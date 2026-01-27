@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,8 +23,12 @@ import (
 
 type Handler struct {
 	config       *config.Config
-	client       *client.Client
+	client       UpstreamClient
 	loadBalancer *loadbalancer.LoadBalancer
+}
+
+type UpstreamClient interface {
+	SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(client.SSEMessage), logger *debug.Logger) error
 }
 
 type ClaudeRequest struct {
@@ -142,7 +147,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	logger.LogIncomingRequest(req)
 
 	// 选择账号
-	var apiClient *client.Client
+	var apiClient UpstreamClient
 	var currentAccount *store.Account
 	var failedAccountIDs []int64
 
@@ -191,15 +196,22 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	mappedModel := mapModel(req.Model)
 	log.Printf("模型映射: %s -> %s", req.Model, mappedModel)
 
-	// 设置 SSE 响应头
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	isStream := req.Stream
+	var flusher http.Flusher
+	if isStream {
+		// 设置 SSE 响应头
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
+		streamFlusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+			return
+		}
+		flusher = streamFlusher
+	} else {
+		w.Header().Set("Content-Type", "application/json")
 	}
 
 	// 状态管理
@@ -209,6 +221,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	var mu sync.Mutex
 	var finalStopReason string
 	toolBlocks := make(map[string]int)
+	var responseText strings.Builder
+	var contentBlocks []map[string]interface{}
+	var currentTextIndex = -1
 
 	// Token 计数
 	inputTokens := tiktoken.EstimateTextTokens(builtPrompt)
@@ -227,6 +242,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// SSE 写入函数
 	writeSSE := func(event, data string) {
+		if !isStream {
+			return
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if hasReturn {
@@ -249,15 +267,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		finalStopReason = stopReason
 		mu.Unlock()
 
-		deltaData, _ := json.Marshal(map[string]interface{}{
-			"type":  "message_delta",
-			"delta": map[string]string{"stop_reason": stopReason},
-			"usage": map[string]int{"output_tokens": outputTokens},
-		})
-		writeSSE("message_delta", string(deltaData))
+		if isStream {
+			deltaData, _ := json.Marshal(map[string]interface{}{
+				"type":  "message_delta",
+				"delta": map[string]string{"stop_reason": stopReason},
+				"usage": map[string]int{"output_tokens": outputTokens},
+			})
+			writeSSE("message_delta", string(deltaData))
 
-		stopData, _ := json.Marshal(map[string]string{"type": "message_stop"})
-		writeSSE("message_stop", string(stopData))
+			stopData, _ := json.Marshal(map[string]string{"type": "message_stop"})
+			writeSSE("message_stop", string(stopData))
+		}
 
 		// 6. 记录摘要
 		logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), stopReason)
@@ -318,7 +338,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					idx := blockIndex
 					mu.Unlock()
 					delta, _ := msg.Event["delta"].(string)
-					addOutputTokens(delta)
+					if isStream {
+						addOutputTokens(delta)
+					}
 					data, _ := json.Marshal(map[string]interface{}{
 						"type":  "content_block_delta",
 						"index": idx,
@@ -341,6 +363,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					blockIndex++
 					idx := blockIndex
 					mu.Unlock()
+					if !isStream {
+						contentBlocks = append(contentBlocks, map[string]interface{}{
+							"type": "text",
+							"text": "",
+						})
+						currentTextIndex = len(contentBlocks) - 1
+					}
 					data, _ := json.Marshal(map[string]interface{}{
 						"type":          "content_block_start",
 						"index":         idx,
@@ -354,6 +383,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					mu.Unlock()
 					delta, _ := msg.Event["delta"].(string)
 					addOutputTokens(delta)
+					if !isStream {
+						responseText.WriteString(delta)
+						if currentTextIndex >= 0 && currentTextIndex < len(contentBlocks) {
+							if text, ok := contentBlocks[currentTextIndex]["text"].(string); ok {
+								contentBlocks[currentTextIndex]["text"] = text + delta
+							}
+						}
+					}
 					data, _ := json.Marshal(map[string]interface{}{
 						"type":  "content_block_delta",
 						"index": idx,
@@ -394,6 +431,22 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					toolName, _ := msg.Event["toolName"].(string)
 					inputStr, _ := msg.Event["input"].(string)
 					if toolID == "" {
+						return
+					}
+					if !isStream {
+						addOutputTokens(toolName)
+						addOutputTokens(inputStr)
+						fixedInput := fixToolInput(inputStr)
+						var inputValue interface{}
+						if err := json.Unmarshal([]byte(fixedInput), &inputValue); err != nil {
+							inputValue = map[string]interface{}{}
+						}
+						contentBlocks = append(contentBlocks, map[string]interface{}{
+							"type":  "tool_use",
+							"id":    toolID,
+							"name":  toolName,
+							"input": inputValue,
+						})
 						return
 					}
 
@@ -476,6 +529,35 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 确保有最终响应
 	if !hasReturn {
 		finishResponse("end_turn")
+	}
+
+	if !isStream {
+		stopReason := finalStopReason
+		if stopReason == "" {
+			stopReason = "end_turn"
+		}
+
+		if len(contentBlocks) == 0 && responseText.Len() > 0 {
+			contentBlocks = append(contentBlocks, map[string]interface{}{
+				"type": "text",
+				"text": responseText.String(),
+			})
+		}
+
+		response := map[string]interface{}{
+			"id":            msgID,
+			"type":          "message",
+			"role":          "assistant",
+			"content":       contentBlocks,
+			"model":         req.Model,
+			"stop_reason":   stopReason,
+			"stop_sequence": nil,
+			"usage": map[string]int{
+				"input_tokens":  inputTokens,
+				"output_tokens": outputTokens,
+			},
+		}
+		_ = json.NewEncoder(w).Encode(response)
 	}
 	_ = finalStopReason
 }

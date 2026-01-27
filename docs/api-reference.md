@@ -54,7 +54,8 @@
 
 ### 响应格式
 
-SSE 流式响应，兼容 Claude API 格式。
+- `stream: true`：SSE 流式响应，兼容 Claude/Anthropic Messages 流式格式  
+- `stream: false`：返回 Anthropic Messages 非流式 JSON（`type: "message"`，`content` 数组，`stop_reason`，`usage`）
 
 ### 模型映射
 
