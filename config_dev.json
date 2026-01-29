@@ -1,0 +1,14 @@
+{
+  "port": "3002",
+  "debug_enabled": true,
+  "debug_log_sse": true,
+  "admin_user": "admin",
+  "admin_pass": "admin123",
+  "admin_path": "/admin",
+  "admin_token": "admin123",
+  "store_mode": "sqlite",
+  "orchids_api_version": "2",
+  "orchids_local_workdir": "/Users/dailin/Documents/GitHub/Orchids-2api",
+  "orchids_allow_run_command": true,
+  "orchids_run_allowlist": ["*"]
+}

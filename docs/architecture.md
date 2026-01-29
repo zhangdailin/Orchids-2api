@@ -11,7 +11,7 @@ Orchids-2api/
 │   ├── api/api.go               # 账号管理 REST API
 │   ├── handler/handler.go       # 主请求处理器 (/v1/messages)
 │   ├── loadbalancer/loadbalancer.go  # 加权负载均衡
-│   ├── store/store.go           # SQLite 数据库层
+│   ├── store/store.go           # SQLite 数据库层（可选 Redis 账号存储）
 │   ├── config/config.go         # 配置管理
 │   ├── client/client.go         # 上游 API 客户端
 │   ├── middleware/auth.go       # 认证中间件
@@ -21,8 +21,7 @@ Orchids-2api/
 │   ├── debug/logger.go          # 调试日志
 │   └── web/embed.go             # Web 资源嵌入
 ├── web/static/                   # 管理界面静态文件
-├── data/orchids.db              # SQLite 数据库文件
-├── Dockerfile                    # Docker 构建配置
+├── data/orchids.db              # SQLite 数据库文件（sqlite 模式可选）
 └── go.mod                        # Go 模块定义
 ```
 

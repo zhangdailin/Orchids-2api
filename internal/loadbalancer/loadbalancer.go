@@ -2,7 +2,6 @@ package loadbalancer
 
 import (
 	"errors"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -17,12 +16,21 @@ type LoadBalancer struct {
 	cachedAccounts []*store.Account
 	cacheExpires   time.Time
 	cacheTTL       time.Duration
+	activeConns    map[int64]int
 }
 
 func New(s *store.Store) *LoadBalancer {
+	return NewWithCacheTTL(s, defaultCacheTTL)
+}
+
+func NewWithCacheTTL(s *store.Store, cacheTTL time.Duration) *LoadBalancer {
+	if cacheTTL <= 0 {
+		cacheTTL = defaultCacheTTL
+	}
 	return &LoadBalancer{
-		store:    s,
-		cacheTTL: defaultCacheTTL,
+		store:       s,
+		cacheTTL:    cacheTTL,
+		activeConns: make(map[int64]int),
 	}
 }
 
@@ -95,20 +103,54 @@ func (lb *LoadBalancer) selectAccount(accounts []*store.Account) *store.Account 
 		return accounts[0]
 	}
 
-	var totalWeight int
-	for _, acc := range accounts {
-		totalWeight += acc.Weight
-	}
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
 
-	randomWeight := rand.Intn(totalWeight)
-	currentWeight := 0
+	var bestAccount *store.Account
+	minScore := float64(-1)
 
 	for _, acc := range accounts {
-		currentWeight += acc.Weight
-		if currentWeight > randomWeight {
-			return acc
+		weight := acc.Weight
+		if weight <= 0 {
+			weight = 1
+		}
+
+		conns := lb.activeConns[acc.ID]
+		score := float64(conns) / float64(weight)
+
+		if bestAccount == nil || score < minScore {
+			bestAccount = acc
+			minScore = score
 		}
 	}
 
+	if bestAccount != nil {
+		return bestAccount
+	}
 	return accounts[0]
+}
+
+func (lb *LoadBalancer) GetStats() map[int64]int {
+	lb.mu.RLock()
+	defer lb.mu.RUnlock()
+	
+	stats := make(map[int64]int, len(lb.activeConns))
+	for id, count := range lb.activeConns {
+		stats[id] = count
+	}
+	return stats
+}
+
+func (lb *LoadBalancer) AcquireConnection(accountID int64) {
+	lb.mu.Lock()
+	lb.activeConns[accountID]++
+	lb.mu.Unlock()
+}
+
+func (lb *LoadBalancer) ReleaseConnection(accountID int64) {
+	lb.mu.Lock()
+	if lb.activeConns[accountID] > 0 {
+		lb.activeConns[accountID]--
+	}
+	lb.mu.Unlock()
 }

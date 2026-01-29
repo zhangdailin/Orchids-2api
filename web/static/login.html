@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理登录 - CodeFreeMax</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --input-bg: rgba(15, 23, 42, 0.5);
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        body {
+            background: var(--bg-gradient);
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            color: var(--text-main);
+        }
+
+        /* Ambient Background Elements */
+        .ambient-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            filter: blur(80px);
+            opacity: 0.5;
+        }
+
+        .blob {
+            position: absolute;
+            border-radius: 50%;
+            background: var(--primary);
+        }
+
+        .blob-1 {
+            width: 400px;
+            height: 400px;
+            top: -100px;
+            left: -100px;
+            background: #4f46e5;
+        }
+
+        .blob-2 {
+            width: 300px;
+            height: 300px;
+            bottom: -50px;
+            right: -50px;
+            background: #7c3aed;
+        }
+
+        .login-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 48px;
+            width: 100%;
+            max-width: 440px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            animation: slideUp 0.6s ease-out;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 32px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--primary);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 24px;
+            box-shadow: 0 0 20px rgba(79, 70, 229, 0.4);
+        }
+
+        .logo-text {
+            font-size: 24px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .header p {
+            color: var(--text-muted);
+            font-size: 15px;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: var(--text-muted);
+            margin-left: 4px;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+        }
+
+        .form-input {
+            width: 100%;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 16px 14px 44px;
+            color: white;
+            font-size: 16px;
+            transition: all 0.2s;
+            outline: none;
+        }
+
+        .form-input:focus {
+            border-color: var(--primary);
+            background: rgba(15, 23, 42, 0.8);
+            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1);
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: var(--text-muted);
+            transition: color 0.2s;
+        }
+
+        .password-toggle:hover {
+            color: white;
+        }
+
+        .login-btn {
+            width: 100%;
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .login-btn:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+            box-shadow: 0 10px 15px -3px rgba(79, 70, 229, 0.4);
+        }
+
+        .login-btn:active {
+            transform: translateY(0);
+        }
+
+        .login-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #ef4444;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-size: 14px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .loading-spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.8s linear infinite;
+            display: none;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .footer-links {
+            text-align: center;
+            margin-top: 32px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .footer-links a {
+            color: var(--primary);
+            text-decoration: none;
+            margin: 0 8px;
+        }
+
+        .footer-links a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="ambient-bg">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <div class="login-card">
+        <div class="logo-container">
+            <div class="logo-icon">C</div>
+            <span class="logo-text">CodeFreeMax</span>
+        </div>
+
+        <div class="header">
+            <h1>管理员登录</h1>
+            <p>请控制您的 API 凭证管理面板</p>
+        </div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label class="form-label">用户名</label>
+                <div class="input-wrapper">
+                    <span class="input-icon">👤</span>
+                    <input type="text" id="username" class="form-input" placeholder="请输入用户名" required
+                        autocomplete="username">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">管理员密码</label>
+                <div class="input-wrapper">
+                    <span class="input-icon">🔒</span>
+                    <input type="password" id="password" class="form-input" placeholder="请输入密码" required
+                        autocomplete="current-password">
+                    <span class="password-toggle" id="passwordToggle">👁️</span>
+                </div>
+            </div>
+
+            <button type="submit" class="login-btn" id="loginBtn">
+                <div class="loading-spinner" id="spinner"></div>
+                <span>登录</span>
+            </button>
+        </form>
+
+        <div class="footer-links">
+            <a href="https://github.com/zhangdailin/Orchids-2api" target="_blank">GitHub</a>
+            <span>•</span>
+            <a href="#">文档教程</a>
+        </div>
+    </div>
+
+    <div id="toast" class="toast">
+        <span>❌</span>
+        <span id="toastMessage">登录失败，请检查账号密码</span>
+    </div>
+
+    <script>
+        const form = document.getElementById('loginForm');
+        const loginBtn = document.getElementById('loginBtn');
+        const spinner = document.getElementById('spinner');
+        const passwordInput = document.getElementById('password');
+        const passwordToggle = document.getElementById('passwordToggle');
+        const toast = document.getElementById('toast');
+        const toastMessage = document.getElementById('toastMessage');
+
+        passwordToggle.addEventListener('click', () => {
+            const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+            passwordInput.setAttribute('type', type);
+            passwordToggle.textContent = type === 'password' ? '👁️' : '🙈';
+        });
+
+        function showToast(msg) {
+            toastMessage.textContent = msg;
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value;
+            const password = passwordInput.value;
+
+            // UI loading state
+            loginBtn.disabled = true;
+            spinner.style.display = 'block';
+            loginBtn.querySelector('span').textContent = '正在登录...';
+
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (response.ok) {
+                    // Success! Go to dashboard
+                    window.location.href = './'; // Or the admin path
+                } else {
+                    const error = await response.text();
+                    showToast(error || '登录失败，请重试');
+                }
+            } catch (err) {
+                showToast('网络连接失败');
+            } finally {
+                loginBtn.disabled = false;
+                spinner.style.display = 'none';
+                loginBtn.querySelector('span').textContent = '登录';
+            }
+        });
+
+        // Check if already logged in? (Optional, backend will redirect anyway)
+    </script>
+</body>
+
+</html>

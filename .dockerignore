@@ -1,7 +1,0 @@
-debug/
-.env
-.git
-.gitignore
-README.md
-Dockerfile
-.dockerignore

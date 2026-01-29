@@ -12,16 +12,17 @@ import (
 
 // Logger 调试日志记录器
 type Logger struct {
-	enabled   bool
-	dir       string
-	rawFile   *os.File
-	outFile   *os.File
-	mu        sync.Mutex
-	startTime time.Time
+	enabled    bool
+	sseEnabled bool
+	dir        string
+	rawFile    *os.File
+	outFile    *os.File
+	mu         sync.Mutex
+	startTime  time.Time
 }
 
 // New 创建新的调试日志记录器
-func New(enabled bool) *Logger {
+func New(enabled bool, sseEnabled bool) *Logger {
 	if !enabled {
 		return &Logger{enabled: false}
 	}
@@ -31,9 +32,10 @@ func New(enabled bool) *Logger {
 	os.MkdirAll(dir, 0755)
 
 	return &Logger{
-		enabled:   true,
-		dir:       dir,
-		startTime: time.Now(),
+		enabled:    true,
+		sseEnabled: sseEnabled,
+		dir:        dir,
+		startTime:  time.Now(),
 	}
 }
 
@@ -83,7 +85,7 @@ func (l *Logger) LogUpstreamRequest(url string, headers map[string]string, body 
 
 // LogUpstreamSSE 记录 4. 上游返回的原始 SSE（追加写入）
 func (l *Logger) LogUpstreamSSE(eventType string, data string) {
-	if !l.enabled {
+	if !l.enabled || !l.sseEnabled {
 		return
 	}
 
@@ -104,7 +106,7 @@ func (l *Logger) LogUpstreamSSE(eventType string, data string) {
 
 // LogOutputSSE 记录 5. 转换给客户端的 SSE（追加写入）
 func (l *Logger) LogOutputSSE(event string, data string) {
-	if !l.enabled {
+	if !l.enabled || !l.sseEnabled {
 		return
 	}
 

@@ -6,10 +6,10 @@ import (
 
 func TestEstimateTokens(t *testing.T) {
 	tests := []struct {
-		name     string
-		text     string
-		min      int
-		max      int
+		name string
+		text string
+		min  int
+		max  int
 	}{
 		{
 			name: "Empty string",
@@ -73,10 +73,10 @@ func TestEstimateTokens(t *testing.T) {
 
 func TestEstimateTextTokens(t *testing.T) {
 	tests := []struct {
-		name     string
-		text     string
-		min      int
-		max      int
+		name string
+		text string
+		min  int
+		max  int
 	}{
 		{
 			name: "Pure English",

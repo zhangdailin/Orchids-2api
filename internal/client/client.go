@@ -10,13 +10,13 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 )
 
@@ -31,6 +31,16 @@ type Client struct {
 	config     *config.Config
 	account    *store.Account
 	httpClient *http.Client
+}
+
+type UpstreamRequest struct {
+	Prompt      string
+	ChatHistory []interface{}
+	Model       string
+	Messages    []prompt.Message
+	System      []prompt.SystemItem
+	Tools       []interface{}
+	NoTools     bool
 }
 
 type TokenResponse struct {
@@ -70,33 +80,79 @@ var tokenCache = struct {
 	items: map[string]cachedToken{},
 }
 
-func New(cfg *config.Config) *Client {
-	return &Client{
-		config:     cfg,
-		httpClient: &http.Client{},
+var defaultHTTPClient = newHTTPClient()
+
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(strings.Builder)
+	},
+}
+
+var bufioReaderPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewReader(nil)
+	},
+}
+
+func newHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
 	}
 }
 
-func NewFromAccount(acc *store.Account) *Client {
+func New(cfg *config.Config) *Client {
+	return &Client{
+		config:     cfg,
+		httpClient: defaultHTTPClient,
+	}
+}
+
+func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 	cfg := &config.Config{
-		SessionID:    acc.SessionID,
-		ClientCookie: acc.ClientCookie,
-		ClientUat:    acc.ClientUat,
-		ProjectID:    acc.ProjectID,
-		UserID:       acc.UserID,
-		AgentMode:    acc.AgentMode,
-		Email:        acc.Email,
+		SessionID:           acc.SessionID,
+		ClientCookie:        acc.ClientCookie,
+		ClientUat:           acc.ClientUat,
+		ProjectID:           acc.ProjectID,
+		UserID:              acc.UserID,
+		AgentMode:           acc.AgentMode,
+		Email:               acc.Email,
+		UpstreamMode:        "",
+		UpstreamURL:         "",
+		UpstreamToken:       "",
+		OrchidsAPIBaseURL:   "",
+		OrchidsWSURL:        "",
+		OrchidsAPIVersion:   "",
+		OrchidsLocalWorkdir: "",
+	}
+	if base != nil {
+		cfg.UpstreamMode = base.UpstreamMode
+		cfg.UpstreamURL = base.UpstreamURL
+		cfg.UpstreamToken = base.UpstreamToken
+		cfg.OrchidsAPIBaseURL = base.OrchidsAPIBaseURL
+		cfg.OrchidsWSURL = base.OrchidsWSURL
+		cfg.OrchidsAPIVersion = base.OrchidsAPIVersion
+		cfg.OrchidsLocalWorkdir = base.OrchidsLocalWorkdir
+		cfg.OrchidsAllowRunCommand = base.OrchidsAllowRunCommand
+		cfg.OrchidsRunAllowlist = base.OrchidsRunAllowlist
 	}
 	return &Client{
 		config:     cfg,
 		account:    acc,
-		httpClient: &http.Client{},
+		httpClient: defaultHTTPClient,
 	}
 }
 
 func (c *Client) GetToken() (string, error) {
-	if token := os.Getenv("UPSTREAM_TOKEN"); token != "" {
-		return token, nil
+	if c.config != nil && c.config.UpstreamToken != "" {
+		return c.config.UpstreamToken, nil
 	}
 
 	if cached, ok := getCachedToken(c.config.SessionID); ok {
@@ -134,14 +190,31 @@ func (c *Client) GetToken() (string, error) {
 }
 
 func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(SSEMessage), logger *debug.Logger) error {
+	req := UpstreamRequest{
+		Prompt:      prompt,
+		ChatHistory: chatHistory,
+		Model:       model,
+	}
+	return c.SendRequestWithPayload(ctx, req, onMessage, logger)
+}
+
+func (c *Client) SendRequestWithPayload(ctx context.Context, req UpstreamRequest, onMessage func(SSEMessage), logger *debug.Logger) error {
+	mode := strings.ToLower(strings.TrimSpace(c.config.UpstreamMode))
+	if mode == "ws" || mode == "websocket" {
+		return c.sendRequestWS(ctx, req, onMessage, logger)
+	}
+	return c.sendRequestSSE(ctx, req, onMessage, logger)
+}
+
+func (c *Client) sendRequestSSE(ctx context.Context, req UpstreamRequest, onMessage func(SSEMessage), logger *debug.Logger) error {
 	token, err := c.GetToken()
 	if err != nil {
 		return fmt.Errorf("failed to get token: %w", err)
 	}
 
 	payload := AgentRequest{
-		Prompt:        prompt,
-		ChatHistory:   chatHistory,
+		Prompt:        req.Prompt,
+		ChatHistory:   req.ChatHistory,
 		ProjectID:     c.config.ProjectID,
 		CurrentPage:   map[string]interface{}{},
 		AgentMode:     c.config.AgentMode,
@@ -151,7 +224,7 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 		ChatSessionID: rand.IntN(90000000) + 10000000,
 		UserID:        c.config.UserID,
 		APIVersion:    2,
-		Model:         model,
+		Model:         req.Model,
 	}
 
 	body, err := json.Marshal(payload)
@@ -159,16 +232,16 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 		return err
 	}
 
-	url := getUpstreamURL()
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	url := c.upstreamURL()
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Orchids-Api-Version", "2")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Orchids-Api-Version", "2")
 
 	// 记录上游请求
 	if logger != nil {
@@ -181,19 +254,26 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 		logger.LogUpstreamRequest(url, headers, payload)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 		return fmt.Errorf("upstream request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	reader := bufio.NewReader(resp.Body)
-	var buffer strings.Builder
+	limitedBody := io.LimitReader(resp.Body, 100*1024*1024)
+
+	reader := bufioReaderPool.Get().(*bufio.Reader)
+	reader.Reset(limitedBody)
+	defer bufioReaderPool.Put(reader)
+
+	buffer := bufferPool.Get().(*strings.Builder)
+	buffer.Reset()
+	defer bufferPool.Put(buffer)
 
 	for {
 		select {
@@ -257,8 +337,12 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 }
 
 func getUpstreamURL() string {
-	if value := os.Getenv("UPSTREAM_URL"); value != "" {
-		return value
+	return upstreamURL
+}
+
+func (c *Client) upstreamURL() string {
+	if c != nil && c.config != nil && c.config.UpstreamURL != "" {
+		return c.config.UpstreamURL
 	}
 	return upstreamURL
 }

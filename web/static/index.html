@@ -1,322 +1,1165 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>API 管理面板</title>
-    <style>
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
-      }
-      body {
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          "Helvetica Neue", Arial, sans-serif;
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        min-height: 100vh;
-        color: #e4e4e7;
-      }
-      .container {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 20px;
-      }
-      header {
-        text-align: center;
-        padding: 40px 0;
-      }
-      header h1 {
-        font-size: 2.5rem;
-        background: linear-gradient(90deg, #06b6d4, #8b5cf6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 10px;
-      }
-      header p {
-        color: #a1a1aa;
-      }
-      .card {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 24px;
-        backdrop-filter: blur(10px);
-      }
-      .card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 20px;
-      }
-      .card-title {
-        font-size: 1.25rem;
-        font-weight: 600;
-      }
-      .btn {
-        padding: 10px 20px;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 0.875rem;
-        font-weight: 500;
-        transition: all 0.2s;
-      }
-      .btn-primary {
-        background: linear-gradient(90deg, #06b6d4, #8b5cf6);
-        color: white;
-      }
-      .btn-primary:hover {
-        opacity: 0.9;
-        transform: translateY(-1px);
-      }
-      .btn-danger {
-        background: #ef4444;
-        color: white;
-      }
-      .btn-danger:hover {
-        background: #dc2626;
-      }
-      .btn-sm {
-        padding: 6px 12px;
-        font-size: 0.75rem;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-      th,
-      td {
-        padding: 12px;
-        text-align: left;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-      }
-      th {
-        color: #a1a1aa;
-        font-weight: 500;
-        font-size: 0.875rem;
-      }
-      tr:hover {
-        background: rgba(255, 255, 255, 0.03);
-      }
-      .status-badge {
-        display: inline-block;
-        padding: 4px 12px;
-        border-radius: 9999px;
-        font-size: 0.75rem;
-        font-weight: 500;
-      }
-      .status-enabled {
-        background: rgba(34, 197, 94, 0.2);
-        color: #22c55e;
-      }
-      .status-disabled {
-        background: rgba(239, 68, 68, 0.2);
-        color: #ef4444;
-      }
-      .modal {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: rgba(0, 0, 0, 0.7);
-        justify-content: center;
-        align-items: center;
-        z-index: 1000;
-      }
-      .modal.active {
-        display: flex;
-      }
-      .modal-content {
-        background: #1e1e2e;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
-        padding: 32px;
-        width: 100%;
-        max-width: 500px;
-        max-height: 90vh;
-        overflow-y: auto;
-      }
-      .modal-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 24px;
-      }
-      .modal-title {
-        font-size: 1.5rem;
-        font-weight: 600;
-      }
-      .modal-close {
-        background: none;
-        border: none;
-        color: #a1a1aa;
-        font-size: 1.5rem;
-        cursor: pointer;
-      }
-      .form-group {
-        margin-bottom: 16px;
-      }
-      .form-label {
-        display: block;
-        margin-bottom: 8px;
-        color: #a1a1aa;
-        font-size: 0.875rem;
-      }
-      .form-input {
-        width: 100%;
-        padding: 12px;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 8px;
-        color: #e4e4e7;
-        font-size: 0.875rem;
-      }
-      .form-input:focus {
-        outline: none;
-        border-color: #8b5cf6;
-      }
-      .form-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px;
-      }
-      .toggle {
-        position: relative;
-        display: inline-block;
-        width: 48px;
-        height: 24px;
-      }
-      .toggle input {
-        opacity: 0;
-        width: 0;
-        height: 0;
-      }
-      .toggle-slider {
-        position: absolute;
-        cursor: pointer;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(255, 255, 255, 0.1);
-        border-radius: 24px;
-        transition: 0.3s;
-      }
-      .toggle-slider:before {
-        position: absolute;
-        content: "";
-        height: 18px;
-        width: 18px;
-        left: 3px;
-        bottom: 3px;
-        background: white;
-        border-radius: 50%;
-        transition: 0.3s;
-      }
-      .toggle input:checked + .toggle-slider {
-        background: linear-gradient(90deg, #06b6d4, #8b5cf6);
-      }
-      .toggle input:checked + .toggle-slider:before {
-        transform: translateX(24px);
-      }
-      .stats {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 16px;
-        margin-bottom: 24px;
-      }
-      .stat-card {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-      }
-      .stat-value {
-        font-size: 2rem;
-        font-weight: 700;
-        background: linear-gradient(90deg, #06b6d4, #8b5cf6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-      }
-      .stat-label {
-        color: #a1a1aa;
-        font-size: 0.875rem;
-        margin-top: 4px;
-      }
-      .actions {
-        display: flex;
-        gap: 8px;
-      }
-      .empty-state {
-        text-align: center;
-        padding: 60px 20px;
-        color: #a1a1aa;
-      }
-      .empty-state p {
-        margin-bottom: 16px;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <header>
-        <h1>API 管理面板</h1>
-        <p>多账号管理与负载均衡</p>
-      </header>
 
-      <div class="stats">
-        <div class="stat-card">
-          <div class="stat-value" id="totalAccounts">0</div>
-          <div class="stat-label">总账号数</div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>API 管理面板</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --sidebar-bg: #1e1e3f;
+      --sidebar-active: #2d2d5f;
+      --main-bg: #f5f6fa;
+      --card-bg: #ffffff;
+      --text-primary: #2d3436;
+      --text-secondary: #636e72;
+      --accent-blue: #3498db;
+      --accent-purple: #9b59b6;
+      --accent-green: #2ecc71;
+      --accent-red: #e74c3c;
+      --accent-orange: #e67e22;
+      --border-color: rgba(0, 0, 0, 0.05);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--main-bg);
+      color: var(--text-primary);
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sidebar Styles */
+    .sidebar {
+      width: 240px;
+      background: var(--sidebar-bg);
+      color: white;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 0;
+      position: fixed;
+      height: 100vh;
+      z-index: 100;
+    }
+
+    .sidebar-header {
+      padding: 0 20px 30px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .sidebar-header .logo {
+      width: 32px;
+      height: 32px;
+      background: var(--accent-purple);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+    }
+
+    .sidebar-header .title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+
+    .sidebar-menu {
+      flex: 1;
+      list-style: none;
+      padding: 0 12px;
+    }
+
+    .sidebar-item {
+      margin-bottom: 4px;
+    }
+
+    .sidebar-link {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      color: rgba(255, 255, 255, 0.7);
+      text-decoration: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      transition: all 0.2s;
+    }
+
+    .sidebar-link:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: white;
+    }
+
+    .sidebar-link.active {
+      background: var(--sidebar-active);
+      color: white;
+    }
+
+    .sidebar-footer {
+      padding: 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .sidebar-footer-stats {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .footer-stat-item {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+    }
+
+    .footer-stat-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .footer-stat-label {
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    .footer-stat-value.normal {
+      color: #2ecc71;
+    }
+
+    .footer-stat-value.abnormal {
+      color: #e74c3c;
+    }
+
+    .buy-button {
+      background: linear-gradient(90deg, #ff7e5f, #feb47b);
+      color: white;
+      padding: 12px;
+      border-radius: 8px;
+      text-align: center;
+      text-decoration: none;
+      display: block;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+
+    /* Main Content Styles */
+    .main-content {
+      flex: 1;
+      margin-left: 240px;
+      padding: 24px 40px;
+    }
+
+    .header-section {
+      margin-bottom: 32px;
+    }
+
+    .header-section h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .header-section p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    /* Grid Layouts */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--card-bg);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.02);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .stat-info .label {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      font-weight: 600;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .stat-info .value {
+      font-size: 1.75rem;
+      font-weight: 700;
+    }
+
+    .stat-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+    }
+
+    .stat-icon.total {
+      background: #eef2ff;
+      color: #6366f1;
+    }
+
+    .stat-icon.normal {
+      background: #f0fdf4;
+      color: #22c55e;
+    }
+
+    .stat-icon.abnormal {
+      background: #fef2f2;
+      color: #ef4444;
+    }
+
+    .stat-icon.selected {
+      background: #fdf4ff;
+      color: #a855f7;
+    }
+
+    /* Toolbar and Filter */
+    .toolbar {
+      background: var(--card-bg);
+      padding: 12px 16px;
+      border-radius: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.01);
+    }
+
+    .filter-tabs {
+      display: flex;
+      background: #f1f2f6;
+      padding: 4px;
+      border-radius: 8px;
+      gap: 4px;
+    }
+
+    .tab-item {
+      padding: 6px 16px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+    }
+
+    .tab-item.active {
+      background: #3b82f6;
+      color: white;
+    }
+
+    .tab-item:not(.active):hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    .action-buttons {
+      display: flex;
+      gap: 12px;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .btn-outline {
+      background: white;
+      border-color: #e2e8f0;
+      color: #475569;
+    }
+
+    .btn-outline:hover {
+      background: #f8fafc;
+    }
+
+    .btn-danger-outline {
+      background: white;
+      border-color: #fecaca;
+      color: #ef4444;
+    }
+
+    .btn-primary {
+      background: #3b82f6;
+      color: white;
+    }
+
+    /* Content Area */
+    .content-card {
+      background: var(--card-bg);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+      min-height: 400px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th {
+      padding: 16px 24px;
+      text-align: left;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    td {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 0.9rem;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover {
+      background: #fafafa;
+    }
+
+    /* Modal and Overlay */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(4px);
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+    }
+
+    .modal-content {
+      background: white;
+      border-radius: 20px;
+      padding: 32px;
+      width: 100%;
+      max-width: 500px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      margin-top: 6px;
+    }
+
+    /* Toast */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 2000;
+    }
+
+    .toast {
+      background: white;
+      padding: 12px 24px;
+      border-radius: 12px;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    .config-section {
+      padding-top: 8px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: #64748b;
+      margin-bottom: 8px;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      font-size: 0.95rem;
+      color: #1e293b;
+      transition: all 0.2s;
+    }
+
+    .form-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    }
+
+    .btn-icon {
+      background: none;
+      border: none;
+      padding: 4px;
+      cursor: pointer;
+      color: #94a3b8;
+      transition: color 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .btn-icon:hover {
+      color: #1e293b;
+    }
+
+    .platform-tabs {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .platform-tabs .tab-item {
+      background: #f1f5f9;
+      color: #64748b;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+
+    .platform-tabs .tab-item:hover {
+      background: #e2e8f0;
+    }
+
+    .platform-tabs .tab-item.active {
+      background: #3b82f6;
+      color: #fff;
+    }
+
+    /* Toggle Switch Refinement */
+    .toggle {
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle input {
+      display: none;
+    }
+
+    .toggle-slider {
+      position: relative;
+      width: 40px;
+      height: 22px;
+      background-color: #e2e8f0;
+      border-radius: 20px;
+      transition: 0.3s;
+    }
+
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      border-radius: 50%;
+      transition: 0.3s;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    }
+
+    .toggle input:checked+.toggle-slider {
+      background-color: #10b981;
+    }
+
+    .toggle input:checked+.toggle-slider:before {
+      transform: translateX(18px);
+    }
+
+    /* Account Table Styles */
+    .usage-progress-container {
+      width: 100px;
+      height: 6px;
+      background: #f1f5f9;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-right: 8px;
+    }
+
+    .usage-progress-bar {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
+    .usage-progress-bar.green {
+      background: #10b981;
+    }
+
+    .usage-progress-bar.orange {
+      background: #f59e0b;
+    }
+
+    .usage-progress-bar.red {
+      background: #ef4444;
+    }
+
+    .tag {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      display: inline-block;
+    }
+
+    .tag-free {
+      background: #ecfdf5;
+      color: #10b981;
+      border: 1px solid #d1fae5;
+    }
+
+    .tag-status-normal {
+      background: #ecfdf5;
+      color: #10b981;
+      font-size: 0.7rem;
+      padding: 4px 6px;
+      line-height: 1.2;
+      text-align: center;
+      width: 32px;
+    }
+
+    .action-icon {
+      cursor: pointer;
+      color: #94a3b8;
+      transition: color 0.2s;
+      font-size: 1.1rem;
+    }
+
+    .action-icon:hover {
+      color: #1e293b;
+    }
+
+    .token-text {
+      font-family: monospace;
+      color: #64748b;
+      font-size: 0.85rem;
+      max-width: 200px;
+      display: inline-block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">C</div>
+      <div class="title">CodeFreeMax</div>
+    </div>
+    <ul class="sidebar-menu">
+      <li class="sidebar-item">
+        <a href="#" class="sidebar-link active" onclick="switchTab('accounts')">
+          <span>👤</span> 账号管理
+        </a>
+      </li>
+      <li class="sidebar-item">
+        <a href="#" class="sidebar-link" onclick="switchTab('keys')">
+          <span>⚙️</span> 配置管理
+        </a>
+      </li>
+      <li class="sidebar-item">
+        <a href="#" class="sidebar-link" onclick="switchTab('models')">
+          <span>💎</span> 模型管理
+        </a>
+      </li>
+      <li class="sidebar-item">
+        <a href="#" class="sidebar-link">
+          <span>📖</span> 使用教程
+        </a>
+      </li>
+    </ul>
+    <div class="sidebar-footer">
+      <div class="sidebar-footer-stats">
+        <div class="footer-stat-item">
+          <span class="footer-stat-label">总账号</span>
+          <span class="footer-stat-value" id="footerTotal">0</span>
         </div>
-        <div class="stat-card">
-          <div class="stat-value" id="enabledAccounts">0</div>
-          <div class="stat-label">已启用</div>
+        <div class="footer-stat-item">
+          <span class="footer-stat-label">正常</span>
+          <span class="footer-stat-value normal" id="footerNormal">0</span>
         </div>
-        <div class="stat-card">
-          <div class="stat-value" id="totalRequests">0</div>
-          <div class="stat-label">总请求数</div>
+        <div class="footer-stat-item">
+          <span class="footer-stat-label">异常</span>
+          <span class="footer-stat-value abnormal" id="footerAbnormal">0</span>
         </div>
       </div>
+      <div style="font-size: 0.8rem; color: rgba(255,255,255,0.4);">
+        今日用量 <span style="float: right;">4/10000</span>
+        <div style="height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; margin: 8px 0;">
+          <div id="usageProgress" style="width: 1%; background: #3b82f6; height: 100%; border-radius: 2px;"></div>
+        </div>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 0.75rem; color: rgba(255,255,255,0.3);">
+        <span>授权到期</span>
+        <span id="expiryDate">2026/02/24</span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px; font-size: 0.75rem; color: rgba(255,255,255,0.3);">
+        <span>GitHub</span>
+        <span>v2.4.5</span>
+      </div>
+      <button class="btn"
+        style="width: 100%; margin-top: 16px; background: rgba(255,255,255,0.05); color: white; justify-content: center;"
+        onclick="logout()">
+        🚪 退出登录
+      </button>
+    </div>
+  </aside>
 
-      <div class="card">
-        <div class="card-header">
-          <h2 class="card-title">账号管理</h2>
-          <div class="actions">
-            <button class="btn btn-primary" onclick="exportAccounts()">
-              导出
-            </button>
-            <button
-              class="btn btn-primary"
-              onclick="document.getElementById('importFile').click()"
-            >
-              导入
-            </button>
-            <input
-              type="file"
-              id="importFile"
-              accept=".json"
-              style="display: none"
-              onchange="importAccounts(event)"
-            />
-            <button class="btn btn-primary" onclick="openModal()">
-              添加账号
-            </button>
+  <main class="main-content">
+    <section class="header-section" id="accountsHeader">
+      <h1 id="pageTitle">账号管理</h1>
+      <p id="pageSubtitle">管理您的 Orchids API 凭证</p>
+    </section>
+
+    <div id="accountsWrapper">
+      <section class="stats-grid" id="statsGrid">
+        <div class="stat-card">
+          <div class="stat-info">
+            <span class="label">总账号数</span>
+            <span class="value" id="totalAccounts">0</span>
+          </div>
+          <div class="stat-icon total">👥</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-info">
+            <span class="label">状态正常</span>
+            <span class="value" style="color: #10b981" id="enabledAccounts">0</span>
+          </div>
+          <div class="stat-icon normal">✅</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-info">
+            <span class="label">状态异常</span>
+            <span class="value" style="color: #ef4444" id="disabledAccounts">0</span>
+          </div>
+          <div class="stat-icon abnormal">⚠️</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-info">
+            <span class="label">已选中</span>
+            <span class="value" style="color: #8b5cf6" id="selectedCount">0</span>
+          </div>
+          <div class="stat-icon selected">📋</div>
+        </div>
+      </section>
+
+      <div id="accountsTabContent">
+        <div class="toolbar" style="padding: 16px; gap: 16px;">
+          <div class="filter-tabs" id="platformFilters" style="background: #f8fafc; border: 1px solid #f1f5f9;">
+            <button class="tab-item active" onclick="filterByPlatform('')">All</button>
+            <button class="tab-item" onclick="filterByPlatform('Kiro')">Kiro</button>
+            <button class="tab-item" onclick="filterByPlatform('Orchids')">Orchids</button>
+            <button class="tab-item" onclick="filterByPlatform('Antigravity')">Antigravity</button>
+            <button class="tab-item" onclick="filterByPlatform('Warp')">Warp</button>
+          </div>
+
+          <div style="flex: 1; display: flex; gap: 12px; align-items: center; justify-content: flex-end;">
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-outline" style="background: #fff;"
+                onclick="document.getElementById('importFile').click()">📤 导入</button>
+              <button class="btn btn-outline" style="background: #fff;" onclick="exportAccounts()">📥 导出</button>
+              <input type="file" id="importFile" accept=".json" style="display: none"
+                onchange="importAccounts(event)" />
+            </div>
+            <div style="width: 1px; height: 24px; background: #e2e8f0; margin: 0 4px;"></div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-outline" style="color: #94a3b8; background: #fff;" id="batchDeleteBtn" disabled
+                onclick="batchDeleteAccounts()">🗑️ 批量删除</button>
+              <button class="btn btn-outline" style="color: #ef4444; border-color: #fecaca; background: #fff;"
+                onclick="clearAbnormalAccounts()">🧹 清空异常</button>
+            </div>
+            <button class="btn btn-primary" style="background: #3b82f6; border: none; padding: 8px 20px;"
+              onclick="openModal()">+ 添加账号</button>
           </div>
         </div>
-        <div id="accountsList">
-          <div class="empty-state">
-            <p>暂无账号，点击上方按钮添加</p>
+
+        <div class="content-card">
+          <div id="accountsList">
+            <div class="empty-state"
+              style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
+              <span style="font-size: 3rem; margin-bottom: 16px;">📂</span>
+              <p>暂无账号数据</p>
+            </div>
+          </div>
+        </div>
+
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; color: var(--text-secondary); font-size: 0.9rem;">
+          <div id="paginationInfo">共 0 条记录，第 1/1 页</div>
+          <div style="display: flex; gap: 12px; align-items: center;">
+            <select class="form-input" style="width: auto; margin: 0;" onchange="updatePageSize(this.value)">
+              <option value="20">20 条/页</option>
+              <option value="50">50 条/页</option>
+              <option value="100">100 条/页</option>
+            </select>
+            <div style="display: flex; gap: 4px;" id="paginationControls">
+              <button class="btn btn-outline" style="padding: 4px 10px;">首页</button>
+              <button class="btn btn-outline" style="padding: 4px 10px;">上一页</button>
+              <button class="btn btn-primary"
+                style="padding: 4px 10px; min-width: 32px; justify-content: center;">1</button>
+              <button class="btn btn-outline" style="padding: 4px 10px;">下一页</button>
+              <button class="btn btn-outline" style="padding: 4px 10px;">末页</button>
+            </div>
           </div>
         </div>
       </div>
     </div>
+
+    <div id="keysWrapper" style="display: none; background: #f8fafc; padding: 24px; min-height: 100%;">
+      <div style="margin-bottom: 32px;">
+        <h2 style="font-size: 1.5rem; font-weight: 700; color: #1e293b; margin-bottom: 8px;">配置管理</h2>
+        <p style="color: #64748b; font-size: 0.95rem;">管理系统基础配置、负载均衡、授权等设置</p>
+      </div>
+
+      <div class="content-card"
+        style="padding: 24px; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <div id="configTabs" class="platform-tabs" style="margin-bottom: 32px; border-bottom: 1px solid #f1f5f9;">
+          <button class="tab-item active" onclick="switchConfigTab('basic')">基础配置</button>
+          <button class="tab-item" onclick="switchConfigTab('auth')">授权配置</button>
+          <button class="tab-item" onclick="switchConfigTab('proxy')">代理配置</button>
+        </div>
+
+        <div id="basicConfig" class="config-section">
+          <!-- 管理员密码 -->
+          <div style="margin-bottom: 32px;">
+            <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 12px;">管理员密码</div>
+            <div class="form-group" style="max-width: 800px;">
+              <div style="position: relative;">
+                <input type="password" class="form-input" id="cfg_admin_pass" placeholder="管理员密码"
+                  style="padding-right: 48px; border-color: #e2e8f0; background: #fbfbfc;" />
+                <div
+                  style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; gap: 8px;">
+                  <button class="btn btn-icon" onclick="togglePassword('cfg_admin_pass')"><i
+                      class="eye-icon">👁️</i></button>
+                </div>
+              </div>
+              <small
+                style="color: #64748b; margin-top: 8px; display: block; font-size: 0.85rem;">用于管理后台登录认证，修改后需要重新登录</small>
+            </div>
+          </div>
+
+          <!-- API密钥 -->
+          <div style="margin-bottom: 32px;">
+            <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 12px;">API密钥</div>
+            <div class="form-group" style="max-width: 800px;">
+              <div style="position: relative;">
+                <input type="password" class="form-input" id="cfg_admin_token" placeholder="留空则不启用认证"
+                  style="padding-right: 80px; border-color: #10b981; background: #fbfbfc;" />
+                <div
+                  style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; gap: 8px;">
+                  <button class="btn btn-icon" onclick="togglePassword('cfg_admin_token')">👁️</button>
+                  <button class="btn btn-icon" onclick="copyFieldValue('cfg_admin_token')">📋</button>
+                </div>
+              </div>
+              <small
+                style="color: #64748b; margin-top: 8px; display: block; font-size: 0.85rem;">用于API接口认证，留空则不启用认证</small>
+            </div>
+          </div>
+
+          <!-- 重试配置 -->
+          <div style="margin-bottom: 32px;">
+            <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">重试配置</div>
+            <div class="form-row"
+              style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; max-width: 800px;">
+              <div class="form-group">
+                <label class="form-label">最大重试次数</label>
+                <input type="number" class="form-input" id="cfg_max_retries" value="3" style="background: #fbfbfc;" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">重试延迟(ms)</label>
+                <input type="number" class="form-input" id="cfg_retry_delay" value="1000"
+                  style="background: #fbfbfc;" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">凭证切换次数</label>
+                <input type="number" class="form-input" id="cfg_switch_count" value="5" style="background: #fbfbfc;" />
+              </div>
+            </div>
+            <small
+              style="color: #64748b; margin-top: 12px; display: block; font-size: 0.85rem;">请求失败后会自动重试，并尝试切换不同账号</small>
+          </div>
+
+          <!-- 请求配置 -->
+          <div style="margin-bottom: 32px;">
+            <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">请求配置</div>
+            <div class="form-row"
+              style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; max-width: 800px;">
+              <div class="form-group">
+                <label class="form-label">请求超时(秒)</label>
+                <input type="number" class="form-input" id="cfg_request_timeout" value="120"
+                  style="background: #fbfbfc;" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Token刷新间隔(分钟)</label>
+                <input type="number" class="form-input" id="cfg_refresh_interval" value="30"
+                  style="background: #fbfbfc;" />
+              </div>
+            </div>
+          </div>
+
+          <!-- 自动刷新设置 -->
+          <div style="margin-bottom: 32px;">
+            <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">自动刷新设置</div>
+            <div style="display: flex; flex-direction: column; gap: 24px;">
+              <div>
+                <label class="toggle" style="justify-content: flex-start; gap: 12px; margin-bottom: 8px;">
+                  <input type="checkbox" id="cfg_auto_refresh_token" onchange="updateSwitchLabel(this, '自动刷新Token')" />
+                  <span class="toggle-slider"></span>
+                  <span id="label_cfg_auto_refresh_token" style="font-size: 0.95rem; color: #1e293b;">自动刷新Token
+                    (已关闭)</span>
+                </label>
+                <small
+                  style="color: #64748b; display: block; font-size: 0.85rem; margin-left: 52px;">开启后，系统每10分钟执行一次定时任务，仅当Token有效期剩余10分钟内才会触发刷新</small>
+              </div>
+              <div>
+                <label class="toggle" style="justify-content: flex-start; gap: 12px; margin-bottom: 8px;">
+                  <input type="checkbox" id="cfg_auto_refresh_usage" onchange="updateSwitchLabel(this, '自动刷新用量')" />
+                  <span class="toggle-slider"></span>
+                  <span id="label_cfg_auto_refresh_usage" style="font-size: 0.95rem; color: #1e293b;">自动刷新用量
+                    (已关闭)</span>
+                </label>
+                <small
+                  style="color: #64748b; display: block; font-size: 0.85rem; margin-left: 52px;">开启后，系统每10分钟定时刷新一次账号用量信息</small>
+              </div>
+            </div>
+          </div>
+
+          <!-- Token计数设置 -->
+          <div style="margin-bottom: 32px;">
+            <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">Token计数设置</div>
+            <div style="display: flex; gap: 32px;">
+              <label class="checkbox-container" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="cfg_output_token_count" checked style="width: 18px; height: 18px;" />
+                <span style="font-size: 0.95rem; color: #1e293b;">输出Token计数</span>
+              </label>
+              <label class="checkbox-container" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="cfg_cache_token_count" checked style="width: 18px; height: 18px;" />
+                <span style="font-size: 0.95rem; color: #1e293b;">缓存Token计数</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 缓存配置 -->
+          <div style="margin-bottom: 40px;">
+            <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">缓存配置</div>
+            <div class="form-row"
+              style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; max-width: 800px;">
+              <div class="form-group">
+                <label class="form-label">缓存时间 (TTL)</label>
+                <select class="form-input" id="cfg_cache_ttl" style="background: #fbfbfc;">
+                  <option value="5">5分钟</option>
+                  <option value="10">10分钟</option>
+                  <option value="30">30分钟</option>
+                  <option value="60">1小时</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">缓存策略</label>
+                <select class="form-input" id="cfg_cache_strategy" style="background: #fbfbfc;">
+                  <option value="split">分离缓存 (推荐)</option>
+                  <option value="mixed">混合缓存</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: flex-start;">
+            <button class="btn btn-primary" onclick="saveConfiguration()"
+              style="padding: 10px 48px; font-weight: 500;">保存配置</button>
+          </div>
+        </div>
+
+        <div id="authConfig" class="config-section" style="display: none;">
+          <div class="toolbar" style="margin-bottom: 24px">
+            <h2 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: #1e293b;">API Key 管理</h2>
+            <button class="btn btn-primary btn-sm" onclick="openCreateKeyModal()">+ 创建 API Key</button>
+          </div>
+          <div id="keysList"></div>
+        </div>
+
+        <div id="proxyConfig" class="config-section" style="display: none;">
+          <div style="max-width: 800px;">
+            <div style="margin-bottom: 24px;">
+              <h2 style="font-size: 1.1rem; font-weight: 600; color: #1e293b; margin-bottom: 24px;">代理服务器配置</h2>
+
+              <div class="form-group" style="margin-bottom: 24px;">
+                <label class="form-label">HTTP 代理地址</label>
+                <input type="text" class="form-input" id="cfg_proxy_http" placeholder="http://127.0.0.1:7890"
+                  style="background: #fbfbfc;" />
+              </div>
+
+              <div class="form-group" style="margin-bottom: 24px;">
+                <label class="form-label">HTTPS 代理地址</label>
+                <input type="text" class="form-input" id="cfg_proxy_https" placeholder="http://127.0.0.1:7890"
+                  style="background: #fbfbfc;" />
+              </div>
+
+              <div class="form-row"
+                style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; margin-bottom: 24px;">
+                <div class="form-group">
+                  <label class="form-label">用户名 (可选)</label>
+                  <input type="text" class="form-input" id="cfg_proxy_user" style="background: #fbfbfc;"
+                    autocomplete="off" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">密码 (可选)</label>
+                  <div style="position: relative;">
+                    <input type="password" class="form-input" id="cfg_proxy_pass"
+                      style="padding-right: 48px; background: #fbfbfc;" autocomplete="new-password" />
+                    <div style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%);">
+                      <button class="btn btn-icon" onclick="togglePassword('cfg_proxy_pass')">👁️</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 32px;">
+                <label class="form-label">不走代理的主机 (每行一个)</label>
+                <textarea class="form-input" id="cfg_proxy_bypass" rows="4"
+                  placeholder="localhost&#10;127.0.0.1&#10;*.example.com"
+                  style="background: #fbfbfc; resize: vertical;"></textarea>
+                <small
+                  style="color: #64748b; margin-top: 8px; display: block; font-size: 0.85rem;">这些地址将直接连接，绕过代理设置</small>
+              </div>
+
+              <button class="btn btn-primary" onclick="saveConfiguration()" style="padding: 10px 48px;">保存配置</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- Models Wrapper -->
+    <div id="modelsWrapper" style="display: none; height: 100%;">
+      <section class="header-section" id="modelsHeader">
+        <h1>模型管理</h1>
+        <p>管理各渠道的模型映射与显示配置</p>
+      </section>
+
+      <div class="toolbar" style="padding: 16px; gap: 16px;">
+        <div class="filter-tabs" id="modelPlatformFilters" style="background: #f8fafc; border: 1px solid #f1f5f9;">
+          <button class="tab-item active" onclick="filterModelsByChannel('')">All</button>
+          <button class="tab-item" onclick="filterModelsByChannel('Kiro')">Kiro</button>
+          <button class="tab-item" onclick="filterModelsByChannel('Orchids')">Orchids</button>
+          <button class="tab-item" onclick="filterModelsByChannel('Antigravity')">Antigravity</button>
+          <button class="tab-item" onclick="filterModelsByChannel('Warp')">Warp</button>
+        </div>
+
+        <div style="flex: 1; display: flex; gap: 12px; align-items: center; justify-content: flex-end;">
+          <button class="btn btn-primary" style="background: #3b82f6; border: none; padding: 8px 20px;"
+            onclick="openModelModal()">+ 添加模型</button>
+        </div>
+      </div>
+
+      <div class="content-card">
+        <div id="modelsList">
+          <div class="empty-state"
+            style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
+            <span style="font-size: 3rem; margin-bottom: 16px;">💎</span>
+            <p>暂无模型数据</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Model Modal -->
+    <div class="modal" id="modelModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title" id="modelModalTitle">添加模型</h3>
+          <button class="modal-close" onclick="closeModelModal()">&times;</button>
+        </div>
+        <form id="modelForm" onsubmit="saveModel(event)">
+          <input type="hidden" id="modelId" />
+          <div class="form-group">
+            <label class="form-label">渠道</label>
+            <select class="form-input" id="modelChannel" style="background: #fbfbfc;">
+              <option value="Orchids">Orchids</option>
+              <option value="Kiro">Kiro</option>
+              <option value="Antigravity">Antigravity</option>
+              <option value="Warp">Warp</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">模型 ID (Model ID)</label>
+            <input type="text" class="form-input" id="modelModelId" required
+              placeholder="e.g. claude-3-opus-20240229" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">显示名称 (Name)</label>
+            <input type="text" class="form-input" id="modelName" required placeholder="e.g. Claude 3 Opus" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">排序权重</label>
+              <input type="number" class="form-input" id="modelSortOrder" value="0" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">状态</label>
+              <select class="form-input" id="modelStatus" style="background: #fbfbfc;">
+                <option value="available">可用 (Available)</option>
+                <option value="maintenance">维护 (Maintenance)</option>
+                <option value="offline">下线 (Offline)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">
+              <label class="toggle">
+                <input type="checkbox" id="modelIsDefault" />
+                <span class="toggle-slider"></span>
+              </label>
+              &nbsp;&nbsp;设为默认模型
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px">
+            保存
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- 创建 Key 弹窗 -->
+    <div class="modal" id="createKeyModal">
+      <div class="modal-content" style="max-width: 450px;">
+        <div class="modal-header">
+          <h3 class="modal-title">创建 API Key</h3>
+          <button class="modal-close" onclick="closeCreateKeyModal()">
+            &times;
+          </button>
+        </div>
+        <form onsubmit="createApiKey(event)">
+          <div class="form-group">
+            <label class="form-label">名称 / 备注（支持换行批量创建）</label>
+            <textarea class="form-input" id="keyName" required placeholder="每行一个名称，例如：&#10;生产环境&#10;测试用&#10;开发者-张三"
+              rows="4" style="resize: vertical;"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">
+            创建
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Key 展示弹窗 -->
+    <div class="modal" id="showKeyModal">
+      <div class="modal-content" style="max-width: 550px;">
+        <div class="modal-header">
+          <h3 class="modal-title">API Key 已创建</h3>
+        </div>
+        <p style="color: #a1a1aa; margin-bottom: 16px;">
+          请立即复制并保存您的 API Key：
+        </p>
+        <div id="fullKeyDisplay" style="max-height: 300px; overflow-y: auto;">
+        </div>
+        <div class="warning-box">
+          <strong>请妥善保存</strong><br />
+          关闭此窗口后将无法再次查看完整 Key
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 20px;">
+          <button class="btn btn-primary" style="flex: 1;" onclick="copyAllKeys()">
+            复制全部
+          </button>
+          <button class="btn" style="flex: 1; background: rgba(255,255,255,0.1); color: white;"
+            onclick="closeShowKeyModal()">
+            我已保存，关闭
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 删除 Key 确认弹窗 -->
+    <div class="modal" id="deleteKeyModal">
+      <div class="modal-content" style="max-width: 400px;">
+        <div class="modal-header">
+          <h3 class="modal-title">删除 API Key</h3>
+          <button class="modal-close" onclick="closeDeleteKeyModal()">
+            &times;
+          </button>
+        </div>
+        <p style="margin-bottom: 20px;">
+          确定要删除 Key「<strong id="deleteKeyName"></strong>」吗？<br />
+          <span style="color: #ef4444;">此操作不可撤销，使用此 Key 的应用将无法访问。</span>
+        </p>
+        <input type="hidden" id="deleteKeyId" />
+        <div style="display: flex; gap: 8px;">
+          <button class="btn" style="flex: 1; background: rgba(255,255,255,0.1); color: white;"
+            onclick="closeDeleteKeyModal()">
+            取消
+          </button>
+          <button class="btn btn-danger" style="flex: 1;" onclick="confirmDeleteKey()">
+            删除
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast 容器 -->
+    <div class="toast-container" id="toastContainer"></div>
 
     <div class="modal" id="accountModal">
       <div class="modal-content">
@@ -328,46 +1171,21 @@
           <input type="hidden" id="accountId" />
           <div class="form-group">
             <label class="form-label">名称</label>
-            <input
-              type="text"
-              class="form-input"
-              id="name"
-              required
-              placeholder="账号名称"
-            />
+            <input type="text" class="form-input" id="name" required placeholder="账号名称" />
           </div>
           <div class="form-group">
             <label class="form-label">Client Cookie (__client)</label>
-            <input
-              type="text"
-              class="form-input"
-              id="clientCookie"
-              required
-              placeholder="eyJhbGciOiJ..."
-            />
-            <small style="color: #666; font-size: 12px"
-              >只需输入 __client cookie，其他信息将自动获取</small
-            >
+            <input type="text" class="form-input" id="clientCookie" required placeholder="eyJhbGciOiJ..." />
+            <small style="color: #666; font-size: 12px">只需输入 __client cookie，其他信息将自动获取</small>
           </div>
           <div class="form-row">
             <div class="form-group">
               <label class="form-label">权重</label>
-              <input
-                type="number"
-                class="form-input"
-                id="weight"
-                value="1"
-                min="1"
-              />
+              <input type="number" class="form-input" id="weight" value="1" min="1" />
             </div>
             <div class="form-group">
               <label class="form-label">Agent Mode</label>
-              <input
-                type="text"
-                class="form-input"
-                id="agentMode"
-                value="claude-opus-4.5"
-              />
+              <input type="text" class="form-input" id="agentMode" value="claude-opus-4.5" />
             </div>
           </div>
           <div class="form-group">
@@ -379,11 +1197,7 @@
               &nbsp;&nbsp;启用账号
             </label>
           </div>
-          <button
-            type="submit"
-            class="btn btn-primary"
-            style="width: 100%; margin-top: 16px"
-          >
+          <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px">
             保存
           </button>
         </form>
@@ -392,23 +1206,36 @@
 
     <script>
       let accounts = [];
+      let currentPlatform = '';
+      let pageSize = 20;
 
       async function loadAccounts() {
         try {
           const res = await fetch("/api/accounts");
+          if (res.status === 401) {
+            window.location.href = "./login.html";
+            return;
+          }
           accounts = await res.json();
           renderAccounts();
           updateStats();
         } catch (err) {
           console.error("Failed to load accounts:", err);
+          showToast("加载账号失败", "error");
         }
       }
 
       function renderAccounts() {
         const container = document.getElementById("accountsList");
-        if (accounts.length === 0) {
-          container.innerHTML =
-            '<div class="empty-state"><p>暂无账号，点击上方按钮添加</p></div>';
+        const filtered = accounts.filter(acc => !currentPlatform || acc.agent_mode?.toLowerCase().includes(currentPlatform.toLowerCase()) || acc.name?.toLowerCase().includes(currentPlatform.toLowerCase()));
+
+        if (filtered.length === 0) {
+          container.innerHTML = `
+            <div class="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
+              <span style="font-size: 3rem; margin-bottom: 16px;">📂</span>
+              <p>暂无 ${currentPlatform} 账号数据</p>
+            </div>`;
+          document.getElementById("paginationInfo").textContent = `共 0 条记录，第 1/1 页`;
           return;
         }
 
@@ -416,51 +1243,197 @@
                 <table>
                     <thead>
                         <tr>
-                            <th>名称</th>
-                            <th>Email</th>
-                            <th>权重</th>
-                            <th>请求数</th>
+                            <th style="width: 40px;"><input type="checkbox" onchange="toggleSelectAll(this.checked)"></th>
+                            <th style="width: 60px;">ID</th>
+                            <th>邮箱</th>
+                            <th>TOKEN</th>
+                            <th>订阅</th>
+                            <th style="width: 180px;">用量</th>
                             <th>状态</th>
-                            <th>操作</th>
+                            <th>调用</th>
+                            <th>最后调用</th>
+                            <th>重置日期</th>
+                            <th style="text-align: right;">操作</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${accounts
-                          .map(
-                            (acc) => `
+                        ${filtered
+            .map(
+              (acc) => `
                             <tr>
-                                <td>${escapeHtml(acc.name)}</td>
-                                <td>${escapeHtml(acc.email)}</td>
-                                <td>${acc.weight}</td>
-                                <td>${acc.request_count || 0}</td>
+                                <td><input type="checkbox" class="row-checkbox" data-id="${acc.id}" onchange="updateSelectedCount()"></td>
+                                <td style="color: #64748b; font-size: 0.9rem;">${acc.id}</td>
+                                <td style="font-weight: 600; font-size: 0.95rem; color: #1e293b;">${escapeHtml(acc.email || '-')}</td>
                                 <td>
-                                    <span class="status-badge ${acc.enabled ? "status-enabled" : "status-disabled"}">
-                                        ${acc.enabled ? "已启用" : "已禁用"}
-                                    </span>
+                                    <span class="token-text" title="${escapeHtml(acc.token || '-')}">${escapeHtml(acc.token || (acc.session_id ? acc.session_id.substring(0, 20) + '...' : '-'))}</span>
+                                </td>
+                                <td><span class="tag tag-free">${acc.subscription || 'free'}</span></td>
+                                <td>
+                                    <div style="display: flex; align-items: center; gap: 8px;">
+                                        <div class="usage-progress-container">
+                                            <div class="usage-progress-bar ${acc.usage_current / (acc.usage_total || 550) > 0.8 ? 'red' : acc.usage_current / (acc.usage_total || 550) > 0.5 ? 'orange' : 'green'}" 
+                                                 style="width: ${Math.min(100, (acc.usage_current / (acc.usage_total || 550)) * 100)}%;"></div>
+                                        </div>
+                                        <span style="font-size: 0.8rem; color: #64748b;">${(acc.usage_current || 0).toFixed(2)}/${acc.usage_total || 550}</span>
+                                    </div>
                                 </td>
                                 <td>
-                                    <div class="actions">
-                                        <button class="btn btn-primary btn-sm" onclick="editAccount(${acc.id})">编辑</button>
-                                        <button class="btn btn-danger btn-sm" onclick="deleteAccount(${acc.id})">删除</button>
+                                    <span class="tag tag-status-normal" style="background: ${acc.enabled ? '#ecfdf5' : '#fef2f2'}; color: ${acc.enabled ? '#10b981' : '#ef4444'}; border: none;">
+                                        ${acc.enabled ? '正常' : '禁用'}
+                                    </span>
+                                </td>
+                                <td style="font-size: 0.9rem; color: #1e293b; font-weight: 500;">${acc.request_count || 0}</td>
+                                <td style="font-size: 0.8rem; color: #64748b;">${acc.last_used_at && !acc.last_used_at.startsWith('0001') ? formatTime(acc.last_used_at) : '-'}</td>
+                                <td style="color: #64748b; font-size: 0.9rem;">${acc.reset_date || '-'}</td>
+                                <td style="text-align: right;">
+                                    <div style="display: flex; justify-content: flex-end; gap: 12px;">
+                                        <i class="action-icon" onclick="refreshToken(${acc.id})" title="刷新">🔄</i>
+                                        <i class="action-icon" onclick="deleteAccount(${acc.id})" title="删除">🗑️</i>
                                     </div>
                                 </td>
                             </tr>
                         `,
-                          )
-                          .join("")}
+            )
+            .join("")}
                     </tbody>
                 </table>
             `;
+
+        document.getElementById("paginationInfo").textContent = `共 ${filtered.length} 条记录，第 1/1 页`;
+        updateSelectedCount();
       }
 
       function updateStats() {
-        document.getElementById("totalAccounts").textContent = accounts.length;
-        document.getElementById("enabledAccounts").textContent =
-          accounts.filter((a) => a.enabled).length;
-        document.getElementById("totalRequests").textContent = accounts.reduce(
-          (sum, a) => sum + (a.request_count || 0),
-          0,
-        );
+        const total = accounts.length;
+        const enabled = accounts.filter((a) => a.enabled).length;
+        const disabled = total - enabled;
+
+        // Update cards
+        document.getElementById("totalAccounts").textContent = total;
+        document.getElementById("enabledAccounts").textContent = enabled;
+        document.getElementById("disabledAccounts").textContent = disabled;
+
+        // Update sidebar
+        document.getElementById("footerTotal").textContent = total;
+        document.getElementById("footerNormal").textContent = enabled;
+        document.getElementById("footerAbnormal").textContent = disabled;
+
+        // Update usage progress (mock)
+        const usage = 4;
+        const limit = 10000;
+        const percent = (usage / limit) * 100;
+        document.getElementById("usageProgress").style.width = percent + "%";
+      }
+
+      function updateSelectedCount() {
+        const checked = document.querySelectorAll(".row-checkbox:checked").length;
+        document.getElementById("selectedCount").textContent = checked;
+        const batchBtn = document.getElementById("batchDeleteBtn");
+        if (batchBtn) {
+          batchBtn.disabled = checked === 0;
+          batchBtn.style.color = checked === 0 ? "#94a3b8" : "#ef4444";
+          batchBtn.style.borderColor = checked === 0 ? "#e2e8f0" : "#fecaca";
+        }
+      }
+
+      function toggleSelectAll(checked) {
+        document.querySelectorAll(".row-checkbox").forEach(cb => cb.checked = checked);
+        updateSelectedCount();
+      }
+
+      function filterByPlatform(platform) {
+        currentPlatform = platform;
+        document.querySelectorAll("#platformFilters .tab-item").forEach(btn => {
+          btn.classList.toggle("active", (platform === '' && btn.textContent === 'All') || btn.textContent === platform);
+        });
+        document.getElementById("pageSubtitle").textContent = platform ? `管理您的 ${platform} API 凭证` : "管理您的所有 API 凭证";
+        renderAccounts();
+      }
+
+      function switchTab(tabName) {
+        // Sidebar active state
+        document.querySelectorAll(".sidebar-link").forEach(link => {
+          link.classList.remove("active");
+          if (link.getAttribute("onclick")?.includes(tabName)) {
+            link.classList.add("active");
+          }
+        });
+
+        const accountsWrapper = document.getElementById("accountsWrapper");
+        const keysWrapper = document.getElementById("keysWrapper");
+        const modelsWrapper = document.getElementById("modelsWrapper");
+        const title = document.getElementById("pageTitle");
+
+        if (tabName === 'accounts') {
+          accountsWrapper.style.display = 'block';
+          keysWrapper.style.display = 'none';
+          modelsWrapper.style.display = 'none';
+          document.getElementById("accountsHeader").style.display = 'block';
+          document.getElementById("modelsHeader").style.display = 'none';
+          title.textContent = "账号管理";
+          loadAccounts();
+        } else if (tabName === 'keys') {
+          accountsWrapper.style.display = 'none';
+          keysWrapper.style.display = 'block';
+          modelsWrapper.style.display = 'none';
+          document.getElementById("accountsHeader").style.display = 'none';
+          document.getElementById("modelsHeader").style.display = 'none';
+          title.textContent = "配置管理";
+          loadConfiguration();
+        } else if (tabName === 'models') {
+          accountsWrapper.style.display = 'none';
+          keysWrapper.style.display = 'none';
+          modelsWrapper.style.display = 'block';
+          document.getElementById("accountsHeader").style.display = 'none';
+          document.getElementById("modelsHeader").style.display = 'block';
+          title.textContent = "模型管理";
+          loadModels();
+        }
+
+        localStorage.setItem("activeTab", tabName);
+      }
+
+      async function logout() {
+        if (confirm("确定要退出登录吗？")) {
+          try {
+            await fetch("/api/logout", { method: "POST" });
+            window.location.href = "./login.html";
+          } catch (err) {
+            window.location.href = "./login.html";
+          }
+        }
+      }
+
+      async function clearAbnormalAccounts() {
+        const abnormal = accounts.filter(a => !a.enabled);
+        if (abnormal.length === 0) {
+          showToast("没有异常账号", "info");
+          return;
+        }
+        if (confirm(`确定要清空 ${abnormal.length} 个异常账号吗？`)) {
+          for (const acc of abnormal) {
+            await fetch(`/api/accounts/${acc.id}`, { method: "DELETE" });
+          }
+          loadAccounts();
+          showToast("已清空异常账号");
+        }
+      }
+
+      async function batchDeleteAccounts() {
+        const selected = Array.from(document.querySelectorAll(".row-checkbox:checked")).map(cb => cb.dataset.id);
+        if (selected.length === 0) return;
+        if (confirm(`确定要删除选中的 ${selected.length} 个账号吗？`)) {
+          for (const id of selected) {
+            await fetch(`/api/accounts/${id}`, { method: "DELETE" });
+          }
+          loadAccounts();
+          showToast(`已成功删除 ${selected.length} 个账号`);
+        }
+      }
+
+      function updatePageSize(size) {
+        pageSize = parseInt(size);
+        renderAccounts();
       }
 
       function openModal(account = null) {
@@ -484,17 +1457,18 @@
           document.getElementById("weight").value = "1";
           document.getElementById("enabled").checked = true;
         }
-
         modal.classList.add("active");
+        modal.style.display = "flex";
       }
 
       function closeModal() {
-        document.getElementById("accountModal").classList.remove("active");
+        const modal = document.getElementById("accountModal");
+        modal.classList.remove("active");
+        modal.style.display = "none";
       }
 
       async function saveAccount(e) {
         e.preventDefault();
-
         const id = document.getElementById("accountId").value;
         const data = {
           name: document.getElementById("name").value,
@@ -507,21 +1481,17 @@
         try {
           const url = id ? `/api/accounts/${id}` : "/api/accounts";
           const method = id ? "PUT" : "POST";
-          const response = await fetch(url, {
+          const res = await fetch(url, {
             method,
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(data),
           });
-
-          if (!response.ok) {
-            const error = await response.text();
-            throw new Error(error);
-          }
-
+          if (!res.ok) throw new Error(await res.text());
           closeModal();
           loadAccounts();
+          showToast("保存成功");
         } catch (err) {
-          alert("保存失败: " + err.message);
+          showToast("保存失败: " + err.message, "error");
         }
       }
 
@@ -529,30 +1499,34 @@
         const account = accounts.find((a) => a.id === id);
         if (account) openModal(account);
       }
+
+      async function refreshToken(id) {
+        try {
+          showToast("正在查询账号信息...", "info");
+          const res = await fetch(`/api/accounts/${id}/refresh`);
+          if (!res.ok) throw new Error(await res.text());
+          const acc = await res.json();
+          showToast(`账号 ${acc.email} 刷新完成`);
+          loadAccounts(); // 刷新列表
+        } catch (err) {
+          showToast("刷新失败: " + err.message, "error");
+        }
+      }
+
       async function deleteAccount(id) {
         if (!confirm("确定要删除这个账号吗？")) return;
         try {
-          const response = await fetch(`/api/accounts/${id}`, {
-            method: "DELETE",
-            headers: {
-              "Content-Type": "application/json",
-            },
-          });
-
-          if (!response.ok) {
-            const error = await response.text();
-            throw new Error(error || `HTTP error! status: ${response.status}`);
-          }
-
-          alert("删除成功");
+          const res = await fetch(`/api/accounts/${id}`, { method: "DELETE" });
+          if (!res.ok) throw new Error(await res.text());
+          showToast("删除成功");
           loadAccounts();
         } catch (err) {
-          console.error("删除失败:", err);
-          alert("删除失败: " + err.message);
+          showToast("删除失败: " + err.message, "error");
         }
       }
 
       function escapeHtml(text) {
+        if (!text) return '';
         const div = document.createElement("div");
         div.textContent = text;
         return div.innerHTML;
@@ -565,7 +1539,6 @@
       async function importAccounts(event) {
         const file = event.target.files[0];
         if (!file) return;
-
         try {
           const text = await file.text();
           const res = await fetch("/api/import", {
@@ -574,17 +1547,508 @@
             body: text,
           });
           const result = await res.json();
-          alert(
-            `导入完成: 成功 ${result.imported} 个, 跳过 ${result.skipped} 个`,
-          );
+          showToast(`导入完成: 成功 ${result.imported}, 跳过 ${result.skipped}`);
           loadAccounts();
         } catch (err) {
-          alert("导入失败: " + err.message);
+          showToast("导入失败: " + err.message, "error");
         }
         event.target.value = "";
       }
 
-      document.addEventListener("DOMContentLoaded", loadAccounts);
+      let apiKeys = [];
+      let createdKeys = [];
+
+      async function loadApiKeys() {
+        try {
+          const res = await fetch("/api/keys");
+          if (res.status === 401) {
+            window.location.href = "./login.html";
+            return;
+          }
+          apiKeys = (await res.json()) || [];
+          renderApiKeys();
+        } catch (err) {
+          showToast("加载 API Keys 失败", "error");
+        }
+      }
+
+      function renderApiKeys() {
+        const container = document.getElementById("keysList");
+        if (apiKeys.length === 0) {
+          container.innerHTML = '<div class="empty-state"><p>暂无 API Key，点击上方按钮创建</p></div>';
+          return;
+        }
+        container.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>Key</th>
+                <th>状态</th>
+                <th>最后使用</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${apiKeys.map((k, idx) => `
+                <tr>
+                  <td style="font-weight: 600;">${escapeHtml(k.name)}</td>
+                  <td>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span style="cursor: pointer;" onclick="toggleKeyVisibility(${idx})">👁️</span>
+                      <span id="key-display-${idx}" style="font-family: monospace; color: #64748b; cursor: pointer;" onclick="copyToClipboard('${k.key_full || k.key_prefix + '****' + k.key_suffix}')">
+                        ${k.key_prefix}****...${k.key_suffix}
+                      </span>
+                    </div>
+                  </td>
+                  <td>
+                    <label class="toggle" style="transform: scale(0.8);">
+                      <input type="checkbox" ${k.enabled ? "checked" : ""} onchange="toggleKeyStatus(${k.id}, this.checked)">
+                      <span class="toggle-slider"></span>
+                    </label>
+                  </td>
+                  <td style="color: #94a3b8; font-size: 0.8rem;">${k.last_used_at ? formatTime(k.last_used_at) : "从未使用"}</td>
+                  <td>
+                    <button class="btn btn-danger-outline" style="padding: 4px 8px;" onclick="openDeleteKeyModal(${k.id}, '${escapeHtml(k.name)}')">删除</button>
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>`;
+      }
+
+      function toggleKeyVisibility(idx) {
+        const span = document.getElementById(`key-display-${idx}`);
+        const k = apiKeys[idx];
+        if (span.textContent.includes('****')) {
+          span.textContent = k.key_full || (k.key_prefix + '****' + k.key_suffix);
+        } else {
+          span.textContent = `${k.key_prefix}****...${k.key_suffix}`;
+        }
+      }
+
+      async function toggleKeyStatus(id, enabled) {
+        try {
+          await fetch(`/api/keys/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled }),
+          });
+          showToast(enabled ? "已启用" : "已禁用");
+        } catch (err) {
+          showToast("操作失败", "error");
+        }
+      }
+
+      function openCreateKeyModal() {
+        document.getElementById("keyName").value = "";
+        document.getElementById("createKeyModal").classList.add("active");
+        document.getElementById("createKeyModal").style.display = "flex";
+      }
+
+      function closeCreateKeyModal() {
+        document.getElementById("createKeyModal").classList.remove("active");
+        document.getElementById("createKeyModal").style.display = "none";
+      }
+
+      async function createApiKey(e) {
+        e.preventDefault();
+        const names = document.getElementById("keyName").value.split("\n").filter(n => n.trim());
+        if (names.length === 0) return;
+
+        createdKeys = [];
+        for (const name of names) {
+          try {
+            const res = await fetch("/api/keys", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name }),
+            });
+            const data = await res.json();
+            createdKeys.push({ name, key: data.key });
+          } catch (err) {
+            createdKeys.push({ name, error: err.message });
+          }
+        }
+        closeCreateKeyModal();
+        renderCreatedKeys();
+        document.getElementById("showKeyModal").classList.add("active");
+        document.getElementById("showKeyModal").style.display = "flex";
+        loadApiKeys();
+      }
+
+      function renderCreatedKeys() {
+        const container = document.getElementById("fullKeyDisplay");
+        container.innerHTML = createdKeys.map(k => `
+          <div class="key-display" style="margin-bottom: 8px; padding: 12px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px;">
+            <div style="font-size: 0.8rem; color: #64748b;">${escapeHtml(k.name)}</div>
+            <div style="font-weight: bold; margin-top: 4px; word-break: break-all; color: #22c55e;">${escapeHtml(k.key || k.error)}</div>
+          </div>
+        `).join("");
+      }
+
+      function closeShowKeyModal() {
+        document.getElementById("showKeyModal").classList.remove("active");
+        document.getElementById("showKeyModal").style.display = "none";
+      }
+
+      function openDeleteKeyModal(id, name) {
+        document.getElementById("deleteKeyId").value = id;
+        document.getElementById("deleteKeyName").textContent = name;
+        const modal = document.getElementById("deleteKeyModal");
+        modal.classList.add("active");
+        modal.style.display = "flex";
+      }
+
+      function closeDeleteKeyModal() {
+        const modal = document.getElementById("deleteKeyModal");
+        modal.classList.remove("active");
+        modal.style.display = "none";
+      }
+
+      async function confirmDeleteKey() {
+        const id = document.getElementById("deleteKeyId").value;
+        try {
+          await fetch(`/api/keys/${id}`, { method: "DELETE" });
+          closeDeleteKeyModal();
+          showToast("删除成功");
+          loadApiKeys();
+        } catch (err) {
+          showToast("删除失败", "error");
+        }
+      }
+
+      function formatTime(iso) {
+        const d = new Date(iso);
+        const now = new Date();
+        const diff = (now - d) / 1000;
+        if (diff < 60) return "刚刚";
+        if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
+        if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
+        return d.toLocaleDateString();
+      }
+
+      function showToast(msg, type = 'success') {
+        const container = document.getElementById("toastContainer");
+        const toast = document.createElement("div");
+        toast.className = `toast`;
+        toast.style.borderLeft = `4px solid ${type === 'success' ? '#22c55e' : '#ef4444'}`;
+        toast.innerHTML = `<span>${type === 'success' ? '✅' : '❌'}</span> ${msg}`;
+        container.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+      }
+
+      async function copyToClipboard(text) {
+        try {
+          if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+          } else {
+            const el = document.createElement('textarea');
+            el.value = text;
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+          }
+          showToast("已复制到剪切板");
+        } catch (err) {
+          showToast("复制失败", "error");
+        }
+      }
+
+      function switchConfigTab(tab) {
+        document.querySelectorAll("#configTabs .tab-item").forEach(btn => {
+          btn.classList.toggle("active", btn.textContent.includes(tab === 'basic' ? '基础' : tab === 'auth' ? '授权' : '代理'));
+        });
+        document.getElementById("basicConfig").style.display = tab === 'basic' ? 'block' : 'none';
+        document.getElementById("authConfig").style.display = tab === 'auth' ? 'block' : 'none';
+        document.getElementById("proxyConfig").style.display = tab === 'proxy' ? 'block' : 'none';
+
+        if (tab === 'auth') loadApiKeys();
+      }
+
+      function updateSwitchLabel(el, text) {
+        const span = document.getElementById("label_" + el.id);
+        if (span) {
+          span.textContent = text + (el.checked ? " (已开启)" : " (已关闭)");
+        }
+      }
+
+      async function loadConfiguration() {
+        try {
+          const res = await fetch("/api/config");
+          if (res.status === 401) {
+            window.location.href = "./login.html";
+            return;
+          }
+          const cfg = await res.json();
+
+          document.getElementById("cfg_admin_pass").value = cfg.admin_pass || "";
+          document.getElementById("cfg_admin_token").value = cfg.admin_token || "";
+          document.getElementById("cfg_max_retries").value = cfg.max_retries || 3;
+          document.getElementById("cfg_retry_delay").value = cfg.retry_delay || 1000;
+          document.getElementById("cfg_switch_count").value = cfg.account_switch_count || 5;
+          document.getElementById("cfg_request_timeout").value = cfg.request_timeout || 120;
+          document.getElementById("cfg_request_timeout").value = cfg.request_timeout || 120;
+          document.getElementById("cfg_refresh_interval").value = cfg.token_refresh_interval || 30;
+
+          // Proxy Config Loading
+          document.getElementById("cfg_proxy_http").value = cfg.proxy_http || "";
+          document.getElementById("cfg_proxy_https").value = cfg.proxy_https || "";
+          document.getElementById("cfg_proxy_user").value = cfg.proxy_user || "";
+          document.getElementById("cfg_proxy_pass").value = cfg.proxy_pass || "";
+          document.getElementById("cfg_proxy_bypass").value = (cfg.proxy_bypass || []).join("\n");
+
+          const autoToken = document.getElementById("cfg_auto_refresh_token");
+          autoToken.checked = cfg.auto_refresh_token || false;
+          updateSwitchLabel(autoToken, "自动刷新Token");
+
+          const autoUsage = document.getElementById("cfg_auto_refresh_usage");
+          autoUsage.checked = cfg.auto_refresh_usage || false;
+          updateSwitchLabel(autoUsage, "自动刷新用量");
+
+          document.getElementById("cfg_output_token_count").checked = cfg.output_token_count || false;
+          document.getElementById("cfg_cache_token_count").checked = cfg.cache_token_count || false;
+          document.getElementById("cfg_cache_ttl").value = cfg.cache_ttl || 5;
+          document.getElementById("cfg_cache_strategy").value = cfg.cache_strategy || "split";
+
+        } catch (err) {
+          showToast("加载配置失败", "error");
+        }
+      }
+
+      async function saveConfiguration() {
+        const data = {
+          admin_pass: document.getElementById("cfg_admin_pass").value,
+          admin_token: document.getElementById("cfg_admin_token").value,
+          max_retries: parseInt(document.getElementById("cfg_max_retries").value),
+          retry_delay: parseInt(document.getElementById("cfg_retry_delay").value),
+          account_switch_count: parseInt(document.getElementById("cfg_switch_count").value),
+          request_timeout: parseInt(document.getElementById("cfg_request_timeout").value),
+          token_refresh_interval: parseInt(document.getElementById("cfg_refresh_interval").value),
+          auto_refresh_token: document.getElementById("cfg_auto_refresh_token").checked,
+          auto_refresh_usage: document.getElementById("cfg_auto_refresh_usage").checked,
+          output_token_count: document.getElementById("cfg_output_token_count").checked,
+          cache_token_count: document.getElementById("cfg_cache_token_count").checked,
+          cache_ttl: parseInt(document.getElementById("cfg_cache_ttl").value),
+          cache_token_count: document.getElementById("cfg_cache_token_count").checked,
+          cache_ttl: parseInt(document.getElementById("cfg_cache_ttl").value),
+          cache_strategy: document.getElementById("cfg_cache_strategy").value,
+
+          // Proxy Config Saving
+          proxy_http: document.getElementById("cfg_proxy_http").value,
+          proxy_https: document.getElementById("cfg_proxy_https").value,
+          proxy_user: document.getElementById("cfg_proxy_user").value,
+          proxy_pass: document.getElementById("cfg_proxy_pass").value,
+          proxy_bypass: document.getElementById("cfg_proxy_bypass").value.split("\n").filter(line => line.trim() !== "")
+        };
+
+        try {
+          const res = await fetch("/api/config", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data)
+          });
+          if (!res.ok) throw new Error(await res.text());
+          showToast("配置已保存");
+        } catch (err) {
+          showToast("保存失败: " + err.message, "error");
+        }
+      }
+
+      function togglePassword(id) {
+        const input = document.getElementById(id);
+        input.type = input.type === 'password' ? 'text' : 'password';
+      }
+
+      function copyFieldValue(id) {
+        const val = document.getElementById(id).value;
+        if (!val) {
+          showToast("没有内容可复制", "info");
+          return;
+        }
+        copyToClipboard(val);
+      }
+
+      // Model Management Logic
+      let models = [];
+      let currentModelChannel = '';
+
+      async function loadModels() {
+        try {
+          const res = await fetch("/api/models");
+          if (res.status === 401) {
+            window.location.href = "./login.html";
+            return;
+          }
+          models = await res.json() || [];
+          renderModels();
+        } catch (err) {
+          showToast("加载模型失败", "error");
+        }
+      }
+
+      function renderModels() {
+        const container = document.getElementById("modelsList");
+        let filtered = models;
+        if (currentModelChannel) {
+          filtered = models.filter(m => m.channel === currentModelChannel);
+        }
+
+        // Sort: SortOrder descending, then Name ascending
+        filtered.sort((a, b) => {
+          if (b.sort_order !== a.sort_order) return b.sort_order - a.sort_order;
+          return a.name.localeCompare(b.name);
+        });
+
+        if (filtered.length === 0) {
+          container.innerHTML = `
+            <div class="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
+              <span style="font-size: 3rem; margin-bottom: 16px;">💎</span>
+              <p>暂无${currentModelChannel ? ' ' + currentModelChannel : ''} 模型数据</p>
+            </div>`;
+          return;
+        }
+
+        container.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 60px;">ID</th>
+                <th>渠道</th>
+                <th>模型 ID</th>
+                <th>显示名称</th>
+                <th>权重</th>
+                <th>状态</th>
+                <th>默认</th>
+                <th style="text-align: right;">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filtered.map(m => `
+                <tr>
+                  <td style="color: #64748b; font-size: 0.9rem;">${m.id}</td>
+                  <td><span class="tag" style="background: #e0f2fe; color: #0284c7;">${escapeHtml(m.channel)}</span></td>
+                  <td style="font-family: monospace; color: #475569;">${escapeHtml(m.model_id)}</td>
+                  <td style="font-weight: 600; color: #1e293b;">${escapeHtml(m.name)}</td>
+                  <td>${m.sort_order}</td>
+                  <td>
+                    <span class="tag" style="
+                      background: ${m.status === 'available' ? '#ecfdf5' : m.status === 'maintenance' ? '#fffbeb' : '#fef2f2'};
+                      color: ${m.status === 'available' ? '#10b981' : m.status === 'maintenance' ? '#f59e0b' : '#ef4444'};
+                    ">
+                      ${m.status === 'available' ? '可用' : m.status === 'maintenance' ? '维护' : '下线'}
+                    </span>
+                  </td>
+                  <td>${m.is_default ? '<span style="color: #10b981;">●</span>' : ''}</td>
+                  <td style="text-align: right;">
+                    <div style="display: flex; justify-content: flex-end; gap: 12px;">
+                      <i class="action-icon" onclick="editModel('${m.id}')" title="编辑">✏️</i>
+                      <i class="action-icon" onclick="deleteModel('${m.id}')" title="删除">🗑️</i>
+                    </div>
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      }
+
+      function filterModelsByChannel(channel) {
+        currentModelChannel = channel;
+        document.querySelectorAll("#modelPlatformFilters .tab-item").forEach(btn => {
+          btn.classList.toggle("active", (channel === '' && btn.textContent === 'All') || btn.textContent === channel);
+        });
+        renderModels();
+      }
+
+      function openModelModal(model = null) {
+        const modal = document.getElementById("modelModal");
+        const title = document.getElementById("modelModalTitle");
+        const form = document.getElementById("modelForm");
+
+        if (model) {
+          title.textContent = "编辑模型";
+          document.getElementById("modelId").value = model.id;
+          document.getElementById("modelChannel").value = model.channel;
+          document.getElementById("modelModelId").value = model.model_id;
+          document.getElementById("modelName").value = model.name;
+          document.getElementById("modelSortOrder").value = model.sort_order;
+          document.getElementById("modelStatus").value = model.status;
+          document.getElementById("modelIsDefault").checked = model.is_default;
+        } else {
+          title.textContent = "添加模型";
+          form.reset();
+          document.getElementById("modelId").value = "";
+          document.getElementById("modelChannel").value = "Orchids";
+          document.getElementById("modelSortOrder").value = "0";
+          document.getElementById("modelStatus").value = "available";
+        }
+        modal.classList.add("active");
+        modal.style.display = "flex";
+      }
+
+      function closeModelModal() {
+        const modal = document.getElementById("modelModal");
+        modal.classList.remove("active");
+        modal.style.display = "none";
+      }
+
+      async function saveModel(e) {
+        e.preventDefault();
+        const id = document.getElementById("modelId").value;
+        const data = {
+          channel: document.getElementById("modelChannel").value,
+          model_id: document.getElementById("modelModelId").value,
+          name: document.getElementById("modelName").value,
+          sort_order: parseInt(document.getElementById("modelSortOrder").value) || 0,
+          status: document.getElementById("modelStatus").value,
+          is_default: document.getElementById("modelIsDefault").checked
+        };
+
+        if (id) {
+          data.id = id;
+        }
+
+        try {
+          const url = id ? `/api/models/${id}` : "/api/models";
+          const method = id ? "PUT" : "POST";
+          const res = await fetch(url, {
+            method,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          closeModelModal();
+          loadModels();
+          showToast("保存成功");
+        } catch (err) {
+          showToast("保存失败: " + err.message, "error");
+        }
+      }
+
+      function editModel(id) {
+        const model = models.find(m => m.id === id);
+        if (model) openModelModal(model);
+      }
+
+      async function deleteModel(id) {
+        if (!confirm("确定要删除这个模型吗？")) return;
+        try {
+          const res = await fetch(`/api/models/${id}`, { method: "DELETE" });
+          if (!res.ok) throw new Error(await res.text());
+          showToast("删除成功");
+          loadModels();
+        } catch (err) {
+          showToast("删除失败: " + err.message, "error");
+        }
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        const savedTab = localStorage.getItem("activeTab") || "accounts";
+        switchTab(savedTab);
+      });
     </script>
-  </body>
+</body>
+
 </html>

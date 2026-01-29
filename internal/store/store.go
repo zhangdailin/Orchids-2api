@@ -2,7 +2,10 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"orchids-api/internal/model"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +24,11 @@ type Account struct {
 	Email        string    `json:"email"`
 	Weight       int       `json:"weight"`
 	Enabled      bool      `json:"enabled"`
+	Token        string    `json:"token"`        // Truncated display token
+	Subscription string    `json:"subscription"` // "free", "pro", etc.
+	UsageCurrent float64   `json:"usage_current"`
+	UsageTotal   float64   `json:"usage_total"`
+	ResetDate    string    `json:"reset_date"`
 	RequestCount int64     `json:"request_count"`
 	LastUsedAt   time.Time `json:"last_used_at"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -33,18 +41,108 @@ type Settings struct {
 	Value string `json:"value"`
 }
 
-type Store struct {
-	db *sql.DB
-	mu sync.RWMutex
+type ApiKey struct {
+	ID         int64      `json:"id"`
+	Name       string     `json:"name"`
+	KeyHash    string     `json:"-"`
+	KeyFull    string     `json:"key_full,omitempty"`
+	KeyPrefix  string     `json:"key_prefix"`
+	KeySuffix  string     `json:"key_suffix"`
+	Enabled    bool       `json:"enabled"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
-func New(dbPath string) (*Store, error) {
+type Store struct {
+	db       *sql.DB
+	mu       sync.RWMutex
+	accounts accountStore
+	settings settingsStore
+	apiKeys  apiKeyStore
+	models   modelStore
+}
+
+type Options struct {
+	StoreMode     string
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
+	RedisPrefix   string
+}
+
+type accountStore interface {
+	CreateAccount(acc *Account) error
+	UpdateAccount(acc *Account) error
+	DeleteAccount(id int64) error
+	GetAccount(id int64) (*Account, error)
+	ListAccounts() ([]*Account, error)
+	GetEnabledAccounts() ([]*Account, error)
+	IncrementRequestCount(id int64) error
+}
+
+type settingsStore interface {
+	GetSetting(key string) (string, error)
+	SetSetting(key, value string) error
+}
+
+type apiKeyStore interface {
+	CreateApiKey(key *ApiKey) error
+	ListApiKeys() ([]*ApiKey, error)
+	GetApiKeyByHash(hash string) (*ApiKey, error)
+	UpdateApiKeyEnabled(id int64, enabled bool) error
+	UpdateApiKeyLastUsed(id int64) error
+	DeleteApiKey(id int64) error
+	GetApiKeyByID(id int64) (*ApiKey, error)
+}
+
+type modelStore interface {
+	CreateModel(m *model.Model) error
+	UpdateModel(m *model.Model) error
+	DeleteModel(id string) error
+	GetModel(id string) (*model.Model, error)
+	ListModels() ([]*model.Model, error)
+}
+
+type closeableStore interface {
+	Close() error
+}
+
+func New(dbPath string, opts Options) (*Store, error) {
+	mode := strings.ToLower(strings.TrimSpace(opts.StoreMode))
+	if mode == "" {
+		mode = "redis"
+	}
+
+	store := &Store{}
+	if mode == "redis" {
+		redisStore, err := newRedisStore(opts.RedisAddr, opts.RedisPassword, opts.RedisDB, opts.RedisPrefix)
+		if err != nil {
+			return nil, fmt.Errorf("failed to init redis store: %w", err)
+		}
+		store.accounts = redisStore
+		store.settings = redisStore
+		store.apiKeys = redisStore
+		store.models = redisStore
+		return store, nil
+	}
+
+	if dbPath == "" {
+		return nil, errors.New("sqlite db path is required when store_mode=sqlite")
+	}
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	store := &Store{db: db}
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(time.Hour)
+
+	if err := applySQLitePragmas(db); err != nil {
+		return nil, fmt.Errorf("failed to apply sqlite pragmas: %w", err)
+	}
+
+	store.db = db
 	if err := store.migrate(); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %w", err)
 	}
@@ -66,6 +164,11 @@ func (s *Store) migrate() error {
 			email TEXT NOT NULL,
 			weight INTEGER DEFAULT 1,
 			enabled INTEGER DEFAULT 1,
+			token TEXT DEFAULT '',
+			subscription TEXT DEFAULT 'free',
+			usage_current REAL DEFAULT 0,
+			usage_total REAL DEFAULT 550,
+			reset_date TEXT DEFAULT '-',
 			request_count INTEGER DEFAULT 0,
 			last_used_at DATETIME,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -76,7 +179,20 @@ func (s *Store) migrate() error {
 			key TEXT UNIQUE NOT NULL,
 			value TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			key_hash TEXT NOT NULL UNIQUE,
+			key_full TEXT NOT NULL DEFAULT '',
+			key_prefix TEXT NOT NULL DEFAULT 'sk-',
+			key_suffix TEXT NOT NULL,
+			enabled INTEGER DEFAULT 1,
+			last_used_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_accounts_enabled ON accounts(enabled)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)`,
+		`CREATE INDEX IF NOT EXISTS idx_api_keys_enabled ON api_keys(enabled)`,
 	}
 
 	for _, q := range queries {
@@ -85,21 +201,55 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	// 迁移：为现有表添加新列
+	s.db.Exec(`ALTER TABLE api_keys ADD COLUMN key_full TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE accounts ADD COLUMN token TEXT DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE accounts ADD COLUMN subscription TEXT DEFAULT 'free'`)
+	s.db.Exec(`ALTER TABLE accounts ADD COLUMN usage_current REAL DEFAULT 0`)
+	s.db.Exec(`ALTER TABLE accounts ADD COLUMN usage_total REAL DEFAULT 550`)
+	s.db.Exec(`ALTER TABLE accounts ADD COLUMN reset_date TEXT DEFAULT '-'`)
+
+	return nil
+}
+
+func applySQLitePragmas(db *sql.DB) error {
+	queries := []string{
+		"PRAGMA journal_mode=WAL;",
+		"PRAGMA synchronous=NORMAL;",
+		"PRAGMA busy_timeout=5000;",
+		"PRAGMA foreign_keys=ON;",
+	}
+	for _, q := range queries {
+		if _, err := db.Exec(q); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (s *Store) Close() error {
+	if s.accounts != nil {
+		if closer, ok := s.accounts.(closeableStore); ok {
+			_ = closer.Close()
+		}
+	}
+	if s.db == nil {
+		return nil
+	}
 	return s.db.Close()
 }
 
 func (s *Store) CreateAccount(acc *Account) error {
+	if s.accounts != nil {
+		return s.accounts.CreateAccount(acc)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	result, err := s.db.Exec(`
-		INSERT INTO accounts (name, session_id, client_cookie, client_uat, project_id, user_id, agent_mode, email, weight, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, acc.Name, acc.SessionID, acc.ClientCookie, acc.ClientUat, acc.ProjectID, acc.UserID, acc.AgentMode, acc.Email, acc.Weight, acc.Enabled)
+		INSERT INTO accounts (name, session_id, client_cookie, client_uat, project_id, user_id, agent_mode, email, weight, enabled, token, subscription, usage_current, usage_total, reset_date)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, acc.Name, acc.SessionID, acc.ClientCookie, acc.ClientUat, acc.ProjectID, acc.UserID, acc.AgentMode, acc.Email, acc.Weight, acc.Enabled, acc.Token, acc.Subscription, acc.UsageCurrent, acc.UsageTotal, acc.ResetDate)
 	if err != nil {
 		return err
 	}
@@ -113,6 +263,9 @@ func (s *Store) CreateAccount(acc *Account) error {
 }
 
 func (s *Store) UpdateAccount(acc *Account) error {
+	if s.accounts != nil {
+		return s.accounts.UpdateAccount(acc)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -120,13 +273,17 @@ func (s *Store) UpdateAccount(acc *Account) error {
 		UPDATE accounts SET
 			name = ?, session_id = ?, client_cookie = ?, client_uat = ?,
 			project_id = ?, user_id = ?, agent_mode = ?, email = ?,
-			weight = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+			weight = ?, enabled = ?, token = ?, subscription = ?,
+			usage_current = ?, usage_total = ?, reset_date = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, acc.Name, acc.SessionID, acc.ClientCookie, acc.ClientUat, acc.ProjectID, acc.UserID, acc.AgentMode, acc.Email, acc.Weight, acc.Enabled, acc.ID)
+	`, acc.Name, acc.SessionID, acc.ClientCookie, acc.ClientUat, acc.ProjectID, acc.UserID, acc.AgentMode, acc.Email, acc.Weight, acc.Enabled, acc.Token, acc.Subscription, acc.UsageCurrent, acc.UsageTotal, acc.ResetDate, acc.ID)
 	return err
 }
 
 func (s *Store) DeleteAccount(id int64) error {
+	if s.accounts != nil {
+		return s.accounts.DeleteAccount(id)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -135,6 +292,9 @@ func (s *Store) DeleteAccount(id int64) error {
 }
 
 func (s *Store) GetAccount(id int64) (*Account, error) {
+	if s.accounts != nil {
+		return s.accounts.GetAccount(id)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -142,11 +302,13 @@ func (s *Store) GetAccount(id int64) (*Account, error) {
 	var lastUsedAt sql.NullTime
 	err := s.db.QueryRow(`
 		SELECT id, name, session_id, client_cookie, client_uat, project_id, user_id,
-			   agent_mode, email, weight, enabled, request_count, last_used_at, created_at, updated_at
+			   agent_mode, email, weight, enabled, token, subscription, usage_current, usage_total, reset_date,
+			   request_count, last_used_at, created_at, updated_at
 		FROM accounts WHERE id = ?
 	`, id).Scan(&acc.ID, &acc.Name, &acc.SessionID, &acc.ClientCookie, &acc.ClientUat,
 		&acc.ProjectID, &acc.UserID, &acc.AgentMode, &acc.Email, &acc.Weight,
-		&acc.Enabled, &acc.RequestCount, &lastUsedAt, &acc.CreatedAt, &acc.UpdatedAt)
+		&acc.Enabled, &acc.Token, &acc.Subscription, &acc.UsageCurrent, &acc.UsageTotal, &acc.ResetDate,
+		&acc.RequestCount, &lastUsedAt, &acc.CreatedAt, &acc.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -157,12 +319,16 @@ func (s *Store) GetAccount(id int64) (*Account, error) {
 }
 
 func (s *Store) ListAccounts() ([]*Account, error) {
+	if s.accounts != nil {
+		return s.accounts.ListAccounts()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`
 		SELECT id, name, session_id, client_cookie, client_uat, project_id, user_id,
-			   agent_mode, email, weight, enabled, request_count, last_used_at, created_at, updated_at
+			   agent_mode, email, weight, enabled, token, subscription, usage_current, usage_total, reset_date,
+			   request_count, last_used_at, created_at, updated_at
 		FROM accounts ORDER BY id
 	`)
 	if err != nil {
@@ -176,7 +342,8 @@ func (s *Store) ListAccounts() ([]*Account, error) {
 		var lastUsedAt sql.NullTime
 		err := rows.Scan(&acc.ID, &acc.Name, &acc.SessionID, &acc.ClientCookie, &acc.ClientUat,
 			&acc.ProjectID, &acc.UserID, &acc.AgentMode, &acc.Email, &acc.Weight,
-			&acc.Enabled, &acc.RequestCount, &lastUsedAt, &acc.CreatedAt, &acc.UpdatedAt)
+			&acc.Enabled, &acc.Token, &acc.Subscription, &acc.UsageCurrent, &acc.UsageTotal, &acc.ResetDate,
+			&acc.RequestCount, &lastUsedAt, &acc.CreatedAt, &acc.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -189,12 +356,16 @@ func (s *Store) ListAccounts() ([]*Account, error) {
 }
 
 func (s *Store) GetEnabledAccounts() ([]*Account, error) {
+	if s.accounts != nil {
+		return s.accounts.GetEnabledAccounts()
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	rows, err := s.db.Query(`
 		SELECT id, name, session_id, client_cookie, client_uat, project_id, user_id,
-			   agent_mode, email, weight, enabled, request_count, last_used_at, created_at, updated_at
+			   agent_mode, email, weight, enabled, token, subscription, usage_current, usage_total, reset_date,
+			   request_count, last_used_at, created_at, updated_at
 		FROM accounts WHERE enabled = 1 ORDER BY id
 	`)
 	if err != nil {
@@ -208,7 +379,8 @@ func (s *Store) GetEnabledAccounts() ([]*Account, error) {
 		var lastUsedAt sql.NullTime
 		err := rows.Scan(&acc.ID, &acc.Name, &acc.SessionID, &acc.ClientCookie, &acc.ClientUat,
 			&acc.ProjectID, &acc.UserID, &acc.AgentMode, &acc.Email, &acc.Weight,
-			&acc.Enabled, &acc.RequestCount, &lastUsedAt, &acc.CreatedAt, &acc.UpdatedAt)
+			&acc.Enabled, &acc.Token, &acc.Subscription, &acc.UsageCurrent, &acc.UsageTotal, &acc.ResetDate,
+			&acc.RequestCount, &lastUsedAt, &acc.CreatedAt, &acc.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
@@ -221,6 +393,9 @@ func (s *Store) GetEnabledAccounts() ([]*Account, error) {
 }
 
 func (s *Store) IncrementRequestCount(id int64) error {
+	if s.accounts != nil {
+		return s.accounts.IncrementRequestCount(id)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -232,6 +407,12 @@ func (s *Store) IncrementRequestCount(id int64) error {
 }
 
 func (s *Store) GetSetting(key string) (string, error) {
+	if s.settings != nil {
+		return s.settings.GetSetting(key)
+	}
+	if s.db == nil {
+		return "", errors.New("settings store not configured")
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -244,6 +425,12 @@ func (s *Store) GetSetting(key string) (string, error) {
 }
 
 func (s *Store) SetSetting(key, value string) error {
+	if s.settings != nil {
+		return s.settings.SetSetting(key, value)
+	}
+	if s.db == nil {
+		return errors.New("settings store not configured")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -252,4 +439,249 @@ func (s *Store) SetSetting(key, value string) error {
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value
 	`, key, value)
 	return err
+}
+
+func (s *Store) CreateApiKey(key *ApiKey) error {
+	if s.apiKeys != nil {
+		return s.apiKeys.CreateApiKey(key)
+	}
+	if s.db == nil {
+		return errors.New("api keys store not configured")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result, err := s.db.Exec(`
+		INSERT INTO api_keys (name, key_hash, key_full, key_prefix, key_suffix, enabled)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, key.Name, key.KeyHash, key.KeyFull, key.KeyPrefix, key.KeySuffix, key.Enabled)
+	if err != nil {
+		return err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	key.ID = id
+
+	var createdAt time.Time
+	var lastUsedAt sql.NullTime
+	if err := s.db.QueryRow(`
+		SELECT enabled, last_used_at, created_at
+		FROM api_keys WHERE id = ?
+	`, id).Scan(&key.Enabled, &lastUsedAt, &createdAt); err != nil {
+		return err
+	}
+	if lastUsedAt.Valid {
+		t := lastUsedAt.Time
+		key.LastUsedAt = &t
+	} else {
+		key.LastUsedAt = nil
+	}
+	key.CreatedAt = createdAt
+
+	return nil
+}
+
+func (s *Store) ListApiKeys() ([]*ApiKey, error) {
+	if s.apiKeys != nil {
+		return s.apiKeys.ListApiKeys()
+	}
+	if s.db == nil {
+		return nil, errors.New("api keys store not configured")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`
+		SELECT id, name, key_full, key_prefix, key_suffix, enabled, last_used_at, created_at
+		FROM api_keys ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []*ApiKey
+	for rows.Next() {
+		key := &ApiKey{}
+		var lastUsedAt sql.NullTime
+		if err := rows.Scan(&key.ID, &key.Name, &key.KeyFull, &key.KeyPrefix, &key.KeySuffix, &key.Enabled, &lastUsedAt, &key.CreatedAt); err != nil {
+			return nil, err
+		}
+		if lastUsedAt.Valid {
+			t := lastUsedAt.Time
+			key.LastUsedAt = &t
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return keys, nil
+}
+
+func (s *Store) GetApiKeyByHash(hash string) (*ApiKey, error) {
+	if s.apiKeys != nil {
+		return s.apiKeys.GetApiKeyByHash(hash)
+	}
+	if s.db == nil {
+		return nil, errors.New("api keys store not configured")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	key := &ApiKey{}
+	var lastUsedAt sql.NullTime
+	err := s.db.QueryRow(`
+		SELECT id, name, key_hash, key_prefix, key_suffix, enabled, last_used_at, created_at
+		FROM api_keys WHERE key_hash = ?
+	`, hash).Scan(&key.ID, &key.Name, &key.KeyHash, &key.KeyPrefix, &key.KeySuffix, &key.Enabled, &lastUsedAt, &key.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lastUsedAt.Valid {
+		t := lastUsedAt.Time
+		key.LastUsedAt = &t
+	}
+	return key, nil
+}
+
+func (s *Store) UpdateApiKeyEnabled(id int64, enabled bool) error {
+	if s.apiKeys != nil {
+		return s.apiKeys.UpdateApiKeyEnabled(id, enabled)
+	}
+	if s.db == nil {
+		return errors.New("api keys store not configured")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result, err := s.db.Exec(`
+		UPDATE api_keys SET enabled = ?
+		WHERE id = ?
+	`, enabled, id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) UpdateApiKeyLastUsed(id int64) error {
+	if s.apiKeys != nil {
+		return s.apiKeys.UpdateApiKeyLastUsed(id)
+	}
+	if s.db == nil {
+		return errors.New("api keys store not configured")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, err := s.db.Exec(`
+		UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, id)
+	return err
+}
+
+func (s *Store) DeleteApiKey(id int64) error {
+	if s.apiKeys != nil {
+		return s.apiKeys.DeleteApiKey(id)
+	}
+	if s.db == nil {
+		return errors.New("api keys store not configured")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result, err := s.db.Exec("DELETE FROM api_keys WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) GetApiKeyByID(id int64) (*ApiKey, error) {
+	if s.apiKeys != nil {
+		return s.apiKeys.GetApiKeyByID(id)
+	}
+	if s.db == nil {
+		return nil, errors.New("api keys store not configured")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	key := &ApiKey{}
+	var lastUsedAt sql.NullTime
+	err := s.db.QueryRow(`
+		SELECT id, name, key_prefix, key_suffix, enabled, last_used_at, created_at
+		FROM api_keys WHERE id = ?
+	`, id).Scan(&key.ID, &key.Name, &key.KeyPrefix, &key.KeySuffix, &key.Enabled, &lastUsedAt, &key.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lastUsedAt.Valid {
+		t := lastUsedAt.Time
+		key.LastUsedAt = &t
+	}
+	return key, nil
+}
+
+// Model wrappers
+
+func (s *Store) CreateModel(m *model.Model) error {
+	if s.models != nil {
+		return s.models.CreateModel(m)
+	}
+	return errors.New("sqlite store for models not implemented")
+}
+
+func (s *Store) UpdateModel(m *model.Model) error {
+	if s.models != nil {
+		return s.models.UpdateModel(m)
+	}
+	return errors.New("sqlite store for models not implemented")
+}
+
+func (s *Store) DeleteModel(id string) error {
+	if s.models != nil {
+		return s.models.DeleteModel(id)
+	}
+	return errors.New("sqlite store for models not implemented")
+}
+
+func (s *Store) GetModel(id string) (*model.Model, error) {
+	if s.models != nil {
+		return s.models.GetModel(id)
+	}
+	return nil, errors.New("sqlite store for models not implemented")
+}
+
+func (s *Store) ListModels() ([]*model.Model, error) {
+	if s.models != nil {
+		return s.models.ListModels()
+	}
+	return nil, errors.New("sqlite store for models not implemented")
 }

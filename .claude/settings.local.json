@@ -3,7 +3,19 @@
     "allow": [
       "Bash(go build:*)",
       "Bash(go test:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(go mod:*)",
+      "Bash(go run:*)",
+      "Bash(curl:*)",
+      "Bash(echo:*)",
+      "Bash(go version:*)",
+      "Bash(brew:*)",
+      "Bash(kill:*)",
+      "Bash(ps:*)",
+      "Bash(pkill:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)"
     ]
   }
 }

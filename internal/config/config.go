@@ -1,38 +1,245 @@
 package config
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 type Config struct {
-	Port         string
-	DebugEnabled bool
-	SessionID    string
-	ClientCookie string
-	ClientUat    string
-	ProjectID    string
-	UserID       string
-	AgentMode    string
-	Email        string
-	AdminUser    string
-	AdminPass    string
-	AdminPath    string
+	Port                    string   `json:"port"`
+	DebugEnabled            bool     `json:"debug_enabled"`
+	SessionID               string   `json:"session_id"`
+	ClientCookie            string   `json:"client_cookie"`
+	ClientUat               string   `json:"client_uat"`
+	ProjectID               string   `json:"project_id"`
+	UserID                  string   `json:"user_id"`
+	AgentMode               string   `json:"agent_mode"`
+	Email                   string   `json:"email"`
+	AdminUser               string   `json:"admin_user"`
+	AdminPass               string   `json:"admin_pass"`
+	AdminPath               string   `json:"admin_path"`
+	ToolCallMode            string   `json:"tool_call_mode"`
+	DebugLogSSE             bool     `json:"debug_log_sse"`
+	OutputTokenMode         string   `json:"output_token_mode"`
+	StoreMode               string   `json:"store_mode"`
+	RedisAddr               string   `json:"redis_addr"`
+	RedisPassword           string   `json:"redis_password"`
+	RedisDB                 int      `json:"redis_db"`
+	RedisPrefix             string   `json:"redis_prefix"`
+	SummaryCacheMode        string   `json:"summary_cache_mode"`
+	SummaryCacheSize        int      `json:"summary_cache_size"`
+	SummaryCacheTTLSeconds  int      `json:"summary_cache_ttl_seconds"`
+	SummaryCacheLog         bool     `json:"summary_cache_log"`
+	SummaryCacheRedisAddr   string   `json:"summary_cache_redis_addr"`
+	SummaryCacheRedisPass   string   `json:"summary_cache_redis_password"`
+	SummaryCacheRedisDB     int      `json:"summary_cache_redis_db"`
+	SummaryCacheRedisPrefix string   `json:"summary_cache_redis_prefix"`
+	ContextMaxTokens        int      `json:"context_max_tokens"`
+	ContextSummaryMaxTokens int      `json:"context_summary_max_tokens"`
+	ContextKeepTurns        int      `json:"context_keep_turns"`
+	UpstreamURL             string   `json:"upstream_url"`
+	UpstreamToken           string   `json:"upstream_token"`
+	UpstreamMode            string   `json:"upstream_mode"`
+	OrchidsAPIBaseURL       string   `json:"orchids_api_base_url"`
+	OrchidsWSURL            string   `json:"orchids_ws_url"`
+	OrchidsAPIVersion       string   `json:"orchids_api_version"`
+	OrchidsLocalWorkdir     string   `json:"orchids_local_workdir"`
+	OrchidsAllowRunCommand  bool     `json:"orchids_allow_run_command"`
+	OrchidsRunAllowlist     []string `json:"orchids_run_allowlist"`
+	OrchidsFSIgnore         []string `json:"orchids_fs_ignore"`
+
+	// New fields for UI
+	AdminToken           string `json:"admin_token"`
+	MaxRetries           int    `json:"max_retries"`
+	RetryDelay           int    `json:"retry_delay"`
+	AccountSwitchCount   int    `json:"account_switch_count"`
+	RequestTimeout       int    `json:"request_timeout"`
+	TokenRefreshInterval int    `json:"token_refresh_interval"`
+	AutoRefreshToken     bool   `json:"auto_refresh_token"`
+	AutoRefreshUsage     bool   `json:"auto_refresh_usage"`
+	OutputTokenCount     bool   `json:"output_token_count"`
+	CacheTokenCount      bool   `json:"cache_token_count"`
+	CacheTTL             int    `json:"cache_ttl"`
+	CacheStrategy        string `json:"cache_strategy"`
+	LoadBalancerCacheTTL int    `json:"load_balancer_cache_ttl"`
+	ConcurrencyLimit     int    `json:"concurrency_limit"`
+	ConcurrencyTimeout   int    `json:"concurrency_timeout"`
+
+	// Proxy Configuration
+	ProxyHTTP   string   `json:"proxy_http"`
+	ProxyHTTPS  string   `json:"proxy_https"`
+	ProxyUser   string   `json:"proxy_user"`
+	ProxyPass   string   `json:"proxy_pass"`
+	ProxyBypass []string `json:"proxy_bypass"`
 }
 
-func Load() *Config {
-	return &Config{
-		Port:         getEnv("PORT", "3002"),
-		DebugEnabled: getEnv("DEBUG_ENABLED", "true") == "true",
-		SessionID:    getEnv("SESSION_ID", "sess_38BUxtHf7iMY9B3A1mbM85favDX"),
-		ClientCookie: getEnv("CLIENT_COOKIE", "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImNsaWVudF8zN0VrNWZtNk0zcXUwS0VBRlVNMmhxeE92ZVYiLCJyb3RhdGluZ190b2tlbiI6Ink2aTF4eHdvY3JzbHJmbTZsdzFtYmY3cnl4dGcwdXIxYWlhbnZiMTkifQ.U5Zt0RwA4oeFWc7b66qsHdw2Q-kV8p1rnsw7Lo6CwPqZfFGG25IEaqty3s7tZrQcY7yzNikqFHlxU7s1j-rRcopZqDEWtBRBHdrB9wDGJzXw7cA1DgL5nfDWHUN50pNut3Ol0MFZE0Lm_plXrlzUifJ9CLooBIzRxcIBGn8W2h-KNCZ5fXMMlJUx6j_Q0YfrVctJYekhtgdH0_5EDFbjEmAsMesaiNuYZ2UbMH1o0LsrPrv0hxEZt_eI3HBEvmkCrtYEL02tTFwVUb08Y5Kme9Oq1E7QO1qOz28OKl7kN_aqv6XFxe75MyBUtBF_9W2gcYi0jORF2m3x1XvmB1RV5A"),
-		ClientUat:    getEnv("CLIENT_UAT", "1768272707"),
-		ProjectID:    getEnv("PROJECT_ID", "280b7bae-cd29-41e4-a0a6-7f603c43b607"),
-		UserID:       getEnv("USER_ID", "user_38BUxvjgpzOuZwztspEW9ZYroXs"),
-		AgentMode:    getEnv("AGENT_MODE", "claude-opus-4.5"),
-		Email:        getEnv("EMAIL", "crushla4@swsdz.com"),
-		AdminUser:    getEnv("ADMIN_USER", "admin"),
-		AdminPass:    getEnv("ADMIN_PASS", "admin123"),
-		AdminPath:    getEnv("ADMIN_PATH", "/admin"),
+func Load(path string) (*Config, string, error) {
+	resolvedPath, err := resolveConfigPath(path)
+	if err != nil {
+		return nil, "", err
+	}
+
+	data, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read config: %w", err)
+	}
+
+	cfg := Config{}
+	ext := strings.ToLower(filepath.Ext(resolvedPath))
+	switch ext {
+	case ".json":
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, "", fmt.Errorf("failed to parse config json: %w", err)
+		}
+	case ".yaml", ".yml":
+		m, err := parseYAMLFlat(data)
+		if err != nil {
+			return nil, "", err
+		}
+		raw, err := json.Marshal(m)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to normalize yaml: %w", err)
+		}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, "", fmt.Errorf("failed to parse config yaml: %w", err)
+		}
+	default:
+		return nil, "", fmt.Errorf("unsupported config extension: %s", ext)
+	}
+
+	applyDefaults(&cfg)
+	return &cfg, resolvedPath, nil
+}
+
+func resolveConfigPath(path string) (string, error) {
+	if strings.TrimSpace(path) != "" {
+		return path, nil
+	}
+
+	candidates := []string{"config.json", "config.yaml", "config.yml"}
+	for _, name := range candidates {
+		if _, err := os.Stat(name); err == nil {
+			return name, nil
+		}
+	}
+
+	return "", errors.New("config.json/config.yaml/config.yml not found")
+}
+
+func applyDefaults(cfg *Config) {
+	if cfg.Port == "" {
+		cfg.Port = "3002"
+	}
+	if cfg.AdminUser == "" {
+		cfg.AdminUser = "admin"
+	}
+	if cfg.AdminPass == "" {
+		cfg.AdminPass = "admin123"
+	}
+	if cfg.AdminPath == "" {
+		cfg.AdminPath = "/admin"
+	}
+	if cfg.ToolCallMode == "" {
+		cfg.ToolCallMode = "auto"
+	}
+	if cfg.OutputTokenMode == "" {
+		cfg.OutputTokenMode = "final"
+	}
+	if cfg.UpstreamMode == "" {
+		cfg.UpstreamMode = "sse"
+	}
+	if cfg.StoreMode == "" {
+		cfg.StoreMode = "redis"
+	}
+	if cfg.RedisPrefix == "" {
+		cfg.RedisPrefix = "orchids:"
+	}
+	if cfg.SummaryCacheMode == "" {
+		if strings.ToLower(strings.TrimSpace(cfg.StoreMode)) == "redis" {
+			cfg.SummaryCacheMode = "redis"
+		} else {
+			cfg.SummaryCacheMode = "memory"
+		}
+	}
+	if strings.ToLower(strings.TrimSpace(cfg.SummaryCacheMode)) == "redis" {
+		if cfg.SummaryCacheRedisAddr == "" {
+			cfg.SummaryCacheRedisAddr = cfg.RedisAddr
+		}
+		if cfg.SummaryCacheRedisPass == "" {
+			cfg.SummaryCacheRedisPass = cfg.RedisPassword
+		}
+	}
+	if cfg.SummaryCacheSize == 0 {
+		cfg.SummaryCacheSize = 256
+	}
+	if cfg.SummaryCacheTTLSeconds == 0 {
+		cfg.SummaryCacheTTLSeconds = 3600
+	}
+	if cfg.SummaryCacheRedisPrefix == "" {
+		cfg.SummaryCacheRedisPrefix = "orchids:summary:"
+	}
+	if cfg.ContextMaxTokens == 0 {
+		cfg.ContextMaxTokens = 8000
+	}
+	if cfg.ContextSummaryMaxTokens == 0 {
+		cfg.ContextSummaryMaxTokens = 800
+	}
+	if cfg.ContextKeepTurns == 0 {
+		cfg.ContextKeepTurns = 6
+	}
+	if cfg.OrchidsAPIBaseURL == "" {
+		cfg.OrchidsAPIBaseURL = "https://orchids-server.calmstone-6964e08a.westeurope.azurecontainerapps.io"
+	}
+	if cfg.OrchidsWSURL == "" {
+		cfg.OrchidsWSURL = "wss://orchids-v2-alpha-108292236521.europe-west1.run.app/agent/ws/coding-agent"
+	}
+	if cfg.OrchidsAPIVersion == "" {
+		cfg.OrchidsAPIVersion = "2"
+	}
+	if len(cfg.OrchidsRunAllowlist) == 0 {
+		cfg.OrchidsRunAllowlist = []string{"pwd", "ls", "find"}
+	}
+	if len(cfg.OrchidsFSIgnore) == 0 {
+		cfg.OrchidsFSIgnore = []string{"debug-logs", "data", ".claude"}
+	}
+
+	// New defaults
+	if cfg.MaxRetries == 0 {
+		cfg.MaxRetries = 3
+	}
+	if cfg.RetryDelay == 0 {
+		cfg.RetryDelay = 1000
+	}
+	if cfg.AccountSwitchCount == 0 {
+		cfg.AccountSwitchCount = 5
+	}
+	if cfg.RequestTimeout == 0 {
+		cfg.RequestTimeout = 120
+	}
+	if cfg.TokenRefreshInterval == 0 {
+		cfg.TokenRefreshInterval = 30
+	}
+	if cfg.CacheTTL == 0 {
+		cfg.CacheTTL = 5
+	}
+	if cfg.CacheStrategy == "" {
+		cfg.CacheStrategy = "split"
+	}
+	if cfg.LoadBalancerCacheTTL == 0 {
+		cfg.LoadBalancerCacheTTL = 5
+	}
+	if cfg.ConcurrencyLimit == 0 {
+		cfg.ConcurrencyLimit = 100
+	}
+	if cfg.ConcurrencyTimeout == 0 {
+		cfg.ConcurrencyTimeout = 120
 	}
 }
 
@@ -40,9 +247,55 @@ func (c *Config) GetCookies() string {
 	return "__client=" + c.ClientCookie + "; __client_uat=" + c.ClientUat
 }
 
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+func (c *Config) Save(path string) error {
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
 	}
-	return defaultValue
+	return os.WriteFile(path, data, 0644)
+}
+
+func parseYAMLFlat(data []byte) (map[string]interface{}, error) {
+	out := map[string]interface{}{}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if idx := strings.Index(line, "#"); idx >= 0 {
+			line = strings.TrimSpace(line[:idx])
+		}
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid yaml line: %q", line)
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		value = strings.Trim(value, "\"'")
+
+		if key == "" {
+			continue
+		}
+		if value == "" {
+			out[key] = ""
+			continue
+		}
+		if value == "true" || value == "false" {
+			out[key] = value == "true"
+			continue
+		}
+		if num, err := strconv.Atoi(value); err == nil {
+			out[key] = num
+			continue
+		}
+		out[key] = value
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

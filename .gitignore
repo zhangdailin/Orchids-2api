@@ -34,10 +34,10 @@ Thumbs.db
 # Debug logs
 
 
-# Environment
-.env
-.env.local
-.env.*.local
+# Config
+config.json
+config.yaml
+config.yml
 
 # Database
 *.db

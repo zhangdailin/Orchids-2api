@@ -18,19 +18,15 @@
 |------|------|
 | [架构设计](./docs/architecture.md) | 目录结构、核心组件、请求流程、数据模型 |
 | [API 接口](./docs/api-reference.md) | 所有端点列表、请求/响应格式、认证说明 |
-| [部署指南](./docs/deployment.md) | Docker 构建、本地开发、生产部署 |
-| [配置说明](./docs/configuration.md) | 环境变量、配置文件格式 |
+| [部署指南](./docs/deployment.md) | 本地开发、生产部署 |
+| [配置说明](./docs/configuration.md) | 配置文件格式 |
 
 ## 快速开始
 
 ```bash
 # 本地开发
 go mod download
-go run ./cmd/server/main.go
-
-# Docker 部署
-./build.sh
-docker compose up -d
+go run ./cmd/server/main.go -config ./config.json
 ```
 
 ## 主要特性
