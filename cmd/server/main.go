@@ -17,6 +17,7 @@ import (
 	"orchids-api/internal/auth"
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
+	"orchids-api/internal/constants"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
@@ -24,6 +25,7 @@ import (
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/summarycache"
+	"orchids-api/internal/template"
 	"orchids-api/web"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -95,6 +97,14 @@ func main() {
 	}
 	slog.Info("Summary cache mode", "mode", cacheMode)
 
+	// Initialize template renderer
+	tmplRenderer, err := template.NewRenderer()
+	if err != nil {
+		slog.Error("Failed to initialize template renderer", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("Template renderer initialized")
+
 	mux := http.NewServeMux()
 
 	limiter := middleware.NewConcurrencyLimiter(cfg.ConcurrencyLimit, time.Duration(cfg.ConcurrencyTimeout)*time.Second)
@@ -117,13 +127,22 @@ func main() {
 	mux.HandleFunc("/api/config", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, apiHandler.HandleConfig))
 
 	// Protected Web UI
-	adminGroup := http.StripPrefix(cfg.AdminPath, web.StaticHandler())
+	staticHandler := http.StripPrefix(cfg.AdminPath, web.StaticHandler())
 	mux.HandleFunc(cfg.AdminPath+"/", func(w http.ResponseWriter, r *http.Request) {
+		// Serve login page (static)
 		if r.URL.Path == cfg.AdminPath+"/login.html" {
-			adminGroup.ServeHTTP(w, r)
+			staticHandler.ServeHTTP(w, r)
 			return
 		}
 
+		// Serve static assets (CSS, JS)
+		if strings.HasPrefix(r.URL.Path, cfg.AdminPath+"/css/") ||
+			strings.HasPrefix(r.URL.Path, cfg.AdminPath+"/js/") {
+			staticHandler.ServeHTTP(w, r)
+			return
+		}
+
+		// Authentication check
 		cookie, err := r.Cookie("session_token")
 		authenticated := err == nil && auth.ValidateSessionToken(cookie.Value)
 
@@ -138,7 +157,18 @@ func main() {
 			return
 		}
 
-		adminGroup.ServeHTTP(w, r)
+		// Render template-based index page
+		if r.URL.Path == cfg.AdminPath+"/" || r.URL.Path == cfg.AdminPath {
+			err := tmplRenderer.RenderIndex(w, r, cfg)
+			if err != nil {
+				slog.Error("Failed to render template", "error", err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+			return
+		}
+
+		// Fallback to static handler for other files
+		staticHandler.ServeHTTP(w, r)
 	})
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +192,10 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+
+	// Create context for background goroutines
+	ctx, cancelBackground := context.WithCancel(context.Background())
+	defer cancelBackground()
 
 	if cfg.AutoRefreshToken {
 		interval := time.Duration(cfg.TokenRefreshInterval) * time.Minute
@@ -214,17 +248,27 @@ func main() {
 			refreshAccounts()
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
-			for range ticker.C {
-				refreshAccounts()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					refreshAccounts()
+				}
 			}
 		}()
 	}
 
 	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(constants.SessionCleanupPeriod)
 		defer ticker.Stop()
-		for range ticker.C {
-			auth.CleanupExpiredSessions()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				auth.CleanupExpiredSessions()
+			}
 		}
 	}()
 
@@ -236,11 +280,14 @@ func main() {
 		sig := <-quit
 		slog.Info("Received signal, starting graceful shutdown", "signal", sig)
 
-		// 给现有请求 30 秒完成
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Stop background goroutines first
+		cancelBackground()
+
+		// Give existing requests time to complete
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), constants.ShutdownTimeout)
 		defer cancel()
 
-		if err := server.Shutdown(ctx); err != nil {
+		if err := server.Shutdown(shutdownCtx); err != nil {
 			slog.Error("Server shutdown error", "error", err)
 		}
 		close(idleConnsClosed)

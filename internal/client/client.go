@@ -209,7 +209,10 @@ func (c *Client) fetchToken() (string, error) {
 
 	url := fmt.Sprintf("https://clerk.orchids.app/v1/client/sessions/%s/tokens?__clerk_api_version=2025-11-10&_clerk_js_version=5.117.0", c.config.SessionID)
 
-	req, err := http.NewRequest("POST", url, strings.NewReader("organization_id="))
+	ctx, cancel := withDefaultTimeout(context.Background(), c.requestTimeout())
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader("organization_id="))
 	if err != nil {
 		return "", err
 	}
@@ -224,7 +227,7 @@ func (c *Client) fetchToken() (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 		return "", fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -456,6 +459,9 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]UpstreamModel, erro
 		return nil, fmt.Errorf("failed to get token: %w", err)
 	}
 
+	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
+	defer cancel()
+
 	// Replace /agent/coding-agent with /v1/models if needed, or just append /v1/models if base is different
 	// The upstreamURL in client.go is "https://orchids-server.../agent/coding-agent"
 	baseURL := "https://orchids-server.calmstone-6964e08a.westeurope.azurecontainerapps.io"
@@ -481,19 +487,21 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]UpstreamModel, erro
 			lastErr = err
 			continue
 		}
-		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
 			var parsed UpstreamModelsResponse
 			if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+				resp.Body.Close()
 				// Try parsing as just []UpstreamModel
 				return nil, err
 			}
+			resp.Body.Close()
 			return parsed.Data, nil
 		}
 
 		// Read body for error details
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		resp.Body.Close()
 		lastErr = fmt.Errorf("upstream models request failed to %s: %s", p, string(body))
 	}
 
@@ -509,6 +517,23 @@ func (c *Client) upstreamURL() string {
 		return c.config.UpstreamURL
 	}
 	return upstreamURL
+}
+
+func (c *Client) requestTimeout() time.Duration {
+	if c != nil && c.config != nil && c.config.RequestTimeout > 0 {
+		return time.Duration(c.config.RequestTimeout) * time.Second
+	}
+	return 30 * time.Second
+}
+
+func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func isWSFallback(err error) bool {

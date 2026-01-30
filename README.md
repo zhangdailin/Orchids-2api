@@ -23,10 +23,55 @@
 
 ## 快速开始
 
+### 开发环境运行
+
 ```bash
-# 本地开发
+# 1. 下载依赖
 go mod download
+
+# 2. 直接运行（开发模式）
 go run ./cmd/server/main.go -config ./config.json
+```
+
+### 生产环境编译和运行
+
+**重要提示**：本项目使用 Go embed 将静态文件（web/static）和模板文件（web/templates）嵌入到二进制文件中。因此，修改这些文件后必须重新编译才能生效。
+
+```bash
+# 1. 编译服务器（将静态文件和模板嵌入到二进制文件）
+go build -o orchids-server ./cmd/server
+
+# 2. 运行编译后的服务器
+./orchids-server -config ./config.json
+
+# 或者后台运行
+nohup ./orchids-server -config ./config.json > server.log 2>&1 &
+```
+
+### 修改前端文件后的步骤
+
+如果您修改了以下文件：
+- `web/static/` 目录下的任何文件（JS、CSS、HTML等）
+- `web/templates/` 目录下的任何模板文件
+
+**必须执行以下步骤**：
+
+```bash
+# 1. 停止正在运行的服务器
+pkill -f orchids-server
+
+# 2. 重新编译（嵌入更新后的文件）
+go build -o orchids-server ./cmd/server
+
+# 3. 重新启动服务器
+./orchids-server -config ./config.json
+```
+
+### 快速重启脚本
+
+```bash
+# 一键重新编译并启动
+(pkill -f orchids-server || true) && go build -o orchids-server ./cmd/server && ./orchids-server
 ```
 
 ## 主要特性

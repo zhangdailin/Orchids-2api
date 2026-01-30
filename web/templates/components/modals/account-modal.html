@@ -1,0 +1,47 @@
+<!-- Account Modal -->
+<div class="modal" id="accountModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modalTitle">添加账号</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <form id="accountForm" onsubmit="saveAccount(event)">
+      <input type="hidden" id="accountId" />
+      <div class="form-group">
+        <label class="form-label">名称（可选）</label>
+        <input type="text" class="form-input" id="name" placeholder="账号名称" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">账号类型</label>
+        <input type="text" class="form-input" id="accountType" placeholder="orchids" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Token</label>
+        <input type="text" class="form-input" id="clientCookie" required placeholder="粘贴 token（支持完整Cookie/纯JWT）" />
+        <small style="color: #666; font-size: 12px">支持完整Cookie（含 __session）或纯JWT；运行时自动获取</small>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">权重</label>
+          <input type="number" class="form-input" id="weight" value="1" min="1" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Agent Mode</label>
+          <input type="text" class="form-input" id="agentMode" value="claude-opus-4.5" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <label class="toggle">
+            <input type="checkbox" id="enabled" checked />
+            <span class="toggle-slider"></span>
+          </label>
+          &nbsp;&nbsp;启用账号
+        </label>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px">
+        保存
+      </button>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,104 @@
+{{define "page-tutorial"}}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css">
+</head>
+<body>
+  {{template "sidebar.html" .}}
+
+  <main class="main-content">
+    <section class="header-section" id="tutorialHeader">
+      <h1>使用教程</h1>
+      <p>了解如何使用 API 接口</p>
+    </section>
+
+    <div class="content-card" style="padding: 24px;">
+      <div style="margin-bottom: 32px; background: rgba(56, 189, 248, 0.05); border: 1px solid rgba(56, 189, 248, 0.15); border-radius: 12px; padding: 20px;">
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+          <div style="width: 32px; height: 32px; background: #38bdf8; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white;">
+            🔗
+          </div>
+          <h3 style="font-size: 1.1rem; font-weight: 700;">API 地址格式</h3>
+        </div>
+        <div style="background: rgba(15, 23, 42, 0.4); padding: 12px 16px; border-radius: 8px; font-family: monospace; font-size: 1.1rem; color: #38bdf8; border: 1px solid rgba(148, 163, 184, 0.1);">
+          https://warp.chinablog.xyz/{渠道}/v1
+        </div>
+      </div>
+
+      <div style="margin-bottom: 32px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 16px; display: flex; align-items: flex-start; gap: 12px;">
+        <span style="font-size: 1.2rem;">⚠️</span>
+        <div>
+          <span style="font-weight: 700; color: #f59e0b;">Claude Code 用户注意:</span> 配置 API 地址时请使用
+          <code style="background: rgba(245, 158, 11, 0.15); padding: 2px 6px; border-radius: 4px; color: #f59e0b;">https://warp.chinablog.xyz/{渠道}</code>，
+          <span style="color: #fb7185; font-weight: 700;">不要</span>添加
+          <code style="background: rgba(251, 113, 133, 0.1); padding: 2px 6px; border-radius: 4px; color: #fb7185;">/v1</code> 后缀
+        </div>
+      </div>
+
+      <div class="table-wrap" style="background: rgba(15, 23, 42, 0.5); border-radius: 12px; border: 1px solid rgba(148, 163, 184, 0.1);">
+        <table>
+          <thead>
+            <tr style="background: rgba(15, 23, 42, 0.8);">
+              <th>渠道</th>
+              <th>API 地址</th>
+              <th>默认模型</th>
+              <th>支持协议</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="tag badge-kiro">Kiro</span></td>
+              <td><code style="color: #38bdf8; cursor: pointer;" onclick="copyToClipboard('https://warp.chinablog.xyz/kiro/v1')">https://warp.chinablog.xyz/kiro/v1</code></td>
+              <td><code style="color: #34d399;">claude-sonnet-4-5</code> <span class="tag badge-kiro" style="font-size: 0.7rem;">Kiro</span></td>
+              <td>
+                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
+                <span class="tag" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">OpenAI</span>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="tag badge-orchids">Orchids</span></td>
+              <td><code style="color: #38bdf8; cursor: pointer;" onclick="copyToClipboard('https://warp.chinablog.xyz/orchids/v1')">https://warp.chinablog.xyz/orchids/v1</code></td>
+              <td><code style="color: #34d399;">claude-sonnet-4-5</code> <span class="tag badge-orchids" style="font-size: 0.7rem;">Orchids</span></td>
+              <td>
+                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
+                <span class="tag" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">OpenAI</span>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="tag badge-antigravity" style="background: rgba(167, 139, 250, 0.15); color: #a78bfa; border: 1px solid rgba(167, 139, 250, 0.3);">Antigravity</span></td>
+              <td><code style="color: #38bdf8; cursor: pointer;" onclick="copyToClipboard('https://warp.chinablog.xyz/antigravity/v1')">https://warp.chinablog.xyz/antigravity/v1</code></td>
+              <td><code style="color: #34d399;">gemini-2.5-flash-preview</code> <span class="tag badge-antigravity" style="background: rgba(167, 139, 250, 0.15); color: #a78bfa; border: 1px solid rgba(167, 139, 250, 0.3); font-size: 0.7rem;">Antigravity</span></td>
+              <td>
+                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
+                <span class="tag" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">OpenAI</span>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="tag badge-warp" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">Warp</span></td>
+              <td><code style="color: #38bdf8; cursor: pointer;" onclick="copyToClipboard('https://warp.chinablog.xyz/warp/v1')">https://warp.chinablog.xyz/warp/v1</code></td>
+              <td><code style="color: #34d399;">claude-4-5-sonnet</code> <span class="tag badge-warp" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); font-size: 0.7rem;">Warp</span></td>
+              <td>
+                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
+                <span class="tag" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">OpenAI</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  {{template "model-modal.html"}}
+  {{template "key-modals.html"}}
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="{{.AdminPath}}/js/common.js"></script>
+</body>
+</html>
+{{end}}

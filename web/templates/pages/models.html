@@ -1,0 +1,52 @@
+{{define "page-models"}}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css">
+</head>
+<body>
+  {{template "sidebar.html" .}}
+
+  <main class="main-content">
+    <section class="header-section" id="modelsHeader">
+      <h1>模型管理</h1>
+      <p>管理各渠道的可用模型列表</p>
+    </section>
+
+    <div class="toolbar" style="padding: 16px; gap: 16px; flex-wrap: wrap;">
+      <div class="filter-tabs" id="modelPlatformFilters">
+        <!-- Dynamic channel tabs will be rendered here -->
+      </div>
+
+      <div style="display: flex; gap: 12px; align-items: center; justify-content: flex-end; flex-wrap: wrap; margin-left: auto;">
+        共 <strong id="totalModelCount">0</strong> 个模型
+      </div>
+      <button class="btn btn-primary" style="background: #3b82f6; border: none; padding: 8px 20px;" onclick="openModelModal()">+ 添加模型</button>
+    </div>
+
+    <div id="modelsListWrapper">
+      <div class="content-card">
+        <div id="modelsList">
+          <div class="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
+            <span style="font-size: 3rem; margin-bottom: 16px;">💎</span>
+            <p>暂无模型数据</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  {{template "model-modal.html"}}
+  {{template "key-modals.html"}}
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="{{.AdminPath}}/js/common.js"></script>
+  <script src="{{.AdminPath}}/js/models.js"></script>
+</body>
+</html>
+{{end}}

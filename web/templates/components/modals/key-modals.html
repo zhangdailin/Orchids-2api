@@ -1,0 +1,74 @@
+<!-- 创建 Key 弹窗 -->
+<div class="modal" id="createKeyModal">
+  <div class="modal-content" style="max-width: 450px;">
+    <div class="modal-header">
+      <h3 class="modal-title">创建 API Key</h3>
+      <button class="modal-close" onclick="closeCreateKeyModal()">
+        &times;
+      </button>
+    </div>
+    <form onsubmit="createApiKey(event)">
+      <div class="form-group">
+        <label class="form-label">名称 / 备注（支持换行批量创建）</label>
+        <textarea class="form-input" id="keyName" required placeholder="每行一个名称，例如：&#10;生产环境&#10;测试用&#10;开发者-张三"
+          rows="4" style="resize: vertical;"></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">
+        创建
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- Key 展示弹窗 -->
+<div class="modal" id="showKeyModal">
+  <div class="modal-content" style="max-width: 550px;">
+    <div class="modal-header">
+      <h3 class="modal-title">API Key 已创建</h3>
+    </div>
+    <p style="color: #a1a1aa; margin-bottom: 16px;">
+      请立即复制并保存您的 API Key：
+    </p>
+    <div id="fullKeyDisplay" style="max-height: 300px; overflow-y: auto;">
+    </div>
+    <div class="warning-box">
+      <strong>请妥善保存</strong><br />
+      关闭此窗口后将无法再次查看完整 Key
+    </div>
+    <div style="display: flex; gap: 8px; margin-top: 20px;">
+      <button class="btn btn-primary" style="flex: 1;" onclick="copyAllKeys()">
+        复制全部
+      </button>
+      <button class="btn" style="flex: 1; background: rgba(255,255,255,0.1); color: white;"
+        onclick="closeShowKeyModal()">
+        我已保存，关闭
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- 删除 Key 确认弹窗 -->
+<div class="modal" id="deleteKeyModal">
+  <div class="modal-content" style="max-width: 400px;">
+    <div class="modal-header">
+      <h3 class="modal-title">删除 API Key</h3>
+      <button class="modal-close" onclick="closeDeleteKeyModal()">
+        &times;
+      </button>
+    </div>
+    <p style="margin-bottom: 20px;">
+      确定要删除 Key「<strong id="deleteKeyName"></strong>」吗？<br />
+      <span style="color: #ef4444;">此操作不可撤销，使用此 Key 的应用将无法访问。</span>
+    </p>
+    <input type="hidden" id="deleteKeyId" />
+    <div style="display: flex; gap: 8px;">
+      <button class="btn" style="flex: 1; background: rgba(255,255,255,0.1); color: white;"
+        onclick="closeDeleteKeyModal()">
+        取消
+      </button>
+      <button class="btn btn-danger" style="flex: 1;" onclick="confirmDeleteKey()">
+        删除
+      </button>
+    </div>
+  </div>
+</div>

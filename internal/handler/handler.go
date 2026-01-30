@@ -205,7 +205,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		Tools:    effectiveTools,
 		Stream:   req.Stream,
 	}, opts)
-	log.Printf("[Performance] BuildPromptV2WithOptions took %v", time.Since(startBuild))
+	if h.config.DebugEnabled {
+		log.Printf("[Performance] BuildPromptV2WithOptions took %v", time.Since(startBuild))
+	}
 
 	// ... rest of code
 

@@ -1,0 +1,116 @@
+{{define "page-accounts"}}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css">
+</head>
+<body>
+  {{template "sidebar.html" .}}
+
+  <main class="main-content">
+    <section class="header-section" id="accountsHeader">
+      <h1 id="pageTitle">账号管理</h1>
+      <p id="pageSubtitle">管理您的 Orchids API 凭证</p>
+    </section>
+
+    <section class="stats-grid" id="statsGrid">
+      <div class="stat-card">
+        <div class="stat-info">
+          <span class="label">总账号数</span>
+          <span class="value" id="totalAccounts">0</span>
+        </div>
+        <div class="stat-icon total">👥</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-info">
+          <span class="label">状态正常</span>
+          <span class="value" style="color: #10b981" id="enabledAccounts">0</span>
+        </div>
+        <div class="stat-icon normal">✅</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-info">
+          <span class="label">状态异常</span>
+          <span class="value" style="color: #ef4444" id="disabledAccounts">0</span>
+        </div>
+        <div class="stat-icon abnormal">⚠️</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-info">
+          <span class="label">已选中</span>
+          <span class="value" style="color: #8b5cf6" id="selectedCount">0</span>
+        </div>
+        <div class="stat-icon selected">📋</div>
+      </div>
+    </section>
+
+    <div id="accountsTabContent">
+      <div class="toolbar" style="padding: 16px; gap: 16px; flex-wrap: wrap;">
+        <div class="filter-tabs" id="platformFilters"></div>
+
+        <div style="flex: 1; display: flex; gap: 12px; align-items: center; justify-content: flex-end; flex-wrap: wrap;">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+            <button class="btn btn-outline" onclick="document.getElementById('importFile').click()">📤 导入</button>
+            <button class="btn btn-outline" onclick="exportAccounts()">📥 导出</button>
+            <input type="file" id="importFile" accept=".json" style="display: none" onchange="importAccounts(event)" />
+            <button class="btn btn-outline" id="checkAllBtn" onclick="checkAllAccounts()">✅ 检测账号</button>
+            <label class="toggle" style="gap: 10px; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(148,163,184,0.2);">
+              <input type="checkbox" id="autoCheckToggle" onchange="toggleAutoCheck(this.checked)" />
+              <span class="toggle-slider"></span>
+              <span style="font-size: 0.85rem; color: #cbd5f5;">自动检测</span>
+            </label>
+          </div>
+          <div style="width: 1px; height: 24px; background: #e2e8f0; margin: 0 4px;"></div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-outline" id="batchDeleteBtn" disabled onclick="batchDeleteAccounts()">🗑️ 批量删除</button>
+            <button class="btn btn-danger-outline" onclick="clearAbnormalAccounts()">🧹 清空异常</button>
+            <button class="btn btn-danger-outline" onclick="deleteAllAccounts()">🧨 删除全部</button>
+          </div>
+          <button class="btn btn-primary" style="background: #3b82f6; border: none; padding: 8px 20px;" onclick="openModal()">+ 添加账号</button>
+        </div>
+      </div>
+
+      <div class="content-card">
+        <div id="accountsList">
+          <div class="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
+            <span style="font-size: 3rem; margin-bottom: 16px;">📂</span>
+            <p>暂无账号数据</p>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 20px; color: var(--text-secondary); font-size: 0.9rem;">
+        <div id="paginationInfo">共 0 条记录，第 1/1 页</div>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <select class="form-input" style="width: auto; margin: 0;" onchange="updatePageSize(this.value)">
+            <option value="20">20 条/页</option>
+            <option value="50">50 条/页</option>
+            <option value="100">100 条/页</option>
+          </select>
+          <div style="display: flex; gap: 4px;" id="paginationControls">
+            <button class="btn btn-outline" style="padding: 4px 10px;">首页</button>
+            <button class="btn btn-outline" style="padding: 4px 10px;">上一页</button>
+            <button class="btn btn-primary" style="padding: 4px 10px; min-width: 32px; justify-content: center;">1</button>
+            <button class="btn btn-outline" style="padding: 4px 10px;">下一页</button>
+            <button class="btn btn-outline" style="padding: 4px 10px;">末页</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  {{template "model-modal.html"}}
+  {{template "key-modals.html"}}
+  {{template "account-modal.html"}}
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="{{.AdminPath}}/js/common.js?v=20260131"></script>
+  <script src="{{.AdminPath}}/js/accounts.js?v=20260131"></script>
+</body>
+</html>
+{{end}}

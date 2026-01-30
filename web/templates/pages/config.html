@@ -1,0 +1,221 @@
+{{define "page-config"}}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css">
+</head>
+<body>
+  {{template "sidebar.html" .}}
+
+  <main class="main-content">
+    <section class="header-section" id="keysHeader">
+      <h1>配置管理</h1>
+      <p>管理系统基础配置、负载均衡、授权等设置</p>
+    </section>
+
+    <div class="content-card" style="padding: 24px; border-radius: 12px; border: 1px solid #e2e8f0; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+      <div id="configTabs" class="platform-tabs" style="margin-bottom: 32px; border-bottom: 1px solid #f1f5f9;">
+        <button class="tab-item active" onclick="switchConfigTab('basic')">基础配置</button>
+        <button class="tab-item" onclick="switchConfigTab('auth')">授权配置</button>
+        <button class="tab-item" onclick="switchConfigTab('proxy')">代理配置</button>
+      </div>
+
+      <div id="basicConfig" class="config-section">
+        <!-- 管理员密码 -->
+        <div style="margin-bottom: 32px;">
+          <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 12px;">管理员密码</div>
+          <div class="form-group" style="max-width: 800px;">
+            <div style="position: relative;">
+              <input type="password" class="form-input" id="cfg_admin_pass" placeholder="管理员密码"
+                style="padding-right: 48px; border-color: #e2e8f0; background: #fbfbfc;" />
+              <div style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; gap: 8px;">
+                <button class="btn btn-icon" onclick="togglePassword('cfg_admin_pass')"><i class="eye-icon">👁️</i></button>
+              </div>
+            </div>
+            <small style="color: #64748b; margin-top: 8px; display: block; font-size: 0.85rem;">用于管理后台登录认证，修改后需要重新登录</small>
+          </div>
+        </div>
+
+        <!-- API密钥 -->
+        <div style="margin-bottom: 32px;">
+          <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 12px;">API密钥</div>
+          <div class="form-group" style="max-width: 800px;">
+            <div style="position: relative;">
+              <input type="password" class="form-input" id="cfg_admin_token" placeholder="留空则不启用认证"
+                style="padding-right: 80px; border-color: #10b981; background: #fbfbfc;" />
+              <div style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); display: flex; gap: 8px;">
+                <button class="btn btn-icon" onclick="togglePassword('cfg_admin_token')">👁️</button>
+                <button class="btn btn-icon" onclick="copyFieldValue('cfg_admin_token')">📋</button>
+              </div>
+            </div>
+            <small style="color: #64748b; margin-top: 8px; display: block; font-size: 0.85rem;">用于API接口认证，留空则不启用认证</small>
+          </div>
+        </div>
+
+        <!-- 重试配置 -->
+        <div style="margin-bottom: 32px;">
+          <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">重试配置</div>
+          <div class="form-row" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; max-width: 800px;">
+            <div class="form-group">
+              <label class="form-label">最大重试次数</label>
+              <input type="number" class="form-input" id="cfg_max_retries" value="3" style="background: #fbfbfc;" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">重试延迟(ms)</label>
+              <input type="number" class="form-input" id="cfg_retry_delay" value="1000" style="background: #fbfbfc;" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">凭证切换次数</label>
+              <input type="number" class="form-input" id="cfg_switch_count" value="5" style="background: #fbfbfc;" />
+            </div>
+          </div>
+          <small style="color: #64748b; margin-top: 12px; display: block; font-size: 0.85rem;">请求失败后会自动重试，并尝试切换不同账号</small>
+        </div>
+
+        <!-- 请求配置 -->
+        <div style="margin-bottom: 32px;">
+          <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">请求配置</div>
+          <div class="form-row" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; max-width: 800px;">
+            <div class="form-group">
+              <label class="form-label">请求超时(秒)</label>
+              <input type="number" class="form-input" id="cfg_request_timeout" value="120" style="background: #fbfbfc;" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Token刷新间隔(分钟)</label>
+              <input type="number" class="form-input" id="cfg_refresh_interval" value="30" style="background: #fbfbfc;" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 自动刷新设置 -->
+        <div style="margin-bottom: 32px;">
+          <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">自动刷新设置</div>
+          <div style="display: flex; flex-direction: column; gap: 24px;">
+            <div>
+              <label class="toggle" style="justify-content: flex-start; gap: 12px; margin-bottom: 8px;">
+                <input type="checkbox" id="cfg_auto_refresh_token" onchange="updateSwitchLabel(this, '自动刷新Token')" />
+                <span class="toggle-slider"></span>
+                <span id="label_cfg_auto_refresh_token" style="font-size: 0.95rem; color: #1e293b;">自动刷新Token (已关闭)</span>
+              </label>
+              <small style="color: #64748b; display: block; font-size: 0.85rem; margin-left: 52px;">开启后，系统每10分钟执行一次定时任务，仅当Token有效期剩余10分钟内才会触发刷新</small>
+            </div>
+            <div>
+              <label class="toggle" style="justify-content: flex-start; gap: 12px; margin-bottom: 8px;">
+                <input type="checkbox" id="cfg_auto_refresh_usage" onchange="updateSwitchLabel(this, '自动刷新用量')" />
+                <span class="toggle-slider"></span>
+                <span id="label_cfg_auto_refresh_usage" style="font-size: 0.95rem; color: #1e293b;">自动刷新用量 (已关闭)</span>
+              </label>
+              <small style="color: #64748b; display: block; font-size: 0.85rem; margin-left: 52px;">开启后，系统每10分钟定时刷新一次账号用量信息</small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Token计数设置 -->
+        <div style="margin-bottom: 32px;">
+          <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">Token计数设置</div>
+          <div style="display: flex; gap: 32px;">
+            <label class="checkbox-container" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="cfg_output_token_count" checked style="width: 18px; height: 18px;" />
+              <span style="font-size: 0.95rem; color: #1e293b;">输出Token计数</span>
+            </label>
+            <label class="checkbox-container" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" id="cfg_cache_token_count" checked style="width: 18px; height: 18px;" />
+              <span style="font-size: 0.95rem; color: #1e293b;">缓存Token计数</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- 缓存配置 -->
+        <div style="margin-bottom: 40px;">
+          <div style="font-weight: 600; font-size: 1rem; color: #1e293b; margin-bottom: 16px;">缓存配置</div>
+          <div class="form-row" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; max-width: 800px;">
+            <div class="form-group">
+              <label class="form-label">缓存时间 (TTL)</label>
+              <select class="form-input" id="cfg_cache_ttl" style="background: #fbfbfc;">
+                <option value="5">5分钟</option>
+                <option value="10">10分钟</option>
+                <option value="30">30分钟</option>
+                <option value="60">1小时</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">缓存策略</label>
+              <select class="form-input" id="cfg_cache_strategy" style="background: #fbfbfc;">
+                <option value="split">分离缓存 (推荐)</option>
+                <option value="mixed">混合缓存</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-start;">
+          <button class="btn btn-primary" onclick="saveConfiguration()" style="padding: 10px 48px; font-weight: 500;">保存配置</button>
+        </div>
+      </div>
+
+      <div id="authConfig" class="config-section" style="display: none;">
+        <div class="toolbar" style="margin-bottom: 24px">
+          <h2 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: #1e293b;">API Key 管理</h2>
+          <button class="btn btn-primary btn-sm" onclick="openCreateKeyModal()">+ 创建 API Key</button>
+        </div>
+        <div id="keysList"></div>
+      </div>
+
+      <div id="proxyConfig" class="config-section" style="display: none;">
+        <div style="max-width: 800px;">
+          <div style="margin-bottom: 24px;">
+            <h2 style="font-size: 1.1rem; font-weight: 600; color: #1e293b; margin-bottom: 24px;">代理服务器配置</h2>
+
+            <div class="form-group" style="margin-bottom: 24px;">
+              <label class="form-label">HTTP 代理地址</label>
+              <input type="text" class="form-input" id="cfg_proxy_http" placeholder="http://127.0.0.1:7890" style="background: #fbfbfc;" />
+            </div>
+
+            <div class="form-group" style="margin-bottom: 24px;">
+              <label class="form-label">HTTPS 代理地址</label>
+              <input type="text" class="form-input" id="cfg_proxy_https" placeholder="http://127.0.0.1:7890" style="background: #fbfbfc;" />
+            </div>
+
+            <div class="form-row" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; margin-bottom: 24px;">
+              <div class="form-group">
+                <label class="form-label">用户名 (可选)</label>
+                <input type="text" class="form-input" id="cfg_proxy_user" style="background: #fbfbfc;" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">密码 (可选)</label>
+                <div style="position: relative;">
+                  <input type="password" class="form-input" id="cfg_proxy_pass" style="padding-right: 48px; background: #fbfbfc;" autocomplete="new-password" />
+                  <div style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%);">
+                    <button class="btn btn-icon" onclick="togglePassword('cfg_proxy_pass')">👁️</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 32px;">
+              <label class="form-label">不走代理的主机 (每行一个)</label>
+              <textarea class="form-input" id="cfg_proxy_bypass" rows="4" placeholder="localhost&#10;127.0.0.1&#10;*.example.com" style="background: #fbfbfc; resize: vertical;"></textarea>
+              <small style="color: #64748b; margin-top: 8px; display: block; font-size: 0.85rem;">这些地址将直接连接，绕过代理设置</small>
+            </div>
+
+            <button class="btn btn-primary" onclick="saveConfiguration()" style="padding: 10px 48px;">保存配置</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  {{template "model-modal.html"}}
+  {{template "key-modals.html"}}
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="{{.AdminPath}}/js/common.js"></script>
+  <script src="{{.AdminPath}}/js/config.js"></script>
+</body>
+</html>
+{{end}}

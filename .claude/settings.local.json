@@ -16,7 +16,16 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push)",
-      "Bash(git remote:*)"
+      "Bash(git remote:*)",
+      "Bash(uvx:*)",
+      "Bash(npm whoami)",
+      "Bash(tree:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)",
+      "Bash(./orchids-server:*)",
+      "Bash(md5:*)"
     ]
   }
 }
