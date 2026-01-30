@@ -66,6 +66,10 @@ type streamHandler struct {
 	preflightResults      []safeToolResult
 	shouldLocalFallback   bool
 
+	// Edit Tool State
+	editFilePath  string
+	editNewString string
+
 	// Logger
 	logger *debug.Logger
 }
@@ -438,6 +442,16 @@ func (h *streamHandler) handleToolCall(call toolCall) {
 	if h.toolCallMode == "auto" {
 		if !h.isStream {
 			h.emitToolCallNonStream(call)
+		} else {
+			// Emit tool call to stream for visibility
+			idx := -1
+			h.mu.Lock()
+			if value, exists := h.toolBlocks[call.id]; exists {
+				idx = value
+				delete(h.toolBlocks, call.id)
+			}
+			h.mu.Unlock()
+			h.emitToolCallStream(call, idx, h.writeSSE)
 		}
 		result := executeToolCall(call, h.config)
 		h.internalToolResults = append(h.internalToolResults, result)
@@ -661,6 +675,61 @@ func (h *streamHandler) handleMessage(msg client.SSEMessage) {
 			},
 		})
 		h.writeSSE("content_block_delta", string(deltaData))
+
+	case "coding_agent.Edit.edit.started":
+		h.editFilePath = ""
+		h.editNewString = ""
+		if data, ok := msg.Raw["data"].(map[string]interface{}); ok {
+			if v, ok := data["file_path"].(string); ok {
+				h.editFilePath = v
+			}
+		}
+
+	case "coding_agent.Edit.edit.chunk":
+		if data, ok := msg.Raw["data"].(map[string]interface{}); ok {
+			if v, ok := data["text"].(string); ok {
+				h.editNewString += v
+			}
+		}
+
+	case "coding_agent.Edit.edit.completed":
+		if h.editFilePath == "" {
+			return
+		}
+
+		input := map[string]interface{}{
+			"file_path":  h.editFilePath,
+			"new_string": h.editNewString,
+			// old_string is optional/not available in stream often, or we ignore it for simple notification
+		}
+		inputJSON, err := json.Marshal(input)
+		if err != nil {
+			inputJSON = []byte("{}")
+		}
+
+		toolID := "toolu_edit_" + fmt.Sprintf("%d", time.Now().UnixNano()) // Simple ID generation
+
+		call := toolCall{
+			id:    toolID,
+			name:  "Edit",
+			input: string(inputJSON),
+		}
+
+		if h.toolCallMode == "auto" {
+			// In auto mode, we just emit the visualization since the actual action is happening upstream
+			// We treat this as a completed tool call notification
+			if h.isStream {
+				idx := -1
+				h.mu.Lock()
+				h.blockIndex++
+				idx = h.blockIndex
+				h.mu.Unlock()
+				h.emitToolCallStream(call, idx, h.writeSSE)
+			}
+		}
+
+		h.editFilePath = ""
+		h.editNewString = ""
 
 	case "model.tool-input-end":
 		toolID, _ := msg.Event["id"].(string)

@@ -415,8 +415,8 @@ func (c *Client) sendRequestSSE(ctx context.Context, req UpstreamRequest, onMess
 						logger.LogUpstreamSSE(msgType, rawData)
 					}
 
-					// 只处理 "model" 类型的事件
-					if msgType != "model" {
+					// 只处理 "model" 类型的事件，以及 coding_agent.Edit 事件
+					if msgType != "model" && !strings.HasPrefix(msgType, "coding_agent.") {
 						continue
 					}
 
