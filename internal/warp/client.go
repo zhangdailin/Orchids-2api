@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"orchids-api/internal/client"
 	"orchids-api/internal/config"
+	"orchids-api/internal/orchids"
+	"orchids-api/internal/upstream"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/store"
 )
@@ -62,8 +63,8 @@ func newHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
-func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(client.SSEMessage), logger *debug.Logger) error {
-	req := client.UpstreamRequest{
+func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(orchids.SSEMessage), logger *debug.Logger) error {
+	req := orchids.UpstreamRequest{
 		Prompt:      prompt,
 		ChatHistory: chatHistory,
 		Model:       model,
@@ -71,7 +72,7 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 	return c.SendRequestWithPayload(ctx, req, onMessage, logger)
 }
 
-func (c *Client) SendRequestWithPayload(ctx context.Context, req client.UpstreamRequest, onMessage func(client.SSEMessage), logger *debug.Logger) error {
+func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.UpstreamRequest, onMessage func(orchids.SSEMessage), logger *debug.Logger) error {
 	if c.session == nil {
 		return fmt.Errorf("warp session not initialized")
 	}
@@ -134,7 +135,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req client.Upstream
 		}, map[string]interface{}{"payload_bytes": len(payload)})
 	}
 
-	breaker := client.GetAccountBreaker(c.breakerKey())
+	breaker := upstream.GetAccountBreaker(c.breakerKey())
 	start := time.Now()
 
 	result, err := breaker.Execute(func() (interface{}, error) {
@@ -195,31 +196,31 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req client.Upstream
 				}
 				continue
 			}
-			for _, delta := range parsed.TextDeltas {
-				onMessage(client.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": delta}})
+		for _, delta := range parsed.TextDeltas {
+			onMessage(orchids.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": delta}})
+		}
+		for _, delta := range parsed.ReasoningDeltas {
+			onMessage(orchids.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{"delta": delta}})
+		}
+		for _, call := range parsed.ToolCalls {
+			toolCallSeen = true
+			onMessage(orchids.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": call.ID, "toolName": call.Name, "input": call.Input}})
+		}
+		if parsed.Finish != nil {
+			finish := map[string]interface{}{
+				"finishReason": "end_turn",
 			}
-			for _, delta := range parsed.ReasoningDeltas {
-				onMessage(client.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{"delta": delta}})
+			if toolCallSeen {
+				finish["finishReason"] = "tool_use"
 			}
-			for _, call := range parsed.ToolCalls {
-				toolCallSeen = true
-				onMessage(client.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": call.ID, "toolName": call.Name, "input": call.Input}})
-			}
-			if parsed.Finish != nil {
-				finish := map[string]interface{}{
-					"finishReason": "end_turn",
+			if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
+				finish["usage"] = map[string]interface{}{
+					"inputTokens":  parsed.Finish.InputTokens,
+					"outputTokens": parsed.Finish.OutputTokens,
 				}
-				if toolCallSeen {
-					finish["finishReason"] = "tool_use"
-				}
-				if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
-					finish["usage"] = map[string]interface{}{
-						"inputTokens":  parsed.Finish.InputTokens,
-						"outputTokens": parsed.Finish.OutputTokens,
-					}
-				}
-				onMessage(client.SSEMessage{Type: "model.finish", Event: finish})
 			}
+			onMessage(orchids.SSEMessage{Type: "model.finish", Event: finish})
+		}
 			continue
 		}
 		if strings.HasPrefix(line, ":") {
@@ -234,9 +235,9 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req client.Upstream
 
 	// Send finish if stream ended without explicit finish event
 	if !toolCallSeen {
-		onMessage(client.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn"}})
+		onMessage(orchids.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn"}})
 	} else {
-		onMessage(client.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
+		onMessage(orchids.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
 	}
 
 	return nil

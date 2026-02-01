@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"orchids-api/internal/client"
 	"orchids-api/internal/config"
+	"orchids-api/internal/orchids"
 
 	"github.com/kballard/go-shellquote"
 )
@@ -44,7 +44,7 @@ func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
 
 	inputMap := parseToolInputMap(call.input)
 	toolName := strings.ToLower(strings.TrimSpace(call.name))
-	toolName = strings.ToLower(client.NormalizeToolName(toolName))
+	toolName = strings.ToLower(orchids.NormalizeToolName(toolName))
 	ignore := cfg.OrchidsFSIgnore
 
 	switch toolName {
@@ -271,15 +271,6 @@ func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
 		result.isError = true
 		result.output = fmt.Sprintf("unsupported tool: %s", call.name)
 		return result
-	}
-}
-
-func normalizeToolAlias(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "runcommand", "run_command", "execute_command", "execute-command", "launch-process":
-		return "bash"
-	default:
-		return strings.ToLower(strings.TrimSpace(name))
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"orchids-api/internal/model"
 	"sync"
 	"time"
 )
@@ -97,11 +96,11 @@ type apiKeyStore interface {
 }
 
 type modelStore interface {
-	CreateModel(ctx context.Context, m *model.Model) error
-	UpdateModel(ctx context.Context, m *model.Model) error
+	CreateModel(ctx context.Context, m *Model) error
+	UpdateModel(ctx context.Context, m *Model) error
 	DeleteModel(ctx context.Context, id string) error
-	GetModel(ctx context.Context, id string) (*model.Model, error)
-	ListModels(ctx context.Context) ([]*model.Model, error)
+	GetModel(ctx context.Context, id string) (*Model, error)
+	ListModels(ctx context.Context) ([]*Model, error)
 }
 
 type closeableStore interface {
@@ -127,7 +126,7 @@ func New(opts Options) (*Store, error) {
 func (s *Store) seedModels() error {
 	ctx := context.Background()
 
-	models := []model.Model{
+	models := []Model{
 		{ID: "6", Channel: "Orchids", ModelID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5", Status: true, IsDefault: true, SortOrder: 0},
 		{ID: "7", Channel: "Orchids", ModelID: "claude-opus-4-5", Name: "Claude Opus 4.5", Status: true, IsDefault: false, SortOrder: 1},
 		{ID: "42", Channel: "Orchids", ModelID: "claude-sonnet-4-5-thinking", Name: "Claude Sonnet 4.5 Thinking", Status: true, IsDefault: false, SortOrder: 1},
@@ -292,7 +291,7 @@ func (s *Store) GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error) {
 
 // Model wrappers
 
-func (s *Store) CreateModel(ctx context.Context, m *model.Model) error {
+func (s *Store) CreateModel(ctx context.Context, m *Model) error {
 	if s.models != nil {
 		if m.IsDefault {
 			models, err := s.models.ListModels(ctx)
@@ -310,7 +309,7 @@ func (s *Store) CreateModel(ctx context.Context, m *model.Model) error {
 	return fmt.Errorf("models store not configured")
 }
 
-func (s *Store) UpdateModel(ctx context.Context, m *model.Model) error {
+func (s *Store) UpdateModel(ctx context.Context, m *Model) error {
 	if s.models != nil {
 		if m.IsDefault {
 			models, err := s.models.ListModels(ctx)
@@ -335,14 +334,14 @@ func (s *Store) DeleteModel(ctx context.Context, id string) error {
 	return fmt.Errorf("models store not configured")
 }
 
-func (s *Store) GetModel(ctx context.Context, id string) (*model.Model, error) {
+func (s *Store) GetModel(ctx context.Context, id string) (*Model, error) {
 	if s.models != nil {
 		return s.models.GetModel(ctx, id)
 	}
 	return nil, fmt.Errorf("models store not configured")
 }
 
-func (s *Store) GetModelByModelID(ctx context.Context, modelID string) (*model.Model, error) {
+func (s *Store) GetModelByModelID(ctx context.Context, modelID string) (*Model, error) {
 	if s.models != nil {
 		models, err := s.models.ListModels(ctx)
 		if err != nil {
@@ -358,7 +357,7 @@ func (s *Store) GetModelByModelID(ctx context.Context, modelID string) (*model.M
 	return nil, fmt.Errorf("models store not configured")
 }
 
-func (s *Store) ListModels(ctx context.Context) ([]*model.Model, error) {
+func (s *Store) ListModels(ctx context.Context) ([]*Model, error) {
 	if s.models != nil {
 		return s.models.ListModels(ctx)
 	}

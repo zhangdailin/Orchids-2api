@@ -9,18 +9,35 @@ Orchids-2api/
 │       └── main.go              # 应用入口点
 ├── internal/                     # 核心业务逻辑
 │   ├── api/api.go               # 账号管理 REST API
-│   ├── handler/handler.go       # 主请求处理器 (/orchids/v1/messages, /warp/v1/messages)
-│   ├── loadbalancer/loadbalancer.go  # 加权负载均衡
+│   ├── handler/                  # 主请求处理器
+│   │   ├── handler.go           # /orchids/v1/messages, /warp/v1/messages
+│   │   ├── stream_handler.go    # SSE 流处理
+│   │   ├── tool_exec.go         # 本地工具执行
+│   │   └── tools.go             # 工具名称映射
+│   ├── loadbalancer/            # 加权负载均衡
 │   ├── store/store.go           # Redis 账号/配置存储层
 │   ├── config/config.go         # 配置管理
-│   ├── client/client.go         # 上游 API 客户端
+│   ├── orchids/                  # Orchids 上游客户端
+│   │   ├── client.go            # SSE 模式客户端
+│   │   ├── ws_aiclient.go       # WebSocket 模式客户端
+│   │   ├── fs.go                # 文件系统操作
+│   │   └── tool_mapping.go      # 上游工具名称映射
+│   ├── warp/                     # Warp 上游客户端
+│   │   ├── client.go            # Warp API 客户端
+│   │   └── session.go           # Warp 会话/Token 管理
+│   ├── upstream/                 # 通用上游组件
+│   │   ├── wspool.go            # WebSocket 连接池
+│   │   ├── breaker.go           # 熔断器
+│   │   └── reliability.go       # 重试与可靠性
 │   ├── middleware/auth.go       # 认证中间件
 │   ├── clerk/clerk.go           # Clerk 认证服务
 │   ├── prompt/                   # 提示词处理
 │   ├── tiktoken/                 # Token 计数
 │   ├── debug/logger.go          # 调试日志
-│   └── web/embed.go             # Web 资源嵌入
-├── web/static/                   # 管理界面静态文件
+│   └── perf/                     # 性能优化 (对象池)
+├── web/                          # 嵌入式静态资源
+│   ├── static/                   # CSS, JS
+│   └── templates/                # HTML 模板
 └── go.mod                        # Go 模块定义
 ```
 
@@ -46,18 +63,38 @@ Orchids-2api/
 - 转换响应格式为 Claude API 格式
 - 处理工具调用 (Tool Calls)
 
-### 上游客户端 (Client)
+### Orchids 上游客户端
 
-**位置**: `internal/client/client.go`
+**位置**: `internal/orchids/`
 
 **上游服务器**:
 ```
 https://orchids-server.calmstone-6964e08a.westeurope.azurecontainerapps.io/agent/coding-agent
 ```
 
+- `client.go` - SSE 模式请求处理
+- `ws_aiclient.go` - WebSocket 模式请求处理
+- `fs.go` - 文件系统操作（用于 fs_operation 事件）
+- `tool_mapping.go` - 上游与 Claude 工具名称映射
 - 通过 Clerk 获取 JWT Token
 - 发送请求到上游服务器
-- 解析 SSE 响应流
+- 解析 SSE/WebSocket 响应流
+
+### Warp 上游客户端
+
+**位置**: `internal/warp/`
+
+- `client.go` - Warp API 请求处理
+- `session.go` - 会话管理与 Token 刷新
+- 使用 Protobuf 格式通信
+
+### 通用上游组件
+
+**位置**: `internal/upstream/`
+
+- `wspool.go` - WebSocket 连接池管理
+- `breaker.go` - 熔断器（防止级联故障）
+- `reliability.go` - 重试策略与可靠性配置
 
 ### Clerk 认证服务
 

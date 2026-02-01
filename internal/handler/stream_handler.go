@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"orchids-api/internal/client"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/perf"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/util"
@@ -702,7 +702,7 @@ func (h *streamHandler) handleToolCall(call toolCall) {
 	h.mu.Unlock()
 }
 
-func (h *streamHandler) handleMessage(msg client.SSEMessage) {
+func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 	if h.config.DebugEnabled && msg.Type != "content_block_delta" {
 		slog.Debug("Incoming SSE", "type", msg.Type)
 	}
@@ -866,7 +866,7 @@ func (h *streamHandler) handleMessage(msg client.SSEMessage) {
 
 		// Map orchids operation back to Claude tool name if possible
 		// mappedName := client.DefaultToolMapper.FromOrchids(opName)
-		_ = client.DefaultToolMapper.FromOrchids(opName)
+		_ = orchids.DefaultToolMapper.FromOrchids(opName)
 
 		output := ""
 		if !success {

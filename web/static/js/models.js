@@ -225,6 +225,26 @@ function editModel(id) {
   if (model) openModelModal(model);
 }
 
+// Toggle model status
+async function toggleModelStatus(id, enabled) {
+  const model = models.find(m => m.id === id);
+  if (!model) return;
+
+  try {
+    const updatedModel = { ...model, status: enabled ? 'available' : 'offline' };
+    const res = await fetch(`/api/models/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updatedModel),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    showToast(enabled ? "模型已启用" : "模型已禁用");
+    loadModels();
+  } catch (err) {
+    showToast("操作失败: " + err.message, "error");
+  }
+}
+
 // Delete model
 async function deleteModel(id) {
   if (!confirm("确定要删除这个模型吗？")) return;

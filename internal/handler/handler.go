@@ -9,13 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
 
-	"orchids-api/internal/client"
 	"orchids-api/internal/config"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/prompt"
@@ -39,11 +38,11 @@ type Handler struct {
 }
 
 type UpstreamClient interface {
-	SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(client.SSEMessage), logger *debug.Logger) error
+	SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(orchids.SSEMessage), logger *debug.Logger) error
 }
 
 type UpstreamPayloadClient interface {
-	SendRequestWithPayload(ctx context.Context, req client.UpstreamRequest, onMessage func(client.SSEMessage), logger *debug.Logger) error
+	SendRequestWithPayload(ctx context.Context, req orchids.UpstreamRequest, onMessage func(orchids.SSEMessage), logger *debug.Logger) error
 }
 
 type ClaudeRequest struct {
@@ -66,18 +65,10 @@ const keepAliveInterval = 15 * time.Second
 const maxRequestBytes = 32 * 1024 * 1024
 const maxToolFollowups = 1
 
-func New(cfg *config.Config) *Handler {
-	return &Handler{
-		config:     cfg,
-		client:     client.New(cfg),
-		summaryLog: cfg.SummaryCacheLog,
-	}
-}
-
 func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	return &Handler{
 		config:       cfg,
-		client:       client.New(cfg),
+		client:       orchids.New(cfg),
 		loadBalancer: lb,
 		summaryLog:   cfg.SummaryCacheLog,
 	}
@@ -218,16 +209,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if strings.EqualFold(account.AccountType, "warp") {
 				apiClient = warp.NewFromAccount(account, h.config)
 			} else {
-				apiClient = client.NewFromAccount(account, h.config)
+				apiClient = orchids.NewFromAccount(account, h.config)
 			}
-			if c, ok := apiClient.(*client.Client); ok && effectiveWorkdir != "" {
+			if c, ok := apiClient.(*orchids.Client); ok && effectiveWorkdir != "" {
 				c.UpdateLocalWorkdir(effectiveWorkdir)
 			}
 			currentAccount = account
 			return nil
 		} else if h.client != nil {
 			apiClient = h.client
-			if c, ok := apiClient.(*client.Client); ok && effectiveWorkdir != "" {
+			if c, ok := apiClient.(*orchids.Client); ok && effectiveWorkdir != "" {
 				c.UpdateLocalWorkdir(effectiveWorkdir)
 			}
 			currentAccount = nil
@@ -293,7 +284,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		ProjectRoot:      effectiveWorkdir,
 	}
 
-	if c, ok := apiClient.(*client.Client); ok {
+	if c, ok := apiClient.(*orchids.Client); ok {
 		opts.ProjectContext = c.GetProjectSummary()
 	}
 
@@ -508,7 +499,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
 			retriesRemaining := maxRetries
 
-			upstreamReq := client.UpstreamRequest{
+			upstreamReq := orchids.UpstreamRequest{
 				Prompt:        builtPrompt,
 				ChatHistory:   chatHistory,
 				Workdir:       dynamicWorkdir,
@@ -543,7 +534,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 					// Inject error message to client for better visibility
 					if isAuthError {
-						errorMsg := "Warp Authentication Error: Session expired (401). Please update your credentials in orchids_creds.json."
+errorMsg := "Authentication Error: Session expired (401). Please update your account credentials."
 						idx := sh.ensureBlock("text")
 
 						// For stream, send delta immediately
@@ -815,20 +806,4 @@ func randomSessionID() string {
 	return hex.EncodeToString(b)
 }
 
-func dedupeConsecutiveMessages(messages []prompt.Message) []prompt.Message {
-	if len(messages) <= 1 {
-		return messages
-	}
-	out := make([]prompt.Message, 0, len(messages))
-	for i := range messages {
-		if len(out) > 0 {
-			prev := out[len(out)-1]
-			if prev.Role == messages[i].Role && reflect.DeepEqual(prev.Content, messages[i].Content) {
-				continue
-			}
-		}
-		out = append(out, messages[i])
-	}
-	return out
-}
 

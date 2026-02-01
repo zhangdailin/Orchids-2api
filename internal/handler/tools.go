@@ -3,12 +3,10 @@ package handler
 import (
 	"encoding/json"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
-	"orchids-api/internal/client"
+	"orchids-api/internal/orchids"
 )
 
 // fixToolInput 修复工具输入中的类型问题
@@ -154,7 +152,7 @@ func mapOrchidsToolName(raw string, inputStr string, index []toolNameInfo, allow
 		}
 	}
 
-	mapped := client.NormalizeToolName(raw)
+	mapped := orchids.NormalizeToolName(raw)
 	if resolved, ok := allowed[strings.ToLower(mapped)]; ok {
 		return resolved
 	}
@@ -229,57 +227,6 @@ func shouldPreflightTools(text string) bool {
 	// Always run preflight to ensure model has context about project structure
 	// This prevents hallucinations about the tech stack (e.g. thinking it's Next.js/FastAPI when it's Go)
 	return true
-}
-
-var fileHintRe = regexp.MustCompile(`(?i)\b[\w\-.]+\.(go|js|ts|tsx|jsx|py|java|c|cc|cpp|h|hpp|rs|rb|php|cs|html|css|json|yaml|yml|md|txt|log|csv|toml|ini)\b`)
-
-func shouldGateTools(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return false
-	}
-	if utf8.RuneCountInString(text) > 20 {
-		return false
-	}
-	if containsFileHint(text) {
-		return false
-	}
-	if containsCodeTaskHint(text) {
-		return false
-	}
-	return true
-}
-
-func containsFileHint(text string) bool {
-	if strings.Contains(text, "./") || strings.Contains(text, "../") {
-		return true
-	}
-	if strings.ContainsAny(text, `/\`) {
-		return true
-	}
-	return fileHintRe.MatchString(text)
-}
-
-func containsCodeTaskHint(text string) bool {
-	lower := strings.ToLower(text)
-	enHints := []string{
-		"bug", "error", "issue", "fix", "broken", "panic", "exception", "stack", "trace",
-		"compile", "build", "test", "lint", "format", "refactor",
-		"function", "class", "method", "api", "endpoint", "request", "response",
-		"performance", "optimize", "latency",
-	}
-	for _, hint := range enHints {
-		if strings.Contains(lower, hint) {
-			return true
-		}
-	}
-	cnHints := []string{"报错", "错误", "修复", "异常", "崩溃", "编译", "构建", "测试", "性能", "优化", "代码", "接口", "请求", "响应", "函数", "类", "方法", "项目", "分析", "架构", "设计", "文档"}
-	for _, hint := range cnHints {
-		if strings.Contains(text, hint) {
-			return true
-		}
-	}
-	return false
 }
 
 func filterSupportedTools(tools []interface{}) []interface{} {

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"orchids-api/internal/model"
 	"orchids-api/internal/util"
 
 	"github.com/redis/go-redis/v9"
@@ -743,7 +742,7 @@ func (r apiKeyRecord) toApiKey() *ApiKey {
 
 // Model wrappers
 
-func (s *redisStore) CreateModel(ctx context.Context, m *model.Model) error {
+func (s *redisStore) CreateModel(ctx context.Context, m *Model) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
 	}
@@ -767,7 +766,7 @@ func (s *redisStore) CreateModel(ctx context.Context, m *model.Model) error {
 	return err
 }
 
-func (s *redisStore) UpdateModel(ctx context.Context, m *model.Model) error {
+func (s *redisStore) UpdateModel(ctx context.Context, m *Model) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
 	}
@@ -802,7 +801,7 @@ func (s *redisStore) DeleteModel(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *redisStore) GetModel(ctx context.Context, id string) (*model.Model, error) {
+func (s *redisStore) GetModel(ctx context.Context, id string) (*Model, error) {
 	if s == nil || s.client == nil {
 		return nil, fmt.Errorf("redis store not configured")
 	}
@@ -814,14 +813,14 @@ func (s *redisStore) GetModel(ctx context.Context, id string) (*model.Model, err
 		return nil, err
 	}
 
-	var m model.Model
+	var m Model
 	if err := json.Unmarshal([]byte(value), &m); err != nil {
 		return nil, err
 	}
 	return &m, nil
 }
 
-func (s *redisStore) ListModels(ctx context.Context) ([]*model.Model, error) {
+func (s *redisStore) ListModels(ctx context.Context) ([]*Model, error) {
 	if s == nil || s.client == nil {
 		return nil, fmt.Errorf("redis store not configured")
 	}
@@ -831,7 +830,7 @@ func (s *redisStore) ListModels(ctx context.Context) ([]*model.Model, error) {
 	}
 
 	if len(ids) == 0 {
-		return []*model.Model{}, nil
+		return []*Model{}, nil
 	}
 
 	// Sort numeric IDs if possible, else string sort
@@ -854,7 +853,7 @@ func (s *redisStore) ListModels(ctx context.Context) ([]*model.Model, error) {
 		return nil, err
 	}
 
-	models := make([]*model.Model, 0, len(values))
+	models := make([]*Model, 0, len(values))
 	for _, value := range values {
 		if value == nil {
 			continue
@@ -863,7 +862,7 @@ func (s *redisStore) ListModels(ctx context.Context) ([]*model.Model, error) {
 		if !ok || strVal == "" {
 			continue
 		}
-		var m model.Model
+		var m Model
 		if err := json.Unmarshal([]byte(strVal), &m); err != nil {
 			continue
 		}

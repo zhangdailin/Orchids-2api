@@ -55,9 +55,8 @@ type Config struct {
 	OrchidsLocalWorkdir     string   `json:"orchids_local_workdir"`
 	OrchidsAllowRunCommand  bool     `json:"orchids_allow_run_command"`
 	OrchidsRunAllowlist     []string `json:"orchids_run_allowlist"`
-	OrchidsFSIgnore         []string `json:"orchids_fs_ignore"`
-	OrchidsCredsPath        string   `json:"orchids_creds_path"`
-	WarpDisableTools        *bool    `json:"warp_disable_tools"`
+	OrchidsFSIgnore  []string `json:"orchids_fs_ignore"`
+	WarpDisableTools *bool    `json:"warp_disable_tools"`
 
 	// New fields for UI
 	AdminToken           string `json:"admin_token"`
@@ -220,9 +219,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if len(cfg.OrchidsFSIgnore) == 0 {
 		cfg.OrchidsFSIgnore = []string{"debug-logs", "data", ".claude"}
-	}
-	if cfg.OrchidsCredsPath == "" {
-		cfg.OrchidsCredsPath = "orchids_creds.json"
 	}
 	if cfg.OrchidsLocalWorkdir == "" {
 		if cwd, err := os.Getwd(); err == nil {

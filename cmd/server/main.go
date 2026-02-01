@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -17,7 +18,6 @@ import (
 	"orchids-api/internal/auth"
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
-	"orchids-api/internal/constants"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
@@ -25,7 +25,6 @@ import (
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/summarycache"
-	credsync "orchids-api/internal/sync"
 	"orchids-api/internal/template"
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/warp"
@@ -74,11 +73,13 @@ func main() {
 
 	slog.Info("Store initialized", "mode", "redis", "addr", cfg.RedisAddr, "prefix", cfg.RedisPrefix)
 
-	// Auto-sync credentials for fallback
-	if err := credsync.SyncCredentials(s, cfg.OrchidsCredsPath); err != nil {
-		slog.Warn("Failed to sync credentials from DB", "error", err)
-	} else {
-		slog.Debug("Credentials sync check completed")
+	// 从 Redis 加载已保存的配置（如果存在）
+	if savedConfig, err := s.GetSetting(context.Background(), "config"); err == nil && savedConfig != "" {
+		if err := json.Unmarshal([]byte(savedConfig), cfg); err != nil {
+			slog.Warn("Failed to load config from Redis, using file config", "error", err)
+		} else {
+			slog.Info("Config loaded from Redis")
+		}
 	}
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Duration(cfg.LoadBalancerCacheTTL)*time.Second)
@@ -306,7 +307,7 @@ func main() {
 	}
 
 	go func() {
-		ticker := time.NewTicker(constants.SessionCleanupPeriod)
+		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for {
 			select {
@@ -330,7 +331,7 @@ func main() {
 		cancelBackground()
 
 		// Give existing requests time to complete
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), constants.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30 * time.Second)
 		defer cancel()
 
 		if err := server.Shutdown(shutdownCtx); err != nil {

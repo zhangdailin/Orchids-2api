@@ -4,10 +4,11 @@ import (
 	"context"
 	"time"
 
-	"orchids-api/internal/constants"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/tokencache"
 )
+
+const defaultTokenCacheTTL = 5 * time.Minute
 
 func (h *Handler) estimateInputTokens(ctx context.Context, model, prompt string) int {
 	if prompt == "" {
@@ -19,7 +20,7 @@ func (h *Handler) estimateInputTokens(ctx context.Context, model, prompt string)
 
 	ttl := time.Duration(h.config.CacheTTL) * time.Minute
 	if ttl <= 0 {
-		ttl = constants.TokenCacheTTL
+		ttl = defaultTokenCacheTTL
 	}
 	h.tokenCache.SetTTL(ttl)
 

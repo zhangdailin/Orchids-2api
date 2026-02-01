@@ -16,7 +16,6 @@ import (
 	"orchids-api/internal/auth"
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
-	"orchids-api/internal/model"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
@@ -140,10 +139,6 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// We need to type assert since we used interface{} to avoid imports if needed
-	// Actually we can just import config if we need to. Let's see.
-	// For now let's use json marshal on the interface.
-
 	switch r.Method {
 	case http.MethodGet:
 		json.NewEncoder(w).Encode(a.config)
@@ -154,15 +149,15 @@ func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Save to file
-		// We'll need to call the Save method. We can use reflection or just import the package.
-		// Let's import the package since it's already used in New.
-
-		if saver, ok := a.config.(interface{ Save(string) error }); ok {
-			if err := saver.Save(a.configPath); err != nil {
-				http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
+		// Save to Redis
+		data, err := json.Marshal(a.config)
+		if err != nil {
+			http.Error(w, "Failed to marshal config: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.store.SetSetting(r.Context(), "config", string(data)); err != nil {
+			http.Error(w, "Failed to save config to Redis: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -605,7 +600,7 @@ func (a *API) HandleModels(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(models)
 
 	case http.MethodPost:
-		var m model.Model
+		var m store.Model
 		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -647,7 +642,7 @@ func (a *API) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(m)
 
 	case http.MethodPut:
-		var m model.Model
+		var m store.Model
 		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

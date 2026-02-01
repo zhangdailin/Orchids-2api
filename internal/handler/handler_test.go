@@ -9,19 +9,19 @@ import (
 	"strings"
 	"testing"
 
-	"orchids-api/internal/client"
 	"orchids-api/internal/config"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
 )
 
 type fakeClient struct {
-	events []client.SSEMessage
+	events []orchids.SSEMessage
 	err    error
 }
 
-func (f *fakeClient) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(client.SSEMessage), logger *debug.Logger) error {
+func (f *fakeClient) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(orchids.SSEMessage), logger *debug.Logger) error {
 	for _, evt := range f.events {
 		onMessage(evt)
 	}
@@ -49,7 +49,7 @@ func TestHandleMessages_NonStreamReturnsAnthropicMessage(t *testing.T) {
 	h := &Handler{
 		config: &config.Config{DebugEnabled: false},
 		client: &fakeClient{
-			events: []client.SSEMessage{
+			events: []orchids.SSEMessage{
 				{Type: "model", Event: map[string]interface{}{"type": "text-start"}},
 				{Type: "model", Event: map[string]interface{}{"type": "text-delta", "delta": "Hello"}},
 				{Type: "model", Event: map[string]interface{}{"type": "text-end"}},
@@ -168,7 +168,7 @@ func TestHandleMessages_NonStreamIncludesToolUse(t *testing.T) {
 	h := &Handler{
 		config: &config.Config{DebugEnabled: false},
 		client: &fakeClient{
-			events: []client.SSEMessage{
+			events: []orchids.SSEMessage{
 				{Type: "model", Event: map[string]interface{}{"type": "tool-call", "toolCallId": "tool_1", "toolName": "sum", "input": "{\"a\":\"1\"}"}},
 				{Type: "model", Event: map[string]interface{}{"type": "finish", "finishReason": "tool-calls"}},
 			},

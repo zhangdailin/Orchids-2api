@@ -53,7 +53,9 @@ Client (Claude API format) → Handler → LoadBalancer → PromptBuilder → Cl
 - `cmd/server/main.go` - Application entry point, HTTP server setup, route registration
 - `internal/handler/` - Main request handlers for `/orchids/v1/messages` and `/warp/v1/messages`
 - `internal/loadbalancer/` - Weighted random account selection with failover support
-- `internal/client/` - Upstream API client (supports SSE and WebSocket modes)
+- `internal/orchids/` - Orchids upstream client (SSE and WebSocket modes)
+- `internal/warp/` - Warp upstream client
+- `internal/upstream/` - Common upstream components (connection pool, circuit breaker, reliability)
 - `internal/clerk/` - Clerk authentication service for JWT token generation
 - `internal/store/` - Redis-based account and settings storage
 - `internal/prompt/` - Converts Claude API messages to Markdown format for upstream

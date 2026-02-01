@@ -97,31 +97,36 @@ orchids-api/
 │   ├── api/             # Admin REST API
 │   ├── auth/            # 认证服务
 │   ├── clerk/           # Clerk JWT 认证
-│   ├── client/          # 上游 API 客户端 (SSE/WebSocket)
 │   ├── config/          # 配置加载
-│   ├── constants/       # 全局常量定义
 │   ├── errors/          # 统一错误处理
 │   ├── handler/         # HTTP 请求处理器
 │   │   ├── handler.go   # 核心处理逻辑
 │   │   ├── stream_handler.go  # SSE 流处理
-│   │   ├── validation.go      # 请求验证
-│   │   ├── response.go        # 响应构建
-│   │   └── context.go         # 会话管理
+│   │   ├── tool_exec.go       # 工具执行
+│   │   └── tools.go           # 工具映射
 │   ├── loadbalancer/    # 加权负载均衡
 │   ├── middleware/      # HTTP 中间件
 │   │   ├── auth.go      # 认证中间件
 │   │   ├── concurrency.go  # 并发限制
-│   │   ├── session.go   # 会话管理
-│   │   └── trace.go     # 请求追踪
+│   │   └── session.go   # 会话管理
+│   ├── orchids/         # Orchids 上游客户端
+│   │   ├── client.go    # SSE 客户端
+│   │   ├── ws_aiclient.go  # WebSocket 客户端
+│   │   ├── fs.go        # 文件系统操作
+│   │   └── tool_mapping.go # 工具名称映射
+│   ├── upstream/        # 通用上游组件
+│   │   ├── wspool.go    # WebSocket 连接池
+│   │   ├── breaker.go   # 熔断器
+│   │   └── reliability.go # 重试与可靠性
+│   ├── warp/            # Warp 上游客户端
+│   │   ├── client.go    # Warp API 客户端
+│   │   └── session.go   # Warp 会话管理
 │   ├── perf/            # 性能优化 (对象池)
-│   ├── pool/            # WebSocket 连接池
 │   ├── prompt/          # Prompt 构建与压缩
-│   ├── reliability/     # 熔断器与重试
 │   ├── store/           # Redis 数据存储
 │   ├── summarycache/    # 会话摘要缓存
 │   ├── tiktoken/        # Token 估算
-│   ├── util/            # 通用工具函数
-│   └── warp/            # Warp 客户端支持
+│   └── util/            # 通用工具函数
 ├── web/                 # 嵌入式静态资源
 │   ├── static/          # CSS, JS
 │   └── templates/       # HTML 模板
@@ -148,12 +153,12 @@ Client Request
 
 | 模块 | 职责 |
 |------|------|
-| `errors` | 统一错误码和结构化错误处理 |
-| `util` | 并行处理、重试、可取消休眠等工具 |
-| `constants` | 全局常量，避免魔法数字 |
-| `middleware/trace` | 请求追踪，自动注入 trace_id |
-| `reliability` | 熔断器模式，防止雪崩 |
-| `perf` | 对象池复用，减少 GC 压力 |
+| `orchids/` | Orchids 上游客户端，SSE/WebSocket 通信 |
+| `warp/` | Warp 上游客户端 |
+| `upstream/` | 通用上游组件：连接池、熔断器、重试 |
+| `errors/` | 统一错误码和结构化错误处理 |
+| `util/` | 并行处理、重试、可取消休眠等工具 |
+| `perf/` | 对象池复用，减少 GC 压力 |
 
 ## 运行测试
 
