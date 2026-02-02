@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/orchids"
-	"orchids-api/internal/upstream"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
+	"orchids-api/internal/upstream"
 )
 
 type Client struct {
@@ -32,9 +32,6 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	refresh := ""
 	if acc != nil {
 		refresh = strings.TrimSpace(acc.RefreshToken)
-		if refresh == "" {
-			refresh = strings.TrimSpace(acc.ClientCookie)
-		}
 	}
 	sess := getSession(acc.ID, refresh)
 
@@ -55,7 +52,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	if cfg != nil && cfg.RequestTimeout > 0 {
 		timeout = time.Duration(cfg.RequestTimeout) * time.Second
 	}
-	
+
 	client := newHTTPClient(timeout, cfg)
 	client.Jar = sess.jar
 
@@ -73,7 +70,7 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 	if timeout <= 0 {
 		timeout = defaultRequestTimeout
 	}
-	
+
 	var proxyURL *url.URL
 	if cfg != nil && cfg.ProxyHTTP != "" {
 		parsedURL, err := url.Parse(cfg.ProxyHTTP)
@@ -111,7 +108,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 	if c.account != nil && c.account.SessionID != "" {
 		cid = c.account.SessionID
 	} else if c.account != nil {
-		cid = fmt.Sprintf("orchids-%d", c.account.ID)
+		cid = fmt.Sprintf("warp-%d", c.account.ID)
 	}
 
 	promptText := req.Prompt
@@ -133,11 +130,14 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 		return err
 	}
 
-	disableWarpTools := true
+	disableWarpTools := false
 	if c.config != nil && c.config.WarpDisableTools != nil {
 		disableWarpTools = *c.config.WarpDisableTools
 	}
 	if req.NoTools {
+		disableWarpTools = true
+	}
+	if len(req.Tools) == 0 {
 		disableWarpTools = true
 	}
 
@@ -170,25 +170,17 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 		return err
 	}
 	request.Header.Set("x-warp-client-id", clientID)
-	request.Header.Set("accept", "*/*")
+	request.Header.Set("accept", "text/event-stream")
 	request.Header.Set("content-type", "application/x-protobuf")
 	request.Header.Set("x-warp-client-version", clientVersion)
 	request.Header.Set("x-warp-os-category", osCategory)
 	request.Header.Set("x-warp-os-name", osName)
 	request.Header.Set("x-warp-os-version", osVersion)
-	request.Header.Set("x-warp-date", time.Now().UTC().Format("2006-01-02T15:04:05.000000Z"))
-	request.Header.Set("user-agent", userAgent)
 	request.Header.Set("authorization", "Bearer "+jwt)
-	request.Header.Set("origin", "https://app.warp.dev")
-	request.Header.Set("referer", "https://app.warp.dev/")
-	if eid := c.session.getExperimentID(); eid != "" {
-		request.Header.Set("x-warp-experiment-id", eid)
-	}
-	if eb := c.session.getExperimentBucket(); eb != "" {
-		request.Header.Set("x-warp-experiment-bucket", eb)
-	}
-	request.Header.Set("accept-encoding", "gzip, br")
-	request.Header.Set("x-warp-request-id", newUUID())
+	request.Header.Set("accept-encoding", "identity")
+	request.Header.Set("content-length", fmt.Sprintf("%d", len(payload)))
+	// 避免 Go 默认注入 User-Agent
+	request.Header.Set("user-agent", "")
 
 	if logger != nil {
 		headers := make(map[string]string)
@@ -236,7 +228,6 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 		slog.Warn("Warp AI request failed", "status", resp.StatusCode, "headers", headerLog, "body", string(body))
 		return fmt.Errorf("warp api error: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-
 
 	var reader io.ReadCloser = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
@@ -286,31 +277,31 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 			if parsed.ConversationID != "" {
 				onMessage(orchids.SSEMessage{Type: "model.conversation_id", Event: map[string]interface{}{"id": parsed.ConversationID}})
 			}
-		for _, delta := range parsed.TextDeltas {
-			onMessage(orchids.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": delta}})
-		}
-		for _, delta := range parsed.ReasoningDeltas {
-			onMessage(orchids.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{"delta": delta}})
-		}
-		for _, call := range parsed.ToolCalls {
-			toolCallSeen = true
-			onMessage(orchids.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": call.ID, "toolName": call.Name, "input": call.Input}})
-		}
-		if parsed.Finish != nil {
-			finish := map[string]interface{}{
-				"finishReason": "end_turn",
+			for _, delta := range parsed.TextDeltas {
+				onMessage(orchids.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": delta}})
 			}
-			if toolCallSeen {
-				finish["finishReason"] = "tool_use"
+			for _, delta := range parsed.ReasoningDeltas {
+				onMessage(orchids.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{"delta": delta}})
 			}
-			if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
-				finish["usage"] = map[string]interface{}{
-					"inputTokens":  parsed.Finish.InputTokens,
-					"outputTokens": parsed.Finish.OutputTokens,
+			for _, call := range parsed.ToolCalls {
+				toolCallSeen = true
+				onMessage(orchids.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": call.ID, "toolName": call.Name, "input": call.Input}})
+			}
+			if parsed.Finish != nil {
+				finish := map[string]interface{}{
+					"finishReason": "end_turn",
 				}
+				if toolCallSeen {
+					finish["finishReason"] = "tool_use"
+				}
+				if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
+					finish["usage"] = map[string]interface{}{
+						"inputTokens":  parsed.Finish.InputTokens,
+						"outputTokens": parsed.Finish.OutputTokens,
+					}
+				}
+				onMessage(orchids.SSEMessage{Type: "model.finish", Event: finish})
 			}
-			onMessage(orchids.SSEMessage{Type: "model.finish", Event: finish})
-		}
 			continue
 		}
 		if strings.HasPrefix(line, ":") {
@@ -362,7 +353,6 @@ func (c *Client) breakerKey() string {
 	}
 	return "warp:default"
 }
-
 
 func decodeWarpPayload(data string) ([]byte, error) {
 	if data == "" {

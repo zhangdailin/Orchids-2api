@@ -67,6 +67,9 @@ func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string
 		}
 		account, err := h.loadBalancer.GetNextAccountExcludingByChannel(ctx, failedAccountIDs, targetChannel)
 		if err != nil {
+			if forcedChannel != "" {
+				return nil, nil, err
+			}
 			if h.client != nil {
 				slog.Info("Load balancer: no available accounts for channel, using default config", "channel", targetChannel)
 				return h.client, nil, nil

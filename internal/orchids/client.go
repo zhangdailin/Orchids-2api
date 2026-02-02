@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -35,10 +36,10 @@ const (
 )
 
 type Client struct {
-	config     *config.Config
-	account    *store.Account
-	httpClient *http.Client
-	fsCache    *perf.TTLCache
+	config         *config.Config
+	account        *store.Account
+	httpClient     *http.Client
+	fsCache        *perf.TTLCache
 	wsPool         *upstream.WSPool
 	wsWriteMu      sync.Mutex // Protects concurrent writes to WebSocket
 	fsIndex        map[string][]string
@@ -101,8 +102,6 @@ var tokenCache = struct {
 	items: map[string]cachedToken{},
 }
 
-var defaultHTTPClient = newHTTPClient()
-
 var bufferPool = sync.Pool{
 	New: func() interface{} {
 		sb := new(strings.Builder)
@@ -123,24 +122,35 @@ var byteBufferPool = sync.Pool{
 	},
 }
 
-func newHTTPClient() *http.Client {
+func newHTTPClient(cfg *config.Config) *http.Client {
+	transport := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
+
+	if cfg != nil && cfg.ProxyHTTP != "" {
+		if u, err := url.Parse(cfg.ProxyHTTP); err == nil {
+			if cfg.ProxyUser != "" && cfg.ProxyPass != "" {
+				u.User = url.UserPassword(cfg.ProxyUser, cfg.ProxyPass)
+			}
+			transport.Proxy = http.ProxyURL(u)
+		}
+	}
+
 	return &http.Client{
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			MaxIdleConns:          100,
-			MaxIdleConnsPerHost:   100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-		},
+		Transport: transport,
 	}
 }
 
 func New(cfg *config.Config) *Client {
 	c := &Client{
 		config:     cfg,
-		httpClient: defaultHTTPClient,
+		httpClient: newHTTPClient(cfg),
 		fsCache:    perf.NewTTLCache(60 * time.Second),
 	}
 	c.wsPool = upstream.NewWSPool(c.createWSConnection, 5, 20)
@@ -151,21 +161,20 @@ func New(cfg *config.Config) *Client {
 
 func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 	cfg := &config.Config{
-		SessionID:           acc.SessionID,
-		ClientCookie:        acc.ClientCookie,
-		SessionCookie:       acc.SessionCookie,
-		ClientUat:           acc.ClientUat,
-		ProjectID:           acc.ProjectID,
-		UserID:              acc.UserID,
-		AgentMode:           acc.AgentMode,
-		Email:               acc.Email,
-		UpstreamMode:        "",
-		UpstreamURL:         "",
-		UpstreamToken:       "",
-		OrchidsAPIBaseURL:   "",
-		OrchidsWSURL:        "",
-		OrchidsAPIVersion:   "",
-
+		SessionID:         acc.SessionID,
+		ClientCookie:      acc.ClientCookie,
+		SessionCookie:     acc.SessionCookie,
+		ClientUat:         acc.ClientUat,
+		ProjectID:         acc.ProjectID,
+		UserID:            acc.UserID,
+		AgentMode:         acc.AgentMode,
+		Email:             acc.Email,
+		UpstreamMode:      "",
+		UpstreamURL:       "",
+		UpstreamToken:     "",
+		OrchidsAPIBaseURL: "",
+		OrchidsWSURL:      "",
+		OrchidsAPIVersion: "",
 	}
 	if base != nil {
 		cfg.UpstreamMode = base.UpstreamMode
@@ -183,22 +192,25 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 		cfg.MaxRetries = base.MaxRetries
 		cfg.RetryDelay = base.RetryDelay
 		cfg.RequestTimeout = base.RequestTimeout
+
+		// Copy Proxy Config
+		cfg.ProxyHTTP = base.ProxyHTTP
+		cfg.ProxyHTTPS = base.ProxyHTTPS
+		cfg.ProxyUser = base.ProxyUser
+		cfg.ProxyPass = base.ProxyPass
+		cfg.ProxyBypass = base.ProxyBypass
 	}
 
 	c := &Client{
 		config:     cfg,
 		account:    acc,
-		httpClient: defaultHTTPClient,
+		httpClient: newHTTPClient(cfg),
 		fsCache:    perf.NewTTLCache(60 * time.Second),
 	}
 	c.wsPool = upstream.NewWSPool(c.createWSConnection, 5, 20)
 	go c.RefreshFSIndex()
 	return c
 }
-
-
-
-
 
 func (c *Client) GetToken() (string, error) {
 	if c.config != nil && c.config.UpstreamToken != "" {

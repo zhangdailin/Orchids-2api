@@ -79,11 +79,20 @@ function renderPlatformTabs() {
     currentPlatform = tabs.length > 0 ? tabs[0] : '';
   }
 
-  container.innerHTML = tabs.map(type => {
-    const label = type;
+  container.innerHTML = "";
+  tabs.forEach(type => {
+    const label = String(type || "");
     const isActive = currentPlatform === label;
-    return `<button class="tab-item ${isActive ? 'active' : ''}" onclick="filterByPlatform('${label}')">${label}</button>`;
-  }).join("");
+    const btn = document.createElement("button");
+    btn.className = `tab-item ${isActive ? 'active' : ''}`.trim();
+    btn.dataset.platform = encodeURIComponent(label);
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      const raw = btn.dataset.platform ? decodeURIComponent(btn.dataset.platform) : "";
+      filterByPlatform(raw);
+    });
+    container.appendChild(btn);
+  });
 }
 
 // Update account health status
@@ -232,91 +241,239 @@ function renderAccounts() {
   const pageItems = filtered.slice(start, end);
 
   if (pageItems.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
-        <span style="font-size: 3rem; margin-bottom: 16px;">📂</span>
-        <p>暂无 ${currentPlatform ? currentPlatform : ''} 账号数据</p>
-      </div>`;
+    container.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.style.display = "flex";
+    empty.style.flexDirection = "column";
+    empty.style.alignItems = "center";
+    empty.style.justifyContent = "center";
+    empty.style.height = "300px";
+    empty.style.color = "#94a3b8";
+    const icon = document.createElement("span");
+    icon.style.fontSize = "3rem";
+    icon.style.marginBottom = "16px";
+    icon.textContent = "📂";
+    const text = document.createElement("p");
+    text.textContent = `暂无 ${currentPlatform ? currentPlatform : ''} 账号数据`;
+    empty.appendChild(icon);
+    empty.appendChild(text);
+    container.appendChild(empty);
     document.getElementById("paginationInfo").textContent = `共 0 条记录，第 1/1 页`;
     renderPagination(1, 1);
     return;
   }
 
-  const rows = pageItems.map(acc => {
+  container.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const headers = [
+    { label: "", style: "width: 40px;" },
+    { label: "ID", style: "width: 60px;" },
+    { label: "Token" },
+    { label: "模型" },
+    { label: "用量", style: "width: 180px;" },
+    { label: "状态" },
+    { label: "调用" },
+    { label: "最后调用" },
+    { label: "操作", style: "text-align: right;" },
+  ];
+  headers.forEach((h, idx) => {
+    const th = document.createElement("th");
+    if (h.style) th.style.cssText = h.style;
+    if (idx === 0) {
+      const selectAll = document.createElement("input");
+      selectAll.type = "checkbox";
+      selectAll.dataset.action = "select-all";
+      th.appendChild(selectAll);
+    } else {
+      th.textContent = h.label;
+    }
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  pageItems.forEach((acc) => {
     const badge = statusBadge(acc);
     const tokenDisplay = formatTokenDisplay(acc);
-    return `
-      <tr>
-        <td><input type="checkbox" class="row-checkbox" data-id="${acc.id}" onchange="updateSelectedCount()"></td>
-        <td style="color: #64748b; font-size: 0.9rem;">${acc.id}</td>
-        <td>
-          <span class="token-text" title="${escapeHtml(tokenDisplay)}" style="font-family: monospace; color: #94a3b8;">${escapeHtml(tokenDisplay)}</span>
-        </td>
-        <td><span class="tag tag-free">${acc.agent_mode || 'auto'}</span></td>
-        <td>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <div class="usage-progress-container">
-              <div class="usage-progress-bar ${acc.usage_current / (acc.usage_total || 550) > 0.8 ? 'red' : acc.usage_current / (acc.usage_total || 550) > 0.5 ? 'orange' : 'green'}"
-                   style="width: ${Math.min(100, (acc.usage_current / (acc.usage_total || 550)) * 100)}%;"></div>
-            </div>
-            <span style="font-size: 0.8rem; color: #64748b;">${(acc.usage_current || 0).toFixed(2)}/${acc.usage_total || 550}</span>
-          </div>
-        </td>
-        <td>
-          <span class="tag tag-status-normal" title="${escapeHtml(badge.tip)}" style="background: ${badge.bg}; color: ${badge.color}; border: none;">
-            ${badge.text}
-          </span>
-        </td>
-        <td style="font-size: 0.9rem; color: #e2e8f0; font-weight: 500;">${acc.request_count || 0}</td>
-        <td style="font-size: 0.8rem; color: #64748b;">${acc.last_used_at && !acc.last_used_at.startsWith('0001') ? formatTime(acc.last_used_at) : '-'}</td>
-        <td style="text-align: right;">
-          <div style="display: flex; justify-content: flex-end; gap: 12px;">
-            <i class="action-icon" onclick="editAccount(${acc.id})" title="编辑">✏️</i>
-            <i class="action-icon" onclick="refreshToken(${acc.id})" title="刷新">🔄</i>
-            <i class="action-icon" onclick="deleteAccount(${acc.id})" title="删除">🗑️</i>
-          </div>
-        </td>
-      </tr>
-    `;
-  }).join("");
+    const tr = document.createElement("tr");
 
-  container.innerHTML = `
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th style="width: 40px;"><input type="checkbox" onchange="toggleSelectAll(this.checked)"></th>
-            <th style="width: 60px;">ID</th>
-            <th>Token</th>
-            <th>模型</th>
-            <th style="width: 180px;">用量</th>
-            <th>状态</th>
-            <th>调用</th>
-            <th>最后调用</th>
-            <th style="text-align: right;">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
-    </div>
-  `;
+    const tdCheck = document.createElement("td");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "row-checkbox";
+    cb.dataset.action = "row-select";
+    cb.dataset.id = encodeData(acc.id);
+    tdCheck.appendChild(cb);
+    tr.appendChild(tdCheck);
+
+    const tdID = document.createElement("td");
+    tdID.style.color = "#64748b";
+    tdID.style.fontSize = "0.9rem";
+    tdID.textContent = acc.id === null || acc.id === undefined ? "" : String(acc.id);
+    tr.appendChild(tdID);
+
+    const tdToken = document.createElement("td");
+    const tokenSpan = document.createElement("span");
+    tokenSpan.className = "token-text";
+    tokenSpan.title = tokenDisplay;
+    tokenSpan.style.fontFamily = "monospace";
+    tokenSpan.style.color = "#94a3b8";
+    tokenSpan.textContent = tokenDisplay;
+    tdToken.appendChild(tokenSpan);
+    tr.appendChild(tdToken);
+
+    const tdModel = document.createElement("td");
+    const modelSpan = document.createElement("span");
+    modelSpan.className = "tag tag-free";
+    modelSpan.textContent = acc.agent_mode || "auto";
+    tdModel.appendChild(modelSpan);
+    tr.appendChild(tdModel);
+
+    const tdUsage = document.createElement("td");
+    const usageWrap = document.createElement("div");
+    usageWrap.style.display = "flex";
+    usageWrap.style.alignItems = "center";
+    usageWrap.style.gap = "8px";
+    const progressContainer = document.createElement("div");
+    progressContainer.className = "usage-progress-container";
+    const progress = document.createElement("div");
+    const usageTotal = acc.usage_total || 550;
+    const usageCurrent = acc.usage_current || 0;
+    const ratio = usageTotal > 0 ? usageCurrent / usageTotal : 0;
+    progress.className = `usage-progress-bar ${ratio > 0.8 ? "red" : ratio > 0.5 ? "orange" : "green"}`;
+    progress.style.width = `${Math.min(100, ratio * 100)}%`;
+    progressContainer.appendChild(progress);
+    const usageText = document.createElement("span");
+    usageText.style.fontSize = "0.8rem";
+    usageText.style.color = "#64748b";
+    usageText.textContent = `${usageCurrent.toFixed(2)}/${usageTotal}`;
+    usageWrap.appendChild(progressContainer);
+    usageWrap.appendChild(usageText);
+    tdUsage.appendChild(usageWrap);
+    tr.appendChild(tdUsage);
+
+    const tdStatus = document.createElement("td");
+    const statusSpan = document.createElement("span");
+    statusSpan.className = "tag tag-status-normal";
+    statusSpan.title = badge.tip || "";
+    statusSpan.style.background = badge.bg;
+    statusSpan.style.color = badge.color;
+    statusSpan.style.border = "none";
+    statusSpan.textContent = badge.text;
+    tdStatus.appendChild(statusSpan);
+    tr.appendChild(tdStatus);
+
+    const tdCount = document.createElement("td");
+    tdCount.style.fontSize = "0.9rem";
+    tdCount.style.color = "#e2e8f0";
+    tdCount.style.fontWeight = "500";
+    tdCount.textContent = String(acc.request_count || 0);
+    tr.appendChild(tdCount);
+
+    const tdLast = document.createElement("td");
+    tdLast.style.fontSize = "0.8rem";
+    tdLast.style.color = "#64748b";
+    tdLast.textContent = acc.last_used_at && !acc.last_used_at.startsWith('0001') ? formatTime(acc.last_used_at) : "-";
+    tr.appendChild(tdLast);
+
+    const tdActions = document.createElement("td");
+    tdActions.style.textAlign = "right";
+    const actionWrap = document.createElement("div");
+    actionWrap.style.display = "flex";
+    actionWrap.style.justifyContent = "flex-end";
+    actionWrap.style.gap = "12px";
+
+    const edit = document.createElement("i");
+    edit.className = "action-icon";
+    edit.dataset.action = "edit";
+    edit.dataset.id = encodeData(acc.id);
+    edit.title = "编辑";
+    edit.textContent = "✏️";
+
+    const refresh = document.createElement("i");
+    refresh.className = "action-icon";
+    refresh.dataset.action = "refresh";
+    refresh.dataset.id = encodeData(acc.id);
+    refresh.title = "刷新";
+    refresh.textContent = "🔄";
+
+    const del = document.createElement("i");
+    del.className = "action-icon";
+    del.dataset.action = "delete";
+    del.dataset.id = encodeData(acc.id);
+    del.title = "删除";
+    del.textContent = "🗑️";
+
+    actionWrap.appendChild(edit);
+    actionWrap.appendChild(refresh);
+    actionWrap.appendChild(del);
+    tdActions.appendChild(actionWrap);
+    tr.appendChild(tdActions);
+
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  container.appendChild(wrap);
 
   document.getElementById("paginationInfo").textContent = `共 ${total} 条记录，第 ${currentPage}/${totalPages} 页`;
   renderPagination(currentPage, totalPages);
   updateSelectedCount();
+
+  container.onclick = (e) => {
+    const actionEl = e.target.closest("[data-action]");
+    if (!actionEl || !container.contains(actionEl)) return;
+    const action = actionEl.dataset.action;
+    const idRaw = actionEl.dataset.id || "";
+    const id = parseDataId(idRaw);
+    if (action === "edit") editAccount(id);
+    if (action === "refresh") refreshToken(id);
+    if (action === "delete") deleteAccount(id);
+  };
+
+  container.onchange = (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const action = target.dataset.action;
+    if (action === "row-select") {
+      updateSelectedCount();
+      return;
+    }
+    if (action === "select-all") {
+      toggleSelectAll(target.checked);
+    }
+  };
 }
 
 function renderPagination(current, total) {
   const container = document.getElementById("paginationControls");
   if (!container) return;
 
-  let html = '';
+  container.innerHTML = "";
+  const appendButton = (label, page, disabled, activeClass, extraStyle) => {
+    const btn = document.createElement("button");
+    btn.className = `btn ${activeClass}`.trim();
+    btn.dataset.page = String(page);
+    btn.disabled = disabled;
+    btn.textContent = label;
+    btn.style.padding = "4px 10px";
+    if (extraStyle) {
+      Object.keys(extraStyle).forEach((key) => {
+        btn.style[key] = extraStyle[key];
+      });
+    }
+    container.appendChild(btn);
+  };
 
   // First & Prev
-  html += `<button class="btn btn-outline" style="padding: 4px 10px;" onclick="goToPage(1)" ${current === 1 ? 'disabled' : ''}>首页</button>`;
-  html += `<button class="btn btn-outline" style="padding: 4px 10px;" onclick="goToPage(${current - 1})" ${current === 1 ? 'disabled' : ''}>上一页</button>`;
+  appendButton("首页", 1, current === 1, "btn-outline");
+  appendButton("上一页", current - 1, current === 1, "btn-outline");
 
   // Page Numbers (simplified logic: show surrounding)
   let startPage = Math.max(1, current - 2);
@@ -327,14 +484,18 @@ function renderPagination(current, total) {
 
   for (let i = startPage; i <= endPage; i++) {
     const activeClass = i === current ? 'btn-primary' : 'btn-outline';
-    html += `<button class="btn ${activeClass}" style="padding: 4px 10px; min-width: 32px; justify-content: center;" onclick="goToPage(${i})">${i}</button>`;
+    appendButton(String(i), i, false, activeClass, { minWidth: "32px", justifyContent: "center" });
   }
 
   // Next & Last
-  html += `<button class="btn btn-outline" style="padding: 4px 10px;" onclick="goToPage(${current + 1})" ${current === total ? 'disabled' : ''}>下一页</button>`;
-  html += `<button class="btn btn-outline" style="padding: 4px 10px;" onclick="goToPage(${total})" ${current === total ? 'disabled' : ''}>末页</button>`;
-
-  container.innerHTML = html;
+  appendButton("下一页", current + 1, current === total, "btn-outline");
+  appendButton("末页", total, current === total, "btn-outline");
+  container.onclick = (e) => {
+    const btn = e.target.closest("button[data-page]");
+    if (!btn || !container.contains(btn) || btn.disabled) return;
+    const page = parseInt(btn.dataset.page, 10);
+    if (!Number.isNaN(page)) goToPage(page);
+  };
 }
 
 function goToPage(page) {
@@ -530,10 +691,30 @@ async function deleteAccount(id) {
 
 // Escape HTML
 function escapeHtml(text) {
-  if (!text) return '';
+  if (text === null || text === undefined) return '';
   const div = document.createElement("div");
-  div.textContent = text;
+  div.textContent = String(text);
   return div.innerHTML;
+}
+
+function encodeData(value) {
+  return encodeURIComponent(value === null || value === undefined ? "" : String(value));
+}
+
+function decodeData(value) {
+  if (!value) return "";
+  try {
+    return decodeURIComponent(value);
+  } catch (err) {
+    return value;
+  }
+}
+
+function parseDataId(value) {
+  const decoded = decodeData(value);
+  if (decoded === "") return "";
+  const num = Number(decoded);
+  return Number.isNaN(num) ? decoded : num;
 }
 
 function formatTokenDisplay(acc) {

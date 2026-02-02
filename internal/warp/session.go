@@ -2,8 +2,8 @@ package warp
 
 import (
 	"bytes"
-	"context"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -73,9 +73,12 @@ func getSession(accountID int64, refreshToken string) *session {
 		sess := val.(*session)
 		sess.mu.Lock()
 		if refreshToken != "" && sess.refreshToken != refreshToken {
-			// The provided snippet for this section was syntactically incorrect and seemed to introduce new logic.
-			// The instruction was to pass 'cid' through existing calls.
-			// This block is left as is, as the instruction did not explicitly ask for changes here.
+			// refresh_token 变更时更新会话，避免旧令牌导致认证异常
+			sess.refreshToken = refreshToken
+			sess.jwt = ""
+			sess.expiresAt = time.Time{}
+			sess.loggedIn = false
+			sess.lastLogin = time.Time{}
 		}
 		sess.mu.Unlock()
 		return sess
@@ -131,22 +134,17 @@ func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Clie
 	if err != nil {
 		return err
 	}
-	now := time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
-	req.Header.Set("x-warp-client-id", "warp-app")
 	req.Header.Set("x-warp-client-version", clientVersion)
 	req.Header.Set("x-warp-os-category", osCategory)
 	req.Header.Set("x-warp-os-name", osName)
 	req.Header.Set("x-warp-os-version", osVersion)
-	req.Header.Set("x-warp-date", now)
 	req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	req.Header.Set("accept", "*/*")
-	req.Header.Set("accept-encoding", "gzip, br")
-	req.Header.Set("x-warp-request-id", newUUID())
+	req.Header.Set("accept-encoding", "gzip")
 
-	// Use the session's cookie jar if the client doesn't have one
-	oldJar := httpClient.Jar
-	httpClient.Jar = s.jar
-	defer func() { httpClient.Jar = oldJar }()
+	if httpClient.Jar == nil {
+		httpClient.Jar = s.jar
+	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -248,26 +246,21 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client, cid 
 	if err != nil {
 		return err
 	}
-	// Python reference does not use browser headers for login
-	now := time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
 	re.Header.Set("x-warp-client-id", "warp-app")
 	re.Header.Set("x-warp-client-version", clientVersion)
 	re.Header.Set("x-warp-os-category", osCategory)
 	re.Header.Set("x-warp-os-name", osName)
 	re.Header.Set("x-warp-os-version", osVersion)
-	re.Header.Set("x-warp-date", now)
 	re.Header.Set("authorization", "Bearer "+jwt)
 	re.Header.Set("x-warp-experiment-id", experimentID)
 	re.Header.Set("x-warp-experiment-bucket", experimentBucket)
 	re.Header.Set("accept", "*/*")
-	re.Header.Set("accept-encoding", "gzip, br")
-	re.Header.Set("x-warp-request-id", newUUID())
+	re.Header.Set("accept-encoding", "gzip")
 	re.Header.Set("content-length", "0")
 
-	// Use the session's cookie jar if the client doesn't have one
-	oldJar := httpClient.Jar
-	httpClient.Jar = s.jar
-	defer func() { httpClient.Jar = oldJar }()
+	if httpClient.Jar == nil {
+		httpClient.Jar = s.jar
+	}
 
 	resp, err := httpClient.Do(re)
 	if err != nil {

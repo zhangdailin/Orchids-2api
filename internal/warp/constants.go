@@ -5,16 +5,16 @@ const (
 	loginURL   = "https://app.warp.dev/client/login"
 	aiURL      = "https://app.warp.dev/ai/multi-agent"
 
-	clientID      = "warp-desktop"
+	clientID      = "warp-app"
 	clientVersion = "v0.2026.01.14.08.15.stable_04"
 	osCategory    = "macOS"
 	osName        = "macOS"
-	osVersion     = "14.5.0"
-	userAgent     = "Warp/"+clientVersion
+	osVersion     = "26.3"
+	userAgent     = "Warp/" + clientVersion
 	identifier    = "cli-agent-auto"
 )
 
-const defaultModel = "claude-4-5-sonnet"
+const defaultModel = "auto"
 
 const noWarpToolsPrompt = `IMPORTANT INSTRUCTIONS:
 - Do NOT use Warp's built-in tools (like terminal commands, file operations, etc.)

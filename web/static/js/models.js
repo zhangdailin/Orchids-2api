@@ -33,11 +33,20 @@ function renderChannelTabs() {
     currentModelChannel = tabs.length > 0 ? tabs[0] : '';
   }
 
-  container.innerHTML = tabs.map(channel => {
-    const label = channel;
+  container.innerHTML = "";
+  tabs.forEach(channel => {
+    const label = String(channel || "");
     const isActive = currentModelChannel === label;
-    return `<button class="tab-item ${isActive ? 'active' : ''}" onclick="filterModelsByChannel('${label}')">${label}</button>`;
-  }).join("");
+    const btn = document.createElement("button");
+    btn.className = `tab-item ${isActive ? 'active' : ''}`.trim();
+    btn.dataset.channel = encodeURIComponent(label);
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      const raw = btn.dataset.channel ? decodeURIComponent(btn.dataset.channel) : "";
+      filterModelsByChannel(raw);
+    });
+    container.appendChild(btn);
+  });
 }
 
 // Render models table
@@ -56,61 +65,223 @@ function renderModels() {
   document.getElementById("totalModelCount").textContent = filtered.length;
 
   if (filtered.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
-        <span style="font-size: 3rem; margin-bottom: 16px;">💎</span>
-        <p>暂无${currentModelChannel ? ' ' + currentModelChannel : ''} 模型数据</p>
-      </div>`;
+    container.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.style.display = "flex";
+    empty.style.flexDirection = "column";
+    empty.style.alignItems = "center";
+    empty.style.justifyContent = "center";
+    empty.style.height = "300px";
+    empty.style.color = "#94a3b8";
+    const icon = document.createElement("span");
+    icon.style.fontSize = "3rem";
+    icon.style.marginBottom = "16px";
+    icon.textContent = "💎";
+    const text = document.createElement("p");
+    text.textContent = `暂无${currentModelChannel ? " " + currentModelChannel : ""} 模型数据`;
+    empty.appendChild(icon);
+    empty.appendChild(text);
+    container.appendChild(empty);
     return;
   }
 
-  const cards = filtered.map(m => `
-    <div style="padding: 24px; border-radius: 12px; border: 1px solid ${m.is_default ? '#3b82f6' : '#e2e8f0'}; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 16px;">
-      <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px;">
-        <div style="flex: 1;">
-          <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
-            <h3 style="font-weight: 600; font-size: 1.1rem; color: #1e293b; margin: 0;">${escapeHtml(m.name)}</h3>
-            <span class="tag badge-${m.channel.toLowerCase()}" style="font-size: 0.75rem;">${escapeHtml(m.channel)}</span>
-            ${m.is_default ? '<span style="background: #dbeafe; color: #1d4ed8; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 500;">默认</span>' : ''}
-          </div>
-          <div style="font-family: monospace; color: #64748b; font-size: 0.9rem; margin-bottom: 8px;">${escapeHtml(m.model_id)}</div>
-          <div style="color: #64748b; font-size: 0.85rem; line-height: 1.5;">
-            该模型用于 ${m.channel} 渠道的 API 调用${m.is_default ? '，作为默认模型优先使用' : ''}
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 12px;">
-          <label class="toggle" style="transform: scale(0.9);">
-            <input type="checkbox" ${m.status === 'available' || m.status === true ? 'checked' : ''} onchange="toggleModelStatus('${m.id}', this.checked)">
-            <span class="toggle-slider"></span>
-          </label>
-          <div style="display: flex; gap: 8px;">
-            <i class="action-icon" style="font-size: 1.2rem; cursor: pointer;" onclick="editModel('${m.id}')" title="编辑">✏️</i>
-            <i class="action-icon" style="font-size: 1.2rem; cursor: pointer; color: #ef4444;" onclick="deleteModel('${m.id}')" title="删除">🗑️</i>
-          </div>
-        </div>
-      </div>
-      ${!m.is_default ? `<button class="btn btn-outline" style="padding: 6px 16px; font-size: 0.85rem;" onclick="setDefaultModel('${m.id}')">设为默认模型</button>` : ''}
-    </div>
-  `).join("");
+  container.innerHTML = "";
+  const wrapper = document.createElement("div");
+  wrapper.style.maxWidth = "100%";
 
-  container.innerHTML = `
-    <div style="max-width: 100%;">
-      ${cards}
-      <div style="margin-top: 24px; padding: 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; color: #1e40af;">
-        <div style="display: flex; gap: 8px; align-items: start;">
-          <span style="font-size: 1.2rem;">💡</span>
-          <div style="flex: 1;">
-            <div style="font-weight: 600; margin-bottom: 4px;">提示</div>
-            <div style="font-size: 0.9rem; line-height: 1.6;">
-              • 默认模型将优先用于 API 调用<br>
-              • 禁用的模型不会出现在可用模型列表中<br>
-              • 排序值越小，在列表中越靠前
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+  filtered.forEach((m) => {
+    const card = document.createElement("div");
+    card.style.padding = "24px";
+    card.style.borderRadius = "12px";
+    card.style.border = `1px solid ${m.is_default ? "#3b82f6" : "#e2e8f0"}`;
+    card.style.background = "#fff";
+    card.style.boxShadow = "0 1px 3px rgba(0,0,0,0.1)";
+    card.style.marginBottom = "16px";
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.alignItems = "flex-start";
+    row.style.justifyContent = "space-between";
+    row.style.marginBottom = "12px";
+
+    const left = document.createElement("div");
+    left.style.flex = "1";
+
+    const titleRow = document.createElement("div");
+    titleRow.style.display = "flex";
+    titleRow.style.alignItems = "center";
+    titleRow.style.gap = "12px";
+    titleRow.style.marginBottom = "8px";
+
+    const h3 = document.createElement("h3");
+    h3.style.fontWeight = "600";
+    h3.style.fontSize = "1.1rem";
+    h3.style.color = "#1e293b";
+    h3.style.margin = "0";
+    h3.textContent = m.name || "";
+
+    const badge = document.createElement("span");
+    badge.className = `tag badge-${sanitizeClassName(m.channel)}`;
+    badge.style.fontSize = "0.75rem";
+    badge.textContent = m.channel || "";
+
+    titleRow.appendChild(h3);
+    titleRow.appendChild(badge);
+
+    if (m.is_default) {
+      const def = document.createElement("span");
+      def.style.background = "#dbeafe";
+      def.style.color = "#1d4ed8";
+      def.style.padding = "2px 8px";
+      def.style.borderRadius = "4px";
+      def.style.fontSize = "0.75rem";
+      def.style.fontWeight = "500";
+      def.textContent = "默认";
+      titleRow.appendChild(def);
+    }
+
+    const modelId = document.createElement("div");
+    modelId.style.fontFamily = "monospace";
+    modelId.style.color = "#64748b";
+    modelId.style.fontSize = "0.9rem";
+    modelId.style.marginBottom = "8px";
+    modelId.textContent = m.model_id || "";
+
+    const desc = document.createElement("div");
+    desc.style.color = "#64748b";
+    desc.style.fontSize = "0.85rem";
+    desc.style.lineHeight = "1.5";
+    desc.textContent = `该模型用于 ${m.channel || ""} 渠道的 API 调用${m.is_default ? "，作为默认模型优先使用" : ""}`;
+
+    left.appendChild(titleRow);
+    left.appendChild(modelId);
+    left.appendChild(desc);
+
+    const right = document.createElement("div");
+    right.style.display = "flex";
+    right.style.alignItems = "center";
+    right.style.gap = "12px";
+
+    const label = document.createElement("label");
+    label.className = "toggle";
+    label.style.transform = "scale(0.9)";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = m.status === "available" || m.status === true;
+    checkbox.dataset.action = "toggle-status";
+    checkbox.dataset.id = encodeData(m.id);
+    const slider = document.createElement("span");
+    slider.className = "toggle-slider";
+    label.appendChild(checkbox);
+    label.appendChild(slider);
+
+    const actionWrap = document.createElement("div");
+    actionWrap.style.display = "flex";
+    actionWrap.style.gap = "8px";
+
+    const edit = document.createElement("i");
+    edit.className = "action-icon";
+    edit.style.fontSize = "1.2rem";
+    edit.style.cursor = "pointer";
+    edit.dataset.action = "edit";
+    edit.dataset.id = encodeData(m.id);
+    edit.title = "编辑";
+    edit.textContent = "✏️";
+
+    const del = document.createElement("i");
+    del.className = "action-icon";
+    del.style.fontSize = "1.2rem";
+    del.style.cursor = "pointer";
+    del.style.color = "#ef4444";
+    del.dataset.action = "delete";
+    del.dataset.id = encodeData(m.id);
+    del.title = "删除";
+    del.textContent = "🗑️";
+
+    actionWrap.appendChild(edit);
+    actionWrap.appendChild(del);
+
+    right.appendChild(label);
+    right.appendChild(actionWrap);
+
+    row.appendChild(left);
+    row.appendChild(right);
+    card.appendChild(row);
+
+    if (!m.is_default) {
+      const btn = document.createElement("button");
+      btn.className = "btn btn-outline";
+      btn.style.padding = "6px 16px";
+      btn.style.fontSize = "0.85rem";
+      btn.dataset.action = "set-default";
+      btn.dataset.id = encodeData(m.id);
+      btn.textContent = "设为默认模型";
+      card.appendChild(btn);
+    }
+
+    wrapper.appendChild(card);
+  });
+
+  const tip = document.createElement("div");
+  tip.style.marginTop = "24px";
+  tip.style.padding = "16px";
+  tip.style.background = "#eff6ff";
+  tip.style.border = "1px solid #bfdbfe";
+  tip.style.borderRadius = "8px";
+  tip.style.color = "#1e40af";
+  const tipRow = document.createElement("div");
+  tipRow.style.display = "flex";
+  tipRow.style.gap = "8px";
+  tipRow.style.alignItems = "start";
+  const tipIcon = document.createElement("span");
+  tipIcon.style.fontSize = "1.2rem";
+  tipIcon.textContent = "💡";
+  const tipBody = document.createElement("div");
+  tipBody.style.flex = "1";
+  const tipTitle = document.createElement("div");
+  tipTitle.style.fontWeight = "600";
+  tipTitle.style.marginBottom = "4px";
+  tipTitle.textContent = "提示";
+  const tipText = document.createElement("div");
+  tipText.style.fontSize = "0.9rem";
+  tipText.style.lineHeight = "1.6";
+  const tipLines = [
+    "• 默认模型将优先用于 API 调用",
+    "• 禁用的模型不会出现在可用模型列表中",
+    "• 排序值越小，在列表中越靠前",
+  ];
+  tipLines.forEach((line, idx) => {
+    if (idx > 0) tipText.appendChild(document.createElement("br"));
+    tipText.appendChild(document.createTextNode(line));
+  });
+  tipBody.appendChild(tipTitle);
+  tipBody.appendChild(tipText);
+  tipRow.appendChild(tipIcon);
+  tipRow.appendChild(tipBody);
+  tip.appendChild(tipRow);
+  wrapper.appendChild(tip);
+  container.appendChild(wrapper);
+
+  container.onclick = (e) => {
+    const target = e.target.closest("[data-action]");
+    if (!target || !container.contains(target)) return;
+    const action = target.dataset.action;
+    const id = decodeData(target.dataset.id || "");
+    if (!id) return;
+    if (action === "edit") editModel(id);
+    if (action === "delete") deleteModel(id);
+    if (action === "set-default") setDefaultModel(id);
+  };
+
+  container.onchange = (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.dataset.action !== "toggle-status") return;
+    const id = decodeData(target.dataset.id || "");
+    if (!id) return;
+    toggleModelStatus(id, target.checked);
+  };
 }
 
 // Set model as default
@@ -261,8 +432,26 @@ async function deleteModel(id) {
 // Escape HTML to prevent XSS
 function escapeHtml(text) {
   const div = document.createElement('div');
-  div.textContent = text;
+  div.textContent = text === null || text === undefined ? "" : String(text);
   return div.innerHTML;
+}
+
+function encodeData(value) {
+  return encodeURIComponent(value === null || value === undefined ? "" : String(value));
+}
+
+function decodeData(value) {
+  if (!value) return "";
+  try {
+    return decodeURIComponent(value);
+  } catch (err) {
+    return value;
+  }
+}
+
+function sanitizeClassName(text) {
+  if (text === null || text === undefined) return "";
+  return String(text).toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
 }
 
 // Load models on page load

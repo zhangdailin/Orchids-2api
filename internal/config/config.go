@@ -55,11 +55,11 @@ type Config struct {
 	OrchidsAllowRunCommand  bool     `json:"orchids_allow_run_command"`
 	OrchidsRunAllowlist     []string `json:"orchids_run_allowlist"`
 	OrchidsCCEntrypointMode string   `json:"orchids_cc_entrypoint_mode"`
-	OrchidsFSIgnore  []string `json:"orchids_fs_ignore"`
-	WarpDisableTools *bool    `json:"warp_disable_tools"`
-	WarpMaxToolResults      int     `json:"warp_max_tool_results"`
-	WarpMaxHistoryMessages  int     `json:"warp_max_history_messages"`
-	WarpSplitToolResults    bool    `json:"warp_split_tool_results"`
+	OrchidsFSIgnore         []string `json:"orchids_fs_ignore"`
+	WarpDisableTools        *bool    `json:"warp_disable_tools"`
+	WarpMaxToolResults      int      `json:"warp_max_tool_results"`
+	WarpMaxHistoryMessages  int      `json:"warp_max_history_messages"`
+	WarpSplitToolResults    bool     `json:"warp_split_tool_results"`
 
 	// New fields for UI
 	AdminToken           string `json:"admin_token"`
@@ -230,7 +230,7 @@ func applyDefaults(cfg *Config) {
 	}
 
 	if cfg.WarpDisableTools == nil {
-		v := true
+		v := false
 		cfg.WarpDisableTools = &v
 	}
 	if cfg.WarpMaxToolResults == 0 {

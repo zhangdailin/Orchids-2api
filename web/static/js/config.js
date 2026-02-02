@@ -149,64 +149,167 @@ async function loadApiKeys() {
 function renderApiKeys() {
   const container = document.getElementById("keysList");
   if (apiKeys.length === 0) {
-    container.innerHTML = '<div class="empty-state"><p>暂无 API Key，点击上方按钮创建</p></div>';
+    container.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    const p = document.createElement("p");
+    p.textContent = "暂无 API Key，点击上方按钮创建";
+    empty.appendChild(p);
+    container.appendChild(empty);
     return;
   }
 
-  const rows = apiKeys.map((k, idx) => {
-    const keyDisplay = k.key_full || k.key_prefix + '****' + k.key_suffix;
-    return `
-      <tr>
-        <td>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="cursor: pointer;" onclick="toggleKeyVisibility(${idx})">👁️</span>
-            <span id="key-display-${idx}" style="font-family: monospace; color: var(--text-secondary); cursor: pointer;" onclick="copyToClipboard('${keyDisplay}')">
-              ${k.key_prefix}****...${k.key_suffix}
-            </span>
-          </div>
-        </td>
-        <td>
-          <label class="toggle" style="transform: scale(0.8);">
-            <input type="checkbox" ${k.enabled ? "checked" : ""} onchange="toggleKeyStatus(${k.id}, this.checked)">
-            <span class="toggle-slider"></span>
-          </label>
-        </td>
-        <td style="color: var(--text-secondary); font-size: 0.8rem;">${k.last_used_at ? formatTime(k.last_used_at) : "从未使用"}</td>
-        <td>
-          <button class="btn btn-danger-outline" style="padding: 4px 8px;" onclick="openDeleteKeyModal(${k.id}, '${escapeHtml(k.key_prefix)}...${escapeHtml(k.key_suffix)}')">删除</button>
-        </td>
-      </tr>
-    `;
-  }).join("");
+  container.innerHTML = "";
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  ["Token", "状态", "最后使用", "操作"].forEach((label) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
 
-  container.innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>Token</th>
-          <th>状态</th>
-          <th>最后使用</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${rows}
-      </tbody>
-    </table>
-    <div style="margin-top: 24px; padding: 16px; background: rgba(56, 189, 248, 0.1); border: 1px solid var(--accent-blue); border-radius: 8px; color: var(--text-primary);">
-      <div style="display: flex; gap: 8px; align-items: start;">
-        <span style="font-size: 1.2rem;">💡</span>
-        <div style="flex: 1;">
-          <div style="font-weight: 600; margin-bottom: 4px;">提示</div>
-          <div style="font-size: 0.9rem; line-height: 1.6;">
-            • API Key 用于访问接口的身份认证<br>
-            • 禁用的 Key 将无法访问 API<br>
-            • 请妥善保管您的 API Key，不要泄露给他人
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+  const tbody = document.createElement("tbody");
+  apiKeys.forEach((k, idx) => {
+    const keyDisplay = k.key_full || `${k.key_prefix}****${k.key_suffix}`;
+    const encodedKey = encodeURIComponent(keyDisplay);
+    const encodedLabel = encodeURIComponent(`${k.key_prefix}...${k.key_suffix}`);
+    const tr = document.createElement("tr");
+
+    const tdToken = document.createElement("td");
+    const tokenWrap = document.createElement("div");
+    tokenWrap.style.display = "flex";
+    tokenWrap.style.alignItems = "center";
+    tokenWrap.style.gap = "8px";
+    const toggle = document.createElement("span");
+    toggle.className = "key-toggle";
+    toggle.dataset.idx = String(idx);
+    toggle.style.cursor = "pointer";
+    toggle.textContent = "👁️";
+    const display = document.createElement("span");
+    display.id = `key-display-${idx}`;
+    display.className = "key-display";
+    display.dataset.key = encodedKey;
+    display.style.fontFamily = "monospace";
+    display.style.color = "var(--text-secondary)";
+    display.style.cursor = "pointer";
+    display.textContent = `${k.key_prefix || ""}****...${k.key_suffix || ""}`;
+    tokenWrap.appendChild(toggle);
+    tokenWrap.appendChild(display);
+    tdToken.appendChild(tokenWrap);
+    tr.appendChild(tdToken);
+
+    const tdStatus = document.createElement("td");
+    const label = document.createElement("label");
+    label.className = "toggle";
+    label.style.transform = "scale(0.8)";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = !!k.enabled;
+    checkbox.dataset.action = "toggle-key";
+    checkbox.dataset.id = encodeData(k.id);
+    const slider = document.createElement("span");
+    slider.className = "toggle-slider";
+    label.appendChild(checkbox);
+    label.appendChild(slider);
+    tdStatus.appendChild(label);
+    tr.appendChild(tdStatus);
+
+    const tdLast = document.createElement("td");
+    tdLast.style.color = "var(--text-secondary)";
+    tdLast.style.fontSize = "0.8rem";
+    tdLast.textContent = k.last_used_at ? formatTime(k.last_used_at) : "从未使用";
+    tr.appendChild(tdLast);
+
+    const tdAction = document.createElement("td");
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger-outline";
+    delBtn.style.padding = "4px 8px";
+    delBtn.dataset.action = "delete-key";
+    delBtn.dataset.id = encodeData(k.id);
+    delBtn.dataset.label = encodedLabel;
+    delBtn.textContent = "删除";
+    tdAction.appendChild(delBtn);
+    tr.appendChild(tdAction);
+
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  container.appendChild(table);
+
+  const tip = document.createElement("div");
+  tip.style.marginTop = "24px";
+  tip.style.padding = "16px";
+  tip.style.background = "rgba(56, 189, 248, 0.1)";
+  tip.style.border = "1px solid var(--accent-blue)";
+  tip.style.borderRadius = "8px";
+  tip.style.color = "var(--text-primary)";
+  const tipRow = document.createElement("div");
+  tipRow.style.display = "flex";
+  tipRow.style.gap = "8px";
+  tipRow.style.alignItems = "start";
+  const tipIcon = document.createElement("span");
+  tipIcon.style.fontSize = "1.2rem";
+  tipIcon.textContent = "💡";
+  const tipBody = document.createElement("div");
+  tipBody.style.flex = "1";
+  const tipTitle = document.createElement("div");
+  tipTitle.style.fontWeight = "600";
+  tipTitle.style.marginBottom = "4px";
+  tipTitle.textContent = "提示";
+  const tipText = document.createElement("div");
+  tipText.style.fontSize = "0.9rem";
+  tipText.style.lineHeight = "1.6";
+  const tipLines = [
+    "• API Key 用于访问接口的身份认证",
+    "• 禁用的 Key 将无法访问 API",
+    "• 请妥善保管您的 API Key，不要泄露给他人",
+  ];
+  tipLines.forEach((line, idx) => {
+    if (idx > 0) tipText.appendChild(document.createElement("br"));
+    tipText.appendChild(document.createTextNode(line));
+  });
+  tipBody.appendChild(tipTitle);
+  tipBody.appendChild(tipText);
+  tipRow.appendChild(tipIcon);
+  tipRow.appendChild(tipBody);
+  tip.appendChild(tipRow);
+  container.appendChild(tip);
+
+  container.onclick = (e) => {
+    const display = e.target.closest(".key-display");
+    if (display && container.contains(display)) {
+      const encoded = display.dataset.key || "";
+      const value = encoded ? decodeURIComponent(encoded) : (display.textContent || "");
+      copyToClipboard(value);
+      return;
+    }
+    const toggle = e.target.closest(".key-toggle");
+    if (toggle && container.contains(toggle)) {
+      const idx = parseInt(toggle.dataset.idx, 10);
+      if (!Number.isNaN(idx)) toggleKeyVisibility(idx);
+      return;
+    }
+    const actionEl = e.target.closest("[data-action]");
+    if (!actionEl || !container.contains(actionEl)) return;
+    const action = actionEl.dataset.action;
+    if (action === "delete-key") {
+      const id = decodeData(actionEl.dataset.id || "");
+      const label = actionEl.dataset.label ? decodeURIComponent(actionEl.dataset.label) : "";
+      if (id) openDeleteKeyModal(id, label);
+    }
+  };
+
+  container.onchange = (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.dataset.action !== "toggle-key") return;
+    const id = decodeData(target.dataset.id || "");
+    if (!id) return;
+    toggleKeyStatus(id, target.checked);
+  };
 }
 
 // Toggle key visibility
@@ -277,13 +380,32 @@ async function createApiKey(e) {
 // Render created keys
 function renderCreatedKeys() {
   const container = document.getElementById("fullKeyDisplay");
-  const keyDisplays = createdKeys.map(k => `
-    <div class="key-display" style="margin-bottom: 8px; padding: 12px; background: var(--card-soft); border: 1px dashed var(--border-color); border-radius: 8px;">
-      <div style="font-size: 0.8rem; color: var(--text-secondary);">${escapeHtml(k.name)}</div>
-      <div style="font-weight: bold; margin-top: 4px; word-break: break-all; color: var(--accent-green);">${escapeHtml(k.key || k.error)}</div>
-    </div>
-  `).join("");
-  container.innerHTML = keyDisplays;
+  container.innerHTML = "";
+  createdKeys.forEach((k) => {
+    const wrap = document.createElement("div");
+    wrap.className = "key-display";
+    wrap.style.marginBottom = "8px";
+    wrap.style.padding = "12px";
+    wrap.style.background = "var(--card-soft)";
+    wrap.style.border = "1px dashed var(--border-color)";
+    wrap.style.borderRadius = "8px";
+
+    const name = document.createElement("div");
+    name.style.fontSize = "0.8rem";
+    name.style.color = "var(--text-secondary)";
+    name.textContent = k.name || "";
+
+    const key = document.createElement("div");
+    key.style.fontWeight = "bold";
+    key.style.marginTop = "4px";
+    key.style.wordBreak = "break-all";
+    key.style.color = "var(--accent-green)";
+    key.textContent = k.key || k.error || "";
+
+    wrap.appendChild(name);
+    wrap.appendChild(key);
+    container.appendChild(wrap);
+  });
 }
 
 // Copy all keys
@@ -341,8 +463,21 @@ function formatTime(iso) {
 // Escape HTML to prevent XSS
 function escapeHtml(text) {
   const div = document.createElement('div');
-  div.textContent = text;
+  div.textContent = text === null || text === undefined ? "" : String(text);
   return div.innerHTML;
+}
+
+function encodeData(value) {
+  return encodeURIComponent(value === null || value === undefined ? "" : String(value));
+}
+
+function decodeData(value) {
+  if (!value) return "";
+  try {
+    return decodeURIComponent(value);
+  } catch (err) {
+    return value;
+  }
 }
 
 // Toggle cache config details
@@ -350,6 +485,9 @@ function toggleCacheConfig(checked) {
   const details = document.getElementById("cacheConfigDetails");
   if (details) {
     details.style.display = checked ? "block" : "none";
+    if (checked) {
+       loadCacheStats();
+    }
   }
 }
 

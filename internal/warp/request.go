@@ -1,9 +1,10 @@
 package warp
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -73,28 +74,81 @@ func (e *encoder) writePackedVarints(field int, values []int) {
 	e.b = append(e.b, inner.b...)
 }
 
+type warpToolCall struct {
+	Name      string
+	Arguments string
+}
+
+type warpHistoryMessage struct {
+	Role       string
+	Content    string
+	ToolCalls  []warpToolCall
+	ToolCallID string
+}
+
+type warpToolResult struct {
+	ToolCallID string
+	Content    string
+}
+
+const (
+	templateQueryLen        = 9  // "你好呀"
+	templateInputContextLen = 67 // 模板里的 InputContext 长度
+)
+
+var realRequestTemplate = mustDecodeHex("0a00125a0a430a1e0a0d2f55736572732f6c6f66796572120d2f55736572732f6c6f6679657212070a054d61634f531a0a0a037a73681203352e39220c08eeb8d3cb0610908ef0bd0232130a110a0f0a09e4bda0e5a5bde591801a0020011a660a210a0f636c617564652d342d352d6f707573220e636c692d6167656e742d6175746f1001180120013001380140014a1306070c08090f0e000b100a141113120203010d500158016001680170017801800101880101a80101b201070a1406070c0201b801012264121e0a0a656e747279706f696e7412101a0e555345525f494e4954494154454412200a1a69735f6175746f5f726573756d655f61667465725f6572726f721202200012200a1a69735f6175746f64657465637465645f757365725f717565727912022001")
+
+var supportedToolsPattern = mustDecodeHex("4a1306070c08090f0e000b100a141113120203010d")
+var clientSupportedToolsPattern = mustDecodeHex("b201070a1406070c0201")
+
+func mustDecodeHex(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic(fmt.Sprintf("warp: invalid hex template: %v", err))
+	}
+	return b
+}
+
+func encodeVarint(value int) []byte {
+	if value < 0 {
+		return []byte{0}
+	}
+	x := uint64(value)
+	var out []byte
+	for x >= 0x80 {
+		out = append(out, byte(x)|0x80)
+		x >>= 7
+	}
+	out = append(out, byte(x))
+	return out
+}
+
 func buildRequestBytes(promptText, model string, messages []prompt.Message, mcpContext []byte, disableWarpTools bool, workdir, conversationID string) ([]byte, error) {
-	promptText = strings.TrimSpace(promptText)
-	if promptText == "" && len(messages) == 0 {
+	userText, history, toolResults, err := extractWarpConversation(messages, promptText)
+	if err != nil {
+		return nil, err
+	}
+
+	fullQuery, isNew := buildWarpQuery(userText, history, toolResults, disableWarpTools)
+	if fullQuery == "" {
 		return nil, fmt.Errorf("empty prompt")
 	}
 
-	// Format history using the project's standard formatter
-	fullQuery := promptText
-	if len(messages) > 0 {
-		historyText := prompt.FormatMessagesAsMarkdown(messages, "")
-		if historyText != "" {
-			if promptText != "" {
-				fullQuery = historyText + "\n\nUser: " + promptText
-			} else {
-				fullQuery = historyText
-			}
+	// 对齐 Python：无历史且无工具结果时用模板构建
+	if len(history) == 0 && len(toolResults) == 0 {
+		reqBytes, err := buildRequestBytesFromTemplate(fullQuery, isNew, disableWarpTools)
+		if err != nil {
+			return nil, err
 		}
+		if len(mcpContext) > 0 {
+			reqBytes = append(reqBytes, encodeBytesField(6, mcpContext)...)
+		}
+		return reqBytes, nil
 	}
 
 	inputContext := buildInputContext(workdir)
-	userQuery := buildUserQuery(fullQuery, len(messages) <= 1)
-	input := buildInput(inputContext, userQuery)
+	userQuery := buildUserQuery(fullQuery, isNew, false)
+	input := buildInputWithUserQuery(inputContext, userQuery)
 	settings := buildSettings(model, disableWarpTools)
 
 	req := encoder{}
@@ -102,21 +156,348 @@ func buildRequestBytes(promptText, model string, messages []prompt.Message, mcpC
 	req.writeMessage(1, []byte{})
 	req.writeMessage(2, input)
 	req.writeMessage(3, settings)
-	
-	// Metadata (field 4)
-	metadata := buildMetadata(conversationID)
-	req.writeMessage(4, metadata)
-
 	if len(mcpContext) > 0 {
 		req.writeMessage(6, mcpContext)
 	}
 
+	_ = conversationID // 对齐 Python：不使用 conversation_id
 	return req.bytes(), nil
+}
+
+type parsedWarpMessage struct {
+	role        string
+	text        string
+	toolUses    []prompt.ContentBlock
+	toolResults []prompt.ContentBlock
+}
+
+func extractWarpConversation(messages []prompt.Message, promptText string) (string, []warpHistoryMessage, []warpToolResult, error) {
+	if len(messages) == 0 {
+		promptText = strings.TrimSpace(promptText)
+		if promptText == "" {
+			return "", nil, nil, fmt.Errorf("empty prompt")
+		}
+		return promptText, nil, nil, nil
+	}
+
+	parsed := make([]parsedWarpMessage, 0, len(messages))
+	for _, msg := range messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		if role == "system" {
+			continue
+		}
+		text, toolUses, toolResults := splitWarpContent(msg.Content)
+		parsed = append(parsed, parsedWarpMessage{
+			role:        role,
+			text:        text,
+			toolUses:    toolUses,
+			toolResults: toolResults,
+		})
+	}
+
+	lastUserTextIdx := -1
+	for i, msg := range parsed {
+		if msg.role == "user" && strings.TrimSpace(msg.text) != "" {
+			lastUserTextIdx = i
+		}
+	}
+
+	var (
+		userText    string
+		history     []warpHistoryMessage
+		toolResults []warpToolResult
+	)
+
+	for i, msg := range parsed {
+		switch msg.role {
+		case "user":
+			hasText := strings.TrimSpace(msg.text) != ""
+			if hasText {
+				if i == lastUserTextIdx {
+					userText = msg.text
+				} else {
+					history = append(history, warpHistoryMessage{Role: "user", Content: msg.text})
+				}
+			}
+
+			for _, block := range msg.toolResults {
+				toolResult := warpToolResult{
+					ToolCallID: block.ToolUseID,
+					Content:    stringifyWarpValue(block.Content),
+				}
+				if lastUserTextIdx == -1 || i > lastUserTextIdx || (i == lastUserTextIdx && !hasText) {
+					toolResults = append(toolResults, toolResult)
+				} else {
+					history = append(history, warpHistoryMessage{
+						Role:       "tool",
+						Content:    toolResult.Content,
+						ToolCallID: toolResult.ToolCallID,
+					})
+				}
+			}
+
+		case "assistant":
+			if lastUserTextIdx == -1 || i < lastUserTextIdx {
+				toolCalls := convertWarpToolCalls(msg.toolUses)
+				if msg.text != "" || len(toolCalls) > 0 {
+					history = append(history, warpHistoryMessage{
+						Role:      "assistant",
+						Content:   msg.text,
+						ToolCalls: toolCalls,
+					})
+				}
+			}
+		}
+	}
+
+	if userText == "" && len(toolResults) == 0 {
+		return "", nil, nil, fmt.Errorf("no user message or tool results found")
+	}
+	return userText, history, toolResults, nil
+}
+
+func splitWarpContent(content prompt.MessageContent) (string, []prompt.ContentBlock, []prompt.ContentBlock) {
+	if content.IsString() {
+		return content.GetText(), nil, nil
+	}
+
+	var (
+		textParts   []string
+		toolUses    []prompt.ContentBlock
+		toolResults []prompt.ContentBlock
+	)
+	for _, block := range content.GetBlocks() {
+		switch block.Type {
+		case "text":
+			textParts = append(textParts, block.Text)
+		case "tool_use":
+			toolUses = append(toolUses, block)
+		case "tool_result":
+			toolResults = append(toolResults, block)
+		}
+	}
+	return strings.Join(textParts, ""), toolUses, toolResults
+}
+
+func convertWarpToolCalls(blocks []prompt.ContentBlock) []warpToolCall {
+	if len(blocks) == 0 {
+		return nil
+	}
+	toolCalls := make([]warpToolCall, 0, len(blocks))
+	for _, block := range blocks {
+		if block.Type != "tool_use" {
+			continue
+		}
+		args := stringifyWarpValue(block.Input)
+		toolCalls = append(toolCalls, warpToolCall{
+			Name:      block.Name,
+			Arguments: args,
+		})
+	}
+	return toolCalls
+}
+
+func stringifyWarpValue(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return v
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(encoded)
+}
+
+func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool) (string, bool) {
+	var parts []string
+	if disableWarpTools {
+		parts = append(parts, noWarpToolsPrompt)
+	}
+
+	if len(toolResults) > 0 {
+		parts = append(parts, formatWarpHistory(history)...)
+		for _, tr := range toolResults {
+			parts = append(parts, fmt.Sprintf("Tool result (%s): %s", tr.ToolCallID, tr.Content))
+		}
+		if strings.TrimSpace(userText) != "" {
+			parts = append(parts, "User: "+userText)
+		} else {
+			parts = append(parts, "User: Please analyze the tool results above and provide your response.")
+		}
+		return strings.Join(parts, "\n\n"), false
+	}
+
+	if len(history) > 0 {
+		parts = append(parts, formatWarpHistory(history)...)
+		if strings.TrimSpace(userText) != "" {
+			parts = append(parts, "User: "+userText)
+		}
+		return strings.Join(parts, "\n\n"), true
+	}
+
+	if strings.TrimSpace(userText) == "" {
+		return "", true
+	}
+	if len(parts) > 0 {
+		parts = append(parts, userText)
+		return strings.Join(parts, "\n\n"), true
+	}
+	return userText, true
+}
+
+func formatWarpHistory(history []warpHistoryMessage) []string {
+	if len(history) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(history))
+	for _, msg := range history {
+		switch msg.Role {
+		case "user":
+			parts = append(parts, "User: "+msg.Content)
+		case "assistant":
+			if len(msg.ToolCalls) == 0 {
+				parts = append(parts, "Assistant: "+msg.Content)
+				continue
+			}
+			callDesc := make([]string, 0, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				if tc.Arguments != "" {
+					callDesc = append(callDesc, fmt.Sprintf("Called %s with args: %s", tc.Name, tc.Arguments))
+				} else {
+					callDesc = append(callDesc, fmt.Sprintf("Called %s", tc.Name))
+				}
+			}
+			content := msg.Content
+			if content == "" {
+				parts = append(parts, fmt.Sprintf("Assistant: \nTool calls: %s", strings.Join(callDesc, "; ")))
+			} else {
+				parts = append(parts, fmt.Sprintf("Assistant: %s\nTool calls: %s", content, strings.Join(callDesc, "; ")))
+			}
+		case "tool":
+			parts = append(parts, fmt.Sprintf("Tool result (%s): %s", msg.ToolCallID, msg.Content))
+		}
+	}
+	return parts
+}
+
+func buildRequestBytesFromTemplate(userText string, isNew bool, disableWarpTools bool) ([]byte, error) {
+	template := append([]byte(nil), realRequestTemplate...)
+
+	newQueryBytes := []byte(userText)
+	userQueryContent := []byte{0x0a}
+	userQueryContent = append(userQueryContent, encodeVarint(len(newQueryBytes))...)
+	userQueryContent = append(userQueryContent, newQueryBytes...)
+	userQueryContent = append(userQueryContent, 0x1a, 0x00, 0x20)
+	if isNew {
+		userQueryContent = append(userQueryContent, 0x01)
+	} else {
+		userQueryContent = append(userQueryContent, 0x00)
+	}
+
+	userQueryTotalLen := len(userQueryContent)
+	userInputContent := append([]byte{0x0a}, encodeVarint(userQueryTotalLen)...)
+	userInputContent = append(userInputContent, userQueryContent...)
+
+	inputsContent := append([]byte{0x0a}, encodeVarint(len(userInputContent))...)
+	inputsContent = append(inputsContent, userInputContent...)
+
+	userInputsContent := append([]byte{0x32}, encodeVarint(len(inputsContent))...)
+	userInputsContent = append(userInputsContent, inputsContent...)
+
+	userInputsStart := 4 + 2 + templateInputContextLen
+	if userInputsStart >= len(template) || template[userInputsStart] != 0x32 {
+		pos := findBytes(template, []byte{0x32, 0x13})
+		if pos == -1 {
+			return nil, fmt.Errorf("warp template: user_inputs not found")
+		}
+		userInputsStart = pos
+	}
+
+	contextPart := template[4:userInputsStart]
+	newInputContent := append(append([]byte(nil), contextPart...), userInputsContent...)
+	newInputMsg := append([]byte{0x12}, encodeVarint(len(newInputContent))...)
+	newInputMsg = append(newInputMsg, newInputContent...)
+
+	// settings 起点基于模板原始 Input 长度 (0x5a = 90)
+	settingsStart := 2 + 2 + 90
+	if settingsStart > len(template) {
+		return nil, fmt.Errorf("warp template: invalid settings offset")
+	}
+	rest := template[settingsStart:]
+
+	result := append([]byte{0x0a, 0x00}, newInputMsg...)
+	result = append(result, rest...)
+
+	if disableWarpTools {
+		result = removeSupportedTools(result)
+	}
+	return result, nil
+}
+
+func removeSupportedTools(data []byte) []byte {
+	result := append([]byte(nil), data...)
+	totalRemoved := 0
+
+	settingsTagPos := -1
+	for i := 0; i < len(data)-1; i++ {
+		if data[i] == 0x1a && i > 50 {
+			if i+3 < len(data) && data[i+2] == 0x0a && data[i+3] == 0x21 {
+				settingsTagPos = i
+				break
+			}
+		}
+	}
+	if settingsTagPos == -1 {
+		return result
+	}
+
+	origSettingsLen := int(data[settingsTagPos+1])
+	if pos := findBytes(result, supportedToolsPattern); pos != -1 {
+		result = append(result[:pos], result[pos+len(supportedToolsPattern):]...)
+		totalRemoved += len(supportedToolsPattern)
+	}
+	if pos := findBytes(result, clientSupportedToolsPattern); pos != -1 {
+		result = append(result[:pos], result[pos+len(clientSupportedToolsPattern):]...)
+		totalRemoved += len(clientSupportedToolsPattern)
+	}
+
+	if totalRemoved > 0 {
+		newLen := origSettingsLen - totalRemoved
+		if newLen < 0 {
+			newLen = 0
+		}
+		if settingsTagPos+1 < len(result) {
+			result[settingsTagPos+1] = byte(newLen)
+		}
+	}
+	return result
+}
+
+func findBytes(haystack, needle []byte) int {
+	if len(needle) == 0 {
+		return -1
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if string(haystack[i:i+len(needle)]) == string(needle) {
+			return i
+		}
+	}
+	return -1
+}
+
+func encodeBytesField(field int, value []byte) []byte {
+	e := encoder{}
+	e.writeBytes(field, value)
+	return e.bytes()
 }
 
 func buildMetadata(conversationID string) []byte {
 	meta := encoder{}
-	
+
 	// WARNING: Setting conversation_id in metadata can cause empty responses in modern Warp API.
 	// We rely on manual context history concatenation instead.
 	// if conversationID != "" {
@@ -127,11 +508,11 @@ func buildMetadata(conversationID string) []byte {
 	// Entry 1: key="entrypoint", value (string_value)="USER_INITIATED"
 	entry1 := encoder{}
 	entry1.writeString(1, "entrypoint")
-	
+
 	val1 := encoder{}
 	val1.writeString(3, "USER_INITIATED") // google.protobuf.Value.string_value
 	entry1.writeMessage(2, val1.bytes())
-	
+
 	meta.writeMessage(2, entry1.bytes())
 
 	// Entry 2: key="is_auto_resume_after_error", value (bool_value)=false
@@ -154,27 +535,23 @@ func buildMetadata(conversationID string) []byte {
 }
 
 func buildInputContext(workdir string) []byte {
-	pwd := strings.TrimSpace(workdir)
-	if pwd == "" {
-		pwd, _ = os.Getwd()
-	}
+	_ = workdir
+	pwd, _ := os.Getwd()
 	home, _ := os.UserHomeDir()
-	shellName := filepath.Base(os.Getenv("SHELL"))
-	if shellName == "" {
-		shellName = "zsh"
-	}
+	shellName := "zsh"
+	shellVersion := "5.9"
 
 	dir := encoder{}
 	dir.writeString(1, pwd)
 	dir.writeString(2, home)
 
 	osCtx := encoder{}
-	osCtx.writeString(1, osName)
+	osCtx.writeString(1, "MacOS")
 	osCtx.writeString(2, "")
 
 	shell := encoder{}
 	shell.writeString(1, shellName)
-	shell.writeString(2, "")
+	shell.writeString(2, shellVersion)
 
 	ts := encoder{}
 	now := time.Now()
@@ -192,12 +569,14 @@ func buildInputContext(workdir string) []byte {
 	return ctx.bytes()
 }
 
-func buildUserQuery(prompt string, isNew bool) []byte {
+func buildUserQuery(prompt string, isNew bool, includeAttachments bool) []byte {
 	msg := encoder{}
 	msg.writeString(1, prompt)
 	// referenced_attachments (field 2) - omitted if empty
-	// attachments_bytes (field 3) - omitted if empty
-	msg.writeBool(4, isNew)      // is_new_conversation
+	if includeAttachments {
+		msg.writeBytes(3, []byte{})
+	}
+	msg.writeBool(4, isNew) // is_new_conversation
 	return msg.bytes()
 }
 
@@ -217,12 +596,18 @@ func buildInput(contextBytes, userQueryBytes []byte) []byte {
 	return input.bytes()
 }
 
+func buildInputWithUserQuery(contextBytes, userQueryBytes []byte) []byte {
+	// 对齐 Python：使用 Input.user_query (field 2)
+	input := encoder{}
+	input.writeMessage(1, contextBytes)
+	input.writeMessage(2, userQueryBytes)
+	return input.bytes()
+}
+
 func buildSettings(model string, disableWarpTools bool) []byte {
 	modelName := normalizeModel(model)
 	modelCfg := encoder{}
 	modelCfg.writeString(1, modelName)
-	modelCfg.writeString(2, "o3") // Standard planning model
-	modelCfg.writeString(4, identifier)
 
 	settings := encoder{}
 	settings.writeMessage(1, modelCfg.bytes())
@@ -241,12 +626,12 @@ func buildSettings(model string, disableWarpTools bool) []byte {
 	settings.writeBool(16, true)
 	settings.writeBool(17, true)
 	settings.writeBool(21, true)
-	settings.writeBool(23, true)
 
 	if !disableWarpTools {
 		settings.writePackedVarints(9, []int{6, 7, 12, 8, 9, 15, 14, 0, 11, 16, 10, 20, 17, 19, 18, 2, 3, 1, 13})
 	}
 	settings.writePackedVarints(22, []int{10, 20, 6, 7, 12, 9, 2, 1})
+	settings.writeBool(23, true)
 
 	return settings.bytes()
 }
@@ -371,5 +756,5 @@ func normalizeModel(model string) string {
 	if model == "auto" {
 		return "auto"
 	}
-	return defaultModel
+	return "auto"
 }

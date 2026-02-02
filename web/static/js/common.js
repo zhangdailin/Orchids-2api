@@ -8,7 +8,10 @@ function showToast(msg, type = 'success') {
   const color = type === 'success' ? '#34d399' : type === 'info' ? '#38bdf8' : '#fb7185';
   const icon = type === 'success' ? '✅' : type === 'info' ? 'ℹ️' : '❌';
   toast.style.borderLeft = `4px solid ${color}`;
-  toast.innerHTML = `<span>${icon}</span> ${msg}`;
+  const iconSpan = document.createElement("span");
+  iconSpan.textContent = icon;
+  toast.appendChild(iconSpan);
+  toast.appendChild(document.createTextNode(` ${msg}`));
   container.appendChild(toast);
   setTimeout(() => toast.remove(), 3000);
 }
