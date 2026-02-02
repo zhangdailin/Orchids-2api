@@ -95,6 +95,7 @@ func (d *decoder) skip(wire int) error {
 }
 
 type parsedEvent struct {
+	ConversationID  string
 	TextDeltas      []string
 	ReasoningDeltas []string
 	ToolCalls       []toolCall
@@ -121,6 +122,18 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 			return out, err
 		}
 		switch field {
+		case 1: // init
+			if wire != 2 {
+				if err := d.skip(wire); err != nil {
+					return out, err
+				}
+				continue
+			}
+			payload, err := d.readBytes()
+			if err != nil {
+				return out, err
+			}
+			parseStreamInit(payload, out)
 		case 2: // client_actions
 			if wire != 2 {
 				if err := d.skip(wire); err != nil {
@@ -152,6 +165,25 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 		}
 	}
 	return out, nil
+}
+
+func parseStreamInit(data []byte, out *parsedEvent) {
+	d := decoder{data: data}
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			return
+		}
+		if field == 1 && wire == 2 {
+			payload, err := d.readBytes()
+			if err != nil {
+				return
+			}
+			out.ConversationID = string(payload)
+			continue
+		}
+		_ = d.skip(wire)
+	}
 }
 
 func parseClientActions(data []byte, out *parsedEvent) {

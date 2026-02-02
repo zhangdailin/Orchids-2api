@@ -167,11 +167,16 @@ func ParseSessionInfoFromJWT(sessionJWT string) (sessionID string, userID string
 	var data struct {
 		SID string `json:"sid"`
 		SUB string `json:"sub"`
+		ID  string `json:"id"`
 	}
 	if err := json.Unmarshal(decoded, &data); err != nil {
 		return "", ""
 	}
-	return data.SID, data.SUB
+	sid := data.SID
+	if sid == "" {
+		sid = data.ID
+	}
+	return sid, data.SUB
 }
 
 func isLikelyJWT(value string) bool {

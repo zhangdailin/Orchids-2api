@@ -25,6 +25,7 @@ type streamHandler struct {
 	suppressThinking bool
 	useUpstreamUsage bool
 	outputTokenMode  string
+	responseFormat   string // "anthropic" or "openai"
 
 	// HTTP Response
 	w       http.ResponseWriter
@@ -95,6 +96,7 @@ func newStreamHandler(
 	preflightResults []safeToolResult,
 	shouldLocalFallback bool,
 	isStream bool,
+	responseFormat string,
 ) *streamHandler {
 	var flusher http.Flusher
 	if isStream {
@@ -122,6 +124,7 @@ func newStreamHandler(
 		preflightResults:    preflightResults,
 		shouldLocalFallback: shouldLocalFallback,
 		outputTokenMode:     outputTokenMode,
+		responseFormat:      responseFormat,
 
 		blockIndex:               -1,
 		toolBlocks:               make(map[string]int),
@@ -166,6 +169,11 @@ func (h *streamHandler) writeSSE(event, data string) {
 	if h.hasReturn {
 		return
 	}
+	if h.responseFormat == "openai" {
+		h.writeOpenAISSE(event, data)
+		return
+	}
+
 	fmt.Fprintf(h.w, "event: %s\ndata: %s\n\n", event, data)
 	if h.flusher != nil {
 		h.flusher.Flush()
@@ -174,12 +182,127 @@ func (h *streamHandler) writeSSE(event, data string) {
 	h.logger.LogOutputSSE(event, data)
 }
 
+func (h *streamHandler) writeOpenAISSE(event, data string) {
+	// Transform Anthropic event to OpenAI chunk
+	chunk := map[string]interface{}{
+		"id":      h.msgID,
+		"object":  "chat.completion.chunk",
+		"created": h.startTime.Unix(),
+		"model":   "", // Should be set if available, but optional in chunk often
+		"choices": []map[string]interface{}{},
+	}
+
+	var parsedData map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &parsedData); err != nil {
+		return
+	}
+
+	choice := map[string]interface{}{
+		"index": 0,
+		"delta": map[string]interface{}{},
+	}
+
+	switch event {
+	case "message_start":
+		if msg, ok := parsedData["message"].(map[string]interface{}); ok {
+			choice["delta"] = map[string]interface{}{"role": "assistant"}
+			if model, ok := msg["model"].(string); ok {
+				chunk["model"] = model
+			}
+		}
+	case "content_block_start":
+		if cb, ok := parsedData["content_block"].(map[string]interface{}); ok {
+			if cb["type"] == "text" {
+				if text, ok := cb["text"].(string); ok && text != "" {
+					choice["delta"] = map[string]interface{}{"content": text}
+				}
+			} else if cb["type"] == "tool_use" {
+				choice["delta"] = map[string]interface{}{
+					"tool_calls": []map[string]interface{}{
+						{
+							"index": 0,
+							"id":    cb["id"],
+							"type":  "function",
+							"function": map[string]interface{}{
+								"name":      cb["name"],
+								"arguments": "",
+							},
+						},
+					},
+				}
+			}
+		}
+	case "content_block_delta":
+		if delta, ok := parsedData["delta"].(map[string]interface{}); ok {
+			if delta["type"] == "text_delta" {
+				choice["delta"] = map[string]interface{}{"content": delta["text"]}
+			} else if delta["type"] == "input_json_delta" {
+				choice["delta"] = map[string]interface{}{
+					"tool_calls": []map[string]interface{}{
+						{
+							"index": 0,
+							"function": map[string]interface{}{
+								"arguments": delta["partial_json"],
+							},
+						},
+					},
+				}
+			} else if delta["type"] == "thinking_delta" {
+				// Map thinking to reasoning_content for supported clients (e.g. DeepSeek/similar)
+				choice["delta"] = map[string]interface{}{"reasoning_content": delta["thinking"]}
+			}
+		}
+	case "message_delta":
+		if delta, ok := parsedData["delta"].(map[string]interface{}); ok {
+			if stopReason, ok := delta["stop_reason"].(string); ok {
+				choice["finish_reason"] = stopReason
+			}
+		}
+		// OpenAI expects finish_reason in the last chunk usually, or separate
+		choice["delta"] = map[string]interface{}{} // Empty delta for usage/stop
+	case "message_stop":
+		choice["finish_reason"] = "stop" // Fallback
+		choice["delta"] = map[string]interface{}{}
+	case "content_block_stop":
+		return // Ignore internal block stops for OpenAI
+	default:
+		return // Ignore other events
+	}
+
+	// Don't send empty updates unless it's a role or finish_reason
+	delta, _ := choice["delta"].(map[string]interface{})
+	if len(delta) == 0 && choice["finish_reason"] == nil {
+		return
+	}
+
+	chunk["choices"] = []interface{}{choice}
+	
+	bytes, _ := json.Marshal(chunk)
+	fmt.Fprintf(h.w, "data: %s\n\n", string(bytes))
+	if h.flusher != nil {
+		h.flusher.Flush()
+	}
+}
+
 func (h *streamHandler) writeFinalSSE(event, data string) {
 	if !h.isStream {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	if h.responseFormat == "openai" {
+		h.writeOpenAISSE(event, data)
+		// Send [DONE] at the very end
+		if event == "message_stop" {
+			fmt.Fprintf(h.w, "data: [DONE]\n\n")
+			if h.flusher != nil {
+				h.flusher.Flush()
+			}
+		}
+		return
+	}
+
 	fmt.Fprintf(h.w, "event: %s\ndata: %s\n\n", event, data)
 	if h.flusher != nil {
 		h.flusher.Flush()
@@ -596,6 +719,10 @@ func (h *streamHandler) closeActiveBlockLocked() {
 
 func (h *streamHandler) writeSSELocked(event, data string) {
 	if !h.isStream {
+		return
+	}
+	if h.responseFormat == "openai" {
+		h.writeOpenAISSE(event, data)
 		return
 	}
 	fmt.Fprintf(h.w, "event: %s\ndata: %s\n\n", event, data)

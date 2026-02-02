@@ -175,7 +175,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.sessionWorkdirs.Store(conversationKey, dynamicWorkdir)
 	}
 
-	effectiveWorkdir := h.config.OrchidsLocalWorkdir
+	effectiveWorkdir := ""
 	if dynamicWorkdir != "" {
 		effectiveWorkdir = dynamicWorkdir
 		slog.Info("Using dynamic workdir", "workdir", dynamicWorkdir)
@@ -211,16 +211,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			} else {
 				apiClient = orchids.NewFromAccount(account, h.config)
 			}
-			if c, ok := apiClient.(*orchids.Client); ok && effectiveWorkdir != "" {
-				c.UpdateLocalWorkdir(effectiveWorkdir)
-			}
+
 			currentAccount = account
 			return nil
 		} else if h.client != nil {
 			apiClient = h.client
-			if c, ok := apiClient.(*orchids.Client); ok && effectiveWorkdir != "" {
-				c.UpdateLocalWorkdir(effectiveWorkdir)
-			}
+
 			currentAccount = nil
 			return nil
 		}
@@ -252,6 +248,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		suppressThinking = true
 	}
 	effectiveTools := req.Tools
+	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
+		effectiveTools = nil
+	}
 	if gateNoTools {
 		effectiveTools = nil
 		slog.Debug("tool_gate: disabled tools for short non-code request")
@@ -432,8 +431,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// Token 计数
 	inputTokens := h.estimateInputTokens(r.Context(), req.Model, builtPrompt)
 
+	// Detect Response Format (Anthropic vs OpenAI)
+	responseFormat := "anthropic"
+	if strings.Contains(r.URL.Path, "/chat/completions") {
+		responseFormat = "openai"
+	}
+
 	sh := newStreamHandler(
-		h.config, w, logger, toolCallMode, suppressThinking, allowedTools, allowedIndex, preflightResults, shouldLocalFallback, isStream,
+		h.config, w, logger, toolCallMode, suppressThinking, allowedTools, allowedIndex, preflightResults, shouldLocalFallback, isStream, responseFormat,
 	)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	defer sh.release()
@@ -528,13 +533,27 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 				// Check for non-retriable errors
 				errStr := err.Error()
-				isAuthError := strings.Contains(errStr, "status 401") || strings.Contains(errStr, "Signed out") || strings.Contains(errStr, "signed_out")
-				if isAuthError || strings.Contains(errStr, "Input is too long") || strings.Contains(errStr, "status 400") {
+				isAuthError := strings.Contains(errStr, "401") || strings.Contains(errStr, "403") || strings.Contains(errStr, "404") || strings.Contains(errStr, "Signed out") || strings.Contains(errStr, "signed_out")
+				if isAuthError || strings.Contains(errStr, "Input is too long") || strings.Contains(errStr, "400") {
 					slog.Error("Aborting retries for non-retriable error", "error", err)
+
+					// Disable the account if it's an authentication, forbidden, or not found error
+					if (strings.Contains(errStr, "403") || strings.Contains(errStr, "401") || strings.Contains(errStr, "404")) && currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+						slog.Warn("Disabling account due to critical error", "account_id", currentAccount.ID, "account_name", currentAccount.Name, "error", err)
+						currentAccount.Enabled = false
+						if updateErr := h.loadBalancer.Store.UpdateAccount(context.Background(), currentAccount); updateErr != nil {
+							slog.Error("Failed to disable account in store", "account_id", currentAccount.ID, "error", updateErr)
+						}
+					}
 
 					// Inject error message to client for better visibility
 					if isAuthError {
-errorMsg := "Authentication Error: Session expired (401). Please update your account credentials."
+						errorMsg := fmt.Sprintf("Warp Request Failed: %s. Please check your account status.", errStr)
+						if strings.Contains(errStr, "401") {
+							errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
+						} else if strings.Contains(errStr, "403") {
+							errorMsg = "Access Forbidden (403): Your account might be flagged or blocked by Warp's firewall. Try re-enabling it in the Admin UI."
+						}
 						idx := sh.ensureBlock("text")
 
 						// For stream, send delta immediately

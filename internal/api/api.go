@@ -177,6 +177,9 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if accounts == nil {
+			accounts = []*store.Account{}
+		}
 		json.NewEncoder(w).Encode(accounts)
 
 	case http.MethodPost:

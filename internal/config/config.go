@@ -52,7 +52,6 @@ type Config struct {
 	OrchidsWSURL            string   `json:"orchids_ws_url"`
 	OrchidsAPIVersion       string   `json:"orchids_api_version"`
 	OrchidsImpl             string   `json:"orchids_impl"`
-	OrchidsLocalWorkdir     string   `json:"orchids_local_workdir"`
 	OrchidsAllowRunCommand  bool     `json:"orchids_allow_run_command"`
 	OrchidsRunAllowlist     []string `json:"orchids_run_allowlist"`
 	OrchidsFSIgnore  []string `json:"orchids_fs_ignore"`
@@ -220,11 +219,7 @@ func applyDefaults(cfg *Config) {
 	if len(cfg.OrchidsFSIgnore) == 0 {
 		cfg.OrchidsFSIgnore = []string{"debug-logs", "data", ".claude"}
 	}
-	if cfg.OrchidsLocalWorkdir == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			cfg.OrchidsLocalWorkdir = cwd
-		}
-	}
+
 	if cfg.WarpDisableTools == nil {
 		v := true
 		cfg.WarpDisableTools = &v

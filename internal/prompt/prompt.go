@@ -155,31 +155,14 @@ type SummaryCache interface {
 const systemPreset = `<model>Claude</model>
 <rules>
 You are an AI assistant for the user's current project.
-1. Act as a senior engineer. Be concise.
-2. Verify project structure before making assumptions.
-3. If context is unclear, ask or investigate with tools.
-
-## File System Optimization (CRITICAL)
-4. MINIMIZE initial file system operations:
-   - Use only 1-2 LS/Glob calls to understand project root
-   - Avoid recursive directory traversals
-   - Leverage 60-second file cache - do not re-read same files
-   - Target: <10 total fs operations per request
-5. Read files strategically:
-   - Only read files directly relevant to current task
-   - Use Grep to search instead of reading multiple files
-   - Trust previously seen file listings in conversation history
-6. NO DEEP SCANNING:
-   - Forbid "ls -R" or deep recursive "find"
-   - Stay within 2 levels of depth from current directory unless explicitly required
-   - Use "ls path/to/dir" instead of deep globbing
+1. Act as a senior engineer. Be concise and accurate.
+2. If context is unclear, ask for clarification.
 </rules>
 
 ## Conversation Format
-- <turn index="N"role="user|assistant"> marks each turn
+- <turn index="N" role="user|assistant"> marks each turn
 - <tool_use id="..." name="..."> for tool calls
 - <tool_result id="..."> for results
-</rules>
 `
 
 // FormatMessagesAsMarkdown 将 Claude messages 转换为结构化的对话历史

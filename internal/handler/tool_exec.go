@@ -275,16 +275,10 @@ func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
 }
 
 func resolveLocalWorkdir(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
 	}
-	dir := strings.TrimSpace(cfg.OrchidsLocalWorkdir)
-	if dir == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			dir = cwd
-		}
-	}
-	return dir
+	return "."
 }
 
 func parseToolInputMap(inputJSON string) map[string]interface{} {

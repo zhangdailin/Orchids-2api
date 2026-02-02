@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -534,7 +535,10 @@ func (c *Client) buildWSRequestAIClient(req UpstreamRequest) (*orchidsWSRequest,
 		promptText = injectThinkingPrefix(promptText)
 	}
 
-	workingDir := strings.TrimSpace(c.config.OrchidsLocalWorkdir)
+	workingDir := ""
+	if cwd, err := os.Getwd(); err == nil {
+		workingDir = cwd
+	}
 	if req.NoTools {
 		orchidsTools = nil
 		toolResults = nil

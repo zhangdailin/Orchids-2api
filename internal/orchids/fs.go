@@ -466,7 +466,7 @@ func (c *Client) RefreshFSIndexSync() {
 }
 
 func (c *Client) RefreshFSIndex() {
-	if c == nil {
+	if c == nil || c.config.SessionID == "" {
 		return
 	}
 	if c.fsIndexRefresh.Swap(true) {
@@ -575,13 +575,10 @@ func isIgnoredRelPath(rel string, ignore []string) bool {
 }
 
 func (c *Client) resolveLocalWorkdir() string {
-	dir := strings.TrimSpace(c.config.OrchidsLocalWorkdir)
-	if dir == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			dir = cwd
-		}
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
 	}
-	return dir
+	return "."
 }
 
 func listDir(baseDir, path string, ignore []string) ([]string, error) {

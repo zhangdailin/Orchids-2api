@@ -144,6 +144,7 @@ func New(cfg *config.Config) *Client {
 		fsCache:    perf.NewTTLCache(60 * time.Second),
 	}
 	c.wsPool = upstream.NewWSPool(c.createWSConnection, 5, 20)
+
 	go c.RefreshFSIndex()
 	return c
 }
@@ -164,9 +165,7 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 		OrchidsAPIBaseURL:   "",
 		OrchidsWSURL:        "",
 		OrchidsAPIVersion:   "",
-		OrchidsImpl:         "",
-		OrchidsLocalWorkdir: "",
-		AutoRefreshToken:    false,
+
 	}
 	if base != nil {
 		cfg.UpstreamMode = base.UpstreamMode
@@ -175,9 +174,7 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 		cfg.OrchidsAPIBaseURL = base.OrchidsAPIBaseURL
 		cfg.OrchidsWSURL = base.OrchidsWSURL
 		cfg.OrchidsAPIVersion = base.OrchidsAPIVersion
-		cfg.OrchidsImpl = base.OrchidsImpl
-		cfg.OrchidsLocalWorkdir = base.OrchidsLocalWorkdir
-		cfg.OrchidsAllowRunCommand = base.OrchidsAllowRunCommand
+
 		cfg.OrchidsRunAllowlist = base.OrchidsRunAllowlist
 		cfg.OrchidsFSIgnore = base.OrchidsFSIgnore // Critical for performance
 		cfg.AutoRefreshToken = base.AutoRefreshToken
@@ -199,21 +196,9 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 	return c
 }
 
-func (c *Client) UpdateLocalWorkdir(dir string) {
-	if c.config != nil {
-		dir = strings.TrimSpace(dir)
-		if dir == "" || dir == c.config.OrchidsLocalWorkdir {
-			return
-		}
-		c.config.OrchidsLocalWorkdir = dir
-		c.RefreshFSIndexSync()
-		go c.RefreshFSIndex()
-	}
-}
 
-func (c *Client) GetProjectRoot() string {
-	return c.resolveLocalWorkdir()
-}
+
+
 
 func (c *Client) GetToken() (string, error) {
 	if c.config != nil && c.config.UpstreamToken != "" {
@@ -249,11 +234,12 @@ func (c *Client) forceRefreshToken() (string, error) {
 }
 
 func (c *Client) fetchToken() (string, error) {
-	if c.config == nil {
-		return "", fmt.Errorf("missing config")
+	sid := strings.TrimSpace(c.config.SessionID)
+	if sid == "" {
+		return "", errors.New("missing orchids session id")
 	}
 
-	url := fmt.Sprintf("https://clerk.orchids.app/v1/client/sessions/%s/tokens?__clerk_api_version=2025-11-10&_clerk_js_version=5.117.0", c.config.SessionID)
+	url := fmt.Sprintf("https://clerk.orchids.app/v1/client/sessions/%s/tokens?__clerk_api_version=2025-11-10&_clerk_js_version=5.117.0", sid)
 
 	ctx, cancel := withDefaultTimeout(context.Background(), c.requestTimeout())
 	defer cancel()

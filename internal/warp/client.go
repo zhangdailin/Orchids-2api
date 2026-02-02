@@ -3,12 +3,14 @@ package warp
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -32,34 +34,57 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		refresh = strings.TrimSpace(acc.ClientCookie)
 	}
 	sess := getSession(acc.ID, refresh)
+
+	// Inject JWT token if available and session is empty
+	if acc != nil && acc.Token != "" {
+		if sess.currentJWT() == "" {
+			sess.mu.Lock()
+			sess.jwt = acc.Token
+			if sess.expiresAt.IsZero() {
+				// We don't know the exact expiry, so set a conservative default
+				sess.expiresAt = time.Now().Add(1 * time.Hour)
+			}
+			sess.mu.Unlock()
+		}
+	}
+
 	timeout := defaultRequestTimeout
 	if cfg != nil && cfg.RequestTimeout > 0 {
 		timeout = time.Duration(cfg.RequestTimeout) * time.Second
 	}
+	
+	client := newHTTPClient(timeout, cfg)
+	client.Jar = sess.jar
+
 	return &Client{
 		config:     cfg,
 		account:    acc,
-		httpClient: newHTTPClient(timeout),
+		httpClient: client,
 		session:    sess,
 	}
 }
 
 const defaultRequestTimeout = 120 * time.Second
 
-func newHTTPClient(timeout time.Duration) *http.Client {
+func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 	if timeout <= 0 {
 		timeout = defaultRequestTimeout
 	}
+	
+	var proxyURL *url.URL
+	if cfg != nil && cfg.ProxyHTTP != "" {
+		parsedURL, err := url.Parse(cfg.ProxyHTTP)
+		if err == nil {
+			if cfg.ProxyUser != "" && cfg.ProxyPass != "" {
+				parsedURL.User = url.UserPassword(cfg.ProxyUser, cfg.ProxyPass)
+			}
+			proxyURL = parsedURL
+		}
+	}
+
 	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			MaxIdleConns:          50,
-			MaxIdleConnsPerHost:   50,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-		},
+		Timeout:   timeout,
+		Transport: newUTLSTransport(proxyURL),
 	}
 }
 
@@ -79,15 +104,32 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()
 
-	if err := c.session.ensureToken(ctx, c.httpClient); err != nil {
+	cid := clientID
+	if c.account != nil && c.account.SessionID != "" {
+		cid = c.account.SessionID
+	} else if c.account != nil {
+		cid = fmt.Sprintf("orchids-%d", c.account.ID)
+	}
+
+	promptText := req.Prompt
+	model := req.Model
+	messages := req.Messages
+	workdir := req.Workdir
+	conversationID := req.ChatSessionID
+
+	if c.config != nil && c.config.DebugEnabled {
+		slog.Debug("Warp AI: Preparing request", "cid", cid, "conversationID", conversationID)
+	}
+
+	if err := c.session.ensureToken(ctx, c.httpClient, cid); err != nil {
+		slog.Warn("Warp AI: ensureToken failed", "error", err)
 		return err
 	}
-	if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
+	if err := c.session.ensureLogin(ctx, c.httpClient, cid); err != nil {
+		slog.Warn("Warp AI: ensureLogin failed", "error", err)
 		return err
 	}
 
-	prompt := req.Prompt
-	hasHistory := len(req.Messages) > 1
 	disableWarpTools := true
 	if c.config != nil && c.config.WarpDisableTools != nil {
 		disableWarpTools = *c.config.WarpDisableTools
@@ -101,7 +143,16 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 		tools = nil
 	}
 
-	payload, err := buildRequestBytes(prompt, req.Model, tools, disableWarpTools, hasHistory, req.Workdir)
+	var mcpContext []byte
+	var err error
+	if !disableWarpTools {
+		mcpContext, err = buildMCPContext(tools)
+		if err != nil {
+			return err
+		}
+	}
+
+	payload, err := buildRequestBytes(promptText, model, messages, mcpContext, disableWarpTools, workdir, conversationID)
 	if err != nil {
 		return err
 	}
@@ -116,39 +167,56 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 		return err
 	}
 	request.Header.Set("x-warp-client-id", clientID)
-	request.Header.Set("accept", "text/event-stream")
+	request.Header.Set("accept", "*/*")
 	request.Header.Set("content-type", "application/x-protobuf")
 	request.Header.Set("x-warp-client-version", clientVersion)
 	request.Header.Set("x-warp-os-category", osCategory)
 	request.Header.Set("x-warp-os-name", osName)
 	request.Header.Set("x-warp-os-version", osVersion)
+	request.Header.Set("x-warp-date", time.Now().UTC().Format("2006-01-02T15:04:05.000000Z"))
+	request.Header.Set("user-agent", userAgent)
 	request.Header.Set("authorization", "Bearer "+jwt)
-	request.Header.Set("accept-encoding", "identity")
-	request.Header.Set("content-length", fmt.Sprintf("%d", len(payload)))
+	request.Header.Set("origin", "https://app.warp.dev")
+	request.Header.Set("referer", "https://app.warp.dev/")
+	if eid := c.session.getExperimentID(); eid != "" {
+		request.Header.Set("x-warp-experiment-id", eid)
+	}
+	if eb := c.session.getExperimentBucket(); eb != "" {
+		request.Header.Set("x-warp-experiment-bucket", eb)
+	}
+	request.Header.Set("accept-encoding", "gzip, br")
+	request.Header.Set("x-warp-request-id", newUUID())
 
 	if logger != nil {
-		logger.LogUpstreamRequest(aiURL, map[string]string{
-			"Accept":                "text/event-stream",
-			"Authorization":         "Bearer [REDACTED]",
-			"Content-Type":          "application/x-protobuf",
-			"X-Warp-Client-Version": clientVersion,
-		}, map[string]interface{}{"payload_bytes": len(payload)})
+		headers := make(map[string]string)
+		for k, v := range request.Header {
+			headers[k] = strings.Join(v, ", ")
+		}
+		logger.LogUpstreamRequest(aiURL, headers, payload)
 	}
 
 	breaker := upstream.GetAccountBreaker(c.breakerKey())
 	start := time.Now()
+
+	if c.config != nil && c.config.DebugEnabled {
+		reqHeaders := make(map[string]string)
+		for k, v := range request.Header {
+			reqHeaders[k] = strings.Join(v, ", ")
+		}
+		slog.Debug("Warp AI: Dispatching request", "url", aiURL, "headers", reqHeaders, "body_size", len(payload))
+	}
 
 	result, err := breaker.Execute(func() (interface{}, error) {
 		return c.httpClient.Do(request)
 	})
 	if err != nil {
 		if c.config != nil && c.config.DebugEnabled {
-			slog.Info("[Performance] Upstream Request Failed", "duration", time.Since(start), "error", err)
+			slog.Info("Warp AI: Request Failed", "duration", time.Since(start), "error", err)
 		}
 		return err
 	}
 	if c.config != nil && c.config.DebugEnabled {
-		slog.Info("[Performance] Upstream Request Success", "duration", time.Since(start))
+		slog.Info("Warp AI: Response Headers Received", "duration", time.Since(start))
 	}
 	resp, ok := result.(*http.Response)
 	if !ok || resp == nil {
@@ -158,14 +226,30 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		headerLog := make(map[string]string)
+		for k, v := range resp.Header {
+			headerLog[k] = strings.Join(v, ", ")
+		}
+		slog.Warn("Warp AI request failed", "status", resp.StatusCode, "headers", headerLog, "body", string(body))
 		return fmt.Errorf("warp api error: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	reader := bufio.NewReader(resp.Body)
+
+	var reader io.ReadCloser = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		var err error
+		reader, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			return err
+		}
+		defer reader.Close()
+	}
+
+	bufReader := bufio.NewReader(reader)
 	var dataLines []string
 	toolCallSeen := false
 	for {
-		line, err := reader.ReadString('\n')
+		line, err := bufReader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -195,6 +279,9 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 					logger.LogUpstreamSSE("warp_parse_error", err.Error())
 				}
 				continue
+			}
+			if parsed.ConversationID != "" {
+				onMessage(orchids.SSEMessage{Type: "model.conversation_id", Event: map[string]interface{}{"id": parsed.ConversationID}})
 			}
 		for _, delta := range parsed.TextDeltas {
 			onMessage(orchids.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": delta}})
@@ -273,6 +360,7 @@ func (c *Client) breakerKey() string {
 	return "warp:default"
 }
 
+
 func decodeWarpPayload(data string) ([]byte, error) {
 	if data == "" {
 		return nil, fmt.Errorf("empty payload")
@@ -290,7 +378,13 @@ func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
 	if c.session == nil {
 		return "", fmt.Errorf("warp session not initialized")
 	}
-	if err := c.session.refreshTokenRequest(ctx, c.httpClient); err != nil {
+	cid := clientID
+	if c.account != nil && c.account.SessionID != "" {
+		cid = c.account.SessionID
+	} else if c.account != nil {
+		cid = fmt.Sprintf("orchids-%d", c.account.ID)
+	}
+	if err := c.session.refreshTokenRequest(ctx, c.httpClient, cid); err != nil {
 		return "", err
 	}
 	if c.account != nil {

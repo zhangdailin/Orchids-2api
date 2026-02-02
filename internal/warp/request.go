@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"orchids-api/internal/prompt"
 )
 
 type encoder struct {
@@ -32,27 +34,18 @@ func (e *encoder) writeKey(field int, wire int) {
 }
 
 func (e *encoder) writeString(field int, value string) {
-	if value == "" {
-		return
-	}
 	e.writeKey(field, 2)
 	e.writeVarint(uint64(len(value)))
 	e.b = append(e.b, value...)
 }
 
 func (e *encoder) writeBytes(field int, value []byte) {
-	if len(value) == 0 {
-		return
-	}
 	e.writeKey(field, 2)
 	e.writeVarint(uint64(len(value)))
 	e.b = append(e.b, value...)
 }
 
 func (e *encoder) writeBool(field int, value bool) {
-	if !value {
-		return
-	}
 	e.writeKey(field, 0)
 	if value {
 		e.writeVarint(1)
@@ -62,9 +55,6 @@ func (e *encoder) writeBool(field int, value bool) {
 }
 
 func (e *encoder) writeMessage(field int, msg []byte) {
-	if len(msg) == 0 {
-		return
-	}
 	e.writeKey(field, 2)
 	e.writeVarint(uint64(len(msg)))
 	e.b = append(e.b, msg...)
@@ -83,34 +73,84 @@ func (e *encoder) writePackedVarints(field int, values []int) {
 	e.b = append(e.b, inner.b...)
 }
 
-func buildRequestBytes(prompt, model string, tools []interface{}, disableWarpTools bool, hasHistory bool, workdir string) ([]byte, error) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
+func buildRequestBytes(promptText, model string, messages []prompt.Message, mcpContext []byte, disableWarpTools bool, workdir, conversationID string) ([]byte, error) {
+	promptText = strings.TrimSpace(promptText)
+	if promptText == "" && len(messages) == 0 {
 		return nil, fmt.Errorf("empty prompt")
 	}
-	if disableWarpTools {
-		prompt = noWarpToolsPrompt + "\n\n" + prompt
+
+	// Format history using the project's standard formatter
+	fullQuery := promptText
+	if len(messages) > 0 {
+		historyText := prompt.FormatMessagesAsMarkdown(messages, "")
+		if historyText != "" {
+			if promptText != "" {
+				fullQuery = historyText + "\n\nUser: " + promptText
+			} else {
+				fullQuery = historyText
+			}
+		}
 	}
 
 	inputContext := buildInputContext(workdir)
-	userQuery := buildUserQuery(prompt, !hasHistory)
+	userQuery := buildUserQuery(fullQuery, len(messages) <= 1)
 	input := buildInput(inputContext, userQuery)
 	settings := buildSettings(model, disableWarpTools)
-	mcpContext, err := buildMCPContext(tools)
-	if err != nil {
-		return nil, err
-	}
 
 	req := encoder{}
-	// task_context: empty message
+	// task_context: empty message (field 1, length 0) => 0a 00
 	req.writeMessage(1, []byte{})
 	req.writeMessage(2, input)
 	req.writeMessage(3, settings)
+	
+	// Metadata (field 4)
+	metadata := buildMetadata(conversationID)
+	req.writeMessage(4, metadata)
+
 	if len(mcpContext) > 0 {
 		req.writeMessage(6, mcpContext)
 	}
 
 	return req.bytes(), nil
+}
+
+func buildMetadata(conversationID string) []byte {
+	meta := encoder{}
+	
+	// WARNING: Setting conversation_id in metadata can cause empty responses in modern Warp API.
+	// We rely on manual context history concatenation instead.
+	// if conversationID != "" {
+	// 	meta.writeString(1, conversationID)
+	// }
+
+	// logging map (field 2)
+	// Entry 1: key="entrypoint", value (string_value)="USER_INITIATED"
+	entry1 := encoder{}
+	entry1.writeString(1, "entrypoint")
+	
+	val1 := encoder{}
+	val1.writeString(3, "USER_INITIATED") // google.protobuf.Value.string_value
+	entry1.writeMessage(2, val1.bytes())
+	
+	meta.writeMessage(2, entry1.bytes())
+
+	// Entry 2: key="is_auto_resume_after_error", value (bool_value)=false
+	entry2 := encoder{}
+	entry2.writeString(1, "is_auto_resume_after_error")
+	val2 := encoder{}
+	val2.writeBool(4, false)
+	entry2.writeMessage(2, val2.bytes())
+	meta.writeMessage(2, entry2.bytes())
+
+	// Entry 3: key="is_autodetected_user_query", value (bool_value)=true
+	entry3 := encoder{}
+	entry3.writeString(1, "is_autodetected_user_query")
+	val3 := encoder{}
+	val3.writeBool(4, true)
+	entry3.writeMessage(2, val3.bytes())
+	meta.writeMessage(2, entry3.bytes())
+
+	return meta.bytes()
 }
 
 func buildInputContext(workdir string) []byte {
@@ -155,14 +195,25 @@ func buildInputContext(workdir string) []byte {
 func buildUserQuery(prompt string, isNew bool) []byte {
 	msg := encoder{}
 	msg.writeString(1, prompt)
-	msg.writeBool(4, isNew)
+	// referenced_attachments (field 2) - omitted if empty
+	// attachments_bytes (field 3) - omitted if empty
+	msg.writeBool(4, isNew)      // is_new_conversation
 	return msg.bytes()
 }
 
 func buildInput(contextBytes, userQueryBytes []byte) []byte {
+	// Modern API uses user_inputs (field 6)
+	// UserInputs (field 6) -> repeated UserInput (field 1) -> oneof input { UserQuery (field 1) }
+
+	userInput := encoder{}
+	userInput.writeMessage(1, userQueryBytes) // UserInput.user_query (field 1)
+
+	userInputs := encoder{}
+	userInputs.writeMessage(1, userInput.bytes()) // repeated UserInputs.inputs (field 1)
+
 	input := encoder{}
 	input.writeMessage(1, contextBytes)
-	input.writeMessage(2, userQueryBytes)
+	input.writeMessage(6, userInputs.bytes()) // Input.user_inputs (field 6)
 	return input.bytes()
 }
 
@@ -170,8 +221,8 @@ func buildSettings(model string, disableWarpTools bool) []byte {
 	modelName := normalizeModel(model)
 	modelCfg := encoder{}
 	modelCfg.writeString(1, modelName)
-	modelCfg.writeString(2, "o3")
-	modelCfg.writeString(4, "auto")
+	modelCfg.writeString(2, "o3") // Standard planning model
+	modelCfg.writeString(4, identifier)
 
 	settings := encoder{}
 	settings.writeMessage(1, modelCfg.bytes())
@@ -317,5 +368,8 @@ func normalizeModel(model string) string {
 		return "claude-4-opus"
 	}
 
+	if model == "auto" {
+		return "auto"
+	}
 	return defaultModel
 }
