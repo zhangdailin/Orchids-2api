@@ -30,12 +30,18 @@ const (
 )
 
 func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
+	return executeToolCallWithBaseDir(call, cfg, "")
+}
+
+func executeToolCallWithBaseDir(call toolCall, cfg *config.Config, baseDir string) safeToolResult {
 	result := safeToolResult{
 		call:  call,
 		input: parseToolInputValue(call.input),
 	}
 
-	baseDir := resolveLocalWorkdir(cfg)
+	if strings.TrimSpace(baseDir) == "" {
+		baseDir = resolveLocalWorkdir(cfg)
+	}
 	if baseDir == "" {
 		result.isError = true
 		result.output = "base directory is empty"
@@ -51,22 +57,37 @@ func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
 	case "read":
 		path := toolInputString(inputMap, "file_path", "path", "file")
 		if path == "" {
+			path = toolInputString(inputMap, "files", "file_paths", "filePaths", "paths")
+		}
+		if path == "" {
 			result.isError = true
 			result.output = "missing file_path for Read"
 			return result
 		}
+		limit := toolInputInt(inputMap, "limit", "line_limit", "lineLimit", "max_lines", "maxLines")
+		offset := toolInputInt(inputMap, "offset", "start", "start_line", "startLine")
+		if limit < 0 {
+			limit = 0
+		}
+		if offset < 0 {
+			offset = 0
+		}
 		abs, err := resolveToolPath(baseDir, path)
 		if err != nil {
-			result.isError = true
-			result.output = err.Error()
-			return result
+			if remapped, ok := remapToolPath(baseDir, path); ok {
+				abs = remapped
+			} else {
+				result.isError = true
+				result.output = err.Error()
+				return result
+			}
 		}
 		if err := validateToolPathIgnore(baseDir, abs, ignore); err != nil {
 			result.isError = true
 			result.output = err.Error()
 			return result
 		}
-		data, err := readFileLimited(abs)
+		data, err := readFileLines(abs, limit, offset)
 		if err != nil {
 			result.isError = true
 			result.output = err.Error()
@@ -146,6 +167,32 @@ func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
 		result.output = fmt.Sprintf("Updated %s (%d replacement(s))", path, count)
 		return result
 
+	case "delete":
+		path := toolInputString(inputMap, "file_path", "path", "file")
+		if path == "" {
+			result.isError = true
+			result.output = "missing file_path for Delete"
+			return result
+		}
+		abs, err := resolveToolPath(baseDir, path)
+		if err != nil {
+			result.isError = true
+			result.output = err.Error()
+			return result
+		}
+		if err := validateToolPathIgnore(baseDir, abs, ignore); err != nil {
+			result.isError = true
+			result.output = err.Error()
+			return result
+		}
+		if err := os.RemoveAll(abs); err != nil {
+			result.isError = true
+			result.output = err.Error()
+			return result
+		}
+		result.output = fmt.Sprintf("Deleted %s", path)
+		return result
+
 	case "ls", "list":
 		path := toolInputString(inputMap, "path", "file_path", "dir")
 		if path == "" {
@@ -172,11 +219,14 @@ func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
 		return result
 
 	case "glob":
-		pattern := toolInputString(inputMap, "pattern", "glob")
+		pattern := toolInputString(inputMap, "pattern", "glob", "query", "search")
 		if pattern == "" {
 			pattern = "*"
 		}
-		root := toolInputString(inputMap, "path", "root")
+		root := toolInputString(inputMap, "path", "root", "dir", "file_path")
+		if root == "" {
+			root = toolInputString(inputMap, "paths", "files", "file_paths", "filePaths", "roots")
+		}
 		if root == "" {
 			root = "."
 		}
@@ -208,13 +258,16 @@ func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
 		return result
 
 	case "grep", "ripgrep", "rg":
-		pattern := toolInputString(inputMap, "pattern", "query")
+		pattern := toolInputString(inputMap, "pattern", "query", "regex", "search")
 		if pattern == "" {
 			result.isError = true
 			result.output = "missing pattern for Grep"
 			return result
 		}
-		root := toolInputString(inputMap, "path", "root")
+		root := toolInputString(inputMap, "path", "root", "dir", "file_path")
+		if root == "" {
+			root = toolInputString(inputMap, "paths", "files", "file_paths", "filePaths", "roots")
+		}
 		if root == "" {
 			root = "."
 		}
@@ -229,7 +282,8 @@ func executeToolCall(call toolCall, cfg *config.Config) safeToolResult {
 			result.output = err.Error()
 			return result
 		}
-		output, err := grepSearch(baseDir, absRoot, pattern, ignore)
+		maxResults := toolInputInt(inputMap, "max_results", "maxResults", "max_lines", "maxLines", "limit")
+		output, err := grepSearch(baseDir, absRoot, pattern, maxResults, ignore)
 		if err != nil {
 			result.isError = true
 			result.output = err.Error()
@@ -296,10 +350,27 @@ func parseToolInputMap(inputJSON string) map[string]interface{} {
 func toolInputString(input map[string]interface{}, keys ...string) string {
 	for _, key := range keys {
 		if value, ok := input[key]; ok {
-			if str, ok := value.(string); ok {
-				str = strings.TrimSpace(str)
+			switch v := value.(type) {
+			case string:
+				str := strings.TrimSpace(v)
 				if str != "" {
 					return str
+				}
+			case []string:
+				for _, item := range v {
+					str := strings.TrimSpace(item)
+					if str != "" {
+						return str
+					}
+				}
+			case []interface{}:
+				for _, item := range v {
+					if s, ok := item.(string); ok {
+						str := strings.TrimSpace(s)
+						if str != "" {
+							return str
+						}
+					}
 				}
 			}
 		}
@@ -354,6 +425,38 @@ func resolveToolPath(baseDir, input string) (string, error) {
 		return "", errors.New("path traversal is not allowed")
 	}
 	return filepath.Join(baseDir, clean), nil
+}
+
+func remapToolPath(baseDir, input string) (string, bool) {
+	if baseDir == "" || strings.TrimSpace(input) == "" {
+		return "", false
+	}
+	clean := filepath.Clean(input)
+	if !filepath.IsAbs(clean) {
+		return "", false
+	}
+	baseName := filepath.Base(baseDir)
+	if baseName != "" {
+		marker := string(os.PathSeparator) + baseName + string(os.PathSeparator)
+		if idx := strings.LastIndex(clean, marker); idx >= 0 {
+			suffix := clean[idx+len(marker):]
+			if suffix != "" {
+				candidate := filepath.Join(baseDir, suffix)
+				if _, err := os.Stat(candidate); err == nil {
+					return candidate, true
+				}
+			}
+		}
+	}
+	base := filepath.Base(clean)
+	if base == "" || base == string(os.PathSeparator) || base == "." {
+		return "", false
+	}
+	candidate := filepath.Join(baseDir, base)
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate, true
+	}
+	return "", false
 }
 
 func validateToolPathIgnore(baseDir, target string, ignore []string) error {
@@ -438,6 +541,61 @@ func readFileLimited(path string) (string, error) {
 	return string(data), nil
 }
 
+func readFileLines(path string, limit, offset int) (string, error) {
+	if limit <= 0 && offset <= 0 {
+		return readFileLimited(path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", errors.New("path is a directory")
+	}
+	if toolMaxFileSize > 0 && info.Size() > toolMaxFileSize {
+		return "", errors.New("file too large")
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	var builder strings.Builder
+	skipped := 0
+	readCount := 0
+
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", err
+		}
+		if err == io.EOF && len(line) == 0 {
+			break
+		}
+		if skipped < offset {
+			skipped++
+		} else {
+			builder.WriteString(line)
+			readCount++
+			if limit > 0 && readCount >= limit {
+				break
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+	}
+
+	output := builder.String()
+	if toolMaxOutputSize > 0 && len(output) > toolMaxOutputSize {
+		output = output[:toolMaxOutputSize]
+	}
+	return output, nil
+}
+
 func writeFile(path string, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -462,6 +620,7 @@ func globSearch(baseDir, root, pattern string, maxResults int, ignore []string) 
 	if err != nil {
 		return nil, err
 	}
+	stopErr := errors.New("max results reached")
 	var results []string
 	count := 0
 	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -480,7 +639,7 @@ func globSearch(baseDir, root, pattern string, maxResults int, ignore []string) 
 			return nil
 		}
 		if (maxResults > 0 && count >= maxResults) || (toolMaxFiles > 0 && count >= toolMaxFiles) {
-			return filepath.SkipDir
+			return stopErr
 		}
 		if len(ignore) > 0 {
 			if rel, err := filepath.Rel(baseDir, path); err == nil {
@@ -498,10 +657,19 @@ func globSearch(baseDir, root, pattern string, maxResults int, ignore []string) 
 		if re.MatchString(rel) {
 			results = append(results, path)
 			count++
+			if (maxResults > 0 && count >= maxResults) || (toolMaxFiles > 0 && count >= toolMaxFiles) {
+				return stopErr
+			}
 		}
 		return nil
 	})
-	return results, err
+	if err != nil {
+		if errors.Is(err, stopErr) {
+			return results, nil
+		}
+		return results, err
+	}
+	return results, nil
 }
 
 func globToRegex(pattern string) (*regexp.Regexp, error) {
@@ -533,12 +701,13 @@ func globToRegex(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile(re.String())
 }
 
-func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) {
+func grepSearch(baseDir, root, pattern string, maxResults int, ignore []string) (string, error) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		re = regexp.MustCompile(regexp.QuoteMeta(pattern))
 	}
 
+	stopErr := errors.New("max results reached")
 	var lines []string
 	count := 0
 	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -556,8 +725,8 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 			}
 			return nil
 		}
-		if (toolMaxLines > 0 && count >= toolMaxLines) || (toolMaxFiles > 0 && count >= toolMaxFiles) {
-			return filepath.SkipDir
+		if (maxResults > 0 && count >= maxResults) || (toolMaxLines > 0 && count >= toolMaxLines) || (toolMaxFiles > 0 && count >= toolMaxFiles) {
+			return stopErr
 		}
 		if len(ignore) > 0 {
 			if rel, err := filepath.Rel(baseDir, path); err == nil {
@@ -592,8 +761,8 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 			if re.MatchString(text) {
 				lines = append(lines, fmt.Sprintf("%s:%d:%s", path, lineNum, text))
 				count++
-				if toolMaxLines > 0 && count >= toolMaxLines {
-					break
+				if (maxResults > 0 && count >= maxResults) || (toolMaxLines > 0 && count >= toolMaxLines) || (toolMaxFiles > 0 && count >= toolMaxFiles) {
+					return stopErr
 				}
 			}
 			if err == io.EOF {
@@ -603,7 +772,11 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 		return nil
 	})
 	if err != nil {
-		return "", err
+		if errors.Is(err, stopErr) {
+			err = nil
+		} else {
+			return "", err
+		}
 	}
 	if len(lines) == 0 {
 		return "", nil

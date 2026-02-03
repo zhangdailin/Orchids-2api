@@ -100,7 +100,7 @@ func (s *session) tokenValid() bool {
 	if s.jwt == "" || s.expiresAt.IsZero() {
 		return false
 	}
-	return time.Now().Add(10 * time.Minute).Before(s.expiresAt)
+	return time.Now().Add(20 * time.Minute).Before(s.expiresAt)
 }
 
 func (s *session) ensureToken(ctx context.Context, httpClient *http.Client, cid string) error {
@@ -152,12 +152,6 @@ func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Clie
 		return err
 	}
 	defer resp.Body.Close()
-
-	headers := make(map[string]string)
-	for k, v := range resp.Header {
-		headers[k] = strings.Join(v, ", ")
-	}
-	slog.Info("Warp AI: Refresh response", "cid", cid, "status", resp.StatusCode, "headers", headers)
 
 	var reader io.ReadCloser = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
@@ -216,6 +210,9 @@ func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Clie
 	if newRefresh != "" {
 		s.refreshToken = newRefresh
 	}
+	// 刷新令牌后需要重新登录，避免旧 cookie 失效
+	s.loggedIn = false
+	s.lastLogin = time.Time{}
 	s.mu.Unlock()
 
 	return nil
@@ -268,12 +265,6 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client, cid 
 		return err
 	}
 	defer resp.Body.Close()
-
-	headers := make(map[string]string)
-	for k, v := range resp.Header {
-		headers[k] = strings.Join(v, ", ")
-	}
-	slog.Info("Warp AI: Login response", "cid", cid, "status", resp.StatusCode, "headers", headers)
 
 	var reader io.ReadCloser = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {

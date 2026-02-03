@@ -38,15 +38,19 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest) string {
 
 	// FINAL FALLBACK: Check session persistence
 	if dynamicWorkdir == "" {
-		if val, ok := h.sessionWorkdirs.Load(conversationKey); ok {
-			dynamicWorkdir = val.(string)
+		h.sessionWorkdirsMu.RLock()
+		if val, ok := h.sessionWorkdirs[conversationKey]; ok {
+			dynamicWorkdir = val
 			slog.Info("Recovered workdir from session", "workdir", dynamicWorkdir, "session", conversationKey)
 		}
+		h.sessionWorkdirsMu.RUnlock()
 	}
 
 	// Persist for future turns in this session
 	if dynamicWorkdir != "" {
-		h.sessionWorkdirs.Store(conversationKey, dynamicWorkdir)
+		h.sessionWorkdirsMu.Lock()
+		h.sessionWorkdirs[conversationKey] = dynamicWorkdir
+		h.sessionWorkdirsMu.Unlock()
 	}
 
 	if dynamicWorkdir != "" {
@@ -80,7 +84,9 @@ func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string
 		if strings.EqualFold(account.AccountType, "warp") {
 			client = warp.NewFromAccount(account, h.config)
 		} else {
-			client = orchids.NewFromAccount(account, h.config)
+			orchidsClient := orchids.NewFromAccount(account, h.config)
+			orchidsClient.SetFSExecutor(h.orchidsFSExecutor)
+			client = orchidsClient
 		}
 		return client, account, nil
 	} else if h.client != nil {
@@ -110,7 +116,9 @@ func (h *Handler) executePreflightTools(toolCallMode, allowBashName, userText st
 					name:  allowBashName,
 					input: fmt.Sprintf(`{"command":%q,"description":"internal preflight"}`, cmd),
 				}
-				results[i] = executeSafeTool(call)
+				result := executeSafeTool(call)
+				result.output = normalizeToolResultOutput(result.output)
+				results[i] = result
 			}(i, cmd)
 		}
 		wg.Wait()

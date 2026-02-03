@@ -1,7 +1,6 @@
 package orchids
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -47,19 +46,7 @@ type Client struct {
 	fsIndexMu      sync.RWMutex
 	fsIndexRefresh atomic.Bool
 	fsIndexPending atomic.Bool
-}
-
-type UpstreamRequest struct {
-	Prompt        string
-	ChatHistory   []interface{}
-	Model         string
-	Messages      []prompt.Message
-	System        []prompt.SystemItem
-	Tools         []interface{}
-	NoTools       bool
-	NoThinking    bool
-	ChatSessionID string
-	Workdir       string // Dynamic local workdir override
+	fsExecutor     func(op map[string]interface{}, workdir string) (bool, interface{}, string)
 }
 
 type TokenResponse struct {
@@ -84,12 +71,6 @@ type AgentRequest struct {
 	Tools         []interface{}       `json:"tools,omitempty"`
 }
 
-type SSEMessage struct {
-	Type  string                 `json:"type"`
-	Event map[string]interface{} `json:"event,omitempty"`
-	Raw   map[string]interface{} `json:"-"`
-}
-
 type cachedToken struct {
 	token     string
 	expiresAt time.Time
@@ -100,26 +81,6 @@ var tokenCache = struct {
 	items map[string]cachedToken
 }{
 	items: map[string]cachedToken{},
-}
-
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		sb := new(strings.Builder)
-		sb.Grow(4096)
-		return sb
-	},
-}
-
-var bufioReaderPool = sync.Pool{
-	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 32768)
-	},
-}
-
-var byteBufferPool = sync.Pool{
-	New: func() interface{} {
-		return bytes.NewBuffer(make([]byte, 0, 4096))
-	},
 }
 
 func newHTTPClient(cfg *config.Config) *http.Client {
@@ -157,6 +118,10 @@ func New(cfg *config.Config) *Client {
 
 	go c.RefreshFSIndex()
 	return c
+}
+
+func (c *Client) SetFSExecutor(fn func(op map[string]interface{}, workdir string) (bool, interface{}, string)) {
+	c.fsExecutor = fn
 }
 
 func NewFromAccount(acc *store.Account, base *config.Config) *Client {
@@ -271,7 +236,10 @@ func (c *Client) fetchToken() (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		if err != nil {
+			return "", fmt.Errorf("token request failed with status %d (failed to read body: %v)", resp.StatusCode, err)
+		}
 		return "", fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -305,8 +273,8 @@ func (c *Client) applyAccountInfo(info *clerk.AccountInfo) {
 	}
 }
 
-func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(SSEMessage), logger *debug.Logger) error {
-	req := UpstreamRequest{
+func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	req := upstream.UpstreamRequest{
 		Prompt:      prompt,
 		ChatHistory: chatHistory,
 		Model:       model,
@@ -315,7 +283,7 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 	return c.SendRequestWithPayload(ctx, req, onMessage, logger)
 }
 
-func (c *Client) SendRequestWithPayload(ctx context.Context, req UpstreamRequest, onMessage func(SSEMessage), logger *debug.Logger) error {
+func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	mode := strings.ToLower(strings.TrimSpace(c.config.UpstreamMode))
 	if c.config.DebugEnabled {
 		slog.Debug("Sending upstream request", "mode", mode, "url", c.upstreamURL())
@@ -336,7 +304,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req UpstreamRequest
 	return c.sendRequestSSE(ctx, req, onMessage, logger)
 }
 
-func (c *Client) sendRequestSSE(ctx context.Context, req UpstreamRequest, onMessage func(SSEMessage), logger *debug.Logger) error {
+func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	timeout := 120 * time.Second
 	if c.config != nil && c.config.RequestTimeout > 0 {
 		timeout = time.Duration(c.config.RequestTimeout) * time.Second
@@ -368,9 +336,8 @@ func (c *Client) sendRequestSSE(ctx context.Context, req UpstreamRequest, onMess
 		Tools:         req.Tools,
 	}
 
-	buf := byteBufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer byteBufferPool.Put(buf)
+	buf := perf.AcquireByteBuffer()
+	defer perf.ReleaseByteBuffer(buf)
 
 	if err := json.NewEncoder(buf).Encode(payload); err != nil {
 		return err
@@ -420,19 +387,20 @@ func (c *Client) sendRequestSSE(ctx context.Context, req UpstreamRequest, onMess
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+		if err != nil {
+			return fmt.Errorf("upstream request failed with status %d (failed to read error body: %v)", resp.StatusCode, err)
+		}
 		return fmt.Errorf("upstream request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	limitedBody := io.LimitReader(resp.Body, 100*1024*1024)
 
-	reader := bufioReaderPool.Get().(*bufio.Reader)
-	reader.Reset(limitedBody)
-	defer bufioReaderPool.Put(reader)
+	reader := perf.AcquireBufioReader(limitedBody)
+	defer perf.ReleaseBufioReader(reader)
 
-	buffer := bufferPool.Get().(*strings.Builder)
-	buffer.Reset()
-	defer bufferPool.Put(buffer)
+	buffer := perf.AcquireStringBuilder()
+	defer perf.ReleaseStringBuilder(buffer)
 
 	for {
 		select {
@@ -480,7 +448,7 @@ func (c *Client) sendRequestSSE(ctx context.Context, req UpstreamRequest, onMess
 						continue
 					}
 
-					sseMsg := SSEMessage{
+					sseMsg := upstream.SSEMessage{
 						Type: msgType,
 						Raw:  msg,
 					}
@@ -628,9 +596,14 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]UpstreamModel, erro
 		}
 
 		// Read body for error details
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		body, rErr := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 		resp.Body.Close()
-		lastErr = fmt.Errorf("upstream models request failed to %s: %s", p, string(body))
+
+		errMsg := string(body)
+		if rErr != nil {
+			errMsg = fmt.Sprintf("%s (read error: %v)", errMsg, rErr)
+		}
+		lastErr = fmt.Errorf("upstream models request failed to %s: %s", p, errMsg)
 	}
 
 	return nil, lastErr
@@ -738,7 +711,7 @@ func tokenExpiry(token string) time.Time {
 	case float64:
 		exp = int64(v)
 	case json.Number:
-		exp, _ = v.Int64()
+		exp, _ = v.Int64() // Error ignored as we return 0 on failure anyway
 	}
 
 	if exp == 0 {

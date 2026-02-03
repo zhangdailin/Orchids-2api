@@ -3,10 +3,10 @@ package handler
 import (
 	"encoding/json"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"orchids-api/internal/orchids"
+	"orchids-api/internal/perf"
 )
 
 // fixToolInput 修复工具输入中的类型问题
@@ -25,33 +25,21 @@ func fixToolInput(inputJSON string) string {
 		if strVal, ok := value.(string); ok {
 			strVal = strings.TrimSpace(strVal)
 
-			if strVal == "true" {
-				input[key] = true
-				fixed = true
-				continue
-			} else if strVal == "false" {
-				input[key] = false
-				fixed = true
-				continue
-			}
-
-			if num, err := strconv.ParseInt(strVal, 10, 64); err == nil {
-				input[key] = num
-				fixed = true
-				continue
-			}
-
-			if fnum, err := strconv.ParseFloat(strVal, 64); err == nil {
-				input[key] = fnum
-				fixed = true
-				continue
-			}
-
 			if (strings.HasPrefix(strVal, "[") && strings.HasSuffix(strVal, "]")) ||
 				(strings.HasPrefix(strVal, "{") && strings.HasSuffix(strVal, "}")) {
 				var parsed interface{}
 				if err := json.Unmarshal([]byte(strVal), &parsed); err == nil {
 					input[key] = parsed
+					fixed = true
+				}
+				continue
+			}
+
+			var scalar interface{}
+			if err := json.Unmarshal([]byte(strVal), &scalar); err == nil {
+				switch scalar.(type) {
+				case float64, bool, nil:
+					input[key] = scalar
 					fixed = true
 				}
 			}
@@ -74,6 +62,21 @@ type toolNameInfo struct {
 	lowered string
 	short   string
 	props   map[string]struct{}
+}
+
+func toolNameFromDef(tm map[string]interface{}) string {
+	if tm == nil {
+		return ""
+	}
+	if name, ok := tm["name"].(string); ok {
+		return strings.TrimSpace(name)
+	}
+	if fn, ok := tm["function"].(map[string]interface{}); ok {
+		if name, ok := fn["name"].(string); ok {
+			return strings.TrimSpace(name)
+		}
+	}
+	return ""
 }
 
 func normalizeToolName(raw string) (string, string) {
@@ -102,8 +105,7 @@ func buildToolNameIndex(tools []interface{}, allowed map[string]string) []toolNa
 		if !ok {
 			continue
 		}
-		name, _ := tm["name"].(string)
-		name = strings.TrimSpace(name)
+		name := toolNameFromDef(tm)
 		if name == "" {
 			continue
 		}
@@ -204,6 +206,48 @@ func mapOrchidsToolName(raw string, inputStr string, index []toolNameInfo, allow
 	return raw
 }
 
+func normalizeWarpTools(tools []interface{}) []interface{} {
+	if len(tools) == 0 {
+		return tools
+	}
+	out := make([]interface{}, 0, len(tools))
+	for _, raw := range tools {
+		tm, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		copied := make(map[string]interface{}, len(tm))
+		for k, v := range tm {
+			copied[k] = v
+		}
+		if typ, _ := copied["type"].(string); typ == "function" {
+			if fn, ok := copied["function"].(map[string]interface{}); ok {
+				fnCopy := make(map[string]interface{}, len(fn))
+				for k, v := range fn {
+					fnCopy[k] = v
+				}
+				if name, ok := fnCopy["name"].(string); ok {
+					if orchids.DefaultToolMapper.IsBlocked(name) {
+						continue
+					}
+					fnCopy["name"] = orchids.NormalizeToolName(name)
+				}
+				copied["function"] = fnCopy
+				out = append(out, copied)
+				continue
+			}
+		}
+		if name, ok := copied["name"].(string); ok {
+			if orchids.DefaultToolMapper.IsBlocked(name) {
+				continue
+			}
+			copied["name"] = orchids.NormalizeToolName(name)
+		}
+		out = append(out, copied)
+	}
+	return out
+}
+
 func parseToolInputKeys(inputStr string) []string {
 	inputStr = strings.TrimSpace(inputStr)
 	if inputStr == "" {
@@ -234,20 +278,15 @@ func filterSupportedTools(tools []interface{}) []interface{} {
 		return tools
 	}
 	supported := map[string]bool{
-		"read":            true,
-		"write":           true,
-		"edit":            true,
-		"bash":            true,
-		"runcommand":      true,
-		"run_command":     true,
-		"execute_command": true,
-		"execute-command": true,
-		"launch-process":  true,
-		"glob":            true,
-		"grep":            true,
-		"ls":              true,
-		"list":            true,
-		"todowrite":       true,
+		"read":      true,
+		"write":     true,
+		"edit":      true,
+		"bash":      true,
+		"glob":      true,
+		"grep":      true,
+		"ls":        true,
+		"list":      true,
+		"todowrite": true,
 	}
 	var filtered []interface{}
 	for _, tool := range tools {
@@ -255,11 +294,12 @@ func filterSupportedTools(tools []interface{}) []interface{} {
 		if !ok {
 			continue
 		}
-		name, _ := tm["name"].(string)
+		name := toolNameFromDef(tm)
 		if name == "" {
 			continue
 		}
-		if supported[strings.ToLower(strings.TrimSpace(name))] {
+		normalized := strings.ToLower(orchids.NormalizeToolName(name))
+		if supported[normalized] {
 			filtered = append(filtered, tool)
 		}
 	}
@@ -273,7 +313,10 @@ func formatLocalToolResults(results []safeToolResult) string {
 	var b strings.Builder
 	b.WriteString("以下 tool_result 来自用户本地环境，具有权威性；回答必须以此为准，不要使用你自己的环境推断。")
 	for _, result := range results {
-		inputJSON, _ := json.Marshal(result.input)
+		inputJSON, err := json.Marshal(result.input)
+		if err != nil {
+			continue
+		}
 		errorAttr := ""
 		if result.isError {
 			errorAttr = ` is_error="true"`
@@ -302,13 +345,28 @@ func injectLocalContext(promptText string, context string) string {
 	}
 	section := "<local_context>\n" + context + "\n</local_context>\n\n"
 	marker := "<user_request>"
-	if idx := strings.Index(promptText, marker); idx != -1 {
-		return promptText[:idx] + section + promptText[idx:]
+	idx := strings.Index(promptText, marker)
+
+	sb := perf.AcquireStringBuilder()
+	defer perf.ReleaseStringBuilder(sb)
+
+	if idx != -1 {
+		sb.Grow(len(promptText) + len(section))
+		sb.WriteString(promptText[:idx])
+		sb.WriteString(section)
+		sb.WriteString(promptText[idx:])
+		return strings.Clone(sb.String())
 	}
+
 	if strings.TrimSpace(promptText) == "" {
 		return section
 	}
-	return promptText + "\n\n" + strings.TrimRight(section, "\n")
+
+	sb.Grow(len(promptText) + len(section) + 2)
+	sb.WriteString(promptText)
+	sb.WriteString("\n\n")
+	sb.WriteString(strings.TrimRight(section, "\n"))
+	return strings.Clone(sb.String())
 }
 
 func injectToolGate(promptText string, message string) string {
@@ -318,13 +376,28 @@ func injectToolGate(promptText string, message string) string {
 	}
 	section := "<tool_gate>\n" + message + "\n</tool_gate>\n\n"
 	marker := "<user_request>"
-	if idx := strings.Index(promptText, marker); idx != -1 {
-		return promptText[:idx] + section + promptText[idx:]
+	idx := strings.Index(promptText, marker)
+
+	sb := perf.AcquireStringBuilder()
+	defer perf.ReleaseStringBuilder(sb)
+
+	if idx != -1 {
+		sb.Grow(len(promptText) + len(section))
+		sb.WriteString(promptText[:idx])
+		sb.WriteString(section)
+		sb.WriteString(promptText[idx:])
+		return strings.Clone(sb.String())
 	}
+
 	if strings.TrimSpace(promptText) == "" {
 		return section
 	}
-	return promptText + "\n\n" + strings.TrimRight(section, "\n")
+
+	sb.Grow(len(promptText) + len(section) + 2)
+	sb.WriteString(promptText)
+	sb.WriteString("\n\n")
+	sb.WriteString(strings.TrimRight(section, "\n"))
+	return strings.Clone(sb.String())
 }
 
 func extractPreflightPwd(results []safeToolResult) string {

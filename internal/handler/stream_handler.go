@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/perf"
 	"orchids-api/internal/tiktoken"
+	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 )
 
@@ -64,6 +66,13 @@ type streamHandler struct {
 	currentToolInputID string
 	toolCallCount      int
 	autoPendingCalls   []toolCall
+	toolCallDedup      map[string]struct{}
+	toolResultDedup    map[string]struct{}
+	introDedup         map[string]struct{}
+	autoToolCallSeen   bool
+	toolResultCache    map[string]safeToolResult
+	toolCacheEnabled   bool
+	toolCacheHit       bool
 
 	// Internal Tools & Resolution
 	allowedTools          map[string]string
@@ -98,6 +107,7 @@ func newStreamHandler(
 	shouldLocalFallback bool,
 	isStream bool,
 	responseFormat adapter.ResponseFormat,
+	toolCacheEnabled bool,
 ) *streamHandler {
 	var flusher http.Flusher
 	if isStream {
@@ -137,6 +147,11 @@ func newStreamHandler(
 		toolInputBuffers:         make(map[string]*strings.Builder),
 		toolInputHadDelta:        make(map[string]bool),
 		toolCallHandled:          make(map[string]bool),
+		toolCallDedup:            make(map[string]struct{}),
+		toolResultDedup:          make(map[string]struct{}),
+		introDedup:               make(map[string]struct{}),
+		toolResultCache:          make(map[string]safeToolResult),
+		toolCacheEnabled:         toolCacheEnabled,
 		msgID:                    fmt.Sprintf("msg_%d", time.Now().UnixMilli()),
 		startTime:                time.Now(),
 		currentTextIndex:         -1,
@@ -311,6 +326,11 @@ func (h *streamHandler) resetRoundState() {
 	clear(h.toolCallHandled)
 	h.currentToolInputID = ""
 	h.toolCallCount = 0
+	h.autoPendingCalls = nil
+	clear(h.toolCallDedup)
+	clear(h.toolResultDedup)
+	h.autoToolCallSeen = false
+	h.toolCacheHit = false
 	h.outputTokens = 0
 	h.outputBuilder.Reset()
 	h.useUpstreamUsage = false
@@ -475,17 +495,25 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		deltaUsage["output_tokens"] = h.outputTokens
 		deltaMap["delta"] = deltaDelta
 		deltaMap["usage"] = deltaUsage
-		deltaData, _ := json.Marshal(deltaMap)
+		deltaData, err := json.Marshal(deltaMap)
+		if err != nil {
+			slog.Error("Failed to marshal message_delta", "error", err)
+		} else {
+			h.writeFinalSSE("message_delta", string(deltaData))
+		}
 		perf.ReleaseMap(deltaUsage)
 		perf.ReleaseMap(deltaDelta)
 		perf.ReleaseMap(deltaMap)
-		h.writeFinalSSE("message_delta", string(deltaData))
 
 		stopMap := perf.AcquireMap()
 		stopMap["type"] = "message_stop"
-		stopData, _ := json.Marshal(stopMap)
+		stopData, err := json.Marshal(stopMap)
+		if err != nil {
+			slog.Error("Failed to marshal message_stop", "error", err)
+		} else {
+			h.writeFinalSSE("message_stop", string(stopData))
+		}
 		perf.ReleaseMap(stopMap)
-		h.writeFinalSSE("message_stop", string(stopData))
 	} else {
 		h.flushPendingToolCalls(stopReason, h.writeFinalSSE)
 		h.overrideWithLocalContext()
@@ -503,6 +531,9 @@ func (h *streamHandler) resolveToolName(name string) (string, bool) {
 		return "", false
 	}
 	if !h.hasToolList {
+		if h.toolCallMode == "internal" || h.toolCallMode == "auto" {
+			return "", false
+		}
 		return name, true
 	}
 	if resolved, ok := h.allowedTools[strings.ToLower(name)]; ok {
@@ -621,7 +652,10 @@ func (h *streamHandler) closeActiveBlockLocked() {
 	m := perf.AcquireMap()
 	m["type"] = "content_block_stop"
 	m["index"] = idx
-	stopData, _ := json.Marshal(m)
+	stopData, err := json.Marshal(m)
+	if err != nil {
+		slog.Error("Failed to marshal content_block_stop", "error", err)
+	}
 	perf.ReleaseMap(m)
 
 	h.writeSSELocked("content_block_stop", string(stopData))
@@ -629,6 +663,9 @@ func (h *streamHandler) closeActiveBlockLocked() {
 
 func (h *streamHandler) writeSSELocked(event, data string) {
 	if !h.isStream {
+		return
+	}
+	if h.hasReturn {
 		return
 	}
 	if h.responseFormat == adapter.FormatOpenAI {
@@ -640,8 +677,10 @@ func (h *streamHandler) writeSSELocked(event, data string) {
 		h.flusher.Flush()
 	}
 	h.logger.LogOutputSSE(event, data)
-	// Log to slog for server.log visibility
-	slog.Debug("SSE Out", "event", event, "data_len", len(data))
+	// Log to slog only when debug enabled
+	if h.config != nil && h.config.DebugEnabled {
+		slog.Debug("SSE Out", "event", event, "data_len", len(data))
+	}
 }
 
 // Event Handlers
@@ -663,69 +702,224 @@ func (h *streamHandler) processAutoPendingCalls() {
 
 	results := make([]safeToolResult, len(calls))
 	util.ParallelFor(len(calls), func(i int) {
-		results[i] = executeToolCall(calls[i], h.config)
+		call := calls[i]
+		mutating := isMutatingTool(call.name)
+		if h.toolCacheEnabled && !mutating {
+			if key := h.toolCacheKey(call); key != "" {
+				if cached, ok := h.loadToolCache(key); ok {
+					results[i] = cached
+					h.markToolCacheHit()
+					return
+				}
+			}
+		}
+		res := executeToolCall(call, h.config)
+		res.output = normalizeToolResultOutput(res.output)
+		if h.toolCacheEnabled {
+			if mutating {
+				h.clearToolCache()
+			} else if key := h.toolCacheKey(call); key != "" {
+				h.storeToolCache(key, res)
+			}
+		}
+		results[i] = res
 	})
 
 	// Append results in order
 	for _, res := range results {
 		h.internalToolResults = append(h.internalToolResults, res)
 	}
+
+	h.emitAutoToolResults(results)
+}
+
+func (h *streamHandler) emitAutoToolResults(results []safeToolResult) {
+	return
+}
+
+func (h *streamHandler) emitAutoToolResult(result safeToolResult) {
+	return
+}
+
+func (h *streamHandler) emitAutoNotice(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	note := "\n" + text + "\n"
+	h.addOutputTokens(note)
+	if h.isStream {
+		h.emitTextBlock(note)
+		return
+	}
+	h.responseText.WriteString(note)
+}
+
+func normalizeToolResultOutput(output string) string {
+	if output == "" {
+		return ""
+	}
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	output = strings.TrimSpace(output)
+	return output
+}
+
+func isMutatingTool(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	name = strings.ToLower(orchids.NormalizeToolName(name))
+	switch name {
+	case "write", "edit", "bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *streamHandler) toolCacheKey(call toolCall) string {
+	return hashToolCallKey(call.name, normalizeToolDedupInput(call.input))
+}
+
+func (h *streamHandler) loadToolCache(key string) (safeToolResult, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	res, ok := h.toolResultCache[key]
+	return res, ok
+}
+
+func (h *streamHandler) clearToolCache() {
+	h.mu.Lock()
+	if len(h.toolResultCache) > 0 {
+		clear(h.toolResultCache)
+	}
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) storeToolCache(key string, res safeToolResult) {
+	h.mu.Lock()
+	h.toolResultCache[key] = res
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) markToolCacheHit() {
+	h.mu.Lock()
+	h.toolCacheHit = true
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) hadToolCacheHit() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.toolCacheHit
+}
+
+func (h *streamHandler) shouldEmitToolResult(result safeToolResult) bool {
+	if h.toolCallMode != "auto" {
+		return true
+	}
+	key := strings.TrimSpace(result.call.id)
+	if key == "" {
+		key = hashToolCallKey(result.call.name, normalizeToolDedupInput(result.call.input))
+	}
+	if key == "" {
+		return true
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.toolResultDedup[key]; ok {
+		return false
+	}
+	h.toolResultDedup[key] = struct{}{}
+	return true
+}
+
+func normalizeToolDedupInput(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return ""
+	}
+	fixed := strings.TrimSpace(fixToolInput(input))
+	if fixed == "" {
+		return input
+	}
+	return fixed
+}
+
+func hashToolCallKey(name, input string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(name))
+	_, _ = h.Write([]byte{0})
+	if input != "" {
+		_, _ = h.Write([]byte(input))
+	}
+	return fmt.Sprintf("call:%x", h.Sum64())
+}
+
+func (h *streamHandler) emitTextBlock(text string) {
+	if !h.isStream || text == "" {
+		return
+	}
+
+	h.mu.Lock()
+	h.blockIndex++
+	idx := h.blockIndex
+	h.mu.Unlock()
+
+	startMap := perf.AcquireMap()
+	startMap["type"] = "content_block_start"
+	startMap["index"] = idx
+	startContent := perf.AcquireMap()
+	startContent["type"] = "text"
+	startContent["text"] = ""
+	startMap["content_block"] = startContent
+	startData, _ := json.Marshal(startMap)
+	perf.ReleaseMap(startContent)
+	perf.ReleaseMap(startMap)
+	h.writeSSE("content_block_start", string(startData))
+
+	deltaMap := perf.AcquireMap()
+	deltaMap["type"] = "content_block_delta"
+	deltaMap["index"] = idx
+	deltaContent := perf.AcquireMap()
+	deltaContent["type"] = "text_delta"
+	deltaContent["text"] = text
+	deltaMap["delta"] = deltaContent
+	deltaData, _ := json.Marshal(deltaMap)
+	perf.ReleaseMap(deltaContent)
+	perf.ReleaseMap(deltaMap)
+	h.writeSSE("content_block_delta", string(deltaData))
+
+	stopMap := perf.AcquireMap()
+	stopMap["type"] = "content_block_stop"
+	stopMap["index"] = idx
+	stopData, _ := json.Marshal(stopMap)
+	perf.ReleaseMap(stopMap)
+	h.writeSSE("content_block_stop", string(stopData))
 }
 
 func (h *streamHandler) handleToolCall(call toolCall) {
 	if call.id == "" {
 		return
 	}
+	if !h.shouldAcceptToolCall(call) {
+		return
+	}
 	if h.toolCallMode == "internal" {
 		result := executeSafeTool(call)
+		result.output = normalizeToolResultOutput(result.output)
 		h.internalToolResults = append(h.internalToolResults, result)
 		return
 	}
 	if h.toolCallMode == "auto" {
-		if !h.isStream {
-			h.emitToolCallNonStream(call)
-		} else {
-			// Emit text notification instead of tool_use to avoid client side execution
-			notification := fmt.Sprintf("\n[Running tool: %s]\n", call.name)
-
-			h.mu.Lock()
-			h.blockIndex++
-			idx := h.blockIndex
-			h.mu.Unlock()
-
-			startMap := perf.AcquireMap()
-			startMap["type"] = "content_block_start"
-			startMap["index"] = idx
-			startContent := perf.AcquireMap()
-			startContent["type"] = "text"
-			startContent["text"] = ""
-			startMap["content_block"] = startContent
-			startData, _ := json.Marshal(startMap)
-			perf.ReleaseMap(startContent)
-			perf.ReleaseMap(startMap)
-			h.writeSSE("content_block_start", string(startData))
-
-			deltaMap := perf.AcquireMap()
-			deltaMap["type"] = "content_block_delta"
-			deltaMap["index"] = idx
-			deltaContent := perf.AcquireMap()
-			deltaContent["type"] = "text_delta"
-			deltaContent["text"] = notification
-			deltaMap["delta"] = deltaContent
-			deltaData, _ := json.Marshal(deltaMap)
-			perf.ReleaseMap(deltaContent)
-			perf.ReleaseMap(deltaMap)
-			h.writeSSE("content_block_delta", string(deltaData))
-
-			stopMap := perf.AcquireMap()
-			stopMap["type"] = "content_block_stop"
-			stopMap["index"] = idx
-			stopData, _ := json.Marshal(stopMap)
-			perf.ReleaseMap(stopMap)
-			h.writeSSE("content_block_stop", string(stopData))
-		}
-
+		// 自动模式下不再输出“Running tool”提示，避免噪音
 		h.mu.Lock()
+		h.autoToolCallSeen = true
 		h.autoPendingCalls = append(h.autoPendingCalls, call)
 		h.mu.Unlock()
 		return
@@ -739,7 +933,76 @@ func (h *streamHandler) handleToolCall(call toolCall) {
 	h.mu.Unlock()
 }
 
-func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
+func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
+	nameKey := strings.ToLower(strings.TrimSpace(call.name))
+	if nameKey == "" {
+		return false
+	}
+	inputKey := normalizeToolDedupInput(call.input)
+	callKey := hashToolCallKey(nameKey, inputKey)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// 同一轮只去重相同输入的调用，允许同名工具不同参数
+	if callKey != "" {
+		if _, ok := h.toolCallDedup[callKey]; ok {
+			if h.config != nil && h.config.DebugEnabled {
+				slog.Debug("duplicate tool call suppressed", "tool", call.name)
+			}
+			return false
+		}
+		h.toolCallDedup[callKey] = struct{}{}
+	}
+	return true
+}
+
+func (h *streamHandler) shouldSkipIntroDelta(delta string) bool {
+	key := normalizeIntroKey(delta)
+	if key == "" {
+		return false
+	}
+	h.mu.Lock()
+	h.introDedup[key] = struct{}{}
+	h.mu.Unlock()
+	return true
+}
+
+func normalizeIntroKey(delta string) string {
+	text := strings.TrimSpace(delta)
+	if text == "" {
+		return ""
+	}
+	lower := strings.ToLower(text)
+	switch lower {
+	case "hi! how can i help you today?",
+		"hello! how can i help you today?",
+		"hi! how can i help you today!",
+		"hello! how can i help you today!":
+		return "intro:en:greet"
+	}
+	if strings.HasPrefix(text, "你好") || strings.HasPrefix(text, "您好") {
+		return "intro:zh:greet"
+	}
+	if strings.HasPrefix(lower, "我是 warp") || strings.HasPrefix(lower, "我是 warp agent mode") || strings.HasPrefix(lower, "我是 warp 智能代理模式") {
+		return "intro:zh:warp"
+	}
+	if strings.HasPrefix(lower, "我是 claude") || strings.HasPrefix(lower, "我是 claude 4.5") || strings.HasPrefix(lower, "我是 claude 4") {
+		return "intro:zh:claude"
+	}
+	return ""
+}
+
+func (h *streamHandler) shouldSuppressAutoText() bool {
+	if h.toolCallMode != "auto" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.autoToolCallSeen
+}
+
+func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	if h.config.DebugEnabled && msg.Type != "content_block_delta" {
 		slog.Debug("Incoming SSE", "type", msg.Type)
 	}
@@ -823,6 +1086,13 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 		h.ensureBlock("text")
 
 	case "model.text-delta":
+		delta, _ := msg.Event["delta"].(string)
+		if h.shouldSkipIntroDelta(delta) {
+			return
+		}
+		if h.shouldSuppressAutoText() {
+			return
+		}
 		h.mu.Lock()
 		idx := h.activeTextBlockIndex
 		h.mu.Unlock()
@@ -830,7 +1100,6 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 			// If we get delta but no text block is active, try to ensure one
 			idx = h.ensureBlock("text")
 		}
-		delta, _ := msg.Event["delta"].(string)
 		h.addOutputTokens(delta)
 		if !h.isStream {
 			h.responseText.WriteString(delta)
@@ -899,11 +1168,10 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 		op, _ := msg.Event["op"].(map[string]interface{})
 
 		_ = op["id"]
-		opName, _ := op["operation"].(string)
+		_, _ = op["operation"].(string)
 
 		// Map orchids operation back to Claude tool name if possible
 		// mappedName := client.DefaultToolMapper.FromOrchids(opName)
-		_ = orchids.DefaultToolMapper.FromOrchids(opName)
 
 		output := ""
 		if !success {
@@ -946,6 +1214,12 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 		if toolID == "" || toolName == "" {
 			return
 		}
+		mappedName := mapOrchidsToolName(toolName, "", h.allowedIndex, h.allowedTools)
+		finalName, ok := h.resolveToolName(mappedName)
+		if !ok || orchids.DefaultToolMapper.IsBlocked(finalName) {
+			h.toolCallHandled[toolID] = true
+			return
+		}
 		h.currentToolInputID = toolID
 		h.toolInputNames[toolID] = toolName
 		h.toolInputBuffers[toolID] = perf.AcquireStringBuilder()
@@ -953,17 +1227,14 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 		if !h.isStream || (h.toolCallMode != "proxy" && h.toolCallMode != "auto") {
 			return
 		}
-		mappedName := mapOrchidsToolName(toolName, "", h.allowedIndex, h.allowedTools)
-		finalName, ok := h.resolveToolName(mappedName)
-		if !ok {
-			return
-		}
 		h.addOutputTokens(finalName)
 		h.mu.Lock()
 		h.blockIndex++
 		idx := h.blockIndex
 		h.toolBlocks[toolID] = idx
-		h.toolCallCount++
+		if h.toolCallMode == "proxy" {
+			h.toolCallCount++
+		}
 		h.mu.Unlock()
 		startMap := perf.AcquireMap()
 		startMap["type"] = "content_block_start"
@@ -1080,7 +1351,8 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 		}
 		resolvedName := mapOrchidsToolName(name, inputStr, h.allowedIndex, h.allowedTools)
 		finalName, ok := h.resolveToolName(resolvedName)
-		if !ok {
+		if !ok || orchids.DefaultToolMapper.IsBlocked(finalName) {
+			h.toolCallHandled[toolID] = true
 			return
 		}
 		call := toolCall{id: toolID, name: finalName, input: inputStr}
@@ -1108,7 +1380,8 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 		}
 		mappedName := mapOrchidsToolName(toolName, inputStr, h.allowedIndex, h.allowedTools)
 		resolvedName, ok := h.resolveToolName(mappedName)
-		if !ok {
+		if !ok || orchids.DefaultToolMapper.IsBlocked(resolvedName) {
+			h.toolCallHandled[toolID] = true
 			return
 		}
 		call := toolCall{id: toolID, name: resolvedName, input: inputStr}
@@ -1170,6 +1443,10 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 			}
 		}
 
+		h.mu.Lock()
+		hadToolCalls := h.toolCallCount > 0 || len(h.pendingToolCalls) > 0 || len(h.autoPendingCalls) > 0 || len(h.internalToolResults) > 0
+		h.mu.Unlock()
+
 		// Force stopReason to tool_use if we have pending auto calls
 		h.mu.Lock()
 		if len(h.autoPendingCalls) > 0 {
@@ -1179,11 +1456,22 @@ func (h *streamHandler) handleMessage(msg orchids.SSEMessage) {
 
 		h.processAutoPendingCalls()
 
+		h.mu.Lock()
+		hasToolCalls := hadToolCalls || len(h.internalToolResults) > 0
+		h.mu.Unlock()
+
+		// If upstream claims tool_use but we didn't actually handle any tool calls, treat as end_turn.
+		if stopReason == "tool_use" && !hasToolCalls {
+			stopReason = "end_turn"
+		}
+
 		if (h.toolCallMode == "internal" || h.toolCallMode == "auto") && (stopReason == "tool_use" || len(h.internalToolResults) > 0) {
-			h.internalNeedsFollowup = true
-			h.closeActiveBlock()
-			// Return without calling finishResponse to keep the stream open for the next turn
-			return
+			if hasToolCalls {
+				h.internalNeedsFollowup = true
+				h.closeActiveBlock()
+				// Return without calling finishResponse to keep the stream open for the next turn
+				return
+			}
 		}
 
 		h.closeActiveBlock()

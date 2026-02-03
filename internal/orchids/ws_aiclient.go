@@ -16,6 +16,7 @@ import (
 
 	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/upstream"
 )
 
 var orchidsAIClientModels = []string{
@@ -62,7 +63,7 @@ type requestState struct {
 	hasFSOps          bool
 }
 
-func (c *Client) sendRequestWSAIClient(ctx context.Context, req UpstreamRequest, onMessage func(SSEMessage), logger *debug.Logger) error {
+func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	parentCtx := ctx
 	timeout := orchidsWSRequestTimeout
 	if c.config != nil && c.config.RequestTimeout > 0 {
@@ -206,8 +207,28 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req UpstreamRequest,
 		}
 	}()
 
+	ctxDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			if conn != nil {
+				_ = conn.Close()
+			}
+		case <-ctxDone:
+		}
+	}()
+	defer close(ctxDone)
+
 	for {
+		if ctx.Err() != nil {
+			returnToPool = false
+			return ctx.Err()
+		}
 		if err := conn.SetReadDeadline(time.Now().Add(orchidsWSReadTimeout)); err != nil {
+			if ctx.Err() != nil {
+				returnToPool = false
+				return ctx.Err()
+			}
 			if parentCtx.Err() == nil {
 				returnToPool = false
 				return wsFallbackError{err: err}
@@ -218,6 +239,10 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req UpstreamRequest,
 
 		_, data, err := conn.ReadMessage()
 		if err != nil {
+			if ctx.Err() != nil {
+				returnToPool = false
+				return ctx.Err()
+			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				returnToPool = false
 				break
@@ -251,7 +276,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req UpstreamRequest,
 		if state.sawToolCall {
 			finishReason = "tool-calls"
 		}
-		onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "finish", "finishReason": finishReason}})
+		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "finish", "finishReason": finishReason}})
 	}
 
 	if state.hasFSOps {
@@ -274,7 +299,7 @@ func (c *Client) handleOrchidsMessage(
 	msg map[string]interface{},
 	rawData []byte,
 	state *requestState,
-	onMessage func(SSEMessage),
+	onMessage func(upstream.SSEMessage),
 	logger *debug.Logger,
 	conn *websocket.Conn,
 	fsWG *sync.WaitGroup,
@@ -313,15 +338,15 @@ func (c *Client) handleOrchidsMessage(
 		}
 		if !state.reasoningStarted {
 			state.reasoningStarted = true
-			onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-start", "id": "0"}})
+			onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-start", "id": "0"}})
 		}
-		onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-delta", "id": "0", "delta": text}})
+		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-delta", "id": "0", "delta": text}})
 		return false
 
 	case EventReasoningCompleted:
 		state.preferCodingAgent = true
 		if state.reasoningStarted {
-			onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-end", "id": "0"}})
+			onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "reasoning-end", "id": "0"}})
 			state.reasoningStarted = false // Reset for safety, though likely end of turn
 		}
 		return false
@@ -338,9 +363,9 @@ func (c *Client) handleOrchidsMessage(
 		state.lastTextDelta = text
 		if !state.textStarted {
 			state.textStarted = true
-			onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-start", "id": "0"}})
+			onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-start", "id": "0"}})
 		}
-		onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-delta", "id": "0", "delta": text}})
+		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-delta", "id": "0", "delta": text}})
 		return false
 
 	case EventModel:
@@ -354,7 +379,7 @@ func (c *Client) handleOrchidsMessage(
 	return false
 }
 
-func (c *Client) handleTokensEvent(msg map[string]interface{}, onMessage func(SSEMessage)) {
+func (c *Client) handleTokensEvent(msg map[string]interface{}, onMessage func(upstream.SSEMessage)) {
 	data, _ := msg["data"].(map[string]interface{})
 	if data == nil {
 		return
@@ -370,14 +395,14 @@ func (c *Client) handleTokensEvent(msg map[string]interface{}, onMessage func(SS
 	} else if v, ok := data["outputTokens"]; ok {
 		event["outputTokens"] = v
 	}
-	onMessage(SSEMessage{Type: "model", Event: event})
+	onMessage(upstream.SSEMessage{Type: "model", Event: event})
 }
 
 func (c *Client) handleCompletionEvent(
 	msgType string,
 	msg map[string]interface{},
 	state *requestState,
-	onMessage func(SSEMessage),
+	onMessage func(upstream.SSEMessage),
 ) bool {
 	if msgType == EventResponseDone {
 		// Handle usage
@@ -390,14 +415,14 @@ func (c *Client) handleCompletionEvent(
 				if v, ok := u["outputTokens"]; ok {
 					event["outputTokens"] = v
 				}
-				onMessage(SSEMessage{Type: "model", Event: event})
+				onMessage(upstream.SSEMessage{Type: "model", Event: event})
 			}
 		}
 		// Handle tool calls
 		toolCalls := extractToolCallsFromResponse(msg)
 		if len(toolCalls) > 0 {
 			for _, call := range toolCalls {
-				onMessage(SSEMessage{
+				onMessage(upstream.SSEMessage{
 					Type: "model.tool-call",
 					Event: map[string]interface{}{
 						"toolCallId": call.id,
@@ -408,7 +433,7 @@ func (c *Client) handleCompletionEvent(
 				state.sawToolCall = true
 			}
 			if !state.finishSent {
-				onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"finishReason": "tool-calls", "type": "finish"}})
+				onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"finishReason": "tool-calls", "type": "finish"}})
 				state.finishSent = true
 			}
 			return true // Break loop
@@ -416,14 +441,14 @@ func (c *Client) handleCompletionEvent(
 	}
 
 	if state.textStarted {
-		onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-end", "id": "0"}})
+		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-end", "id": "0"}})
 	}
 	if !state.finishSent {
 		finishReason := "stop"
 		if state.sawToolCall {
 			finishReason = "tool-calls"
 		}
-		onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "finish", "finishReason": finishReason}})
+		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "finish", "finishReason": finishReason}})
 		state.finishSent = true
 	}
 	return true // Break loop
@@ -431,18 +456,18 @@ func (c *Client) handleCompletionEvent(
 
 func (c *Client) dispatchFSOperation(
 	msg map[string]interface{},
-	onMessage func(SSEMessage),
+	onMessage func(upstream.SSEMessage),
 	conn *websocket.Conn,
 	wg *sync.WaitGroup,
 	workdir string,
 ) {
-	onMessage(SSEMessage{Type: "fs_operation", Event: msg})
+	onMessage(upstream.SSEMessage{Type: "fs_operation", Event: msg})
 	wg.Add(1)
 	go func(m map[string]interface{}) {
 		defer wg.Done()
 		if err := c.handleFSOperation(conn, m, func(success bool, data interface{}, errMsg string) {
 			if onMessage != nil {
-				onMessage(SSEMessage{
+				onMessage(upstream.SSEMessage{
 					Type: "fs_operation_result",
 					Event: map[string]interface{}{
 						"success": success,
@@ -461,7 +486,7 @@ func (c *Client) dispatchFSOperation(
 func (c *Client) handleModelEvent(
 	msg map[string]interface{},
 	state *requestState,
-	onMessage func(SSEMessage),
+	onMessage func(upstream.SSEMessage),
 ) bool {
 	event, ok := msg["event"].(map[string]interface{})
 	if !ok {
@@ -481,12 +506,12 @@ func (c *Client) handleModelEvent(
 	if eventType == "tool-call" {
 		state.sawToolCall = true
 	}
-	onMessage(SSEMessage{Type: "model", Event: event, Raw: msg})
+	onMessage(upstream.SSEMessage{Type: "model", Event: event, Raw: msg})
 	if eventType == "finish" {
 		state.finishSent = true
 		if reason, ok := event["finishReason"].(string); ok {
 			if state.textStarted {
-				onMessage(SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-end", "id": "0"}})
+				onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-end", "id": "0"}})
 			}
 			if reason == "tool-calls" {
 				return true
@@ -512,7 +537,7 @@ func (c *Client) buildWSURLAIClient(token string) string {
 	return fmt.Sprintf("%s%stoken=%s", wsURL, sep, urlEncode(token))
 }
 
-func (c *Client) buildWSRequestAIClient(req UpstreamRequest) (*orchidsWSRequest, error) {
+func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsWSRequest, error) {
 	if c.config == nil {
 		return nil, errors.New("server config unavailable")
 	}

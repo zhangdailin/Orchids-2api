@@ -16,7 +16,6 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
-	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 )
@@ -88,8 +87,8 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 	}
 }
 
-func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(orchids.SSEMessage), logger *debug.Logger) error {
-	req := orchids.UpstreamRequest{
+func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	req := upstream.UpstreamRequest{
 		Prompt:      prompt,
 		ChatHistory: chatHistory,
 		Model:       model,
@@ -97,7 +96,7 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 	return c.SendRequestWithPayload(ctx, req, onMessage, logger)
 }
 
-func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.UpstreamRequest, onMessage func(orchids.SSEMessage), logger *debug.Logger) error {
+func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	if c.session == nil {
 		return fmt.Errorf("warp session not initialized")
 	}
@@ -130,15 +129,21 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 		return err
 	}
 
+	rawToolCount := len(req.Tools)
 	disableWarpTools := false
+	var cfgDisable interface{}
 	if c.config != nil && c.config.WarpDisableTools != nil {
 		disableWarpTools = *c.config.WarpDisableTools
+		cfgDisable = *c.config.WarpDisableTools
 	}
 	if req.NoTools {
 		disableWarpTools = true
 	}
-	if len(req.Tools) == 0 {
+	if rawToolCount == 0 {
 		disableWarpTools = true
+	}
+	if c.config != nil && c.config.DebugEnabled {
+		slog.Debug("Warp 工具开关诊断", "cid", cid, "cfg_warp_disable_tools", cfgDisable, "req_no_tools", req.NoTools, "req_tool_count", rawToolCount, "disable_warp_tools", disableWarpTools)
 	}
 
 	tools := req.Tools
@@ -211,7 +216,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 		return err
 	}
 	if c.config != nil && c.config.DebugEnabled {
-		slog.Info("Warp AI: Response Headers Received", "duration", time.Since(start))
+		slog.Debug("Warp AI: Response Headers Received", "duration", time.Since(start))
 	}
 	resp, ok := result.(*http.Response)
 	if !ok || resp == nil {
@@ -220,7 +225,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 		headerLog := make(map[string]string)
 		for k, v := range resp.Header {
 			headerLog[k] = strings.Join(v, ", ")
@@ -242,11 +247,27 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 	bufReader := bufio.NewReader(reader)
 	var dataLines []string
 	toolCallSeen := false
+	finishSent := false
+	ctxDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = resp.Body.Close()
+		case <-ctxDone:
+		}
+	}()
+	defer close(ctxDone)
 	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		line, err := bufReader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
 				break
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
 			return err
 		}
@@ -275,19 +296,20 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 				continue
 			}
 			if parsed.ConversationID != "" {
-				onMessage(orchids.SSEMessage{Type: "model.conversation_id", Event: map[string]interface{}{"id": parsed.ConversationID}})
+				onMessage(upstream.SSEMessage{Type: "model.conversation_id", Event: map[string]interface{}{"id": parsed.ConversationID}})
 			}
 			for _, delta := range parsed.TextDeltas {
-				onMessage(orchids.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": delta}})
+				onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": delta}})
 			}
 			for _, delta := range parsed.ReasoningDeltas {
-				onMessage(orchids.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{"delta": delta}})
+				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{"delta": delta}})
 			}
 			for _, call := range parsed.ToolCalls {
 				toolCallSeen = true
-				onMessage(orchids.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": call.ID, "toolName": call.Name, "input": call.Input}})
+				onMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": call.ID, "toolName": call.Name, "input": call.Input}})
 			}
 			if parsed.Finish != nil {
+				finishSent = true
 				finish := map[string]interface{}{
 					"finishReason": "end_turn",
 				}
@@ -300,7 +322,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 						"outputTokens": parsed.Finish.OutputTokens,
 					}
 				}
-				onMessage(orchids.SSEMessage{Type: "model.finish", Event: finish})
+				onMessage(upstream.SSEMessage{Type: "model.finish", Event: finish})
 			}
 			continue
 		}
@@ -315,10 +337,12 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req orchids.Upstrea
 	}
 
 	// Send finish if stream ended without explicit finish event
-	if !toolCallSeen {
-		onMessage(orchids.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn"}})
-	} else {
-		onMessage(orchids.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
+	if !finishSent {
+		if !toolCallSeen {
+			onMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn"}})
+		} else {
+			onMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
+		}
 	}
 
 	return nil
@@ -375,7 +399,7 @@ func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
 	if c.account != nil && c.account.SessionID != "" {
 		cid = c.account.SessionID
 	} else if c.account != nil {
-		cid = fmt.Sprintf("orchids-%d", c.account.ID)
+		cid = fmt.Sprintf("warp-%d", c.account.ID)
 	}
 	if err := c.session.refreshTokenRequest(ctx, c.httpClient, cid); err != nil {
 		return "", err

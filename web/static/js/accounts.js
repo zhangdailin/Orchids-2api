@@ -268,6 +268,7 @@ function renderAccounts() {
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   const table = document.createElement("table");
+  table.className = "accounts-table";
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
   const headers = [
@@ -275,7 +276,7 @@ function renderAccounts() {
     { label: "ID", style: "width: 60px;" },
     { label: "Token" },
     { label: "模型" },
-    { label: "用量", style: "width: 180px;" },
+    { label: "今日用量", style: "width: 140px;" },
     { label: "状态" },
     { label: "调用" },
     { label: "最后调用" },
@@ -284,6 +285,7 @@ function renderAccounts() {
   headers.forEach((h, idx) => {
     const th = document.createElement("th");
     if (h.style) th.style.cssText = h.style;
+    if (h.label === "Token") th.classList.add("col-token");
     if (idx === 0) {
       const selectAll = document.createElement("input");
       selectAll.type = "checkbox";
@@ -319,6 +321,7 @@ function renderAccounts() {
     tr.appendChild(tdID);
 
     const tdToken = document.createElement("td");
+    tdToken.className = "col-token";
     const tokenSpan = document.createElement("span");
     tokenSpan.className = "token-text";
     tokenSpan.title = tokenDisplay;
@@ -336,26 +339,10 @@ function renderAccounts() {
     tr.appendChild(tdModel);
 
     const tdUsage = document.createElement("td");
-    const usageWrap = document.createElement("div");
-    usageWrap.style.display = "flex";
-    usageWrap.style.alignItems = "center";
-    usageWrap.style.gap = "8px";
-    const progressContainer = document.createElement("div");
-    progressContainer.className = "usage-progress-container";
-    const progress = document.createElement("div");
-    const usageTotal = acc.usage_total || 550;
-    const usageCurrent = acc.usage_current || 0;
-    const ratio = usageTotal > 0 ? usageCurrent / usageTotal : 0;
-    progress.className = `usage-progress-bar ${ratio > 0.8 ? "red" : ratio > 0.5 ? "orange" : "green"}`;
-    progress.style.width = `${Math.min(100, ratio * 100)}%`;
-    progressContainer.appendChild(progress);
-    const usageText = document.createElement("span");
-    usageText.style.fontSize = "0.8rem";
-    usageText.style.color = "#64748b";
-    usageText.textContent = `${usageCurrent.toFixed(2)}/${usageTotal}`;
-    usageWrap.appendChild(progressContainer);
-    usageWrap.appendChild(usageText);
-    tdUsage.appendChild(usageWrap);
+    const usageCurrent = acc.usage_daily || 0;
+    tdUsage.style.fontSize = "0.9rem";
+    tdUsage.style.color = "#94a3b8";
+    tdUsage.textContent = usageCurrent.toFixed(2);
     tr.appendChild(tdUsage);
 
     const tdStatus = document.createElement("td");
@@ -540,8 +527,7 @@ function updateStats() {
   // Attempt to update selected if element exists (it should)
   updateSelectedCount();
 
-  const totalUsage = accounts.reduce((sum, acc) => sum + (acc.usage_current || 0), 0);
-  const totalLimit = accounts.reduce((sum, acc) => sum + (acc.usage_total || 550), 0);
+  const totalUsage = accounts.reduce((sum, acc) => sum + (acc.usage_daily || 0), 0);
 
   // Update sidebar footer
   const footerTotal = document.getElementById("footerTotal");
@@ -554,16 +540,8 @@ function updateStats() {
   if (footerAbnormal) footerAbnormal.textContent = abnormal;
 
   const footerUsage = document.getElementById("footerUsageText");
-  const footerProgress = document.getElementById("usageProgress");
-  if (footerUsage && footerProgress) {
-    footerUsage.textContent = `${Math.floor(totalUsage)}/${totalLimit}`;
-    const pct = totalLimit > 0 ? (totalUsage / totalLimit) * 100 : 0;
-    footerProgress.style.width = `${Math.min(100, Math.max(1, pct))}%`; // Min 1% visibility
-
-    // Color logic
-    if (pct > 90) footerProgress.style.background = "#fb7185";
-    else if (pct > 70) footerProgress.style.background = "#f59e0b";
-    else footerProgress.style.background = "#3b82f6";
+  if (footerUsage) {
+    footerUsage.textContent = `${Math.floor(totalUsage)}`;
   }
 }
 

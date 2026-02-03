@@ -442,6 +442,25 @@ table {
   min-width: 1000px;
 }
 
+/* 账号管理表格自适应 */
+.accounts-table {
+  table-layout: fixed;
+  min-width: 0;
+}
+
+.accounts-table th,
+.accounts-table td {
+  word-break: break-word;
+}
+
+.accounts-table .col-token .token-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 th {
   background: rgba(15, 23, 42, 0.8);
   color: var(--text-secondary);

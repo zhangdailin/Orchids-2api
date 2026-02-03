@@ -56,6 +56,16 @@ func NewToolMapper() *ToolMapper {
 	tm.addMapping("create_file", "Write")
 	tm.addMapping("save-file", "Write")
 
+	// Warp 内置工具名 → 标准工具名
+	tm.addMapping("run_shell_command", "Bash")
+	tm.addMapping("write_to_long_running_shell_command", "Bash")
+	tm.addMapping("search_codebase", "Grep")
+	tm.addMapping("grep", "Grep")
+	tm.addMapping("file_glob", "Glob")
+	tm.addMapping("file_glob_v2", "Glob")
+	tm.addMapping("read_files", "Read")
+	tm.addMapping("apply_file_diffs", "Edit")
+
 	// 计划与任务工具
 	tm.addMapping("update_todo_list", "TodoWrite")
 	tm.addMapping("todo", "TodoWrite")
@@ -134,6 +144,11 @@ var blockedTools = map[string]bool{
 	"web_search": true,
 	"WebSearch":  true,
 	"SQL":        true,
+	"server":     true,
+	"suggest_plan": true,
+	"suggest_create_plan": true,
+	"suggest_new_conversation": true,
+	"read_mcp_resource": true,
 	// 添加其他需要屏蔽的云端工具
 }
 
@@ -147,4 +162,3 @@ func (tm *ToolMapper) IsBlocked(name string) bool {
 func NormalizeToolName(name string) string {
 	return DefaultToolMapper.ToOrchids(name)
 }
-

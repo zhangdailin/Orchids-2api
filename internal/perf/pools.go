@@ -2,6 +2,9 @@
 package perf
 
 import (
+	"bufio"
+	"bytes"
+	"io"
 	"strings"
 	"sync"
 )
@@ -48,7 +51,50 @@ func ReleaseMap(m map[string]interface{}) {
 	if len(m) > 256 {
 		return
 	}
-	// Clear map before returning (Go 1.21+ optimized)
 	clear(m)
 	MapPool.Put(m)
+}
+
+// ByteBufferPool provides reusable bytes.Buffer instances.
+var ByteBufferPool = sync.Pool{
+	New: func() interface{} {
+		return bytes.NewBuffer(make([]byte, 0, 4096))
+	},
+}
+
+// AcquireByteBuffer gets a bytes.Buffer from the pool.
+func AcquireByteBuffer() *bytes.Buffer {
+	return ByteBufferPool.Get().(*bytes.Buffer)
+}
+
+// ReleaseByteBuffer resets and returns a bytes.Buffer to the pool.
+func ReleaseByteBuffer(b *bytes.Buffer) {
+	if b == nil {
+		return
+	}
+	b.Reset()
+	ByteBufferPool.Put(b)
+}
+
+// BufioReaderPool provides reusable bufio.Reader instances.
+var BufioReaderPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewReaderSize(nil, 32768)
+	},
+}
+
+// AcquireBufioReader gets a bufio.Reader from the pool.
+func AcquireBufioReader(r io.Reader) *bufio.Reader {
+	br := BufioReaderPool.Get().(*bufio.Reader)
+	br.Reset(r)
+	return br
+}
+
+// ReleaseBufioReader returns a bufio.Reader to the pool.
+func ReleaseBufioReader(br *bufio.Reader) {
+	if br == nil {
+		return
+	}
+	br.Reset(nil)
+	BufioReaderPool.Put(br)
 }

@@ -28,10 +28,6 @@ func sanitizeSystemItems(system SystemItems, isWarp bool, cfg *config.Config) (S
 		mode = ccEntrypointModeAuto
 	}
 
-	if mode == ccEntrypointModeAuto && isWarp {
-		return system, false
-	}
-
 	stripAll := mode == ccEntrypointModeStrip
 	changed := false
 	out := make(SystemItems, 0, len(system))
@@ -54,10 +50,55 @@ func sanitizeSystemItems(system SystemItems, isWarp bool, cfg *config.Config) (S
 		out = append(out, item)
 	}
 
+	if isWarp {
+		filtered, dropped := filterWarpSystemItems(out)
+		if dropped {
+			out = filtered
+			changed = true
+		}
+	}
+
 	if !changed {
 		return system, false
 	}
 	return out, true
+}
+
+func filterWarpSystemItems(system SystemItems) (SystemItems, bool) {
+	if len(system) == 0 {
+		return system, false
+	}
+	dropped := false
+	out := make(SystemItems, 0, len(system))
+	for _, item := range system {
+		if item.Type != "text" || strings.TrimSpace(item.Text) == "" {
+			out = append(out, item)
+			continue
+		}
+		if isClaudeCodeSystem(item.Text) {
+			dropped = true
+			continue
+		}
+		out = append(out, item)
+	}
+	return out, dropped
+}
+
+func isClaudeCodeSystem(text string) bool {
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "claude code") ||
+		strings.Contains(lower, "claude agent sdk") ||
+		strings.Contains(lower, "you are an interactive cli tool") ||
+		strings.Contains(lower, "todowrite tool") ||
+		strings.Contains(lower, "task tool") ||
+		strings.Contains(lower, "skill tool") ||
+		strings.Contains(lower, "vscode") ||
+		strings.Contains(lower, "claude-sonnet") ||
+		strings.Contains(lower, "claude-opus") ||
+		strings.Contains(lower, "system-reminder") {
+		return true
+	}
+	return false
 }
 
 func stripCCEntrypoint(text string, stripAll bool) (string, bool) {

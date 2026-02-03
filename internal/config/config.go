@@ -57,6 +57,7 @@ type Config struct {
 	OrchidsCCEntrypointMode string   `json:"orchids_cc_entrypoint_mode"`
 	OrchidsFSIgnore         []string `json:"orchids_fs_ignore"`
 	WarpDisableTools        *bool    `json:"warp_disable_tools"`
+	WarpToolCallMode        string   `json:"warp_tool_call_mode"`
 	WarpMaxToolResults      int      `json:"warp_max_tool_results"`
 	WarpMaxHistoryMessages  int      `json:"warp_max_history_messages"`
 	WarpSplitToolResults    bool     `json:"warp_split_tool_results"`
@@ -232,6 +233,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.WarpDisableTools == nil {
 		v := false
 		cfg.WarpDisableTools = &v
+	}
+	if cfg.WarpToolCallMode == "" {
+		cfg.WarpToolCallMode = "proxy"
 	}
 	if cfg.WarpMaxToolResults == 0 {
 		cfg.WarpMaxToolResults = 10

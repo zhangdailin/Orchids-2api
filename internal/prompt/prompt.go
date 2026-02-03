@@ -619,9 +619,28 @@ func BuildPromptV2WithOptions(req ClaudeAPIRequest, opts PromptOptions) string {
 		historyMessages = historyMessages[:len(historyMessages)-1]
 	}
 
-	// Intelligent Context Compression
-	historyMessages = CompressToolResults(historyMessages, 6, 2000)
+	// 上下文压缩（类似 Orchids）
 	historyMessages = CollapseRepeatedErrors(historyMessages)
+
+	reservedForSummary := opts.SummaryMaxTokens
+	if reservedForSummary <= 0 {
+		reservedForSummary = 800
+	}
+
+	pinnedSummary := ""
+	if opts.KeepTurns > 0 && len(historyMessages) > opts.KeepTurns {
+		cut := len(historyMessages) - opts.KeepTurns
+		older := historyMessages[:cut]
+		recent := historyMessages[cut:]
+		if len(older) > 0 {
+			ctx := opts.Context
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			pinnedSummary = summarizeMessagesWithCache(ctx, opts, older, reservedForSummary)
+		}
+		historyMessages = recent
+	}
 
 	// 5. 当前用户请求
 	var currentRequest string
@@ -665,7 +684,8 @@ func BuildPromptV2WithOptions(req ClaudeAPIRequest, opts PromptOptions) string {
 
 	if opts.MaxTokens <= 0 {
 		fullHistory := FormatMessagesAsMarkdown(historyMessages, opts.ProjectRoot)
-		return buildSections("", fullHistory)
+		summary := trimSummaryToBudget(pinnedSummary, reservedForSummary)
+		return buildSections(summary, fullHistory)
 	}
 
 	// Optimization: Token-First History Selection
@@ -675,14 +695,16 @@ func BuildPromptV2WithOptions(req ClaudeAPIRequest, opts PromptOptions) string {
 	baseTokens := tiktoken.EstimateTextTokens(baseText)
 
 	if len(historyMessages) == 0 {
-		return baseText
+		summary := trimSummaryToBudget(pinnedSummary, reservedForSummary)
+		return buildSections(summary, "")
 	}
 
 	var tokenCounts []int
 	const estimateThreshold = 16
 	if len(historyMessages) < estimateThreshold {
 		fullHistory := FormatMessagesAsMarkdown(historyMessages, opts.ProjectRoot)
-		promptText := buildSections("", fullHistory)
+		summary := trimSummaryToBudget(pinnedSummary, reservedForSummary)
+		promptText := buildSections(summary, fullHistory)
 		if tiktoken.EstimateTextTokens(promptText) <= opts.MaxTokens {
 			return promptText
 		}
@@ -696,17 +718,12 @@ func BuildPromptV2WithOptions(req ClaudeAPIRequest, opts PromptOptions) string {
 		estimatedTotal := baseTokens + estimatedHistoryTokens + wrapperOverhead
 		if estimatedTotal <= opts.MaxTokens {
 			fullHistory := FormatMessagesAsMarkdown(historyMessages, opts.ProjectRoot)
-			promptText := buildSections("", fullHistory)
+			summary := trimSummaryToBudget(pinnedSummary, reservedForSummary)
+			promptText := buildSections(summary, fullHistory)
 			if tiktoken.EstimateTextTokens(promptText) <= opts.MaxTokens {
 				return promptText
 			}
 		}
-	}
-
-	// Reserve some tokens for summary if possible (e.g. 500 tokens)
-	reservedForSummary := opts.SummaryMaxTokens
-	if reservedForSummary <= 0 {
-		reservedForSummary = 800
 	}
 
 	historyBudget := opts.MaxTokens - baseTokens - reservedForSummary
@@ -730,6 +747,14 @@ func BuildPromptV2WithOptions(req ClaudeAPIRequest, opts PromptOptions) string {
 	if len(older) > 0 {
 		// Use Recursive Summarization (Divide & Conquer)
 		summary = summarizeMessagesRecursive(older, reservedForSummary)
+	}
+	if pinnedSummary != "" && summary != "" {
+		summary = pinnedSummary + "\n" + summary
+	} else if summary == "" {
+		summary = pinnedSummary
+	}
+	if summary != "" {
+		summary = trimSummaryToBudget(summary, reservedForSummary)
 	}
 
 	historyText := FormatMessagesAsMarkdown(recent, opts.ProjectRoot)

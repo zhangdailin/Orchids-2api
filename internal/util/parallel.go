@@ -3,6 +3,7 @@ package util
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 	"time"
@@ -42,7 +43,14 @@ func ParallelFor(n int, fn func(int)) {
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
-				fn(idx)
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							// Prevent crash from panic in worker
+						}
+					}()
+					fn(idx)
+				}()
 			}
 		}()
 	}
@@ -94,17 +102,28 @@ func ParallelForWithContext(ctx context.Context, n int, fn func(context.Context,
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
-				if err := fn(ctx, idx); err != nil {
-					select {
-					case errCh <- err:
-						cancel()
-					default:
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							select {
+							case errCh <- fmt.Errorf("worker panic: %v", r):
+								cancel()
+							default:
+							}
+						}
+					}()
+					if ctx.Err() != nil {
+						return
 					}
-					return
-				}
+					if err := fn(ctx, idx); err != nil {
+						select {
+						case errCh <- err:
+							cancel()
+						default:
+						}
+						return
+					}
+				}()
 			}
 		}()
 	}

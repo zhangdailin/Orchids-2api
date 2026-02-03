@@ -28,8 +28,10 @@ type Account struct {
 	Token         string    `json:"token"`        // Truncated display token
 	Subscription  string    `json:"subscription"` // "free", "pro", etc.
 	UsageCurrent  float64   `json:"usage_current"`
-	UsageTotal    float64   `json:"usage_total"`
-	ResetDate     string    `json:"reset_date"`
+	UsageTotal    float64   `json:"usage_total"` // Used as lifetime usage
+	UsageDaily    float64   `json:"usage_daily"` // Usage for current day
+	UsageLimit    float64   `json:"usage_limit"` // Daily limit
+	ResetDate     string    `json:"reset_date"`  // YYYY-MM-DD for daily reset
 	StatusCode    string    `json:"status_code"`
 	LastAttempt   time.Time `json:"last_attempt"`
 	QuotaResetAt  time.Time `json:"quota_reset_at"`

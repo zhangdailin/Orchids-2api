@@ -21,6 +21,7 @@ import (
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/summarycache"
 	"orchids-api/internal/tokencache"
+	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
 )
@@ -34,15 +35,16 @@ type Handler struct {
 	summaryLog   bool
 	tokenCache   tokencache.Cache
 
-	sessionWorkdirs sync.Map // Map conversationKey -> string (workdir)
+	sessionWorkdirsMu sync.RWMutex
+	sessionWorkdirs   map[string]string // Map conversationKey -> string (workdir)
 }
 
 type UpstreamClient interface {
-	SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(orchids.SSEMessage), logger *debug.Logger) error
+	SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error
 }
 
 type UpstreamPayloadClient interface {
-	SendRequestWithPayload(ctx context.Context, req orchids.UpstreamRequest, onMessage func(orchids.SSEMessage), logger *debug.Logger) error
+	SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error
 }
 
 type ClaudeRequest struct {
@@ -63,15 +65,80 @@ type toolCall struct {
 
 const keepAliveInterval = 15 * time.Second
 const maxRequestBytes = 32 * 1024 * 1024
-const maxToolFollowups = 1
+const maxToolFollowups = 3
+
+type upstreamErrorClass struct {
+	category      string
+	retryable     bool
+	switchAccount bool
+}
+
+func classifyUpstreamError(errStr string) upstreamErrorClass {
+	lower := strings.ToLower(errStr)
+	switch {
+	case strings.Contains(lower, "context canceled") || strings.Contains(lower, "canceled"):
+		return upstreamErrorClass{category: "canceled", retryable: false, switchAccount: false}
+	case strings.Contains(lower, "401") || strings.Contains(lower, "403") || strings.Contains(lower, "404") ||
+		strings.Contains(lower, "signed out") || strings.Contains(lower, "signed_out"):
+		return upstreamErrorClass{category: "auth", retryable: false, switchAccount: false}
+	case strings.Contains(lower, "input is too long") || strings.Contains(lower, "400"):
+		return upstreamErrorClass{category: "client", retryable: false, switchAccount: false}
+	case strings.Contains(lower, "429") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "rate limit"):
+		return upstreamErrorClass{category: "rate_limit", retryable: true, switchAccount: true}
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") || strings.Contains(lower, "context deadline"):
+		return upstreamErrorClass{category: "timeout", retryable: true, switchAccount: true}
+	case strings.Contains(lower, "connection reset") || strings.Contains(lower, "connection refused") || strings.Contains(lower, "eof") ||
+		strings.Contains(lower, "network") || strings.Contains(lower, "broken pipe"):
+		return upstreamErrorClass{category: "network", retryable: true, switchAccount: true}
+	case strings.Contains(lower, "500") || strings.Contains(lower, "502") || strings.Contains(lower, "503") || strings.Contains(lower, "504"):
+		return upstreamErrorClass{category: "server", retryable: true, switchAccount: true}
+	default:
+		return upstreamErrorClass{category: "unknown", retryable: true, switchAccount: true}
+	}
+}
+
+func computeRetryDelay(base time.Duration, attempt int, category string) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt > 4 {
+		attempt = 4
+	}
+	delay := base * time.Duration(1<<(attempt-1))
+	if category == "rate_limit" && delay < 2*time.Second {
+		delay = 2 * time.Second
+	}
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	return delay
+}
+
+func toolCallKey(name, input string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return ""
+	}
+	input = strings.TrimSpace(fixToolInput(input))
+	return name + "|" + input
+}
 
 func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
-	return &Handler{
-		config:       cfg,
-		client:       orchids.New(cfg),
-		loadBalancer: lb,
-		summaryLog:   cfg.SummaryCacheLog,
+	h := &Handler{
+		config:          cfg,
+		loadBalancer:    lb,
+		summaryLog:      cfg.SummaryCacheLog,
+		sessionWorkdirs: make(map[string]string),
 	}
+	if cfg != nil {
+		client := orchids.New(cfg)
+		client.SetFSExecutor(h.orchidsFSExecutor)
+		h.client = client
+	}
+	return h
 }
 
 func (h *Handler) SetSummaryCache(cache prompt.SummaryCache) {
@@ -207,8 +274,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if planMode {
 		toolCallMode = "proxy"
 	}
+	if isWarpRequest {
+		warpMode := strings.ToLower(strings.TrimSpace(h.config.WarpToolCallMode))
+		if warpMode != "" {
+			toolCallMode = warpMode
+		}
+	}
 	if toolCallMode == "auto" || toolCallMode == "internal" {
 		effectiveTools = filterSupportedTools(effectiveTools)
+	}
+	if isWarpRequest {
+		effectiveTools = normalizeWarpTools(effectiveTools)
 	}
 
 	if toolCallMode == "internal" && req.Stream {
@@ -289,11 +365,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		allowedTools = make(map[string]string, len(effectiveTools))
 		for _, t := range effectiveTools {
 			if tm, ok := t.(map[string]interface{}); ok {
-				if name, ok := tm["name"].(string); ok {
-					name = strings.TrimSpace(name)
-					if name != "" {
-						allowedTools[strings.ToLower(name)] = name
-					}
+				name := toolNameFromDef(tm)
+				if name != "" {
+					allowedTools[strings.ToLower(name)] = name
 				}
 			}
 		}
@@ -306,6 +380,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			return "", false
 		}
 		if !hasToolList {
+			if toolCallMode == "proxy" {
+				return "", false
+			}
 			return name, true
 		}
 		if resolved, ok := allowedTools[strings.ToLower(name)]; ok {
@@ -331,8 +408,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	chatHistory = make([]interface{}, 0, 10+len(preflightHistory))
 	chatHistory = append(chatHistory, preflightHistory...)
 
-	upstreamMessages = append([]prompt.Message(nil), req.Messages...) // Copied
-
 	localContext := formatLocalToolResults(preflightResults)
 	if localContext != "" {
 		builtPrompt = injectLocalContext(builtPrompt, localContext)
@@ -350,8 +425,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// Detect Response Format (Anthropic vs OpenAI)
 	responseFormat := adapter.DetectResponseFormat(r.URL.Path)
 
+	enableToolCache := isWarpRequest && toolCallMode == "auto"
 	sh := newStreamHandler(
-		h.config, w, logger, toolCallMode, suppressThinking, allowedTools, allowedIndex, preflightResults, shouldLocalFallback, isStream, responseFormat,
+		h.config, w, logger, toolCallMode, suppressThinking, allowedTools, allowedIndex, preflightResults, shouldLocalFallback, isStream, responseFormat, enableToolCache,
 	)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	defer sh.release()
@@ -376,6 +452,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	var keepAliveStop chan struct{}
 	if isStream {
 		keepAliveStop = make(chan struct{})
+		defer close(keepAliveStop)
 		ticker := time.NewTicker(keepAliveInterval)
 		go func() {
 			defer ticker.Stop()
@@ -406,6 +483,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		turnCount := 1
 		followupCount := 0
 		chatSessionID := "chat_" + randomSessionID()
+		seenToolKeys := make(map[string]struct{})
+		cachedRepeatCount := 0
 
 		for {
 			slog.Debug("Starting turn", "turn", turnCount, "mode", toolCallMode)
@@ -418,7 +497,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
 			retriesRemaining := maxRetries
 
-			upstreamReq := orchids.UpstreamRequest{
+			upstreamReq := upstream.UpstreamRequest{
 				Prompt:        builtPrompt,
 				ChatHistory:   chatHistory,
 				Workdir:       effectiveWorkdir,
@@ -446,7 +525,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 							warpBatches = batches
 						}
 					}
-					noopHandler := func(orchids.SSEMessage) {}
+					noopHandler := func(upstream.SSEMessage) {}
 					for i, batch := range warpBatches {
 						batchReq := upstreamReq
 						batchReq.Messages = batch
@@ -469,21 +548,20 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 
-				slog.Error("Request error", "error", err)
-
 				// Check for non-retriable errors
 				errStr := err.Error()
+				errClass := classifyUpstreamError(errStr)
+				slog.Error("Request error", "error", err, "category", errClass.category, "retryable", errClass.retryable)
 				if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
 					if status := classifyAccountStatus(errStr); status != "" {
-						markAccountStatus(context.Background(), h.loadBalancer.Store, currentAccount, status)
+						markAccountStatus(r.Context(), h.loadBalancer.Store, currentAccount, status)
 					}
 				}
-				isAuthError := strings.Contains(errStr, "401") || strings.Contains(errStr, "403") || strings.Contains(errStr, "404") || strings.Contains(errStr, "Signed out") || strings.Contains(errStr, "signed_out")
-				if isAuthError || strings.Contains(errStr, "Input is too long") || strings.Contains(errStr, "400") {
-					slog.Error("Aborting retries for non-retriable error", "error", err)
+				if !errClass.retryable {
+					slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.category)
 
 					// Inject error message to client for better visibility
-					if isAuthError {
+					if errClass.category == "auth" {
 						errorMsg := fmt.Sprintf("Warp Request Failed: %s. Please check your account status.", errStr)
 						if strings.Contains(errStr, "401") {
 							errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
@@ -532,7 +610,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				retriesRemaining--
-				if currentAccount != nil && h.loadBalancer != nil {
+				if errClass.switchAccount && currentAccount != nil && h.loadBalancer != nil {
 					if _, ok := failedAccountSet[currentAccount.ID]; !ok {
 						failedAccountSet[currentAccount.ID] = struct{}{}
 						failedAccountIDs = append(failedAccountIDs, currentAccount.ID)
@@ -556,7 +634,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				if retryDelay > 0 {
-					if !util.SleepWithContext(r.Context(), retryDelay) {
+					attempt := maxRetries - retriesRemaining + 1
+					delay := computeRetryDelay(retryDelay, attempt, errClass.category)
+					if delay > 0 && !util.SleepWithContext(r.Context(), delay) {
 						sh.finishResponse("end_turn")
 						return
 					}
@@ -564,6 +644,30 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 			if ((toolCallMode == "internal" || toolCallMode == "auto") && sh.internalNeedsFollowup) || (sh.internalNeedsFollowup && len(sh.internalToolResults) > 0) {
 				if toolCallMode == "internal" || toolCallMode == "auto" {
+					repeatOnly := true
+					for _, res := range sh.internalToolResults {
+						key := toolCallKey(res.call.name, res.call.input)
+						if key == "" {
+							continue
+						}
+						if _, ok := seenToolKeys[key]; !ok {
+							repeatOnly = false
+							seenToolKeys[key] = struct{}{}
+						}
+					}
+					if len(sh.internalToolResults) == 0 {
+						repeatOnly = true
+					}
+					if repeatOnly {
+						if sh.hadToolCacheHit() && cachedRepeatCount < 1 {
+							cachedRepeatCount++
+						} else {
+							slog.Warn("检测到重复工具调用，终止自动跟进", "turn", turnCount)
+							sh.emitAutoNotice("[工具循环] 检测到重复工具调用，已终止自动跟进。")
+							sh.finishResponse("end_turn")
+							return
+						}
+					}
 					if followupCount >= maxToolFollowups {
 						slog.Warn("Tool follow-up limit reached", "turn", turnCount, "max_followups", maxToolFollowups)
 						sh.finishResponse("end_turn")
@@ -670,10 +774,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	run()
-
-	if keepAliveStop != nil {
-		close(keepAliveStop)
-	}
 
 	// 确保有最终响应
 	if !sh.hasReturn {

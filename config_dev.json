@@ -10,7 +10,8 @@
   "cache_strategy": "moderate",
   "context_max_tokens": 100000,
   "max_retries": 3,
-  "warp_disable_tools": true,
+  "warp_disable_tools": false,
   "tool_call_mode": "proxy",
+  "warp_tool_call_mode": "auto",
   "adaptive_timeout": true
 }

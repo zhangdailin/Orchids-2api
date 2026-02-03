@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
 )
 
@@ -75,6 +76,7 @@ func (e *encoder) writePackedVarints(field int, values []int) {
 }
 
 type warpToolCall struct {
+	ID        string
 	Name      string
 	Arguments string
 }
@@ -173,7 +175,7 @@ type parsedWarpMessage struct {
 
 func extractWarpConversation(messages []prompt.Message, promptText string) (string, []warpHistoryMessage, []warpToolResult, error) {
 	if len(messages) == 0 {
-		promptText = strings.TrimSpace(promptText)
+		promptText = strings.TrimSpace(stripWarpMetaTags(promptText))
 		if promptText == "" {
 			return "", nil, nil, fmt.Errorf("empty prompt")
 		}
@@ -187,6 +189,7 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 			continue
 		}
 		text, toolUses, toolResults := splitWarpContent(msg.Content)
+		text = strings.TrimSpace(stripWarpMetaTags(text))
 		parsed = append(parsed, parsedWarpMessage{
 			role:        role,
 			text:        text,
@@ -207,6 +210,7 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 		history     []warpHistoryMessage
 		toolResults []warpToolResult
 	)
+	toolResultSeen := map[string]struct{}{}
 
 	for i, msg := range parsed {
 		switch msg.role {
@@ -223,7 +227,20 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 			for _, block := range msg.toolResults {
 				toolResult := warpToolResult{
 					ToolCallID: block.ToolUseID,
-					Content:    stringifyWarpValue(block.Content),
+					Content:    strings.TrimSpace(stripWarpMetaTags(stringifyWarpValue(block.Content))),
+				}
+				if isNoiseToolResult(toolResult.Content) {
+					continue
+				}
+				key := toolResult.ToolCallID + "|" + toolResult.Content
+				if key == "|" {
+					key = ""
+				}
+				if key != "" {
+					if _, ok := toolResultSeen[key]; ok {
+						continue
+					}
+					toolResultSeen[key] = struct{}{}
 				}
 				if lastUserTextIdx == -1 || i > lastUserTextIdx || (i == lastUserTextIdx && !hasText) {
 					toolResults = append(toolResults, toolResult)
@@ -239,10 +256,11 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 		case "assistant":
 			if lastUserTextIdx == -1 || i < lastUserTextIdx {
 				toolCalls := convertWarpToolCalls(msg.toolUses)
-				if msg.text != "" || len(toolCalls) > 0 {
+				content := strings.TrimSpace(stripWarpMetaTags(msg.text))
+				if content != "" || len(toolCalls) > 0 {
 					history = append(history, warpHistoryMessage{
 						Role:      "assistant",
-						Content:   msg.text,
+						Content:   content,
 						ToolCalls: toolCalls,
 					})
 				}
@@ -254,6 +272,80 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 		return "", nil, nil, fmt.Errorf("no user message or tool results found")
 	}
 	return userText, history, toolResults, nil
+}
+
+// stripWarpMetaTags 清理系统提示残留（system-reminder/IDE 上下文）
+func stripWarpMetaTags(text string) string {
+	if text == "" {
+		return text
+	}
+	out := stripTagBlocks(text, "system-reminder")
+	out = stripTagBlocks(out, "ide_opened_file")
+	out = stripTagBlocks(out, "ide_selection")
+	out = filterWarpLogLines(out)
+	return strings.TrimSpace(out)
+}
+
+func stripTagBlocks(text, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
+	if !strings.Contains(text, startTag) {
+		return text
+	}
+	var sb strings.Builder
+	sb.Grow(len(text))
+	i := 0
+	for i < len(text) {
+		start := strings.Index(text[i:], startTag)
+		if start == -1 {
+			sb.WriteString(text[i:])
+			break
+		}
+		sb.WriteString(text[i : i+start])
+		endStart := i + start + len(startTag)
+		end := strings.Index(text[endStart:], endTag)
+		if end == -1 {
+			break
+		}
+		i = endStart + end + len(endTag)
+	}
+	return sb.String()
+}
+
+func filterWarpLogLines(text string) string {
+	if text == "" {
+		return text
+	}
+	if !strings.Contains(text, "[System:") && !strings.Contains(text, "[Scanning:") {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[System:") || strings.HasPrefix(trimmed, "[Scanning:") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func isNoiseToolResult(content string) bool {
+	if content == "" {
+		return false
+	}
+	lower := strings.ToLower(content)
+	if strings.Contains(lower, "unsupported tool") {
+		return true
+	}
+	if strings.Contains(lower, "unsupported tool:") {
+		return true
+	}
+	if strings.Contains(lower, "<tool_use_error>") || strings.Contains(lower, "no such tool available") {
+		return true
+	}
+	return false
 }
 
 func splitWarpContent(content prompt.MessageContent) (string, []prompt.ContentBlock, []prompt.ContentBlock) {
@@ -290,11 +382,36 @@ func convertWarpToolCalls(blocks []prompt.ContentBlock) []warpToolCall {
 		}
 		args := stringifyWarpValue(block.Input)
 		toolCalls = append(toolCalls, warpToolCall{
+			ID:        block.ID,
 			Name:      block.Name,
 			Arguments: args,
 		})
 	}
 	return toolCalls
+}
+
+func formatWarpToolUse(call warpToolCall) string {
+	name := strings.TrimSpace(call.Name)
+	if name == "" {
+		return ""
+	}
+	args := strings.TrimSpace(call.Arguments)
+	if args == "" {
+		args = "{}"
+	}
+	id := strings.TrimSpace(call.ID)
+	if id == "" {
+		return fmt.Sprintf("<tool_use name=\"%s\">\n%s\n</tool_use>", name, args)
+	}
+	return fmt.Sprintf("<tool_use id=\"%s\" name=\"%s\">\n%s\n</tool_use>", id, name, args)
+}
+
+func formatWarpToolResult(id, content string) string {
+	content = strings.TrimSpace(content)
+	if id == "" {
+		return fmt.Sprintf("<tool_result>\n%s\n</tool_result>", content)
+	}
+	return fmt.Sprintf("<tool_result id=\"%s\">\n%s\n</tool_result>", id, content)
 }
 
 func stringifyWarpValue(value interface{}) string {
@@ -321,7 +438,7 @@ func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults [
 	if len(toolResults) > 0 {
 		parts = append(parts, formatWarpHistory(history)...)
 		for _, tr := range toolResults {
-			parts = append(parts, fmt.Sprintf("Tool result (%s): %s", tr.ToolCallID, tr.Content))
+			parts = append(parts, formatWarpToolResult(tr.ToolCallID, tr.Content))
 		}
 		if strings.TrimSpace(userText) != "" {
 			parts = append(parts, "User: "+userText)
@@ -359,26 +476,16 @@ func formatWarpHistory(history []warpHistoryMessage) []string {
 		case "user":
 			parts = append(parts, "User: "+msg.Content)
 		case "assistant":
-			if len(msg.ToolCalls) == 0 {
+			if msg.Content != "" {
 				parts = append(parts, "Assistant: "+msg.Content)
-				continue
 			}
-			callDesc := make([]string, 0, len(msg.ToolCalls))
 			for _, tc := range msg.ToolCalls {
-				if tc.Arguments != "" {
-					callDesc = append(callDesc, fmt.Sprintf("Called %s with args: %s", tc.Name, tc.Arguments))
-				} else {
-					callDesc = append(callDesc, fmt.Sprintf("Called %s", tc.Name))
+				if formatted := formatWarpToolUse(tc); formatted != "" {
+					parts = append(parts, formatted)
 				}
 			}
-			content := msg.Content
-			if content == "" {
-				parts = append(parts, fmt.Sprintf("Assistant: \nTool calls: %s", strings.Join(callDesc, "; ")))
-			} else {
-				parts = append(parts, fmt.Sprintf("Assistant: %s\nTool calls: %s", content, strings.Join(callDesc, "; ")))
-			}
 		case "tool":
-			parts = append(parts, fmt.Sprintf("Tool result (%s): %s", msg.ToolCallID, msg.Content))
+			parts = append(parts, formatWarpToolResult(msg.ToolCallID, msg.Content))
 		}
 	}
 	return parts
@@ -535,8 +642,10 @@ func buildMetadata(conversationID string) []byte {
 }
 
 func buildInputContext(workdir string) []byte {
-	_ = workdir
-	pwd, _ := os.Getwd()
+	pwd := strings.TrimSpace(workdir)
+	if pwd == "" {
+		pwd, _ = os.Getwd()
+	}
 	home, _ := os.UserHomeDir()
 	shellName := "zsh"
 	shellVersion := "5.9"
@@ -682,6 +791,10 @@ func convertTools(tools []interface{}) []toolDef {
 		if typ, _ := m["type"].(string); typ == "function" {
 			if fn, ok := m["function"].(map[string]interface{}); ok {
 				name, _ := fn["name"].(string)
+				if orchids.DefaultToolMapper.IsBlocked(name) {
+					continue
+				}
+				name = orchids.NormalizeToolName(name)
 				description, _ := fn["description"].(string)
 				schema := schemaMap(fn["parameters"])
 				if name != "" {
@@ -691,6 +804,10 @@ func convertTools(tools []interface{}) []toolDef {
 			}
 		}
 		name, _ := m["name"].(string)
+		if orchids.DefaultToolMapper.IsBlocked(name) {
+			continue
+		}
+		name = orchids.NormalizeToolName(name)
 		description, _ := m["description"].(string)
 		schema := schemaMap(m["input_schema"])
 		if schema == nil {

@@ -75,6 +75,11 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 		return conn.WriteJSON(payload)
 	}
 
+	if c.fsExecutor != nil {
+		success, data, errMsg := c.fsExecutor(msg, overrideWorkdir)
+		return respond(success, data, errMsg)
+	}
+
 	operation := strings.TrimSpace(op.Operation)
 	if operation == "" {
 		return respond(false, nil, "missing operation")

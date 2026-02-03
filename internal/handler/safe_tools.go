@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -435,17 +436,47 @@ func safeRelPath(baseDir, path string) (string, error) {
 
 func captureLimitedOutput(cmd *exec.Cmd) (string, error) {
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	limit := int64(safeToolMaxOutputSize)
+	lw := &limitWriter{w: &buf, limit: limit}
+	cmd.Stdout = lw
+	cmd.Stderr = lw
 
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	out := buf.String()
+	out = strings.TrimSpace(out)
+
+	if err != nil {
+		// If process failed but we captured output, return output with error hint?
+		// Or just return error. The original code returned error.
+		// Usually we want the stderr if it failed.
+		if out != "" {
+			return out, nil // Return output even if failed, often contains error msg
+		}
 		return "", err
 	}
 
-	out := buf.String()
-	if len(out) > safeToolMaxOutputSize {
-		out = out[:safeToolMaxOutputSize]
-	}
-	out = strings.TrimSpace(out)
 	return out, nil
+}
+
+type limitWriter struct {
+	w       io.Writer
+	limit   int64
+	written int64
+}
+
+func (l *limitWriter) Write(p []byte) (n int, err error) {
+	if l.written >= l.limit {
+		return len(p), nil
+	}
+	todo := int64(len(p))
+	if l.written+todo > l.limit {
+		todo = l.limit - l.written
+	}
+	n, err = l.w.Write(p[:todo])
+	l.written += int64(n)
+	if err == nil && int64(len(p)) > todo {
+		// Pretend we wrote everything to satisfy io.Writer contract for Copy/exec
+		return len(p), nil
+	}
+	return n, err
 }
