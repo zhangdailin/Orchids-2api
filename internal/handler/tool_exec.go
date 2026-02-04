@@ -752,22 +752,6 @@ func grepSearch(baseDir, root, pattern string, maxResults int, ignore []string) 
 	return output, nil
 }
 
-func runAllowedCommand(baseDir, command string, allowlist []string) (string, error) {
-	return runShellCommand(baseDir, command)
-}
-
-func runExecCommand(baseDir string, tokens []string) (string, error) {
-	cmd := exec.Command(tokens[0], tokens[1:]...)
-	cmd.Dir = baseDir
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		return buf.String(), err
-	}
-	return buf.String(), nil
-}
-
 func runShellCommand(baseDir, command string) (string, error) {
 	cmd := exec.Command("bash", "-lc", command)
 	cmd.Dir = baseDir
@@ -778,19 +762,6 @@ func runShellCommand(baseDir, command string) (string, error) {
 		return buf.String(), err
 	}
 	return buf.String(), nil
-}
-
-func containsShellMeta(command string) bool {
-	if strings.Contains(command, "|") || strings.Contains(command, ";") || strings.Contains(command, "&&") || strings.Contains(command, "||") {
-		return true
-	}
-	if strings.Contains(command, "<") || strings.Contains(command, ">") {
-		return true
-	}
-	if strings.Contains(command, "$(") || strings.Contains(command, "`") {
-		return true
-	}
-	return false
 }
 
 func applyEdits(content string, input map[string]interface{}) (string, int, error) {

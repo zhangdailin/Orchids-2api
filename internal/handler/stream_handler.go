@@ -731,8 +731,6 @@ func (h *streamHandler) processAutoPendingCalls() {
 	})
 
 	// Append results in order
-
-	// Append results in order
 	for _, res := range results {
 		h.internalToolResults = append(h.internalToolResults, res)
 	}
@@ -1097,7 +1095,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if h.shouldSkipIntroDelta(delta) {
 			return
 		}
-		// Removed shouldSuppressAutoText check as it was causing empty results in some cases
+
 		h.mu.Lock()
 		sseIdx := h.activeTextSSEIndex
 		internalIdx := h.activeTextBlockIndex

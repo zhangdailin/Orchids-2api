@@ -5,13 +5,6 @@ import (
 	"strings"
 )
 
-const (
-	safeToolTimeout       = 0
-	safeToolMaxOutputSize = 0
-	safeToolMaxLines      = 0
-	safeToolMaxFindDepth  = -1
-)
-
 type safeToolResult struct {
 	call    toolCall
 	input   interface{}
