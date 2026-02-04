@@ -86,7 +86,7 @@ func LogWithTrace(ctx context.Context) *slog.Logger {
 // TracedResponseWriter 包装 ResponseWriter 以记录响应状态
 type TracedResponseWriter struct {
 	http.ResponseWriter
-	StatusCode int
+	StatusCode   int
 	BytesWritten int64
 }
 

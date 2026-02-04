@@ -28,11 +28,11 @@ func GenerateSessionToken() (string, error) {
 		return "", fmt.Errorf("failed to generate session token: %w", err)
 	}
 	token := hex.EncodeToString(bytes)
-	
+
 	globalSessionStore.mu.Lock()
 	globalSessionStore.sessions[token] = time.Now().Add(sessionTTL)
 	globalSessionStore.mu.Unlock()
-	
+
 	return token, nil
 }
 
@@ -40,18 +40,18 @@ func ValidateSessionToken(token string) bool {
 	globalSessionStore.mu.RLock()
 	expiry, exists := globalSessionStore.sessions[token]
 	globalSessionStore.mu.RUnlock()
-	
+
 	if !exists {
 		return false
 	}
-	
+
 	if time.Now().After(expiry) {
 		globalSessionStore.mu.Lock()
 		delete(globalSessionStore.sessions, token)
 		globalSessionStore.mu.Unlock()
 		return false
 	}
-	
+
 	return true
 }
 
@@ -64,7 +64,7 @@ func InvalidateSessionToken(token string) {
 func CleanupExpiredSessions() {
 	globalSessionStore.mu.Lock()
 	defer globalSessionStore.mu.Unlock()
-	
+
 	now := time.Now()
 	for token, expiry := range globalSessionStore.sessions {
 		if now.After(expiry) {

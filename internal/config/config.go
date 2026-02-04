@@ -13,54 +13,57 @@ import (
 )
 
 type Config struct {
-	Port                    string   `json:"port"`
-	DebugEnabled            bool     `json:"debug_enabled"`
-	SessionID               string   `json:"session_id"`
-	ClientCookie            string   `json:"client_cookie"`
-	SessionCookie           string   `json:"session_cookie"`
-	ClientUat               string   `json:"client_uat"`
-	ProjectID               string   `json:"project_id"`
-	UserID                  string   `json:"user_id"`
-	AgentMode               string   `json:"agent_mode"`
-	Email                   string   `json:"email"`
-	AdminUser               string   `json:"admin_user"`
-	AdminPass               string   `json:"admin_pass"`
-	AdminPath               string   `json:"admin_path"`
-	ToolCallMode            string   `json:"tool_call_mode"`
-	DebugLogSSE             bool     `json:"debug_log_sse"`
-	OutputTokenMode         string   `json:"output_token_mode"`
-	StoreMode               string   `json:"store_mode"`
-	RedisAddr               string   `json:"redis_addr"`
-	RedisPassword           string   `json:"redis_password"`
-	RedisDB                 int      `json:"redis_db"`
-	RedisPrefix             string   `json:"redis_prefix"`
-	SummaryCacheMode        string   `json:"summary_cache_mode"`
-	SummaryCacheSize        int      `json:"summary_cache_size"`
-	SummaryCacheTTLSeconds  int      `json:"summary_cache_ttl_seconds"`
-	SummaryCacheLog         bool     `json:"summary_cache_log"`
-	SummaryCacheRedisAddr   string   `json:"summary_cache_redis_addr"`
-	SummaryCacheRedisPass   string   `json:"summary_cache_redis_password"`
-	SummaryCacheRedisDB     int      `json:"summary_cache_redis_db"`
-	SummaryCacheRedisPrefix string   `json:"summary_cache_redis_prefix"`
-	ContextMaxTokens        int      `json:"context_max_tokens"`
-	ContextSummaryMaxTokens int      `json:"context_summary_max_tokens"`
-	ContextKeepTurns        int      `json:"context_keep_turns"`
-	UpstreamURL             string   `json:"upstream_url"`
-	UpstreamToken           string   `json:"upstream_token"`
-	UpstreamMode            string   `json:"upstream_mode"`
-	OrchidsAPIBaseURL       string   `json:"orchids_api_base_url"`
-	OrchidsWSURL            string   `json:"orchids_ws_url"`
-	OrchidsAPIVersion       string   `json:"orchids_api_version"`
-	OrchidsImpl             string   `json:"orchids_impl"`
-	OrchidsAllowRunCommand  bool     `json:"orchids_allow_run_command"`
-	OrchidsRunAllowlist     []string `json:"orchids_run_allowlist"`
-	OrchidsCCEntrypointMode string   `json:"orchids_cc_entrypoint_mode"`
-	OrchidsFSIgnore         []string `json:"orchids_fs_ignore"`
-	WarpDisableTools        *bool    `json:"warp_disable_tools"`
-	WarpToolCallMode        string   `json:"warp_tool_call_mode"`
-	WarpMaxToolResults      int      `json:"warp_max_tool_results"`
-	WarpMaxHistoryMessages  int      `json:"warp_max_history_messages"`
-	WarpSplitToolResults    bool     `json:"warp_split_tool_results"`
+	Port                      string   `json:"port"`
+	DebugEnabled              bool     `json:"debug_enabled"`
+	SessionID                 string   `json:"session_id"`
+	ClientCookie              string   `json:"client_cookie"`
+	SessionCookie             string   `json:"session_cookie"`
+	ClientUat                 string   `json:"client_uat"`
+	ProjectID                 string   `json:"project_id"`
+	UserID                    string   `json:"user_id"`
+	AgentMode                 string   `json:"agent_mode"`
+	Email                     string   `json:"email"`
+	AdminUser                 string   `json:"admin_user"`
+	AdminPass                 string   `json:"admin_pass"`
+	AdminPath                 string   `json:"admin_path"`
+	ToolCallMode              string   `json:"tool_call_mode"`
+	DebugLogSSE               bool     `json:"debug_log_sse"`
+	OutputTokenMode           string   `json:"output_token_mode"`
+	StoreMode                 string   `json:"store_mode"`
+	RedisAddr                 string   `json:"redis_addr"`
+	RedisPassword             string   `json:"redis_password"`
+	RedisDB                   int      `json:"redis_db"`
+	RedisPrefix               string   `json:"redis_prefix"`
+	SummaryCacheMode          string   `json:"summary_cache_mode"`
+	SummaryCacheSize          int      `json:"summary_cache_size"`
+	SummaryCacheTTLSeconds    int      `json:"summary_cache_ttl_seconds"`
+	SummaryCacheLog           bool     `json:"summary_cache_log"`
+	SummaryCacheRedisAddr     string   `json:"summary_cache_redis_addr"`
+	SummaryCacheRedisPass     string   `json:"summary_cache_redis_password"`
+	SummaryCacheRedisDB       int      `json:"summary_cache_redis_db"`
+	SummaryCacheRedisPrefix   string   `json:"summary_cache_redis_prefix"`
+	ContextMaxTokens          int      `json:"context_max_tokens"`
+	ContextSummaryMaxTokens   int      `json:"context_summary_max_tokens"`
+	ContextKeepTurns          int      `json:"context_keep_turns"`
+	UpstreamURL               string   `json:"upstream_url"`
+	UpstreamToken             string   `json:"upstream_token"`
+	UpstreamMode              string   `json:"upstream_mode"`
+	OrchidsAPIBaseURL         string   `json:"orchids_api_base_url"`
+	OrchidsWSURL              string   `json:"orchids_ws_url"`
+	OrchidsAPIVersion         string   `json:"orchids_api_version"`
+	OrchidsImpl               string   `json:"orchids_impl"`
+	OrchidsAllowRunCommand    bool     `json:"orchids_allow_run_command"`
+	OrchidsRunAllowlist       []string `json:"orchids_run_allowlist"`
+	OrchidsCCEntrypointMode   string   `json:"orchids_cc_entrypoint_mode"`
+	OrchidsFSIgnore           []string `json:"orchids_fs_ignore"`
+	WarpDisableTools          *bool    `json:"warp_disable_tools"`
+	WarpToolCallMode          string   `json:"warp_tool_call_mode"`
+	WarpMaxToolResults        int      `json:"warp_max_tool_results"`
+	WarpMaxHistoryMessages    int      `json:"warp_max_history_messages"`
+	WarpSplitToolResults      bool     `json:"warp_split_tool_results"`
+	OrchidsMaxToolResults     int      `json:"orchids_max_tool_results"`
+	OrchidsMaxHistoryMessages int      `json:"orchids_max_history_messages"`
+	MaxToolFollowups          int      `json:"max_tool_followups"`
 
 	// New fields for UI
 	AdminToken           string `json:"admin_token"`
@@ -243,6 +246,15 @@ func applyDefaults(cfg *Config) {
 	if cfg.WarpMaxHistoryMessages == 0 {
 		cfg.WarpMaxHistoryMessages = 20
 	}
+	if cfg.OrchidsMaxToolResults == 0 {
+		cfg.OrchidsMaxToolResults = 10
+	}
+	if cfg.OrchidsMaxHistoryMessages == 0 {
+		cfg.OrchidsMaxHistoryMessages = 20
+	}
+	if cfg.MaxToolFollowups == 0 {
+		cfg.MaxToolFollowups = 5
+	}
 
 	// New defaults
 	if cfg.MaxRetries == 0 {
@@ -276,7 +288,7 @@ func applyDefaults(cfg *Config) {
 		cfg.ConcurrencyLimit = 100
 	}
 	if cfg.ConcurrencyTimeout == 0 {
-		cfg.ConcurrencyTimeout = 120
+		cfg.ConcurrencyTimeout = 300
 	}
 
 	// Auto Reg defaults

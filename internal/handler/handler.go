@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	rtdebug "runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -65,7 +66,6 @@ type toolCall struct {
 
 const keepAliveInterval = 15 * time.Second
 const maxRequestBytes = 0
-const maxToolFollowups = 3
 
 type upstreamErrorClass struct {
 	category      string
@@ -168,6 +168,14 @@ func (h *Handler) writeErrorResponse(w http.ResponseWriter, errType string, mess
 func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
+	defer func() {
+		if err := recover(); err != nil {
+			stack := string(rtdebug.Stack())
+			slog.Error("Panic in HandleMessages", "error", err, "stack", stack)
+			h.writeErrorResponse(w, "server_error", "Internal Server Error", http.StatusInternalServerError)
+		}
+	}()
+
 	if r.Method != http.MethodPost {
 		h.writeErrorResponse(w, "invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -196,7 +204,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 1. 记录进入的 Claude 请求
 	logger.LogIncomingRequest(req)
 
+	// ...
 	if ok, command := isCommandPrefixRequest(req); ok {
+		slog.Debug("Handling command prefix request", "command", command)
 		prefix := detectCommandPrefix(command)
 		writeCommandPrefixResponse(w, req, prefix, startTime, logger)
 		return
@@ -209,7 +219,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	// Debug: log all headers
 	for k, v := range r.Header {
-		slog.Debug("Incoming header", "key", k, "value", v)
+		slog.Debug("Incoming header V2 CHECK", "key", k, "value", v)
 	}
 
 	forcedChannel := channelFromPath(r.URL.Path)
@@ -224,21 +234,29 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	apiClient, currentAccount, err := h.selectAccount(r.Context(), req.Model, forcedChannel, failedAccountIDs)
 	if err != nil {
+		slog.Error("selectAccount failed", "error", err)
 		h.writeErrorResponse(w, "overloaded_error", err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	slog.Debug("Checkpoint: selectAccount success")
 
 	isWarpRequest := strings.EqualFold(forcedChannel, "warp")
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		isWarpRequest = true
 	}
 	if isWarpRequest {
-		trimmed, droppedHistory, droppedToolResults := trimWarpMessages(req.Messages, h.config.WarpMaxHistoryMessages, h.config.WarpMaxToolResults)
-		if droppedHistory > 0 || droppedToolResults > 0 {
-			logWarpTrim(droppedHistory, droppedToolResults)
-		}
+		slog.Debug("Checkpoint: trimming messages for warp")
+		trimmed, _, _ := trimMessages(req.Messages, h.config.WarpMaxHistoryMessages, h.config.WarpMaxToolResults, "warp")
 		req.Messages = trimmed
+	} else {
+		// Orchids: Compress HUGE tool results (>100KB) to prevent upstream 413/Timeout
+		// 100KB limit is generous enough for most code but prevents MB-sized payloads.
+		slog.Debug("Checkpoint: compressing tool results")
+		compressed, _ := compressToolResults(req.Messages, 102400, "orchids")
+		req.Messages = compressed
 	}
+	slog.Debug("Checkpoint: message processing done")
+
 	if sanitized, changed := sanitizeSystemItems(req.System, isWarpRequest, h.config); changed {
 		req.System = sanitized
 		slog.Info("系统提示已移除 cc_entrypoint", "mode", h.config.OrchidsCCEntrypointMode, "warp", isWarpRequest)
@@ -421,6 +439,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. 记录转换后的 prompt
+	slog.Debug("Checkpoint: LogConvertedPrompt")
 	logger.LogConvertedPrompt(builtPrompt)
 
 	// Token 计数
@@ -575,6 +594,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 						slog.Info("Injecting auth error to client", "error_msg", errorMsg, "is_stream", sh.isStream)
 						idx := sh.ensureBlock("text")
+						internalIdx := sh.activeTextBlockIndex
 
 						// For stream, send delta immediately
 						if sh.isStream {
@@ -592,7 +612,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						} else {
 							// For non-stream, ensureBlock has initialized the builder, we append to it
 							slog.Debug("Appending error to text builder")
-							if builder, ok := sh.textBlockBuilders[idx]; ok {
+							if builder, ok := sh.textBlockBuilders[internalIdx]; ok {
 								builder.WriteString(errorMsg)
 							}
 						}
@@ -666,17 +686,20 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						if sh.hadToolCacheHit() && cachedRepeatCount < 1 {
 							cachedRepeatCount++
 						} else {
-							slog.Warn("检测到重复工具调用，终止自动跟进", "turn", turnCount)
-							sh.emitAutoNotice("[工具循环] 检测到重复工具调用，已终止自动跟进。")
+							slog.Warn("检测到重复工具调用，但用户要求无限制，继续执行", "turn", turnCount)
+							sh.emitAutoNotice("[警告] 检测到重复工具调用，继续执行...")
+							// sh.finishResponse("end_turn")
+							// return
+						}
+					}
+					// Disable max followups limit
+					/*
+						if followupCount >= h.config.MaxToolFollowups {
+							slog.Warn("Tool follow-up limit reached", "turn", turnCount, "max_followups", h.config.MaxToolFollowups)
 							sh.finishResponse("end_turn")
 							return
 						}
-					}
-					if followupCount >= maxToolFollowups {
-						slog.Warn("Tool follow-up limit reached", "turn", turnCount, "max_followups", maxToolFollowups)
-						sh.finishResponse("end_turn")
-						return
-					}
+					*/
 					followupCount++
 				}
 				slog.Debug("Turn completed, follow-up required", "turn", turnCount)

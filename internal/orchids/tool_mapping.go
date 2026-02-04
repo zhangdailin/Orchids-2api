@@ -141,14 +141,14 @@ func (tm *ToolMapper) FromOrchids(name string) string {
 // IsBlocked checks if a tool should be blocked.
 // 可以在这里添加工具过滤逻辑
 var blockedTools = map[string]bool{
-	"web_search": true,
-	"WebSearch":  true,
-	"SQL":        true,
-	"server":     true,
-	"suggest_plan": true,
-	"suggest_create_plan": true,
+	"web_search":               true,
+	"WebSearch":                true,
+	"SQL":                      true,
+	"server":                   true,
+	"suggest_plan":             true,
+	"suggest_create_plan":      true,
 	"suggest_new_conversation": true,
-	"read_mcp_resource": true,
+	"read_mcp_resource":        true,
 	// 添加其他需要屏蔽的云端工具
 }
 

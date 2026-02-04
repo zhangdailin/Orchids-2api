@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"log/slog"
 
 	"orchids-api/internal/prompt"
@@ -11,7 +12,7 @@ type toolResultRef struct {
 	blockIndex int
 }
 
-func trimWarpMessages(messages []prompt.Message, maxHistory, maxToolResults int) ([]prompt.Message, int, int) {
+func trimMessages(messages []prompt.Message, maxHistory, maxToolResults int, channel string) ([]prompt.Message, int, int) {
 	trimmed := cloneMessages(messages)
 	droppedHistory := 0
 	droppedToolResults := 0
@@ -66,6 +67,10 @@ func trimWarpMessages(messages []prompt.Message, maxHistory, maxToolResults int)
 			kept[i], kept[j] = kept[j], kept[i]
 		}
 		trimmed = kept
+	}
+
+	if droppedHistory > 0 || droppedToolResults > 0 {
+		logTrim(channel, droppedHistory, droppedToolResults)
 	}
 
 	return trimmed, droppedHistory, droppedToolResults
@@ -158,11 +163,50 @@ func cloneMessages(messages []prompt.Message) []prompt.Message {
 	return out
 }
 
-func logWarpTrim(droppedHistory, droppedToolResults int) {
+func logTrim(channel string, droppedHistory, droppedToolResults int) {
 	if droppedHistory > 0 {
-		slog.Info("Warp 历史裁剪", "dropped_messages", droppedHistory)
+		slog.Info("History trimmed", "channel", channel, "dropped_messages", droppedHistory)
 	}
 	if droppedToolResults > 0 {
-		slog.Info("Warp 工具结果裁剪", "dropped_tool_results", droppedToolResults)
+		slog.Info("Tool results trimmed", "channel", channel, "dropped_tool_results", droppedToolResults)
 	}
+}
+
+func compressToolResults(messages []prompt.Message, maxLen int, channel string) ([]prompt.Message, int) {
+	if maxLen <= 0 {
+		return messages, 0
+	}
+	compressed := cloneMessages(messages)
+	compressedCount := 0
+
+	for i := range compressed {
+		msg := &compressed[i]
+		if msg.Role != "user" || msg.Content.Blocks == nil {
+			continue
+		}
+
+		for j := range msg.Content.Blocks {
+			block := &msg.Content.Blocks[j]
+			if block.Type == "tool_result" {
+				content, ok := block.Content.(string)
+				if !ok {
+					// Handle array of text blocks if necessary, but usually it's string or array of blocks
+					// For simplicity, if it's not string, we skip or handle complex structure later
+					// Orchids usually puts string content here
+					continue
+				}
+				if len(content) > maxLen {
+					truncated := content[:maxLen] + fmt.Sprintf("\n... [truncated %d bytes]", len(content)-maxLen)
+					block.Content = truncated
+					compressedCount++
+				}
+			}
+		}
+	}
+
+	if compressedCount > 0 {
+		slog.Info("Context compressed", "channel", channel, "compressed_blocks", compressedCount)
+	}
+
+	return compressed, compressedCount
 }

@@ -45,7 +45,9 @@ type streamHandler struct {
 	outputTokens             int
 	inputTokens              int
 	activeThinkingBlockIndex int
+	activeThinkingSSEIndex   int
 	activeTextBlockIndex     int
+	activeTextSSEIndex       int
 	activeBlockType          string // "thinking", "text", "tool_use"
 
 	// Buffers and Builders
@@ -92,6 +94,8 @@ type streamHandler struct {
 
 	// Logger
 	logger *debug.Logger
+
+	lastInitMsg string
 }
 
 func newStreamHandler(
@@ -156,7 +160,9 @@ func newStreamHandler(
 		startTime:                time.Now(),
 		currentTextIndex:         -1,
 		activeThinkingBlockIndex: -1,
+		activeThinkingSSEIndex:   -1,
 		activeTextBlockIndex:     -1,
+		activeTextSSEIndex:       -1,
 		activeBlockType:          "",
 	}
 	return h
@@ -290,14 +296,14 @@ func (h *streamHandler) resetRoundState() {
 	// Ensure any currently open block is closed before resetting state
 	h.closeActiveBlockLocked()
 
-	// Do NOT reset h.blockIndex = -1 here.
-	// Preserving blockIndex across retries ensures that a retry starts with NEW indices.
-	// Index collisions (re-sending index 0) cause "Mismatched content block type" on the client.
+	// 不要在这里重置 h.blockIndex。
+	// 保留索引递增可避免重试时索引回绕，导致客户端报错 "Mismatched content block type"。
 
 	h.activeThinkingBlockIndex = -1
+	h.activeThinkingSSEIndex = -1
 	h.activeTextBlockIndex = -1
+	h.activeTextSSEIndex = -1
 	h.activeBlockType = ""
-	h.blockIndex = -1
 	h.hasReturn = false
 
 	clear(h.toolBlocks)
@@ -558,32 +564,32 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 	// If already in the correct block type, return current index
 	if h.activeBlockType == blockType {
 		if blockType == "thinking" {
-			return h.activeThinkingBlockIndex
+			return h.activeThinkingSSEIndex
 		}
 		if blockType == "text" {
-			return h.activeTextBlockIndex
+			return h.activeTextSSEIndex
 		}
 	}
 
 	// Start new block
 	h.blockIndex++
-	idx := h.blockIndex
+	sseIdx := h.blockIndex
 	h.activeBlockType = blockType
 
 	var startData []byte
 	switch blockType {
 	case "thinking":
-		h.activeThinkingBlockIndex = idx
 		h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
 			"type": "thinking",
 		})
-		h.activeThinkingBlockIndex = len(h.contentBlocks) - 1
-		h.thinkingBlockBuilders[h.activeThinkingBlockIndex] = perf.AcquireStringBuilder()
-		idx = h.activeThinkingBlockIndex
+		internalIdx := len(h.contentBlocks) - 1
+		h.activeThinkingBlockIndex = internalIdx
+		h.activeThinkingSSEIndex = sseIdx
+		h.thinkingBlockBuilders[internalIdx] = perf.AcquireStringBuilder()
 
 		m := perf.AcquireMap()
 		m["type"] = "content_block_start"
-		m["index"] = idx
+		m["index"] = sseIdx
 
 		cb := perf.AcquireMap()
 		cb["type"] = "thinking"
@@ -594,17 +600,17 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		perf.ReleaseMap(cb)
 		perf.ReleaseMap(m)
 	case "text":
-		h.activeTextBlockIndex = idx
 		h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
 			"type": "text",
 		})
-		h.activeTextBlockIndex = len(h.contentBlocks) - 1
-		h.textBlockBuilders[h.activeTextBlockIndex] = perf.AcquireStringBuilder()
-		idx = h.activeTextBlockIndex
+		internalIdx := len(h.contentBlocks) - 1
+		h.activeTextBlockIndex = internalIdx
+		h.activeTextSSEIndex = sseIdx
+		h.textBlockBuilders[internalIdx] = perf.AcquireStringBuilder()
 
 		m := perf.AcquireMap()
 		m["type"] = "content_block_start"
-		m["index"] = idx
+		m["index"] = sseIdx
 
 		cb := perf.AcquireMap()
 		cb["type"] = "text"
@@ -620,7 +626,7 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		h.writeSSELocked("content_block_start", string(startData))
 	}
 
-	return idx
+	return sseIdx
 }
 
 func (h *streamHandler) closeActiveBlock() {
@@ -634,14 +640,16 @@ func (h *streamHandler) closeActiveBlockLocked() {
 		return
 	}
 
-	var idx int
+	var sseIdx int
 	switch h.activeBlockType {
 	case "thinking":
-		idx = h.activeThinkingBlockIndex
+		sseIdx = h.activeThinkingSSEIndex
 		h.activeThinkingBlockIndex = -1
+		h.activeThinkingSSEIndex = -1
 	case "text":
-		idx = h.activeTextBlockIndex
+		sseIdx = h.activeTextSSEIndex
 		h.activeTextBlockIndex = -1
+		h.activeTextSSEIndex = -1
 	default:
 		// tool_use and others are usually handled as single-event blocks or managed separately
 		h.activeBlockType = ""
@@ -652,7 +660,7 @@ func (h *streamHandler) closeActiveBlockLocked() {
 
 	m := perf.AcquireMap()
 	m["type"] = "content_block_stop"
-	m["index"] = idx
+	m["index"] = sseIdx
 	stopData, err := json.Marshal(m)
 	if err != nil {
 		slog.Error("Failed to marshal content_block_stop", "error", err)
@@ -1060,29 +1068,33 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 
 		h.mu.Lock()
-		idx := h.activeThinkingBlockIndex
+		sseIdx := h.activeThinkingSSEIndex
+		internalIdx := h.activeThinkingBlockIndex
 		h.mu.Unlock()
-		if idx < 0 {
+		if sseIdx < 0 {
 			// If we get delta but no thinking block is active, try to ensure one
-			idx = h.ensureBlock("thinking")
+			sseIdx = h.ensureBlock("thinking")
+			h.mu.Lock()
+			internalIdx = h.activeThinkingBlockIndex
+			h.mu.Unlock()
 		}
 		if h.isStream {
 			h.addOutputTokens(delta)
 		}
 		// Always update internal state for history
 		h.mu.Lock()
-		if h.activeThinkingBlockIndex >= 0 && h.activeThinkingBlockIndex < len(h.contentBlocks) {
-			builder, ok := h.thinkingBlockBuilders[h.activeThinkingBlockIndex]
+		if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
+			builder, ok := h.thinkingBlockBuilders[internalIdx]
 			if !ok {
 				builder = perf.AcquireStringBuilder()
-				h.thinkingBlockBuilders[h.activeThinkingBlockIndex] = builder
+				h.thinkingBlockBuilders[internalIdx] = builder
 			}
 			builder.WriteString(delta)
 		}
 		h.mu.Unlock()
 		m := perf.AcquireMap()
 		m["type"] = "content_block_delta"
-		m["index"] = idx
+		m["index"] = sseIdx
 		deltaMap := perf.AcquireMap()
 		deltaMap["type"] = "thinking_delta"
 		deltaMap["thinking"] = delta
@@ -1115,11 +1127,15 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 		// Removed shouldSuppressAutoText check as it was causing empty results in some cases
 		h.mu.Lock()
-		idx := h.activeTextBlockIndex
+		sseIdx := h.activeTextSSEIndex
+		internalIdx := h.activeTextBlockIndex
 		h.mu.Unlock()
-		if idx < 0 {
+		if sseIdx < 0 {
 			// If we get delta but no text block is active, try to ensure one
-			idx = h.ensureBlock("text")
+			sseIdx = h.ensureBlock("text")
+			h.mu.Lock()
+			internalIdx = h.activeTextBlockIndex
+			h.mu.Unlock()
 		}
 		h.addOutputTokens(delta)
 		if !h.isStream {
@@ -1127,18 +1143,18 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 		// Always update internal state for history
 		h.mu.Lock()
-		if h.activeTextBlockIndex >= 0 && h.activeTextBlockIndex < len(h.contentBlocks) {
-			builder, ok := h.textBlockBuilders[h.activeTextBlockIndex]
+		if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
+			builder, ok := h.textBlockBuilders[internalIdx]
 			if !ok {
 				builder = perf.AcquireStringBuilder()
-				h.textBlockBuilders[h.activeTextBlockIndex] = builder
+				h.textBlockBuilders[internalIdx] = builder
 			}
 			builder.WriteString(delta)
 		}
 		h.mu.Unlock()
 		m := perf.AcquireMap()
 		m["type"] = "content_block_delta"
-		m["index"] = idx
+		m["index"] = sseIdx
 		deltaMap := perf.AcquireMap()
 		deltaMap["type"] = "text_delta"
 		deltaMap["text"] = delta
@@ -1155,6 +1171,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		idx := h.ensureBlock("thinking") // Trigger/Maintain thinking state
 		if data, ok := msg.Event["data"].(map[string]interface{}); ok {
 			if message, ok := data["message"].(string); ok {
+				if h.lastInitMsg == message {
+					return
+				}
+				h.lastInitMsg = message
 				// Send as thinking delta to keep block open and visible
 				deltaMap := perf.AcquireMap()
 				deltaMap["type"] = "content_block_delta"
@@ -1215,22 +1235,30 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			}
 		}
 
-		/*
-			// FIX: Do not treat fs_operation as a tool call requiring follow-up.
-			// The upstream agent handles this inline via WebSocket.
+		opID, _ := op["id"].(string)
+		opName, _ := op["operation"].(string)
+
+		// Map orchids fs operation to tool result
+		if opID != "" {
 			h.mu.Lock()
 			h.internalToolResults = append(h.internalToolResults, safeToolResult{
 				call: toolCall{
-					id:   opID,
-					name: mappedName,
+					id:    opID,
+					name:  "fs_" + opName, // Synthetic name or mapped name
+					input: "",             // Input is in op map, maybe serialize it?
 				},
-				input:   op,
+				// input: op, // store.Account incompatible type if safeToolResult uses map[string]interface{} for Input?
+				// Let's check safeToolResult struct definition if needed.
+				// Assuming it's compatible or we serialize.
+				// The commented code used `input: op`.
+				// Let's assume input needs to be compatible with what handler.go expects.
+				input:   stringifyToolInput(op),
 				output:  output,
 				isError: !success,
 			})
-			// h.internalNeedsFollowup = true
+			h.internalNeedsFollowup = true
 			h.mu.Unlock()
-		*/
+		}
 
 	case "model.tool-input-start":
 		h.closeActiveBlock() // Tool input starts a separate block mechanism
@@ -1502,4 +1530,15 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.closeActiveBlock()
 		h.finishResponse(stopReason)
 	}
+}
+
+func stringifyToolInput(input interface{}) string {
+	if input == nil {
+		return "{}"
+	}
+	bytes, err := json.Marshal(input)
+	if err != nil {
+		return "{}"
+	}
+	return string(bytes)
 }

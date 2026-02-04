@@ -1,17 +1,1 @@
-{
-  "port": "3002",
-  "admin_user": "admin",
-  "admin_pass": "admin123",
-  "redis_addr": "127.0.0.1:6379",
-  "redis_password": "",
-  "redis_db": 0,
-  "redis_prefix": "orchids:",
-  "debug_enabled": true,
-  "cache_strategy": "moderate",
-  "context_max_tokens": 100000,
-  "max_retries": 3,
-  "warp_disable_tools": false,
-  "tool_call_mode": "proxy",
-  "warp_tool_call_mode": "auto",
-  "adaptive_timeout": true
-}
+{"admin":{"password":"admin123","username":"admin"},"performance":{"adaptive_timeout":true,"cache_strategy":"moderate","context_max_tokens":100000,"max_retries":3},"redis":{"address":"127.0.0.1:6379","database":0,"key_prefix":"orchids:","password":""},"server":{"debug_enabled":true,"port":"3002"},"tools":{"call_mode":"proxy","warp_call_mode":"auto","warp_disable":false}}

@@ -34,4 +34,3 @@ func GetAccountBreaker(accountName string) *CircuitBreaker {
 	upstreamBreakers.breakers[accountName] = cb
 	return cb
 }
-

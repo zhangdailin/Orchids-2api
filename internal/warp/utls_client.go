@@ -94,7 +94,7 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		ServerName: host,
 		NextProtos: []string{"http/1.1"},
 	}
-	
+
 	// Create a spec based on Chrome 120 but filter out H2 from ALPN
 	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_120)
 	if err == nil {
@@ -130,7 +130,7 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	// Use http1 Transport with a custom dialer that returns the already established conn
-	// Note: for simpler implementation without complex connection pooling, 
+	// Note: for simpler implementation without complex connection pooling,
 	// we just use a one-off transport.
 	h1 := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {

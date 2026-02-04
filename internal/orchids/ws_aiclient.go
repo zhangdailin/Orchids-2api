@@ -51,6 +51,7 @@ const (
 	EventOutputTextDelta    = "output_text_delta"
 	EventResponseChunk      = "coding_agent.response.chunk"
 	EventModel              = "model"
+	EventResponseStarted    = "response_started"
 )
 
 type requestState struct {
@@ -61,6 +62,8 @@ type requestState struct {
 	finishSent        bool
 	sawToolCall       bool
 	hasFSOps          bool
+	responseStarted   bool
+	suppressStarts    bool
 }
 
 func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -314,7 +317,18 @@ func (c *Client) handleOrchidsMessage(
 	case EventConnected:
 		return false
 
+	case EventResponseStarted:
+		if state.responseStarted {
+			state.suppressStarts = true
+			return false
+		}
+		state.responseStarted = true
+		return false
+
 	case EventCodingAgentStart, EventCodingAgentInit:
+		if state.suppressStarts {
+			return false
+		}
 		state.preferCodingAgent = true
 		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg})
 		return false
@@ -498,6 +512,9 @@ func (c *Client) handleModelEvent(
 		return false
 	}
 	eventType, _ := event["type"].(string)
+	if state.suppressStarts && eventType == "stream-start" {
+		return false
+	}
 
 	if state.preferCodingAgent {
 		// Suppress only duplicate text/thinking segments to avoid redundancy

@@ -85,9 +85,9 @@ func main() {
 			}
 			acc.ClientCookie = ""
 		}
-		
+
 		fmt.Printf("Importing account: %s (%s)...\n", acc.Name, acc.AccountType)
-		
+
 		payload, _ := json.Marshal(acc)
 		req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/accounts", *host), bytes.NewBuffer(payload))
 		if err != nil {

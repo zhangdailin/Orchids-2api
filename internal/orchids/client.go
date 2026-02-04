@@ -285,8 +285,12 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	mode := strings.ToLower(strings.TrimSpace(c.config.UpstreamMode))
+	timeout := c.config.RequestTimeout
+	if timeout <= 0 {
+		timeout = 120
+	}
 	if c.config.DebugEnabled {
-		slog.Debug("Sending upstream request", "mode", mode, "url", c.upstreamURL())
+		slog.Debug("Sending upstream request", "mode", mode, "url", c.upstreamURL(), "timeout", timeout)
 	}
 	if mode == "ws" || mode == "websocket" {
 		err := c.sendRequestWSAIClient(ctx, req, onMessage, logger)
@@ -394,7 +398,7 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		return fmt.Errorf("upstream request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-limitedBody := resp.Body
+	limitedBody := resp.Body
 
 	reader := perf.AcquireBufioReader(limitedBody)
 	defer perf.ReleaseBufioReader(reader)

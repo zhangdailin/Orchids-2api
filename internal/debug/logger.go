@@ -1,6 +1,8 @@
 package debug
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,8 +29,14 @@ func New(enabled bool, sseEnabled bool) *Logger {
 		return &Logger{enabled: false}
 	}
 
-	timestamp := time.Now().Format("2006-01-02_15-04-05")
-	dir := filepath.Join("debug-logs", timestamp)
+	now := time.Now()
+	timestamp := now.Format("2006-01-02_15-04-05.000")
+	suffix := "0000"
+	var randBytes [2]byte
+	if _, err := rand.Read(randBytes[:]); err == nil {
+		suffix = hex.EncodeToString(randBytes[:])
+	}
+	dir := filepath.Join("debug-logs", fmt.Sprintf("%s_%s", timestamp, suffix))
 	os.MkdirAll(dir, 0755)
 
 	return &Logger{
