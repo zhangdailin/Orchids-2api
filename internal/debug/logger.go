@@ -47,13 +47,12 @@ func New(enabled bool, sseEnabled bool) *Logger {
 	}
 }
 
-// CleanupAllLogs 清理所有调试日志（启动时调用，保留最近 20 个）
-func CleanupAllLogs() {
-	if _, err := os.Stat("debug-logs"); os.IsNotExist(err) {
-		os.MkdirAll("debug-logs", 0755)
-		return
+// CleanupAllLogs 清空所有调试日志（启动时调用）
+func CleanupAllLogs() error {
+	if err := os.RemoveAll("debug-logs"); err != nil {
+		return err
 	}
-	cleanupOldDirs("debug-logs", 20)
+	return os.MkdirAll("debug-logs", 0755)
 }
 
 // Dir 返回日志目录

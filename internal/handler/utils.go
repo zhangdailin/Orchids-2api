@@ -160,16 +160,15 @@ func isSuggestionMode(messages []prompt.Message) bool {
 			continue
 		}
 		if msg.Content.IsString() {
-			if containsSuggestionMode(msg.Content.GetText()) {
-				return true
-			}
-			continue
+			return containsSuggestionMode(msg.Content.GetText())
 		}
 		for _, block := range msg.Content.GetBlocks() {
-			if block.Type == "text" && containsSuggestionMode(block.Text) {
-				return true
+			if block.Type == "text" {
+				return containsSuggestionMode(block.Text)
 			}
 		}
+		// 最近一条 user 消息没有文本内容，避免回溯旧的 suggestion prompt 误判
+		return false
 	}
 	return false
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +45,10 @@ const (
 	EventEditChunk          = "coding_agent.Edit.edit.chunk"
 	EventEditFileCompleted  = "coding_agent.edit_file.completed"
 	EventEditCompleted      = "coding_agent.Edit.edit.completed"
+	EventWriteStart         = "coding_agent.Write.started"
+	EventWriteContentStart  = "coding_agent.Write.content.started"
+	EventWriteChunk         = "coding_agent.Write.content.chunk"
+	EventWriteCompleted     = "coding_agent.Write.content.completed"
 	EventReasoningChunk     = "coding_agent.reasoning.chunk"
 	EventReasoningCompleted = "coding_agent.reasoning.completed"
 	EventOutputTextDelta    = "output_text_delta"
@@ -64,6 +67,12 @@ type requestState struct {
 	hasFSOps          bool
 	responseStarted   bool
 	suppressStarts    bool
+	activeWrites      map[string]*fileWriterState
+}
+
+type fileWriterState struct {
+	path string
+	buf  strings.Builder
 }
 
 func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -171,13 +180,18 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 	// 	logger.LogUpstreamRequest(wsURL, logHeaders, wsPayload)
 	// }
 
-	if err := conn.WriteJSON(wsPayload); err != nil {
+	// Lock to prevent race with ping loop which starts shortly after
+	c.wsWriteMu.Lock()
+	writeErr := conn.WriteJSON(wsPayload)
+	c.wsWriteMu.Unlock()
+
+	if writeErr != nil {
 		if parentCtx.Err() == nil {
 			returnToPool = false
-			return wsFallbackError{err: fmt.Errorf("ws write failed: %w", err)}
+			return wsFallbackError{err: fmt.Errorf("ws write failed: %w", writeErr)}
 		}
 		returnToPool = false
-		return fmt.Errorf("ws write failed: %w", err)
+		return fmt.Errorf("ws write failed: %w", writeErr)
 	}
 
 	if c.config.DebugEnabled {
@@ -384,11 +398,69 @@ func (c *Client) handleOrchidsMessage(
 		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "text-delta", "id": "0", "delta": text}})
 		return false
 
+	case EventWriteStart, EventWriteContentStart, EventEditStart:
+		state.preferCodingAgent = true
+		data, _ := msg["data"].(map[string]interface{})
+		path, _ := data["file_path"].(string)
+		if path != "" {
+			if state.activeWrites == nil {
+				state.activeWrites = make(map[string]*fileWriterState)
+			}
+			state.activeWrites[path] = &fileWriterState{path: path}
+		}
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg})
+		return false
+
+	case EventWriteChunk, EventEditChunk:
+		state.preferCodingAgent = true
+		data, _ := msg["data"].(map[string]interface{})
+		path, _ := data["file_path"].(string)
+		text, _ := data["text"].(string)
+		if path != "" && text != "" && state.activeWrites != nil {
+			if w, ok := state.activeWrites[path]; ok {
+				w.buf.WriteString(text)
+			}
+		}
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg})
+		return false
+
+	case EventWriteCompleted:
+		state.preferCodingAgent = true
+		data, _ := msg["data"].(map[string]interface{})
+		path, _ := data["file_path"].(string)
+		if path != "" && state.activeWrites != nil {
+			if w, ok := state.activeWrites[path]; ok {
+				content := w.buf.String()
+				c.dispatchFSOperation(map[string]interface{}{
+					"operation": "write",
+					"path":      path,
+					"content":   content,
+					"id":        fmt.Sprintf("stream_%d", time.Now().UnixMilli()),
+				}, onMessage, conn, fsWG, workdir)
+				delete(state.activeWrites, path)
+				state.hasFSOps = true
+			}
+		}
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg})
+		return false
+
+	case EventEditCompleted, EventEditFileCompleted:
+		state.preferCodingAgent = true
+		if state.activeWrites != nil {
+			data, _ := msg["data"].(map[string]interface{})
+			path, _ := data["file_path"].(string)
+			if path != "" {
+				delete(state.activeWrites, path)
+			}
+		}
+		onMessage(upstream.SSEMessage{Type: msgType, Event: msg, Raw: msg})
+		return false
+
 	case EventModel:
 		return c.handleModelEvent(msg, state, onMessage)
 
 	// Suppressed events
-	case EventTodoWriteStart, EventRunItemStream, EventToolCallOutput, EventEditStart, EventEditChunk, EventEditFileCompleted, EventEditCompleted:
+	case EventTodoWriteStart, EventRunItemStream, EventToolCallOutput:
 		return false
 	}
 
@@ -586,13 +658,6 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 	orchidsTools := convertOrchidsTools(req.Tools)
 	attachmentUrls := extractAttachmentURLsAIClient(req.Messages)
 
-	workingDir := req.Workdir
-	if workingDir == "" {
-		if cwd, err := os.Getwd(); err == nil {
-			workingDir = cwd
-		}
-	}
-
 	promptText := ""
 	if req.Prompt != "" {
 		promptText = req.Prompt
@@ -601,7 +666,7 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 			chatHistory = nil
 		}
 	} else {
-		promptText = buildLocalAssistantPrompt(systemText, userText)
+		promptText = buildLocalAssistantPrompt(systemText, userText, req.Model)
 		if !req.NoThinking && !isSuggestionModeText(userText) {
 			promptText = injectThinkingPrefix(promptText)
 		}
@@ -610,7 +675,6 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 	if req.NoTools {
 		orchidsTools = nil
 		toolResults = nil
-		workingDir = ""
 	}
 
 	agentMode := normalizeAIClientModel(req.Model)
@@ -629,11 +693,12 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 		"chatHistory":    chatHistory,
 		"attachmentUrls": attachmentUrls,
 		"currentPage":    nil,
-		"email":          "bridge@localhost",
+		"email":          c.config.Email,
 		"isLocal":        false, // MUST be false to avoid upstream indexing loop
 		"isFixingErrors": false,
 		"fileStructure":  nil,
-		"userId":         defaultUserID(c.config.UserID),
+		"userId":         c.config.UserID,
+		"apiVersion":     2,
 	}
 	// Do NOT send localWorkingDirectory to avoid triggering the crawler
 	if len(orchidsTools) > 0 {
@@ -707,8 +772,8 @@ func extractUserMessageAIClient(messages []prompt.Message) (string, []orchidsToo
 
 func extractMessageTextAIClient(content prompt.MessageContent) (string, []orchidsToolResult) {
 	if content.IsString() {
-		text := strings.TrimSpace(content.GetText())
-		if text != "" && strings.Contains(text, "<system-reminder>") {
+		text := stripSystemReminders(content.GetText())
+		if text == "" {
 			return "", nil
 		}
 		return text, nil
@@ -718,20 +783,25 @@ func extractMessageTextAIClient(content prompt.MessageContent) (string, []orchid
 	for _, block := range content.GetBlocks() {
 		switch block.Type {
 		case "text":
-			text := strings.TrimSpace(block.Text)
-			if text != "" && !strings.Contains(text, "<system-reminder>") {
+			text := stripSystemReminders(block.Text)
+			if text != "" {
 				parts = append(parts, text)
 			}
 		case "tool_result":
 			text := formatToolResultContentLocal(block.Content)
 			text = strings.ReplaceAll(text, "<tool_use_error>", "")
 			text = strings.ReplaceAll(text, "</tool_use_error>", "")
-			if strings.TrimSpace(text) != "" {
+			text = stripSystemReminders(text)
+			if text != "" {
 				parts = append(parts, text)
+			}
+			status := "success"
+			if block.IsError {
+				status = "error"
 			}
 			toolResults = append(toolResults, orchidsToolResult{
 				Content:   []map[string]string{{"text": text}},
-				Status:    "success",
+				Status:    status,
 				ToolUseID: block.ToolUseID,
 			})
 		case "image":
@@ -752,8 +822,8 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 		}
 		if msg.Role == "user" {
 			if msg.Content.IsString() {
-				text := strings.TrimSpace(msg.Content.GetText())
-				if text != "" && !strings.Contains(text, "<system-reminder>") {
+				text := stripSystemReminders(msg.Content.GetText())
+				if text != "" {
 					history = append(history, map[string]string{
 						"role":    "user",
 						"content": text,
@@ -767,8 +837,8 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 			for _, block := range blocks {
 				switch block.Type {
 				case "text":
-					text := strings.TrimSpace(block.Text)
-					if text != "" && !strings.Contains(text, "<system-reminder>") {
+					text := stripSystemReminders(block.Text)
+					if text != "" {
 						textParts = append(textParts, text)
 						hasValidContent = true
 					}
@@ -776,13 +846,18 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 					contentText := formatToolResultContentLocal(block.Content)
 					contentText = strings.ReplaceAll(contentText, "<tool_use_error>", "")
 					contentText = strings.ReplaceAll(contentText, "</tool_use_error>", "")
-					if strings.TrimSpace(contentText) != "" {
+					contentText = stripSystemReminders(contentText)
+					if contentText != "" {
 						textParts = append(textParts, contentText)
 						hasValidContent = true
 					}
+					status := "success"
+					if block.IsError {
+						status = "error"
+					}
 					toolResults = append(toolResults, orchidsToolResult{
 						Content:   []map[string]string{{"text": contentText}},
-						Status:    "success",
+						Status:    status,
 						ToolUseID: block.ToolUseID,
 					})
 				case "image":
@@ -807,7 +882,7 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 		}
 
 		if msg.Content.IsString() {
-			text := strings.TrimSpace(msg.Content.GetText())
+			text := stripSystemReminders(msg.Content.GetText())
 			if text == "" {
 				continue
 			}
@@ -821,7 +896,7 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 		for _, block := range msg.Content.GetBlocks() {
 			switch block.Type {
 			case "text":
-				text := strings.TrimSpace(block.Text)
+				text := stripSystemReminders(block.Text)
 				if text != "" {
 					parts = append(parts, text)
 				}

@@ -149,7 +149,9 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 	}
 	if cfg != nil {
 		client := orchids.New(cfg)
-		client.SetFSExecutor(h.orchidsFSExecutor)
+		if strings.EqualFold(strings.TrimSpace(cfg.ToolCallMode), "internal") {
+			client.SetFSExecutor(h.orchidsFSExecutor)
+		}
 		h.client = client
 	}
 	return h
@@ -346,11 +348,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("Incoming header V2 CHECK", "key", k, "value", v)
 	}
 
-	forcedChannel := channelFromPath(r.URL.Path)
-	effectiveWorkdir := h.resolveWorkdir(r, req)
-
 	// Context and Conversation Key
 	conversationKey := conversationKeyForRequest(r, req)
+
+	forcedChannel := channelFromPath(r.URL.Path)
+	effectiveWorkdir, prevWorkdir, workdirChanged := h.resolveWorkdir(r, req, conversationKey)
+	if workdirChanged {
+		slog.Warn("检测到工作目录变化，已清空历史", "prev", prevWorkdir, "next", effectiveWorkdir, "session", conversationKey)
+		req.Messages = resetMessagesForNewWorkdir(req.Messages)
+	}
 
 	// 选择账号 (Initial Selection)
 	failedAccountIDs := []int64{}
@@ -399,19 +405,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	userText := extractUserText(req.Messages)
 	planMode := isPlanMode(req.Messages)
 	suggestionMode := isSuggestionMode(req.Messages)
+	noThinking := suggestionMode || h.config.SuppressThinking
 	gateNoTools := false
-	suppressThinking := false
+	suppressThinking := noThinking
 	if suggestionMode {
 		gateNoTools = true
-		suppressThinking = false
-	}
-	effectiveTools := req.Tools
-	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
-		effectiveTools = nil
-	}
-	if gateNoTools {
-		effectiveTools = nil
-		slog.Debug("tool_gate: disabled tools for short non-code request")
 	}
 	toolCallMode := strings.ToLower(strings.TrimSpace(h.config.ToolCallMode))
 	if toolCallMode == "" {
@@ -425,6 +423,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if warpMode != "" {
 			toolCallMode = warpMode
 		}
+	}
+	effectiveTools := req.Tools
+	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
+		effectiveTools = nil
+	}
+	if strings.TrimSpace(effectiveWorkdir) == "" && toolCallMode == "internal" {
+		gateNoTools = true
+		slog.Warn("未提供 workdir，已禁用工具调用")
+	}
+	if gateNoTools {
+		effectiveTools = nil
+		slog.Debug("tool_gate: disabled tools for short non-code request")
 	}
 	if toolCallMode == "auto" || toolCallMode == "internal" {
 		effectiveTools = filterSupportedTools(effectiveTools)
@@ -440,18 +450,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
 
+	summaryKey := conversationKey
+	if strings.TrimSpace(effectiveWorkdir) != "" {
+		summaryKey = conversationKey + "|" + strings.TrimSpace(effectiveWorkdir)
+	}
 	opts := prompt.PromptOptions{
 		Context:          r.Context(),
-		ConversationID:   conversationKey,
+		ConversationID:   summaryKey,
 		MaxTokens:        h.config.ContextMaxTokens,
 		SummaryMaxTokens: h.config.ContextSummaryMaxTokens,
 		KeepTurns:        h.config.ContextKeepTurns,
 		SummaryCache:     h.summaryCache,
 		ProjectRoot:      effectiveWorkdir,
-	}
-
-	if c, ok := apiClient.(*orchids.Client); ok {
-		opts.ProjectContext = c.GetProjectSummary()
 	}
 
 	slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
@@ -463,7 +473,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	var aiClientHistory []map[string]string
 	var builtPrompt string
 	if isOrchidsAIClient {
-		builtPrompt, aiClientHistory = orchids.BuildAIClientPromptAndHistory(req.Messages, req.System, suggestionMode)
+		builtPrompt, aiClientHistory = orchids.BuildAIClientPromptAndHistory(req.Messages, req.System, req.Model, noThinking)
 	} else {
 		builtPrompt = prompt.BuildPromptV2WithOptions(prompt.ClaudeAPIRequest{
 			Model:    req.Model,
@@ -630,15 +640,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				select {
 				case <-ticker.C:
 					sh.mu.Lock()
-					if sh.hasReturn {
-						sh.mu.Unlock()
+					done := sh.hasReturn
+					sh.mu.Unlock()
+					if done {
 						return
 					}
-					fmt.Fprint(w, ": keepalive\n\n")
-					if f, ok := w.(http.Flusher); ok {
-						f.Flush()
-					}
-					sh.mu.Unlock()
+					sh.writeKeepAlive()
 				case <-keepAliveStop:
 					return
 				case <-r.Context().Done():
@@ -666,10 +673,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 			payloadMessages := upstreamMessages
 			payloadSystem := req.System
-			if isOrchidsAIClient {
-				payloadMessages = nil
-				payloadSystem = nil
-			}
+			// AIClient 需要 messages 来生成 toolResults/chatHistory，否则容易陷入工具回路
 
 			upstreamReq := upstream.UpstreamRequest{
 				Prompt:        builtPrompt,
@@ -680,7 +684,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				System:        payloadSystem,
 				Tools:         effectiveTools,
 				NoTools:       gateNoTools,
-				NoThinking:    suggestionMode,
+				NoThinking:    noThinking,
 				ChatSessionID: chatSessionID,
 			}
 			for {
@@ -722,6 +726,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Debug("Upstream Client Returned", "error", err)
 
 				if err == nil {
+					sh.forceFinishIfMissing()
 					break
 				}
 
@@ -823,8 +828,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if ((toolCallMode == "internal" || toolCallMode == "auto") && sh.internalNeedsFollowup) || (sh.internalNeedsFollowup && len(sh.internalToolResults) > 0) {
 				if toolCallMode == "internal" || toolCallMode == "auto" {
 					// Enforce max followups limit (prevent infinite loop)
-					if followupCount >= 30 {
-						slog.Warn("Tool follow-up limit reached", "turn", turnCount, "max_followups", 30)
+					maxFollowups := h.config.MaxToolFollowups
+					if maxFollowups <= 0 {
+						maxFollowups = 5
+					}
+					if followupCount >= maxFollowups {
+						slog.Warn("Tool follow-up limit reached", "turn", turnCount, "max_followups", maxFollowups)
 						sh.finishResponse("end_turn")
 						return
 					}
@@ -911,7 +920,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 					// Rebuild prompt for next round to include updated history
 					if isOrchidsAIClient {
-						builtPrompt, aiClientHistory = orchids.BuildAIClientPromptAndHistory(upstreamMessages, req.System, suggestionMode)
+						builtPrompt, aiClientHistory = orchids.BuildAIClientPromptAndHistory(upstreamMessages, req.System, req.Model, noThinking)
 						chatHistory = chatHistory[:0]
 						for _, item := range aiClientHistory {
 							chatHistory = append(chatHistory, item)

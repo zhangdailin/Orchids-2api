@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -643,10 +642,7 @@ func buildMetadata(conversationID string) []byte {
 
 func buildInputContext(workdir string) []byte {
 	pwd := strings.TrimSpace(workdir)
-	if pwd == "" {
-		pwd, _ = os.Getwd()
-	}
-	home, _ := os.UserHomeDir()
+	home := ""
 	shellName := "zsh"
 	shellVersion := "5.9"
 

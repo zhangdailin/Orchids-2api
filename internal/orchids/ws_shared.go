@@ -91,13 +91,16 @@ func injectThinkingPrefix(prompt string) string {
 	return prefix + "\n" + prompt
 }
 
-func buildLocalAssistantPrompt(systemText string, userText string) string {
+func buildLocalAssistantPrompt(systemText string, userText string, model string) string {
 	var b strings.Builder
 	dateStr := time.Now().Format("2006-01-02")
 	b.WriteString("<environment>\n")
 	b.WriteString("Date: " + dateStr + "\n")
 	b.WriteString("Interface: Client API Bridge\n")
-	b.WriteString("Model: claude-opus-4-5-20251101\n")
+	if model == "" {
+		model = "claude-opus-4-5-20251101"
+	}
+	b.WriteString("Model: " + model + "\n")
 	b.WriteString("Execution: Client Environment (Safe Tool Execution)\n")
 	b.WriteString("</environment>\n\n")
 	b.WriteString(`
@@ -177,7 +180,7 @@ func buildLocalAssistantPrompt(systemText string, userText string) string {
 
 // BuildAIClientPromptAndHistory 构建 AIClient 风格 prompt，并提取 chatHistory（用于 SSE/WS 统一行为）。
 // 返回的 chatHistory 为 {role, content} 结构，避免重复注入 messages。
-func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.SystemItem, noThinking bool) (string, []map[string]string) {
+func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool) (string, []map[string]string) {
 	systemText := extractSystemPrompt(messages)
 	if strings.TrimSpace(systemText) == "" && len(system) > 0 {
 		var sb strings.Builder
@@ -190,8 +193,11 @@ func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.Sy
 		}
 		systemText = sb.String()
 	}
+	systemText = stripSystemReminders(systemText)
+	systemText = ensureReadBeforeWriteRule(systemText)
 
 	userText, _ := extractUserMessageAIClient(messages)
+	userText = stripSystemReminders(userText)
 	currentUserIdx := findCurrentUserMessageIndex(messages)
 	if currentUserIdx >= 0 && !hasUserPlainText(messages[currentUserIdx]) {
 		previousText := findLatestUserText(messages[:currentUserIdx])
@@ -211,11 +217,51 @@ func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.Sy
 	}
 	chatHistory, _ := convertChatHistoryAIClient(historyMessages)
 
-	promptText := buildLocalAssistantPrompt(systemText, userText)
+	promptText := buildLocalAssistantPrompt(systemText, userText, model)
 	if !noThinking && !isSuggestionModeText(userText) {
 		promptText = injectThinkingPrefix(promptText)
 	}
 	return promptText, chatHistory
+}
+
+func ensureReadBeforeWriteRule(systemText string) string {
+	if strings.Contains(strings.ToLower(systemText), "read before write") ||
+		strings.Contains(systemText, "先 Read 再 Write") ||
+		strings.Contains(systemText, "先读再写") {
+		return systemText
+	}
+	rule := "文件工具规则：对可能已存在的文件，必须先 Read 再 Write/Edit；Read 失败（不存在）后才允许 Write。"
+	if strings.TrimSpace(systemText) == "" {
+		return rule
+	}
+	return strings.TrimSpace(systemText) + "\n" + rule
+}
+
+// stripSystemReminders 移除 <system-reminder>...</system-reminder>，避免污染上游提示
+func stripSystemReminders(text string) string {
+	const startTag = "<system-reminder>"
+	const endTag = "</system-reminder>"
+	if !strings.Contains(text, startTag) {
+		return strings.TrimSpace(text)
+	}
+	var sb strings.Builder
+	sb.Grow(len(text))
+	i := 0
+	for i < len(text) {
+		start := strings.Index(text[i:], startTag)
+		if start == -1 {
+			sb.WriteString(text[i:])
+			break
+		}
+		sb.WriteString(text[i : i+start])
+		endStart := i + start + len(startTag)
+		end := strings.Index(text[endStart:], endTag)
+		if end == -1 {
+			break
+		}
+		i = endStart + end + len(endTag)
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func hasUserPlainText(msg prompt.Message) bool {
@@ -223,15 +269,15 @@ func hasUserPlainText(msg prompt.Message) bool {
 		return false
 	}
 	if msg.Content.IsString() {
-		text := strings.TrimSpace(msg.Content.GetText())
-		return text != "" && !strings.Contains(text, "<system-reminder>")
+		text := stripSystemReminders(msg.Content.GetText())
+		return text != ""
 	}
 	for _, block := range msg.Content.GetBlocks() {
 		if block.Type != "text" {
 			continue
 		}
-		text := strings.TrimSpace(block.Text)
-		if text != "" && !strings.Contains(text, "<system-reminder>") {
+		text := stripSystemReminders(block.Text)
+		if text != "" {
 			return true
 		}
 	}
@@ -245,8 +291,8 @@ func findLatestUserText(messages []prompt.Message) string {
 			continue
 		}
 		if msg.Content.IsString() {
-			text := strings.TrimSpace(msg.Content.GetText())
-			if text != "" && !strings.Contains(text, "<system-reminder>") {
+			text := stripSystemReminders(msg.Content.GetText())
+			if text != "" {
 				return text
 			}
 		} else {
@@ -255,8 +301,8 @@ func findLatestUserText(messages []prompt.Message) string {
 				if block.Type != "text" {
 					continue
 				}
-				text := strings.TrimSpace(block.Text)
-				if text != "" && !strings.Contains(text, "<system-reminder>") {
+				text := stripSystemReminders(block.Text)
+				if text != "" {
 					parts = append(parts, text)
 				}
 			}
@@ -273,19 +319,18 @@ func extractSystemPrompt(messages []prompt.Message) string {
 	for _, msg := range messages {
 		if msg.Role == "system" {
 			if msg.Content.IsString() {
-				parts = append(parts, msg.Content.GetText())
+				text := stripSystemReminders(msg.Content.GetText())
+				if text != "" {
+					parts = append(parts, text)
+				}
 			} else {
 				for _, block := range msg.Content.GetBlocks() {
 					if block.Type == "text" {
-						parts = append(parts, block.Text)
+						text := stripSystemReminders(block.Text)
+						if text != "" {
+							parts = append(parts, text)
+						}
 					}
-				}
-			}
-		} else if msg.Role == "user" && !msg.Content.IsString() {
-			// Look for system-reminder tags inside user messages (common in some adapters)
-			for _, block := range msg.Content.GetBlocks() {
-				if block.Type == "text" && strings.Contains(block.Text, "<system-reminder>") {
-					parts = append(parts, block.Text)
 				}
 			}
 		}
@@ -299,7 +344,7 @@ func (c *Client) getWSToken() (string, error) {
 	}
 
 	if c.config != nil && strings.TrimSpace(c.config.ClientCookie) != "" {
-		info, err := clerk.FetchAccountInfo(c.config.ClientCookie)
+		info, err := clerk.FetchAccountInfoWithProject(c.config.ClientCookie, c.config.ProjectID)
 		if err == nil && info.JWT != "" {
 			return info.JWT, nil
 		}
@@ -333,8 +378,8 @@ func findCurrentUserMessageIndex(messages []prompt.Message) int {
 			case "tool_result", "image", "document":
 				return i
 			case "text":
-				text := strings.TrimSpace(block.Text)
-				if text != "" && !strings.Contains(text, "<system-reminder>") {
+				text := stripSystemReminders(block.Text)
+				if text != "" {
 					return i
 				}
 			}
@@ -376,11 +421,10 @@ func convertOrchidsTools(tools []interface{}) []orchidsToolSpec {
 	const maxDescriptionLength = 9216
 	var out []orchidsToolSpec
 	for _, tool := range tools {
-		tm, ok := tool.(map[string]interface{})
-		if !ok {
+		name, description, inputSchema := extractToolSpecFields(tool)
+		if name == "" {
 			continue
 		}
-		name, _ := tm["name"].(string)
 
 		// 使用 ToolMapper 检查是否被屏蔽
 		if DefaultToolMapper.IsBlocked(name) {
@@ -389,12 +433,18 @@ func convertOrchidsTools(tools []interface{}) []orchidsToolSpec {
 
 		// 映射工具名
 		mappedName := DefaultToolMapper.ToOrchids(name)
+		// Orchids AIClient 仅支持本地工具集合，避免下游不支持的命令
+		if !isOrchidsToolSupported(mappedName) {
+			continue
+		}
 
-		description, _ := tm["description"].(string)
 		if len(description) > maxDescriptionLength {
 			description = description[:maxDescriptionLength] + "..."
 		}
-		inputSchema, _ := tm["input_schema"].(map[string]interface{})
+		inputSchema = cleanJSONSchemaProperties(inputSchema)
+		if inputSchema == nil {
+			inputSchema = map[string]interface{}{}
+		}
 		var spec orchidsToolSpec
 		spec.ToolSpecification.Name = mappedName
 		spec.ToolSpecification.Description = description
@@ -404,6 +454,107 @@ func convertOrchidsTools(tools []interface{}) []orchidsToolSpec {
 		out = append(out, spec)
 	}
 	return out
+}
+
+// extractToolSpecFields 支持 Claude/OpenAI 风格的工具定义字段提取
+// 兼容：{name, description, input_schema} 与 {type:"function", function:{name, description, parameters}}
+func extractToolSpecFields(tool interface{}) (string, string, map[string]interface{}) {
+	tm, ok := tool.(map[string]interface{})
+	if !ok {
+		return "", "", nil
+	}
+	var name string
+	var description string
+	var schema map[string]interface{}
+
+	if fn, ok := tm["function"].(map[string]interface{}); ok {
+		if v, ok := fn["name"].(string); ok {
+			name = strings.TrimSpace(v)
+		}
+		if v, ok := fn["description"].(string); ok {
+			description = v
+		}
+		schema = extractSchemaMap(fn, "parameters", "input_schema", "inputSchema")
+	}
+	if name == "" {
+		if v, ok := tm["name"].(string); ok {
+			name = strings.TrimSpace(v)
+		}
+	}
+	if description == "" {
+		if v, ok := tm["description"].(string); ok {
+			description = v
+		}
+	}
+	if schema == nil {
+		schema = extractSchemaMap(tm, "input_schema", "inputSchema", "parameters")
+	}
+	return name, description, schema
+}
+
+func extractSchemaMap(tm map[string]interface{}, keys ...string) map[string]interface{} {
+	if tm == nil {
+		return nil
+	}
+	for _, key := range keys {
+		if v, ok := tm[key]; ok {
+			if schema, ok := v.(map[string]interface{}); ok {
+				return schema
+			}
+		}
+	}
+	return nil
+}
+
+// cleanJSONSchemaProperties 递归清理不受支持的 JSON Schema 字段
+// 仅保留 type/description/properties/required/enum/items，避免上游报错
+func cleanJSONSchemaProperties(schema map[string]interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+	sanitized := map[string]interface{}{}
+	for _, key := range []string{"type", "description", "properties", "required", "enum", "items"} {
+		if v, ok := schema[key]; ok {
+			sanitized[key] = v
+		}
+	}
+	if props, ok := sanitized["properties"].(map[string]interface{}); ok {
+		cleanProps := map[string]interface{}{}
+		for name, prop := range props {
+			cleanProps[name] = cleanJSONSchemaValue(prop)
+		}
+		sanitized["properties"] = cleanProps
+	}
+	if items, ok := sanitized["items"]; ok {
+		sanitized["items"] = cleanJSONSchemaValue(items)
+	}
+	return sanitized
+}
+
+func cleanJSONSchemaValue(value interface{}) interface{} {
+	if value == nil {
+		return value
+	}
+	if m, ok := value.(map[string]interface{}); ok {
+		return cleanJSONSchemaProperties(m)
+	}
+	if arr, ok := value.([]interface{}); ok {
+		out := make([]interface{}, 0, len(arr))
+		for _, item := range arr {
+			out = append(out, cleanJSONSchemaValue(item))
+		}
+		return out
+	}
+	return value
+}
+
+func isOrchidsToolSupported(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "read", "write", "edit", "bash", "glob", "grep", "ls", "list", "todowrite":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractOrchidsText(msg map[string]interface{}) string {

@@ -52,10 +52,13 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
-	// 启动时清理所有调试日志
+	// 启动时清空所有调试日志
 	if cfg.DebugEnabled {
-		debug.CleanupAllLogs()
-		slog.Info("已清理调试日志目录")
+		if err := debug.CleanupAllLogs(); err != nil {
+			slog.Warn("清理调试日志失败", "error", err)
+		} else {
+			slog.Info("已清空调试日志目录")
+		}
 	}
 
 	s, err := store.New(store.Options{

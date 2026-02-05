@@ -74,6 +74,9 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 		if errMsg != "" {
 			payload["error"] = errMsg
 		}
+		if conn == nil {
+			return nil
+		}
 		c.wsWriteMu.Lock()
 		defer c.wsWriteMu.Unlock()
 		return conn.WriteJSON(payload)
@@ -92,81 +95,19 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 	if c.config == nil {
 		return respond(false, nil, "server config unavailable")
 	}
-	var baseDir string
-	if overrideWorkdir != "" {
-		baseDir = overrideWorkdir
-	} else {
-		baseDir = c.resolveLocalWorkdir()
+	if strings.TrimSpace(overrideWorkdir) == "" {
+		return respond(false, nil, "workdir is required")
 	}
+	baseDir := overrideWorkdir
 	var ignore []string
 
 	switch operation {
 	case "edit":
-		if c.fsCache != nil {
-			c.fsCache.Clear() // Invalidate cache on write
-		}
-		if op.Path == "" {
-			return respond(false, nil, "path is required for edit")
-		}
-		path, err := resolvePath(baseDir, op.Path)
-		if err != nil {
-			return respond(false, nil, err.Error())
-		}
-		if err := validatePathIgnore(baseDir, path, ignore); err != nil {
-			return respond(false, nil, err.Error())
-		}
-		if op.Content == nil {
-			return respond(false, nil, "content is required for edit")
-		}
-		switch payload := op.Content.(type) {
-		case string:
-			if err := writeFile(path, payload); err != nil {
-				return respond(false, nil, err.Error())
-			}
-			return respond(true, map[string]interface{}{"replacements": 1}, "")
-		case []interface{}:
-			original, err := readFileLimited(path)
-			if err != nil {
-				return respond(false, nil, err.Error())
-			}
-			updated, count, err := applyEdits(original, map[string]interface{}{"edits": payload})
-			if err != nil {
-				return respond(false, nil, err.Error())
-			}
-			if err := writeFile(path, updated); err != nil {
-				return respond(false, nil, err.Error())
-			}
-			return respond(true, map[string]interface{}{"replacements": count}, "")
-		case map[string]interface{}:
-			if content := toolInputString(payload, "content", "text", "new_content", "newContent"); content != "" && payload["old_string"] == nil && payload["edits"] == nil {
-				if err := writeFile(path, content); err != nil {
-					return respond(false, nil, err.Error())
-				}
-				return respond(true, map[string]interface{}{"replacements": 1}, "")
-			}
-			original, err := readFileLimited(path)
-			if err != nil {
-				return respond(false, nil, err.Error())
-			}
-			updated, count, err := applyEdits(original, payload)
-			if err != nil {
-				return respond(false, nil, err.Error())
-			}
-			if err := writeFile(path, updated); err != nil {
-				return respond(false, nil, err.Error())
-			}
-			return respond(true, map[string]interface{}{"replacements": count}, "")
-		default:
-			content := normalizeContent(payload)
-			if content == "" {
-				return respond(false, nil, "unsupported edit payload")
-			}
-			if err := writeFile(path, content); err != nil {
-				return respond(false, nil, err.Error())
-			}
-			go c.RefreshFSIndex()
-			return respond(true, map[string]interface{}{"replacements": 1}, "")
-		}
+		// 'edit' is often an internal Orchids operation used for coordination.
+		// We should ACK it but NOT execute a local write here, as it might contain
+		// only partial snippets that would overwrite the entire file.
+		// Standard edits are handled via the model's tool calls in handler/tool_exec.go.
+		return respond(true, map[string]interface{}{"replacements": 1}, "")
 	case "read":
 		if op.Path == "" {
 			return respond(false, nil, "path is required for read")
@@ -218,7 +159,6 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 		if err := writeFile(path, content); err != nil {
 			return respond(false, nil, err.Error())
 		}
-		go c.RefreshFSIndex()
 		return respond(true, nil, "")
 	case "delete":
 		if c.fsCache != nil {
@@ -237,7 +177,6 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 		if err := os.RemoveAll(path); err != nil {
 			return respond(false, nil, err.Error())
 		}
-		go c.RefreshFSIndex()
 		return respond(true, nil, "")
 	case "list":
 		target := op.Path
@@ -251,21 +190,6 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 		if err := validatePathIgnore(baseDir, path, ignore); err != nil {
 			return respond(false, nil, err.Error())
 		}
-
-		// Fast path: use memory index
-		rel, _ := filepath.Rel(baseDir, path)
-		rel = filepath.ToSlash(rel)
-		c.fsIndexMu.RLock()
-		if c.fsIndex != nil {
-			if names, ok := c.fsIndex[rel]; ok {
-				c.fsIndexMu.RUnlock()
-				if names == nil {
-					return respond(false, nil, "readdirent: not a directory")
-				}
-				return respond(true, names, "")
-			}
-		}
-		c.fsIndexMu.RUnlock()
 
 		if c.fsCache != nil {
 			if val, errMsg, ok := c.fsCache.Get("list:" + path); ok {
@@ -311,37 +235,6 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 			return respond(false, nil, err.Error())
 		}
 
-		// Fast path: use memory index for glob matching
-		re, err := globToRegex(pattern)
-		if err == nil {
-			c.fsIndexMu.RLock()
-			if len(c.fsFileList) > 0 {
-				var results []string
-				rootRel, _ := filepath.Rel(baseDir, root)
-				rootRel = filepath.ToSlash(rootRel)
-				for _, f := range c.fsFileList {
-					// Filter by sub-directory
-					if rootRel != "." {
-						if !strings.HasPrefix(f, rootRel) {
-							continue
-						}
-					}
-					// Match pattern relative to root
-					matchTarget := f
-					if rootRel != "." {
-						if sub, err := filepath.Rel(rootRel, f); err == nil {
-							matchTarget = filepath.ToSlash(sub)
-						}
-					}
-					if re.MatchString(matchTarget) {
-						results = append(results, filepath.Join(baseDir, f))
-					}
-				}
-				c.fsIndexMu.RUnlock()
-				return respond(true, results, "")
-			}
-			c.fsIndexMu.RUnlock()
-		}
 		maxResults := 0
 		if params != nil {
 			if v, ok := asInt(params["maxResults"]); ok {
@@ -446,108 +339,6 @@ func validatePathIgnore(baseDir, target string, ignore []string) error {
 	return nil
 }
 
-func (c *Client) RefreshFSIndexSync() {
-	if c == nil {
-		return
-	}
-	baseDir := c.resolveLocalWorkdir()
-	ignore := c.config.OrchidsFSIgnore
-
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
-		return
-	}
-
-	c.fsIndexMu.Lock()
-	// Always reset the index when syncing to avoid stale entries from previous workdir
-	c.fsIndex = make(map[string][]string)
-	c.fsFileList = nil
-
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if !isIgnoredRelPath(e.Name(), ignore) {
-			names = append(names, e.Name())
-		}
-	}
-	c.fsIndex["."] = names
-	c.fsIndexMu.Unlock()
-}
-
-func (c *Client) RefreshFSIndex() {
-	if c == nil || c.config.SessionID == "" {
-		return
-	}
-	if c.fsIndexRefresh.Swap(true) {
-		c.fsIndexPending.Store(true)
-		return
-	}
-	defer c.fsIndexRefresh.Store(false)
-
-	for {
-		c.fsIndexPending.Store(false)
-
-		baseDir := c.resolveLocalWorkdir()
-		ignore := c.config.OrchidsFSIgnore
-
-		newIndex := make(map[string][]string)
-		newFileList := make([]string, 0)
-		filepath.WalkDir(baseDir, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-
-			rel, err := filepath.Rel(baseDir, path)
-			if err != nil {
-				return nil
-			}
-			rel = filepath.ToSlash(rel)
-
-			if rel != "." && isIgnoredRelPath(rel, ignore) {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-
-			// Limit depth to 3 levels
-			if rel != "." && strings.Count(rel, "/") >= 3 {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-
-			if d.IsDir() {
-				entries, err := os.ReadDir(path)
-				if err == nil {
-					names := make([]string, 0, len(entries))
-					for _, e := range entries {
-						eRel := filepath.ToSlash(filepath.Join(rel, e.Name()))
-						if !isIgnoredRelPath(eRel, ignore) {
-							names = append(names, e.Name())
-						}
-					}
-					newIndex[rel] = names
-				}
-			} else {
-				newFileList = append(newFileList, rel)
-				// Mark as file in index so list operations can fast-fail
-				newIndex[rel] = nil
-			}
-			return nil
-		})
-
-		c.fsIndexMu.Lock()
-		c.fsIndex = newIndex
-		c.fsFileList = newFileList
-		c.fsIndexMu.Unlock()
-
-		if !c.fsIndexPending.Load() {
-			break
-		}
-	}
-}
-
 func isIgnoredRelPath(rel string, ignore []string) bool {
 	rel = strings.TrimPrefix(rel, "./")
 	rel = strings.TrimSpace(rel)
@@ -580,13 +371,6 @@ func isIgnoredRelPath(rel string, ignore []string) bool {
 		}
 	}
 	return false
-}
-
-func (c *Client) resolveLocalWorkdir() string {
-	if cwd, err := os.Getwd(); err == nil {
-		return cwd
-	}
-	return "."
 }
 
 func listDir(baseDir, path string, ignore []string) ([]string, error) {
@@ -632,10 +416,50 @@ func readFileLimited(path string) (string, error) {
 }
 
 func writeFile(path string, content string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	snippet := content
+	if len(snippet) > 200 {
+		snippet = snippet[:200]
+	}
+	slog.Info("Orchids FS: writeFile", "path", path, "content_len", len(content), "snippet", snippet)
+
+	// Safeguard: Don't overwrite an existing non-empty file with empty content
+	if content == "" {
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			slog.Warn("Prevented accidental file wipe (empty content)", "path", path)
+			return fmt.Errorf("refused to overwrite non-empty file %s with empty content", path)
+		}
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(content), 0644)
+
+	// Atomic write: create temp file, write, sync, close, rename
+	// Use .tmp prefix and hidden file to avoid showing up in default listings
+	tmpFile, err := os.CreateTemp(dir, ".orchids_tmp_*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+
+	// Ensure cleanup
+	defer func() {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath) // Will fail if rename succeeded, which is fine
+	}()
+
+	if _, err := tmpFile.Write([]byte(content)); err != nil {
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil { // Unlikely to fail, but good practice for durability
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, path)
 }
 
 func normalizeContent(content interface{}) string {
@@ -875,7 +699,7 @@ func applyEdits(content string, input map[string]interface{}) (string, int, erro
 			if !ok {
 				return "", 0, errors.New("invalid edit entry")
 			}
-			oldStr := strings.TrimSpace(toolInputString(editMap, "old_string", "oldString"))
+			oldStr := toolInputString(editMap, "old_string", "oldString")
 			newStr := toolInputString(editMap, "new_string", "newString")
 			replaceAll := toolInputBool(editMap, "replace_all", "replaceAll")
 			if oldStr == "" {
@@ -889,7 +713,7 @@ func applyEdits(content string, input map[string]interface{}) (string, int, erro
 		}
 		return updated, total, nil
 	}
-	oldStr := strings.TrimSpace(toolInputString(input, "old_string", "oldString"))
+	oldStr := toolInputString(input, "old_string", "oldString")
 	if oldStr == "" {
 		return "", 0, errors.New("missing old_string for Edit")
 	}
@@ -904,24 +728,132 @@ func applyEdits(content string, input map[string]interface{}) (string, int, erro
 }
 
 func replaceString(content, oldStr, newStr string, replaceAll bool, total *int) (string, error) {
+	// 1. Try exact match
 	if replaceAll {
 		count := strings.Count(content, oldStr)
-		if count == 0 {
-			return "", fmt.Errorf("old_string not found")
+		if count > 0 {
+			if total != nil {
+				*total += count
+			}
+			return strings.ReplaceAll(content, oldStr, newStr), nil
 		}
-		if total != nil {
-			*total += count
+	} else {
+		if idx := strings.Index(content, oldStr); idx != -1 {
+			if total != nil {
+				*total++
+			}
+			return content[:idx] + newStr + content[idx+len(oldStr):], nil
 		}
-		return strings.ReplaceAll(content, oldStr, newStr), nil
 	}
-	index := strings.Index(content, oldStr)
-	if index == -1 {
-		return "", fmt.Errorf("old_string not found")
+
+	// 2. Try normalizing Windows line endings (CRLF -> LF)
+	contentLF := strings.ReplaceAll(content, "\r\n", "\n")
+	oldStrLF := strings.ReplaceAll(oldStr, "\r\n", "\n")
+	newStrLF := strings.ReplaceAll(newStr, "\r\n", "\n")
+
+	if contentLF != content || oldStrLF != oldStr {
+		if replaceAll {
+			count := strings.Count(contentLF, oldStrLF)
+			if count > 0 {
+				if total != nil {
+					*total += count
+				}
+				return strings.ReplaceAll(contentLF, oldStrLF, newStrLF), nil
+			}
+		} else {
+			if idx := strings.Index(contentLF, oldStrLF); idx != -1 {
+				if total != nil {
+					*total++
+				}
+				return contentLF[:idx] + newStrLF + contentLF[idx+len(oldStrLF):], nil
+			}
+		}
 	}
-	if total != nil {
-		*total++
+
+	// 3. Robust/Fuzzy match (Whitespace agnostic line matching)
+	// ONLY supported for single replacement (replaceAll=false) to avoid complexity
+	if !replaceAll {
+		if idx, length := findFuzzyBlock(contentLF, oldStrLF); idx != -1 {
+			if total != nil {
+				*total++
+			}
+			return contentLF[:idx] + newStrLF + contentLF[idx+length:], nil
+		}
 	}
-	return content[:index] + newStr + content[index+len(oldStr):], nil
+
+	return "", fmt.Errorf("old_string not found (even with fuzzy match)")
+}
+
+func findFuzzyBlock(content, target string) (int, int) {
+	// Both inputs assumed to be LF-normalized
+	contentLines := strings.Split(content, "\n")
+	targetLines := strings.Split(target, "\n")
+
+	if len(targetLines) == 0 {
+		return -1, 0
+	}
+
+	// Trim target lines for comparison
+	trimmedTarget := make([]string, len(targetLines))
+	for i, l := range targetLines {
+		trimmedTarget[i] = strings.TrimSpace(l)
+	}
+
+	// Map line index to byte offset
+	lineOffsets := make([]int, len(contentLines)+1)
+	offset := 0
+	for i, l := range contentLines {
+		lineOffsets[i] = offset
+		offset += len(l) + 1 // +1 for \n
+	}
+	lineOffsets[len(contentLines)] = offset // Set the end offset for the last line
+	// Correct the last offset if no trailing newline (split behavior depends on trailing \n)
+	// But strings.Split("a", "\n") -> ["a"]. len("a")=1. offset+=2.
+	// The byte index logic is approximate but sufficient for contiguous blocks
+	// as long as we use the start and end offsets derived from the same loop.
+
+	// Scan for block match
+	maxIdx := len(contentLines) - len(targetLines)
+	for i := 0; i <= maxIdx; i++ {
+		match := true
+		for j := 0; j < len(targetLines); j++ {
+			if strings.TrimSpace(contentLines[i+j]) != trimmedTarget[j] {
+				match = false
+				break
+			}
+		}
+
+		if match {
+			start := lineOffsets[i]
+			// End is offset of the line *after* the block, minus 1 (for the last \n)
+			// But we must be careful if it's the very last line
+			endLineIdx := i + len(targetLines)
+			end := 0
+			if endLineIdx < len(lineOffsets) {
+				// lineOffsets[endLineIdx] is the start of the next line.
+				// The previous line ended at lineOffsets[endLineIdx] - 1 (the \n)
+				// EXCEPT if the file doesn't end with \n?
+				// We normalize everything to \n so constructing the string assumes \n.
+				end = lineOffsets[endLineIdx] - 1
+			} else {
+				end = len(content)
+			}
+
+			// Safety clamp
+			if start < 0 {
+				start = 0
+			}
+			if end > len(content) {
+				end = len(content)
+			}
+			if end < start {
+				end = start
+			}
+
+			return start, end - start
+		}
+	}
+	return -1, 0
 }
 
 func toolInputString(input map[string]interface{}, keys ...string) string {

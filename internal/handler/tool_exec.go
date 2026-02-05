@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,12 +36,9 @@ func executeToolCallWithBaseDir(call toolCall, cfg *config.Config, baseDir strin
 		input: parseToolInputValue(call.input),
 	}
 
-	if strings.TrimSpace(baseDir) == "" {
-		baseDir = resolveLocalWorkdir(cfg)
-	}
 	if baseDir == "" {
 		result.isError = true
-		result.output = "base directory is empty"
+		result.output = "workdir is required"
 		return result
 	}
 
@@ -319,13 +317,6 @@ func executeToolCallWithBaseDir(call toolCall, cfg *config.Config, baseDir strin
 	}
 }
 
-func resolveLocalWorkdir(cfg *config.Config) string {
-	if cwd, err := os.Getwd(); err == nil {
-		return cwd
-	}
-	return "."
-}
-
 func parseToolInputMap(inputJSON string) map[string]interface{} {
 	if strings.TrimSpace(inputJSON) == "" {
 		return map[string]interface{}{}
@@ -573,6 +564,20 @@ func readFileLines(path string, limit, offset int) (string, error) {
 }
 
 func writeFile(path string, content string) error {
+	snippet := content
+	if len(snippet) > 200 {
+		snippet = snippet[:200]
+	}
+	slog.Info("Handler FS: writeFile", "path", path, "content_len", len(content), "snippet", snippet)
+
+	// Safeguard: Don't overwrite an existing non-empty file with empty content
+	if content == "" {
+		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			slog.Warn("Prevented accidental file wipe (empty content)", "path", path)
+			return fmt.Errorf("refused to overwrite non-empty file %s with empty content", path)
+		}
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -766,12 +771,14 @@ func grepSearch(baseDir, root, pattern string, maxResults int, ignore []string) 
 }
 
 func runShellCommand(baseDir, command string) (string, error) {
+	slog.Info("Executing Shell Command", "dir", baseDir, "cmd", command)
 	cmd := exec.Command("bash", "-lc", command)
 	cmd.Dir = baseDir
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
+		slog.Error("Shell Command Failed", "cmd", command, "error", err, "stderr", buf.String())
 		return buf.String(), err
 	}
 	return buf.String(), nil
@@ -790,8 +797,14 @@ func applyEdits(content string, input map[string]interface{}) (string, int, erro
 			if !ok {
 				return "", 0, errors.New("invalid edit entry")
 			}
-			oldStr := strings.TrimSpace(toolInputString(editMap, "old_string"))
+			oldStr := toolInputString(editMap, "old_string")
 			newStr := toolInputString(editMap, "new_string")
+
+			// Safeguard: Reject if newStr is a pure subset of oldStr
+			if len(oldStr) > 40 && len(newStr) > 5 && strings.Contains(oldStr, newStr) && len(newStr) < int(float64(len(oldStr))*0.8) {
+				return "", 0, errors.New("safeguard: replacement text appears to be a subset of the target text. The Edit tool requires the FULL replacement block, not just the lines you want to keep. Please provide the complete new code block.")
+			}
+
 			replaceAll := toolInputBool(editMap, "replace_all")
 			if oldStr == "" {
 				return "", 0, errors.New("edit missing old_string")
@@ -804,11 +817,18 @@ func applyEdits(content string, input map[string]interface{}) (string, int, erro
 		}
 		return updated, total, nil
 	}
-	oldStr := strings.TrimSpace(toolInputString(input, "old_string"))
+	oldStr := toolInputString(input, "old_string")
 	if oldStr == "" {
 		return "", 0, errors.New("missing old_string for Edit")
 	}
 	newStr := toolInputString(input, "new_string")
+
+	// Safeguard: Reject if newStr is a pure subset of oldStr (mimicking "select mode" error)
+	// Only apply if oldStr is substantial to avoid blocking trivial deletions.
+	if len(oldStr) > 40 && len(newStr) > 5 && strings.Contains(oldStr, newStr) && len(newStr) < int(float64(len(oldStr))*0.8) {
+		return "", 0, errors.New("safeguard: replacement text appears to be a subset of the target text. The Edit tool requires the FULL replacement block, not just the lines you want to keep. Please provide the complete new code block.")
+	}
+
 	replaceAll := toolInputBool(input, "replace_all")
 	total := 0
 	updated, err := replaceString(content, oldStr, newStr, replaceAll, &total)

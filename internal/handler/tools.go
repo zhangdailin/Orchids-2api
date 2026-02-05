@@ -23,6 +23,9 @@ func fixToolInput(inputJSON string) string {
 	fixed := false
 	for key, value := range input {
 		if strVal, ok := value.(string); ok {
+			if !shouldParseToolInputKey(key) {
+				continue
+			}
 			strVal = strings.TrimSpace(strVal)
 
 			// Only try to fix JSON arrays/objects that were passed as strings.
@@ -47,6 +50,24 @@ func fixToolInput(inputJSON string) string {
 		return inputJSON
 	}
 	return string(result)
+}
+
+func shouldParseToolInputKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "edits",
+		"files",
+		"file_paths",
+		"filepaths",
+		"paths",
+		"roots",
+		"globparameters",
+		"glob_parameters",
+		"ripgrepparameters",
+		"ripgrep_parameters":
+		return true
+	default:
+		return false
+	}
 }
 
 type toolNameInfo struct {
@@ -111,7 +132,7 @@ func buildToolNameIndex(tools []interface{}, allowed map[string]string) []toolNa
 			continue
 		}
 		props := map[string]struct{}{}
-		if schema, ok := tm["input_schema"].(map[string]interface{}); ok {
+		if schema := toolInputSchemaFromDef(tm); schema != nil {
 			if properties, ok := schema["properties"].(map[string]interface{}); ok {
 				for key := range properties {
 					props[key] = struct{}{}
@@ -126,6 +147,34 @@ func buildToolNameIndex(tools []interface{}, allowed map[string]string) []toolNa
 		})
 	}
 	return index
+}
+
+// toolInputSchemaFromDef 兼容 Claude/OpenAI 风格的工具 schema 字段
+func toolInputSchemaFromDef(tm map[string]interface{}) map[string]interface{} {
+	if tm == nil {
+		return nil
+	}
+	if schema, ok := tm["input_schema"].(map[string]interface{}); ok {
+		return schema
+	}
+	if schema, ok := tm["inputSchema"].(map[string]interface{}); ok {
+		return schema
+	}
+	if schema, ok := tm["parameters"].(map[string]interface{}); ok {
+		return schema
+	}
+	if fn, ok := tm["function"].(map[string]interface{}); ok {
+		if schema, ok := fn["parameters"].(map[string]interface{}); ok {
+			return schema
+		}
+		if schema, ok := fn["input_schema"].(map[string]interface{}); ok {
+			return schema
+		}
+		if schema, ok := fn["inputSchema"].(map[string]interface{}); ok {
+			return schema
+		}
+	}
+	return nil
 }
 
 func mapOrchidsToolName(raw string, inputStr string, index []toolNameInfo, allowed map[string]string) string {

@@ -12,10 +12,8 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"orchids-api/internal/clerk"
@@ -35,18 +33,13 @@ const (
 )
 
 type Client struct {
-	config         *config.Config
-	account        *store.Account
-	httpClient     *http.Client
-	fsCache        *perf.TTLCache
-	wsPool         *upstream.WSPool
-	wsWriteMu      sync.Mutex // Protects concurrent writes to WebSocket
-	fsIndex        map[string][]string
-	fsFileList     []string
-	fsIndexMu      sync.RWMutex
-	fsIndexRefresh atomic.Bool
-	fsIndexPending atomic.Bool
-	fsExecutor     func(op map[string]interface{}, workdir string) (bool, interface{}, string)
+	config     *config.Config
+	account    *store.Account
+	httpClient *http.Client
+	fsCache    *perf.TTLCache
+	wsPool     *upstream.WSPool
+	wsWriteMu  sync.Mutex // Protects concurrent writes to WebSocket
+	fsExecutor func(op map[string]interface{}, workdir string) (bool, interface{}, string)
 }
 
 type TokenResponse struct {
@@ -62,7 +55,7 @@ type AgentRequest struct {
 	Mode          string              `json:"mode"`
 	GitRepoUrl    string              `json:"gitRepoUrl"`
 	Email         string              `json:"email"`
-	ChatSessionID int                 `json:"chatSessionId"`
+	ChatSessionID string              `json:"chatSessionId"`
 	UserID        string              `json:"userId"`
 	APIVersion    int                 `json:"apiVersion"`
 	Model         string              `json:"model,omitempty"`
@@ -115,8 +108,6 @@ func New(cfg *config.Config) *Client {
 		fsCache:    perf.NewTTLCache(60 * time.Second),
 	}
 	c.wsPool = upstream.NewWSPool(c.createWSConnection, 5, 20)
-
-	go c.RefreshFSIndex()
 	return c
 }
 
@@ -173,7 +164,6 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 		fsCache:    perf.NewTTLCache(60 * time.Second),
 	}
 	c.wsPool = upstream.NewWSPool(c.createWSConnection, 5, 20)
-	go c.RefreshFSIndex()
 	return c
 }
 
@@ -199,7 +189,7 @@ func (c *Client) forceRefreshToken() (string, error) {
 	}
 
 	if strings.TrimSpace(c.config.ClientCookie) != "" {
-		info, err := clerk.FetchAccountInfo(c.config.ClientCookie)
+		info, err := clerk.FetchAccountInfoWithProject(c.config.ClientCookie, c.config.ProjectID)
 		if err == nil && info.JWT != "" {
 			c.applyAccountInfo(info)
 			setCachedToken(c.config.SessionID, info.JWT)
@@ -339,13 +329,16 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		Mode:          "agent",
 		GitRepoUrl:    "",
 		Email:         c.config.Email,
-		ChatSessionID: rand.IntN(90000000) + 10000000,
+		ChatSessionID: req.ChatSessionID,
 		UserID:        c.config.UserID,
 		APIVersion:    2,
 		Model:         req.Model,
 		Messages:      payloadMessages,
 		System:        payloadSystem,
 		Tools:         req.Tools,
+	}
+	if payload.ChatSessionID == "" {
+		payload.ChatSessionID = fmt.Sprintf("chat_%d", rand.IntN(90000000)+10000000)
 	}
 
 	buf := perf.AcquireByteBuffer()
@@ -414,6 +407,9 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 	buffer := perf.AcquireStringBuilder()
 	defer perf.ReleaseStringBuilder(buffer)
 
+	var state requestState
+	var fsWG sync.WaitGroup
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -445,108 +441,40 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 						continue
 					}
 
-					msgType, _ := msg["type"].(string)
-
-					// 记录上游 SSE
-					if logger != nil {
-						logger.LogUpstreamSSE(msgType, rawData)
+					if shouldBreak := c.handleOrchidsMessage(msg, []byte(rawData), &state, onMessage, logger, nil, &fsWG, req.Workdir); shouldBreak {
+						goto done
 					}
-
-					// Allow informative events for real-time feedback
-					if msgType != "model" &&
-						!strings.HasPrefix(msgType, "coding_agent.") &&
-						msgType != "fs_operation" &&
-						msgType != "init" {
-						continue
-					}
-
-					sseMsg := upstream.SSEMessage{
-						Type: msgType,
-						Raw:  msg,
-					}
-
-					if event, ok := msg["event"].(map[string]interface{}); ok {
-						sseMsg.Event = event
-					} else {
-						// For flat events like fs_operation, the event itself is the data map
-						sseMsg.Event = msg
-					}
-
-					onMessage(sseMsg)
 				}
 			}
 		}
 	}
+
+done:
+	if !state.finishSent {
+		finishReason := "stop"
+		if state.sawToolCall {
+			finishReason = "tool-calls"
+		}
+		onMessage(upstream.SSEMessage{Type: "model", Event: map[string]interface{}{"type": "finish", "finishReason": finishReason}})
+	}
+
+	if state.hasFSOps {
+		// Wait for FS operations with timeout
+		fsDone := make(chan struct{})
+		go func() {
+			fsWG.Wait()
+			close(fsDone)
+		}()
+		select {
+		case <-fsDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Second):
+			slog.Warn("FS operations timed out in SSE mode")
+		}
+	}
+
 	return nil
-}
-
-func (c *Client) GetProjectSummary() string {
-	c.fsIndexMu.RLock()
-	defer c.fsIndexMu.RUnlock()
-
-	if len(c.fsIndex) == 0 {
-		return "Project structure currently unknown (indexing in progress)."
-	}
-
-	rootFiles, ok := c.fsIndex["."]
-	projectType := "Generic"
-	if ok {
-		hasFile := func(name string) bool {
-			for _, f := range rootFiles {
-				if f == name {
-					return true
-				}
-			}
-			return false
-		}
-		if hasFile("go.mod") {
-			projectType = "Go"
-		} else if hasFile("package.json") {
-			projectType = "JavaScript/TypeScript"
-		} else if hasFile("requirements.txt") || hasFile("setup.py") || hasFile("pyproject.toml") {
-			projectType = "Python"
-		} else if hasFile("Cargo.toml") {
-			projectType = "Rust"
-		} else if hasFile("pom.xml") || hasFile("build.gradle") {
-			projectType = "Java/Kotlin"
-		}
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("This is a %s project. Directory structure:\n", projectType))
-
-	// 限制深度和项数以节省 token
-	count := 0
-	keys := make([]string, 0, len(c.fsIndex))
-	for k := range c.fsIndex {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	for _, rel := range keys {
-		if count > 20 { // 仅显示前20个核心目录
-			break
-		}
-		depth := strings.Count(rel, "/")
-		if depth > 1 { // 仅显示两层深度
-			continue
-		}
-
-		indent := strings.Repeat("  ", depth)
-		sb.WriteString(fmt.Sprintf("%s- %s/\n", indent, rel))
-
-		files := c.fsIndex[rel]
-		for i, f := range files {
-			if i > 5 { // 核心目录仅显示前5个文件
-				sb.WriteString(fmt.Sprintf("%s  - ... (%d more files)\n", indent, len(files)-5))
-				break
-			}
-			sb.WriteString(fmt.Sprintf("%s  - %s\n", indent, f))
-		}
-		count++
-	}
-
-	return sb.String()
 }
 
 type UpstreamModel struct {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,34 +17,50 @@ import (
 )
 
 // resolveWorkdir determines the working directory from headers, system prompt, or session.
-func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest) string {
+// 返回当前 workdir、上一轮 workdir、以及是否发生变更。
+func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversationKey string) (string, string, bool) {
+	prevWorkdir := ""
+	if conversationKey != "" {
+		h.sessionWorkdirsMu.RLock()
+		prevWorkdir = h.sessionWorkdirs[conversationKey]
+		h.sessionWorkdirsMu.RUnlock()
+	}
+
 	// Check for dynamic workdir header EARLY
 	dynamicWorkdir := r.Header.Get("X-Orchids-Workdir")
+	source := ""
+	if dynamicWorkdir != "" {
+		source = "header"
+	}
 	if dynamicWorkdir == "" {
 		dynamicWorkdir = r.Header.Get("X-Project-Root") // Try alternative
+		if dynamicWorkdir != "" {
+			source = "header"
+		}
 	}
 	if dynamicWorkdir == "" {
 		dynamicWorkdir = r.Header.Get("X-Working-Dir") // Try another alternative
+		if dynamicWorkdir != "" {
+			source = "header"
+		}
 	}
 
 	// FALLBACK: Check system prompt for <env>Working directory: ...</env>
 	if dynamicWorkdir == "" {
 		dynamicWorkdir = extractWorkdirFromSystem(req.System)
 		if dynamicWorkdir != "" {
+			source = "system"
 			slog.Info("Using workdir from system prompt env block", "workdir", dynamicWorkdir)
 		}
 	}
 
-	conversationKey := conversationKeyForRequest(r, req)
-
 	// FINAL FALLBACK: Check session persistence
 	if dynamicWorkdir == "" {
-		h.sessionWorkdirsMu.RLock()
-		if val, ok := h.sessionWorkdirs[conversationKey]; ok {
-			dynamicWorkdir = val
+		if prevWorkdir != "" {
+			dynamicWorkdir = prevWorkdir
+			source = "session"
 			slog.Info("Recovered workdir from session", "workdir", dynamicWorkdir, "session", conversationKey)
 		}
-		h.sessionWorkdirsMu.RUnlock()
 	}
 
 	// Persist for future turns in this session
@@ -54,9 +71,12 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest) string {
 	}
 
 	if dynamicWorkdir != "" {
-		slog.Info("Using dynamic workdir", "workdir", dynamicWorkdir)
+		slog.Info("Using dynamic workdir", "workdir", dynamicWorkdir, "source", source)
 	}
-	return dynamicWorkdir
+	normalizedPrev := filepath.Clean(strings.TrimSpace(prevWorkdir))
+	normalizedNext := filepath.Clean(strings.TrimSpace(dynamicWorkdir))
+	changed := normalizedPrev != "" && normalizedNext != "" && normalizedPrev != normalizedNext
+	return dynamicWorkdir, prevWorkdir, changed
 }
 
 // selectAccount logic extracted from HandleMessages
@@ -85,7 +105,9 @@ func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string
 			client = warp.NewFromAccount(account, h.config)
 		} else {
 			orchidsClient := orchids.NewFromAccount(account, h.config)
-			orchidsClient.SetFSExecutor(h.orchidsFSExecutor)
+			if strings.EqualFold(strings.TrimSpace(h.config.ToolCallMode), "internal") {
+				orchidsClient.SetFSExecutor(h.orchidsFSExecutor)
+			}
 			client = orchidsClient
 		}
 		return client, account, nil
@@ -98,6 +120,12 @@ func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string
 // executePreflightTools performs parallel preflight checks
 func (h *Handler) executePreflightTools(toolCallMode, allowBashName, userText, workdir string) ([]safeToolResult, []interface{}) {
 	slog.Debug("executePreflightTools called", "toolCallMode", toolCallMode, "allowBashName", allowBashName, "workdir", workdir, "userTextLen", len(userText))
+	if toolCallMode != "internal" {
+		return nil, nil
+	}
+	if strings.TrimSpace(workdir) == "" {
+		return nil, nil
+	}
 	if (toolCallMode == "internal" || toolCallMode == "auto") && allowBashName != "" && shouldPreflightTools(userText) {
 		slog.Info("Running preflight tools", "workdir", workdir)
 		preflight := []string{

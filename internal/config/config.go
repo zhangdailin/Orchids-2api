@@ -28,6 +28,7 @@ type Config struct {
 	AdminPath                 string   `json:"admin_path"`
 	ToolCallMode              string   `json:"tool_call_mode"`
 	DebugLogSSE               bool     `json:"debug_log_sse"`
+	SuppressThinking          bool     `json:"suppress_thinking"`
 	OutputTokenMode           string   `json:"output_token_mode"`
 	StoreMode                 string   `json:"store_mode"`
 	RedisAddr                 string   `json:"redis_addr"`
