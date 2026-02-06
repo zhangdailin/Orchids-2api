@@ -380,6 +380,9 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 	})
 
 	if err != nil {
+		if logger != nil {
+			logger.LogUpstreamHTTPError(url, 0, "", err)
+		}
 		if c.config.DebugEnabled {
 			slog.Info("[Performance] Upstream Request Failed", "duration", time.Since(start), "error", err)
 		}

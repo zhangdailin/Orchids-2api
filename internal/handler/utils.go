@@ -71,6 +71,11 @@ func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {
 	if key := headerValue(r, "X-Conversation-Id", "X-Session-Id", "X-Thread-Id", "X-Chat-Id"); key != "" {
 		return key
 	}
+	if req.Metadata != nil {
+		if key := metadataString(req.Metadata, "user_id", "userId"); key != "" {
+			return "user:" + key
+		}
+	}
 
 	host := r.RemoteAddr
 	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {

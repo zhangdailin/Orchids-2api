@@ -314,15 +314,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reqHash := h.computeRequestHash(r, bodyBytes)
-	slog.Debug("Request fingerprint", "hash", reqHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", r.Header.Get("X-Stainless-Retry-Count"))
-	if dup, inFlight := h.registerRequest(reqHash); dup {
-		slog.Warn("Duplicate request suppressed", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
-		h.writeDuplicateResponse(w, req)
-		return
-	}
-	defer h.finishRequest(reqHash)
-
 	// 初始化调试日志
 	logger := debug.New(h.config.DebugEnabled, h.config.DebugLogSSE)
 	defer logger.Close()
@@ -330,10 +321,28 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 1. 记录进入的 Claude 请求
 	logger.LogIncomingRequest(req)
 
+	reqHash := h.computeRequestHash(r, bodyBytes)
+	slog.Debug("Request fingerprint", "hash", reqHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", r.Header.Get("X-Stainless-Retry-Count"))
+	if dup, inFlight := h.registerRequest(reqHash); dup {
+		slog.Warn("Duplicate request suppressed", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
+		logger.LogEarlyExit("duplicate_request", map[string]interface{}{
+			"hash":      reqHash,
+			"in_flight": inFlight,
+			"path":      r.URL.Path,
+		})
+		h.writeDuplicateResponse(w, req)
+		return
+	}
+	defer h.finishRequest(reqHash)
+
 	// ...
 	if ok, command := isCommandPrefixRequest(req); ok {
 		slog.Debug("Handling command prefix request", "command", command)
 		prefix := detectCommandPrefix(command)
+		logger.LogEarlyExit("command_prefix", map[string]interface{}{
+			"command": command,
+			"prefix":  prefix,
+		})
 		writeCommandPrefixResponse(w, req, prefix, startTime, logger)
 		return
 	}
@@ -365,6 +374,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	apiClient, currentAccount, err := h.selectAccount(r.Context(), req.Model, forcedChannel, failedAccountIDs)
 	if err != nil {
 		slog.Error("selectAccount failed", "error", err)
+		logger.LogEarlyExit("select_account_failed", map[string]interface{}{
+			"error":   err.Error(),
+			"model":   req.Model,
+			"channel": forcedChannel,
+		})
 		h.writeErrorResponse(w, "overloaded_error", err.Error(), http.StatusServiceUnavailable)
 		return
 	}
@@ -436,7 +450,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		effectiveTools = nil
 		slog.Debug("tool_gate: disabled tools for short non-code request")
 	}
-	if toolCallMode == "auto" || toolCallMode == "internal" {
+	if !h.config.DisableToolFilter && (toolCallMode == "auto" || toolCallMode == "internal") {
 		effectiveTools = filterSupportedTools(effectiveTools)
 	}
 	if isWarpRequest {

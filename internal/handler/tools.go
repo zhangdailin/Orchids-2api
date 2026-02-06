@@ -52,6 +52,62 @@ func fixToolInput(inputJSON string) string {
 	return string(result)
 }
 
+// fixToolInputForName 为特定工具补齐必要字段，避免客户端校验报错。
+func fixToolInputForName(toolName, inputJSON string) string {
+	fixed := fixToolInput(inputJSON)
+	if strings.TrimSpace(fixed) == "" {
+		fixed = "{}"
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "glob":
+		return ensureGlobPattern(fixed)
+	default:
+		return fixed
+	}
+}
+
+func ensureGlobPattern(inputJSON string) string {
+	var input map[string]interface{}
+	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
+		return inputJSON
+	}
+
+	pattern := firstNonEmptyString(input, "pattern")
+	if pattern == "" {
+		pattern = firstNonEmptyString(input, "query", "search", "glob")
+	}
+	if pattern == "" {
+		pattern = "*"
+	}
+	input["pattern"] = pattern
+
+	path := firstNonEmptyString(input, "path", "root", "dir", "file_path", "filePath", "file_paths", "paths", "roots")
+	if path == "" {
+		path = "."
+	}
+	input["path"] = path
+
+	result, err := json.Marshal(input)
+	if err != nil {
+		return inputJSON
+	}
+	return string(result)
+}
+
+func firstNonEmptyString(input map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if val, ok := input[key]; ok {
+			if strVal, ok := val.(string); ok {
+				strVal = strings.TrimSpace(strVal)
+				if strVal != "" {
+					return strVal
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func shouldParseToolInputKey(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(key)) {
 	case "edits",

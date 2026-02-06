@@ -27,6 +27,7 @@ type Config struct {
 	AdminPass                 string   `json:"admin_pass"`
 	AdminPath                 string   `json:"admin_path"`
 	ToolCallMode              string   `json:"tool_call_mode"`
+	DisableToolFilter         bool     `json:"disable_tool_filter"`
 	DebugLogSSE               bool     `json:"debug_log_sse"`
 	SuppressThinking          bool     `json:"suppress_thinking"`
 	OutputTokenMode           string   `json:"output_token_mode"`

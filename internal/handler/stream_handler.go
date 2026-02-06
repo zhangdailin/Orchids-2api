@@ -97,7 +97,7 @@ type streamHandler struct {
 	// Logger
 	logger *debug.Logger
 
-	lastInitMsg string
+	lastInitMsg       string
 	finalStopSequence string
 }
 
@@ -392,7 +392,7 @@ func (h *streamHandler) shouldEmitToolCalls(stopReason string) bool {
 func (h *streamHandler) emitToolCallNonStream(call toolCall) {
 	h.addOutputTokens(call.name)
 	h.addOutputTokens(call.input)
-	fixedInput := fixToolInput(call.input)
+	fixedInput := fixToolInputForName(call.name, call.input)
 	var inputValue interface{}
 	if err := json.Unmarshal([]byte(fixedInput), &inputValue); err != nil {
 		inputValue = map[string]interface{}{}
@@ -418,7 +418,7 @@ func (h *streamHandler) emitToolCallStream(call toolCall, idx int, write func(ev
 
 	h.addOutputTokens(call.name)
 	h.addOutputTokens(call.input)
-	fixedInput := fixToolInput(call.input)
+	fixedInput := fixToolInputForName(call.name, call.input)
 
 	startMap := perf.AcquireMap()
 	startMap["type"] = "content_block_start"
@@ -486,7 +486,7 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 	}
 
 	h.addOutputTokens(toolName)
-	fixedInput := fixToolInput(inputStr)
+	fixedInput := fixToolInputForName(toolName, inputStr)
 	if fixedInput == "" {
 		fixedInput = "{}"
 	}
@@ -652,6 +652,9 @@ func (h *streamHandler) resolveToolName(name string) (string, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", false
+	}
+	if h.config != nil && h.config.DisableToolFilter {
+		return name, true
 	}
 	if !h.hasToolList {
 		if h.toolCallMode == "internal" || h.toolCallMode == "auto" {
@@ -1201,6 +1204,22 @@ func normalizeIntroKey(delta string) string {
 	return ""
 }
 
+// extractThinkingSignature 尝试从上游事件中提取 signature（优先 event.signature，其次 event.data.signature）
+func extractThinkingSignature(event map[string]interface{}) string {
+	if event == nil {
+		return ""
+	}
+	if sig, ok := event["signature"].(string); ok {
+		return strings.TrimSpace(sig)
+	}
+	if data, ok := event["data"].(map[string]interface{}); ok {
+		if sig, ok := data["signature"].(string); ok {
+			return strings.TrimSpace(sig)
+		}
+	}
+	return ""
+}
+
 func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	if h.config.DebugEnabled && msg.Type != "content_block_delta" {
 		slog.Debug("Incoming SSE", "type", msg.Type)
@@ -1257,9 +1276,22 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	switch eventKey {
 	case "model.reasoning-start":
-		h.ensureBlock("thinking")
+		h.pendingThinkingSig = ""
+		if sig := extractThinkingSignature(msg.Event); sig != "" {
+			h.pendingThinkingSig = sig
+			h.ensureBlock("thinking")
+		}
 
 	case "model.reasoning-delta", "coding_agent.reasoning.chunk":
+		sig := ""
+		if h.pendingThinkingSig == "" {
+			sig = extractThinkingSignature(msg.Event)
+			if sig != "" {
+				h.pendingThinkingSig = sig
+			}
+		} else {
+			sig = h.pendingThinkingSig
+		}
 		delta := ""
 		if msg.Type == "model" {
 			delta, _ = msg.Event["delta"].(string)
@@ -1270,12 +1302,30 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			}
 		}
 		if delta == "" {
+			if sig != "" {
+				h.ensureBlock("thinking")
+				h.mu.Lock()
+				internalIdx := h.activeThinkingBlockIndex
+				if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
+					if existing, ok := h.thinkingBlockSigs[internalIdx]; ok && existing == "" {
+						h.thinkingBlockSigs[internalIdx] = sig
+						h.contentBlocks[internalIdx]["signature"] = sig
+					}
+				}
+				h.mu.Unlock()
+			}
 			return
 		}
 
 		h.mu.Lock()
 		sseIdx := h.activeThinkingSSEIndex
 		internalIdx := h.activeThinkingBlockIndex
+		if sig != "" && internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
+			if existing, ok := h.thinkingBlockSigs[internalIdx]; ok && existing == "" {
+				h.thinkingBlockSigs[internalIdx] = sig
+				h.contentBlocks[internalIdx]["signature"] = sig
+			}
+		}
 		h.mu.Unlock()
 		if sseIdx < 0 {
 			// If we get delta but no thinking block is active, try to ensure one
@@ -1374,8 +1424,13 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.closeActiveBlock()
 
 	case "coding_agent.start", "coding_agent.initializing", "init":
-		// Ensure a thinking block is open for these status updates
-		h.ensureBlock("thinking")
+		// Ensure a thinking block is open for these status updates when we already have signature or block
+		h.mu.Lock()
+		hasThinkingBlock := h.activeThinkingSSEIndex >= 0
+		h.mu.Unlock()
+		if hasThinkingBlock || h.pendingThinkingSig != "" {
+			h.ensureBlock("thinking")
+		}
 		if h.isStream {
 			data, _ := json.Marshal(msg.Event)
 			h.writeSSE(msg.Type, string(data))

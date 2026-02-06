@@ -71,6 +71,21 @@ func (l *Logger) LogIncomingRequest(req interface{}) {
 	l.writeJSON("1_claude_request.json", req)
 }
 
+// LogEarlyExit 记录提前返回的原因
+func (l *Logger) LogEarlyExit(reason string, details map[string]interface{}) {
+	if !l.enabled {
+		return
+	}
+	payload := map[string]interface{}{
+		"reason":     reason,
+		"elapsed_ms": time.Since(l.startTime).Milliseconds(),
+	}
+	if details != nil {
+		payload["details"] = details
+	}
+	l.writeJSON("1_early_exit.json", payload)
+}
+
 // LogConvertedPrompt 记录 2. 转换后的 prompt
 func (l *Logger) LogConvertedPrompt(prompt string) {
 	if !l.enabled {

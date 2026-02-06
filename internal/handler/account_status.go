@@ -12,7 +12,7 @@ import (
 func classifyAccountStatus(errStr string) string {
 	lower := strings.ToLower(errStr)
 	switch {
-	case strings.Contains(lower, "429") || strings.Contains(lower, "too many requests"):
+	case hasExplicitHTTPStatus(lower, "429") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "rate limit"):
 		return "429"
 	case strings.Contains(lower, "quota_exceeded") || strings.Contains(lower, "quota exceeded") || strings.Contains(lower, "quota"):
 		return "quota_exceeded"
@@ -25,6 +25,35 @@ func classifyAccountStatus(errStr string) string {
 	default:
 		return ""
 	}
+}
+
+func hasExplicitHTTPStatus(lower string, code string) bool {
+	code = strings.TrimSpace(code)
+	if code == "" || lower == "" {
+		return false
+	}
+	patterns := []string{
+		"http " + code,
+		"http/1.1 " + code,
+		"http/2 " + code,
+		"status " + code,
+		"status=" + code,
+		"status:" + code,
+		"statuscode " + code,
+		"statuscode=" + code,
+		"status code " + code,
+		"code " + code,
+		"code=" + code,
+		"code:" + code,
+		"response status " + code,
+		"response code " + code,
+	}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func markAccountStatus(ctx context.Context, store *store.Store, acc *store.Account, status string) {

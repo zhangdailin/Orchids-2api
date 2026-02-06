@@ -35,7 +35,7 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	effectiveTools := req.Tools
-	if toolCallMode == "auto" || toolCallMode == "internal" {
+	if !h.config.DisableToolFilter && (toolCallMode == "auto" || toolCallMode == "internal") {
 		effectiveTools = filterSupportedTools(effectiveTools)
 	}
 
