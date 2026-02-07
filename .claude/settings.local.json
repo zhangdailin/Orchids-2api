@@ -43,7 +43,9 @@
       "Bash(./orchids-server:*)",
       "Bash(./orchids-api:*)",
       "Bash(tee:*)",
-      "mcp__sequential-thinking__sequentialthinking"
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(staticcheck:*)",
+      "Bash(deadcode:*)"
     ]
   }
 }

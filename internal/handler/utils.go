@@ -217,6 +217,7 @@ func containsPlanReminder(text string) bool {
 }
 
 // stripSystemRemindersForMode 移除 <system-reminder>...</system-reminder>，避免误判 plan/suggestion 模式
+// 使用 LastIndex 查找结束标签，正确处理嵌套的字面量标签
 func stripSystemRemindersForMode(text string) string {
 	const startTag = "<system-reminder>"
 	const endTag = "</system-reminder>"
@@ -235,7 +236,7 @@ func stripSystemRemindersForMode(text string) string {
 		sb.WriteString(text[i : i+start])
 		blockStart := i + start
 		endStart := blockStart + len(startTag)
-		end := strings.Index(text[endStart:], endTag)
+		end := strings.LastIndex(text[endStart:], endTag)
 		if end == -1 {
 			sb.WriteString(text[blockStart:])
 			break

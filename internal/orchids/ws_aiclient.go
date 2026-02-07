@@ -671,7 +671,7 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 			chatHistory = nil
 		}
 	} else {
-		promptText = buildLocalAssistantPrompt(systemText, userText, req.Model)
+		promptText = buildLocalAssistantPrompt(systemText, userText, req.Model, req.Workdir)
 		if !req.NoThinking && !isSuggestionModeText(userText) {
 			promptText = injectThinkingPrefix(promptText)
 		}
@@ -825,6 +825,9 @@ func extractMessageTextAIClient(content prompt.MessageContent) (string, []orchid
 	return strings.TrimSpace(strings.Join(parts, "\n")), toolResults
 }
 
+// maxHistoryContentLen 单条 chatHistory 消息的最大字符数，防止上游超时或截断
+const maxHistoryContentLen = 8000
+
 func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string, []orchidsToolResult) {
 	var history []map[string]string
 	var toolResults []orchidsToolResult
@@ -835,6 +838,7 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 		if msg.Role == "user" {
 			if msg.Content.IsString() {
 				text := stripSystemReminders(msg.Content.GetText())
+				text = truncateHistoryContent(text)
 				if text != "" {
 					history = append(history, map[string]string{
 						"role":    "user",
@@ -884,6 +888,7 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 				continue
 			}
 			text := strings.TrimSpace(strings.Join(textParts, "\n"))
+			text = truncateHistoryContent(text)
 			if text != "" {
 				history = append(history, map[string]string{
 					"role":    "user",
@@ -895,6 +900,7 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 
 		if msg.Content.IsString() {
 			text := stripSystemReminders(msg.Content.GetText())
+			text = truncateHistoryContent(text)
 			if text == "" {
 				continue
 			}
@@ -922,6 +928,7 @@ func convertChatHistoryAIClient(messages []prompt.Message) ([]map[string]string,
 			}
 		}
 		text := strings.TrimSpace(strings.Join(parts, "\n"))
+		text = truncateHistoryContent(text)
 		if text == "" {
 			continue
 		}

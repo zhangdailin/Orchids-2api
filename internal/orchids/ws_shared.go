@@ -92,7 +92,7 @@ func injectThinkingPrefix(prompt string) string {
 	return prefix + "\n" + prompt
 }
 
-func buildLocalAssistantPrompt(systemText string, userText string, model string) string {
+func buildLocalAssistantPrompt(systemText string, userText string, model string, workdir string) string {
 	var b strings.Builder
 	dateStr := time.Now().Format("2006-01-02")
 	b.WriteString("<environment>\n")
@@ -103,6 +103,9 @@ func buildLocalAssistantPrompt(systemText string, userText string, model string)
 	}
 	b.WriteString("Model: " + model + "\n")
 	b.WriteString("Execution: Client Environment (Safe Tool Execution)\n")
+	if strings.TrimSpace(workdir) != "" {
+		b.WriteString("Working Directory: " + strings.TrimSpace(workdir) + "\n")
+	}
 	b.WriteString("</environment>\n\n")
 	b.WriteString(`
 <CRITICAL_OVERRIDE>
@@ -166,9 +169,12 @@ b.WriteString("- Use ONLY Claude Code native tools: Read, Write, Edit, Bash, Glo
 	b.WriteString("</guidelines>\n\n")
 
 	if strings.TrimSpace(systemText) != "" {
-		b.WriteString("<system_context>\n")
-		b.WriteString(systemText)
-		b.WriteString("\n</system_context>\n\n")
+		condensed := condenseSystemContext(systemText)
+		if condensed != "" {
+			b.WriteString("<system_context>\n")
+			b.WriteString(condensed)
+			b.WriteString("\n</system_context>\n\n")
+		}
 	}
 	b.WriteString("<user_message>\n")
 	b.WriteString(userText)
@@ -178,7 +184,7 @@ b.WriteString("- Use ONLY Claude Code native tools: Read, Write, Edit, Bash, Glo
 
 // BuildAIClientPromptAndHistory 构建 AIClient 风格 prompt，并提取 chatHistory（用于 SSE/WS 统一行为）。
 // 返回的 chatHistory 为 {role, content} 结构，避免重复注入 messages。
-func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool) (string, []map[string]string) {
+func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool, workdir string) (string, []map[string]string) {
 	systemText := extractSystemPrompt(messages)
 	if strings.TrimSpace(systemText) == "" && len(system) > 0 {
 		var sb strings.Builder
@@ -215,11 +221,101 @@ func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.Sy
 	}
 	chatHistory, _ := convertChatHistoryAIClient(historyMessages)
 
-	promptText := buildLocalAssistantPrompt(systemText, userText, model)
+	promptText := buildLocalAssistantPrompt(systemText, userText, model, workdir)
 	if !noThinking && !isSuggestionModeText(userText) {
 		promptText = injectThinkingPrefix(promptText)
 	}
 	return promptText, chatHistory
+}
+
+// condenseSystemContext 精简客户端 system prompt，只保留关键上下文信息。
+// 完整的 Claude Code system prompt 太长（数千 token），上游会截断。
+// 提取：环境信息、项目描述、AGENTS.md 内容、git 状态、MEMORY 等关键段落。
+func condenseSystemContext(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+
+	// 需要保留的关键段落标识
+	keepMarkers := []string{
+		"# Environment",
+		"# environment",
+		"Primary working directory",
+		"working directory:",
+		"gitStatus:",
+		"git status",
+		"AGENTS.md",
+		"MEMORY.md",
+		"auto memory",
+		"# MCP Server",
+		"# VSCode",
+		"ide_selection",
+		"ide_opened_file",
+	}
+
+	// 需要丢弃的冗长通用指令段落标识
+	dropMarkers := []string{
+		"# Doing tasks",
+		"# Executing actions with care",
+		"# Using your tools",
+		"# Tone and style",
+		"# Committing changes with git",
+		"# Creating pull requests",
+		"Examples of the kind of risky",
+		"When NOT to use the Task tool",
+		"Usage notes:",
+	}
+
+	lines := strings.Split(text, "\n")
+	var result []string
+	dropping := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// 检查是否进入需要丢弃的段落
+		shouldDrop := false
+		for _, marker := range dropMarkers {
+			if strings.Contains(trimmed, marker) {
+				shouldDrop = true
+				break
+			}
+		}
+		if shouldDrop {
+			dropping = true
+			continue
+		}
+
+		// 检查是否进入需要保留的段落（结束丢弃模式）
+		shouldKeep := false
+		for _, marker := range keepMarkers {
+			if strings.Contains(trimmed, marker) {
+				shouldKeep = true
+				break
+			}
+		}
+		// 新的顶级 # 标题也结束丢弃模式
+		if dropping && strings.HasPrefix(trimmed, "# ") {
+			shouldKeep = true
+		}
+		if shouldKeep {
+			dropping = false
+		}
+
+		if !dropping {
+			result = append(result, line)
+		}
+	}
+
+	condensed := strings.TrimSpace(strings.Join(result, "\n"))
+	// 如果精简后内容太短（可能全被丢弃了），回退到原始文本的前 4000 字符
+	if len(condensed) < 50 && len(text) > 50 {
+		if len(text) > 4000 {
+			return strings.TrimSpace(text[:4000]) + "\n..."
+		}
+		return text
+	}
+	return condensed
 }
 
 func ensureReadBeforeWriteRule(systemText string) string {
@@ -236,6 +332,7 @@ func ensureReadBeforeWriteRule(systemText string) string {
 }
 
 // stripSystemReminders 移除 <system-reminder>...</system-reminder>，避免污染上游提示
+// 使用 LastIndex 查找结束标签，正确处理嵌套的字面量标签
 func stripSystemReminders(text string) string {
 	const startTag = "<system-reminder>"
 	const endTag = "</system-reminder>"
@@ -253,8 +350,11 @@ func stripSystemReminders(text string) string {
 		}
 		sb.WriteString(text[i : i+start])
 		endStart := i + start + len(startTag)
-		end := strings.Index(text[endStart:], endTag)
+		// 使用 LastIndex 找到最远的结束标签，跳过嵌套的字面量标签
+		end := strings.LastIndex(text[endStart:], endTag)
 		if end == -1 {
+			// 没有结束标签，保留从 startTag 开始的剩余内容，避免丢失用户消息
+			sb.WriteString(text[i+start:])
 			break
 		}
 		i = endStart + end + len(endTag)
@@ -672,4 +772,16 @@ func formatToolResultContentLocal(content interface{}) string {
 		raw, _ := json.Marshal(v)
 		return string(raw)
 	}
+}
+
+// truncateHistoryContent 截断单条 chatHistory 消息内容，防止上游超时
+func truncateHistoryContent(text string) string {
+	if len(text) <= maxHistoryContentLen {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= maxHistoryContentLen {
+		return text
+	}
+	return string(runes[:maxHistoryContentLen]) + "…[truncated]"
 }

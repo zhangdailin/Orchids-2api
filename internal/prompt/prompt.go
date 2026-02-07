@@ -481,8 +481,8 @@ func formatToolResultContent(content interface{}) string {
 	}
 }
 
-// stripSystemReminders 使用单次遍历移除所有 <system-reminder>...</system-reminder> 标签
-// 优化：避免多次 Index 调用和字符串拼接
+// stripSystemReminders 移除所有 <system-reminder>...</system-reminder> 标签
+// 使用 LastIndex 查找结束标签，正确处理嵌套的字面量标签
 func stripSystemReminders(text string) string {
 	const startTag = "<system-reminder>"
 	const endTag = "</system-reminder>"
@@ -508,11 +508,11 @@ func stripSystemReminders(text string) string {
 		// 写入标签之前的内容
 		sb.WriteString(text[i : i+start])
 
-		// 查找对应的 endTag
+		// 查找对应的 endTag（使用 LastIndex 处理嵌套）
 		endStart := i + start + len(startTag)
-		end := strings.Index(text[endStart:], endTag)
+		end := strings.LastIndex(text[endStart:], endTag)
 		if end == -1 {
-			// 没有结束标签，写入剩余内容
+			// 没有结束标签，保留从 startTag 开始的剩余内容，避免丢失用户消息
 			sb.WriteString(text[i+start:])
 			break
 		}

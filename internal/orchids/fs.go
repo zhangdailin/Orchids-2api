@@ -99,7 +99,18 @@ func (c *Client) handleFSOperation(conn *websocket.Conn, msg map[string]interfac
 		return respond(false, nil, "workdir is required")
 	}
 	baseDir := overrideWorkdir
-	var ignore []string
+	// 从配置加载 ignore 列表，并自动排除 .git
+	ignore := append([]string{}, c.config.OrchidsFSIgnore...)
+	hasGit := false
+	for _, item := range ignore {
+		if strings.TrimSpace(item) == ".git" {
+			hasGit = true
+			break
+		}
+	}
+	if !hasGit {
+		ignore = append(ignore, ".git")
+	}
 
 	switch operation {
 	case "edit":
