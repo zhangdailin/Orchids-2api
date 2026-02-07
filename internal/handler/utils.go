@@ -34,19 +34,20 @@ func channelFromPath(path string) string {
 }
 
 // mapModel 根据请求的 model 名称映射到 orchids 上游实际支持的模型
-// orchids 支持: claude-sonnet-4-5, claude-opus-4-5, claude-sonnet-4-5-thinking,
-//   claude-opus-4-5-thinking, claude-haiku-4-5, claude-sonnet-4-20250514, claude-3-7-sonnet-20250219
+// orchids 支持: claude-opus-4-6, claude-opus-4-6-thinking, claude-sonnet-4-5, claude-opus-4-5,
+//   claude-sonnet-4-5-thinking, claude-opus-4-5-thinking, claude-haiku-4-5,
+//   claude-sonnet-4-20250514, claude-3-7-sonnet-20250219
 func mapModel(requestModel string) string {
 	lower := strings.ToLower(requestModel)
 	isThinking := strings.Contains(lower, "thinking")
 
 	switch {
-	// opus-4-6 / opus-4.6 / 4-6-opus 系列 (Orchids 不支持 4.6，降级到 4.5)
+	// opus-4-6 / opus-4.6 / 4-6-opus 系列
 	case strings.Contains(lower, "opus-4-6") || strings.Contains(lower, "opus-4.6") || strings.Contains(lower, "4-6-opus"):
 		if isThinking {
-			return "claude-opus-4-5-thinking"
+			return "claude-opus-4-6-thinking"
 		}
-		return "claude-opus-4-5"
+		return "claude-opus-4-6"
 
 	// opus-4-5 / opus-4.5 / 4-5-opus 系列
 	case strings.Contains(lower, "opus-4-5") || strings.Contains(lower, "opus-4.5") || strings.Contains(lower, "4-5-opus"):
@@ -55,12 +56,12 @@ func mapModel(requestModel string) string {
 		}
 		return "claude-opus-4-5"
 
-	// opus 通配
+	// opus 通配 → 最新 4.6
 	case strings.Contains(lower, "opus"):
 		if isThinking {
-			return "claude-opus-4-5-thinking"
+			return "claude-opus-4-6-thinking"
 		}
-		return "claude-opus-4-5"
+		return "claude-opus-4-6"
 
 	// sonnet-3-7 / sonnet-3.7 / 3-7-sonnet 系列
 	case strings.Contains(lower, "sonnet-3-7") || strings.Contains(lower, "sonnet-3.7") || strings.Contains(lower, "3-7-sonnet"):

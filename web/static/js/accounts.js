@@ -263,7 +263,6 @@ function renderAccounts() {
     { label: "Token" },
     { label: "模型" },
     { label: "今日用量", style: "width: 100px;" },
-    { label: "配额", style: "width: 120px;" },
     { label: "状态" },
     { label: "调用" },
     { label: "最后调用" },
@@ -331,37 +330,6 @@ function renderAccounts() {
     tdUsage.style.color = "#94a3b8";
     tdUsage.textContent = usageCurrent.toFixed(2);
     tr.appendChild(tdUsage);
-
-    const tdQuota = document.createElement("td");
-    tdQuota.style.fontSize = "0.9rem";
-    const quotaSpan = document.createElement("span");
-    if (acc.subscription === "unlimited") {
-      quotaSpan.className = "tag";
-      quotaSpan.style.background = "rgba(52, 211, 153, 0.16)";
-      quotaSpan.style.color = "#34d399";
-      quotaSpan.style.border = "none";
-      quotaSpan.textContent = "无限制";
-    } else if (acc.usage_limit > 0) {
-      const current = acc.usage_current || 0;
-      const limit = acc.usage_limit;
-      const ratio = current / limit;
-      quotaSpan.textContent = Math.floor(current) + " / " + Math.floor(limit);
-      if (ratio >= 1) {
-        quotaSpan.style.color = "#fb7185";
-        quotaSpan.title = "配额已满";
-      } else if (ratio >= 0.8) {
-        quotaSpan.style.color = "#f59e0b";
-        quotaSpan.title = "配额即将用尽 (" + Math.floor(ratio * 100) + "%)";
-      } else {
-        quotaSpan.style.color = "#94a3b8";
-        quotaSpan.title = "已使用 " + Math.floor(ratio * 100) + "%";
-      }
-    } else {
-      quotaSpan.style.color = "#64748b";
-      quotaSpan.textContent = "-";
-    }
-    tdQuota.appendChild(quotaSpan);
-    tr.appendChild(tdQuota);
 
     const tdStatus = document.createElement("td");
     const statusSpan = document.createElement("span");
@@ -546,41 +514,6 @@ function updateStats() {
   updateSelectedCount();
 
   const totalUsage = accounts.reduce((sum, acc) => sum + (acc.usage_daily || 0), 0);
-
-  // Quota summary: count accounts with quota info
-  let quotaUsed = 0;
-  let quotaTotal = 0;
-  let quotaAccounts = 0;
-  let unlimitedAccounts = 0;
-  accounts.forEach(acc => {
-    if (acc.subscription === "unlimited") {
-      unlimitedAccounts++;
-    } else if (acc.usage_limit > 0) {
-      quotaAccounts++;
-      quotaUsed += (acc.usage_current || 0);
-      quotaTotal += acc.usage_limit;
-    }
-  });
-  const quotaSummaryEl = document.getElementById("quotaSummary");
-  if (quotaSummaryEl) {
-    if (quotaAccounts > 0) {
-      quotaSummaryEl.textContent = Math.floor(quotaUsed) + " / " + Math.floor(quotaTotal);
-      const ratio = quotaUsed / quotaTotal;
-      if (ratio >= 1) {
-        quotaSummaryEl.style.color = "#fb7185";
-      } else if (ratio >= 0.8) {
-        quotaSummaryEl.style.color = "#f59e0b";
-      } else {
-        quotaSummaryEl.style.color = "#6366f1";
-      }
-    } else if (unlimitedAccounts > 0) {
-      quotaSummaryEl.textContent = "无限制";
-      quotaSummaryEl.style.color = "#34d399";
-    } else {
-      quotaSummaryEl.textContent = "-";
-      quotaSummaryEl.style.color = "#6366f1";
-    }
-  }
 
   // Update sidebar footer
   const footerTotal = document.getElementById("footerTotal");

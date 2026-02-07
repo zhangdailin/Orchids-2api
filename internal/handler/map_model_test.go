@@ -7,13 +7,13 @@ func TestMapModel(t *testing.T) {
 		input string
 		want  string
 	}{
-		// Opus 4.6 系列 (降级到 4.5)
-		{"claude-opus-4-6", "claude-opus-4-5"},
-		{"claude-opus-4.6", "claude-opus-4-5"},
-		{"claude-4-6-opus-high", "claude-opus-4-5"},
-		{"claude-4-6-opus-max", "claude-opus-4-5"},
-		{"claude-opus-4-6-thinking", "claude-opus-4-5-thinking"},
-		{"claude-opus-4.6-thinking", "claude-opus-4-5-thinking"},
+		// Opus 4.6 系列
+		{"claude-opus-4-6", "claude-opus-4-6"},
+		{"claude-opus-4.6", "claude-opus-4-6"},
+		{"claude-4-6-opus-high", "claude-opus-4-6"},
+		{"claude-4-6-opus-max", "claude-opus-4-6"},
+		{"claude-opus-4-6-thinking", "claude-opus-4-6-thinking"},
+		{"claude-opus-4.6-thinking", "claude-opus-4-6-thinking"},
 
 		// Opus 4.5 系列
 		{"claude-opus-4-5", "claude-opus-4-5"},
@@ -24,9 +24,9 @@ func TestMapModel(t *testing.T) {
 		{"claude-4-5-opus-thinking", "claude-opus-4-5-thinking"},
 
 		// Opus 通配
-		{"claude-opus", "claude-opus-4-5"},
-		{"opus", "claude-opus-4-5"},
-		{"opus-thinking", "claude-opus-4-5-thinking"},
+		{"claude-opus", "claude-opus-4-6"},
+		{"opus", "claude-opus-4-6"},
+		{"opus-thinking", "claude-opus-4-6-thinking"},
 
 		// Sonnet 3.7 系列
 		{"claude-sonnet-3-7", "claude-3-7-sonnet-20250219"},
@@ -75,7 +75,7 @@ func TestMapModel(t *testing.T) {
 		{"Claude-Opus-4-5", "claude-opus-4-5"},
 		{"CLAUDE-SONNET-4-5-THINKING", "claude-sonnet-4-5-thinking"},
 		{"Claude-Haiku-4.5", "claude-haiku-4-5"},
-		{"OPUS-4-6-MAX", "claude-opus-4-5"},
+		{"OPUS-4-6-MAX", "claude-opus-4-6"},
 	}
 
 	for _, tt := range tests {

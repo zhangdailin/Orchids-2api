@@ -337,6 +337,22 @@ func main() {
 				if info.JWT != "" {
 					acc.Token = info.JWT
 				}
+
+				// Sync Orchids credits via RSC Server Action
+				if info.JWT != "" {
+					creditsCtx, creditsCancel := context.WithTimeout(context.Background(), 15*time.Second)
+					creditsInfo, creditsErr := orchids.FetchCredits(creditsCtx, info.JWT)
+					creditsCancel()
+					if creditsErr != nil {
+						slog.Warn("Orchids credits sync failed", "account", acc.Name, "error", creditsErr)
+					} else if creditsInfo != nil {
+						acc.Subscription = strings.ToLower(creditsInfo.Plan)
+						acc.UsageCurrent = creditsInfo.Credits
+						acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+						slog.Debug("Orchids credits synced", "account", acc.Name, "credits", acc.UsageCurrent, "limit", acc.UsageLimit, "plan", acc.Subscription)
+					}
+				}
+
 				if err := s.UpdateAccount(context.Background(), acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "error", err)
 					continue

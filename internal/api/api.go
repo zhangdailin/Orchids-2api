@@ -16,6 +16,7 @@ import (
 	"orchids-api/internal/auth"
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
+	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
@@ -338,6 +339,18 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				acc.UserID = info.UserID
 				acc.Email = info.Email
 				acc.Token = info.JWT // Update Token/JWT
+
+				// Sync Orchids credits
+				if info.JWT != "" {
+					creditsInfo, creditsErr := orchids.FetchCredits(r.Context(), info.JWT)
+					if creditsErr != nil {
+						slog.Warn("Orchids credits sync failed on refresh", "account", acc.Name, "error", creditsErr)
+					} else if creditsInfo != nil {
+						acc.Subscription = strings.ToLower(creditsInfo.Plan)
+						acc.UsageCurrent = creditsInfo.Credits
+						acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
+					}
+				}
 			}
 
 			// 刷新成功后清理账号状态
