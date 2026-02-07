@@ -30,6 +30,10 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	filterChannel := channelFromPath(r.URL.Path)
 
 	ctx := r.Context()
+	if h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		h.writeErrorResponse(w, "api_error", "Model store not configured", http.StatusServiceUnavailable)
+		return
+	}
 	allModels, err := h.loadBalancer.Store.ListModels(ctx)
 	if err != nil {
 		h.writeErrorResponse(w, "api_error", "Failed to fetch models: "+err.Error(), http.StatusInternalServerError)
@@ -99,12 +103,10 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	// We need to find by ModelID (string), but Store.GetModel uses ID (string UUID) usually?
-	// Wait, Store.GetModel(ctx, id) takes a string ID.
-	// But ListModels returns models with ModelID field.
-	// The public API passes "claude-3-5-sonnet", which corresponds to `m.ModelID`.
-	// Does Store have GetModelByModelID? Yes, loadbalancer uses it.
+	if h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		h.writeErrorResponse(w, "api_error", "Model store not configured", http.StatusServiceUnavailable)
+		return
+	}
 
 	m, err := h.loadBalancer.Store.GetModelByModelID(ctx, id)
 	if err != nil {

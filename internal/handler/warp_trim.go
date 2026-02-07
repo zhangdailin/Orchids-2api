@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 
@@ -188,17 +189,20 @@ func compressToolResults(messages []prompt.Message, maxLen int, channel string) 
 		for j := range msg.Content.Blocks {
 			block := &msg.Content.Blocks[j]
 			if block.Type == "tool_result" {
-				content, ok := block.Content.(string)
-				if !ok {
-					// Handle array of text blocks if necessary, but usually it's string or array of blocks
-					// For simplicity, if it's not string, we skip or handle complex structure later
-					// Orchids usually puts string content here
-					continue
-				}
-				if len(content) > maxLen {
-					truncated := content[:maxLen] + fmt.Sprintf("\n... [truncated %d bytes]", len(content)-maxLen)
-					block.Content = truncated
-					compressedCount++
+				switch content := block.Content.(type) {
+				case string:
+					if len(content) > maxLen {
+						block.Content = content[:maxLen] + fmt.Sprintf("\n... [truncated %d bytes]", len(content)-maxLen)
+						compressedCount++
+					}
+				case []interface{}:
+					// tool_result content can be []ContentBlock (decoded as []interface{})
+					// Serialize to measure total size, truncate if needed
+					raw, err := json.Marshal(content)
+					if err == nil && len(raw) > maxLen {
+						block.Content = string(raw[:maxLen]) + fmt.Sprintf("\n... [truncated %d bytes]", len(raw)-maxLen)
+						compressedCount++
+					}
 				}
 			}
 		}

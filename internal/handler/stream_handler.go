@@ -1456,7 +1456,7 @@ func stringifyToolInput(input interface{}) string {
 }
 
 // mapFSOperationToToolCall 将 Orchids fs_operation 转成标准工具调用
-// 参考 AIClient-2-API 的映射逻辑，尽量还原到 Read/Write/Edit/Bash/Glob/Grep/LS
+// 参考 AIClient-2-API 的映射逻辑，尽量还原到 Read/Write/Edit/Bash/Glob/Grep
 func mapFSOperationToToolCall(op map[string]interface{}) (toolCall, interface{}, bool) {
 	if op == nil {
 		return toolCall{}, nil, false
@@ -1475,11 +1475,12 @@ func mapFSOperationToToolCall(op map[string]interface{}) (toolCall, interface{},
 	input := map[string]interface{}{}
 	switch opType {
 	case "list", "ls":
-		toolName = "LS"
+		toolName = "Glob"
 		path := opString(op, "path", "dir", "file_path", "file")
 		if path == "" {
 			path = "."
 		}
+		input["pattern"] = "*"
 		input["path"] = path
 	case "read":
 		toolName = "Read"

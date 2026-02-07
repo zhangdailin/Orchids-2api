@@ -56,7 +56,6 @@ type Config struct {
 	OrchidsRunAllowlist       []string `json:"orchids_run_allowlist"`
 	OrchidsCCEntrypointMode   string   `json:"orchids_cc_entrypoint_mode"`
 	OrchidsFSIgnore           []string `json:"orchids_fs_ignore"`
-	OrchidsLocalWorkdir       string   `json:"orchids_local_workdir"`
 	WarpDisableTools          *bool    `json:"warp_disable_tools"`
 	WarpMaxToolResults        int      `json:"warp_max_tool_results"`
 	WarpMaxHistoryMessages    int      `json:"warp_max_history_messages"`

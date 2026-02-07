@@ -550,12 +550,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		builtPrompt = injectToolGate(builtPrompt, "This is a short, non-code request. Do NOT call tools or perform any file operations. Answer directly.")
 	}
 
-	localContext := buildLocalContext(effectiveWorkdir, h.config)
-	if localContext != "" {
-		builtPrompt = injectLocalContext(builtPrompt, localContext)
-		slog.Info("已注入本地预检上下文", "workdir", effectiveWorkdir)
-	}
-
 	// 2. 记录转换后的 prompt
 	slog.Debug("Checkpoint: LogConvertedPrompt")
 	logger.LogConvertedPrompt(builtPrompt)

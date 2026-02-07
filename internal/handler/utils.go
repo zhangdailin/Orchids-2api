@@ -33,30 +33,51 @@ func channelFromPath(path string) string {
 	return ""
 }
 
-// mapModel 根据请求的 model 名称映射到实际使用的模型
+// mapModel 根据请求的 model 名称映射到 orchids 上游实际支持的模型
+// orchids 支持: claude-sonnet-4-5, claude-opus-4-5, claude-sonnet-4-5-thinking,
+//   claude-opus-4-5-thinking, claude-haiku-4-5, claude-sonnet-4-20250514, claude-3-7-sonnet-20250219
 func mapModel(requestModel string) string {
-	lowerModel := strings.ToLower(requestModel)
-	if strings.Contains(lowerModel, "opus") {
-		return "claude-3-opus-20240229"
-	}
-	if strings.Contains(lowerModel, "sonnet-3-5") {
-		return "claude-3-5-sonnet-20241022"
-	}
-	if strings.Contains(lowerModel, "sonnet-3.5") {
-		return "claude-3-5-sonnet-20241022"
-	}
-	if strings.Contains(lowerModel, "sonnet-4-5") {
+	lower := strings.ToLower(requestModel)
+	isThinking := strings.Contains(lower, "thinking")
+
+	switch {
+	// opus 系列
+	case strings.Contains(lower, "opus"):
+		if isThinking {
+			return "claude-opus-4-5-thinking"
+		}
+		return "claude-opus-4-5"
+
+	// sonnet-3-7 / sonnet-3.7 系列
+	case strings.Contains(lower, "sonnet-3-7") || strings.Contains(lower, "sonnet-3.7") || strings.Contains(lower, "3-7-sonnet"):
+		return "claude-3-7-sonnet-20250219"
+
+	// sonnet-3-5 / sonnet-3.5 旧版 → 映射到最新 sonnet
+	case strings.Contains(lower, "sonnet-3-5") || strings.Contains(lower, "sonnet-3.5") || strings.Contains(lower, "3-5-sonnet"):
+		return "claude-sonnet-4-5"
+
+	// sonnet-4-5 系列
+	case strings.Contains(lower, "sonnet-4-5") || strings.Contains(lower, "sonnet-4.5"):
+		if isThinking {
+			return "claude-sonnet-4-5-thinking"
+		}
+		return "claude-sonnet-4-5"
+
+	// sonnet-4 (不含 4-5) → claude-sonnet-4-20250514
+	case strings.Contains(lower, "sonnet-4") || strings.Contains(lower, "sonnet"):
+		if isThinking {
+			return "claude-sonnet-4-5-thinking"
+		}
+		return "claude-sonnet-4-20250514"
+
+	// haiku 系列
+	case strings.Contains(lower, "haiku"):
+		return "claude-haiku-4-5"
+
+	// 默认
+	default:
 		return "claude-sonnet-4-5"
 	}
-	if strings.Contains(lowerModel, "sonnet") {
-		// Default to latest sonnet if version not specified
-		return "claude-sonnet-4-5"
-	}
-	if strings.Contains(lowerModel, "haiku") {
-		return "claude-3-5-haiku-20241022"
-	}
-	// Fallback to Sonnet 4.5
-	return "claude-sonnet-4-5"
 }
 
 func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {

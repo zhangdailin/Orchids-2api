@@ -32,9 +32,10 @@ func NewToolMapper() *ToolMapper {
 	tm.addMapping("view", "Read")
 	tm.addMapping("ReadFile", "Read")
 	tm.addMapping("read_file", "Read")
-	tm.addMapping("ListDir", "LS")
-	tm.addMapping("list_dir", "LS")
-	tm.addMapping("list_directory", "LS")
+	tm.addMapping("ListDir", "Glob")
+	tm.addMapping("list_dir", "Glob")
+	tm.addMapping("list_directory", "Glob")
+	tm.addMapping("LS", "Glob")
 	tm.addMapping("RipGrepTool", "Grep")
 	tm.addMapping("ripgrep", "Grep")
 	tm.addMapping("search_code", "Grep")
@@ -100,7 +101,7 @@ func NewToolMapper() *ToolMapper {
 	tm.fromOrchids["Read"] = "Read"
 	tm.fromOrchids["Write"] = "Write"
 	tm.fromOrchids["Bash"] = "Bash"
-	tm.fromOrchids["LS"] = "LS"
+	tm.fromOrchids["LS"] = "Glob"
 	tm.fromOrchids["Glob"] = "Glob"
 	tm.fromOrchids["Grep"] = "Grep"
 	tm.fromOrchids["TodoWrite"] = "TodoWrite"

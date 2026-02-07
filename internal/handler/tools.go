@@ -360,36 +360,6 @@ func parseToolInputKeys(inputStr string) []string {
 	return keys
 }
 
-func injectLocalContext(promptText string, context string) string {
-	context = strings.TrimSpace(context)
-	if context == "" {
-		return promptText
-	}
-	section := "<local_context>\n" + context + "\n</local_context>\n\n"
-	_, idx := findUserMarker(promptText)
-
-	sb := perf.AcquireStringBuilder()
-	defer perf.ReleaseStringBuilder(sb)
-
-	if idx != -1 {
-		sb.Grow(len(promptText) + len(section))
-		sb.WriteString(promptText[:idx])
-		sb.WriteString(section)
-		sb.WriteString(promptText[idx:])
-		return strings.Clone(sb.String())
-	}
-
-	if strings.TrimSpace(promptText) == "" {
-		return section
-	}
-
-	sb.Grow(len(promptText) + len(section) + 2)
-	sb.WriteString(promptText)
-	sb.WriteString("\n\n")
-	sb.WriteString(strings.TrimRight(section, "\n"))
-	return strings.Clone(sb.String())
-}
-
 func injectToolGate(promptText string, message string) string {
 	message = strings.TrimSpace(message)
 	if message == "" {
