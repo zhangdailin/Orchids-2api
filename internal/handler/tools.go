@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"strings"
 
 	"orchids-api/internal/orchids"
@@ -361,80 +360,6 @@ func parseToolInputKeys(inputStr string) []string {
 	return keys
 }
 
-func shouldPreflightTools(text string) bool {
-	if text == "" {
-		return false
-	}
-	// Always run preflight to ensure model has context about project structure
-	// This prevents hallucinations about the tech stack (e.g. thinking it's Next.js/FastAPI when it's Go)
-	return true
-}
-
-func filterSupportedTools(tools []interface{}) []interface{} {
-	if len(tools) == 0 {
-		return tools
-	}
-	supported := map[string]bool{
-		"read":      true,
-		"write":     true,
-		"edit":      true,
-		"bash":      true,
-		"glob":      true,
-		"grep":      true,
-		"ls":        true,
-		"list":      true,
-		"todowrite": true,
-	}
-	var filtered []interface{}
-	for _, tool := range tools {
-		tm, ok := tool.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		name := toolNameFromDef(tm)
-		if name == "" {
-			continue
-		}
-		normalized := strings.ToLower(orchids.NormalizeToolName(name))
-		if supported[normalized] {
-			filtered = append(filtered, tool)
-		}
-	}
-	return filtered
-}
-
-func formatLocalToolResults(results []safeToolResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("以下 tool_result 来自用户本地环境，具有权威性；回答必须以此为准，不要使用你自己的环境推断。")
-	for _, result := range results {
-		inputJSON, err := json.Marshal(result.input)
-		if err != nil {
-			continue
-		}
-		errorAttr := ""
-		if result.isError {
-			errorAttr = ` is_error="true"`
-		}
-		b.WriteString("\n<tool_use id=\"")
-		b.WriteString(result.call.id)
-		b.WriteString("\" name=\"")
-		b.WriteString(result.call.name)
-		b.WriteString("\">\n")
-		b.WriteString(string(inputJSON))
-		b.WriteString("\n</tool_use>\n<tool_result tool_use_id=\"")
-		b.WriteString(result.call.id)
-		b.WriteString("\"")
-		b.WriteString(errorAttr)
-		b.WriteString(">\n")
-		b.WriteString(result.output)
-		b.WriteString("\n</tool_result>")
-	}
-	return b.String()
-}
-
 func injectLocalContext(promptText string, context string) string {
 	context = strings.TrimSpace(context)
 	if context == "" {
@@ -505,87 +430,4 @@ func findUserMarker(promptText string) (string, int) {
 		return marker, idx
 	}
 	return "", -1
-}
-
-func extractPreflightPwd(results []safeToolResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-	if results[0].isError {
-		return ""
-	}
-	return strings.TrimSpace(results[0].output)
-}
-
-func buildLocalFallbackResponse(results []safeToolResult) string {
-	pwd := extractPreflightPwd(results)
-	findOutput := ""
-	if len(results) > 1 && !results[1].isError {
-		findOutput = results[1].output
-	}
-	topEntries := extractTopLevelEntries(findOutput, 12)
-	projectName := ""
-	if pwd != "" {
-		projectName = filepath.Base(pwd)
-	}
-
-	var b strings.Builder
-	if projectName != "" {
-		b.WriteString("这是 `")
-		b.WriteString(projectName)
-		b.WriteString("` 项目。")
-	} else {
-		b.WriteString("这是当前目录下的项目。")
-	}
-	if pwd != "" {
-		b.WriteString("\n当前项目目录: ")
-		b.WriteString(pwd)
-	}
-	if len(topEntries) > 0 {
-		b.WriteString("\n顶层目录/文件: ")
-		b.WriteString(strings.Join(topEntries, ", "))
-	}
-	if containsEntry(topEntries, "go.mod") {
-		b.WriteString("\n从目录结构看，这是一个 Go 项目（包含 go.mod/go.sum、cmd、internal、web 等）。")
-	} else if len(topEntries) > 0 {
-		b.WriteString("\n从目录结构看，这是一个后端服务项目，建议查看 README.md 获取完整说明。")
-	}
-	b.WriteString("\n如需更准确的项目介绍，请告知你想关注的模块或具体文件。")
-	return b.String()
-}
-
-func extractTopLevelEntries(findOutput string, limit int) []string {
-	if findOutput == "" {
-		return nil
-	}
-	seen := map[string]bool{}
-	var entries []string
-	for _, line := range strings.Split(findOutput, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line == "." {
-			continue
-		}
-		line = strings.TrimPrefix(line, "./")
-		if line == "" || strings.Contains(line, "/") {
-			continue
-		}
-		if seen[line] {
-			continue
-		}
-		seen[line] = true
-		entries = append(entries, line)
-		if limit > 0 && len(entries) >= limit {
-			break
-		}
-	}
-	return entries
-}
-
-func containsEntry(entries []string, target string) bool {
-	for _, entry := range entries {
-		if entry == target {
-			return true
-		}
-	}
-	return false
 }

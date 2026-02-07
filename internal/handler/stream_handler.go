@@ -17,7 +17,6 @@ import (
 	"orchids-api/internal/perf"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/upstream"
-	"orchids-api/internal/util"
 )
 
 type streamHandler struct {
@@ -25,7 +24,6 @@ type streamHandler struct {
 	config           *config.Config
 	workdir          string
 	isStream         bool
-	toolCallMode     string
 	suppressThinking bool
 	useUpstreamUsage bool
 	outputTokenMode  string
@@ -61,35 +59,23 @@ type streamHandler struct {
 	currentTextIndex      int
 	pendingThinkingSig    string
 
-	// Tool Handling
-	toolBlocks             map[string]int
-	pendingToolCalls       []toolCall
-	toolInputNames         map[string]string
-	toolInputBuffers       map[string]*strings.Builder
-	toolInputHadDelta      map[string]bool
-	toolCallHandled        map[string]bool
-	toolCallEmitted        map[string]struct{}
-	currentToolInputID     string
-	toolCallCount          int
-	autoPendingCalls       []toolCall
-	toolCallDedup          map[string]struct{}
-	toolResultDedup        map[string]struct{}
-	introDedup             map[string]struct{}
-	autoToolCallSeen       bool
-	autoToolUsePassthrough bool
-	toolResultCache        map[string]safeToolResult
-	toolCacheEnabled       bool
-	toolCacheHit           bool
-	toolReadFiles          map[string]struct{}
+	// Tool Handling (proxy mode only)
+	toolBlocks         map[string]int
+	pendingToolCalls   []toolCall
+	toolInputNames     map[string]string
+	toolInputBuffers   map[string]*strings.Builder
+	toolInputHadDelta  map[string]bool
+	toolCallHandled    map[string]bool
+	toolCallEmitted    map[string]struct{}
+	currentToolInputID string
+	toolCallCount      int
+	toolCallDedup      map[string]struct{}
+	introDedup         map[string]struct{}
 
-	// Internal Tools & Resolution
-	allowedTools          map[string]string
-	allowedIndex          []toolNameInfo
-	hasToolList           bool
-	internalToolResults   []safeToolResult
-	internalNeedsFollowup bool
-	preflightResults      []safeToolResult
-	shouldLocalFallback   bool
+	// Tool Resolution
+	allowedTools map[string]string
+	allowedIndex []toolNameInfo
+	hasToolList  bool
 
 	// Throttling
 	lastScanTime time.Time
@@ -104,17 +90,12 @@ type streamHandler struct {
 func newStreamHandler(
 	cfg *config.Config,
 	w http.ResponseWriter,
-	// r *http.Request, // Not used directly in storage
 	logger *debug.Logger,
-	toolCallMode string,
 	suppressThinking bool,
 	allowedTools map[string]string,
 	allowedIndex []toolNameInfo,
-	preflightResults []safeToolResult,
-	shouldLocalFallback bool,
 	isStream bool,
 	responseFormat adapter.ResponseFormat,
-	toolCacheEnabled bool,
 	workdir string,
 ) *streamHandler {
 	var flusher http.Flusher
@@ -130,21 +111,18 @@ func newStreamHandler(
 	}
 
 	h := &streamHandler{
-		config:              cfg,
-		workdir:             workdir,
-		w:                   w,
-		flusher:             flusher,
-		isStream:            isStream,
-		logger:              logger,
-		toolCallMode:        toolCallMode,
-		suppressThinking:    suppressThinking,
-		allowedTools:        allowedTools,
-		allowedIndex:        allowedIndex,
-		hasToolList:         len(allowedTools) > 0,
-		preflightResults:    preflightResults,
-		shouldLocalFallback: shouldLocalFallback,
-		outputTokenMode:     outputTokenMode,
-		responseFormat:      responseFormat,
+		config:           cfg,
+		workdir:          workdir,
+		w:                w,
+		flusher:          flusher,
+		isStream:         isStream,
+		logger:           logger,
+		suppressThinking: suppressThinking,
+		allowedTools:     allowedTools,
+		allowedIndex:     allowedIndex,
+		hasToolList:      len(allowedTools) > 0,
+		outputTokenMode:  outputTokenMode,
+		responseFormat:   responseFormat,
 
 		blockIndex:               -1,
 		toolBlocks:               make(map[string]int),
@@ -159,11 +137,7 @@ func newStreamHandler(
 		toolCallHandled:          make(map[string]bool),
 		toolCallEmitted:          make(map[string]struct{}),
 		toolCallDedup:            make(map[string]struct{}),
-		toolResultDedup:          make(map[string]struct{}),
 		introDedup:               make(map[string]struct{}),
-		toolResultCache:          make(map[string]safeToolResult),
-		toolCacheEnabled:         toolCacheEnabled,
-		toolReadFiles:            make(map[string]struct{}),
 		msgID:                    fmt.Sprintf("msg_%d", time.Now().UnixMilli()),
 		startTime:                time.Now(),
 		currentTextIndex:         -1,
@@ -365,13 +339,7 @@ func (h *streamHandler) resetRoundState() {
 	clear(h.toolCallEmitted)
 	h.currentToolInputID = ""
 	h.toolCallCount = 0
-	h.autoPendingCalls = nil
 	clear(h.toolCallDedup)
-	clear(h.toolResultDedup)
-	clear(h.toolReadFiles)
-	h.autoToolCallSeen = false
-	h.autoToolUsePassthrough = false
-	h.toolCacheHit = false
 	h.outputTokens = 0
 	h.outputBuilder.Reset()
 	h.useUpstreamUsage = false
@@ -379,14 +347,7 @@ func (h *streamHandler) resetRoundState() {
 }
 
 func (h *streamHandler) shouldEmitToolCalls(stopReason string) bool {
-	switch h.toolCallMode {
-	case "auto":
-		return stopReason == "tool_use"
-	case "internal":
-		return false
-	default:
-		return true
-	}
+	return true
 }
 
 func (h *streamHandler) emitToolCallNonStream(call toolCall) {
@@ -467,31 +428,16 @@ func (h *streamHandler) emitToolUseFromInput(toolID, toolName, inputStr string) 
 	if _, ok := h.toolCallEmitted[toolID]; ok {
 		return
 	}
-	if h.toolCallMode == "auto" && h.isStream {
-		if h.autoToolUsePassthrough && len(h.toolCallEmitted) > 0 {
-			// 自动模式仅透传一次 tool_use，避免多工具导致客户端报错
-			return
-		}
-	}
 	h.toolCallEmitted[toolID] = struct{}{}
-	if h.toolCallMode == "auto" && h.isStream {
-		// 自动模式下已向客户端暴露 tool_use，本轮不再内部跟随
-		h.autoToolUsePassthrough = true
-	}
 
-	if h.toolCallMode == "proxy" {
-		h.mu.Lock()
-		h.toolCallCount++
-		h.mu.Unlock()
-	}
+	h.mu.Lock()
+	h.toolCallCount++
+	h.mu.Unlock()
 
 	h.addOutputTokens(toolName)
 	fixedInput := fixToolInputForName(toolName, inputStr)
 	if fixedInput == "" {
 		fixedInput = "{}"
-	}
-	if h.toolCallMode == "auto" && h.isStream && strings.EqualFold(toolName, "Read") {
-		// 远程模式下不做本机路径探测，保持原始 Read
 	}
 
 	h.mu.Lock()
@@ -555,40 +501,11 @@ func (h *streamHandler) flushPendingToolCalls(stopReason string, write func(even
 	}
 }
 
-func (h *streamHandler) overrideWithLocalContext() {
-	if h.isStream || !h.shouldLocalFallback {
-		return
-	}
-	pwd := extractPreflightPwd(h.preflightResults)
-	currentText := strings.TrimSpace(h.responseText.String())
-	if currentText != "" && pwd != "" && strings.Contains(currentText, pwd) {
-		return
-	}
-	fallback := buildLocalFallbackResponse(h.preflightResults)
-	if fallback == "" {
-		return
-	}
-	h.responseText.Reset()
-	h.responseText.WriteString(fallback)
-	h.contentBlocks = []map[string]interface{}{
-		{
-			"type": "text",
-			"text": fallback,
-		},
-	}
-	h.textBlockBuilders = map[int]*strings.Builder{}
-	h.currentTextIndex = -1
-	h.outputBuilder.Reset()
-	h.outputBuilder.WriteString(fallback)
-	h.outputTokens = 0
-}
-
 func (h *streamHandler) finishResponse(stopReason string) {
 	if stopReason == "tool_use" {
 		h.mu.Lock()
 		hasToolCalls := h.toolCallCount > 0 ||
 			len(h.pendingToolCalls) > 0 ||
-			len(h.autoPendingCalls) > 0 ||
 			len(h.toolCallEmitted) > 0
 		h.mu.Unlock()
 		if !hasToolCalls {
@@ -639,7 +556,6 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		perf.ReleaseMap(stopMap)
 	} else {
 		h.flushPendingToolCalls(stopReason, h.writeFinalSSE)
-		h.overrideWithLocalContext()
 		h.finalizeOutputTokens()
 	}
 
@@ -653,13 +569,7 @@ func (h *streamHandler) resolveToolName(name string) (string, bool) {
 	if name == "" {
 		return "", false
 	}
-	if h.config != nil && h.config.DisableToolFilter {
-		return name, true
-	}
 	if !h.hasToolList {
-		if h.toolCallMode == "internal" || h.toolCallMode == "auto" {
-			return "", false
-		}
 		return name, true
 	}
 	if resolved, ok := h.allowedTools[strings.ToLower(name)]; ok {
@@ -823,53 +733,6 @@ func (h *streamHandler) writeSSELocked(event, data string) {
 
 // Event Handlers
 
-func (h *streamHandler) processAutoPendingCalls() {
-	if len(h.autoPendingCalls) == 0 {
-		return
-	}
-
-	h.mu.Lock()
-	calls := make([]toolCall, len(h.autoPendingCalls))
-	copy(calls, h.autoPendingCalls)
-	h.autoPendingCalls = nil
-	h.mu.Unlock()
-
-	if len(calls) == 0 {
-		return
-	}
-
-	results := make([]safeToolResult, len(calls))
-	util.ParallelFor(len(calls), func(i int) {
-		call := calls[i]
-		mutating := isMutatingTool(call.name)
-		if h.toolCacheEnabled && !mutating {
-			if key := h.toolCacheKey(call); key != "" {
-				if cached, ok := h.loadToolCache(key); ok {
-					results[i] = cached
-					h.markToolCacheHit()
-					return
-				}
-			}
-		}
-		slog.Debug("Executing tool", "name", call.name, "workdir", h.workdir)
-		res := executeToolCallWithBaseDir(call, h.config, h.workdir)
-		res.output = normalizeToolResultOutput(res.output)
-		if h.toolCacheEnabled {
-			if mutating {
-				h.clearToolCache()
-			} else if key := h.toolCacheKey(call); key != "" {
-				h.storeToolCache(key, res)
-			}
-		}
-		results[i] = res
-	})
-
-	// Append results in order
-	for _, res := range results {
-		h.internalToolResults = append(h.internalToolResults, res)
-	}
-}
-
 func normalizeToolResultOutput(output string) string {
 	if output == "" {
 		return ""
@@ -877,77 +740,6 @@ func normalizeToolResultOutput(output string) string {
 	output = strings.ReplaceAll(output, "\r\n", "\n")
 	output = strings.TrimSpace(output)
 	return output
-}
-
-func isMutatingTool(name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return false
-	}
-	name = strings.ToLower(orchids.NormalizeToolName(name))
-	switch name {
-	case "write", "edit", "bash":
-		return true
-	default:
-		return false
-	}
-}
-
-func (h *streamHandler) toolCacheKey(call toolCall) string {
-	return hashToolCallKey(call.name, normalizeToolDedupInput(call.input))
-}
-
-func (h *streamHandler) loadToolCache(key string) (safeToolResult, bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	res, ok := h.toolResultCache[key]
-	return res, ok
-}
-
-func (h *streamHandler) clearToolCache() {
-	h.mu.Lock()
-	if len(h.toolResultCache) > 0 {
-		clear(h.toolResultCache)
-	}
-	h.mu.Unlock()
-}
-
-func (h *streamHandler) storeToolCache(key string, res safeToolResult) {
-	h.mu.Lock()
-	h.toolResultCache[key] = res
-	h.mu.Unlock()
-}
-
-func (h *streamHandler) markToolCacheHit() {
-	h.mu.Lock()
-	h.toolCacheHit = true
-	h.mu.Unlock()
-}
-
-func (h *streamHandler) hadToolCacheHit() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.toolCacheHit
-}
-
-func (h *streamHandler) shouldEmitToolResult(result safeToolResult) bool {
-	if h.toolCallMode != "auto" {
-		return true
-	}
-	key := strings.TrimSpace(result.call.id)
-	if key == "" {
-		key = hashToolCallKey(result.call.name, normalizeToolDedupInput(result.call.input))
-	}
-	if key == "" {
-		return true
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, ok := h.toolResultDedup[key]; ok {
-		return false
-	}
-	h.toolResultDedup[key] = struct{}{}
-	return true
 }
 
 func normalizeToolDedupInput(input string) string {
@@ -1025,38 +817,12 @@ func (h *streamHandler) handleToolCall(call toolCall) {
 	if !h.shouldAcceptToolCall(call) {
 		return
 	}
-	if h.enforceReadBeforeWrite(call) {
-		return
-	}
 	h.handleToolCallAfterChecks(call)
 }
 
 func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
-	if h.toolCallMode == "internal" {
-		result := executeSafeTool(call)
-		result.output = normalizeToolResultOutput(result.output)
-		h.internalToolResults = append(h.internalToolResults, result)
-		return
-	}
-	if h.toolCallMode == "auto" {
-		if h.autoToolUsePassthrough {
-			// 已向客户端输出 tool_use，本轮交由客户端处理 tool_result
-			return
-		}
-		// 自动模式下不再输出“Running tool”提示，避免噪音
-		h.mu.Lock()
-		h.autoToolCallSeen = true
-		h.autoPendingCalls = append(h.autoPendingCalls, call)
-		h.mu.Unlock()
-		return
-	}
-	h.mu.Lock()
-	h.toolCallCount++
-	h.mu.Unlock()
-	// Default pending behavior (proxy mode removed)
-	h.mu.Lock()
 	h.pendingToolCalls = append(h.pendingToolCalls, call)
-	h.mu.Unlock()
+	h.toolCallCount++
 }
 
 func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
@@ -1103,8 +869,6 @@ func (h *streamHandler) forceFinishIfMissing() {
 	}
 	hasToolCalls := h.toolCallCount > 0 ||
 		len(h.pendingToolCalls) > 0 ||
-		len(h.autoPendingCalls) > 0 ||
-		len(h.internalToolResults) > 0 ||
 		len(h.toolCallEmitted) > 0
 	h.mu.Unlock()
 	stopReason := "end_turn"
@@ -1113,59 +877,6 @@ func (h *streamHandler) forceFinishIfMissing() {
 	}
 	slog.Warn("上游未发送结束标记，强制结束响应", "stop_reason", stopReason)
 	h.finishResponse(stopReason)
-}
-
-func (h *streamHandler) enforceReadBeforeWrite(call toolCall) bool {
-	name := strings.ToLower(strings.TrimSpace(call.name))
-	if name == "" {
-		return false
-	}
-	if name == "read" {
-		path := extractToolFilePath(call.input)
-		if path != "" {
-			h.mu.Lock()
-			h.toolReadFiles[path] = struct{}{}
-			h.mu.Unlock()
-		}
-		return false
-	}
-	if name != "write" && name != "edit" {
-		return false
-	}
-	path := extractToolFilePath(call.input)
-	if path == "" {
-		return false
-	}
-	h.mu.Lock()
-	_, ok := h.toolReadFiles[path]
-	h.mu.Unlock()
-	if ok {
-		return false
-	}
-	h.emitReadBeforeWriteError(call, path)
-	return true
-}
-
-func (h *streamHandler) emitReadBeforeWriteError(call toolCall, path string) {
-	msg := "File has not been read yet. Read it first before writing to it."
-	if h.config != nil && h.config.DebugEnabled {
-		slog.Warn("拦截写入工具调用：未先读取文件", "tool", call.name, "path", path)
-	}
-	h.mu.Lock()
-	h.internalToolResults = append(h.internalToolResults, safeToolResult{
-		call:    call,
-		input:   parseToolInputValue(call.input),
-		output:  msg,
-		isError: true,
-	})
-	h.internalNeedsFollowup = true
-	h.toolCallHandled[call.id] = true
-	h.mu.Unlock()
-}
-
-func extractToolFilePath(inputStr string) string {
-	input := parseToolInputMap(inputStr)
-	return toolInputString(input, "file_path", "path", "filename", "file")
 }
 
 func (h *streamHandler) shouldSkipIntroDelta(delta string) bool {
@@ -1496,51 +1207,8 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		return
 
 	case "fs_operation_result":
-		success, _ := msg.Event["success"].(bool)
-		data := msg.Event["data"]
-		errMsg, _ := msg.Event["error"].(string)
-		op, _ := msg.Event["op"].(map[string]interface{})
-
-		_ = op["id"]
-		_, _ = op["operation"].(string)
-
-		// Map orchids operation back to Claude tool name if possible
-		// mappedName := client.DefaultToolMapper.FromOrchids(opName)
-
-		output := ""
-		if !success {
-			output = errMsg
-			if output == "" {
-				output = "Operation failed"
-			}
-		} else {
-			if data != nil {
-				if s, ok := data.(string); ok {
-					output = s
-				} else {
-					jsonData, _ := json.Marshal(data)
-					output = string(jsonData)
-				}
-			}
-		}
-
-		if h.autoToolUsePassthrough {
-			// 已向客户端暴露 tool_use，本轮不再注入内部 tool_result
-			return
-		}
-
-		// Map orchids fs operation to tool result（对齐 AIClient-2-API）
-		if call, input, ok := mapFSOperationToToolCall(op); ok {
-			h.mu.Lock()
-			h.internalToolResults = append(h.internalToolResults, safeToolResult{
-				call:    call,
-				input:   input,
-				output:  output,
-				isError: !success,
-			})
-			h.internalNeedsFollowup = true
-			h.mu.Unlock()
-		}
+		// Just pass through the event, no internal tool result handling in proxy mode
+		return
 
 	case "model.tool-input-start":
 		h.closeActiveBlock() // Tool input starts a separate block mechanism
@@ -1586,6 +1254,9 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 		name, ok := h.toolInputNames[toolID]
 		if !ok || name == "" {
+			if buf, ok := h.toolInputBuffers[toolID]; ok {
+				perf.ReleaseStringBuilder(buf)
+			}
 			delete(h.toolInputBuffers, toolID)
 			delete(h.toolInputHadDelta, toolID)
 			delete(h.toolInputNames, toolID)
@@ -1594,6 +1265,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		inputStr := ""
 		if buf, ok := h.toolInputBuffers[toolID]; ok {
 			inputStr = strings.TrimSpace(buf.String())
+			perf.ReleaseStringBuilder(buf)
 		}
 		delete(h.toolInputBuffers, toolID)
 		delete(h.toolInputHadDelta, toolID)
@@ -1612,16 +1284,11 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if !h.shouldAcceptToolCall(call) {
 			return
 		}
-		if h.enforceReadBeforeWrite(call) {
-			return
-		}
-		if h.isStream && (h.toolCallMode == "proxy" || h.toolCallMode == "auto") {
+		if h.isStream {
 			if inputStr != "" {
 				h.addOutputTokens(inputStr)
 			}
 			h.emitToolUseFromInput(toolID, finalName, inputStr)
-		}
-		if h.toolCallMode == "proxy" && h.isStream {
 			return
 		}
 		h.handleToolCallAfterChecks(call)
@@ -1653,10 +1320,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if !h.shouldAcceptToolCall(call) {
 			return
 		}
-		if h.enforceReadBeforeWrite(call) {
-			return
-		}
-		if h.isStream && (h.toolCallMode == "proxy" || h.toolCallMode == "auto") {
+		if h.isStream {
 			h.emitToolUseFromInput(toolID, resolvedName, inputStr)
 		}
 		h.handleToolCallAfterChecks(call)
@@ -1718,47 +1382,19 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 		h.mu.Lock()
 		toolUseEmitted := len(h.toolCallEmitted) > 0
-		autoPassthrough := h.autoToolUsePassthrough
 		hadToolCalls := h.toolCallCount > 0 ||
 			len(h.pendingToolCalls) > 0 ||
-			len(h.autoPendingCalls) > 0 ||
-			len(h.internalToolResults) > 0 ||
 			toolUseEmitted
-		if autoPassthrough {
-			// 已输出 tool_use，不再执行内部工具或注入 tool_result
-			h.autoPendingCalls = nil
-			h.internalToolResults = nil
-		}
 		h.mu.Unlock()
 
-		// Force stopReason to tool_use if we have pending auto calls
-		h.mu.Lock()
-		if len(h.autoPendingCalls) > 0 || len(h.toolCallEmitted) > 0 {
+		// Force stopReason to tool_use if we have emitted tool calls
+		if toolUseEmitted {
 			stopReason = "tool_use"
 		}
-		h.mu.Unlock()
-
-		if !autoPassthrough {
-			h.processAutoPendingCalls()
-		}
-
-		h.mu.Lock()
-		hasToolCalls := hadToolCalls || len(h.internalToolResults) > 0 || len(h.toolCallEmitted) > 0
-		autoPassthrough = h.autoToolUsePassthrough
-		h.mu.Unlock()
 
 		// If upstream claims tool_use but we didn't actually handle any tool calls, treat as end_turn.
-		if stopReason == "tool_use" && !hasToolCalls {
+		if stopReason == "tool_use" && !hadToolCalls {
 			stopReason = "end_turn"
-		}
-
-		if (h.toolCallMode == "internal" || h.toolCallMode == "auto") && (stopReason == "tool_use" || len(h.internalToolResults) > 0) {
-			if hasToolCalls && !autoPassthrough {
-				h.internalNeedsFollowup = true
-				h.closeActiveBlock()
-				// Return without calling finishResponse to keep the stream open for the next turn
-				return
-			}
 		}
 
 		h.closeActiveBlock()

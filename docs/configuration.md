@@ -26,8 +26,6 @@
 | `summary_cache_redis_password` |  | 摘要缓存 Redis 密码 |
 | `summary_cache_redis_db` | 0 | 摘要缓存 Redis DB |
 | `summary_cache_redis_prefix` | orchids:summary: | 摘要缓存 Redis key 前缀 |
-| `tool_call_mode` | auto | 工具调用模式（proxy/auto/internal），internal 会在服务端安全执行 pwd/ls/find 并回传 tool_result（强制非流式） |
-| `tool_call_mode` | auto | Tool Call 模式 |
 | `output_token_mode` | final | 输出 Token 统计模式 |
 | `context_max_tokens` | 8000 | 最大上下文 Tokens |
 | `context_summary_max_tokens` | 800 | 摘要最大 Tokens |

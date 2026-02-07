@@ -3,12 +3,10 @@ package handler
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"orchids-api/internal/orchids"
@@ -62,11 +60,21 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 			slog.Info("Recovered workdir from session", "workdir", dynamicWorkdir, "session", conversationKey)
 		}
 	}
+	// Fallback to config default if still empty
+	if dynamicWorkdir == "" && h != nil && h.config != nil {
+		if strings.TrimSpace(h.config.OrchidsLocalWorkdir) != "" {
+			dynamicWorkdir = h.config.OrchidsLocalWorkdir
+			source = "config"
+			slog.Info("Using workdir from config", "workdir", dynamicWorkdir)
+		}
+	}
 
 	// Persist for future turns in this session
-	if dynamicWorkdir != "" {
+	if dynamicWorkdir != "" && conversationKey != "" {
 		h.sessionWorkdirsMu.Lock()
 		h.sessionWorkdirs[conversationKey] = dynamicWorkdir
+		h.sessionLastAccess[conversationKey] = time.Now()
+		h.cleanupSessionWorkdirsLocked()
 		h.sessionWorkdirsMu.Unlock()
 	}
 
@@ -105,9 +113,6 @@ func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string
 			client = warp.NewFromAccount(account, h.config)
 		} else {
 			orchidsClient := orchids.NewFromAccount(account, h.config)
-			if strings.EqualFold(strings.TrimSpace(h.config.ToolCallMode), "internal") {
-				orchidsClient.SetFSExecutor(h.orchidsFSExecutor)
-			}
 			client = orchidsClient
 		}
 		return client, account, nil
@@ -117,80 +122,6 @@ func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string
 	return nil, nil, errors.New("no client configured")
 }
 
-// executePreflightTools performs parallel preflight checks
-func (h *Handler) executePreflightTools(toolCallMode, allowBashName, userText, workdir string) ([]safeToolResult, []interface{}) {
-	slog.Debug("executePreflightTools called", "toolCallMode", toolCallMode, "allowBashName", allowBashName, "workdir", workdir, "userTextLen", len(userText))
-	if toolCallMode != "internal" {
-		return nil, nil
-	}
-	if strings.TrimSpace(workdir) == "" {
-		return nil, nil
-	}
-	if (toolCallMode == "internal" || toolCallMode == "auto") && allowBashName != "" && shouldPreflightTools(userText) {
-		slog.Info("Running preflight tools", "workdir", workdir)
-		preflight := []string{
-			"pwd",
-			"find . -maxdepth 2 -not -path '*/.*'",
-			"ls -la",
-		}
-
-		results := make([]safeToolResult, len(preflight))
-		var wg sync.WaitGroup
-		wg.Add(len(preflight))
-
-		for i, cmd := range preflight {
-			go func(i int, cmd string) {
-				defer wg.Done()
-				call := toolCall{
-					id:    fmt.Sprintf("internal_tool_%d", i+1),
-					name:  allowBashName,
-					input: fmt.Sprintf(`{"command":%q,"description":"internal preflight"}`, cmd),
-				}
-				result := executeToolCallWithBaseDir(call, h.config, workdir)
-				result.output = normalizeToolResultOutput(result.output)
-				results[i] = result
-				slog.Debug("Preflight result", "cmd", cmd, "isError", result.isError, "outputLen", len(result.output))
-			}(i, cmd)
-		}
-		wg.Wait()
-
-		// Construct chat history (must be ordered to match execution order for consistency)
-		// Since we filled 'results' by index, order is preserved.
-
-		var chatHistory []interface{}
-		// Pre-allocate assuming 2 entries per result
-		chatHistory = make([]interface{}, 0, len(results)*2)
-
-		for _, result := range results {
-			chatHistory = append(chatHistory, map[string]interface{}{
-				"role": "assistant",
-				"content": []map[string]interface{}{
-					{
-						"type":  "tool_use",
-						"id":    result.call.id,
-						"name":  result.call.name,
-						"input": result.input,
-					},
-				},
-			})
-			chatHistory = append(chatHistory, map[string]interface{}{
-				"role": "user",
-				"content": []map[string]interface{}{
-					{
-						"type":        "tool_result",
-						"tool_use_id": result.call.id,
-						"content":     result.output,
-						"is_error":    result.isError,
-					},
-				},
-			})
-		}
-		slog.Info("Preflight completed", "resultCount", len(results))
-		return results, chatHistory
-	}
-	slog.Debug("Preflight skipped", "toolCallMode", toolCallMode, "allowBashName", allowBashName)
-	return nil, make([]interface{}, 0)
-}
 
 func (h *Handler) updateAccountStats(account *store.Account, inputTokens, outputTokens int) {
 	if account == nil || h.loadBalancer == nil {
@@ -223,4 +154,26 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {
 			}
 		}
 	}
+}
+
+const (
+	sessionMaxSize        = 1024
+	sessionCleanupInterval = 5 * time.Minute
+	sessionMaxAge          = 30 * time.Minute
+)
+
+// cleanupSessionWorkdirsLocked removes stale session entries.
+// Must be called with sessionWorkdirsMu held for writing.
+func (h *Handler) cleanupSessionWorkdirsLocked() {
+	now := time.Now()
+	if len(h.sessionWorkdirs) < sessionMaxSize && now.Sub(h.sessionCleanupRun) < sessionCleanupInterval {
+		return
+	}
+	for key, lastAccess := range h.sessionLastAccess {
+		if now.Sub(lastAccess) > sessionMaxAge {
+			delete(h.sessionWorkdirs, key)
+			delete(h.sessionLastAccess, key)
+		}
+	}
+	h.sessionCleanupRun = now
 }

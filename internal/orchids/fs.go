@@ -23,11 +23,11 @@ import (
 )
 
 const (
-	fsMaxOutputSize = 0
-	fsMaxLines      = 0
-	fsMaxFileSize   = 0
-	fsMaxFiles      = 0
-	fsCmdTimeout    = 0 * time.Second
+	fsMaxOutputSize = 512 * 1024        // 512KB max output size
+	fsMaxLines      = 10000             // max lines for directory listing
+	fsMaxFileSize   = int64(10 << 20)   // 10MB max file size for read
+	fsMaxFiles      = 5000              // max files for glob/grep results
+	fsCmdTimeout    = 30 * time.Second  // shell command timeout
 )
 
 type fsOperation struct {
@@ -301,7 +301,6 @@ func resolvePath(baseDir, input string) (string, error) {
 	}
 	clean := filepath.Clean(input)
 	if filepath.IsAbs(clean) {
-		// Allow absolute paths directly
 		return clean, nil
 	}
 	// Fix for common agent error: providing absolute path without leading slash
@@ -314,9 +313,20 @@ func resolvePath(baseDir, input string) (string, error) {
 			}
 		}
 	}
-	// Allow relative paths, even if they go outside (e.g. ../)
-	// Just join them with baseDir
-	return filepath.Join(baseDir, clean), nil
+	joined := filepath.Join(baseDir, clean)
+	// Security: ensure resolved path stays within baseDir
+	absJoined, err := filepath.Abs(joined)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
+	}
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve base: %w", err)
+	}
+	if absJoined != absBase && !strings.HasPrefix(absJoined, absBase+string(filepath.Separator)) {
+		return "", fmt.Errorf("path escapes base directory: %s", input)
+	}
+	return absJoined, nil
 }
 
 func validatePathIgnore(baseDir, target string, ignore []string) error {

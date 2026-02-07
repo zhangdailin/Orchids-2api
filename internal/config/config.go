@@ -26,8 +26,6 @@ type Config struct {
 	AdminUser                 string   `json:"admin_user"`
 	AdminPass                 string   `json:"admin_pass"`
 	AdminPath                 string   `json:"admin_path"`
-	ToolCallMode              string   `json:"tool_call_mode"`
-	DisableToolFilter         bool     `json:"disable_tool_filter"`
 	DebugLogSSE               bool     `json:"debug_log_sse"`
 	SuppressThinking          bool     `json:"suppress_thinking"`
 	OutputTokenMode           string   `json:"output_token_mode"`
@@ -58,14 +56,13 @@ type Config struct {
 	OrchidsRunAllowlist       []string `json:"orchids_run_allowlist"`
 	OrchidsCCEntrypointMode   string   `json:"orchids_cc_entrypoint_mode"`
 	OrchidsFSIgnore           []string `json:"orchids_fs_ignore"`
+	OrchidsLocalWorkdir       string   `json:"orchids_local_workdir"`
 	WarpDisableTools          *bool    `json:"warp_disable_tools"`
-	WarpToolCallMode          string   `json:"warp_tool_call_mode"`
 	WarpMaxToolResults        int      `json:"warp_max_tool_results"`
 	WarpMaxHistoryMessages    int      `json:"warp_max_history_messages"`
 	WarpSplitToolResults      bool     `json:"warp_split_tool_results"`
 	OrchidsMaxToolResults     int      `json:"orchids_max_tool_results"`
 	OrchidsMaxHistoryMessages int      `json:"orchids_max_history_messages"`
-	MaxToolFollowups          int      `json:"max_tool_followups"`
 
 	// New fields for UI
 	AdminToken           string `json:"admin_token"`
@@ -165,9 +162,6 @@ func applyDefaults(cfg *Config) {
 	if cfg.AdminPath == "" {
 		cfg.AdminPath = "/admin"
 	}
-	if cfg.ToolCallMode == "" {
-		cfg.ToolCallMode = "auto"
-	}
 	if cfg.OutputTokenMode == "" {
 		cfg.OutputTokenMode = "final"
 	}
@@ -239,9 +233,6 @@ func applyDefaults(cfg *Config) {
 		v := false
 		cfg.WarpDisableTools = &v
 	}
-	if cfg.WarpToolCallMode == "" {
-		cfg.WarpToolCallMode = "proxy"
-	}
 	if cfg.WarpMaxToolResults == 0 {
 		cfg.WarpMaxToolResults = 10
 	}
@@ -253,9 +244,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.OrchidsMaxHistoryMessages == 0 {
 		cfg.OrchidsMaxHistoryMessages = 20
-	}
-	if cfg.MaxToolFollowups == 0 {
-		cfg.MaxToolFollowups = 5
 	}
 
 	// New defaults

@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
@@ -26,19 +25,6 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
 
-	toolCallMode := strings.ToLower(strings.TrimSpace(h.config.ToolCallMode))
-	if toolCallMode == "" {
-		toolCallMode = "proxy"
-	}
-	if isPlanMode(req.Messages) {
-		toolCallMode = "proxy"
-	}
-
-	effectiveTools := req.Tools
-	if !h.config.DisableToolFilter && (toolCallMode == "auto" || toolCallMode == "internal") {
-		effectiveTools = filterSupportedTools(effectiveTools)
-	}
-
 	conversationKey := conversationKeyForRequest(r, req)
 	opts := prompt.PromptOptions{
 		Context:          r.Context(),
@@ -53,7 +39,7 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		Model:    req.Model,
 		Messages: req.Messages,
 		System:   req.System,
-		Tools:    effectiveTools,
+		Tools:    req.Tools,
 		Stream:   false,
 	}, opts)
 

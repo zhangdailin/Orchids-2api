@@ -38,8 +38,10 @@ type Handler struct {
 	summaryLog   bool
 	tokenCache   tokencache.Cache
 
-	sessionWorkdirsMu sync.RWMutex
-	sessionWorkdirs   map[string]string // Map conversationKey -> string (workdir)
+	sessionWorkdirsMu      sync.RWMutex
+	sessionWorkdirs        map[string]string    // Map conversationKey -> string (workdir)
+	sessionLastAccess      map[string]time.Time // Map conversationKey -> last access time
+	sessionCleanupRun      time.Time
 
 	recentReqMu      sync.Mutex
 	recentRequests   map[string]*recentRequest
@@ -71,7 +73,7 @@ type toolCall struct {
 }
 
 const keepAliveInterval = 15 * time.Second
-const maxRequestBytes = 0
+const maxRequestBytes = 50 * 1024 * 1024 // 50MB
 const duplicateWindow = 2 * time.Second
 const duplicateCleanupWindow = 10 * time.Second
 
@@ -141,18 +143,15 @@ func toolCallKey(name, input string) string {
 
 func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	h := &Handler{
-		config:          cfg,
-		loadBalancer:    lb,
-		summaryLog:      cfg.SummaryCacheLog,
-		sessionWorkdirs: make(map[string]string),
-		recentRequests:  make(map[string]*recentRequest),
+		config:            cfg,
+		loadBalancer:      lb,
+		summaryLog:        cfg.SummaryCacheLog,
+		sessionWorkdirs:   make(map[string]string),
+		sessionLastAccess: make(map[string]time.Time),
+		recentRequests:    make(map[string]*recentRequest),
 	}
 	if cfg != nil {
-		client := orchids.New(cfg)
-		if strings.EqualFold(strings.TrimSpace(cfg.ToolCallMode), "internal") {
-			client.SetFSExecutor(h.orchidsFSExecutor)
-		}
-		h.client = client
+		h.client = orchids.New(cfg)
 	}
 	return h
 }
@@ -416,8 +415,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		hitsBefore, missesBefore = h.summaryStats.Snapshot()
 	}
 
-	userText := extractUserText(req.Messages)
-	planMode := isPlanMode(req.Messages)
 	suggestionMode := isSuggestionMode(req.Messages)
 	noThinking := suggestionMode || h.config.SuppressThinking
 	gateNoTools := false
@@ -425,40 +422,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if suggestionMode {
 		gateNoTools = true
 	}
-	toolCallMode := strings.ToLower(strings.TrimSpace(h.config.ToolCallMode))
-	if toolCallMode == "" {
-		toolCallMode = "proxy"
-	}
-	if planMode {
-		toolCallMode = "proxy"
-	}
-	if isWarpRequest {
-		warpMode := strings.ToLower(strings.TrimSpace(h.config.WarpToolCallMode))
-		if warpMode != "" {
-			toolCallMode = warpMode
-		}
-	}
 	effectiveTools := req.Tools
 	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
 		effectiveTools = nil
-	}
-	if strings.TrimSpace(effectiveWorkdir) == "" && toolCallMode == "internal" {
-		gateNoTools = true
-		slog.Warn("未提供 workdir，已禁用工具调用")
 	}
 	if gateNoTools {
 		effectiveTools = nil
 		slog.Debug("tool_gate: disabled tools for short non-code request")
 	}
-	if !h.config.DisableToolFilter && (toolCallMode == "auto" || toolCallMode == "internal") {
-		effectiveTools = filterSupportedTools(effectiveTools)
-	}
 	if isWarpRequest {
 		effectiveTools = normalizeWarpTools(effectiveTools)
-	}
-
-	if toolCallMode == "internal" && req.Stream {
-		req.Stream = false
 	}
 
 	// 构建 prompt（V2 Markdown 格式）
@@ -559,36 +532,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	allowedIndex := buildToolNameIndex(effectiveTools, allowedTools)
-	hasToolList := len(allowedTools) > 0
-	resolveToolName := func(name string) (string, bool) {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return "", false
-		}
-		if !hasToolList {
-			if toolCallMode == "proxy" {
-				return "", false
-			}
-			return name, true
-		}
-		if resolved, ok := allowedTools[strings.ToLower(name)]; ok {
-			return resolved, true
-		}
-		return "", false
-	}
-
-	var preflightResults []safeToolResult
 
 	chatHistory := []interface{}{}
 	upstreamMessages := append([]prompt.Message(nil), req.Messages...)
-	allowBashName := ""
-	shouldLocalFallback := false
-	if name, ok := resolveToolName("bash"); ok {
-		allowBashName = name
-	}
-	// executePreflightTools now handles parallel execution and result construction
-	preflightResults, preflightHistory := h.executePreflightTools(toolCallMode, allowBashName, userText, effectiveWorkdir)
-	shouldLocalFallback = len(preflightResults) > 0
 
 	// Pre-allocate chatHistory
 	if isOrchidsAIClient {
@@ -597,16 +543,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			chatHistory = append(chatHistory, item)
 		}
 	} else {
-		chatHistory = make([]interface{}, 0, 10+len(preflightHistory))
-		chatHistory = append(chatHistory, preflightHistory...)
+		chatHistory = make([]interface{}, 0, 10)
 	}
 
-	localContext := formatLocalToolResults(preflightResults)
-	if localContext != "" {
-		builtPrompt = injectLocalContext(builtPrompt, localContext)
-	}
 	if gateNoTools {
 		builtPrompt = injectToolGate(builtPrompt, "This is a short, non-code request. Do NOT call tools or perform any file operations. Answer directly.")
+	}
+
+	localContext := buildLocalContext(effectiveWorkdir, h.config)
+	if localContext != "" {
+		builtPrompt = injectLocalContext(builtPrompt, localContext)
+		slog.Info("已注入本地预检上下文", "workdir", effectiveWorkdir)
 	}
 
 	// 2. 记录转换后的 prompt
@@ -619,9 +566,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// Detect Response Format (Anthropic vs OpenAI)
 	responseFormat := adapter.DetectResponseFormat(r.URL.Path)
 
-	enableToolCache := isWarpRequest && toolCallMode == "auto"
 	sh := newStreamHandler(
-		h.config, w, logger, toolCallMode, suppressThinking, allowedTools, allowedIndex, preflightResults, shouldLocalFallback, isStream, responseFormat, enableToolCache, effectiveWorkdir,
+		h.config, w, logger, suppressThinking, allowedTools, allowedIndex, isStream, responseFormat, effectiveWorkdir,
 	)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	defer sh.release()
@@ -669,293 +615,167 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
-	// Main execution loop
+	// Main execution
 	run := func() {
-		turnCount := 1
-		followupCount := 0
 		chatSessionID := "chat_" + randomSessionID()
+		maxRetries := h.config.MaxRetries
+		if maxRetries < 0 {
+			maxRetries = 0
+		}
+		retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
+		retriesRemaining := maxRetries
+
+		payloadMessages := upstreamMessages
+		payloadSystem := req.System
+
+		upstreamReq := upstream.UpstreamRequest{
+			Prompt:        builtPrompt,
+			ChatHistory:   chatHistory,
+			Workdir:       effectiveWorkdir,
+			Model:         mappedModel,
+			Messages:      payloadMessages,
+			System:        payloadSystem,
+			Tools:         effectiveTools,
+			NoTools:       gateNoTools,
+			NoThinking:    noThinking,
+			ChatSessionID: chatSessionID,
+		}
 		for {
-			slog.Debug("Starting turn", "turn", turnCount, "mode", toolCallMode)
-			sh.internalNeedsFollowup = false // Reset per retry/turn
-			sh.internalToolResults = nil
-			maxRetries := h.config.MaxRetries
-			if maxRetries < 0 {
-				maxRetries = 0
+			sh.resetRoundState()
+			var err error
+			slog.Debug("Calling Upstream Client...", "attempt", maxRetries-retriesRemaining+1)
+
+			slog.Info("Interface check", "type", fmt.Sprintf("%T", apiClient))
+			if sender, ok := apiClient.(UpstreamPayloadClient); ok {
+				slog.Info("Using SendRequestWithPayload")
+				warpBatches := [][]prompt.Message{upstreamMessages}
+				if isWarpRequest && h.config.WarpSplitToolResults {
+					if _, isWarp := apiClient.(*warp.Client); isWarp {
+						batches, total := splitWarpToolResults(upstreamMessages, 1)
+						if len(batches) > 1 {
+							slog.Info("Warp 工具结果分批发送", "total_tool_results", total, "batches", len(batches))
+						}
+						warpBatches = batches
+					}
+				}
+				noopHandler := func(msg upstream.SSEMessage) {
+					if msg.Type == "error" {
+						slog.Warn("Warp intermediate batch error", "event", msg.Event)
+					}
+				}
+				for i, batch := range warpBatches {
+					batchReq := upstreamReq
+					batchReq.Messages = batch
+					isLast := i == len(warpBatches)-1
+					if isLast {
+						err = sender.SendRequestWithPayload(r.Context(), batchReq, sh.handleMessage, logger)
+					} else {
+						err = sender.SendRequestWithPayload(r.Context(), batchReq, noopHandler, nil)
+					}
+					if err != nil {
+						break
+					}
+				}
+			} else {
+				slog.Warn("Falling back to legacy SendRequest (Workdir lost!)", "type", fmt.Sprintf("%T", apiClient))
+				err = apiClient.SendRequest(r.Context(), builtPrompt, chatHistory, mappedModel, sh.handleMessage, logger)
 			}
-			retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
-			retriesRemaining := maxRetries
+			slog.Debug("Upstream Client Returned", "error", err)
 
-			payloadMessages := upstreamMessages
-			payloadSystem := req.System
-			// AIClient 需要 messages 来生成 toolResults/chatHistory，否则容易陷入工具回路
-
-			upstreamReq := upstream.UpstreamRequest{
-				Prompt:        builtPrompt,
-				ChatHistory:   chatHistory,
-				Workdir:       effectiveWorkdir,
-				Model:         mappedModel,
-				Messages:      payloadMessages,
-				System:        payloadSystem,
-				Tools:         effectiveTools,
-				NoTools:       gateNoTools,
-				NoThinking:    noThinking,
-				ChatSessionID: chatSessionID,
+			if err == nil {
+				sh.forceFinishIfMissing()
+				break
 			}
-			for {
-				sh.resetRoundState() // Ensure fresh state indicators for each attempt
-				var err error
-				slog.Debug("Calling Upstream Client...", "attempt", maxRetries-retriesRemaining+1)
 
-				slog.Info("Interface check", "type", fmt.Sprintf("%T", apiClient))
-				if sender, ok := apiClient.(UpstreamPayloadClient); ok {
-					slog.Info("Using SendRequestWithPayload")
-					warpBatches := [][]prompt.Message{upstreamMessages}
-					if isWarpRequest && h.config.WarpSplitToolResults {
-						if _, isWarp := apiClient.(*warp.Client); isWarp {
-							batches, total := splitWarpToolResults(upstreamMessages, 1)
-							if len(batches) > 1 {
-								slog.Info("Warp 工具结果分批发送", "total_tool_results", total, "batches", len(batches))
-							}
-							warpBatches = batches
+			// Check for non-retriable errors
+			errStr := err.Error()
+			errClass := classifyUpstreamError(errStr)
+			slog.Error("Request error", "error", err, "category", errClass.category, "retryable", errClass.retryable)
+			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+				if status := classifyAccountStatus(errStr); status != "" {
+					markAccountStatus(r.Context(), h.loadBalancer.Store, currentAccount, status)
+				}
+			}
+			if !errClass.retryable {
+				slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.category)
+
+				if errClass.category == "auth" {
+					errorMsg := fmt.Sprintf("Warp Request Failed: %s. Please check your account status.", errStr)
+					if strings.Contains(errStr, "401") {
+						errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
+					} else if strings.Contains(errStr, "403") {
+						errorMsg = "Access Forbidden (403): Your account might be flagged or blocked by Warp's firewall. Try re-enabling it in the Admin UI."
+					}
+
+					slog.Info("Injecting auth error to client", "error_msg", errorMsg, "is_stream", sh.isStream)
+					idx := sh.ensureBlock("text")
+					internalIdx := sh.activeTextBlockIndex
+
+					if sh.isStream {
+						deltaMap := map[string]interface{}{
+							"type":  "content_block_delta",
+							"index": idx,
+							"delta": map[string]interface{}{
+								"type": "text_delta",
+								"text": errorMsg,
+							},
+						}
+						deltaData, _ := json.Marshal(deltaMap)
+						slog.Debug("Sending error delta via SSE", "data", string(deltaData))
+						sh.writeSSE("content_block_delta", string(deltaData))
+					} else {
+						slog.Debug("Appending error to text builder")
+						if builder, ok := sh.textBlockBuilders[internalIdx]; ok {
+							builder.WriteString(errorMsg)
 						}
 					}
-					noopHandler := func(upstream.SSEMessage) {}
-					for i, batch := range warpBatches {
-						batchReq := upstreamReq
-						batchReq.Messages = batch
-						isLast := i == len(warpBatches)-1
-						if isLast {
-							err = sender.SendRequestWithPayload(r.Context(), batchReq, sh.handleMessage, logger)
-						} else {
-							err = sender.SendRequestWithPayload(r.Context(), batchReq, noopHandler, nil)
-						}
-						if err != nil {
-							break
-						}
+				}
+
+				sh.finishResponse("end_turn")
+				return
+			}
+
+			if r.Context().Err() != nil {
+				sh.finishResponse("end_turn")
+				return
+			}
+			if retriesRemaining <= 0 {
+				if currentAccount != nil && h.loadBalancer != nil {
+					slog.Error("Account request failed, max retries reached", "account", currentAccount.Name)
+				}
+				sh.finishResponse("end_turn")
+				return
+			}
+			retriesRemaining--
+			if errClass.switchAccount && currentAccount != nil && h.loadBalancer != nil {
+				if _, ok := failedAccountSet[currentAccount.ID]; !ok {
+					failedAccountSet[currentAccount.ID] = struct{}{}
+					failedAccountIDs = append(failedAccountIDs, currentAccount.ID)
+				}
+				slog.Warn("Account request failed, switching account", "account", currentAccount.Name, "unsuccessful_attempts", len(failedAccountIDs))
+
+				var retryErr error
+				apiClient, currentAccount, retryErr = h.selectAccount(r.Context(), req.Model, forcedChannel, failedAccountIDs)
+				if retryErr == nil {
+					if currentAccount != nil {
+						slog.Debug("Switched to account", "account", currentAccount.Name)
+					} else {
+						slog.Debug("Switched to default upstream config")
 					}
 				} else {
-					slog.Warn("Falling back to legacy SendRequest (Workdir lost!)", "type", fmt.Sprintf("%T", apiClient))
-					err = apiClient.SendRequest(r.Context(), builtPrompt, chatHistory, mappedModel, sh.handleMessage, logger)
-				}
-				slog.Debug("Upstream Client Returned", "error", err)
-
-				if err == nil {
-					sh.forceFinishIfMissing()
-					break
-				}
-
-				// Check for non-retriable errors
-				errStr := err.Error()
-				errClass := classifyUpstreamError(errStr)
-				slog.Error("Request error", "error", err, "category", errClass.category, "retryable", errClass.retryable)
-				if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-					if status := classifyAccountStatus(errStr); status != "" {
-						markAccountStatus(r.Context(), h.loadBalancer.Store, currentAccount, status)
-					}
-				}
-				if !errClass.retryable {
-					slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.category)
-
-					// Inject error message to client for better visibility
-					if errClass.category == "auth" {
-						errorMsg := fmt.Sprintf("Warp Request Failed: %s. Please check your account status.", errStr)
-						if strings.Contains(errStr, "401") {
-							errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
-						} else if strings.Contains(errStr, "403") {
-							errorMsg = "Access Forbidden (403): Your account might be flagged or blocked by Warp's firewall. Try re-enabling it in the Admin UI."
-						}
-
-						slog.Info("Injecting auth error to client", "error_msg", errorMsg, "is_stream", sh.isStream)
-						idx := sh.ensureBlock("text")
-						internalIdx := sh.activeTextBlockIndex
-
-						// For stream, send delta immediately
-						if sh.isStream {
-							deltaMap := map[string]interface{}{
-								"type":  "content_block_delta",
-								"index": idx,
-								"delta": map[string]interface{}{
-									"type": "text_delta",
-									"text": errorMsg,
-								},
-							}
-							deltaData, _ := json.Marshal(deltaMap)
-							slog.Debug("Sending error delta via SSE", "data", string(deltaData))
-							sh.writeSSE("content_block_delta", string(deltaData))
-						} else {
-							// For non-stream, ensureBlock has initialized the builder, we append to it
-							slog.Debug("Appending error to text builder")
-							if builder, ok := sh.textBlockBuilders[internalIdx]; ok {
-								builder.WriteString(errorMsg)
-							}
-						}
-					}
-
+					slog.Error("No more accounts available", "error", retryErr)
 					sh.finishResponse("end_turn")
 					return
-				}
-
-				if r.Context().Err() != nil {
-					sh.finishResponse("end_turn")
-					return
-				}
-				if retriesRemaining <= 0 {
-					if currentAccount != nil && h.loadBalancer != nil {
-						slog.Error("Account request failed, max retries reached", "account", currentAccount.Name)
-					}
-					sh.finishResponse("end_turn")
-					return
-				}
-				retriesRemaining--
-				if errClass.switchAccount && currentAccount != nil && h.loadBalancer != nil {
-					if _, ok := failedAccountSet[currentAccount.ID]; !ok {
-						failedAccountSet[currentAccount.ID] = struct{}{}
-						failedAccountIDs = append(failedAccountIDs, currentAccount.ID)
-					}
-					slog.Warn("Account request failed, switching account", "account", currentAccount.Name, "unsuccessful_attempts", len(failedAccountIDs))
-
-					// Retry account selection
-					var retryErr error
-					apiClient, currentAccount, retryErr = h.selectAccount(r.Context(), req.Model, forcedChannel, failedAccountIDs)
-					if retryErr == nil {
-						if currentAccount != nil {
-							slog.Debug("Switched to account", "account", currentAccount.Name)
-						} else {
-							slog.Debug("Switched to default upstream config")
-						}
-						// Don't restart loop, just continue to next iteration
-					} else {
-						slog.Error("No more accounts available", "error", retryErr)
-						sh.finishResponse("end_turn")
-						return
-					}
-				}
-				if retryDelay > 0 {
-					attempt := maxRetries - retriesRemaining + 1
-					delay := computeRetryDelay(retryDelay, attempt, errClass.category)
-					if delay > 0 && !util.SleepWithContext(r.Context(), delay) {
-						sh.finishResponse("end_turn")
-						return
-					}
 				}
 			}
-			if ((toolCallMode == "internal" || toolCallMode == "auto") && sh.internalNeedsFollowup) || (sh.internalNeedsFollowup && len(sh.internalToolResults) > 0) {
-				if toolCallMode == "internal" || toolCallMode == "auto" {
-					// Enforce max followups limit (prevent infinite loop)
-					maxFollowups := h.config.MaxToolFollowups
-					if maxFollowups <= 0 {
-						maxFollowups = 5
-					}
-					if followupCount >= maxFollowups {
-						slog.Warn("Tool follow-up limit reached", "turn", turnCount, "max_followups", maxFollowups)
-						sh.finishResponse("end_turn")
-						return
-					}
-					followupCount++
+			if retryDelay > 0 {
+				attempt := maxRetries - retriesRemaining + 1
+				delay := computeRetryDelay(retryDelay, attempt, errClass.category)
+				if delay > 0 && !util.SleepWithContext(r.Context(), delay) {
+					sh.finishResponse("end_turn")
+					return
 				}
-				slog.Debug("Turn completed, follow-up required", "turn", turnCount)
-				turnCount++
-				if len(sh.internalToolResults) > 0 {
-					var assistantBlocks []prompt.ContentBlock
-					var userBlocks []prompt.ContentBlock
-					var assistantHistoryBlocks []map[string]interface{}
-					var userHistoryBlocks []map[string]interface{}
-
-					// 1. Add text/thinking blocks from the current turn
-					for _, block := range sh.contentBlocks {
-						blockType, _ := block["type"].(string)
-						if blockType == "text" {
-							text, _ := block["text"].(string)
-							if text != "" {
-								assistantBlocks = append(assistantBlocks, prompt.ContentBlock{
-									Type: "text",
-									Text: text,
-								})
-								assistantHistoryBlocks = append(assistantHistoryBlocks, map[string]interface{}{
-									"type": "text",
-									"text": text,
-								})
-							}
-						} else if blockType == "thinking" {
-							// Check if we need to include thinking blocks in history
-							// Usually we don't for Anthropic API unless explicitly requested,
-							// but for "chat history" it might be needed if the model relies on it.
-							// For now, let's include it if allowed.
-							thinking, _ := block["thinking"].(string)
-							if thinking != "" {
-								assistantBlocks = append(assistantBlocks, prompt.ContentBlock{
-									Type:     "thinking",
-									Thinking: thinking,
-								})
-								assistantHistoryBlocks = append(assistantHistoryBlocks, map[string]interface{}{
-									"type":     "thinking",
-									"thinking": thinking,
-								})
-							}
-						}
-					}
-
-					// 2. Add tool use and results
-					for _, result := range sh.internalToolResults {
-						assistantBlocks = append(assistantBlocks, prompt.ContentBlock{
-							Type:  "tool_use",
-							ID:    result.call.id,
-							Name:  result.call.name,
-							Input: result.input,
-						})
-						userBlocks = append(userBlocks, prompt.ContentBlock{
-							Type:      "tool_result",
-							ToolUseID: result.call.id,
-							Content:   result.output,
-							IsError:   result.isError,
-						})
-						assistantHistoryBlocks = append(assistantHistoryBlocks, map[string]interface{}{
-							"type":  "tool_use",
-							"id":    result.call.id,
-							"name":  result.call.name,
-							"input": result.input,
-						})
-						userHistoryBlocks = append(userHistoryBlocks, map[string]interface{}{
-							"type":        "tool_result",
-							"tool_use_id": result.call.id,
-							"content":     result.output,
-							"is_error":    result.isError,
-						})
-					}
-
-					upstreamMessages = append(upstreamMessages,
-						prompt.Message{Role: "assistant", Content: prompt.MessageContent{Blocks: assistantBlocks}},
-						prompt.Message{Role: "user", Content: prompt.MessageContent{Blocks: userBlocks}},
-					)
-					chatHistory = append(chatHistory,
-						map[string]interface{}{"role": "assistant", "content": assistantHistoryBlocks},
-						map[string]interface{}{"role": "user", "content": userHistoryBlocks},
-					)
-
-					// Rebuild prompt for next round to include updated history
-					if isOrchidsAIClient {
-						builtPrompt, aiClientHistory = orchids.BuildAIClientPromptAndHistory(upstreamMessages, req.System, req.Model, noThinking)
-						chatHistory = chatHistory[:0]
-						for _, item := range aiClientHistory {
-							chatHistory = append(chatHistory, item)
-						}
-					} else {
-						builtPrompt = prompt.BuildPromptV2WithOptions(prompt.ClaudeAPIRequest{
-							Model:    req.Model,
-							Messages: upstreamMessages,
-							System:   req.System,
-							Tools:    effectiveTools,
-							Stream:   req.Stream,
-						}, opts)
-					}
-					inputTokens = h.estimateInputTokens(r.Context(), req.Model, builtPrompt)
-					sh.setUsageTokens(inputTokens, -1)
-					logger.LogConvertedPrompt(builtPrompt)
-				}
-				sh.resetRoundState()
-				continue
 			}
-			break
 		}
 	}
 
