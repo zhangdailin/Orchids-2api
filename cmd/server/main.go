@@ -458,7 +458,7 @@ func main() {
 					Channel: channel,
 					ModelID: modelID,
 					Name:    modelID,
-					Status:  true,
+					Status:  store.ModelStatusAvailable,
 				}
 				if err := s.CreateModel(context.Background(), newModel); err != nil {
 					slog.Warn("上游模型同步: 创建模型失败", "model_id", modelID, "error", err)
@@ -529,7 +529,7 @@ func main() {
 						Channel: "Warp",
 						ModelID: modelID,
 						Name:    displayName + " (Warp)",
-						Status:  true,
+						Status:  store.ModelStatusAvailable,
 					}
 					if err := s.CreateModel(context.Background(), newModel); err != nil {
 						slog.Warn("Warp 模型同步: 创建模型失败", "model_id", modelID, "error", err)

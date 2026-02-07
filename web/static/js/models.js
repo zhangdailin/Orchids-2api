@@ -328,22 +328,33 @@ function openModelModal(model = null) {
   const title = document.getElementById("modelModalTitle");
   const form = document.getElementById("modelForm");
 
+  const setSelectValue = (el, value) => {
+    if (!el) return;
+    const raw = value === null || value === undefined ? "" : String(value);
+    el.value = raw;
+    // 如果 value 不在 option 列表里，浏览器会显示空白。
+    // 这里兜底为第一个 option，避免“白框像没值”。
+    if (el.tagName === "SELECT" && el.value !== raw) {
+      el.selectedIndex = 0;
+    }
+  };
+
   if (model) {
     title.textContent = "编辑模型";
     document.getElementById("modelId").value = model.id;
-    document.getElementById("modelChannel").value = model.channel;
+    setSelectValue(document.getElementById("modelChannel"), model.channel);
     document.getElementById("modelModelId").value = model.model_id;
     document.getElementById("modelName").value = model.name;
     document.getElementById("modelSortOrder").value = model.sort_order;
-    document.getElementById("modelStatus").value = model.status;
+    setSelectValue(document.getElementById("modelStatus"), model.status);
     document.getElementById("modelIsDefault").checked = model.is_default;
   } else {
     title.textContent = "添加模型";
     form.reset();
     document.getElementById("modelId").value = "";
-    document.getElementById("modelChannel").value = "Orchids";
+    setSelectValue(document.getElementById("modelChannel"), "Orchids");
     document.getElementById("modelSortOrder").value = "0";
-    document.getElementById("modelStatus").value = "available";
+    setSelectValue(document.getElementById("modelStatus"), "available");
   }
   modal.classList.add("active");
   modal.style.display = "flex";

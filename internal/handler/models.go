@@ -54,7 +54,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Only return enabled models for public API
-		if !m.Status {
+		if !m.Status.Enabled() {
 			continue
 		}
 
