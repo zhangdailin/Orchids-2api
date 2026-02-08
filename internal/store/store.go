@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 )
 
@@ -60,7 +59,6 @@ type ApiKey struct {
 }
 
 type Store struct {
-	mu       sync.RWMutex
 	accounts accountStore
 	settings settingsStore
 	apiKeys  apiKeyStore

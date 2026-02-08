@@ -23,11 +23,11 @@ import (
 )
 
 const (
-	fsMaxOutputSize = 512 * 1024        // 512KB max output size
-	fsMaxLines      = 10000             // max lines for directory listing
-	fsMaxFileSize   = int64(10 << 20)   // 10MB max file size for read
-	fsMaxFiles      = 5000              // max files for glob/grep results
-	fsCmdTimeout    = 30 * time.Second  // shell command timeout
+	fsMaxOutputSize = 512 * 1024       // 512KB max output size
+	fsMaxLines      = 10000            // max lines for directory listing
+	fsMaxFileSize   = int64(10 << 20)  // 10MB max file size for read
+	fsMaxFiles      = 5000             // max files for glob/grep results
+	fsCmdTimeout    = 30 * time.Second // shell command timeout
 )
 
 type fsOperation struct {
@@ -660,24 +660,6 @@ func grepSearch(baseDir, root, pattern string, ignore []string) (string, error) 
 	return output, nil
 }
 
-func runExecCommand(baseDir string, tokens []string) (string, error) {
-	ctx := context.Background()
-	if fsCmdTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, fsCmdTimeout)
-		defer cancel()
-	}
-	cmd := exec.CommandContext(ctx, tokens[0], tokens[1:]...)
-	cmd.Dir = baseDir
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	if err := cmd.Run(); err != nil {
-		return buf.String(), err
-	}
-	return buf.String(), nil
-}
-
 func runShellCommand(baseDir, command string) (string, error) {
 	ctx := context.Background()
 	if fsCmdTimeout > 0 {
@@ -694,211 +676,6 @@ func runShellCommand(baseDir, command string) (string, error) {
 		return buf.String(), err
 	}
 	return buf.String(), nil
-}
-
-func applyEdits(content string, input map[string]interface{}) (string, int, error) {
-	if editsRaw, ok := input["edits"]; ok {
-		edits, ok := editsRaw.([]interface{})
-		if !ok {
-			return "", 0, errors.New("invalid edits payload")
-		}
-		total := 0
-		updated := content
-		for _, item := range edits {
-			editMap, ok := item.(map[string]interface{})
-			if !ok {
-				return "", 0, errors.New("invalid edit entry")
-			}
-			oldStr := toolInputString(editMap, "old_string", "oldString")
-			newStr := toolInputString(editMap, "new_string", "newString")
-			replaceAll := toolInputBool(editMap, "replace_all", "replaceAll")
-			if oldStr == "" {
-				return "", 0, errors.New("edit missing old_string")
-			}
-			var err error
-			updated, err = replaceString(updated, oldStr, newStr, replaceAll, &total)
-			if err != nil {
-				return "", 0, err
-			}
-		}
-		return updated, total, nil
-	}
-	oldStr := toolInputString(input, "old_string", "oldString")
-	if oldStr == "" {
-		return "", 0, errors.New("missing old_string for Edit")
-	}
-	newStr := toolInputString(input, "new_string", "newString")
-	replaceAll := toolInputBool(input, "replace_all", "replaceAll")
-	total := 0
-	updated, err := replaceString(content, oldStr, newStr, replaceAll, &total)
-	if err != nil {
-		return "", 0, err
-	}
-	return updated, total, nil
-}
-
-func replaceString(content, oldStr, newStr string, replaceAll bool, total *int) (string, error) {
-	// 1. Try exact match
-	if replaceAll {
-		count := strings.Count(content, oldStr)
-		if count > 0 {
-			if total != nil {
-				*total += count
-			}
-			return strings.ReplaceAll(content, oldStr, newStr), nil
-		}
-	} else {
-		if idx := strings.Index(content, oldStr); idx != -1 {
-			if total != nil {
-				*total++
-			}
-			return content[:idx] + newStr + content[idx+len(oldStr):], nil
-		}
-	}
-
-	// 2. Try normalizing Windows line endings (CRLF -> LF)
-	contentLF := strings.ReplaceAll(content, "\r\n", "\n")
-	oldStrLF := strings.ReplaceAll(oldStr, "\r\n", "\n")
-	newStrLF := strings.ReplaceAll(newStr, "\r\n", "\n")
-
-	if contentLF != content || oldStrLF != oldStr {
-		if replaceAll {
-			count := strings.Count(contentLF, oldStrLF)
-			if count > 0 {
-				if total != nil {
-					*total += count
-				}
-				return strings.ReplaceAll(contentLF, oldStrLF, newStrLF), nil
-			}
-		} else {
-			if idx := strings.Index(contentLF, oldStrLF); idx != -1 {
-				if total != nil {
-					*total++
-				}
-				return contentLF[:idx] + newStrLF + contentLF[idx+len(oldStrLF):], nil
-			}
-		}
-	}
-
-	// 3. Robust/Fuzzy match (Whitespace agnostic line matching)
-	// ONLY supported for single replacement (replaceAll=false) to avoid complexity
-	if !replaceAll {
-		if idx, length := findFuzzyBlock(contentLF, oldStrLF); idx != -1 {
-			if total != nil {
-				*total++
-			}
-			return contentLF[:idx] + newStrLF + contentLF[idx+length:], nil
-		}
-	}
-
-	return "", fmt.Errorf("old_string not found (even with fuzzy match)")
-}
-
-func findFuzzyBlock(content, target string) (int, int) {
-	// Both inputs assumed to be LF-normalized
-	contentLines := strings.Split(content, "\n")
-	targetLines := strings.Split(target, "\n")
-
-	if len(targetLines) == 0 {
-		return -1, 0
-	}
-
-	// Trim target lines for comparison
-	trimmedTarget := make([]string, len(targetLines))
-	for i, l := range targetLines {
-		trimmedTarget[i] = strings.TrimSpace(l)
-	}
-
-	// Map line index to byte offset
-	lineOffsets := make([]int, len(contentLines)+1)
-	offset := 0
-	for i, l := range contentLines {
-		lineOffsets[i] = offset
-		offset += len(l) + 1 // +1 for \n
-	}
-	lineOffsets[len(contentLines)] = offset // Set the end offset for the last line
-	// Correct the last offset if no trailing newline (split behavior depends on trailing \n)
-	// But strings.Split("a", "\n") -> ["a"]. len("a")=1. offset+=2.
-	// The byte index logic is approximate but sufficient for contiguous blocks
-	// as long as we use the start and end offsets derived from the same loop.
-
-	// Scan for block match
-	maxIdx := len(contentLines) - len(targetLines)
-	for i := 0; i <= maxIdx; i++ {
-		match := true
-		for j := 0; j < len(targetLines); j++ {
-			if strings.TrimSpace(contentLines[i+j]) != trimmedTarget[j] {
-				match = false
-				break
-			}
-		}
-
-		if match {
-			start := lineOffsets[i]
-			// End is offset of the line *after* the block, minus 1 (for the last \n)
-			// But we must be careful if it's the very last line
-			endLineIdx := i + len(targetLines)
-			end := 0
-			if endLineIdx < len(lineOffsets) {
-				// lineOffsets[endLineIdx] is the start of the next line.
-				// The previous line ended at lineOffsets[endLineIdx] - 1 (the \n)
-				// EXCEPT if the file doesn't end with \n?
-				// We normalize everything to \n so constructing the string assumes \n.
-				end = lineOffsets[endLineIdx] - 1
-			} else {
-				end = len(content)
-			}
-
-			// Safety clamp
-			if start < 0 {
-				start = 0
-			}
-			if end > len(content) {
-				end = len(content)
-			}
-			if end < start {
-				end = start
-			}
-
-			return start, end - start
-		}
-	}
-	return -1, 0
-}
-
-func toolInputString(input map[string]interface{}, keys ...string) string {
-	for _, key := range keys {
-		if value, ok := input[key]; ok {
-			if str, ok := value.(string); ok {
-				str = strings.TrimSpace(str)
-				if str != "" {
-					return str
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func toolInputBool(input map[string]interface{}, keys ...string) bool {
-	for _, key := range keys {
-		if value, ok := input[key]; ok {
-			switch v := value.(type) {
-			case bool:
-				return v
-			case string:
-				parsed, err := strconv.ParseBool(strings.TrimSpace(v))
-				if err == nil {
-					return parsed
-				}
-			case float64:
-				return v != 0
-			case int:
-				return v != 0
-			}
-		}
-	}
-	return false
 }
 
 func asInt(value interface{}) (int, bool) {

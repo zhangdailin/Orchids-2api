@@ -6,6 +6,7 @@
 debug-logs
 *.dylib
 orchids-api
+orchids-server
 
 # Test binary
 *.test

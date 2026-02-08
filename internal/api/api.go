@@ -153,18 +153,6 @@ func (a *API) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-func (a *API) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/accounts", a.HandleAccounts)
-	mux.HandleFunc("/api/accounts/", a.HandleAccountByID)
-	mux.HandleFunc("/api/keys", a.HandleKeys)
-	mux.HandleFunc("/api/keys/", a.HandleKeyByID)
-	mux.HandleFunc("/api/models", a.HandleModels)
-	mux.HandleFunc("/api/models/", a.HandleModelByID)
-	mux.HandleFunc("/api/config", a.HandleConfig)
-	mux.HandleFunc("/api/config/cache/stats", a.HandleCacheStats)
-	mux.HandleFunc("/api/config/cache/clear", a.HandleCacheClear)
-}
-
 func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -746,16 +734,6 @@ func (a *API) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-func prettifyModelName(id string) string {
-	parts := strings.Split(id, "-")
-	for i, p := range parts {
-		if len(p) > 0 {
-			parts[i] = strings.ToUpper(p[:1]) + p[1:]
-		}
-	}
-	return strings.Join(parts, " ")
 }
 
 func (a *API) SetSummaryCache(c prompt.SummaryCache) {

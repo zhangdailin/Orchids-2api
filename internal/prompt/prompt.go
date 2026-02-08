@@ -762,39 +762,6 @@ func BuildPromptV2WithOptions(req ClaudeAPIRequest, opts PromptOptions) string {
 	return buildSections(summary, historyText)
 }
 
-func summaryBudgetFor(maxTokens int, baseSections []string, recent []Message, currentRequest string, projectRoot string) int {
-	if maxTokens <= 0 {
-		return 0
-	}
-	var sb strings.Builder
-	sb.Grow(1024)
-	writeSection := func(s string) {
-		if sb.Len() > 0 {
-			sb.WriteString("\n\n")
-		}
-		sb.WriteString(s)
-	}
-	for _, section := range baseSections {
-		if section != "" {
-			writeSection(section)
-		}
-	}
-	if len(recent) > 0 {
-		history := FormatMessagesAsMarkdown(recent, projectRoot)
-		if history != "" {
-			writeSection(wrapSection("conversation_history", history))
-		}
-	}
-	writeSection(wrapUserRequest(currentRequest))
-	promptText := sb.String()
-	usedTokens := tiktoken.EstimateTextTokens(promptText)
-	budget := maxTokens - usedTokens
-	if budget < 0 {
-		return 0
-	}
-	return budget
-}
-
 func summarizeMessagesWithCache(ctx context.Context, opts PromptOptions, messages []Message, maxTokens int) string {
 	if maxTokens <= 0 {
 		return ""
@@ -1040,31 +1007,6 @@ func isPrefix(prefix []string, full []string) bool {
 	return true
 }
 
-func splitHistory(messages []Message, keepTurns int) (older []Message, recent []Message) {
-	if len(messages) == 0 {
-		return messages, nil
-	}
-	if keepTurns <= 0 {
-		return messages, nil
-	}
-
-	count := 0
-	splitIndex := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == "user" {
-			count++
-			if count == keepTurns {
-				splitIndex = i
-				break
-			}
-		}
-	}
-	if count < keepTurns {
-		return []Message{}, messages
-	}
-	return messages[:splitIndex], messages[splitIndex:]
-}
-
 func summarizeMessages(messages []Message, maxTokens int) string {
 	if len(messages) == 0 || maxTokens <= 0 {
 		return ""
@@ -1096,11 +1038,6 @@ func buildSummaryLines(messages []Message, perLineTokens int) []string {
 
 	// 并发阈值：少于 8 条消息时串行处理更高效
 	const parallelThreshold = 8
-
-	type indexedLine struct {
-		index int
-		line  string
-	}
 
 	if len(messages) >= parallelThreshold {
 		results := make([]string, len(messages))
@@ -1364,26 +1301,4 @@ func truncateToTokens(text string, maxTokens int) string {
 		return ""
 	}
 	return result + "…"
-}
-
-func removeSection(sections []string, sectionName string) []string {
-	prefix := "<" + sectionName + ">"
-	result := make([]string, 0, len(sections))
-	for _, section := range sections {
-		if strings.HasPrefix(section, prefix) {
-			continue
-		}
-		result = append(result, section)
-	}
-	return result
-}
-
-func insertSectionBefore(sections []string, sectionName string, newSection string) []string {
-	prefix := "<" + sectionName + ">"
-	for i, section := range sections {
-		if strings.HasPrefix(section, prefix) {
-			return append(append(sections[:i], newSection), sections[i:]...)
-		}
-	}
-	return append(sections, newSection)
 }

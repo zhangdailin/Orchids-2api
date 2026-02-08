@@ -125,11 +125,6 @@ func FetchAccountInfoWithProject(clientCookie string, customProjectID string) (*
 	}, nil
 }
 
-func NormalizeClientCookie(input string) (string, error) {
-	client, _, err := ParseClientCookies(input)
-	return client, err
-}
-
 func ParseClientCookies(input string) (clientJWT string, sessionJWT string, err error) {
 	trimmed := strings.TrimSpace(input)
 	if trimmed == "" {

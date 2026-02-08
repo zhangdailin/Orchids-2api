@@ -119,7 +119,7 @@ func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Clie
 	refreshToken := strings.TrimSpace(s.refreshToken)
 	s.mu.Unlock()
 
-	payload := []byte{}
+	var payload []byte
 	if refreshToken != "" {
 		payload = []byte("grant_type=refresh_token&refresh_token=" + refreshToken)
 	} else {
@@ -292,18 +292,6 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client, cid 
 	s.lastLogin = time.Now()
 	s.mu.Unlock()
 	return nil
-}
-
-func (s *session) getExperimentID() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.experimentID
-}
-
-func (s *session) getExperimentBucket() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.experimentBuck
 }
 
 func newUUID() string {

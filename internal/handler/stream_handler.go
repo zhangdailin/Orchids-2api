@@ -82,9 +82,6 @@ type streamHandler struct {
 
 	// Logger
 	logger *debug.Logger
-
-	lastInitMsg       string
-	finalStopSequence string
 }
 
 func newStreamHandler(
@@ -733,15 +730,6 @@ func (h *streamHandler) writeSSELocked(event, data string) {
 
 // Event Handlers
 
-func normalizeToolResultOutput(output string) string {
-	if output == "" {
-		return ""
-	}
-	output = strings.ReplaceAll(output, "\r\n", "\n")
-	output = strings.TrimSpace(output)
-	return output
-}
-
 func normalizeToolDedupInput(input string) string {
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -808,16 +796,6 @@ func (h *streamHandler) emitTextBlock(text string) {
 	stopData, _ := json.Marshal(stopMap)
 	perf.ReleaseMap(stopMap)
 	h.writeSSE("content_block_stop", string(stopData))
-}
-
-func (h *streamHandler) handleToolCall(call toolCall) {
-	if call.id == "" {
-		return
-	}
-	if !h.shouldAcceptToolCall(call) {
-		return
-	}
-	h.handleToolCallAfterChecks(call)
 }
 
 func (h *streamHandler) handleToolCallAfterChecks(call toolCall) {
@@ -1475,181 +1453,4 @@ func (h *streamHandler) emitThinkingDelta(delta string) {
 	h.writeSSE("content_block_delta", string(data))
 	perf.ReleaseMap(deltaMap)
 	perf.ReleaseMap(m)
-}
-
-func stringifyToolInput(input interface{}) string {
-	if input == nil {
-		return "{}"
-	}
-	bytes, err := json.Marshal(input)
-	if err != nil {
-		return "{}"
-	}
-	return string(bytes)
-}
-
-// mapFSOperationToToolCall 将 Orchids fs_operation 转成标准工具调用
-// 参考 AIClient-2-API 的映射逻辑，尽量还原到 Read/Write/Edit/Bash/Glob/Grep
-func mapFSOperationToToolCall(op map[string]interface{}) (toolCall, interface{}, bool) {
-	if op == nil {
-		return toolCall{}, nil, false
-	}
-	opID := opString(op, "id")
-	if opID == "" {
-		return toolCall{}, nil, false
-	}
-	opType := strings.ToLower(strings.TrimSpace(opString(op, "operation", "op", "type")))
-	if opType == "" {
-		return toolCall{}, nil, false
-	}
-
-	toolName := ""
-	input := map[string]interface{}{}
-	switch opType {
-	case "list", "ls":
-		toolName = "Glob"
-		path := opString(op, "path", "dir", "file_path", "file")
-		if path == "" {
-			path = "."
-		}
-		input["pattern"] = "*"
-		input["path"] = path
-	case "read":
-		toolName = "Read"
-		path := opString(op, "path", "file_path", "file")
-		if path != "" {
-			input["file_path"] = path
-		}
-	case "write":
-		path := opString(op, "path", "file_path", "file")
-		oldStr := opString(op, "old_string", "old_str", "old_content", "oldString")
-		newStr := opString(op, "new_string", "new_str", "new_content", "newString")
-		if oldStr != "" {
-			toolName = "Edit"
-			if path != "" {
-				input["file_path"] = path
-			}
-			input["old_string"] = oldStr
-			if newStr != "" {
-				input["new_string"] = newStr
-			}
-		} else {
-			toolName = "Write"
-			if path != "" {
-				input["file_path"] = path
-			}
-			if content, ok := opContent(op, "content", "new_content"); ok {
-				input["content"] = content
-			}
-		}
-	case "edit":
-		toolName = "Edit"
-		path := opString(op, "path", "file_path", "file")
-		if path != "" {
-			input["file_path"] = path
-		}
-		if edits, ok := op["edits"]; ok {
-			input["edits"] = edits
-		} else {
-			oldStr := opString(op, "old_string", "old_str", "old_content", "oldString")
-			newStr := opString(op, "new_string", "new_str", "new_content", "newString")
-			if oldStr != "" {
-				input["old_string"] = oldStr
-			}
-			if newStr != "" {
-				input["new_string"] = newStr
-			}
-		}
-	case "grep", "ripgrep", "search":
-		toolName = "Grep"
-		pattern := opString(op, "pattern", "query", "search")
-		if pattern != "" {
-			input["pattern"] = pattern
-		}
-		path := opString(op, "path", "dir")
-		if path == "" {
-			path = "."
-		}
-		input["path"] = path
-	case "glob":
-		toolName = "Glob"
-		pattern := opString(op, "pattern", "query", "glob")
-		if pattern == "" {
-			pattern = "*"
-		}
-		input["pattern"] = pattern
-		path := opString(op, "path", "dir")
-		if path == "" {
-			path = "."
-		}
-		input["path"] = path
-	case "run_command", "execute", "bash":
-		toolName = "Bash"
-		if command := opString(op, "command", "cmd"); command != "" {
-			input["command"] = command
-		}
-	case "todowrite", "todo_write":
-		toolName = "TodoWrite"
-		if content, ok := opContent(op, "content", "todos"); ok {
-			input["content"] = content
-		}
-	default:
-		// 未知操作类型，不转发给客户端
-		return toolCall{}, nil, false
-	}
-
-	if toolName == "" {
-		return toolCall{}, nil, false
-	}
-	if len(input) == 0 {
-		input = op
-	}
-
-	call := toolCall{
-		id:    opID,
-		name:  toolName,
-		input: stringifyToolInput(input),
-	}
-	return call, input, true
-}
-
-func opString(op map[string]interface{}, keys ...string) string {
-	if op == nil {
-		return ""
-	}
-	for _, key := range keys {
-		if v, ok := op[key]; ok {
-			if s, ok := v.(string); ok {
-				s = strings.TrimSpace(s)
-				if s != "" {
-					return s
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func opContent(op map[string]interface{}, keys ...string) (interface{}, bool) {
-	if op == nil {
-		return nil, false
-	}
-	for _, key := range keys {
-		if v, ok := op[key]; ok {
-			switch val := v.(type) {
-			case string:
-				if strings.TrimSpace(val) == "" {
-					continue
-				}
-				return val, true
-			default:
-				encoded, err := json.Marshal(val)
-				if err != nil {
-					continue
-				}
-				return string(encoded), true
-			}
-		}
-	}
-	return nil, false
 }

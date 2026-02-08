@@ -35,8 +35,9 @@ func channelFromPath(path string) string {
 
 // mapModel 根据请求的 model 名称映射到 orchids 上游实际支持的模型
 // orchids 支持: claude-opus-4-6, claude-opus-4-6-thinking, claude-sonnet-4-5, claude-opus-4-5,
-//   claude-sonnet-4-5-thinking, claude-opus-4-5-thinking, claude-haiku-4-5,
-//   claude-sonnet-4-20250514, claude-3-7-sonnet-20250219
+//
+//	claude-sonnet-4-5-thinking, claude-opus-4-5-thinking, claude-haiku-4-5,
+//	claude-sonnet-4-20250514, claude-3-7-sonnet-20250219
 func mapModel(requestModel string) string {
 	lower := strings.ToLower(requestModel)
 	isThinking := strings.Contains(lower, "thinking")
@@ -181,27 +182,6 @@ func extractUserText(messages []prompt.Message) string {
 	return ""
 }
 
-func isPlanMode(messages []prompt.Message) bool {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role != "user" {
-			continue
-		}
-		if msg.Content.IsString() {
-			if containsPlanReminder(msg.Content.GetText()) {
-				return true
-			}
-			continue
-		}
-		for _, block := range msg.Content.GetBlocks() {
-			if block.Type == "text" && containsPlanReminder(block.Text) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func isSuggestionMode(messages []prompt.Message) bool {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
@@ -225,18 +205,6 @@ func isSuggestionMode(messages []prompt.Message) bool {
 func containsSuggestionMode(text string) bool {
 	clean := stripSystemRemindersForMode(text)
 	return strings.Contains(strings.ToLower(clean), "suggestion mode")
-}
-
-func containsPlanReminder(text string) bool {
-	clean := stripSystemRemindersForMode(text)
-	lower := strings.ToLower(clean)
-	if strings.Contains(lower, "plan mode") || strings.Contains(lower, "planning mode") {
-		return true
-	}
-	if strings.Contains(clean, "计划模式") || strings.Contains(clean, "规划模式") {
-		return true
-	}
-	return false
 }
 
 // stripSystemRemindersForMode 移除 <system-reminder>...</system-reminder>，避免误判 plan/suggestion 模式

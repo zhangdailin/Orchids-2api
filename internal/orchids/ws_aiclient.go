@@ -769,13 +769,6 @@ func isSuggestionModeText(text string) bool {
 	return strings.Contains(normalized, "suggestion mode")
 }
 
-func defaultUserID(id string) string {
-	if strings.TrimSpace(id) == "" {
-		return "local_user"
-	}
-	return id
-}
-
 func normalizeAIClientModel(model string) string {
 	mapped := strings.TrimSpace(model)
 	if mapped == "" {

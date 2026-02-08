@@ -601,45 +601,6 @@ func encodeBytesField(field int, value []byte) []byte {
 	return e.bytes()
 }
 
-func buildMetadata(conversationID string) []byte {
-	meta := encoder{}
-
-	// WARNING: Setting conversation_id in metadata can cause empty responses in modern Warp API.
-	// We rely on manual context history concatenation instead.
-	// if conversationID != "" {
-	// 	meta.writeString(1, conversationID)
-	// }
-
-	// logging map (field 2)
-	// Entry 1: key="entrypoint", value (string_value)="USER_INITIATED"
-	entry1 := encoder{}
-	entry1.writeString(1, "entrypoint")
-
-	val1 := encoder{}
-	val1.writeString(3, "USER_INITIATED") // google.protobuf.Value.string_value
-	entry1.writeMessage(2, val1.bytes())
-
-	meta.writeMessage(2, entry1.bytes())
-
-	// Entry 2: key="is_auto_resume_after_error", value (bool_value)=false
-	entry2 := encoder{}
-	entry2.writeString(1, "is_auto_resume_after_error")
-	val2 := encoder{}
-	val2.writeBool(4, false)
-	entry2.writeMessage(2, val2.bytes())
-	meta.writeMessage(2, entry2.bytes())
-
-	// Entry 3: key="is_autodetected_user_query", value (bool_value)=true
-	entry3 := encoder{}
-	entry3.writeString(1, "is_autodetected_user_query")
-	val3 := encoder{}
-	val3.writeBool(4, true)
-	entry3.writeMessage(2, val3.bytes())
-	meta.writeMessage(2, entry3.bytes())
-
-	return meta.bytes()
-}
-
 func buildInputContext(workdir string) []byte {
 	pwd := strings.TrimSpace(workdir)
 	home := ""
@@ -683,22 +644,6 @@ func buildUserQuery(prompt string, isNew bool, includeAttachments bool) []byte {
 	}
 	msg.writeBool(4, isNew) // is_new_conversation
 	return msg.bytes()
-}
-
-func buildInput(contextBytes, userQueryBytes []byte) []byte {
-	// Modern API uses user_inputs (field 6)
-	// UserInputs (field 6) -> repeated UserInput (field 1) -> oneof input { UserQuery (field 1) }
-
-	userInput := encoder{}
-	userInput.writeMessage(1, userQueryBytes) // UserInput.user_query (field 1)
-
-	userInputs := encoder{}
-	userInputs.writeMessage(1, userInput.bytes()) // repeated UserInputs.inputs (field 1)
-
-	input := encoder{}
-	input.writeMessage(1, contextBytes)
-	input.writeMessage(6, userInputs.bytes()) // Input.user_inputs (field 6)
-	return input.bytes()
 }
 
 func buildInputWithUserQuery(contextBytes, userQueryBytes []byte) []byte {
@@ -833,38 +778,38 @@ func normalizeModel(model string) string {
 	}
 
 	known := map[string]struct{}{
-		"auto":                     {},
-		"auto-efficient":           {},
-		"auto-genius":              {},
-		"warp-basic":               {},
-		"claude-4-sonnet":          {},
-		"claude-4-5-sonnet":        {},
+		"auto":                       {},
+		"auto-efficient":             {},
+		"auto-genius":                {},
+		"warp-basic":                 {},
+		"claude-4-sonnet":            {},
+		"claude-4-5-sonnet":          {},
 		"claude-4-5-sonnet-thinking": {},
-		"claude-4-5-opus":          {},
-		"claude-4-5-opus-thinking": {},
-		"claude-4-6-opus-high":     {},
-		"claude-4-6-opus-max":      {},
-		"claude-4-5-haiku":         {},
-		"claude-4-opus":            {},
-		"claude-4.1-opus":          {},
-		"gpt-5":                    {},
-		"gpt-5-low":                {},
-		"gpt-5-medium":             {},
-		"gpt-5-high":               {},
-		"gpt-5-1-low":              {},
-		"gpt-5-1-medium":           {},
-		"gpt-5-1-high":             {},
-		"gpt-5-1-codex-low":        {},
-		"gpt-5-1-codex-medium":     {},
-		"gpt-5-1-codex-high":       {},
-		"gpt-5-1-codex-max-low":    {},
-		"gpt-4o":                   {},
-		"gpt-4.1":                  {},
-		"o3":                       {},
-		"o4-mini":                  {},
-		"gemini-2-5-pro":           {},
-		"gemini-2.5-pro":           {},
-		"gemini-3-pro":             {},
+		"claude-4-5-opus":            {},
+		"claude-4-5-opus-thinking":   {},
+		"claude-4-6-opus-high":       {},
+		"claude-4-6-opus-max":        {},
+		"claude-4-5-haiku":           {},
+		"claude-4-opus":              {},
+		"claude-4.1-opus":            {},
+		"gpt-5":                      {},
+		"gpt-5-low":                  {},
+		"gpt-5-medium":               {},
+		"gpt-5-high":                 {},
+		"gpt-5-1-low":                {},
+		"gpt-5-1-medium":             {},
+		"gpt-5-1-high":               {},
+		"gpt-5-1-codex-low":          {},
+		"gpt-5-1-codex-medium":       {},
+		"gpt-5-1-codex-high":         {},
+		"gpt-5-1-codex-max-low":      {},
+		"gpt-4o":                     {},
+		"gpt-4.1":                    {},
+		"o3":                         {},
+		"o4-mini":                    {},
+		"gemini-2-5-pro":             {},
+		"gemini-2.5-pro":             {},
+		"gemini-3-pro":               {},
 	}
 	if _, ok := known[model]; ok {
 		return model

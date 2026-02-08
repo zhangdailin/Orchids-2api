@@ -138,15 +138,6 @@ func computeRetryDelay(base time.Duration, attempt int, category string) time.Du
 	return delay
 }
 
-func toolCallKey(name, input string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "" {
-		return ""
-	}
-	input = strings.TrimSpace(fixToolInput(input))
-	return name + "|" + input
-}
-
 func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	h := &Handler{
 		config:            cfg,
@@ -553,7 +544,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	allowedIndex := buildToolNameIndex(effectiveTools, allowedTools)
 
-	chatHistory := []interface{}{}
+	var chatHistory []interface{}
 	upstreamMessages := append([]prompt.Message(nil), req.Messages...)
 
 	// Pre-allocate chatHistory
