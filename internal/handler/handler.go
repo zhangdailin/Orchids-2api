@@ -39,10 +39,10 @@ type Handler struct {
 	summaryLog   bool
 	tokenCache   tokencache.Cache
 
-	sessionWorkdirsMu      sync.RWMutex
-	sessionWorkdirs        map[string]string    // Map conversationKey -> string (workdir)
-	sessionLastAccess      map[string]time.Time // Map conversationKey -> last access time
-	sessionCleanupRun      time.Time
+	sessionWorkdirsMu sync.RWMutex
+	sessionWorkdirs   map[string]string    // Map conversationKey -> string (workdir)
+	sessionLastAccess map[string]time.Time // Map conversationKey -> last access time
+	sessionCleanupRun time.Time
 
 	recentReqMu      sync.Mutex
 	recentRequests   map[string]*recentRequest
@@ -705,8 +705,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			errStr := err.Error()
 			errClass := classifyUpstreamError(errStr)
 			slog.Error("Request error", "error", err, "category", errClass.category, "retryable", errClass.retryable)
-			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil && !errClass.retryable {
 				if status := classifyAccountStatus(errStr); status != "" {
+					slog.Info("标记账号状态（非重试类错误）", "account_id", currentAccount.ID, "status", status, "category", errClass.category)
 					markAccountStatus(r.Context(), h.loadBalancer.Store, currentAccount, status)
 				}
 			}

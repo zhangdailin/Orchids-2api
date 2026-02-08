@@ -12,8 +12,6 @@ import (
 func classifyAccountStatus(errStr string) string {
 	lower := strings.ToLower(errStr)
 	switch {
-	case hasExplicitHTTPStatus(lower, "429") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "rate limit"):
-		return "429"
 	case strings.Contains(lower, "quota_exceeded") || strings.Contains(lower, "quota exceeded") || strings.Contains(lower, "quota"):
 		return "quota_exceeded"
 	case hasExplicitHTTPStatus(lower, "401") || strings.Contains(lower, "signed out") || strings.Contains(lower, "signed_out") || strings.Contains(lower, "unauthorized"):
@@ -61,13 +59,14 @@ func markAccountStatus(ctx context.Context, store *store.Store, acc *store.Accou
 		return
 	}
 
+	now := time.Now()
+
 	// 避免重复标记同一状态，防止冷却计时器被反复重置
 	if acc.StatusCode == status {
 		slog.Debug("账号状态已存在，跳过重复标记", "account_id", acc.ID, "status", status)
 		return
 	}
 
-	now := time.Now()
 	acc.StatusCode = status
 	acc.LastAttempt = now
 	if status == "quota_exceeded" {

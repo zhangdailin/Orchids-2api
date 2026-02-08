@@ -263,9 +263,19 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 					creditsJWT = acc.Token
 				}
 				if creditsJWT != "" {
-					creditsInfo, creditsErr := orchids.FetchCredits(r.Context(), creditsJWT)
+					creditsInfo, creditsErr := orchids.FetchCreditsWithAuth(r.Context(), orchids.CreditsAuth{
+						SessionJWT: creditsJWT,
+						ClientJWT:  acc.ClientCookie,
+						ClientUat:  acc.ClientUat,
+						SessionID:  acc.SessionID,
+						UserID:     acc.UserID,
+					})
 					if creditsErr != nil {
-						slog.Warn("Orchids credits sync failed on create", "error", creditsErr)
+						if orchids.IsCreditsSoftError(creditsErr) {
+							slog.Debug("Orchids credits sync skipped on create, keep previous usage", "error", creditsErr)
+						} else {
+							slog.Warn("Orchids credits sync failed on create", "error", creditsErr)
+						}
 					} else if creditsInfo != nil {
 						acc.Subscription = strings.ToLower(creditsInfo.Plan)
 						acc.UsageCurrent = creditsInfo.Credits
@@ -354,11 +364,21 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 						creditsJWT = acc.SessionCookie
 					}
 					if creditsJWT != "" {
-						creditsInfo, creditsErr := orchids.FetchCredits(r.Context(), creditsJWT)
+						creditsInfo, creditsErr := orchids.FetchCreditsWithAuth(r.Context(), orchids.CreditsAuth{
+							SessionJWT: creditsJWT,
+							ClientJWT:  acc.ClientCookie,
+							ClientUat:  acc.ClientUat,
+							SessionID:  acc.SessionID,
+							UserID:     acc.UserID,
+						})
 						if creditsErr != nil {
-							slog.Warn("Orchids credits sync also failed", "account_id", id, "error", creditsErr)
-							http.Error(w, "Failed to refresh account: "+err.Error(), http.StatusBadRequest)
-							return
+							if orchids.IsCreditsSoftError(creditsErr) {
+								slog.Debug("Orchids credits fallback skipped on refresh, keep previous usage", "account_id", id, "error", creditsErr)
+							} else {
+								slog.Warn("Orchids credits sync also failed", "account_id", id, "error", creditsErr)
+								http.Error(w, "Failed to refresh account: "+err.Error(), http.StatusBadRequest)
+								return
+							}
 						}
 						if creditsInfo != nil {
 							slog.Info("Orchids credits synced via fallback", "account_id", id, "credits", creditsInfo.Credits, "plan", creditsInfo.Plan)
@@ -385,9 +405,19 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 						creditsJWT = existingToken
 					}
 					if creditsJWT != "" {
-						creditsInfo, creditsErr := orchids.FetchCredits(r.Context(), creditsJWT)
+						creditsInfo, creditsErr := orchids.FetchCreditsWithAuth(r.Context(), orchids.CreditsAuth{
+							SessionJWT: creditsJWT,
+							ClientJWT:  acc.ClientCookie,
+							ClientUat:  acc.ClientUat,
+							SessionID:  acc.SessionID,
+							UserID:     acc.UserID,
+						})
 						if creditsErr != nil {
-							slog.Warn("Orchids credits sync failed on refresh", "account_id", id, "error", creditsErr)
+							if orchids.IsCreditsSoftError(creditsErr) {
+								slog.Debug("Orchids credits sync skipped on refresh, keep previous usage", "account_id", id, "error", creditsErr)
+							} else {
+								slog.Warn("Orchids credits sync failed on refresh", "account_id", id, "error", creditsErr)
+							}
 						} else if creditsInfo != nil {
 							slog.Info("Orchids credits synced", "account_id", id, "credits", creditsInfo.Credits, "plan", creditsInfo.Plan, "limit", orchids.PlanCreditLimit(creditsInfo.Plan))
 							acc.Subscription = strings.ToLower(creditsInfo.Plan)

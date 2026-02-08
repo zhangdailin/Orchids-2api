@@ -885,9 +885,12 @@ func (h *streamHandler) shouldSkipIntroDelta(delta string) bool {
 		return false
 	}
 	h.mu.Lock()
-	h.introDedup[key] = struct{}{}
+	_, exists := h.introDedup[key]
+	if !exists {
+		h.introDedup[key] = struct{}{}
+	}
 	h.mu.Unlock()
-	return true
+	return exists
 }
 
 func normalizeIntroKey(delta string) string {

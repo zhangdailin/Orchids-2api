@@ -26,7 +26,6 @@ type LoadBalancer struct {
 	cacheExpires   time.Time
 	cacheTTL       time.Duration
 	activeConns    sync.Map // map[int64]*atomic.Int64
-	retry429       time.Duration
 	sfGroup        singleflight.Group
 }
 
@@ -41,15 +40,7 @@ func NewWithCacheTTL(s *store.Store, cacheTTL time.Duration) *LoadBalancer {
 	return &LoadBalancer{
 		Store:    s,
 		cacheTTL: cacheTTL,
-		retry429: 60 * time.Minute,
 	}
-}
-
-func (lb *LoadBalancer) SetRetry429Interval(interval time.Duration) {
-	if interval <= 0 {
-		interval = 60 * time.Minute
-	}
-	lb.retry429 = interval
 }
 
 func (lb *LoadBalancer) GetModelChannel(ctx context.Context, modelID string) string {
@@ -246,15 +237,6 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 
 	now := time.Now()
 	switch status {
-	case "429":
-		if acc.LastAttempt.IsZero() {
-			return false
-		}
-		if now.Sub(acc.LastAttempt) >= lb.retry429 {
-			lb.clearAccountStatus(ctx, acc, "429 冷却完成，自动恢复")
-			return true
-		}
-		return false
 	case "quota_exceeded":
 		resetAt := acc.QuotaResetAt
 		if resetAt.IsZero() {

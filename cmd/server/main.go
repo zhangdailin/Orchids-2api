@@ -99,7 +99,6 @@ func main() {
 	}
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Duration(cfg.LoadBalancerCacheTTL)*time.Second)
-	lb.SetRetry429Interval(time.Duration(cfg.Retry429Interval) * time.Minute)
 	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg, resolvedCfgPath)
 	h := handler.NewWithLoadBalancer(cfg, lb)
 
@@ -341,10 +340,20 @@ func main() {
 				// Sync Orchids credits via RSC Server Action
 				if info.JWT != "" {
 					creditsCtx, creditsCancel := context.WithTimeout(context.Background(), 15*time.Second)
-					creditsInfo, creditsErr := orchids.FetchCredits(creditsCtx, info.JWT)
+					creditsInfo, creditsErr := orchids.FetchCreditsWithAuth(creditsCtx, orchids.CreditsAuth{
+						SessionJWT: info.JWT,
+						ClientJWT:  acc.ClientCookie,
+						ClientUat:  acc.ClientUat,
+						SessionID:  acc.SessionID,
+						UserID:     acc.UserID,
+					})
 					creditsCancel()
 					if creditsErr != nil {
-						slog.Warn("Orchids credits sync failed", "account", acc.Name, "error", creditsErr)
+						if orchids.IsCreditsSoftError(creditsErr) {
+							slog.Debug("Orchids credits sync skipped, keep previous usage", "account_id", acc.ID, "account", acc.Name, "error", creditsErr)
+						} else {
+							slog.Warn("Orchids credits sync failed", "account_id", acc.ID, "account", acc.Name, "error", creditsErr)
+						}
 					} else if creditsInfo != nil {
 						acc.Subscription = strings.ToLower(creditsInfo.Plan)
 						acc.UsageCurrent = creditsInfo.Credits
