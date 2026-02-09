@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"unicode/utf8"
 
 	"orchids-api/internal/prompt"
 )
@@ -192,7 +193,8 @@ func compressToolResults(messages []prompt.Message, maxLen int, channel string) 
 				switch content := block.Content.(type) {
 				case string:
 					if len(content) > maxLen {
-						block.Content = content[:maxLen] + fmt.Sprintf("\n... [truncated %d bytes]", len(content)-maxLen)
+						cutPoint := truncateUTF8(content, maxLen)
+						block.Content = content[:cutPoint] + fmt.Sprintf("\n... [truncated %d bytes]", len(content)-cutPoint)
 						compressedCount++
 					}
 				case []interface{}:
@@ -200,7 +202,10 @@ func compressToolResults(messages []prompt.Message, maxLen int, channel string) 
 					// Serialize to measure total size, truncate if needed
 					raw, err := json.Marshal(content)
 					if err == nil && len(raw) > maxLen {
-						block.Content = string(raw[:maxLen]) + fmt.Sprintf("\n... [truncated %d bytes]", len(raw)-maxLen)
+						// Convert to string and truncate at a valid UTF-8 boundary
+						s := string(raw)
+						cutPoint := truncateUTF8(s, maxLen)
+						block.Content = s[:cutPoint] + fmt.Sprintf("\n... [truncated %d bytes]", len(s)-cutPoint)
 						compressedCount++
 					}
 				}
@@ -213,4 +218,16 @@ func compressToolResults(messages []prompt.Message, maxLen int, channel string) 
 	}
 
 	return compressed, compressedCount
+}
+
+// truncateUTF8 returns the largest index <= maxLen that does not split a UTF-8 character.
+func truncateUTF8(s string, maxLen int) int {
+	if maxLen >= len(s) {
+		return len(s)
+	}
+	// Walk backwards from maxLen to find a valid UTF-8 boundary
+	for maxLen > 0 && !utf8.RuneStart(s[maxLen]) {
+		maxLen--
+	}
+	return maxLen
 }

@@ -149,6 +149,9 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
         }
       }
     }
+    ... on UserFacingError {
+      error { __typename message }
+    }
   }
 }`
 
@@ -245,6 +248,19 @@ func FetchFeatureModelChoices(ctx context.Context, jwt string) (*FeatureModelCho
 	if userWrapper == nil {
 		return nil, fmt.Errorf("warp graphql: missing user in response")
 	}
+
+	// Check for UserFacingError
+	if typename, _ := userWrapper["__typename"].(string); typename == "UserFacingError" {
+		errObj, _ := userWrapper["error"].(map[string]interface{})
+		msg := "unknown error"
+		if errObj != nil {
+			if m, ok := errObj["message"].(string); ok {
+				msg = m
+			}
+		}
+		return nil, fmt.Errorf("warp graphql: UserFacingError: %s", msg)
+	}
+
 	userObj, _ := userWrapper["user"].(map[string]interface{})
 	if userObj == nil {
 		return nil, fmt.Errorf("warp graphql: missing user object in response")
@@ -375,8 +391,11 @@ func doGraphQL(ctx context.Context, jwt, operationName string, body graphqlReque
 
 	// Check for top-level GraphQL errors
 	if errs, ok := result["errors"]; ok {
-		b, _ := json.Marshal(errs)
-		return nil, fmt.Errorf("warp graphql %s: errors: %s", operationName, string(b))
+		// An empty errors array is not an error
+		if errSlice, isSlice := errs.([]interface{}); !isSlice || len(errSlice) > 0 {
+			b, _ := json.Marshal(errs)
+			return nil, fmt.Errorf("warp graphql %s: errors: %s", operationName, string(b))
+		}
 	}
 
 	return result, nil

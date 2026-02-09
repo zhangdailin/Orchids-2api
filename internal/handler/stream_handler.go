@@ -834,13 +834,14 @@ func (h *streamHandler) forceFinishIfMissing() {
 		h.ensureBlock("text")
 		h.mu.Lock()
 		internalIdx := h.activeTextBlockIndex
+		sseIdx := h.activeTextSSEIndex
 		h.mu.Unlock()
 
 		emptyMsg := "No response from upstream. The request may not be supported in this mode."
 		if h.isStream {
 			deltaMap := map[string]interface{}{
 				"type":  "content_block_delta",
-				"index": h.activeTextSSEIndex,
+				"index": sseIdx,
 				"delta": map[string]interface{}{
 					"type": "text_delta",
 					"text": emptyMsg,

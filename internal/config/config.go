@@ -313,7 +313,11 @@ func parseYAMLFlat(data []byte) (map[string]interface{}, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if idx := strings.Index(line, "#"); idx >= 0 {
+		// Only strip inline comments where # is preceded by whitespace,
+		// to avoid corrupting values containing # (hex colors, URLs, etc.)
+		if idx := strings.Index(line, " #"); idx >= 0 {
+			line = strings.TrimSpace(line[:idx])
+		} else if idx := strings.Index(line, "\t#"); idx >= 0 {
 			line = strings.TrimSpace(line[:idx])
 		}
 		if line == "" {

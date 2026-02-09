@@ -144,7 +144,7 @@ func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Accoun
 
 		lb.mu.Lock()
 		lb.cachedAccounts = accounts
-		lb.cacheExpires = now.Add(lb.cacheTTL)
+		lb.cacheExpires = time.Now().Add(lb.cacheTTL)
 		lb.mu.Unlock()
 
 		return deepCopyAccounts(accounts), nil
@@ -259,6 +259,15 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		return false
 	default:
+		// Unknown status codes are treated as transient errors with a short cooldown
+		// to prevent permanent account exclusion.
+		if acc.LastAttempt.IsZero() {
+			return false
+		}
+		if now.Sub(acc.LastAttempt) >= retry401Default {
+			lb.clearAccountStatus(ctx, acc, status+" 未知状态冷却完成，自动恢复尝试")
+			return true
+		}
 		return false
 	}
 }
@@ -272,9 +281,11 @@ func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Accou
 	if strings.EqualFold(acc.AccountType, "warp") && acc.ID > 0 {
 		warp.InvalidateSession(acc.ID)
 	}
+	lb.mu.Lock()
 	acc.StatusCode = ""
 	acc.LastAttempt = time.Time{}
 	acc.QuotaResetAt = time.Time{}
+	lb.mu.Unlock()
 	lb.persistAccountStatus(ctx, acc, reason)
 }
 
@@ -283,11 +294,14 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 	if acc == nil || lb.Store == nil || status == "" {
 		return
 	}
+	lb.mu.Lock()
 	if acc.StatusCode == status {
+		lb.mu.Unlock()
 		return
 	}
 	acc.StatusCode = status
 	acc.LastAttempt = time.Now()
+	lb.mu.Unlock()
 	lb.persistAccountStatus(ctx, acc, "后台刷新失败: "+status)
 }
 

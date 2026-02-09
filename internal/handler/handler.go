@@ -110,7 +110,7 @@ func classifyUpstreamError(errStr string) upstreamErrorClass {
 		return upstreamErrorClass{category: "timeout", retryable: true, switchAccount: true}
 	case strings.Contains(lower, "connection reset") || strings.Contains(lower, "connection refused") ||
 		strings.Contains(lower, "unexpected eof") || strings.Contains(lower, "use of closed") ||
-		strings.Contains(lower, "broken pipe"):
+		strings.Contains(lower, "broken pipe") || strings.HasSuffix(lower, ": eof") || lower == "eof":
 		return upstreamErrorClass{category: "network", retryable: true, switchAccount: true}
 	case hasExplicitHTTPStatus(lower, "500") || hasExplicitHTTPStatus(lower, "502") || hasExplicitHTTPStatus(lower, "503") || hasExplicitHTTPStatus(lower, "504"):
 		return upstreamErrorClass{category: "server", retryable: true, switchAccount: true}
@@ -277,12 +277,28 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 
 func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
+	streamingStarted := false
 
 	defer func() {
 		if err := recover(); err != nil {
 			stack := string(rtdebug.Stack())
 			slog.Error("Panic in HandleMessages", "error", err, "stack", stack)
-			h.writeErrorResponse(w, "server_error", "Internal Server Error", http.StatusInternalServerError)
+			if streamingStarted {
+				// Headers already sent — write an SSE error event instead of HTTP error
+				errData, _ := json.Marshal(map[string]interface{}{
+					"type": "error",
+					"error": map[string]interface{}{
+						"type":    "server_error",
+						"message": "Internal Server Error",
+					},
+				})
+				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errData)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			} else {
+				h.writeErrorResponse(w, "server_error", "Internal Server Error", http.StatusInternalServerError)
+			}
 		}
 	}()
 
@@ -520,6 +536,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
+		streamingStarted = true
 
 		if _, ok := w.(http.Flusher); !ok {
 			h.writeErrorResponse(w, "api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError)

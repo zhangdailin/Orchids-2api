@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -650,7 +651,42 @@ func parseFallbackToolInput(toolName string, payload []byte) string {
 		}
 		return string(b)
 	default:
-		return "{}"
+		// Generic protobuf extraction: pull all string fields so non-shell
+		// tools don't receive empty input.
+		input := map[string]interface{}{}
+		d := decoder{data: payload}
+		for !d.eof() {
+			field, wire, err := d.readKey()
+			if err != nil {
+				break
+			}
+			switch wire {
+			case 0: // varint
+				v, err := d.readVarint()
+				if err != nil {
+					break
+				}
+				input[fmt.Sprintf("field%d", field)] = v
+			case 2: // length-delimited (string/bytes)
+				b, err := d.readBytes()
+				if err != nil {
+					break
+				}
+				if utf8.Valid(b) {
+					input[fmt.Sprintf("field%d", field)] = string(b)
+				}
+			default:
+				_ = d.skip(wire)
+			}
+		}
+		if len(input) == 0 {
+			return "{}"
+		}
+		b, err := json.Marshal(input)
+		if err != nil {
+			return "{}"
+		}
+		return string(b)
 	}
 }
 

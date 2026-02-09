@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
@@ -295,6 +296,8 @@ func stripTagBlocks(text, tag string) string {
 		endStart := i + start + len(startTag)
 		end := strings.Index(text[endStart:], endTag)
 		if end == -1 {
+			// No closing tag found — preserve the remaining text as-is
+			sb.WriteString(text[i+start:])
 			break
 		}
 		i = endStart + end + len(endTag)
@@ -391,9 +394,9 @@ func formatWarpToolUse(call warpToolCall) string {
 	}
 	id := strings.TrimSpace(call.ID)
 	if id == "" {
-		return fmt.Sprintf("<tool_use name=\"%s\">\n%s\n</tool_use>", name, args)
+		return fmt.Sprintf("<tool_use name=\"%s\">\n%s\n</tool_use>", html.EscapeString(name), args)
 	}
-	return fmt.Sprintf("<tool_use id=\"%s\" name=\"%s\">\n%s\n</tool_use>", id, name, args)
+	return fmt.Sprintf("<tool_use id=\"%s\" name=\"%s\">\n%s\n</tool_use>", html.EscapeString(id), html.EscapeString(name), args)
 }
 
 func formatWarpToolResult(id, content string) string {
@@ -401,7 +404,7 @@ func formatWarpToolResult(id, content string) string {
 	if id == "" {
 		return fmt.Sprintf("<tool_result>\n%s\n</tool_result>", content)
 	}
-	return fmt.Sprintf("<tool_result id=\"%s\">\n%s\n</tool_result>", id, content)
+	return fmt.Sprintf("<tool_result id=\"%s\">\n%s\n</tool_result>", html.EscapeString(id), content)
 }
 
 func stringifyWarpValue(value interface{}) string {
@@ -555,7 +558,12 @@ func removeSupportedTools(data []byte) []byte {
 		return result
 	}
 
-	origSettingsLen := int(data[settingsTagPos+1])
+	// Decode the settings length as a proper varint (may be >1 byte for lengths ≥128)
+	origSettingsLen, varintLen := decodeVarintAt(data, settingsTagPos+1)
+	if varintLen == 0 {
+		return result
+	}
+
 	if pos := findBytes(result, supportedToolsPattern); pos != -1 {
 		result = append(result[:pos], result[pos+len(supportedToolsPattern):]...)
 		totalRemoved += len(supportedToolsPattern)
@@ -570,11 +578,37 @@ func removeSupportedTools(data []byte) []byte {
 		if newLen < 0 {
 			newLen = 0
 		}
-		if settingsTagPos+1 < len(result) {
-			result[settingsTagPos+1] = byte(newLen)
+		newVarint := encodeVarint(newLen)
+		// Replace the old varint with the new one; lengths may differ
+		insertPos := settingsTagPos + 1
+		oldEnd := insertPos + varintLen
+		if oldEnd > len(result) {
+			oldEnd = len(result)
 		}
+		tail := append([]byte(nil), result[oldEnd:]...)
+		result = append(result[:insertPos], newVarint...)
+		result = append(result, tail...)
 	}
 	return result
+}
+
+// decodeVarintAt reads a varint starting at data[offset] and returns (value, bytesConsumed).
+// Returns (0, 0) if the varint cannot be read.
+func decodeVarintAt(data []byte, offset int) (int, int) {
+	var x uint64
+	var s uint
+	for i := offset; i < len(data); i++ {
+		b := data[i]
+		x |= uint64(b&0x7f) << s
+		s += 7
+		if b < 0x80 {
+			return int(x), i - offset + 1
+		}
+		if s > 63 {
+			return 0, 0
+		}
+	}
+	return 0, 0
 }
 
 func findBytes(haystack, needle []byte) int {

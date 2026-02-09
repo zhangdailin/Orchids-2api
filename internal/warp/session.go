@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,9 @@ type session struct {
 	refreshToken   string
 	loggedIn       bool
 	lastLogin      time.Time
+	lastUsed       time.Time // for cache eviction
+	refreshing     bool      // prevents concurrent refresh attempts
+	refreshDone    chan struct{}
 	clientVersion  string
 	osCategory     string
 	osName         string
@@ -45,6 +49,10 @@ type refreshResponse struct {
 }
 
 var sessionCache sync.Map
+var sessionCount int64 // approximate count for eviction
+var sessionCountMu sync.Mutex
+
+const maxSessionCacheSize = 10000
 
 func sessionKey(accountID int64, refreshToken string) string {
 	if accountID > 0 {
@@ -69,9 +77,25 @@ func getSession(accountID int64, refreshToken string) *session {
 	}
 
 	key := sessionKey(accountID, refreshToken)
-	if val, ok := sessionCache.Load(key); ok {
-		sess := val.(*session)
+
+	// Use LoadOrStore to atomically check-and-insert, preventing race conditions
+	jar, _ := cookiejar.New(nil)
+	newSess := &session{
+		refreshToken:  refreshToken,
+		clientVersion: clientVersion,
+		osCategory:    osCategory,
+		osName:        osName,
+		osVersion:     osVersion,
+		jar:           jar,
+		lastUsed:      time.Now(),
+	}
+	val, loaded := sessionCache.LoadOrStore(key, newSess)
+	sess := val.(*session)
+
+	if loaded {
+		// Existing session found — update refresh token if changed
 		sess.mu.Lock()
+		sess.lastUsed = time.Now()
 		if refreshToken != "" && sess.refreshToken != refreshToken {
 			// refresh_token 变更时更新会话，避免旧令牌导致认证异常
 			sess.refreshToken = refreshToken
@@ -81,19 +105,42 @@ func getSession(accountID int64, refreshToken string) *session {
 			sess.lastLogin = time.Time{}
 		}
 		sess.mu.Unlock()
-		return sess
+	} else {
+		// New session inserted — track count and evict if needed
+		sessionCountMu.Lock()
+		sessionCount++
+		if sessionCount > maxSessionCacheSize {
+			go evictStaleSessions()
+		}
+		sessionCountMu.Unlock()
 	}
-	jar, _ := cookiejar.New(nil)
-	sess := &session{
-		refreshToken:  refreshToken,
-		clientVersion: clientVersion,
-		osCategory:    osCategory,
-		osName:        osName,
-		osVersion:     osVersion,
-		jar:           jar,
-	}
-	sessionCache.Store(key, sess)
 	return sess
+}
+
+// evictStaleSessions removes sessions not used in the last 2 hours.
+func evictStaleSessions() {
+	cutoff := time.Now().Add(-2 * time.Hour)
+	evicted := 0
+	sessionCache.Range(func(key, value interface{}) bool {
+		sess := value.(*session)
+		sess.mu.Lock()
+		lastUsed := sess.lastUsed
+		sess.mu.Unlock()
+		if lastUsed.Before(cutoff) {
+			sessionCache.Delete(key)
+			evicted++
+		}
+		return true
+	})
+	if evicted > 0 {
+		sessionCountMu.Lock()
+		sessionCount -= int64(evicted)
+		if sessionCount < 0 {
+			sessionCount = 0
+		}
+		sessionCountMu.Unlock()
+		slog.Info("Evicted stale warp sessions", "evicted", evicted)
+	}
 }
 
 func (s *session) tokenValid() bool {
@@ -109,9 +156,53 @@ func (s *session) ensureToken(ctx context.Context, httpClient *http.Client, cid 
 		s.mu.Unlock()
 		return nil
 	}
+	// If another goroutine is already refreshing, wait for it
+	if s.refreshing {
+		ch := s.refreshDone
+		s.mu.Unlock()
+		if ch != nil {
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		// After waiting, check if token is now valid
+		s.mu.Lock()
+		valid := s.tokenValid()
+		s.mu.Unlock()
+		if valid {
+			return nil
+		}
+		// If still invalid, fall through to try refresh ourselves
+		return s.ensureToken(ctx, httpClient, cid)
+	}
+	// Mark that we are refreshing
+	s.refreshing = true
+	s.refreshDone = make(chan struct{})
 	s.mu.Unlock()
 
-	return s.refreshTokenRequest(ctx, httpClient, cid)
+	err := s.refreshTokenRequest(ctx, httpClient, cid)
+
+	s.mu.Lock()
+	s.refreshing = false
+	close(s.refreshDone)
+	s.refreshDone = nil
+	s.mu.Unlock()
+
+	return err
+}
+
+func isTransientNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.HasSuffix(s, ": eof") || s == "eof" ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "broken pipe") ||
+		strings.Contains(s, "use of closed")
 }
 
 func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Client, cid string) error {
@@ -121,7 +212,7 @@ func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Clie
 
 	var payload []byte
 	if refreshToken != "" {
-		payload = []byte("grant_type=refresh_token&refresh_token=" + refreshToken)
+		payload = []byte("grant_type=refresh_token&refresh_token=" + url.QueryEscape(refreshToken))
 	} else {
 		decoded, err := base64.StdEncoding.DecodeString(refreshTokenB64)
 		if err != nil {
@@ -130,6 +221,29 @@ func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Clie
 		payload = decoded
 	}
 
+	const maxAuthRetries = 2
+	var lastErr error
+	for attempt := 0; attempt <= maxAuthRetries; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt > 0 {
+			slog.Info("Warp AI: Retrying refresh token request", "cid", cid, "attempt", attempt)
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+		lastErr = s.doRefreshTokenRequest(ctx, httpClient, cid, payload)
+		if lastErr == nil {
+			return nil
+		}
+		if !isTransientNetworkError(lastErr) {
+			return lastErr
+		}
+		slog.Warn("Warp AI: Refresh request transient error, will retry", "cid", cid, "attempt", attempt, "error", lastErr)
+	}
+	return lastErr
+}
+
+func (s *session) doRefreshTokenRequest(ctx context.Context, httpClient *http.Client, cid string, payload []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, refreshURL, bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -141,10 +255,6 @@ func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Clie
 	req.Header.Set("content-type", "application/x-www-form-urlencoded")
 	req.Header.Set("accept", "*/*")
 	req.Header.Set("accept-encoding", "gzip")
-
-	if httpClient.Jar == nil {
-		httpClient.Jar = s.jar
-	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -205,9 +315,26 @@ func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Clie
 		newRefresh = parsed.RefreshAlt
 	}
 
+	// 用 JWT 实际 exp 声明校验，防止 refresh 端点返回已过期的缓存 token
+	actualExp := jwtExpiry(accessToken)
+	expiresByResponse := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+	effectiveExpiry := expiresByResponse
+	if !actualExp.IsZero() {
+		// 如果 JWT 实际过期时间早于 expires_in 推算值，以实际值为准
+		if actualExp.Before(effectiveExpiry) {
+			effectiveExpiry = actualExp
+		}
+		// 如果 JWT 已过期或即将在 1 分钟内过期，拒绝使用
+		if time.Now().Add(1 * time.Minute).After(actualExp) {
+			slog.Warn("Warp AI: Refresh returned already-expired JWT", "cid", cid, "exp", actualExp, "now", time.Now())
+			return fmt.Errorf("refresh returned expired JWT (exp=%s)", actualExp.Format(time.RFC3339))
+		}
+	}
+
 	s.mu.Lock()
 	s.jwt = accessToken
-	s.expiresAt = time.Now().Add(time.Duration(expiresIn) * time.Second)
+	s.expiresAt = effectiveExpiry
 	if newRefresh != "" {
 		s.refreshToken = newRefresh
 	}
@@ -240,6 +367,29 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client, cid 
 		return fmt.Errorf("missing jwt")
 	}
 
+	const maxAuthRetries = 2
+	var lastErr error
+	for attempt := 0; attempt <= maxAuthRetries; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt > 0 {
+			slog.Info("Warp AI: Retrying login request", "cid", cid, "attempt", attempt)
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+		lastErr = s.doLogin(ctx, httpClient, cid, jwt, experimentID, experimentBucket)
+		if lastErr == nil {
+			return nil
+		}
+		if !isTransientNetworkError(lastErr) {
+			return lastErr
+		}
+		slog.Warn("Warp AI: Login request transient error, will retry", "cid", cid, "attempt", attempt, "error", lastErr)
+	}
+	return lastErr
+}
+
+func (s *session) doLogin(ctx context.Context, httpClient *http.Client, cid, jwt, experimentID, experimentBucket string) error {
 	re, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, nil)
 	if err != nil {
 		return err
@@ -255,10 +405,6 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client, cid 
 	re.Header.Set("accept", "*/*")
 	re.Header.Set("accept-encoding", "gzip")
 	re.Header.Set("content-length", "0")
-
-	if httpClient.Jar == nil {
-		httpClient.Jar = s.jar
-	}
 
 	resp, err := httpClient.Do(re)
 	if err != nil {

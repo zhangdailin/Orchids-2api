@@ -37,14 +37,14 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 
 	// Inject JWT token if available, valid, and session is empty
 	if acc.Token != "" {
-		if sess.currentJWT() == "" {
+		sess.mu.Lock()
+		if sess.jwt == "" {
 			if exp := jwtExpiry(acc.Token); !exp.IsZero() && time.Now().Add(20*time.Minute).Before(exp) {
-				sess.mu.Lock()
 				sess.jwt = acc.Token
 				sess.expiresAt = exp
-				sess.mu.Unlock()
 			}
 		}
+		sess.mu.Unlock()
 	}
 
 	timeout := defaultRequestTimeout
@@ -53,7 +53,10 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	}
 
 	client := newHTTPClient(timeout, cfg)
+	// Set jar under session lock to avoid concurrent mutation
+	sess.mu.Lock()
 	client.Jar = sess.jar
+	sess.mu.Unlock()
 
 	return &Client{
 		config:     cfg,
@@ -168,6 +171,22 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	jwt := c.session.currentJWT()
 	if jwt == "" {
 		return fmt.Errorf("warp jwt missing")
+	}
+	// 发送前再次校验 JWT 未过期，防止 ensureToken 和发送之间的竞态
+	if exp := jwtExpiry(jwt); !exp.IsZero() && time.Now().Add(1*time.Minute).After(exp) {
+		slog.Warn("Warp AI: JWT expired before send, forcing re-refresh", "cid", cid, "exp", exp)
+		// 清除过期 token 强制重新 refresh
+		c.session.mu.Lock()
+		c.session.jwt = ""
+		c.session.expiresAt = time.Time{}
+		c.session.mu.Unlock()
+		if err := c.session.ensureToken(ctx, c.httpClient, cid); err != nil {
+			return fmt.Errorf("re-refresh after expired JWT: %w", err)
+		}
+		jwt = c.session.currentJWT()
+		if jwt == "" {
+			return fmt.Errorf("warp jwt missing after re-refresh")
+		}
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, aiURL, bytes.NewReader(payload))

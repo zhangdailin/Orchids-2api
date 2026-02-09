@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"orchids-api/internal/auth"
@@ -28,6 +29,7 @@ type API struct {
 	tokenCache   tokencache.Cache
 	adminUser    string
 	adminPass    string
+	configMu     sync.RWMutex
 	config       interface{} // Using interface{} to avoid circular dependency if any, or just use *config.Config
 	configPath   string      // Path to config.json
 }
@@ -158,10 +160,14 @@ func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		a.configMu.RLock()
 		json.NewEncoder(w).Encode(a.config)
+		a.configMu.RUnlock()
 	case http.MethodPost:
-		// Update config
+		// Update config under write lock
+		a.configMu.Lock()
 		if err := json.NewDecoder(r.Body).Decode(a.config); err != nil {
+			a.configMu.Unlock()
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -169,16 +175,21 @@ func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 		// Save to Redis
 		data, err := json.Marshal(a.config)
 		if err != nil {
+			a.configMu.Unlock()
 			http.Error(w, "Failed to marshal config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+		a.configMu.Unlock()
+
 		if err := a.store.SetSetting(r.Context(), "config", string(data)); err != nil {
 			http.Error(w, "Failed to save config to Redis: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
+		a.configMu.RLock()
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(a.config)
+		a.configMu.RUnlock()
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -307,9 +318,11 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			}
 			if strings.EqualFold(acc.AccountType, "warp") {
 				var cfg *config.Config
+				a.configMu.RLock()
 				if raw, ok := a.config.(*config.Config); ok {
 					cfg = raw
 				}
+				a.configMu.RUnlock()
 				warpClient := warp.NewFromAccount(acc, cfg)
 				jwt, err := warpClient.RefreshAccount(r.Context())
 				if err != nil {
@@ -794,7 +807,9 @@ func (a *API) HandleCacheClear(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) cacheTokenCountEnabled() bool {
+	a.configMu.RLock()
 	cfg, ok := a.config.(*config.Config)
+	a.configMu.RUnlock()
 	if !ok || cfg == nil {
 		return false
 	}
