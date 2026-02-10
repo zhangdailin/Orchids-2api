@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -21,6 +20,30 @@ func extractWorkdirFromSystem(system []prompt.SystemItem) string {
 		}
 	}
 	return ""
+}
+
+func extractWorkdirFromRequest(r *http.Request, req ClaudeRequest) (string, string) {
+	if req.Metadata != nil {
+		if wd := metadataString(req.Metadata,
+			"workdir", "working_directory", "workingDirectory", "cwd",
+			"workspace", "workspace_path", "workspacePath",
+			"project_root", "projectRoot",
+		); wd != "" {
+			return strings.TrimSpace(wd), "metadata"
+		}
+	}
+
+	if wd := headerValue(r,
+		"X-Workdir", "X-Working-Directory", "X-Cwd", "X-Workspace", "X-Project-Root",
+	); wd != "" {
+		return strings.TrimSpace(wd), "header"
+	}
+
+	if wd := extractWorkdirFromSystem(req.System); wd != "" {
+		return strings.TrimSpace(wd), "system"
+	}
+
+	return "", ""
 }
 
 func channelFromPath(path string) string {
@@ -116,24 +139,7 @@ func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {
 	if key := headerValue(r, "X-Conversation-Id", "X-Session-Id", "X-Thread-Id", "X-Chat-Id"); key != "" {
 		return key
 	}
-	if req.Metadata != nil {
-		if key := metadataString(req.Metadata, "user_id", "userId"); key != "" {
-			return "user:" + key
-		}
-	}
-
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		host = h
-	}
-	if host == "" {
-		return ""
-	}
-	ua := strings.TrimSpace(r.UserAgent())
-	if ua == "" {
-		return host
-	}
-	return host + "|" + ua
+	return ""
 }
 
 func metadataString(metadata map[string]interface{}, keys ...string) string {

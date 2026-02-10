@@ -24,20 +24,23 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 		h.sessionWorkdirsMu.RUnlock()
 	}
 
-	// Extract workdir from system prompt (Claude Code sends "Primary working directory: ...")
-	dynamicWorkdir := extractWorkdirFromSystem(req.System)
-	source := ""
-	if dynamicWorkdir != "" {
-		source = "system"
-	}
+	// Prefer explicit workdir from request payload/header/system.
+	dynamicWorkdir, source := extractWorkdirFromRequest(r, req)
 
-	// FALLBACK: Check session persistence
-	if dynamicWorkdir == "" {
-		if prevWorkdir != "" {
-			dynamicWorkdir = prevWorkdir
-			source = "session"
-			slog.Info("Recovered workdir from session", "workdir", dynamicWorkdir, "session", conversationKey)
-		}
+	// Only recover from session when we have a stable explicit conversation key.
+	hasExplicitSession := req.ConversationID != "" ||
+		headerValue(r, "X-Conversation-Id", "X-Session-Id", "X-Thread-Id", "X-Chat-Id") != "" ||
+		(req.Metadata != nil && metadataString(req.Metadata,
+			"conversation_id", "conversationId",
+			"session_id", "sessionId",
+			"thread_id", "threadId",
+			"chat_id", "chatId",
+		) != "")
+
+	if dynamicWorkdir == "" && hasExplicitSession && prevWorkdir != "" {
+		dynamicWorkdir = prevWorkdir
+		source = "session"
+		slog.Info("Recovered workdir from session", "workdir", dynamicWorkdir, "session", conversationKey)
 	}
 
 	// Persist for future turns in this session
@@ -52,8 +55,16 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 	if dynamicWorkdir != "" {
 		slog.Info("Using dynamic workdir", "workdir", dynamicWorkdir, "source", source)
 	}
-	normalizedPrev := filepath.Clean(strings.TrimSpace(prevWorkdir))
-	normalizedNext := filepath.Clean(strings.TrimSpace(dynamicWorkdir))
+	rawPrev := strings.TrimSpace(prevWorkdir)
+	rawNext := strings.TrimSpace(dynamicWorkdir)
+	normalizedPrev := ""
+	normalizedNext := ""
+	if rawPrev != "" {
+		normalizedPrev = filepath.Clean(rawPrev)
+	}
+	if rawNext != "" {
+		normalizedNext = filepath.Clean(rawNext)
+	}
 	changed := normalizedPrev != "" && normalizedNext != "" && normalizedPrev != normalizedNext
 	return dynamicWorkdir, prevWorkdir, changed
 }
@@ -92,7 +103,6 @@ func (h *Handler) selectAccount(ctx context.Context, model, forcedChannel string
 	}
 	return nil, nil, errors.New("no client configured")
 }
-
 
 func (h *Handler) updateAccountStats(account *store.Account, inputTokens, outputTokens int) {
 	if account == nil || h.loadBalancer == nil {
@@ -136,7 +146,7 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient, s
 }
 
 const (
-	sessionMaxSize        = 1024
+	sessionMaxSize         = 1024
 	sessionCleanupInterval = 5 * time.Minute
 	sessionMaxAge          = 30 * time.Minute
 )
@@ -156,4 +166,59 @@ func (h *Handler) cleanupSessionWorkdirsLocked() {
 		}
 	}
 	h.sessionCleanupRun = now
+}
+
+type upstreamErrorClass struct {
+	category      string
+	retryable     bool
+	switchAccount bool
+}
+
+func classifyUpstreamError(errStr string) upstreamErrorClass {
+	lower := strings.ToLower(errStr)
+	switch {
+	case strings.Contains(lower, "context canceled") || strings.Contains(lower, "canceled"):
+		return upstreamErrorClass{category: "canceled", retryable: false, switchAccount: false}
+	case hasExplicitHTTPStatus(lower, "401") ||
+		strings.Contains(lower, "signed out") || strings.Contains(lower, "signed_out"):
+		return upstreamErrorClass{category: "auth", retryable: true, switchAccount: true}
+	case hasExplicitHTTPStatus(lower, "403"):
+		return upstreamErrorClass{category: "auth_blocked", retryable: true, switchAccount: true}
+	case hasExplicitHTTPStatus(lower, "404"):
+		return upstreamErrorClass{category: "auth_blocked", retryable: false, switchAccount: false}
+	case strings.Contains(lower, "input is too long") || hasExplicitHTTPStatus(lower, "400"):
+		return upstreamErrorClass{category: "client", retryable: false, switchAccount: false}
+	case hasExplicitHTTPStatus(lower, "429") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "rate limit"):
+		return upstreamErrorClass{category: "rate_limit", retryable: true, switchAccount: true}
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") || strings.Contains(lower, "context deadline"):
+		return upstreamErrorClass{category: "timeout", retryable: true, switchAccount: true}
+	case strings.Contains(lower, "connection reset") || strings.Contains(lower, "connection refused") ||
+		strings.Contains(lower, "unexpected eof") || strings.Contains(lower, "use of closed") ||
+		strings.Contains(lower, "broken pipe") || strings.HasSuffix(lower, ": eof") || lower == "eof":
+		return upstreamErrorClass{category: "network", retryable: true, switchAccount: true}
+	case hasExplicitHTTPStatus(lower, "500") || hasExplicitHTTPStatus(lower, "502") || hasExplicitHTTPStatus(lower, "503") || hasExplicitHTTPStatus(lower, "504"):
+		return upstreamErrorClass{category: "server", retryable: true, switchAccount: true}
+	default:
+		return upstreamErrorClass{category: "unknown", retryable: true, switchAccount: true}
+	}
+}
+
+func computeRetryDelay(base time.Duration, attempt int, category string) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt > 4 {
+		attempt = 4
+	}
+	delay := base * time.Duration(1<<(attempt-1))
+	if category == "rate_limit" && delay < 2*time.Second {
+		delay = 2 * time.Second
+	}
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	return delay
 }

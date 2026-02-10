@@ -785,6 +785,12 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 	if nameKey == "" {
 		return false
 	}
+	if !hasRequiredToolInput(call.name, call.input) {
+		if h.config != nil && h.config.DebugEnabled {
+			slog.Debug("invalid tool call suppressed", "tool", call.name, "input", call.input)
+		}
+		return false
+	}
 	inputKey := normalizeToolDedupInput(call.input)
 	callKey := hashToolCallKey(nameKey, inputKey)
 
@@ -802,6 +808,51 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		h.toolCallDedup[callKey] = struct{}{}
 	}
 	return true
+}
+
+func hasRequiredToolInput(name, input string) bool {
+	nameKey := strings.ToLower(strings.TrimSpace(name))
+	if nameKey == "" {
+		return false
+	}
+	if input == "" {
+		input = "{}"
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		// For known structured tools, malformed JSON should be treated as invalid.
+		switch nameKey {
+		case "edit", "write", "bash", "read", "glob", "grep":
+			return false
+		default:
+			return true
+		}
+	}
+
+	requireString := func(key string) bool {
+		v, ok := payload[key].(string)
+		return ok && strings.TrimSpace(v) != ""
+	}
+
+	switch nameKey {
+	case "edit":
+		_, hasOld := payload["old_string"]
+		_, hasNew := payload["new_string"]
+		return requireString("file_path") && hasOld && hasNew
+	case "write":
+		// Warp sometimes sends "path" instead of "file_path", or we might have mapped it.
+		// Also strict checking might fail if "content" is empty string (though rare for meaningful write).
+		_, hasContent := payload["content"]
+		hasPath := requireString("file_path") || requireString("path")
+		return hasPath && hasContent
+	case "bash":
+		return requireString("command")
+	case "read":
+		return requireString("file_path")
+	default:
+		return true
+	}
 }
 
 func (h *streamHandler) markWriteErrorLocked(event string, err error) {
@@ -1421,4 +1472,62 @@ func (h *streamHandler) emitThinkingDelta(delta string) {
 	h.writeSSE("content_block_delta", string(data))
 	perf.ReleaseMap(deltaMap)
 	perf.ReleaseMap(m)
+}
+
+// InjectErrorText injects an error message as a text delta into the stream or buffer.
+func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
+	if h.config != nil && h.config.DebugEnabled {
+		slog.Info(logMsg, "error_msg", errorMsg, "is_stream", h.isStream)
+	}
+	idx := h.ensureBlock("text")
+	internalIdx := h.activeTextBlockIndex
+
+	if h.isStream {
+		m := perf.AcquireMap()
+		m["type"] = "content_block_delta"
+		m["index"] = idx
+
+		delta := perf.AcquireMap()
+		delta["type"] = "text_delta"
+		delta["text"] = errorMsg
+		m["delta"] = delta
+
+		data, _ := json.Marshal(m)
+		h.writeSSE("content_block_delta", string(data))
+
+		perf.ReleaseMap(delta)
+		perf.ReleaseMap(m)
+	} else {
+		h.mu.Lock()
+		if builder, ok := h.textBlockBuilders[internalIdx]; ok {
+			builder.WriteString(errorMsg)
+		}
+		h.mu.Unlock()
+	}
+}
+
+func (h *streamHandler) InjectAuthError(category, errStr string) {
+	var errorMsg string
+	switch {
+	case strings.Contains(errStr, "401"):
+		errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
+	case strings.Contains(errStr, "403"):
+		errorMsg = "Access Forbidden (403): Your account might be flagged or blocked. Try re-enabling it in the Admin UI."
+	default:
+		errorMsg = fmt.Sprintf("Request Failed: %s. Please check your account status.", errStr)
+	}
+	h.InjectErrorText("Injecting auth error to client", errorMsg)
+}
+
+func (h *streamHandler) InjectRetryExhaustedError(lastErr string) {
+	errorMsg := fmt.Sprintf("Request failed: retries exhausted. Last error: %s", lastErr)
+	h.InjectErrorText("Injecting retry exhausted error to client", errorMsg)
+}
+
+func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr error) {
+	errorMsg := "Request failed: retries exhausted and no available accounts. Please check account statuses in Admin UI or add valid accounts."
+	if selectErr != nil {
+		errorMsg = fmt.Sprintf("%s (selector: %v, last error: %s)", errorMsg, selectErr, lastErr)
+	}
+	h.InjectErrorText("Injecting no available account error to client", errorMsg)
 }

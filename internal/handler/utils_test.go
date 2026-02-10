@@ -58,18 +58,18 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 			want:      "header",
 		},
 		{
-			name: "metadata user_id fallback",
+			name: "no explicit session key returns empty",
 			req: ClaudeRequest{
 				Metadata: map[string]interface{}{
 					"user_id": "u1",
 				},
 			},
-			want: "user:u1",
+			want: "",
 		},
 		{
-			name: "fallback host and user agent",
+			name: "no fallback to host and user agent",
 			req:  ClaudeRequest{},
-			want: "203.0.113.9|test-agent",
+			want: "",
 		},
 	}
 
@@ -87,6 +87,55 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 			}
 			if got := conversationKeyForRequest(r, tt.req); got != tt.want {
 				t.Fatalf("conversationKeyForRequest() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractWorkdirFromRequestPriority(t *testing.T) {
+	baseReq := func() *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "http://example.com/warp/v1/messages", nil)
+		return r
+	}
+
+	tests := []struct {
+		name string
+		req  ClaudeRequest
+		hdr  map[string]string
+		want string
+		src  string
+	}{
+		{
+			name: "metadata wins",
+			req:  ClaudeRequest{Metadata: map[string]interface{}{"workdir": "/meta/path"}},
+			hdr:  map[string]string{"X-Workdir": "/header/path"},
+			want: "/meta/path",
+			src:  "metadata",
+		},
+		{
+			name: "header fallback",
+			req:  ClaudeRequest{},
+			hdr:  map[string]string{"X-Workdir": "/header/path"},
+			want: "/header/path",
+			src:  "header",
+		},
+		{
+			name: "system fallback",
+			req:  ClaudeRequest{System: SystemItems{{Type: "text", Text: "Primary working directory: /system/path"}}},
+			want: "/system/path",
+			src:  "system",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := baseReq()
+			for k, v := range tt.hdr {
+				r.Header.Set(k, v)
+			}
+			got, src := extractWorkdirFromRequest(r, tt.req)
+			if got != tt.want || src != tt.src {
+				t.Fatalf("extractWorkdirFromRequest() = (%q,%q), want (%q,%q)", got, src, tt.want, tt.src)
 			}
 		})
 	}

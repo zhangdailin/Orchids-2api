@@ -16,7 +16,10 @@ func TestParseFallbackToolInput_RunShellCommand(t *testing.T) {
 	command := "ls -la"
 	payload := []byte{0x0a, 0x06, 'l', 's', ' ', '-', 'l', 'a', 0x10, 0x01, 0x18, 0x00, 0x28, 0x00, 0x30, 0x00}
 
-	rawInput := parseFallbackToolInput("run_shell_command", payload)
+	toolName, rawInput := parseFallbackToolInput("run_shell_command", payload)
+	if toolName != "run_shell_command" {
+		t.Fatalf("expected tool name run_shell_command, got %q", toolName)
+	}
 	if strings.TrimSpace(rawInput) == "" || rawInput == "{}" {
 		t.Fatalf("expected non-empty input, got %q", rawInput)
 	}
@@ -28,6 +31,140 @@ func TestParseFallbackToolInput_RunShellCommand(t *testing.T) {
 	if got, _ := parsed["command"].(string); got != command {
 		t.Fatalf("expected command %q, got %q", command, got)
 	}
+}
+
+func TestParseToolCall_ApplyFileDiffsNewFileBecomesWrite(t *testing.T) {
+	t.Parallel()
+
+	newFile := testEncodeMessage(
+		testEncodeStringField(1, "/Users/dailin/Documents/GitHub/TEST/index.html"),
+		testEncodeStringField(2, "<!doctype html><html></html>"),
+	)
+	applyFileDiffs := testEncodeMessage(
+		testEncodeBytesField(3, newFile), // new_files
+	)
+
+	payload := testEncodeMessage(
+		testEncodeStringField(1, "tool_id_write_1"),
+		testEncodeBytesField(6, applyFileDiffs), // field 6 => apply_file_diffs
+	)
+
+	out := &parsedEvent{}
+	parseToolCall(payload, out)
+
+	if len(out.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %d", len(out.ToolCalls))
+	}
+	if out.ToolCalls[0].Name != "Write" {
+		t.Fatalf("expected Write, got %q", out.ToolCalls[0].Name)
+	}
+
+	var input map[string]interface{}
+	if err := json.Unmarshal([]byte(out.ToolCalls[0].Input), &input); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if got, _ := input["file_path"].(string); got != "/Users/dailin/Documents/GitHub/TEST/index.html" {
+		t.Fatalf("expected file_path, got %q", got)
+	}
+	if got, _ := input["content"].(string); got != "<!doctype html><html></html>" {
+		t.Fatalf("expected content, got %q", got)
+	}
+}
+
+func TestParseToolCall_ApplyFileDiffsReplacementBecomesEdit(t *testing.T) {
+	t.Parallel()
+
+	replacement := testEncodeMessage(
+		testEncodeStringField(1, "old"),
+		testEncodeStringField(2, "new"),
+	)
+	fileDiff := testEncodeMessage(
+		testEncodeStringField(1, "/tmp/a.txt"),
+		testEncodeBytesField(3, replacement), // replacements
+	)
+	applyFileDiffs := testEncodeMessage(
+		testEncodeBytesField(2, fileDiff), // file_diffs
+	)
+	payload := testEncodeMessage(
+		testEncodeStringField(1, "tool_id_edit_1"),
+		testEncodeBytesField(6, applyFileDiffs),
+	)
+
+	out := &parsedEvent{}
+	parseToolCall(payload, out)
+
+	if len(out.ToolCalls) != 1 {
+		t.Fatalf("expected one tool call, got %d", len(out.ToolCalls))
+	}
+	if out.ToolCalls[0].Name != "Edit" {
+		t.Fatalf("expected Edit, got %q", out.ToolCalls[0].Name)
+	}
+
+	var input map[string]interface{}
+	if err := json.Unmarshal([]byte(out.ToolCalls[0].Input), &input); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if got, _ := input["file_path"].(string); got != "/tmp/a.txt" {
+		t.Fatalf("expected file_path, got %q", got)
+	}
+	if got, _ := input["old_string"].(string); got != "old" {
+		t.Fatalf("expected old_string, got %q", got)
+	}
+	if got, _ := input["new_string"].(string); got != "new" {
+		t.Fatalf("expected new_string, got %q", got)
+	}
+}
+
+func testEncodeMessage(fields ...[]byte) []byte {
+	var out []byte
+	for _, f := range fields {
+		out = append(out, f...)
+	}
+	return out
+}
+
+func testEncodeStringField(field int, value string) []byte {
+	return testEncodeBytesField(field, []byte(value))
+}
+
+func testEncodeBytesField(field int, value []byte) []byte {
+	var out []byte
+	out = append(out, testEncodeKey(field, 2)...)
+	out = append(out, testEncodeVarint(uint64(len(value)))...)
+	out = append(out, value...)
+	return out
+}
+
+func testEncodeKey(field int, wire int) []byte {
+	return testEncodeVarint(uint64((field << 3) | wire))
+}
+
+func testEncodeVarint(v uint64) []byte {
+	buf := make([]byte, 0, 10)
+	for v >= 0x80 {
+		buf = append(buf, byte(v)|0x80)
+		v >>= 7
+	}
+	buf = append(buf, byte(v))
+	return buf
+}
+
+func TestIsIncompleteToolCall_WriteAndEditValidation(t *testing.T) {
+	t.Parallel()
+
+	if !isIncompleteToolCall("Write", `{}`) {
+		t.Fatalf("expected empty write to be incomplete")
+	}
+	if isIncompleteToolCall("Write", `{"file_path":"/tmp/a.txt","content":"x"}`) {
+		t.Fatalf("expected valid write to be complete")
+	}
+	if !isIncompleteToolCall("Edit", `{"file_path":"/tmp/a.txt","old_string":"a"}`) {
+		t.Fatalf("expected edit missing new_string to be incomplete")
+	}
+	if isIncompleteToolCall("Edit", `{"file_path":"/tmp/a.txt","old_string":"a","new_string":"b"}`) {
+		t.Fatalf("expected valid edit to be complete")
+	}
+
 }
 
 func TestParseResponseEvent_FallbackToolCallHasCommand(t *testing.T) {

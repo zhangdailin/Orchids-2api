@@ -469,8 +469,13 @@ func parseToolCall(data []byte, out *parsedEvent) {
 				if err != nil {
 					return
 				}
-				toolName = fallbackToolName(field)
-				toolInput = parseFallbackToolInput(toolName, payload)
+				fallbackName := fallbackToolName(field)
+				resolvedName, resolvedInput := parseFallbackToolInput(fallbackName, payload)
+				if strings.TrimSpace(resolvedName) == "" {
+					resolvedName = fallbackName
+				}
+				toolName = resolvedName
+				toolInput = resolvedInput
 				if toolInput == "" {
 					toolInput = "{}"
 				}
@@ -509,6 +514,25 @@ func isIncompleteToolCall(toolName, toolInput string) bool {
 		}
 		command, _ := payload["command"].(string)
 		return strings.TrimSpace(command) == ""
+	case "write":
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(toolInput), &payload); err != nil {
+			return false
+		}
+		path, _ := payload["file_path"].(string)
+		return strings.TrimSpace(path) == ""
+	case "edit":
+		var payload map[string]interface{}
+		if err := json.Unmarshal([]byte(toolInput), &payload); err != nil {
+			return false
+		}
+		path, _ := payload["file_path"].(string)
+		if strings.TrimSpace(path) == "" {
+			return true
+		}
+		_, hasOld := payload["old_string"]
+		_, hasNew := payload["new_string"]
+		return !hasOld || !hasNew
 	default:
 		return false
 	}
@@ -575,7 +599,7 @@ func parseCallMCPTool(data []byte) (string, string) {
 	return name, input
 }
 
-func parseFallbackToolInput(toolName string, payload []byte) string {
+func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 	switch toolName {
 	case "run_shell_command", "write_to_long_running_shell_command":
 		input := map[string]interface{}{}
@@ -643,13 +667,15 @@ func parseFallbackToolInput(toolName string, payload []byte) string {
 			}
 		}
 		if len(input) == 0 {
-			return "{}"
+			return toolName, "{}"
 		}
 		b, err := json.Marshal(input)
 		if err != nil {
-			return "{}"
+			return toolName, "{}"
 		}
-		return string(b)
+		return toolName, string(b)
+	case "apply_file_diffs":
+		return parseApplyFileDiffsPayload(payload)
 	default:
 		// Generic protobuf extraction: pull all string fields so non-shell
 		// tools don't receive empty input.
@@ -680,14 +706,180 @@ func parseFallbackToolInput(toolName string, payload []byte) string {
 			}
 		}
 		if len(input) == 0 {
-			return "{}"
+			return toolName, "{}"
 		}
 		b, err := json.Marshal(input)
 		if err != nil {
-			return "{}"
+			return toolName, "{}"
 		}
-		return string(b)
+		return toolName, string(b)
 	}
+}
+
+func parseApplyFileDiffsPayload(payload []byte) (string, string) {
+	d := decoder{data: payload}
+	writePath := ""
+	writeContent := ""
+	editPath := ""
+	editOld := ""
+	editNew := ""
+
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			break
+		}
+		if wire != 2 {
+			_ = d.skip(wire)
+			continue
+		}
+		b, err := d.readBytes()
+		if err != nil {
+			break
+		}
+		switch field {
+		case 2: // file_diffs
+			if editPath == "" {
+				p, oldStr, newStr := parseApplyFileDiffItem(b)
+				if strings.TrimSpace(p) != "" {
+					editPath = strings.TrimSpace(p)
+					editOld = oldStr
+					editNew = newStr
+				}
+			}
+		case 3: // new_files
+			if writePath == "" {
+				p, c := parseApplyFileDiffNewFile(b)
+				if strings.TrimSpace(p) != "" {
+					writePath = strings.TrimSpace(p)
+					writeContent = c
+				}
+			}
+		}
+	}
+
+	if writePath != "" {
+		input := map[string]interface{}{
+			"file_path": writePath,
+			"content":   writeContent,
+		}
+		b, err := json.Marshal(input)
+		if err != nil {
+			return "Write", "{}"
+		}
+		return "Write", string(b)
+	}
+
+	if editPath != "" {
+		input := map[string]interface{}{
+			"file_path":  editPath,
+			"old_string": editOld,
+			"new_string": editNew,
+		}
+		b, err := json.Marshal(input)
+		if err != nil {
+			return "Edit", "{}"
+		}
+		return "Edit", string(b)
+	}
+
+	return "apply_file_diffs", "{}"
+}
+
+func parseApplyFileDiffNewFile(payload []byte) (string, string) {
+	d := decoder{data: payload}
+	path := ""
+	content := ""
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			break
+		}
+		if wire != 2 {
+			_ = d.skip(wire)
+			continue
+		}
+		b, err := d.readBytes()
+		if err != nil {
+			break
+		}
+		switch field {
+		case 1: // file_path
+			path = string(b)
+		case 2: // content
+			content = string(b)
+		}
+	}
+	return path, content
+}
+
+func parseApplyFileDiffItem(payload []byte) (string, string, string) {
+	d := decoder{data: payload}
+	path := ""
+	oldStr := ""
+	newStr := ""
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			break
+		}
+		switch field {
+		case 1: // file_path
+			if wire != 2 {
+				_ = d.skip(wire)
+				continue
+			}
+			b, err := d.readBytes()
+			if err != nil {
+				break
+			}
+			path = string(b)
+		case 3: // replacements
+			if wire != 2 {
+				_ = d.skip(wire)
+				continue
+			}
+			b, err := d.readBytes()
+			if err != nil {
+				break
+			}
+			if oldStr == "" && newStr == "" {
+				o, n := parseApplyFileDiffReplacement(b)
+				oldStr = o
+				newStr = n
+			}
+		default:
+			_ = d.skip(wire)
+		}
+	}
+	return path, oldStr, newStr
+}
+
+func parseApplyFileDiffReplacement(payload []byte) (string, string) {
+	d := decoder{data: payload}
+	oldStr := ""
+	newStr := ""
+	for !d.eof() {
+		field, wire, err := d.readKey()
+		if err != nil {
+			break
+		}
+		if wire != 2 {
+			_ = d.skip(wire)
+			continue
+		}
+		b, err := d.readBytes()
+		if err != nil {
+			break
+		}
+		switch field {
+		case 1:
+			oldStr = string(b)
+		case 2:
+			newStr = string(b)
+		}
+	}
+	return oldStr, newStr
 }
 
 func fallbackToolName(field int) string {

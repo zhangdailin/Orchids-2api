@@ -56,6 +56,7 @@ func NewToolMapper() *ToolMapper {
 	tm.addMapping("CreateFile", "Write")
 	tm.addMapping("create_file", "Write")
 	tm.addMapping("save-file", "Write")
+	tm.addMapping("Write", "Write")
 
 	// Warp 内置工具名 → 标准工具名
 	tm.addMapping("run_shell_command", "Bash")

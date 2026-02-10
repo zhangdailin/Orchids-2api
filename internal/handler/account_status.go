@@ -18,6 +18,8 @@ func classifyAccountStatus(errStr string) string {
 		return "403"
 	case hasExplicitHTTPStatus(lower, "404"):
 		return "404"
+	case hasExplicitHTTPStatus(lower, "429") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "no remaining quota"):
+		return "429"
 	default:
 		return ""
 	}
