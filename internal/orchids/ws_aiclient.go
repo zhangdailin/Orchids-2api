@@ -39,6 +39,7 @@ const (
 	EventCodingAgentStart   = "coding_agent.start"
 	EventCodingAgentInit    = "coding_agent.initializing"
 	EventCodingAgentTokens  = "coding_agent.tokens_used"
+	EventCreditsExhausted   = "coding_agent.credits_exhausted"
 	EventResponseDone       = "response_done"
 	EventCodingAgentEnd     = "coding_agent.end"
 	EventComplete           = "complete"
@@ -365,6 +366,27 @@ func (c *Client) handleOrchidsMessage(
 		c.handleTokensEvent(msg, onMessage)
 		return false
 
+	case EventCreditsExhausted:
+		errCode, errMsg := extractOrchidsError(msg)
+		if errCode == "" {
+			errCode = "credits_exhausted"
+		}
+		if errMsg == "" {
+			errMsg = "You have run out of credits."
+		}
+		slog.Warn("Orchids credits exhausted", "code", errCode, "message", errMsg)
+		// Keep wording aligned with existing quota classifier so account rotation can kick in.
+		state.errorMsg = "no remaining quota: " + errMsg
+		onMessage(upstream.SSEMessage{
+			Type: "error",
+			Event: map[string]interface{}{
+				"type":    "error",
+				"code":    errCode,
+				"message": errMsg,
+			},
+		})
+		return true // Break loop on non-recoverable upstream quota event
+
 	case EventResponseDone, EventCodingAgentEnd, EventComplete:
 		return c.handleCompletionEvent(msgType, msg, state, onMessage)
 
@@ -476,26 +498,7 @@ func (c *Client) handleOrchidsMessage(
 		return c.handleModelEvent(msg, state, onMessage)
 
 	case "error":
-		errMsg := ""
-		errCode := ""
-		if data, ok := msg["data"].(map[string]interface{}); ok {
-			if m, ok := data["message"].(string); ok {
-				errMsg = m
-			}
-			if code, ok := data["code"].(string); ok {
-				errCode = code
-			}
-		}
-		if errMsg == "" {
-			if m, ok := msg["message"].(string); ok {
-				errMsg = m
-			}
-		}
-		if errCode == "" {
-			if code, ok := msg["code"].(string); ok {
-				errCode = code
-			}
-		}
+		errCode, errMsg := extractOrchidsError(msg)
 		if errMsg == "" {
 			errMsg = "unknown upstream error"
 		}
@@ -521,6 +524,28 @@ func (c *Client) handleOrchidsMessage(
 	}
 
 	return false
+}
+
+func extractOrchidsError(msg map[string]interface{}) (code string, message string) {
+	if data, ok := msg["data"].(map[string]interface{}); ok {
+		if m, ok := data["message"].(string); ok {
+			message = m
+		}
+		if c, ok := data["code"].(string); ok {
+			code = c
+		}
+	}
+	if message == "" {
+		if m, ok := msg["message"].(string); ok {
+			message = m
+		}
+	}
+	if code == "" {
+		if c, ok := msg["code"].(string); ok {
+			code = c
+		}
+	}
+	return code, message
 }
 
 func (c *Client) handleTokensEvent(msg map[string]interface{}, onMessage func(upstream.SSEMessage)) {

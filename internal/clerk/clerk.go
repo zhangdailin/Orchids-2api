@@ -60,10 +60,6 @@ func FetchAccountInfo(clientCookie string) (*AccountInfo, error) {
 	return FetchAccountInfoWithProjectAndSession(clientCookie, "", "")
 }
 
-func FetchAccountInfoWithProject(clientCookie string, customProjectID string) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSession(clientCookie, "", customProjectID)
-}
-
 func FetchAccountInfoWithSession(clientCookie string, sessionCookie string) (*AccountInfo, error) {
 	return FetchAccountInfoWithProjectAndSession(clientCookie, sessionCookie, "")
 }

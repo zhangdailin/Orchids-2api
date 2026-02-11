@@ -34,8 +34,3 @@ func SessionAuth(adminPass, adminToken string, next http.HandlerFunc) http.Handl
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
-
-// SessionAuthHandler is the same as SessionAuth but for http.Handler
-func SessionAuthHandler(adminPass, adminToken string, next http.Handler) http.HandlerFunc {
-	return SessionAuth(adminPass, adminToken, next.ServeHTTP)
-}

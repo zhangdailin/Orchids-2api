@@ -143,21 +143,3 @@ func (cl *ConcurrencyLimiter) GetP95() int64 {
 	}
 	return valid[idx]
 }
-
-// Stats returns current limiter statistics.
-func (cl *ConcurrencyLimiter) Stats() (active, total, rejected int64) {
-	return atomic.LoadInt64(&cl.activeCount),
-		atomic.LoadInt64(&cl.totalReqs),
-		atomic.LoadInt64(&cl.rejectedReqs)
-}
-
-// TryAcquire attempts to acquire the semaphore without blocking.
-// Returns true if acquired, false otherwise.
-func (cl *ConcurrencyLimiter) TryAcquire() bool {
-	return cl.sem.TryAcquire(1)
-}
-
-// Release releases one slot in the semaphore.
-func (cl *ConcurrencyLimiter) Release() {
-	cl.sem.Release(1)
-}

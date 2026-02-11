@@ -30,10 +30,6 @@ type LoadBalancer struct {
 	sfGroup        singleflight.Group
 }
 
-func New(s *store.Store) *LoadBalancer {
-	return NewWithCacheTTL(s, defaultCacheTTL)
-}
-
 func NewWithCacheTTL(s *store.Store, cacheTTL time.Duration) *LoadBalancer {
 	if cacheTTL <= 0 {
 		cacheTTL = defaultCacheTTL
@@ -53,18 +49,6 @@ func (lb *LoadBalancer) GetModelChannel(ctx context.Context, modelID string) str
 		return ""
 	}
 	return m.Channel
-}
-
-func (lb *LoadBalancer) GetNextAccount(ctx context.Context) (*store.Account, error) {
-	return lb.GetNextAccountExcludingByChannel(ctx, nil, "")
-}
-
-func (lb *LoadBalancer) GetNextAccountByChannel(ctx context.Context, channel string) (*store.Account, error) {
-	return lb.GetNextAccountExcludingByChannel(ctx, nil, channel)
-}
-
-func (lb *LoadBalancer) GetNextAccountExcluding(ctx context.Context, excludeIDs []int64) (*store.Account, error) {
-	return lb.GetNextAccountExcludingByChannel(ctx, excludeIDs, "")
 }
 
 func (lb *LoadBalancer) GetNextAccountExcludingByChannel(ctx context.Context, excludeIDs []int64, channel string) (*store.Account, error) {
@@ -192,15 +176,6 @@ func (lb *LoadBalancer) selectAccount(accounts []*store.Account) *store.Account 
 		return bestAccounts[rand.IntN(len(bestAccounts))]
 	}
 	return accounts[0]
-}
-
-func (lb *LoadBalancer) GetStats() map[int64]int {
-	stats := make(map[int64]int)
-	lb.activeConns.Range(func(key, value interface{}) bool {
-		stats[key.(int64)] = int(value.(*atomic.Int64).Load())
-		return true
-	})
-	return stats
 }
 
 func (lb *LoadBalancer) AcquireConnection(accountID int64) {

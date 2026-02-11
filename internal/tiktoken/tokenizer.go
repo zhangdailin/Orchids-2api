@@ -143,30 +143,6 @@ func EstimateTextTokens(text string) int {
 	return int(math.Round(tokens))
 }
 
-// EstimateMessagesTokens 估算消息列表的 token 数量
-// 考虑消息格式和角色标记的开销
-func EstimateMessagesTokens(messages []map[string]interface{}) int {
-	tokens := 0
-
-	for _, msg := range messages {
-		// 角色标记约 3 tokens
-		tokens += 3
-
-		// 消息分隔符约 4 tokens
-		tokens += 4
-
-		// 内容
-		if content, ok := msg["content"].(string); ok {
-			tokens += EstimateTextTokens(content)
-		}
-	}
-
-	// 整体格式开销约 3 tokens
-	tokens += 3
-
-	return tokens
-}
-
 // IsCJK 判断是否是中日韩字符
 func IsCJK(r rune) bool {
 	// CJK 统一表意文字

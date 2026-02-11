@@ -238,13 +238,6 @@ func (s *Store) IncrementRequestCount(ctx context.Context, id int64) error {
 	return fmt.Errorf("store not configured")
 }
 
-func (s *Store) IncrementUsage(ctx context.Context, id int64, usage float64) error {
-	if s.accounts != nil {
-		return s.accounts.IncrementUsage(ctx, id, usage)
-	}
-	return fmt.Errorf("store not configured")
-}
-
 func (s *Store) IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error {
 	if s.accounts != nil {
 		return s.accounts.IncrementAccountStats(ctx, id, usage, count)
@@ -280,23 +273,9 @@ func (s *Store) ListApiKeys(ctx context.Context) ([]*ApiKey, error) {
 	return nil, fmt.Errorf("api keys store not configured")
 }
 
-func (s *Store) GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey, error) {
-	if s.apiKeys != nil {
-		return s.apiKeys.GetApiKeyByHash(ctx, hash)
-	}
-	return nil, fmt.Errorf("api keys store not configured")
-}
-
 func (s *Store) UpdateApiKeyEnabled(ctx context.Context, id int64, enabled bool) error {
 	if s.apiKeys != nil {
 		return s.apiKeys.UpdateApiKeyEnabled(ctx, id, enabled)
-	}
-	return fmt.Errorf("api keys store not configured")
-}
-
-func (s *Store) UpdateApiKeyLastUsed(ctx context.Context, id int64) error {
-	if s.apiKeys != nil {
-		return s.apiKeys.UpdateApiKeyLastUsed(ctx, id)
 	}
 	return fmt.Errorf("api keys store not configured")
 }

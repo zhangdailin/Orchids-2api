@@ -10,9 +10,7 @@ import (
 type ToolMapper struct {
 	// Claude Code → Orchids 标准名
 	toOrchids map[string]string
-	// Orchids → Claude Code 标准名
-	fromOrchids map[string]string
-	mu          sync.RWMutex
+	mu        sync.RWMutex
 }
 
 // DefaultToolMapper is the global tool mapper instance.
@@ -21,8 +19,7 @@ var DefaultToolMapper = NewToolMapper()
 // NewToolMapper creates a new ToolMapper with default mappings.
 func NewToolMapper() *ToolMapper {
 	tm := &ToolMapper{
-		toOrchids:   make(map[string]string),
-		fromOrchids: make(map[string]string),
+		toOrchids: make(map[string]string),
 	}
 
 	// Claude Code → Orchids 映射
@@ -94,18 +91,6 @@ func NewToolMapper() *ToolMapper {
 	tm.addMapping("mcp__context7__query-docs", "mcp__context7__query-docs")
 	tm.addMapping("mcp__context7__resolve-library-id", "mcp__context7__resolve-library-id")
 
-	// Orchids 事件 → Claude Code 工具名映射
-	tm.fromOrchids["edit_file"] = "Edit"
-	tm.fromOrchids["todo_write"] = "TodoWrite"
-	tm.fromOrchids["Edit"] = "Edit"
-	tm.fromOrchids["Read"] = "Read"
-	tm.fromOrchids["Write"] = "Write"
-	tm.fromOrchids["Bash"] = "Bash"
-	tm.fromOrchids["LS"] = "Glob"
-	tm.fromOrchids["Glob"] = "Glob"
-	tm.fromOrchids["Grep"] = "Grep"
-	tm.fromOrchids["TodoWrite"] = "TodoWrite"
-
 	return tm
 }
 
@@ -126,17 +111,6 @@ func (tm *ToolMapper) ToOrchids(name string) string {
 		return mapped
 	}
 	return name // 未知工具保持原名
-}
-
-// FromOrchids maps an Orchids tool name to Claude Code standard name.
-func (tm *ToolMapper) FromOrchids(name string) string {
-	tm.mu.RLock()
-	defer tm.mu.RUnlock()
-
-	if mapped, ok := tm.fromOrchids[name]; ok {
-		return mapped
-	}
-	return name
 }
 
 // IsBlocked checks if a tool should be blocked.

@@ -437,6 +437,61 @@ func stringifyToolInput(input interface{}) string {
 	}
 }
 
+// sanitizeToolInput normalizes upstream tool input for Claude Code compatibility.
+// It drops or maps fields known to cause local tool validation failures.
+func sanitizeToolInput(name, input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return input
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return input
+	}
+
+	nameKey := strings.ToLower(strings.TrimSpace(name))
+	changed := false
+	mapField := func(from, to string) {
+		v, ok := payload[from]
+		if !ok {
+			return
+		}
+		if _, exists := payload[to]; !exists {
+			payload[to] = v
+			changed = true
+		}
+		delete(payload, from)
+		changed = true
+	}
+
+	switch nameKey {
+	case "write":
+		// Claude Code Write tool rejects unknown field "overwrite".
+		if _, ok := payload["overwrite"]; ok {
+			delete(payload, "overwrite")
+			changed = true
+		}
+		mapField("path", "file_path")
+	case "edit":
+		mapField("path", "file_path")
+	case "read":
+		mapField("path", "file_path")
+	case "bash":
+		mapField("cmd", "command")
+	}
+
+	if !changed {
+		return input
+	}
+
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return input
+	}
+	return string(normalized)
+}
+
 func (h *streamHandler) emitToolCallNonStream(call toolCall) {
 	h.addOutputTokens(call.name)
 	h.addOutputTokens(call.input)
@@ -615,10 +670,18 @@ func (h *streamHandler) finishResponse(stopReason string) {
 	h.mu.Unlock()
 
 	if h.isStream {
+		var blockStopData string
 		h.mu.Lock()
-		h.closeActiveBlockLocked()
+		if stopData, ok := h.popActiveBlockStopDataLocked(); ok {
+			blockStopData = stopData
+		}
 		h.mu.Unlock()
-		h.emitWriteChunkFallbackIfNeeded(h.writeFinalSSE)
+		if blockStopData != "" {
+			h.writeFinalSSE("content_block_stop", blockStopData)
+		}
+		if stopReason != "tool_use" {
+			h.emitWriteChunkFallbackIfNeeded(h.writeFinalSSE)
+		}
 		h.flushPendingToolCalls(stopReason, h.writeFinalSSE)
 		h.finalizeOutputTokens()
 		deltaMap := perf.AcquireMap()
@@ -649,7 +712,9 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		}
 		perf.ReleaseMap(stopMap)
 	} else {
-		h.emitWriteChunkFallbackIfNeeded(h.writeFinalSSE)
+		if stopReason != "tool_use" {
+			h.emitWriteChunkFallbackIfNeeded(h.writeFinalSSE)
+		}
 		h.flushPendingToolCalls(stopReason, h.writeFinalSSE)
 		h.finalizeOutputTokens()
 	}
@@ -760,9 +825,9 @@ func (h *streamHandler) closeActiveBlock() {
 	h.closeActiveBlockLocked()
 }
 
-func (h *streamHandler) closeActiveBlockLocked() {
+func (h *streamHandler) popActiveBlockStopDataLocked() (string, bool) {
 	if h.activeBlockType == "" {
-		return
+		return "", false
 	}
 
 	var sseIdx int
@@ -778,7 +843,7 @@ func (h *streamHandler) closeActiveBlockLocked() {
 	default:
 		// tool_use and others are usually handled as single-event blocks or managed separately
 		h.activeBlockType = ""
-		return
+		return "", false
 	}
 
 	h.activeBlockType = ""
@@ -791,8 +856,18 @@ func (h *streamHandler) closeActiveBlockLocked() {
 		slog.Error("Failed to marshal content_block_stop", "error", err)
 	}
 	perf.ReleaseMap(m)
+	if err != nil {
+		return "", false
+	}
+	return string(stopData), true
+}
 
-	h.writeSSELocked("content_block_stop", string(stopData))
+func (h *streamHandler) closeActiveBlockLocked() {
+	stopData, ok := h.popActiveBlockStopDataLocked()
+	if !ok {
+		return
+	}
+	h.writeSSELocked("content_block_stop", stopData)
 }
 
 func (h *streamHandler) writeSSELocked(event, data string) {
@@ -963,6 +1038,9 @@ func sideEffectToolDedupKey(nameKey, input string) string {
 	switch nameKey {
 	case "bash":
 		command, _ := payload["command"].(string)
+		if strings.TrimSpace(command) == "" {
+			command, _ = payload["cmd"].(string)
+		}
 		command = strings.TrimSpace(command)
 		if command == "" {
 			return ""
@@ -1062,7 +1140,8 @@ func hasRequiredToolInput(name, input string) bool {
 	case "edit":
 		_, hasOld := payload["old_string"]
 		_, hasNew := payload["new_string"]
-		return requireString("file_path") && hasOld && hasNew
+		hasPath := requireString("file_path") || requireString("path")
+		return hasPath && hasOld && hasNew
 	case "write":
 		// Warp sometimes sends "path" instead of "file_path", or we might have mapped it.
 		// Also strict checking might fail if "content" is empty string (though rare for meaningful write).
@@ -1070,9 +1149,9 @@ func hasRequiredToolInput(name, input string) bool {
 		hasPath := requireString("file_path") || requireString("path")
 		return hasPath && hasContent
 	case "bash":
-		return requireString("command")
+		return requireString("command") || requireString("cmd")
 	case "read":
-		return requireString("file_path")
+		return requireString("file_path") || requireString("path")
 	default:
 		return true
 	}
@@ -1192,6 +1271,21 @@ func extractThinkingSignature(event map[string]interface{}) string {
 		}
 	}
 	return ""
+}
+
+func extractEventMessage(event map[string]interface{}, fallback string) string {
+	if event == nil {
+		return fallback
+	}
+	if data, ok := event["data"].(map[string]interface{}); ok {
+		if msg, ok := data["message"].(string); ok && strings.TrimSpace(msg) != "" {
+			return strings.TrimSpace(msg)
+		}
+	}
+	if msg, ok := event["message"].(string); ok && strings.TrimSpace(msg) != "" {
+		return strings.TrimSpace(msg)
+	}
+	return fallback
 }
 
 func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
@@ -1418,6 +1512,13 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 		return
 
+	case "coding_agent.credits_exhausted":
+		errorMsg := extractEventMessage(msg.Event, "You have run out of credits. Please upgrade your plan to continue.")
+		h.closeActiveBlock()
+		h.InjectErrorText("Injecting credits exhausted message to client", errorMsg)
+		h.finishResponse("end_turn")
+		return
+
 	case "coding_agent.Write.started", "coding_agent.Edit.edit.started":
 		if h.isStream {
 			data, _ := msg.Event["data"].(map[string]interface{})
@@ -1548,6 +1649,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			inputStr = strings.TrimSpace(buf.String())
 			perf.ReleaseStringBuilder(buf)
 		}
+		inputStr = sanitizeToolInput(name, inputStr)
 		delete(h.toolInputBuffers, toolID)
 		delete(h.toolInputHadDelta, toolID)
 		delete(h.toolInputNames, toolID)
@@ -1572,25 +1674,29 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		toolID, _ := msg.Event["toolCallId"].(string)
 		toolName, _ := msg.Event["toolName"].(string)
 		inputStr, _ := msg.Event["input"].(string)
+		inputStr = sanitizeToolInput(toolName, inputStr)
 		if toolID == "" {
 			toolID = fallbackToolCallID(toolName, inputStr)
 			if toolID == "" {
 				return
 			}
 		}
-		if h.currentToolInputID != "" && toolID != h.currentToolInputID {
-			return
-		}
 		if h.toolCallHandled[toolID] {
-			return
-		}
-		if _, ok := h.toolInputBuffers[toolID]; ok {
 			return
 		}
 		call := toolCall{id: toolID, name: toolName, input: inputStr}
 		if !h.shouldAcceptToolCall(call) {
 			return
 		}
+		if h.currentToolInputID == toolID {
+			h.currentToolInputID = ""
+		}
+		if buf, ok := h.toolInputBuffers[toolID]; ok {
+			perf.ReleaseStringBuilder(buf)
+		}
+		delete(h.toolInputBuffers, toolID)
+		delete(h.toolInputHadDelta, toolID)
+		delete(h.toolInputNames, toolID)
 		h.toolCallHandled[toolID] = true
 		if h.isStream {
 			h.emitToolUseFromInput(toolID, toolName, inputStr)

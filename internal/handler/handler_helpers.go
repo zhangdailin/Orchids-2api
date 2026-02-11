@@ -188,7 +188,13 @@ func classifyUpstreamError(errStr string) upstreamErrorClass {
 		return upstreamErrorClass{category: "auth_blocked", retryable: false, switchAccount: false}
 	case strings.Contains(lower, "input is too long") || hasExplicitHTTPStatus(lower, "400"):
 		return upstreamErrorClass{category: "client", retryable: false, switchAccount: false}
-	case hasExplicitHTTPStatus(lower, "429") || strings.Contains(lower, "too many requests") || strings.Contains(lower, "rate limit"):
+	case hasExplicitHTTPStatus(lower, "429") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "no remaining quota") ||
+		strings.Contains(lower, "out of credits") ||
+		strings.Contains(lower, "credits exhausted") ||
+		strings.Contains(lower, "run out of credits"):
 		return upstreamErrorClass{category: "rate_limit", retryable: true, switchAccount: true}
 	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") || strings.Contains(lower, "context deadline"):
 		return upstreamErrorClass{category: "timeout", retryable: true, switchAccount: true}

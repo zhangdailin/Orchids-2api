@@ -51,6 +51,11 @@ func TestClassifyAccountStatus(t *testing.T) {
 			expected: "429",
 		},
 		{
+			name:     "Credits exhausted message",
+			errStr:   "You have run out of credits. Please upgrade your plan to continue.",
+			expected: "429",
+		},
+		{
 			name:     "Server error (ignored)",
 			errStr:   "HTTP 500 Internal Server Error",
 			expected: "",
