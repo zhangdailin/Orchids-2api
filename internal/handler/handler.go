@@ -525,6 +525,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh := newStreamHandler(
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
+	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	// 捕获上游返回的 conversationID，持久化到 session 以便后续请求复用
 	sh.onConversationID = func(id string) {

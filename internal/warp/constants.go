@@ -22,5 +22,12 @@ const noWarpToolsPrompt = `IMPORTANT INSTRUCTIONS:
 - If you need to perform an action, use the available client tools
 - Available client tools will be listed in the tool definitions`
 
+const singleResultPrompt = `RESPONSE STYLE:
+- After successful tool actions, provide exactly ONE concise completion message.
+- Do not output a preface (e.g. "I'll help you...") and then repeat the same summary.
+- Avoid duplicate summary paragraphs.
+- For shell deletion errors like "no matches found" or "No such file or directory", treat as a no-op and do not retry the same delete command.
+- If a command fails with interactive stdin errors (e.g. "EOFError: EOF when reading a line"), do not rerun the same command; explain that the environment is non-interactive and provide a non-interactive alternative or manual run guidance.`
+
 // Built-in refresh token payload (base64 decoded) used when no account refresh token is provided.
 const refreshTokenB64 = "Z3JhbnRfdHlwZT1yZWZyZXNoX3Rva2VuJnJlZnJlc2hfdG9rZW49QU1mLXZCeFNSbWRodmVHR0JZTTY5cDA1a0RoSW4xaTd3c2NBTEVtQzlmWURScEh6akVSOWRMN2trLWtIUFl3dlk5Uk9rbXk1MHFHVGNBb0JaNEFtODZoUFhrcFZQTDkwSEptQWY1Zlo3UGVqeXBkYmNLNHdzbzhLZjNheGlTV3RJUk9oT2NuOU56R2FTdmw3V3FSTU5PcEhHZ0JyWW40SThrclc1N1I4X3dzOHU3WGNTdzh1MERpTDlIcnBNbTBMdHdzQ2g4MWtfNmJiMkNXT0ViMWxJeDNIV1NCVGVQRldzUQ=="

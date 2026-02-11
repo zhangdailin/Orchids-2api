@@ -196,10 +196,7 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 				if isNoiseToolResult(toolResult.Content) {
 					continue
 				}
-				key := toolResult.ToolCallID + "|" + toolResult.Content
-				if key == "|" {
-					key = ""
-				}
+				key := toolResultDedupKey(toolResult)
 				if key != "" {
 					if _, ok := toolResultSeen[key]; ok {
 						continue
@@ -311,6 +308,42 @@ func isNoiseToolResult(content string) bool {
 	if strings.Contains(lower, "<tool_use_error>") || strings.Contains(lower, "no such tool available") {
 		return true
 	}
+	if isBenignNoopShellError(lower) {
+		return true
+	}
+	return false
+}
+
+func toolResultDedupKey(result warpToolResult) string {
+	content := strings.TrimSpace(result.Content)
+	id := strings.TrimSpace(result.ToolCallID)
+	if content == "" && id == "" {
+		return ""
+	}
+	if shouldDedupToolResultByContent(content) {
+		return "content:" + content
+	}
+	return id + "|" + content
+}
+
+func shouldDedupToolResultByContent(content string) bool {
+	lower := strings.ToLower(content)
+	if strings.Contains(lower, "eoferror: eof when reading a line") {
+		return true
+	}
+	return false
+}
+
+func isBenignNoopShellError(lower string) bool {
+	if strings.Contains(lower, "no matches found:") && strings.Contains(lower, "*") {
+		return true
+	}
+	if strings.Contains(lower, "rm:") && strings.Contains(lower, "no such file or directory") {
+		return true
+	}
+	if strings.Contains(lower, "cannot remove") && strings.Contains(lower, "no such file or directory") {
+		return true
+	}
 	return false
 }
 
@@ -396,7 +429,7 @@ func stringifyWarpValue(value interface{}) string {
 }
 
 func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool) (string, bool) {
-	var parts []string
+	parts := []string{singleResultPrompt}
 	if disableWarpTools {
 		parts = append(parts, noWarpToolsPrompt)
 	}

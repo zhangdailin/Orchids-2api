@@ -155,18 +155,24 @@ func buildLocalAssistantPrompt(systemText string, userText string, model string,
 
 ## 响应风格
 
-- 简洁直接，避免冗余解释
-- 完成任务后简短说明所做更改
-- 遇到问题时明确说明并提供解决方案
-- 对话过长时自动压缩上下文：输出精简摘要后继续；摘要需保留当前需求、关键约束、已确定结论与待办
-</claude_code_client_assistant>
-`)
+	- 简洁直接，避免冗余解释
+	- 完成任务后简短说明所做更改
+	- 工具执行成功后只输出一次简短结果，禁止“先预告再复述”
+	- 删除命令遇到“no matches found / No such file or directory”时视为幂等无操作，不要重复执行同一删除命令
+	- 命令出现交互输入错误（如 EOFError: EOF when reading a line）时，不要重复执行同一命令，直接说明需交互环境并给出非交互替代方式
+	- 遇到问题时明确说明并提供解决方案
+	- 对话过长时自动压缩上下文：输出精简摘要后继续；摘要需保留当前需求、关键约束、已确定结论与待办
+	</claude_code_client_assistant>
+	`)
 	b.WriteString("\n<guidelines>\n")
 	b.WriteString("- Respond in the same language the user uses (e.g., Chinese input → Chinese response).\n")
 	b.WriteString("- Focus on the user's actual request without assumptions about their tech stack.\n")
 	b.WriteString("- For coding tasks, support any language or framework the user is working with.\n")
 	b.WriteString("- Use ONLY Claude Code native tools: Read, Write, Edit, Bash, Glob, Grep, TodoWrite.\n")
 	b.WriteString("- All tool calls execute LOCALLY on user's machine.\n")
+	b.WriteString("- After tool success, emit one concise completion message only; do not preface and then repeat.\n")
+	b.WriteString("- For deletion shell errors like \"no matches found\" or \"No such file or directory\", treat as idempotent no-op and do not rerun the same delete command.\n")
+	b.WriteString("- If a command fails with interactive stdin errors (for example \"EOFError: EOF when reading a line\"), do not rerun the same command; explain non-interactive limits and provide a non-interactive alternative.\n")
 	b.WriteString("</guidelines>\n\n")
 
 	if strings.TrimSpace(systemText) != "" {

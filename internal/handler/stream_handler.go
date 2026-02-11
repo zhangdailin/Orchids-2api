@@ -14,6 +14,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/perf"
+	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/upstream"
 )
@@ -69,6 +70,9 @@ type streamHandler struct {
 	currentToolInputID string
 	toolCallCount      int
 	bashCallDedup      map[string]struct{}
+	seedToolDedup      map[string]struct{}
+	toolDedupCount     int
+	toolDedupKeys      map[string]int
 	introDedup         map[string]struct{}
 
 	// Throttling
@@ -126,6 +130,8 @@ func newStreamHandler(
 		toolCallHandled:          make(map[string]bool),
 		toolCallEmitted:          make(map[string]struct{}),
 		bashCallDedup:            make(map[string]struct{}),
+		seedToolDedup:            make(map[string]struct{}),
+		toolDedupKeys:            make(map[string]int),
 		introDedup:               make(map[string]struct{}),
 		msgID:                    fmt.Sprintf("msg_%d", time.Now().UnixMilli()),
 		startTime:                time.Now(),
@@ -327,6 +333,11 @@ func (h *streamHandler) resetRoundState() {
 	clear(h.toolCallHandled)
 	clear(h.toolCallEmitted)
 	clear(h.bashCallDedup)
+	for key := range h.seedToolDedup {
+		h.bashCallDedup[key] = struct{}{}
+	}
+	h.toolDedupCount = 0
+	clear(h.toolDedupKeys)
 	h.currentToolInputID = ""
 	h.toolCallCount = 0
 	h.outputTokens = 0
@@ -337,6 +348,87 @@ func (h *streamHandler) resetRoundState() {
 
 func (h *streamHandler) shouldEmitToolCalls(stopReason string) bool {
 	return true
+}
+
+// seedSideEffectDedupFromMessages 预热跨轮去重键，避免工具结果回传后的下一轮重复执行同一副作用命令。
+// 仅采集“最近一条含文本用户消息之后”的 assistant tool_use，避免污染更早轮次。
+func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Message) {
+	if len(messages) == 0 {
+		return
+	}
+	lastUserTextIdx := -1
+	for i, msg := range messages {
+		if strings.ToLower(strings.TrimSpace(msg.Role)) != "user" {
+			continue
+		}
+		if strings.TrimSpace(messagePlainText(msg.Content)) != "" {
+			lastUserTextIdx = i
+		}
+	}
+	if lastUserTextIdx < 0 {
+		return
+	}
+
+	for i, msg := range messages {
+		if i <= lastUserTextIdx || strings.ToLower(strings.TrimSpace(msg.Role)) != "assistant" {
+			continue
+		}
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type != "tool_use" {
+				continue
+			}
+			nameKey := strings.ToLower(strings.TrimSpace(block.Name))
+			if nameKey == "" {
+				continue
+			}
+			input := strings.TrimSpace(stringifyToolInput(block.Input))
+			if input == "" {
+				input = "{}"
+			}
+			key := sideEffectToolDedupKey(nameKey, input)
+			if key == "" {
+				continue
+			}
+			h.seedToolDedup[key] = struct{}{}
+			h.bashCallDedup[key] = struct{}{}
+		}
+	}
+}
+
+func messagePlainText(content prompt.MessageContent) string {
+	if content.IsString() {
+		return content.GetText()
+	}
+	blocks := content.GetBlocks()
+	if len(blocks) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, block := range blocks {
+		if block.Type != "text" || block.Text == "" {
+			continue
+		}
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(block.Text)
+	}
+	return sb.String()
+}
+
+func stringifyToolInput(input interface{}) string {
+	switch v := input.(type) {
+	case nil:
+		return ""
+	case string:
+		return v
+	default:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(raw)
+	}
 }
 
 func (h *streamHandler) emitToolCallNonStream(call toolCall) {
@@ -555,6 +647,16 @@ func (h *streamHandler) finishResponse(stopReason string) {
 	}
 
 	// 记录摘要
+	h.mu.Lock()
+	suppressedDedup := h.toolDedupCount
+	dedupKeys := make(map[string]int, len(h.toolDedupKeys))
+	for k, v := range h.toolDedupKeys {
+		dedupKeys[k] = v
+	}
+	h.mu.Unlock()
+	if suppressedDedup > 0 {
+		slog.Info("tool call dedup summary", "suppressed_count", suppressedDedup, "dedup_keys", dedupKeys)
+	}
 	h.logger.LogSummary(h.inputTokens, h.outputTokens, time.Since(h.startTime), stopReason)
 	slog.Debug("Request completed", "input_tokens", h.inputTokens, "output_tokens", h.outputTokens, "duration", time.Since(h.startTime))
 }
@@ -772,32 +874,101 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		}
 		return false
 	}
-	if key := bashCommandDedupKey(nameKey, call.input); key != "" {
+	if key := sideEffectToolDedupKey(nameKey, call.input); key != "" {
+		maskedKey := maskDedupKey(key)
+		h.mu.Lock()
 		if _, ok := h.bashCallDedup[key]; ok {
+			h.toolDedupCount++
+			h.toolDedupKeys[maskedKey]++
+			suppressed := h.toolDedupCount
+			h.mu.Unlock()
 			if h.config != nil && h.config.DebugEnabled {
-				slog.Debug("duplicate bash command suppressed", "tool", call.name)
+				slog.Debug("duplicate mutating tool call suppressed", "tool", call.name, "dedup_key", maskedKey, "suppressed_total", suppressed)
 			}
 			return false
 		}
 		h.bashCallDedup[key] = struct{}{}
+		h.seedToolDedup[key] = struct{}{}
+		h.mu.Unlock()
 	}
 	return true
 }
 
-func bashCommandDedupKey(nameKey, input string) string {
-	if nameKey != "bash" {
+func maskDedupKey(key string) string {
+	tool := key
+	if idx := strings.IndexByte(tool, ':'); idx > 0 {
+		tool = tool[:idx]
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key))
+	return fmt.Sprintf("%s#%x", tool, h.Sum64())
+}
+
+func sideEffectToolDedupKey(nameKey, input string) string {
+	switch nameKey {
+	case "bash", "write", "edit":
+	default:
 		return ""
 	}
 	var payload map[string]interface{}
 	if err := json.Unmarshal([]byte(input), &payload); err != nil {
 		return ""
 	}
-	command, _ := payload["command"].(string)
-	command = strings.TrimSpace(command)
-	if command == "" {
+	switch nameKey {
+	case "bash":
+		command, _ := payload["command"].(string)
+		command = strings.TrimSpace(command)
+		if command == "" {
+			return ""
+		}
+		return "bash:" + command
+	case "write":
+		path := extractPathFromInput(payload)
+		if path == "" {
+			return ""
+		}
+		content, ok := payload["content"]
+		if !ok {
+			return ""
+		}
+		return "write:" + path + "\x00" + canonicalToolValue(content)
+	case "edit":
+		path := extractPathFromInput(payload)
+		if path == "" {
+			return ""
+		}
+		oldV, hasOld := payload["old_string"]
+		newV, hasNew := payload["new_string"]
+		if !hasOld || !hasNew {
+			return ""
+		}
+		return "edit:" + path + "\x00" + canonicalToolValue(oldV) + "\x00" + canonicalToolValue(newV)
+	default:
 		return ""
 	}
-	return "bash:" + command
+}
+
+func extractPathFromInput(payload map[string]interface{}) string {
+	if v, ok := payload["file_path"].(string); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v, ok := payload["path"].(string); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func canonicalToolValue(v interface{}) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	default:
+		raw, err := json.Marshal(x)
+		if err != nil {
+			return fmt.Sprintf("%v", x)
+		}
+		return string(raw)
+	}
 }
 
 func fallbackToolCallID(toolName, input string) string {
