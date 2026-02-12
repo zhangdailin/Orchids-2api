@@ -197,6 +197,12 @@ func (c *Client) GetToken() (string, error) {
 	if c.config.UpstreamToken != "" {
 		return c.config.UpstreamToken, nil
 	}
+	// Per-account JWT: allow using a pasted JWT directly without Clerk cookies/session.
+	if c.account != nil {
+		if tok := strings.TrimSpace(c.account.Token); tok != "" {
+			return tok, nil
+		}
+	}
 
 	if c.config.AutoRefreshToken {
 		return c.forceRefreshToken()

@@ -234,17 +234,27 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		} else if acc.ClientCookie != "" {
 			clientJWT, sessionJWT, err := clerk.ParseClientCookies(acc.ClientCookie)
 			if err != nil {
-				http.Error(w, "Invalid client cookie: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			acc.ClientCookie = clientJWT
-			if sessionJWT != "" {
-				acc.SessionCookie = sessionJWT
-				if acc.SessionID == "" {
-					if sid, sub := clerk.ParseSessionInfoFromJWT(sessionJWT); sid != "" {
-						acc.SessionID = sid
-						if acc.UserID == "" {
-							acc.UserID = sub
+				// Orchids: allow pasting a pure JWT token directly.
+				// In this case we treat it as the upstream bearer token and skip cookie parsing.
+				if isLikelyJWT(acc.ClientCookie) {
+					acc.Token = strings.TrimSpace(acc.ClientCookie)
+					acc.ClientCookie = ""
+					acc.SessionCookie = ""
+					acc.SessionID = ""
+				} else {
+					http.Error(w, "Invalid client cookie: "+err.Error(), http.StatusBadRequest)
+					return
+				}
+			} else {
+				acc.ClientCookie = clientJWT
+				if sessionJWT != "" {
+					acc.SessionCookie = sessionJWT
+					if acc.SessionID == "" {
+						if sid, sub := clerk.ParseSessionInfoFromJWT(sessionJWT); sid != "" {
+							acc.SessionID = sid
+							if acc.UserID == "" {
+								acc.UserID = sub
+							}
 						}
 					}
 				}
@@ -533,18 +543,27 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 		} else if acc.ClientCookie != "" {
 			clientJWT, sessionJWT, err := clerk.ParseClientCookies(acc.ClientCookie)
 			if err != nil {
-				slog.Warn("Invalid client cookie in import", "name", acc.Name, "error", err)
-				result.Skipped++
-				continue
-			}
-			acc.ClientCookie = clientJWT
-			if sessionJWT != "" {
-				acc.SessionCookie = sessionJWT
-				if acc.SessionID == "" {
-					if sid, sub := clerk.ParseSessionInfoFromJWT(sessionJWT); sid != "" {
-						acc.SessionID = sid
-						if acc.UserID == "" {
-							acc.UserID = sub
+				// allow importing pure JWT in client_cookie
+				if isLikelyJWT(acc.ClientCookie) {
+					acc.Token = strings.TrimSpace(acc.ClientCookie)
+					acc.ClientCookie = ""
+					acc.SessionCookie = ""
+					acc.SessionID = ""
+				} else {
+					slog.Warn("Invalid client cookie in import", "name", acc.Name, "error", err)
+					result.Skipped++
+					continue
+				}
+			} else {
+				acc.ClientCookie = clientJWT
+				if sessionJWT != "" {
+					acc.SessionCookie = sessionJWT
+					if acc.SessionID == "" {
+						if sid, sub := clerk.ParseSessionInfoFromJWT(sessionJWT); sid != "" {
+							acc.SessionID = sid
+							if acc.UserID == "" {
+								acc.UserID = sub
+							}
 						}
 					}
 				}

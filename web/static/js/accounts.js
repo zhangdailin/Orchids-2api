@@ -40,7 +40,7 @@ function getAccountToken(acc) {
   if (!acc) return '';
   const type = normalizeAccountType(acc);
   if (type === 'warp') {
-    return acc.refresh_token || acc.client_cookie || '';
+    return acc.refresh_token || acc.token || acc.client_cookie || '';
   }
   return acc.client_cookie || '';
 }
