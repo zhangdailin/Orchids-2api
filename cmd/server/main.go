@@ -373,7 +373,11 @@ func main() {
 				// Sync Orchids credits via RSC Server Action
 				if info.JWT != "" {
 					creditsCtx, creditsCancel := context.WithTimeout(context.Background(), 15*time.Second)
-					creditsInfo, creditsErr := orchids.FetchCredits(creditsCtx, info.JWT)
+					uid := info.UserID
+					if strings.TrimSpace(uid) == "" {
+						uid = acc.UserID
+					}
+					creditsInfo, creditsErr := orchids.FetchCredits(creditsCtx, info.JWT, uid)
 					creditsCancel()
 					if creditsErr != nil {
 						slog.Warn("Orchids credits sync failed", "account", acc.Name, "error", creditsErr)

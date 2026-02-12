@@ -403,7 +403,11 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 
 					// Sync Orchids credits
 					if info.JWT != "" {
-						creditsInfo, creditsErr := orchids.FetchCredits(r.Context(), info.JWT)
+						uid := info.UserID
+						if strings.TrimSpace(uid) == "" {
+							uid = acc.UserID
+						}
+						creditsInfo, creditsErr := orchids.FetchCredits(r.Context(), info.JWT, uid)
 						if creditsErr != nil {
 							slog.Warn("Orchids credits sync failed on refresh", "account", acc.Name, "error", creditsErr)
 						} else if creditsInfo != nil {

@@ -137,16 +137,22 @@ func fetchNextRouterStateTree(ctx context.Context) (string, error) {
 }
 
 // FetchCredits fetches the user's credits info from Orchids via RSC Server Action.
-// It requires a valid Clerk __session JWT token.
-func FetchCredits(ctx context.Context, sessionJWT string) (*CreditsInfo, error) {
-	if strings.TrimSpace(sessionJWT) == "" {
+// It requires a valid Clerk __session JWT token and the Clerk userId.
+func FetchCredits(ctx context.Context, sessionJWT string, userID string) (*CreditsInfo, error) {
+	sessionJWT = strings.TrimSpace(sessionJWT)
+	userID = strings.TrimSpace(userID)
+	if sessionJWT == "" {
 		return nil, fmt.Errorf("empty session JWT")
+	}
+	if userID == "" {
+		return nil, fmt.Errorf("empty user id")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", orchidsAppURL, strings.NewReader("[]"))
+	// Server action expects an argument array. Current Orchids passes the userId.
+	req, err := http.NewRequestWithContext(ctx, "POST", orchidsAppURL, strings.NewReader(fmt.Sprintf(`["%s"]`, userID)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -270,13 +276,16 @@ func parseRSCCredits(body string) (*CreditsInfo, error) {
 }
 
 // FetchCreditsForAccount fetches credits for an Orchids account using its stored credentials.
-// It first tries SessionCookie, then falls back to fetching a fresh JWT via Clerk.
-func FetchCreditsForAccount(ctx context.Context, acc interface{ GetSessionJWT() string }) (*CreditsInfo, error) {
-	jwt := acc.GetSessionJWT()
+func FetchCreditsForAccount(ctx context.Context, acc interface{ GetSessionJWT() string; GetUserID() string }) (*CreditsInfo, error) {
+	jwt := strings.TrimSpace(acc.GetSessionJWT())
+	uid := strings.TrimSpace(acc.GetUserID())
 	if jwt == "" {
 		return nil, fmt.Errorf("no session JWT available")
 	}
-	return FetchCredits(ctx, jwt)
+	if uid == "" {
+		return nil, fmt.Errorf("no user id available")
+	}
+	return FetchCredits(ctx, jwt, uid)
 }
 
 // PlanCreditLimit returns the monthly credit limit for a given plan name.
