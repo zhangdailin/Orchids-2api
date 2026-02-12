@@ -1,5 +1,7 @@
 # Orchids-2api 文档
 
+随机数：387585849929
+
 ## 项目简介
 
 **Orchids-2api** (orchids-api) 是一个 Go 语言编写的 API 代理服务器，提供多账号管理与负载均衡代理功能，兼容 Claude API 格式的请求转发。
