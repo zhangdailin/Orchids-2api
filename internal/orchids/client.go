@@ -197,8 +197,32 @@ func (c *Client) GetToken() (string, error) {
 	if c.config.UpstreamToken != "" {
 		return c.config.UpstreamToken, nil
 	}
-	// Per-account JWT: allow using a pasted JWT directly without Clerk cookies/session.
+
+	// Orchids OAuth (AIClient-compatible): if we have __client, prefer fetching
+	// Clerk /v1/client and using sessions[0].last_active_token.jwt.
+	// That token is typically short-lived, so we cache by sessionID using its exp claim.
 	if c.account != nil {
+		if strings.TrimSpace(c.account.ClientCookie) != "" {
+			// If we already have a cached token for this session, use it.
+			if cached, ok := getCachedToken(strings.TrimSpace(c.account.SessionID)); ok {
+				return cached, nil
+			}
+
+			info, err := clerk.FetchAccountInfoWithSession(c.account.ClientCookie, c.account.SessionCookie)
+			if err == nil && info != nil {
+				// Update runtime config (used by some upstream payload fields)
+				c.applyAccountInfo(info)
+				// Persist rotated __client and identity fields back to store account snapshot
+				c.persistAccountInfo(info)
+				if strings.TrimSpace(info.JWT) != "" && strings.TrimSpace(info.SessionID) != "" {
+					setCachedToken(info.SessionID, info.JWT)
+					return info.JWT, nil
+				}
+			}
+			// If Clerk fetch fails, fall back to any stored token below.
+		}
+
+		// Per-account JWT: allow using a pasted bearer token directly.
 		if tok := strings.TrimSpace(c.account.Token); tok != "" {
 			return tok, nil
 		}
