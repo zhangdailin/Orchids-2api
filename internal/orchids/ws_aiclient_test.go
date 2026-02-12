@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"orchids-api/internal/config"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/upstream"
 )
@@ -71,5 +72,93 @@ func TestConvertChatHistoryAIClient_DoesNotTruncateUserText(t *testing.T) {
 	}
 	if history[0]["content"] != longText {
 		t.Fatalf("expected user text to be preserved without truncation")
+	}
+}
+
+func TestBuildWSRequestAIClient_PrefersProvidedChatHistory(t *testing.T) {
+	t.Parallel()
+
+	c := &Client{
+		config: &config.Config{
+			ContextMaxTokens: 12000,
+			Email:            "tester@example.com",
+			UserID:           "u1",
+		},
+	}
+
+	req := upstream.UpstreamRequest{
+		Model:  "claude-sonnet-4-5",
+		Prompt: "hello",
+		ChatHistory: []interface{}{
+			map[string]string{"role": "user", "content": "from-provided-history"},
+		},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "from-messages"}},
+		},
+	}
+
+	wsReq, err := c.buildWSRequestAIClient(req)
+	if err != nil {
+		t.Fatalf("buildWSRequestAIClient returned error: %v", err)
+	}
+
+	rawHistory, ok := wsReq.Data["chatHistory"]
+	if !ok {
+		t.Fatalf("chatHistory missing from payload")
+	}
+	history, ok := rawHistory.([]map[string]string)
+	if !ok {
+		t.Fatalf("chatHistory has unexpected type %T", rawHistory)
+	}
+	if len(history) != 1 {
+		t.Fatalf("chatHistory len = %d, want 1", len(history))
+	}
+	if history[0]["content"] != "from-provided-history" {
+		t.Fatalf("chatHistory content = %q, want provided history", history[0]["content"])
+	}
+}
+
+func TestBuildWSRequestAIClient_PreservesProvidedChatHistoryWithinBudget(t *testing.T) {
+	t.Parallel()
+
+	c := &Client{
+		config: &config.Config{
+			ContextMaxTokens: 12000,
+			Email:            "tester@example.com",
+			UserID:           "u1",
+		},
+	}
+
+	longText := strings.Repeat("x", 5000)
+	req := upstream.UpstreamRequest{
+		Model:  "claude-sonnet-4-5",
+		Prompt: "hello",
+		ChatHistory: []interface{}{
+			map[string]interface{}{
+				"role":    "user",
+				"content": longText,
+			},
+		},
+	}
+
+	wsReq, err := c.buildWSRequestAIClient(req)
+	if err != nil {
+		t.Fatalf("buildWSRequestAIClient returned error: %v", err)
+	}
+
+	rawHistory, ok := wsReq.Data["chatHistory"]
+	if !ok {
+		t.Fatalf("chatHistory missing from payload")
+	}
+	history, ok := rawHistory.([]map[string]string)
+	if !ok {
+		t.Fatalf("chatHistory has unexpected type %T", rawHistory)
+	}
+	if len(history) != 1 {
+		t.Fatalf("chatHistory len = %d, want 1", len(history))
+	}
+	got := history[0]["content"]
+	if got != longText {
+		t.Fatalf("expected provided history to be preserved within budget")
 	}
 }

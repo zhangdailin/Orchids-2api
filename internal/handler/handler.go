@@ -601,20 +601,21 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					// Enforce hard token budget for Warp requests to avoid runaway context cost.
 					if _, isWarp := apiClient.(*warp.Client); isWarp {
 						budget := h.config.ContextMaxTokens
-						if budget <= 0 {
+						if budget <= 0 || budget > 12000 {
 							budget = 12000
 						}
-						trimmed, before, after, compressed, dropped := enforceWarpBudget(builtPrompt, upstreamMessages, budget)
-						if before.Total != after.Total || compressed > 0 || dropped > 0 {
+						trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget(builtPrompt, upstreamMessages, budget)
+						if before.Total != after.Total || compressed > 0 || summarized > 0 || dropped > 0 {
 							slog.Info(
 								"Warp budget applied",
-								"budget", 12000,
+								"budget", budget,
 								"tokens_before", before.Total,
 								"tokens_after", after.Total,
 								"prompt_tokens", after.PromptTokens,
 								"messages_tokens", after.MessagesTokens,
 								"tool_tokens", after.ToolTokens,
 								"compressed_blocks", compressed,
+								"summarized_messages", summarized,
 								"dropped_messages", dropped,
 							)
 						}
@@ -658,6 +659,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				sh.forceFinishIfMissing()
 				break
+			}
+			if sh.hasAnyOutput() {
+				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "error", err)
+				sh.finishResponse("end_turn")
+				return
 			}
 
 			// Check for non-retriable errors

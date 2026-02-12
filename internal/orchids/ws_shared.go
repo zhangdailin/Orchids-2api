@@ -203,8 +203,6 @@ func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.Sy
 		historyMessages = messages
 	}
 	chatHistory, _ := convertChatHistoryAIClient(historyMessages)
-	// Truncate individual chatHistory items to avoid huge tool outputs blowing up context.
-	chatHistory = truncateAIClientHistory(chatHistory)
 
 	promptText := buildLocalAssistantPrompt(systemText, userText, model, workdir, maxTokens)
 	if !noThinking && !isSuggestionModeText(userText) {
@@ -497,37 +495,46 @@ func mergeToolResults(first, second []orchidsToolResult) []orchidsToolResult {
 	return out
 }
 
+const (
+	maxCompactToolCount         = 24
+	maxCompactToolDescLen       = 512
+	maxCompactToolSchemaJSONLen = 4096
+	maxOrchidsToolCount         = 12
+)
+
 func convertOrchidsTools(tools []interface{}) []orchidsToolSpec {
 	if len(tools) == 0 {
 		return nil
 	}
-	const maxDescriptionLength = 9216
+
 	var out []orchidsToolSpec
+	seen := make(map[string]struct{})
 	for _, tool := range tools {
 		name, description, inputSchema := extractToolSpecFields(tool)
-		if name == "" {
+		if name == "" || DefaultToolMapper.IsBlocked(name) {
 			continue
 		}
 
-		// 使用 ToolMapper 检查是否被屏蔽
-		if DefaultToolMapper.IsBlocked(name) {
-			continue
-		}
-
-		// 映射工具名
 		mappedName := DefaultToolMapper.ToOrchids(name)
-		// Orchids AIClient 仅支持本地工具集合，避免下游不支持的命令
 		if !isOrchidsToolSupported(mappedName) {
 			continue
 		}
 
-		if len(description) > maxDescriptionLength {
-			description = description[:maxDescriptionLength] + "..."
+		key := strings.ToLower(strings.TrimSpace(mappedName))
+		if key == "" {
+			continue
 		}
-		inputSchema = cleanJSONSchemaProperties(inputSchema)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		description = compactToolDescription(description)
+		inputSchema = compactToolSchema(inputSchema)
 		if inputSchema == nil {
 			inputSchema = map[string]interface{}{}
 		}
+
 		var spec orchidsToolSpec
 		spec.ToolSpecification.Name = mappedName
 		spec.ToolSpecification.Description = description
@@ -535,8 +542,151 @@ func convertOrchidsTools(tools []interface{}) []orchidsToolSpec {
 			"json": inputSchema,
 		}
 		out = append(out, spec)
+		if len(out) >= maxOrchidsToolCount {
+			break
+		}
 	}
 	return out
+}
+
+// compactIncomingTools reduces tool definition size for SSE mode while preserving original tool shape.
+func compactIncomingTools(tools []interface{}) []interface{} {
+	if len(tools) == 0 {
+		return nil
+	}
+
+	out := make([]interface{}, 0, len(tools))
+	seen := make(map[string]struct{})
+
+	for _, raw := range tools {
+		rawMap, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		name, description, schema := extractToolSpecFields(rawMap)
+		if name == "" || DefaultToolMapper.IsBlocked(name) {
+			continue
+		}
+
+		key := strings.ToLower(strings.TrimSpace(DefaultToolMapper.ToOrchids(name)))
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(name))
+		}
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		description = compactToolDescription(description)
+		schema = compactToolSchema(schema)
+
+		rebuilt := map[string]interface{}{}
+		if fn, ok := rawMap["function"].(map[string]interface{}); ok {
+			_ = fn
+			rebuilt["type"] = "function"
+			function := map[string]interface{}{
+				"name": strings.TrimSpace(name),
+			}
+			if description != "" {
+				function["description"] = description
+			}
+			if len(schema) > 0 {
+				function["parameters"] = schema
+			}
+			rebuilt["function"] = function
+		} else {
+			rebuilt["name"] = strings.TrimSpace(name)
+			if description != "" {
+				rebuilt["description"] = description
+			}
+			if len(schema) > 0 {
+				rebuilt["input_schema"] = schema
+			}
+		}
+
+		out = append(out, rebuilt)
+		if len(out) >= maxCompactToolCount {
+			break
+		}
+	}
+	return out
+}
+
+func compactToolDescription(description string) string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return ""
+	}
+	runes := []rune(description)
+	if len(runes) <= maxCompactToolDescLen {
+		return description
+	}
+	return string(runes[:maxCompactToolDescLen]) + "...[truncated]"
+}
+
+func compactToolSchema(schema map[string]interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+	cleaned := cleanJSONSchemaProperties(schema)
+	if cleaned == nil {
+		return nil
+	}
+	if schemaJSONLen(cleaned) <= maxCompactToolSchemaJSONLen {
+		return cleaned
+	}
+	stripped := stripSchemaDescriptions(cleaned)
+	if schemaJSONLen(stripped) <= maxCompactToolSchemaJSONLen {
+		return stripped
+	}
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}
+}
+
+func stripSchemaDescriptions(schema map[string]interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(schema))
+	for k, v := range schema {
+		if strings.EqualFold(k, "description") || strings.EqualFold(k, "title") {
+			continue
+		}
+		out[k] = stripSchemaDescriptionsValue(v)
+	}
+	return out
+}
+
+func stripSchemaDescriptionsValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		return stripSchemaDescriptions(v)
+	case []interface{}:
+		out := make([]interface{}, 0, len(v))
+		for _, item := range v {
+			out = append(out, stripSchemaDescriptionsValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func schemaJSONLen(schema map[string]interface{}) int {
+	if schema == nil {
+		return 0
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return 0
+	}
+	return len(raw)
 }
 
 // extractToolSpecFields 支持 Claude/OpenAI 风格的工具定义字段提取

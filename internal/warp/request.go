@@ -693,11 +693,18 @@ type toolDef struct {
 	Schema      map[string]interface{}
 }
 
+const (
+	maxWarpToolCount         = 24
+	maxWarpToolDescLen       = 512
+	maxWarpToolSchemaJSONLen = 4096
+)
+
 func convertTools(tools []interface{}) []toolDef {
 	if len(tools) == 0 {
 		return nil
 	}
 	defs := make([]toolDef, 0, len(tools))
+	seen := make(map[string]struct{})
 	for _, raw := range tools {
 		m, ok := raw.(map[string]interface{})
 		if !ok {
@@ -711,9 +718,20 @@ func convertTools(tools []interface{}) []toolDef {
 				}
 				name = orchids.NormalizeToolName(name)
 				description, _ := fn["description"].(string)
-				schema := schemaMap(fn["parameters"])
+				schema := compactWarpSchema(schemaMap(fn["parameters"]))
 				if name != "" {
-					defs = append(defs, toolDef{Name: name, Description: description, Schema: schema})
+					key := strings.ToLower(strings.TrimSpace(name))
+					if key == "" {
+						continue
+					}
+					if _, exists := seen[key]; exists {
+						continue
+					}
+					seen[key] = struct{}{}
+					defs = append(defs, toolDef{Name: name, Description: compactWarpDescription(description), Schema: schema})
+					if len(defs) >= maxWarpToolCount {
+						break
+					}
 				}
 				continue
 			}
@@ -728,8 +746,20 @@ func convertTools(tools []interface{}) []toolDef {
 		if schema == nil {
 			schema = schemaMap(m["parameters"])
 		}
+		schema = compactWarpSchema(schema)
 		if name != "" {
-			defs = append(defs, toolDef{Name: name, Description: description, Schema: schema})
+			key := strings.ToLower(strings.TrimSpace(name))
+			if key == "" {
+				continue
+			}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			defs = append(defs, toolDef{Name: name, Description: compactWarpDescription(description), Schema: schema})
+			if len(defs) >= maxWarpToolCount {
+				break
+			}
 		}
 	}
 	return defs
@@ -743,6 +773,117 @@ func schemaMap(v interface{}) map[string]interface{} {
 		return m
 	}
 	return nil
+}
+
+func compactWarpDescription(description string) string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return ""
+	}
+	runes := []rune(description)
+	if len(runes) <= maxWarpToolDescLen {
+		return description
+	}
+	return string(runes[:maxWarpToolDescLen]) + "...[truncated]"
+}
+
+func compactWarpSchema(schema map[string]interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+	cleaned := cleanWarpSchema(schema)
+	if cleaned == nil {
+		return nil
+	}
+	if warpSchemaJSONLen(cleaned) <= maxWarpToolSchemaJSONLen {
+		return cleaned
+	}
+	stripped := stripWarpSchemaDescriptions(cleaned)
+	if warpSchemaJSONLen(stripped) <= maxWarpToolSchemaJSONLen {
+		return stripped
+	}
+	return map[string]interface{}{
+		"type":       "object",
+		"properties": map[string]interface{}{},
+	}
+}
+
+func cleanWarpSchema(schema map[string]interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+	sanitized := map[string]interface{}{}
+	for _, key := range []string{"type", "description", "properties", "required", "enum", "items"} {
+		if v, ok := schema[key]; ok {
+			sanitized[key] = v
+		}
+	}
+	if props, ok := sanitized["properties"].(map[string]interface{}); ok {
+		cleanProps := map[string]interface{}{}
+		for name, prop := range props {
+			cleanProps[name] = cleanWarpSchemaValue(prop)
+		}
+		sanitized["properties"] = cleanProps
+	}
+	if items, ok := sanitized["items"]; ok {
+		sanitized["items"] = cleanWarpSchemaValue(items)
+	}
+	return sanitized
+}
+
+func cleanWarpSchemaValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		return cleanWarpSchema(v)
+	case []interface{}:
+		out := make([]interface{}, 0, len(v))
+		for _, item := range v {
+			out = append(out, cleanWarpSchemaValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func stripWarpSchemaDescriptions(schema map[string]interface{}) map[string]interface{} {
+	if schema == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(schema))
+	for k, v := range schema {
+		if strings.EqualFold(k, "description") || strings.EqualFold(k, "title") {
+			continue
+		}
+		out[k] = stripWarpSchemaDescriptionsValue(v)
+	}
+	return out
+}
+
+func stripWarpSchemaDescriptionsValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		return stripWarpSchemaDescriptions(v)
+	case []interface{}:
+		out := make([]interface{}, 0, len(v))
+		for _, item := range v {
+			out = append(out, stripWarpSchemaDescriptionsValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func warpSchemaJSONLen(schema map[string]interface{}) int {
+	if schema == nil {
+		return 0
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return 0
+	}
+	return len(raw)
 }
 
 func normalizeModel(model string) string {

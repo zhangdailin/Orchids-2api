@@ -208,6 +208,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 
 	startFirstToken := time.Now()
 	firstReceived := false
+	receivedAnyMessage := false
 
 	var state requestState
 	var fsWG sync.WaitGroup
@@ -255,7 +256,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 				returnToPool = false
 				return ctx.Err()
 			}
-			if parentCtx.Err() == nil {
+			if parentCtx.Err() == nil && !receivedAnyMessage {
 				returnToPool = false
 				return wsFallbackError{err: err}
 			}
@@ -273,7 +274,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 				returnToPool = false
 				break
 			}
-			if parentCtx.Err() == nil {
+			if parentCtx.Err() == nil && !receivedAnyMessage {
 				returnToPool = false
 				return wsFallbackError{err: err}
 			}
@@ -285,6 +286,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
 		}
+		receivedAnyMessage = true
 
 		if !firstReceived && c.config.DebugEnabled {
 			firstReceived = true
@@ -735,24 +737,30 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 		historyMessages = req.Messages
 	}
 	chatHistory, historyToolResults := convertChatHistoryAIClient(historyMessages)
+	if provided := normalizeProvidedChatHistory(req.ChatHistory); len(provided) > 0 {
+		// Prefer caller-provided history (already budgeted by handler) to avoid WS re-expanding context.
+		chatHistory = provided
+	}
+
 	toolResults := mergeToolResults(historyToolResults, currentToolResults)
 	orchidsTools := convertOrchidsTools(req.Tools)
 	attachmentUrls := extractAttachmentURLsAIClient(req.Messages)
 
+	maxTokens := 12000
+	if c.config != nil && c.config.ContextMaxTokens > 0 {
+		maxTokens = c.config.ContextMaxTokens
+	}
+
 	promptText := ""
 	if req.Prompt != "" {
 		promptText = req.Prompt
-		// AIClient-only: keep chatHistory; caller is responsible for avoiding duplication.
 	} else {
-		maxTokens := 12000
-		if c.config != nil && c.config.ContextMaxTokens > 0 {
-			maxTokens = c.config.ContextMaxTokens
-		}
 		promptText = buildLocalAssistantPrompt(systemText, userText, req.Model, req.Workdir, maxTokens)
 		if !req.NoThinking && !isSuggestionModeText(userText) {
 			promptText = injectThinkingPrefix(promptText)
 		}
 	}
+	promptText, chatHistory = enforceAIClientBudget(promptText, chatHistory, maxTokens)
 
 	if req.NoTools {
 		orchidsTools = nil
@@ -794,6 +802,63 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 		Type: "user_request",
 		Data: payload,
 	}, nil
+}
+
+func normalizeProvidedChatHistory(raw []interface{}) []map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	normalizeRole := func(role string) (string, bool) {
+		switch strings.ToLower(strings.TrimSpace(role)) {
+		case "user":
+			return "user", true
+		case "assistant":
+			return "assistant", true
+		default:
+			return "", false
+		}
+	}
+
+	history := make([]map[string]string, 0, len(raw))
+	for _, item := range raw {
+		var role string
+		var content string
+
+		switch v := item.(type) {
+		case map[string]string:
+			role = v["role"]
+			content = v["content"]
+		case map[string]interface{}:
+			if s, ok := v["role"].(string); ok {
+				role = s
+			}
+			if s, ok := v["content"].(string); ok {
+				content = s
+			}
+		default:
+			continue
+		}
+
+		normalizedRole, ok := normalizeRole(role)
+		if !ok {
+			continue
+		}
+		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
+
+		history = append(history, map[string]string{
+			"role":    normalizedRole,
+			"content": content,
+		})
+	}
+
+	if len(history) == 0 {
+		return nil
+	}
+	return history
 }
 
 func isSuggestionModeText(text string) bool {

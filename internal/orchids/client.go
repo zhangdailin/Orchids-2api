@@ -479,6 +479,10 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		email = cfg.Email
 		userID = cfg.UserID
 	}
+	payloadTools := compactIncomingTools(req.Tools)
+	if req.NoTools {
+		payloadTools = nil
+	}
 
 	payload := AgentRequest{
 		Prompt:        req.Prompt,
@@ -495,7 +499,7 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		Model:         req.Model,
 		Messages:      payloadMessages,
 		System:        payloadSystem,
-		Tools:         req.Tools,
+		Tools:         payloadTools,
 	}
 	if payload.ChatSessionID == "" {
 		payload.ChatSessionID = fmt.Sprintf("chat_%d", rand.IntN(90000000)+10000000)

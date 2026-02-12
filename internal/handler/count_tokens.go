@@ -39,6 +39,12 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 			totalTokens += tiktoken.EstimateTextTokens(c) + 15
 		}
 	}
+	// Include tool definitions to avoid under-estimating real upstream input.
+	if len(req.Tools) > 0 {
+		if rawTools, err := json.Marshal(req.Tools); err == nil {
+			totalTokens += tiktoken.EstimateTextTokens(string(rawTools))
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(map[string]int{

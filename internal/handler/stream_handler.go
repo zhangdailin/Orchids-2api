@@ -1230,6 +1230,25 @@ func (h *streamHandler) forceFinishIfMissing() {
 	h.finishResponse(stopReason)
 }
 
+func (h *streamHandler) hasAnyOutput() bool {
+	h.mu.Lock()
+	has := h.hasTextOutput ||
+		h.toolCallCount > 0 ||
+		len(h.pendingToolCalls) > 0 ||
+		len(h.toolCallEmitted) > 0 ||
+		len(h.contentBlocks) > 0 ||
+		h.responseText.Len() > 0
+	h.mu.Unlock()
+	if has {
+		return true
+	}
+
+	h.outputMu.Lock()
+	has = h.outputBuilder.Len() > 0 || h.outputTokens > 0
+	h.outputMu.Unlock()
+	return has
+}
+
 func (h *streamHandler) shouldSkipIntroDelta(delta string) bool {
 	key := normalizeIntroKey(delta)
 	if key == "" {
