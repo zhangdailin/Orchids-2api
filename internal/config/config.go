@@ -216,8 +216,9 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.OrchidsAPIVersion == "" {
 		cfg.OrchidsAPIVersion = "2"
 	}
+	// Only AIClient mode is supported.
 	if cfg.OrchidsImpl == "" {
-		cfg.OrchidsImpl = "legacy"
+		cfg.OrchidsImpl = "aiclient"
 	}
 	if len(cfg.OrchidsRunAllowlist) == 0 {
 		cfg.OrchidsRunAllowlist = []string{"pwd", "ls", "find"}

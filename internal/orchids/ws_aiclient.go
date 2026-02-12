@@ -742,10 +742,7 @@ func (c *Client) buildWSRequestAIClient(req upstream.UpstreamRequest) (*orchidsW
 	promptText := ""
 	if req.Prompt != "" {
 		promptText = req.Prompt
-		// 非 AIClient 模式下，若 prompt 已包含完整历史，则避免 chatHistory 重复注入。
-		if c.config == nil || !strings.EqualFold(strings.TrimSpace(c.config.OrchidsImpl), "aiclient") {
-			chatHistory = nil
-		}
+		// AIClient-only: keep chatHistory; caller is responsible for avoiding duplication.
 	} else {
 		maxTokens := 12000
 		if c.config != nil && c.config.ContextMaxTokens > 0 {

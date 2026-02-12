@@ -467,13 +467,9 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		return fmt.Errorf("failed to get token: %w", err)
 	}
 
-	payloadMessages := req.Messages
-	payloadSystem := req.System
-	if cfg != nil && strings.EqualFold(strings.TrimSpace(cfg.OrchidsImpl), "aiclient") {
-		// AIClient 模式：避免 prompt + messages 双份注入上下文
-		payloadMessages = nil
-		payloadSystem = nil
-	}
+	// AIClient-only: avoid prompt + messages double-injection.
+	payloadMessages := []prompt.Message(nil)
+	payloadSystem := []prompt.SystemItem(nil)
 	projectID := ""
 	agentMode := ""
 	email := ""
