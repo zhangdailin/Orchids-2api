@@ -125,12 +125,17 @@ func (a *API) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// NOTE: Do not mark cookies as Secure when served over plain HTTP,
+	// otherwise browsers will drop the cookie and the Admin UI will appear unable to log in.
+	// When behind a TLS-terminating proxy, honor X-Forwarded-Proto.
+	isHTTPS := r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     "session_token",
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   isHTTPS,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   86400 * 7,
 	})
