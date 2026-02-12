@@ -442,7 +442,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	var aiClientHistory []map[string]string
 	var builtPrompt string
 	if isOrchidsAIClient {
-		builtPrompt, aiClientHistory = orchids.BuildAIClientPromptAndHistory(req.Messages, req.System, req.Model, noThinking, effectiveWorkdir)
+		builtPrompt, aiClientHistory = orchids.BuildAIClientPromptAndHistory(req.Messages, req.System, req.Model, noThinking, effectiveWorkdir, h.config.ContextMaxTokens)
 	} else {
 		builtPrompt = prompt.BuildPromptV2WithOptions(prompt.ClaudeAPIRequest{
 			Model:    req.Model,

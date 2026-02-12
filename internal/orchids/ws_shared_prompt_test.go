@@ -69,7 +69,7 @@ func TestBuildAIClientPromptAndHistory_NoLargeCarryoverOnToolResultTurn(t *testi
 		},
 	}
 
-	builtPrompt, _ := BuildAIClientPromptAndHistory(messages, nil, "claude-opus-4-6", false, "/tmp/project")
+	builtPrompt, _ := BuildAIClientPromptAndHistory(messages, nil, "claude-opus-4-6", false, "/tmp/project", 12000)
 	if strings.Contains(builtPrompt, marker) {
 		t.Fatalf("expected previous large user text not to be carried over in tool-result-only turn")
 	}

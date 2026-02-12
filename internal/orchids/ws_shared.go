@@ -168,7 +168,7 @@ Read / Write / Edit / Bash / Glob / Grep / TodoWrite。
 
 // BuildAIClientPromptAndHistory 构建 AIClient 风格 prompt，并提取 chatHistory（用于 SSE/WS 统一行为）。
 // 返回的 chatHistory 为 {role, content} 结构，避免重复注入 messages。
-func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool, workdir string) (string, []map[string]string) {
+func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.SystemItem, model string, noThinking bool, workdir string, maxTokens int) (string, []map[string]string) {
 	systemText := extractSystemPrompt(messages)
 	if strings.TrimSpace(systemText) == "" && len(system) > 0 {
 		var sb strings.Builder
@@ -203,11 +203,16 @@ func BuildAIClientPromptAndHistory(messages []prompt.Message, system []prompt.Sy
 		historyMessages = messages
 	}
 	chatHistory, _ := convertChatHistoryAIClient(historyMessages)
+	// Truncate individual chatHistory items to avoid huge tool outputs blowing up context.
+	chatHistory = truncateAIClientHistory(chatHistory)
 
 	promptText := buildLocalAssistantPrompt(systemText, userText, model, workdir)
 	if !noThinking && !isSuggestionModeText(userText) {
 		promptText = injectThinkingPrefix(promptText)
 	}
+
+	// Enforce a hard context budget for AIClient mode.
+	promptText, chatHistory = enforceAIClientBudget(promptText, chatHistory, maxTokens)
 	return promptText, chatHistory
 }
 
