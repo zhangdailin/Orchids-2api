@@ -321,8 +321,9 @@ func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage 
 		end
 
 		-- Warp 的 usage_current 保存请求配额（由上游同步），
+		-- Orchids 的 usage_current 保存 credits（由 RSC 同步）。
 		-- 不能叠加 token 用量，否则会污染配额显示。
-		if acc_type ~= "warp" then
+		if acc_type ~= "warp" and acc_type ~= "orchids" then
 			acc.usage_current = (acc.usage_current or 0) + usage
 		end
 		acc.usage_total = (acc.usage_total or 0) + usage

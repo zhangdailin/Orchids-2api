@@ -131,7 +131,7 @@ function statusBadge(acc) {
   } else if (!acc.session_id && !acc.session_cookie) {
     return { text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少会话信息' };
   }
-  if (type === 'warp' && acc.usage_limit > 0) {
+  if (acc.usage_limit > 0) {
     const used = acc.usage_current || 0;
     if (used >= acc.usage_limit) {
       return { text: '配额已满', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '配额已用尽 (已用 ' + Math.floor(used) + ' / ' + Math.floor(acc.usage_limit) + ')' };
@@ -335,8 +335,7 @@ function renderAccounts() {
 
     const tdQuota = document.createElement("td");
     tdQuota.style.fontSize = "0.85rem";
-    const type = normalizeAccountType(acc);
-    if (type === 'warp' && acc.usage_limit > 0) {
+    if (acc.usage_limit > 0) {
       const used = Math.floor(acc.usage_current || 0);
       const limit = Math.floor(acc.usage_limit);
       const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
