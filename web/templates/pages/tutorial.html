@@ -25,9 +25,9 @@
           <h3 style="font-size: 1.1rem; font-weight: 700;">API 地址格式</h3>
         </div>
         <div style="background: rgba(12, 14, 26, 0.4); padding: 12px 16px; border-radius: 8px; font-family: monospace; font-size: 1.1rem; color: var(--accent-cyan); border: 1px solid var(--border-color);">
-          Orchids/Warp: https://warp.chinablog.xyz/{渠道}/v1
+          Orchids/Warp: <span data-api-base></span>/{渠道}/v1
           <br />
-          Grok: https://warp.chinablog.xyz/grok/v1
+          Grok: <span data-api-base></span>/grok/v1
         </div>
       </div>
 
@@ -35,7 +35,7 @@
         <span style="font-size: 1.2rem;">⚠️</span>
         <div>
           <span style="font-weight: 700; color: var(--accent-orange);">Claude Code 用户注意:</span> 配置 API 地址时请使用
-          <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);">https://warp.chinablog.xyz/{渠道}</code>，
+          <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);"><span data-api-base></span>/{渠道}</code>，
           <span style="color: var(--accent-red); font-weight: 700;">不要</span>添加
           <code style="background: rgba(248, 113, 113, 0.1); padding: 2px 6px; border-radius: 4px; color: var(--accent-red);">/v1</code> 后缀
           <br />
@@ -57,7 +57,7 @@
           <tbody>
             <tr>
               <td><span class="tag badge-orchids">Orchids</span></td>
-              <td><code style="color: var(--accent-cyan); cursor: pointer;" onclick="copyToClipboard('https://warp.chinablog.xyz/orchids/v1')">https://warp.chinablog.xyz/orchids/v1</code></td>
+              <td><code style="color: var(--accent-cyan);" data-api-path="/orchids/v1"></code></td>
               <td><code style="color: var(--accent-green);">claude-sonnet-4-5</code> <span class="tag badge-orchids" style="font-size: 0.7rem;">Orchids</span></td>
               <td>
                 <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
@@ -66,7 +66,7 @@
             </tr>
             <tr>
               <td><span class="tag badge-warp" style="background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); border: 1px solid rgba(34, 211, 238, 0.3);">Warp</span></td>
-              <td><code style="color: var(--accent-cyan); cursor: pointer;" onclick="copyToClipboard('https://warp.chinablog.xyz/warp/v1')">https://warp.chinablog.xyz/warp/v1</code></td>
+              <td><code style="color: var(--accent-cyan);" data-api-path="/warp/v1"></code></td>
               <td><code style="color: var(--accent-green);">claude-4-5-sonnet</code> <span class="tag badge-warp" style="background: rgba(34, 211, 238, 0.15); color: var(--accent-cyan); border: 1px solid rgba(34, 211, 238, 0.3); font-size: 0.7rem;">Warp</span></td>
               <td>
                 <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
@@ -75,7 +75,7 @@
             </tr>
             <tr>
               <td><span class="tag badge-grok" style="background: rgba(244, 114, 182, 0.15); color: var(--accent-pink); border: 1px solid rgba(244, 114, 182, 0.3);">Grok</span></td>
-              <td><code style="color: var(--accent-cyan); cursor: pointer;" onclick="copyToClipboard('https://warp.chinablog.xyz/grok/v1')">https://warp.chinablog.xyz/grok/v1</code></td>
+              <td><code style="color: var(--accent-cyan);" data-api-path="/grok/v1"></code></td>
               <td><code style="color: var(--accent-green);">grok-3</code> <span class="tag badge-grok" style="background: rgba(244, 114, 182, 0.15); color: var(--accent-pink); border: 1px solid rgba(244, 114, 182, 0.3); font-size: 0.7rem;">Grok</span></td>
               <td>
                 <span class="tag" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-orange); border: 1px solid rgba(251, 191, 36, 0.3);">OpenAI</span>
@@ -94,6 +94,21 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <script src="{{.AdminPath}}/js/common.js"></script>
+  <script>
+    (function () {
+      const base = window.location.origin.replace(/\/$/, "");
+      document.querySelectorAll("[data-api-base]").forEach((el) => {
+        el.textContent = base;
+      });
+      document.querySelectorAll("[data-api-path]").forEach((el) => {
+        const path = el.getAttribute("data-api-path") || "";
+        const url = base + path;
+        el.textContent = url;
+        el.style.cursor = "pointer";
+        el.addEventListener("click", () => copyToClipboard(url));
+      });
+    })();
+  </script>
 </body>
 </html>
 {{end}}
