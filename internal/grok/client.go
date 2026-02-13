@@ -91,6 +91,13 @@ func (c *Client) headers(token string) http.Header {
 	h.Set("Sec-Fetch-Mode", "cors")
 	h.Set("Sec-Fetch-Site", "same-origin")
 	h.Set("User-Agent", c.userAgent())
+	h.Set("sec-ch-ua", `"Chromium";v="131", "Google Chrome";v="131", "Not_A Brand";v="24"`)
+	h.Set("sec-ch-ua-mobile", "?0")
+	h.Set("sec-ch-ua-platform", `"Windows"`)
+	h.Set("Sec-Fetch-Dest", "empty")
+	h.Set("Sec-Fetch-Mode", "cors")
+	h.Set("Sec-Fetch-Site", "same-origin")
+	h.Set("Priority", "u=1, i")
 	h.Set("x-statsig-id", buildStatsigID())
 	h.Set("x-xai-request-id", randomHex(16))
 	cookie := "sso=" + token + "; sso-rw=" + token
