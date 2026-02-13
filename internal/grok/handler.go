@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/loadbalancer"
@@ -373,6 +374,21 @@ type streamMarkupFilter struct {
 	inRender bool
 }
 
+func validUTF8Prefix(s string) string {
+	if s == "" || utf8.ValidString(s) {
+		return s
+	}
+	// Trim bytes until valid UTF-8.
+	b := []byte(s)
+	for len(b) > 0 {
+		b = b[:len(b)-1]
+		if utf8.Valid(b) {
+			return string(b)
+		}
+	}
+	return ""
+}
+
 func (f *streamMarkupFilter) feed(chunk string) string {
 	if chunk == "" {
 		return ""
@@ -429,11 +445,11 @@ func (f *streamMarkupFilter) feed(chunk string) string {
 
 		if idx < 0 {
 			// No marker found; emit everything except a small tail to catch split markers.
-			keep := 32
+			keep := 64
 			if len(f.pending) <= keep {
 				break
 			}
-			safe := f.pending[:len(f.pending)-keep]
+			safe := validUTF8Prefix(f.pending[:len(f.pending)-keep])
 			cleaned := stripToolAndRenderMarkup(safe)
 			if cleaned != "" {
 				out.WriteString(cleaned)
@@ -443,7 +459,7 @@ func (f *streamMarkupFilter) feed(chunk string) string {
 		}
 
 		// Emit prefix before the marker.
-		prefix := f.pending[:idx]
+		prefix := validUTF8Prefix(f.pending[:idx])
 		cleaned := stripToolAndRenderMarkup(prefix)
 		if cleaned != "" {
 			out.WriteString(cleaned)
