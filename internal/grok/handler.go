@@ -525,27 +525,34 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				}
 				var urls []string
 				var debugHTTP []string
+				var debugAsset []string
 				_ = parseUpstreamLines(resp2.Body, func(line map[string]interface{}) error {
 					if mr, ok := line["modelResponse"].(map[string]interface{}); ok {
 						urls = append(urls, extractImageURLs(mr)...)
 						urls = append(urls, extractRenderableImageLinks(mr)...)
 						if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 							debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 20)...)
+							debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 40)...)
 						}
 					}
 					urls = append(urls, extractRenderableImageLinks(line)...)
 					if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 						debugHTTP = append(debugHTTP, collectHTTPStrings(line, 20)...)
+						debugAsset = append(debugAsset, collectAssetLikeStrings(line, 40)...)
 					}
 					return nil
 				})
 				resp2.Body.Close()
 				if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 					debugHTTP = uniqueStrings(debugHTTP)
+					debugAsset = uniqueStrings(debugAsset)
 					if len(debugHTTP) > 0 {
 						slog.Info("grok imagine fallback: observed http urls", "count", len(debugHTTP), "urls", debugHTTP)
 					} else {
 						slog.Info("grok imagine fallback: no http urls observed")
+					}
+					if len(debugAsset) > 0 {
+						slog.Info("grok imagine fallback: observed asset-like strings", "count", len(debugAsset), "items", debugAsset)
 					}
 				}
 				urls = uniqueStrings(urls)
@@ -655,27 +662,34 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 				}
 				var urls []string
 				var debugHTTP []string
+				var debugAsset []string
 				_ = parseUpstreamLines(resp2.Body, func(line map[string]interface{}) error {
 					if mr, ok := line["modelResponse"].(map[string]interface{}); ok {
 						urls = append(urls, extractImageURLs(mr)...)
 						urls = append(urls, extractRenderableImageLinks(mr)...)
 						if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 							debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 20)...)
+							debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 40)...)
 						}
 					}
 					urls = append(urls, extractRenderableImageLinks(line)...)
 					if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 						debugHTTP = append(debugHTTP, collectHTTPStrings(line, 20)...)
+						debugAsset = append(debugAsset, collectAssetLikeStrings(line, 40)...)
 					}
 					return nil
 				})
 				resp2.Body.Close()
 				if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 					debugHTTP = uniqueStrings(debugHTTP)
+					debugAsset = uniqueStrings(debugAsset)
 					if len(debugHTTP) > 0 {
 						slog.Info("grok imagine fallback: observed http urls", "count", len(debugHTTP), "urls", debugHTTP)
 					} else {
 						slog.Info("grok imagine fallback: no http urls observed")
+					}
+					if len(debugAsset) > 0 {
+						slog.Info("grok imagine fallback: observed asset-like strings", "count", len(debugAsset), "items", debugAsset)
 					}
 				}
 				urls = uniqueStrings(urls)
