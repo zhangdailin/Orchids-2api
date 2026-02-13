@@ -157,6 +157,25 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+func detectPublicBaseURL(r *http.Request) string {
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		if r.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = strings.TrimSpace(r.Host)
+	}
+	if host == "" {
+		return ""
+	}
+	return proto + "://" + host
+}
+
 func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -227,11 +246,12 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	defer resp.Body.Close()
 	h.syncGrokQuota(acc, resp.Header)
 
+	publicBase := detectPublicBaseURL(r)
 	if req.Stream {
-		h.streamChat(w, req.Model, spec, token, text, resp.Body)
+		h.streamChat(w, req.Model, spec, token, publicBase, text, resp.Body)
 		return
 	}
-	h.collectChat(w, req.Model, spec, token, text, resp.Body)
+	h.collectChat(w, req.Model, spec, token, publicBase, text, resp.Body)
 }
 
 func (h *Handler) buildChatPayload(ctx context.Context, token string, spec ModelSpec, text string, fileAttachments []string, videoCfg *VideoConfig) (map[string]interface{}, error) {
@@ -347,7 +367,7 @@ func (h *Handler) uploadSingleInput(ctx context.Context, token, input string) (s
 	return h.client.uploadFile(ctx, token, filename, mime, contentBase64)
 }
 
-func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, userPrompt string, body io.Reader) {
+func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, userPrompt string, body io.Reader) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -586,6 +606,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					if errV != nil || strings.TrimSpace(val) == "" {
 						val = u
 					}
+					if publicBase != "" && strings.HasPrefix(val, "/") {
+						val = publicBase + val
+					}
 					emitChunk(map[string]interface{}{"content": "\n![](" + val + ")"}, nil)
 				}
 			}
@@ -599,7 +622,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	}
 }
 
-func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, userPrompt string, body io.Reader) {
+func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, userPrompt string, body io.Reader) {
 	id := "chatcmpl_" + randomHex(8)
 	var content strings.Builder
 	lastMessage := ""
@@ -737,6 +760,9 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 					val, errV := h.imageOutputValue(context.Background(), token, u, "url")
 					if errV != nil || strings.TrimSpace(val) == "" {
 						val = u
+					}
+					if publicBase != "" && strings.HasPrefix(val, "/") {
+						val = publicBase + val
 					}
 					finalContent += "\n![](" + val + ")"
 				}
