@@ -396,6 +396,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				if !sawToken {
 					emitChunk(map[string]interface{}{"content": msg}, nil)
 				}
+				// Debug aid: Grok sometimes returns image cards/tool markup instead of URLs.
+				// Log a small hint to help map where the real URLs live.
+				if strings.Contains(msg, "<grok:render") || strings.Contains(msg, "tool_usage_card") {
+					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
+				}
 			}
 			for _, u := range extractImageURLs(mr) {
 				emitChunk(map[string]interface{}{"content": "\n![](" + u + ")"}, nil)
@@ -404,6 +409,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			for _, u := range extractRenderableImageLinks(mr) {
 				emitChunk(map[string]interface{}{"content": "\n![](" + u + ")"}, nil)
 			}
+		}
+		// Broader fallback: sometimes URLs live outside modelResponse.
+		for _, u := range extractRenderableImageLinks(resp) {
+			emitChunk(map[string]interface{}{"content": "\n![](" + u + ")"}, nil)
 		}
 		if spec.IsVideo {
 			if progress, videoURL, _, ok := extractVideoProgress(resp); ok {
@@ -455,6 +464,9 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 				if !sawToken {
 					content.WriteString(msg)
 				}
+				if strings.Contains(msg, "<grok:render") || strings.Contains(msg, "tool_usage_card") {
+					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
+				}
 			}
 			for _, u := range extractImageURLs(mr) {
 				content.WriteString("\n![](" + u + ")")
@@ -462,6 +474,9 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 			for _, u := range extractRenderableImageLinks(mr) {
 				content.WriteString("\n![](" + u + ")")
 			}
+		}
+		for _, u := range extractRenderableImageLinks(resp) {
+			content.WriteString("\n![](" + u + ")")
 		}
 		if spec.IsVideo {
 			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 && strings.TrimSpace(vurl) != "" {
