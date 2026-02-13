@@ -268,11 +268,12 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	h.syncGrokQuota(acc, resp.Header)
 
 	publicBase := detectPublicBaseURL(r)
+	hasAttachments := len(attachments) > 0 || len(fileAttachments) > 0
 	if req.Stream {
-		h.streamChat(w, req.Model, spec, token, publicBase, text, resp.Body)
+		h.streamChat(w, req.Model, spec, token, publicBase, hasAttachments, text, resp.Body)
 		return
 	}
-	h.collectChat(w, req.Model, spec, token, publicBase, text, resp.Body)
+	h.collectChat(w, req.Model, spec, token, publicBase, hasAttachments, text, resp.Body)
 }
 
 func (h *Handler) buildChatPayload(ctx context.Context, token string, spec ModelSpec, text string, fileAttachments []string, videoCfg *VideoConfig) (map[string]interface{}, error) {
@@ -514,7 +515,7 @@ func (f *streamMarkupFilter) feed(chunk string) string {
 	return out.String()
 }
 
-func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, userPrompt string, body io.Reader) {
+func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, userPrompt string, body io.Reader) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -613,12 +614,18 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	}
 
 	// If Grok emitted search_images tool cards, generate equivalent images and append as Markdown.
+	// IMPORTANT: do NOT run this fallback when the user provided image attachments (vision Q/A),
+	// otherwise we may accidentally generate unrelated images and/or corrupt the answer.
 	rawText := rawAll.String()
 	args := parseSearchImagesArgsFromText(rawText)
-	if len(args) == 0 && strings.Contains(rawText, "search_images") {
-		desc := strings.TrimSpace(userPrompt)
-		if desc != "" {
-			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+	if !hasAttachments {
+		if len(args) == 0 && strings.Contains(rawText, "search_images") {
+			desc := strings.TrimSpace(userPrompt)
+			// Only do the aggressive fallback (A) when the user prompt actually looks like an image request.
+			ld := strings.ToLower(desc)
+			if desc != "" && (strings.Contains(desc, "图片") || strings.Contains(desc, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture")) {
+				args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+			}
 		}
 	}
 	if len(args) > 0 {
@@ -718,7 +725,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	}
 }
 
-func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, userPrompt string, body io.Reader) {
+func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, userPrompt string, body io.Reader) {
 	id := "chatcmpl_" + randomHex(8)
 	var content strings.Builder
 	lastMessage := ""
@@ -776,10 +783,13 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	// If Grok returned search_images tool cards, run an equivalent image generation as a compatibility fallback.
 	// This makes OpenAI-compatible clients (e.g. Cherry Studio) able to display images.
 	args := parseSearchImagesArgsFromText(finalContent)
-	if len(args) == 0 && strings.Contains(finalContent, "search_images") {
-		desc := strings.TrimSpace(userPrompt)
-		if desc != "" {
-			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+	if !hasAttachments {
+		if len(args) == 0 && strings.Contains(finalContent, "search_images") {
+			desc := strings.TrimSpace(userPrompt)
+			ld := strings.ToLower(desc)
+			if desc != "" && (strings.Contains(desc, "图片") || strings.Contains(desc, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture")) {
+				args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+			}
 		}
 	}
 	if len(args) > 0 {
