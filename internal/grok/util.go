@@ -108,6 +108,37 @@ type SearchImagesArgs struct {
 	NumberOfImages   int    `json:"number_of_images"`
 }
 
+func collectHTTPStrings(value interface{}, limit int) []string {
+	out := make([]string, 0, 16)
+	seen := map[string]struct{}{}
+	var walk func(v interface{})
+	walk = func(v interface{}) {
+		if limit > 0 && len(out) >= limit {
+			return
+		}
+		switch x := v.(type) {
+		case map[string]interface{}:
+			for _, vv := range x {
+				walk(vv)
+			}
+		case []interface{}:
+			for _, vv := range x {
+				walk(vv)
+			}
+		case string:
+			s := strings.TrimSpace(x)
+			if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
+				if _, ok := seen[s]; !ok {
+					seen[s] = struct{}{}
+					out = append(out, s)
+				}
+			}
+		}
+	}
+	walk(value)
+	return out
+}
+
 func parseSearchImagesArgsFromText(text string) []SearchImagesArgs {
 	text = strings.TrimSpace(text)
 	if text == "" {

@@ -524,15 +524,30 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					continue
 				}
 				var urls []string
+				var debugHTTP []string
 				_ = parseUpstreamLines(resp2.Body, func(line map[string]interface{}) error {
 					if mr, ok := line["modelResponse"].(map[string]interface{}); ok {
 						urls = append(urls, extractImageURLs(mr)...)
 						urls = append(urls, extractRenderableImageLinks(mr)...)
+						if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+							debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 20)...)
+						}
 					}
 					urls = append(urls, extractRenderableImageLinks(line)...)
+					if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+						debugHTTP = append(debugHTTP, collectHTTPStrings(line, 20)...)
+					}
 					return nil
 				})
 				resp2.Body.Close()
+				if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+					debugHTTP = uniqueStrings(debugHTTP)
+					if len(debugHTTP) > 0 {
+						slog.Info("grok imagine fallback: observed http urls", "count", len(debugHTTP), "urls", debugHTTP)
+					} else {
+						slog.Info("grok imagine fallback: no http urls observed")
+					}
+				}
 				urls = uniqueStrings(urls)
 				if len(urls) > n {
 					urls = urls[:n]
@@ -636,15 +651,30 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 					continue
 				}
 				var urls []string
+				var debugHTTP []string
 				_ = parseUpstreamLines(resp2.Body, func(line map[string]interface{}) error {
 					if mr, ok := line["modelResponse"].(map[string]interface{}); ok {
 						urls = append(urls, extractImageURLs(mr)...)
 						urls = append(urls, extractRenderableImageLinks(mr)...)
+						if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+							debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 20)...)
+						}
 					}
 					urls = append(urls, extractRenderableImageLinks(line)...)
+					if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+						debugHTTP = append(debugHTTP, collectHTTPStrings(line, 20)...)
+					}
 					return nil
 				})
 				resp2.Body.Close()
+				if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+					debugHTTP = uniqueStrings(debugHTTP)
+					if len(debugHTTP) > 0 {
+						slog.Info("grok imagine fallback: observed http urls", "count", len(debugHTTP), "urls", debugHTTP)
+					} else {
+						slog.Info("grok imagine fallback: no http urls observed")
+					}
+				}
 				urls = uniqueStrings(urls)
 				if len(urls) > n {
 					urls = urls[:n]

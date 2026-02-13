@@ -55,6 +55,7 @@ type Config struct {
 	GrokBaseProxyURL          string   `json:"grok_base_proxy_url"`
 	GrokAssetProxyURL         string   `json:"grok_asset_proxy_url"`
 	GrokUseUTLS               bool     `json:"grok_use_utls"`
+	GrokDebugImageFallback    bool     `json:"grok_debug_image_fallback"`
 	WarpDisableTools          *bool    `json:"warp_disable_tools"`
 	WarpMaxToolResults        int      `json:"warp_max_tool_results"`
 	WarpMaxHistoryMessages    int      `json:"warp_max_history_messages"`
