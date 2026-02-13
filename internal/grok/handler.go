@@ -23,6 +23,15 @@ import (
 	"orchids-api/internal/store"
 )
 
+func sanitizeText(s string) string {
+	if s == "" {
+		return s
+	}
+	// Drop replacement chars introduced by invalid UTF-8 boundaries.
+	s = strings.ReplaceAll(s, "\uFFFD", "")
+	return s
+}
+
 const maxEditImageBytes = 50 * 1024 * 1024
 
 var cacheBaseDir = filepath.Join("data", "tmp")
@@ -398,7 +407,9 @@ func (f *streamMarkupFilter) feed(chunk string) string {
 
 	const toolStart = "xai:tool_usage_card"
 	const toolEnd = "</xai:tool_usage_card>"
-	const renderStart = "grok:render"
+	// Grok render blocks sometimes appear as '<grok:render ...>' and can be split,
+	// so treat any '<grok' as the beginning of a render block to avoid leaking '<grok<' fragments.
+	const renderStart = "<grok"
 	const renderEnd = "</grok:render>"
 
 	for {
@@ -450,7 +461,7 @@ func (f *streamMarkupFilter) feed(chunk string) string {
 				break
 			}
 			safe := validUTF8Prefix(f.pending[:len(f.pending)-keep])
-			cleaned := stripToolAndRenderMarkup(safe)
+			cleaned := sanitizeText(stripToolAndRenderMarkup(safe))
 			if cleaned != "" {
 				out.WriteString(cleaned)
 			}
@@ -460,7 +471,7 @@ func (f *streamMarkupFilter) feed(chunk string) string {
 
 		// Emit prefix before the marker.
 		prefix := validUTF8Prefix(f.pending[:idx])
-		cleaned := stripToolAndRenderMarkup(prefix)
+		cleaned := sanitizeText(stripToolAndRenderMarkup(prefix))
 		if cleaned != "" {
 			out.WriteString(cleaned)
 		}
