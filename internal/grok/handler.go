@@ -1015,13 +1015,18 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 						urls = cur
 						break
 					}
+					// Upstream may ignore large imageGenerationCount and keep returning only 2 images.
+					// To reach arbitrary N, request 1 image per call with a distinct variant prompt.
+					if need > 1 {
+						need = 1
+					}
 					before := len(cur)
 					variants := []string{"安福路白天", "外滩夜景", "南京路人潮", "法租界梧桐", "弄堂市井", "地铁口"}
 					vi := 0
 					if before > 0 {
-						vi = (before / 2) % len(variants)
+						vi = before % len(variants)
 					}
-					desc2 := fmt.Sprintf("%s\n\n请生成与之前不同的画面，变体：%s（seed %s）", a.ImageDescription, variants[vi], randomHex(8))
+					desc2 := fmt.Sprintf("%s\n\n请生成与之前不同的画面，第%d张：%s（seed %s）", a.ImageDescription, before+1, variants[vi], randomHex(8))
 					payload := h.client.chatPayload(imSpec, "Image Generation: "+desc2, true, need)
 					resp2, err2 := h.client.doChat(context.Background(), token, payload)
 					if err2 != nil {
@@ -1208,13 +1213,18 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 						urls = cur
 						break
 					}
+					// Upstream may ignore large imageGenerationCount and keep returning only 2 images.
+					// To reach arbitrary N, request 1 image per call with a distinct variant prompt.
+					if need > 1 {
+						need = 1
+					}
 					before := len(cur)
 					variants := []string{"安福路白天", "外滩夜景", "南京路人潮", "法租界梧桐", "弄堂市井", "地铁口"}
 					vi := 0
 					if before > 0 {
-						vi = (before / 2) % len(variants)
+						vi = before % len(variants)
 					}
-					desc2 := fmt.Sprintf("%s\n\n请生成与之前不同的画面，变体：%s（seed %s）", a.ImageDescription, variants[vi], randomHex(8))
+					desc2 := fmt.Sprintf("%s\n\n请生成与之前不同的画面，第%d张：%s（seed %s）", a.ImageDescription, before+1, variants[vi], randomHex(8))
 					payload := h.client.chatPayload(imSpec, "Image Generation: "+desc2, true, need)
 					resp2, err2 := h.client.doChat(context.Background(), token, payload)
 					if err2 != nil {
