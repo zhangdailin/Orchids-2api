@@ -514,6 +514,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				h.replyChatImagesOnly(w, req.Model, imgs, req.Stream)
 				return
 			}
+			// Prefer images/generations even on failure: do NOT fall back to Grok chat.
+			http.Error(w, "no image generated", http.StatusBadGateway)
+			return
 		}
 	}
 
