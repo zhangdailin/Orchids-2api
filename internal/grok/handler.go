@@ -395,6 +395,22 @@ type streamMarkupFilter struct {
 	inRender bool
 }
 
+func (f *streamMarkupFilter) flush() string {
+	if f == nil {
+		return ""
+	}
+	if f.inTool || f.inRender {
+		// Can't safely flush while inside suppressed markup.
+		return ""
+	}
+	if strings.TrimSpace(f.pending) == "" {
+		return ""
+	}
+	out := stripLeadingAngleNoise(sanitizeText(stripToolAndRenderMarkup(validUTF8Prefix(f.pending))))
+	f.pending = ""
+	return out
+}
+
 func validUTF8Prefix(s string) string {
 	if s == "" || utf8.ValidString(s) {
 		return s
@@ -631,6 +647,13 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			return
 		}
 		emitChunk(map[string]interface{}{"content": "\n[上游响应解析失败]\n"}, nil)
+	}
+
+	// Flush any remaining buffered text (avoids "no content" when stream ends quickly).
+	if mf != nil {
+		if tail := mf.flush(); tail != "" {
+			emitChunk(map[string]interface{}{"content": tail}, nil)
+		}
 	}
 
 	// If Grok emitted search_images tool cards, generate equivalent images and append as Markdown.
