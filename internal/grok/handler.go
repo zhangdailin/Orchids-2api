@@ -1458,16 +1458,25 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	callsNeeded := (req.N + 1) / 2
-	if callsNeeded < 1 {
-		callsNeeded = 1
-	}
-
 	var urls []string
 	var debugHTTP []string
 	var debugAsset []string
-	for i := 0; i < callsNeeded; i++ {
-		resp, err := h.client.doChat(r.Context(), token, onePayload)
+
+	// Grok upstream may return only 2 images per call and may repeat. To reliably reach N,
+	// we request 1 image per call with a varied prompt and stop when no new URLs appear.
+	maxAttempts := req.N * 3
+	if maxAttempts < 3 {
+		maxAttempts = 3
+	}
+	for i := 0; i < maxAttempts; i++ {
+		cur := normalizeImageURLs(urls, 0)
+		if len(cur) >= req.N {
+			urls = cur
+			break
+		}
+		prompt2 := fmt.Sprintf("%s\n\n[variant %d seed %s]", req.Prompt, i+1, randomHex(4))
+		payload := h.client.chatPayload(spec, "Image Generation: "+prompt2, true, 1)
+		resp, err := h.client.doChat(r.Context(), token, payload)
 		if err != nil {
 			h.markAccountStatus(r.Context(), acc, err)
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1480,6 +1489,7 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 				debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 50)...)
 				debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 100)...)
 			}
+			urls = append(urls, extractImageURLs(line)...)
 			debugHTTP = append(debugHTTP, collectHTTPStrings(line, 50)...)
 			debugAsset = append(debugAsset, collectAssetLikeStrings(line, 100)...)
 			return nil
@@ -1489,6 +1499,12 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 			http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
 			return
 		}
+		next := normalizeImageURLs(urls, 0)
+		if len(next) <= len(cur) {
+			urls = next
+			break
+		}
+		urls = next
 	}
 
 	urls = normalizeImageURLs(urls, req.N)
