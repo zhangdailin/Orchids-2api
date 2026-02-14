@@ -1065,8 +1065,16 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					out.WriteString(")\n")
 				}
 				emitChunk(map[string]interface{}{"content": out.String()}, nil)
-			} else if reason == "rate-limited" {
-				emitChunk(map[string]interface{}{"content": "\n[上游图片生成被限流(429)。请改用 /grok/v1/images/generations 生成图片] \n"}, nil)
+			} else {
+				// No images generated.
+				switch reason {
+				case "rate-limited":
+					emitChunk(map[string]interface{}{"content": "\n[上游图片生成被限流(429)。请改用 /grok/v1/images/generations 生成图片]\n"}, nil)
+				case "timeout":
+					emitChunk(map[string]interface{}{"content": "\n[图片生成超时。请改用 /grok/v1/images/generations 生成图片]\n"}, nil)
+				default:
+					emitChunk(map[string]interface{}{"content": "\n[图片生成失败。请改用 /grok/v1/images/generations 生成图片]\n"}, nil)
+				}
 			}
 		}
 	}
@@ -1168,8 +1176,15 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 						}
 						finalContent += formatImageMarkdown(val)
 					}
-				} else if reason == "rate-limited" {
-					finalContent += "\n\n[上游图片生成被限流(429)。请改用 /grok/v1/images/generations 生成图片]\n"
+				} else {
+					switch reason {
+					case "rate-limited":
+						finalContent += "\n\n[上游图片生成被限流(429)。请改用 /grok/v1/images/generations 生成图片]\n"
+					case "timeout":
+						finalContent += "\n\n[图片生成超时。请改用 /grok/v1/images/generations 生成图片]\n"
+					default:
+						finalContent += "\n\n[图片生成失败。请改用 /grok/v1/images/generations 生成图片]\n"
+					}
 				}
 			}
 		}

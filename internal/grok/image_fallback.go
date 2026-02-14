@@ -44,6 +44,10 @@ func (h *Handler) generateImagesFallback(ctx context.Context, token string, prom
 		v := variants[i%len(variants)]
 		prompt2 := fmt.Sprintf("%s\n\n请生成与之前不同的一张图片：%s。要求不同人物/不同构图/不同光线。（seed %s #%d）", prompt, v, randomHex(4), i+1)
 		payload := h.client.chatPayload(spec, "Image Generation: "+strings.TrimSpace(prompt2), true, 1)
+		if err := ctx.Err(); err != nil {
+			lastErr = err.Error()
+			break
+		}
 		resp, err := h.client.doChat(ctx, token, payload)
 		if err != nil {
 			lastErr = err.Error()
@@ -63,6 +67,9 @@ func (h *Handler) generateImagesFallback(ctx context.Context, token string, prom
 	urls = normalizeImageURLs(urls, n)
 	if len(urls) == 0 && strings.Contains(lastErr, "status=429") {
 		return nil, "rate-limited"
+	}
+	if len(urls) == 0 && strings.Contains(strings.ToLower(lastErr), "context deadline") {
+		return nil, "timeout"
 	}
 	if len(urls) == 0 && lastErr != "" {
 		return nil, "upstream-error"
