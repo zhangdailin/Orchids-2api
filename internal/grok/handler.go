@@ -5,8 +5,13 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"mime"
@@ -1300,14 +1305,40 @@ func mediaExtFromMime(mediaType, mimeType, rawURL string) string {
 	return ".jpg"
 }
 
+func imageDimsFromBytes(data []byte) (int, int) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
 func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType string) (string, error) {
 	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
 	if mediaType != "video" {
 		mediaType = "image"
 	}
+	trimURL := strings.TrimSpace(rawURL)
+	lurl := strings.ToLower(trimURL)
+	// Never cache known low-res thumbnail hosts; they lead to blurry results.
+	if mediaType == "image" && strings.Contains(lurl, "encrypted-tbn0.gstatic.com") {
+		return "", fmt.Errorf("skip thumbnail url")
+	}
+
 	data, mimeType, err := h.client.downloadAsset(ctx, token, rawURL)
 	if err != nil {
 		return "", err
+	}
+	// Heuristic: avoid caching tiny/low-res images (often thumbnails/previews).
+	if mediaType == "image" {
+		w, hgt := imageDimsFromBytes(data)
+		if (w > 0 && hgt > 0 && (w < 900 || hgt < 900)) || len(data) < 60*1024 {
+			slog.Debug("skip caching low-res image", "url", trimURL, "bytes", len(data), "w", w, "h", hgt)
+			return "", fmt.Errorf("skip low-res image")
+		}
 	}
 	return h.cacheMediaBytes(rawURL, mediaType, data, mimeType)
 }
