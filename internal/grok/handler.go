@@ -1048,7 +1048,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			emitChunk(map[string]interface{}{"content": "\n[正在生成图片...]\n"}, nil)
 			ctx2, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			defer cancel()
-			imgs := h.generateImagesFallback(ctx2, token, desc, n)
+			imgs, reason := h.generateImagesFallback(ctx2, token, desc, n)
 			if len(imgs) > 0 {
 				var out strings.Builder
 				out.WriteString("\n\n")
@@ -1065,6 +1065,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					out.WriteString(")\n")
 				}
 				emitChunk(map[string]interface{}{"content": out.String()}, nil)
+			} else if reason == "rate-limited" {
+				emitChunk(map[string]interface{}{"content": "\n[上游图片生成被限流(429)。请改用 /grok/v1/images/generations 生成图片] \n"}, nil)
 			}
 		}
 	}
@@ -1154,7 +1156,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 			if n > 0 && len(imgs) < n {
 				ctx2, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 				defer cancel()
-				gen := h.generateImagesFallback(ctx2, token, desc, n)
+				gen, reason := h.generateImagesFallback(ctx2, token, desc, n)
 				if len(gen) > 0 {
 					for _, u := range gen {
 						val, errV := h.imageOutputValue(context.Background(), token, u, "url")
@@ -1166,6 +1168,8 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 						}
 						finalContent += formatImageMarkdown(val)
 					}
+				} else if reason == "rate-limited" {
+					finalContent += "\n\n[上游图片生成被限流(429)。请改用 /grok/v1/images/generations 生成图片]\n"
 				}
 			}
 		}

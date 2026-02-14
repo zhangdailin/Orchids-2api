@@ -9,10 +9,10 @@ import (
 
 // generateImagesFallback calls Grok image generation (grok-imagine-1.0) to produce image URLs.
 // This is used ONLY as a fallback when chat did not return any extractable image links.
-func (h *Handler) generateImagesFallback(ctx context.Context, token string, prompt string, n int) []string {
+func (h *Handler) generateImagesFallback(ctx context.Context, token string, prompt string, n int) ([]string, string) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
-		return nil
+		return nil, "empty-prompt"
 	}
 	if n <= 0 {
 		n = 1
@@ -20,7 +20,7 @@ func (h *Handler) generateImagesFallback(ctx context.Context, token string, prom
 
 	spec, ok := ResolveModel("grok-imagine-1.0")
 	if !ok {
-		return nil
+		return nil, "model-not-found"
 	}
 
 	var urls []string
@@ -30,6 +30,7 @@ func (h *Handler) generateImagesFallback(ctx context.Context, token string, prom
 	}
 	deadline := time.Now().Add(60 * time.Second)
 	variants := []string{"安福路白天街拍", "外滩夜景街拍", "南京路人潮街拍", "法租界梧桐街拍", "弄堂市井街拍", "陆家嘴现代街拍", "地铁口街拍", "雨天街拍"}
+	lastErr := ""
 
 	for i := 0; i < maxAttempts; i++ {
 		if time.Now().After(deadline) {
@@ -45,6 +46,7 @@ func (h *Handler) generateImagesFallback(ctx context.Context, token string, prom
 		payload := h.client.chatPayload(spec, "Image Generation: "+strings.TrimSpace(prompt2), true, 1)
 		resp, err := h.client.doChat(ctx, token, payload)
 		if err != nil {
+			lastErr = err.Error()
 			break
 		}
 		_ = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
@@ -59,5 +61,14 @@ func (h *Handler) generateImagesFallback(ctx context.Context, token string, prom
 	}
 
 	urls = normalizeImageURLs(urls, n)
-	return urls
+	if len(urls) == 0 && strings.Contains(lastErr, "status=429") {
+		return nil, "rate-limited"
+	}
+	if len(urls) == 0 && lastErr != "" {
+		return nil, "upstream-error"
+	}
+	if len(urls) == 0 {
+		return nil, "no-urls"
+	}
+	return urls, "ok"
 }
