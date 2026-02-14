@@ -1507,12 +1507,41 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	}
 	release := h.trackAccount(acc)
 	defer release()
+	switched := false
+
+	doChatWithSwitch := func(payload map[string]interface{}) (*http.Response, error) {
+		resp, err := h.client.doChat(r.Context(), token, payload)
+		if err == nil {
+			return resp, nil
+		}
+		status := classifyAccountStatusFromError(err.Error())
+		h.markAccountStatus(r.Context(), acc, err)
+		if !switched && (status == "403" || status == "429") {
+			switched = true
+			// switch account once
+			release()
+			var err2 error
+			acc, token, err2 = h.selectAccount(r.Context())
+			if err2 != nil {
+				return nil, err
+			}
+			release = h.trackAccount(acc)
+			resp2, err3 := h.client.doChat(r.Context(), token, payload)
+			if err3 == nil {
+				return resp2, nil
+			}
+			status2 := classifyAccountStatusFromError(err3.Error())
+			h.markAccountStatus(r.Context(), acc, err3)
+			_ = status2
+			return nil, err3
+		}
+		return nil, err
+	}
 
 	onePayload := h.client.chatPayload(spec, "Image Generation: "+req.Prompt, true, req.N)
 	if req.Stream {
-		resp, err := h.client.doChat(r.Context(), token, onePayload)
+		resp, err := doChatWithSwitch(onePayload)
 		if err != nil {
-			h.markAccountStatus(r.Context(), acc, err)
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -1551,9 +1580,8 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 		v := variants[i%len(variants)]
 		prompt2 := fmt.Sprintf("%s\n\n请生成与之前不同的一张图片：%s。要求不同人物/不同构图/不同光线。（seed %s #%d）", req.Prompt, v, randomHex(4), i+1)
 		payload := h.client.chatPayload(spec, "Image Generation: "+strings.TrimSpace(prompt2), true, 1)
-		resp, err := h.client.doChat(r.Context(), token, payload)
+		resp, err := doChatWithSwitch(payload)
 		if err != nil {
-			h.markAccountStatus(r.Context(), acc, err)
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
