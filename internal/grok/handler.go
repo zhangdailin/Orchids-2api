@@ -49,6 +49,7 @@ func formatImageMarkdown(u string) string {
 }
 
 var reImageURLInText = regexp.MustCompile(`https?://[^\s"')>]+\.(?:png|jpe?g|webp|gif)(?:\?[^\s"')>]*)?`)
+var reGrokAssetPathInText = regexp.MustCompile(`(?i)(?:^|[^\w/])((?:users|user)/[a-z0-9-]+/generated/[a-z0-9-]+(?:-part-0)?/image\.(?:png|jpe?g|webp|gif))`)
 
 func extractImageURLsFromText(s string) []string {
 	s = strings.TrimSpace(s)
@@ -60,6 +61,24 @@ func extractImageURLsFromText(s string) []string {
 		return nil
 	}
 	return uniqueStrings(m)
+}
+
+func extractGrokAssetPathsFromText(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	ms := reGrokAssetPathInText.FindAllStringSubmatch(s, -1)
+	if len(ms) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		if len(m) == 2 {
+			out = append(out, m[1])
+		}
+	}
+	return uniqueStrings(out)
 }
 
 type scoredURL struct {
@@ -970,6 +989,15 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		}
 		// Fall back to preview.
 		emitImageURL(part)
+	}
+
+	// Final pass: scan accumulated raw text for any image URLs / asset paths that were only present
+	// inside tool/render markup and might not have been captured by structured parsers.
+	for _, u := range extractImageURLsFromText(rawAll.String()) {
+		emitImageURL(u)
+	}
+	for _, p := range extractGrokAssetPathsFromText(rawAll.String()) {
+		emitImageURL("https://assets.grok.com/" + strings.TrimPrefix(p, "/"))
 	}
 
 	// NOTE: We intentionally do NOT call grok-imagine as a fallback.
