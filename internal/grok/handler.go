@@ -1036,8 +1036,35 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		emitImageURL("https://assets.grok.com/" + strings.TrimPrefix(p, "/"))
 	}
 
-	// NOTE: We intentionally do NOT call grok-imagine as a fallback.
-	// Contract: Only emit image links that Grok actually returned (parsed from cards/urls).
+	// Fallback (restore grok2api-style behavior): if the user asked for images but Grok chat did not
+	// return any extractable image links, call grok-imagine to generate images.
+	if !hasAttachments {
+		desc := strings.TrimSpace(userPrompt)
+		ld := strings.ToLower(desc)
+		neg := strings.Contains(desc, "不要图片") || strings.Contains(desc, "不需要图片") || strings.Contains(desc, "别发图片") || strings.Contains(desc, "不要照片") || strings.Contains(desc, "不需要照片") || strings.Contains(desc, "别发照片")
+		looksLikeImageReq := !neg && desc != "" && (strings.Contains(desc, "图片") || strings.Contains(desc, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture"))
+		if looksLikeImageReq && len(emitted) == 0 {
+			n := inferRequestedImageCount(desc, 2)
+			imgs := h.generateImagesFallback(context.Background(), token, desc, n)
+			if len(imgs) > 0 {
+				var out strings.Builder
+				out.WriteString("\n\n")
+				for _, u := range imgs {
+					val, errV := h.imageOutputValue(context.Background(), token, u, "url")
+					if errV != nil || strings.TrimSpace(val) == "" {
+						val = u
+					}
+					if publicBase != "" && strings.HasPrefix(val, "/") {
+						val = publicBase + val
+					}
+					out.WriteString("![](")
+					out.WriteString(val)
+					out.WriteString(")\n")
+				}
+				emitChunk(map[string]interface{}{"content": out.String()}, nil)
+			}
+		}
+	}
 
 	emitChunk(map[string]interface{}{}, "stop")
 	writeSSE(w, "", "[DONE]")
@@ -1110,8 +1137,34 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 		}
 		finalContent += formatImageMarkdown(val)
 	}
-	// NOTE: We intentionally do NOT call grok-imagine as a fallback.
-	// Contract: Only emit image links that Grok actually returned (parsed from cards/urls).
+	// Fallback: if the user asked for images but Grok chat did not return any extractable image links,
+	// call grok-imagine to generate images.
+	// This matches common grok2api behavior for OpenAI clients.
+	if !hasAttachments {
+		desc := strings.TrimSpace(userPrompt)
+		ld := strings.ToLower(desc)
+		neg := strings.Contains(desc, "不要图片") || strings.Contains(desc, "不需要图片") || strings.Contains(desc, "别发图片") || strings.Contains(desc, "不要照片") || strings.Contains(desc, "不需要照片") || strings.Contains(desc, "别发照片")
+		looksLikeImageReq := !neg && desc != "" && (strings.Contains(desc, "图片") || strings.Contains(desc, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture"))
+		if looksLikeImageReq {
+			// If Grok didn't provide links, generate.
+			n := inferRequestedImageCount(desc, 2)
+			if n > 0 && len(imgs) < n {
+				gen := h.generateImagesFallback(context.Background(), token, desc, n)
+				if len(gen) > 0 {
+					for _, u := range gen {
+						val, errV := h.imageOutputValue(context.Background(), token, u, "url")
+						if errV != nil || strings.TrimSpace(val) == "" {
+							val = u
+						}
+						if publicBase != "" && strings.HasPrefix(val, "/") {
+							val = publicBase + val
+						}
+						finalContent += formatImageMarkdown(val)
+					}
+				}
+			}
+		}
+	}
 
 	resp := map[string]interface{}{
 		"id":      id,
