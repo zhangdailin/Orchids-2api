@@ -732,6 +732,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		if len(args) == 0 && strings.Contains(rawText, "tool_usage_card") && looksLikeImageReq {
 			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
 		}
+		// 5) If the user clearly asked for images but Grok returned no usable image URLs/cards,
+		// just generate images from the user prompt (Cherry Studio compatibility).
+		if len(args) == 0 && looksLikeImageReq {
+			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+		}
 	}
 	if len(args) > 0 {
 		imSpec, ok := ResolveModel("grok-imagine-1.0")
@@ -906,6 +911,9 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
 		}
 		if len(args) == 0 && strings.Contains(finalContent, "tool_usage_card") && looksLikeImageReq {
+			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+		}
+		if len(args) == 0 && looksLikeImageReq {
 			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
 		}
 	}
