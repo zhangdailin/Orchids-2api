@@ -922,6 +922,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		}
 
 		val, errV := h.imageOutputValue(context.Background(), token, raw, "url")
+		if errV != nil {
+			if isLowResImageErr(errV) {
+				return
+			}
+		}
 		if errV != nil || strings.TrimSpace(val) == "" {
 			val = raw
 		}
@@ -1113,6 +1118,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				out.WriteString("\n\n")
 				for _, u := range imgs {
 					val, errV := h.imageOutputValue(context.Background(), token, u, "url")
+					if errV != nil {
+						if isLowResImageErr(errV) {
+							continue
+						}
+					}
 					if errV != nil || strings.TrimSpace(val) == "" {
 						val = u
 					}
@@ -1191,6 +1201,11 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	imgs := normalizeImageURLs(imageCandidates, 8)
 	for _, u := range imgs {
 		val, errV := h.imageOutputValue(context.Background(), token, u, "url")
+		if errV != nil {
+			if isLowResImageErr(errV) {
+				continue
+			}
+		}
 		if errV != nil || strings.TrimSpace(val) == "" {
 			val = u
 		}
@@ -1409,10 +1424,16 @@ func (h *Handler) imageOutputValue(ctx context.Context, token, url, format strin
 		if strings.Contains(trim, "-part-0/") {
 			full := strings.ReplaceAll(trim, "-part-0/", "/")
 			if name, err := h.cacheMediaURL(ctx, token, full, "image"); err == nil && name != "" {
+				if !h.cachedImageAcceptable(name) {
+					return "", fmt.Errorf("low-res cached image")
+				}
 				return "/grok/v1/files/image/" + name, nil
 			}
 		}
 		if name, err := h.cacheMediaURL(ctx, token, trim, "image"); err == nil && name != "" {
+			if !h.cachedImageAcceptable(name) {
+				return "", fmt.Errorf("low-res cached image")
+			}
 			return "/grok/v1/files/image/" + name, nil
 		}
 		return trim, nil
@@ -1422,6 +1443,47 @@ func (h *Handler) imageOutputValue(ctx context.Context, token, url, format strin
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(raw), nil
+}
+
+func isLowResCachedImage(sizeBytes int64, w int, hgt int) bool {
+	if sizeBytes > 0 && sizeBytes < 80*1024 {
+		return true
+	}
+	if w > 0 && hgt > 0 {
+		min := w
+		if hgt < min {
+			min = hgt
+		}
+		if min < 900 {
+			return true
+		}
+	}
+	return false
+}
+
+func isLowResImageErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "low-res")
+}
+
+func (h *Handler) cachedImageAcceptable(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	fullPath := filepath.Join(cacheBaseDir, "image", name)
+	info, err := os.Stat(fullPath)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	b, err := os.ReadFile(fullPath)
+	if err != nil {
+		return false
+	}
+	w, hgt := imageDimsFromBytes(b)
+	return !isLowResCachedImage(info.Size(), w, hgt)
 }
 
 func (h *Handler) cacheMediaBytes(rawURL, mediaType string, data []byte, mimeType string) (string, error) {
@@ -1690,6 +1752,9 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	for _, u := range urls {
 		val, err := h.imageOutputValue(r.Context(), token, u, req.ResponseFormat)
 		if err != nil {
+			if isLowResImageErr(err) {
+				continue
+			}
 			slog.Warn("grok image convert failed", "url", u, "error", err)
 			if field == "url" {
 				val = u
