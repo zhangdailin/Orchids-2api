@@ -1053,7 +1053,13 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			// to reliably obtain image URLs, then emit them as Markdown. Keep it silent on failure.
 			ctx2, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			imgs, _ := h.generateImagesFallback(ctx2, token, desc, n)
+			if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+				slog.Info("grok imagine fallback: start", "n", n)
+			}
+			imgs, reason := h.generateImagesFallback(ctx2, token, desc, n)
+			if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+				slog.Info("grok imagine fallback: done", "reason", reason, "count", len(imgs))
+			}
 			imgs = normalizeImageURLs(imgs, n)
 			if len(imgs) > 0 {
 				var out strings.Builder
@@ -1160,7 +1166,13 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 			if n > 0 && len(imgs) < n {
 				ctx2, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 				defer cancel()
-				gen, _ := h.generateImagesFallback(ctx2, token, desc, n)
+				if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+					slog.Info("grok imagine fallback(non-stream): start", "n", n)
+				}
+				gen, reason := h.generateImagesFallback(ctx2, token, desc, n)
+				if h.cfg != nil && h.cfg.GrokDebugImageFallback {
+					slog.Info("grok imagine fallback(non-stream): done", "reason", reason, "count", len(gen))
+				}
 				if len(gen) > 0 {
 					for _, u := range gen {
 						val, errV := h.imageOutputValue(context.Background(), token, u, "url")
