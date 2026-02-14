@@ -1331,13 +1331,9 @@ func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType st
 	// Heuristic: avoid caching tiny/low-res images (often thumbnails/previews).
 	if mediaType == "image" {
 		w, hgt := imageDimsFromBytes(data)
-		// For assets.grok.com, caching is required for display, but we should still avoid
-		// caching obvious preview images (e.g. -part-0) that are extremely compressed.
+		// For assets.grok.com, caching is required for display (clients may not reach grok CDN).
 		if forceCache {
-			if strings.Contains(lurl, "-part-0/") && len(data) < 80*1024 {
-				slog.Debug("skip caching low-res grok preview image", "url", trimURL, "bytes", len(data), "w", w, "h", hgt)
-				return "", fmt.Errorf("skip low-res grok preview image")
-			}
+			// Always cache (even previews). We already avoid emitting -part-0 when full exists.
 		} else {
 			if (w > 0 && hgt > 0 && (w < 900 || hgt < 900)) || len(data) < 60*1024 {
 				slog.Debug("skip caching low-res image", "url", trimURL, "bytes", len(data), "w", w, "h", hgt)
