@@ -32,6 +32,15 @@ func sanitizeText(s string) string {
 	return s
 }
 
+func formatImageMarkdown(u string) string {
+	u = strings.TrimSpace(u)
+	if u == "" {
+		return ""
+	}
+	// Blank lines around images improve rendering in some clients.
+	return "\n\n![](" + u + ")\n\n"
+}
+
 func stripLeadingAngleNoise(s string) string {
 	// Remove obvious leftover fragments like "<<<" produced by suppressed markup.
 	// More robust than line-start only: strip runs of '<' (len>=3) that appear at
@@ -642,16 +651,22 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				}
 			}
 			for _, u := range extractImageURLs(mr) {
-				emitChunk(map[string]interface{}{"content": "\n![](" + u + ")"}, nil)
+				if md := formatImageMarkdown(u); md != "" {
+					emitChunk(map[string]interface{}{"content": md}, nil)
+				}
 			}
 			// Fallback: tool/card payloads may include image URLs outside of the known keys.
 			for _, u := range extractRenderableImageLinks(mr) {
-				emitChunk(map[string]interface{}{"content": "\n![](" + u + ")"}, nil)
+				if md := formatImageMarkdown(u); md != "" {
+					emitChunk(map[string]interface{}{"content": md}, nil)
+				}
 			}
 		}
 		// Broader fallback: sometimes URLs live outside modelResponse.
 		for _, u := range extractRenderableImageLinks(resp) {
-			emitChunk(map[string]interface{}{"content": "\n![](" + u + ")"}, nil)
+			if md := formatImageMarkdown(u); md != "" {
+				emitChunk(map[string]interface{}{"content": md}, nil)
+			}
 		}
 		if spec.IsVideo {
 			if progress, videoURL, _, ok := extractVideoProgress(resp); ok {
@@ -820,14 +835,20 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 				}
 			}
 			for _, u := range extractImageURLs(mr) {
-				content.WriteString("\n![](" + u + ")")
+				if md := formatImageMarkdown(u); md != "" {
+					content.WriteString(md)
+				}
 			}
 			for _, u := range extractRenderableImageLinks(mr) {
-				content.WriteString("\n![](" + u + ")")
+				if md := formatImageMarkdown(u); md != "" {
+					content.WriteString(md)
+				}
 			}
 		}
 		for _, u := range extractRenderableImageLinks(resp) {
-			content.WriteString("\n![](" + u + ")")
+			if md := formatImageMarkdown(u); md != "" {
+				content.WriteString(md)
+			}
 		}
 		if spec.IsVideo {
 			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 && strings.TrimSpace(vurl) != "" {
