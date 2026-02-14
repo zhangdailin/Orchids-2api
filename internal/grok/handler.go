@@ -106,6 +106,65 @@ func normalizeImageURLs(urls []string, n int) []string {
 	return urls
 }
 
+func appendImageCandidates(urls []string, debugHTTP []string, debugAsset []string, n int) []string {
+	if n <= 0 {
+		n = 4
+	}
+	if len(urls) > 0 {
+		return urls
+	}
+	// 1) Prefer direct image URLs from observed http strings.
+	for _, u := range debugHTTP {
+		if isLikelyImageURL(u) {
+			urls = append(urls, u)
+			if len(urls) >= n {
+				break
+			}
+		}
+	}
+	urls = normalizeImageURLs(urls, n)
+	if len(urls) > 0 {
+		return urls
+	}
+
+	// 2) Parse JSON card strings from debugAsset to extract preferred image URLs.
+	for _, p := range debugAsset {
+		p = strings.TrimSpace(p)
+		if p == "" || strings.Contains(p, "grok-3") || strings.Contains(p, "grok-4") {
+			continue
+		}
+		if strings.HasPrefix(p, "{") {
+			preferred := extractPreferredImageURLsFromJSONText(p)
+			if len(preferred) == 0 {
+				preferred = extractImageURLsFromText(p)
+			}
+			for _, u := range preferred {
+				if isLikelyImageURL(u) {
+					urls = append(urls, u)
+					if len(urls) >= n {
+						break
+					}
+				}
+			}
+			urls = normalizeImageURLs(urls, n)
+			if len(urls) > 0 {
+				return urls
+			}
+			continue
+		}
+		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+			urls = append(urls, p)
+		} else if isLikelyImageAssetPath(p) {
+			urls = append(urls, "https://assets.grok.com/"+strings.TrimPrefix(p, "/"))
+		}
+		urls = normalizeImageURLs(urls, n)
+		if len(urls) > 0 {
+			return urls
+		}
+	}
+	return urls
+}
+
 func extractPreferredImageURLsFromJSONText(s string) []string {
 	s = strings.TrimSpace(s)
 	if s == "" || !strings.HasPrefix(s, "{") {
@@ -958,64 +1017,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					}
 				}
 				urls = normalizeImageURLs(urls, n)
-				// If we got no renderable image URLs from the primary parsers, try to salvage
-				// direct image URLs from observed http strings (e.g. image_card.original fields).
-				if len(urls) == 0 && len(debugHTTP) > 0 {
-					for _, u := range debugHTTP {
-						if isLikelyImageURL(u) {
-							urls = append(urls, u)
-							if len(urls) >= n {
-								break
-							}
-						}
-					}
-					urls = uniqueStrings(urls)
-					if len(urls) > n {
-						urls = urls[:n]
-					}
-				}
-				// If imagine still didn't return usable URLs, we sometimes still get assets.grok.com paths.
-				// Only accept strings that look like actual image asset paths; otherwise we risk
-				// turning echoed prompts / JSON cards into bogus URLs.
-				if len(urls) == 0 {
-					if len(debugAsset) > 0 {
-						for _, p := range debugAsset {
-							p = strings.TrimSpace(p)
-							if p == "" || strings.Contains(p, "grok-3") || strings.Contains(p, "grok-4") {
-								continue
-							}
-							// Some image_card payloads appear as JSON strings in debugAsset.
-							if strings.HasPrefix(p, "{") {
-								preferred := extractPreferredImageURLsFromJSONText(p)
-								if len(preferred) == 0 {
-									preferred = extractImageURLsFromText(p)
-								}
-								for _, u := range preferred {
-									if isLikelyImageURL(u) {
-										urls = append(urls, u)
-										if len(urls) >= n {
-											break
-										}
-									}
-								}
-								if len(urls) >= n {
-									break
-								}
-								continue
-							}
-							if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
-								urls = append(urls, p)
-							} else if isLikelyImageAssetPath(p) {
-								urls = append(urls, "https://assets.grok.com/"+strings.TrimPrefix(p, "/"))
-							} else {
-								continue
-							}
-							if len(urls) >= n {
-								break
-							}
-						}
-					}
-				}
+				urls = appendImageCandidates(urls, debugHTTP, debugAsset, n)
 				if len(urls) == 0 {
 					emitChunk(map[string]interface{}{"content": "\n[图片生成未返回可用链接]\n"}, nil)
 				}
