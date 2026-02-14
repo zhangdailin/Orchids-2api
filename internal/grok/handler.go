@@ -563,8 +563,12 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			rawAll.WriteString(tokenDelta)
 			sawToken = true
 			if mf == nil {
-				// Vision Q/A path: avoid aggressive streaming filters that can corrupt text.
-				emitChunk(map[string]interface{}{"content": tokenDelta}, nil)
+				// Vision Q/A path: keep text intact but strip full tool/render blocks when present.
+				cleaned := stripToolAndRenderMarkup(tokenDelta)
+				cleaned = stripLeadingAngleNoise(sanitizeText(cleaned))
+				if cleaned != "" {
+					emitChunk(map[string]interface{}{"content": cleaned}, nil)
+				}
 			} else {
 				if cleaned := mf.feed(tokenDelta); cleaned != "" {
 					emitChunk(map[string]interface{}{"content": cleaned}, nil)
@@ -577,7 +581,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				rawAll.WriteString(msg)
 				if !sawToken {
 					if mf == nil {
-						emitChunk(map[string]interface{}{"content": msg}, nil)
+						cleaned := stripToolAndRenderMarkup(msg)
+						cleaned = stripLeadingAngleNoise(sanitizeText(cleaned))
+						if cleaned != "" {
+							emitChunk(map[string]interface{}{"content": cleaned}, nil)
+						}
 					} else {
 						if cleaned := mf.feed(msg); cleaned != "" {
 							emitChunk(map[string]interface{}{"content": cleaned}, nil)
