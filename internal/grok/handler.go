@@ -1016,11 +1016,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 						break
 					}
 					before := len(cur)
-					attempt := before
-					desc2 := a.ImageDescription
-					if attempt > 0 {
-						desc2 = fmt.Sprintf("%s\n\n[variant %d: generate a different image than previous outputs]", desc2, attempt)
-					}
+					_ = before
+					desc2 := fmt.Sprintf("%s\n\n[seed %s: generate a different image than previous outputs]", a.ImageDescription, randomHex(8))
 					payload := h.client.chatPayload(imSpec, "Image Generation: "+desc2, true, need)
 					resp2, err2 := h.client.doChat(context.Background(), token, payload)
 					if err2 != nil {
@@ -1208,11 +1205,8 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 						break
 					}
 					before := len(cur)
-					attempt := before
-					desc2 := a.ImageDescription
-					if attempt > 0 {
-						desc2 = fmt.Sprintf("%s\n\n[variant %d: generate a different image than previous outputs]", desc2, attempt)
-					}
+					_ = before
+					desc2 := fmt.Sprintf("%s\n\n[seed %s: generate a different image than previous outputs]", a.ImageDescription, randomHex(8))
 					payload := h.client.chatPayload(imSpec, "Image Generation: "+desc2, true, need)
 					resp2, err2 := h.client.doChat(context.Background(), token, payload)
 					if err2 != nil {
