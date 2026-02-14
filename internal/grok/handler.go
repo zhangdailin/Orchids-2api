@@ -981,7 +981,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	if !hasAttachments {
 		desc := strings.TrimSpace(userPrompt)
 		ld := strings.ToLower(desc)
-		looksLikeImageReq := desc != "" && (strings.Contains(desc, "图片") || strings.Contains(desc, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture"))
+		neg := strings.Contains(desc, "不要图片") || strings.Contains(desc, "不需要图片") || strings.Contains(desc, "别发图片") || strings.Contains(desc, "不要照片") || strings.Contains(desc, "不需要照片") || strings.Contains(desc, "别发照片")
+		looksLikeImageReq := !neg && desc != "" && (strings.Contains(desc, "图片") || strings.Contains(desc, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture"))
 
 		// 1) If tool args exist, use them.
 		// 2) If we see search_images markup but args missing, fallback to user prompt.
@@ -1183,7 +1184,8 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	if !hasAttachments {
 		desc := strings.TrimSpace(userPrompt)
 		ld := strings.ToLower(desc)
-		looksLikeImageReq := desc != "" && (strings.Contains(desc, "图片") || strings.Contains(desc, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture"))
+		neg := strings.Contains(desc, "不要图片") || strings.Contains(desc, "不需要图片") || strings.Contains(desc, "别发图片") || strings.Contains(desc, "不要照片") || strings.Contains(desc, "不需要照片") || strings.Contains(desc, "别发照片")
+		looksLikeImageReq := !neg && desc != "" && (strings.Contains(desc, "图片") || strings.Contains(desc, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture"))
 		if len(args) == 0 && strings.Contains(finalContent, "search_images") && looksLikeImageReq {
 			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
 		}
