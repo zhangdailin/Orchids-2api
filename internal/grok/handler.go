@@ -1056,7 +1056,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 			if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 				slog.Info("grok imagine fallback: start", "n", n)
 			}
-			imgs, reason := h.generateImagesFallback(ctx2, token, desc, n)
+			imgs, reason := h.generateImagesViaImagesEndpoint(ctx2, desc, n)
 			if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 				slog.Info("grok imagine fallback: done", "reason", reason, "count", len(imgs))
 			}
@@ -1169,7 +1169,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 				if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 					slog.Info("grok imagine fallback(non-stream): start", "n", n)
 				}
-				gen, reason := h.generateImagesFallback(ctx2, token, desc, n)
+				gen, reason := h.generateImagesViaImagesEndpoint(ctx2, desc, n)
 				if h.cfg != nil && h.cfg.GrokDebugImageFallback {
 					slog.Info("grok imagine fallback(non-stream): done", "reason", reason, "count", len(gen))
 				}
