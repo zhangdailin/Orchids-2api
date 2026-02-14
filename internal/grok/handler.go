@@ -891,6 +891,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	}
 
 	finalContent := stripToolAndRenderMarkup(content.String())
+	finalContent = stripLeadingAngleNoise(sanitizeText(finalContent))
 	// If Grok returned search_images tool cards, run an equivalent image generation as a compatibility fallback.
 	// This makes OpenAI-compatible clients (e.g. Cherry Studio) able to display images.
 	args := parseSearchImagesArgsFromText(finalContent)
@@ -904,10 +905,13 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 		if len(args) == 0 && strings.Contains(finalContent, "grok:render") && looksLikeImageReq {
 			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
 		}
+		if len(args) == 0 && strings.Contains(finalContent, "tool_usage_card") && looksLikeImageReq {
+			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+		}
 	}
 	if len(args) > 0 {
 		cleaned := stripToolAndRenderMarkup(finalContent)
-		finalContent = cleaned
+		finalContent = stripLeadingAngleNoise(sanitizeText(cleaned))
 
 		imSpec, ok := ResolveModel("grok-imagine-1.0")
 		if ok {
