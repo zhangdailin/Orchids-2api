@@ -978,20 +978,20 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		// 1) If tool args exist, use them.
 		// 2) If we see search_images markup but args missing, fallback to user prompt.
 		if len(args) == 0 && strings.Contains(rawText, "search_images") && looksLikeImageReq {
-			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: inferRequestedImageCount(desc, 4)}}
 		}
 		// 3) If we see grok render image cards but no URLs, also fallback to user prompt.
 		if len(args) == 0 && strings.Contains(rawText, "grok:render") && looksLikeImageReq {
-			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: inferRequestedImageCount(desc, 4)}}
 		}
 		// 4) Some responses only include xai tool usage cards (no explicit search_images args).
 		if len(args) == 0 && strings.Contains(rawText, "tool_usage_card") && looksLikeImageReq {
-			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: inferRequestedImageCount(desc, 4)}}
 		}
 		// 5) If the user clearly asked for images but Grok returned no usable image URLs/cards,
 		// just generate images from the user prompt (Cherry Studio compatibility).
 		if len(args) == 0 && looksLikeImageReq {
-			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: 4}}
+			args = []SearchImagesArgs{{ImageDescription: desc, NumberOfImages: inferRequestedImageCount(desc, 4)}}
 		}
 	}
 	if len(args) > 0 {
@@ -1276,6 +1276,29 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+func inferRequestedImageCount(s string, def int) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def
+	}
+	// Common Chinese numerals.
+	s = strings.ReplaceAll(s, "两张", "2张")
+	s = strings.ReplaceAll(s, "二张", "2张")
+	s = strings.ReplaceAll(s, "俩张", "2张")
+	s = strings.ReplaceAll(s, "三张", "3张")
+	s = strings.ReplaceAll(s, "四张", "4张")
+	// ASCII digits.
+	for _, n := range []int{4, 3, 2, 1} {
+		if strings.Contains(s, fmt.Sprintf("%d张", n)) {
+			return n
+		}
+		if strings.Contains(strings.ToLower(s), fmt.Sprintf("%d images", n)) {
+			return n
+		}
+	}
+	return def
+}
+
 func normalizeImageResponseFormat(format string) string {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "b64_json", "base64":
@@ -1384,10 +1407,19 @@ func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType st
 
 func (h *Handler) imageOutputValue(ctx context.Context, token, url, format string) (string, error) {
 	if normalizeImageResponseFormat(format) == "url" {
-		if name, err := h.cacheMediaURL(ctx, token, url, "image"); err == nil && name != "" {
+		trim := strings.TrimSpace(url)
+		// Stable contract: prefer full over -part-0. If we only got a preview URL,
+		// try the full variant first.
+		if strings.Contains(trim, "-part-0/") {
+			full := strings.ReplaceAll(trim, "-part-0/", "/")
+			if name, err := h.cacheMediaURL(ctx, token, full, "image"); err == nil && name != "" {
+				return "/grok/v1/files/image/" + name, nil
+			}
+		}
+		if name, err := h.cacheMediaURL(ctx, token, trim, "image"); err == nil && name != "" {
 			return "/grok/v1/files/image/" + name, nil
 		}
-		return strings.TrimSpace(url), nil
+		return trim, nil
 	}
 	raw, _, err := h.client.downloadAsset(ctx, token, url)
 	if err != nil {
