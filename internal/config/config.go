@@ -62,12 +62,23 @@ type Config struct {
 	OrchidsMaxToolResults     int      `json:"orchids_max_tool_results"`
 	OrchidsMaxHistoryMessages int      `json:"orchids_max_history_messages"`
 	// grok2api parity: app.stream default behavior
-	Stream    *bool `json:"stream,omitempty"`
-	AppStream *bool `json:"app_stream,omitempty"`
+	Stream       *bool `json:"stream,omitempty"`
+	AppStream    *bool `json:"app_stream,omitempty"`
+	AppStreamDot *bool `json:"app.stream,omitempty"`
 	// grok2api parity: image.* public imagine config
-	ImageNSFW           *bool `json:"image_nsfw,omitempty"`
-	ImageFinalMinBytes  int   `json:"image_final_min_bytes"`
-	ImageMediumMinBytes int   `json:"image_medium_min_bytes"`
+	ImageNSFW              *bool `json:"image_nsfw,omitempty"`
+	ImageFinalMinBytes     int   `json:"image_final_min_bytes"`
+	ImageMediumMinBytes    int   `json:"image_medium_min_bytes"`
+	ImageNSFWDot           *bool `json:"image.nsfw,omitempty"`
+	ImageFinalMinBytesDot  int   `json:"image.final_min_bytes,omitempty"`
+	ImageMediumMinBytesDot int   `json:"image.medium_min_bytes,omitempty"`
+	// grok2api parity: public key / public enabled
+	PublicKey           string `json:"public_key,omitempty"`
+	PublicEnabled       *bool  `json:"public_enabled,omitempty"`
+	AppPublicKey        string `json:"app_public_key,omitempty"`
+	AppPublicEnabled    *bool  `json:"app_public_enabled,omitempty"`
+	AppPublicKeyDot     string `json:"app.public_key,omitempty"`
+	AppPublicEnabledDot *bool  `json:"app.public_enabled,omitempty"`
 
 	// New fields for UI
 	AdminToken           string `json:"admin_token"`
@@ -301,6 +312,9 @@ func (c *Config) ChatDefaultStream() bool {
 	if c == nil {
 		return true
 	}
+	if c.AppStreamDot != nil {
+		return *c.AppStreamDot
+	}
 	if c.AppStream != nil {
 		return *c.AppStream
 	}
@@ -314,6 +328,9 @@ func (c *Config) PublicImagineNSFW() bool {
 	if c == nil {
 		return true
 	}
+	if c.ImageNSFWDot != nil {
+		return *c.ImageNSFWDot
+	}
 	if c.ImageNSFW != nil {
 		return *c.ImageNSFW
 	}
@@ -321,17 +338,58 @@ func (c *Config) PublicImagineNSFW() bool {
 }
 
 func (c *Config) PublicImagineFinalMinBytes() int {
-	if c == nil || c.ImageFinalMinBytes <= 0 {
+	if c == nil {
+		return 100000
+	}
+	if c.ImageFinalMinBytesDot > 0 {
+		return c.ImageFinalMinBytesDot
+	}
+	if c.ImageFinalMinBytes <= 0 {
 		return 100000
 	}
 	return c.ImageFinalMinBytes
 }
 
 func (c *Config) PublicImagineMediumMinBytes() int {
-	if c == nil || c.ImageMediumMinBytes <= 0 {
+	if c == nil {
+		return 30000
+	}
+	if c.ImageMediumMinBytesDot > 0 {
+		return c.ImageMediumMinBytesDot
+	}
+	if c.ImageMediumMinBytes <= 0 {
 		return 30000
 	}
 	return c.ImageMediumMinBytes
+}
+
+func (c *Config) PublicAPIKey() string {
+	if c == nil {
+		return ""
+	}
+	if key := strings.TrimSpace(c.AppPublicKeyDot); key != "" {
+		return key
+	}
+	if key := strings.TrimSpace(c.AppPublicKey); key != "" {
+		return key
+	}
+	return strings.TrimSpace(c.PublicKey)
+}
+
+func (c *Config) PublicAPIEnabled() bool {
+	if c == nil {
+		return false
+	}
+	if c.AppPublicEnabledDot != nil {
+		return *c.AppPublicEnabledDot
+	}
+	if c.AppPublicEnabled != nil {
+		return *c.AppPublicEnabled
+	}
+	if c.PublicEnabled != nil {
+		return *c.PublicEnabled
+	}
+	return false
 }
 
 func (c *Config) Save(path string) error {

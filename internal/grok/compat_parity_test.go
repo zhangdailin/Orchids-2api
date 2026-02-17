@@ -192,6 +192,23 @@ func TestChatCompletionsRequest_StreamProvidedFlagAndDefault(t *testing.T) {
 	if req2.Stream != false {
 		t.Fatalf("explicit stream should not be overridden, got=%v", req2.Stream)
 	}
+
+	rawWithNullStream := []byte(`{
+		"model":"grok-3",
+		"messages":[{"role":"user","content":"hello"}],
+		"stream":null
+	}`)
+	var req3 ChatCompletionsRequest
+	if err := json.Unmarshal(rawWithNullStream, &req3); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if req3.StreamProvided {
+		t.Fatalf("stream=null should be treated as not provided")
+	}
+	h.applyDefaultChatStream(&req3)
+	if req3.Stream != true {
+		t.Fatalf("null stream should fallback to default true, got=%v", req3.Stream)
+	}
 }
 
 func TestApplyDefaultChatStream_AppStreamOverridesStream(t *testing.T) {

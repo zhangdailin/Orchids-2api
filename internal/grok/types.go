@@ -221,7 +221,13 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	}
 	var rawMap map[string]json.RawMessage
 	_ = json.Unmarshal(data, &rawMap)
-	_, streamProvided := rawMap["stream"]
+	streamRaw, streamProvided := rawMap["stream"]
+	if streamProvided {
+		s := strings.TrimSpace(string(streamRaw))
+		if s == "" || strings.EqualFold(s, "null") {
+			streamProvided = false
+		}
+	}
 	stream, err := parseLooseBoolAny(raw.Stream)
 	if err != nil {
 		return err

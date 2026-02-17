@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video Stream</title>
+  <link rel="stylesheet" href="/static/public/css/public.css">
+</head>
+<body>
+  <main class="page stack">
+    <header class="header">
+      <div>
+        <h1 class="title">Video Stream</h1>
+        <p class="subtitle">Start a public video task and inspect SSE output.</p>
+      </div>
+      <nav class="nav">
+        <a href="/login">Login</a>
+        <a href="/imagine">Imagine</a>
+        <a href="/voice">Voice</a>
+        <a href="/video">Video</a>
+      </nav>
+    </header>
+
+    <section class="card stack">
+      <div class="field">
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" placeholder="Describe the video"></textarea>
+      </div>
+      <div class="row">
+        <div class="field compact">
+          <label for="ratio">Aspect Ratio</label>
+          <select id="ratio">
+            <option value="3:2" selected>3:2</option>
+            <option value="16:9">16:9</option>
+            <option value="9:16">9:16</option>
+            <option value="2:3">2:3</option>
+            <option value="1:1">1:1</option>
+          </select>
+        </div>
+        <div class="field compact">
+          <label for="length">Length</label>
+          <select id="length">
+            <option value="6" selected>6</option>
+            <option value="10">10</option>
+            <option value="15">15</option>
+          </select>
+        </div>
+        <div class="field compact">
+          <label for="resolution">Resolution</label>
+          <select id="resolution">
+            <option value="480p" selected>480p</option>
+            <option value="720p">720p</option>
+          </select>
+        </div>
+        <div class="field compact">
+          <label for="preset">Preset</label>
+          <select id="preset">
+            <option value="normal" selected>normal</option>
+            <option value="fun">fun</option>
+            <option value="spicy">spicy</option>
+            <option value="custom">custom</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="imageUrl">Image URL (optional for image-to-video)</label>
+          <input id="imageUrl" type="text" placeholder="https://... or data:image/...">
+        </div>
+        <div class="field compact">
+          <label for="effort">Reasoning Effort</label>
+          <select id="effort">
+            <option value="" selected>(none)</option>
+            <option value="none">none</option>
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <button id="startBtn" class="btn" type="button">Start</button>
+        <button id="stopBtn" class="btn danger" type="button">Stop</button>
+      </div>
+      <div id="status" class="status"></div>
+    </section>
+
+    <section class="card stack">
+      <div class="video-wrap">
+        <video id="videoOutput" controls></video>
+      </div>
+      <a id="videoLink" class="mono" target="_blank" rel="noopener"></a>
+      <pre id="logOutput" class="log"></pre>
+    </section>
+  </main>
+
+  <script src="/static/public/js/common.js"></script>
+  <script src="/static/public/js/video.js"></script>
+</body>
+</html>

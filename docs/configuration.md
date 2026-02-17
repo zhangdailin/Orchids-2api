@@ -106,6 +106,26 @@
 | `grok_asset_proxy_url` | 空 | Grok 资源代理 |
 | `grok_use_utls` | `false` | 是否启用 uTLS |
 
+### 3.4 Grok2API 兼容键
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `stream` | `true` | chat/completions 默认是否流式 |
+| `app_stream` | 空 | 覆盖 `stream` |
+| `app.stream` | 空 | 最高优先级覆盖 `app_stream/stream` |
+| `image_nsfw` | `true` | public imagine 默认 NSFW 开关 |
+| `image.nsfw` | 空 | 覆盖 `image_nsfw` |
+| `image_final_min_bytes` | `100000` | public imagine 最终图过滤阈值 |
+| `image.final_min_bytes` | 空 | 覆盖 `image_final_min_bytes` |
+| `image_medium_min_bytes` | `30000` | public imagine 中等图过滤阈值 |
+| `image.medium_min_bytes` | 空 | 覆盖 `image_medium_min_bytes` |
+| `public_key` | 空 | public API 鉴权 key；为空时不做 public API 鉴权 |
+| `app_public_key` | 空 | 覆盖 `public_key` |
+| `app.public_key` | 空 | 最高优先级覆盖 `app_public_key/public_key` |
+| `public_enabled` | `false` | 是否公开 `/login` `/imagine` `/voice` `/video` 页面（仅页面开关） |
+| `app_public_enabled` | 空 | 覆盖 `public_enabled` |
+| `app.public_enabled` | 空 | 最高优先级覆盖 `app_public_enabled/public_enabled` |
+
 ## 4. 代理配置
 
 | 字段 | 默认值 | 说明 |

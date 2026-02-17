@@ -113,6 +113,17 @@ Reference: `chenyme/grok2api` README + API behavior (`/v1/chat/completions`, `/v
   - `GET /v1/public/video/sse`
   - `POST /v1/public/video/stop`
 - [x] `public/video/start` default `preset` now aligns to `normal`
+- [x] Public auth semantics aligned to `public_key/public_enabled`:
+  - added config key compatibility: `public_key` / `app_public_key` / `app.public_key`
+  - added config key compatibility: `public_enabled` / `app_public_enabled` / `app.public_enabled`
+  - `verify` / `voice/token` / `imagine start|stop` / `video start|stop` now use public-key auth (not admin session auth)
+  - `imagine/config` and `video/sse` are no longer forced through admin/session auth
+  - `imagine/sse|ws` support query `public_key` auth with `task_id` bypass behavior
+  - project override: if `public_key` is empty, public API auth is disabled (no auth check)
+- [x] Added public web entry routes aligned to grok2api behavior:
+  - `/` redirects to `/login` when `public_enabled=true`, otherwise redirects to admin login
+  - `/login` `/imagine` `/voice` `/video` pages are exposed only when public is enabled
+  - static assets are available at `/static/public/*`
 
 ## Request Decoding Compatibility
 
@@ -130,7 +141,13 @@ Reference: `chenyme/grok2api` README + API behavior (`/v1/chat/completions`, `/v
 - [x] Added global default stream behavior aligned to grok2api `app.stream`:
   - config keys: `stream` (default true), optional override `app_stream`
   - applies when `chat/completions` request omits `stream`
+  - `stream: null` is treated as omitted (falls back to default)
   - explicit request `stream` always takes precedence
+- [x] Added dot-key compatibility for grok2api-style config payloads:
+  - `app.stream` (higher priority than `app_stream` / `stream`)
+  - `image.nsfw`
+  - `image.final_min_bytes`
+  - `image.medium_min_bytes`
 
 ## Remaining Gaps (Intentional / Deferred)
 

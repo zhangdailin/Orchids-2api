@@ -202,29 +202,111 @@ func main() {
 	mux.HandleFunc("/v1/admin/cache/online/clear/async", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminCacheOnlineClearAsync))
 	mux.HandleFunc("/v1/admin/cache/online/load/async", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminCacheOnlineLoadAsync))
 	// grok2api public-compatible endpoints
-	mux.HandleFunc("/api/v1/public/verify", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicVerify))
-	mux.HandleFunc("/api/v1/public/voice/token", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminVoiceToken))
-	mux.HandleFunc("/api/v1/public/imagine/config", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicImagineConfig))
-	mux.HandleFunc("/api/v1/public/imagine/start", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminImagineStart))
-	mux.HandleFunc("/api/v1/public/imagine/stop", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminImagineStop))
-	mux.HandleFunc("/api/v1/public/imagine/sse", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminImagineSSE))
-	mux.HandleFunc("/api/v1/public/imagine/ws", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminImagineWS))
-	mux.HandleFunc("/api/v1/public/video/start", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicVideoStart))
-	mux.HandleFunc("/api/v1/public/video/stop", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicVideoStop))
-	mux.HandleFunc("/api/v1/public/video/sse", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicVideoSSE))
-	mux.HandleFunc("/v1/public/verify", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicVerify))
-	mux.HandleFunc("/v1/public/voice/token", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminVoiceToken))
-	mux.HandleFunc("/v1/public/imagine/config", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicImagineConfig))
-	mux.HandleFunc("/v1/public/imagine/start", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminImagineStart))
-	mux.HandleFunc("/v1/public/imagine/stop", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminImagineStop))
-	mux.HandleFunc("/v1/public/imagine/sse", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminImagineSSE))
-	mux.HandleFunc("/v1/public/imagine/ws", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandleAdminImagineWS))
-	mux.HandleFunc("/v1/public/video/start", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicVideoStart))
-	mux.HandleFunc("/v1/public/video/stop", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicVideoStop))
-	mux.HandleFunc("/v1/public/video/sse", middleware.SessionAuth(cfg.AdminPass, cfg.AdminToken, grokHandler.HandlePublicVideoSSE))
+	// Read public auth config per request so Admin config updates take effect immediately.
+	publicAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			middleware.PublicKeyAuth(cfg.PublicAPIKey(), cfg.PublicAPIEnabled(), next)(w, r)
+		}
+	}
+	publicImagineStreamAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			middleware.PublicImagineStreamAuth(cfg.PublicAPIKey(), cfg.PublicAPIEnabled(), next)(w, r)
+		}
+	}
+
+	mux.HandleFunc("/api/v1/public/verify", publicAuth(grokHandler.HandlePublicVerify))
+	mux.HandleFunc("/api/v1/public/voice/token", publicAuth(grokHandler.HandleAdminVoiceToken))
+	mux.HandleFunc("/api/v1/public/imagine/config", grokHandler.HandlePublicImagineConfig)
+	mux.HandleFunc("/api/v1/public/imagine/start", publicAuth(grokHandler.HandleAdminImagineStart))
+	mux.HandleFunc("/api/v1/public/imagine/stop", publicAuth(grokHandler.HandleAdminImagineStop))
+	mux.HandleFunc("/api/v1/public/imagine/sse", publicImagineStreamAuth(grokHandler.HandleAdminImagineSSE))
+	mux.HandleFunc("/api/v1/public/imagine/ws", publicImagineStreamAuth(grokHandler.HandleAdminImagineWS))
+	mux.HandleFunc("/api/v1/public/video/start", publicAuth(grokHandler.HandlePublicVideoStart))
+	mux.HandleFunc("/api/v1/public/video/stop", publicAuth(grokHandler.HandlePublicVideoStop))
+	mux.HandleFunc("/api/v1/public/video/sse", grokHandler.HandlePublicVideoSSE)
+	mux.HandleFunc("/v1/public/verify", publicAuth(grokHandler.HandlePublicVerify))
+	mux.HandleFunc("/v1/public/voice/token", publicAuth(grokHandler.HandleAdminVoiceToken))
+	mux.HandleFunc("/v1/public/imagine/config", grokHandler.HandlePublicImagineConfig)
+	mux.HandleFunc("/v1/public/imagine/start", publicAuth(grokHandler.HandleAdminImagineStart))
+	mux.HandleFunc("/v1/public/imagine/stop", publicAuth(grokHandler.HandleAdminImagineStop))
+	mux.HandleFunc("/v1/public/imagine/sse", publicImagineStreamAuth(grokHandler.HandleAdminImagineSSE))
+	mux.HandleFunc("/v1/public/imagine/ws", publicImagineStreamAuth(grokHandler.HandleAdminImagineWS))
+	mux.HandleFunc("/v1/public/video/start", publicAuth(grokHandler.HandlePublicVideoStart))
+	mux.HandleFunc("/v1/public/video/stop", publicAuth(grokHandler.HandlePublicVideoStop))
+	mux.HandleFunc("/v1/public/video/sse", grokHandler.HandlePublicVideoSSE)
+
+	// Public static assets/pages
+	staticRootHandler := web.StaticHandler()
+	mux.Handle("/static/", http.StripPrefix("/static/", staticRootHandler))
+
+	serveStaticPath := func(w http.ResponseWriter, r *http.Request, path string) {
+		target := "/" + strings.TrimPrefix(strings.TrimSpace(path), "/")
+		if target == "/" || strings.Contains(target, "..") {
+			http.NotFound(w, r)
+			return
+		}
+		rr := r.Clone(r.Context())
+		rr.URL.Path = target
+		staticRootHandler.ServeHTTP(w, rr)
+	}
+
+	servePublicPage := func(path string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if !cfg.PublicAPIEnabled() {
+				http.NotFound(w, r)
+				return
+			}
+			serveStaticPath(w, r, path)
+		}
+	}
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		if cfg.PublicAPIEnabled() {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, cfg.AdminPath+"/login.html", http.StatusFound)
+	})
+	mux.HandleFunc("/login", servePublicPage("public/pages/login.html"))
+	mux.HandleFunc("/imagine", servePublicPage("public/pages/imagine.html"))
+	mux.HandleFunc("/voice", servePublicPage("public/pages/voice.html"))
+	mux.HandleFunc("/video", servePublicPage("public/pages/video.html"))
+
+	// grok2api public page-compatible aliases
+	redirectPublicRoot := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !cfg.PublicAPIEnabled() {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusFound)
+	}
+	mux.HandleFunc("/v1/public", redirectPublicRoot)
+	mux.HandleFunc("/v1/public/", redirectPublicRoot)
+	mux.HandleFunc("/api/v1/public", redirectPublicRoot)
+	mux.HandleFunc("/api/v1/public/", redirectPublicRoot)
+	mux.HandleFunc("/v1/public/login", servePublicPage("public/pages/login.html"))
+	mux.HandleFunc("/v1/public/imagine", servePublicPage("public/pages/imagine.html"))
+	mux.HandleFunc("/v1/public/voice", servePublicPage("public/pages/voice.html"))
+	mux.HandleFunc("/v1/public/video", servePublicPage("public/pages/video.html"))
+	mux.HandleFunc("/api/v1/public/login", servePublicPage("public/pages/login.html"))
+	mux.HandleFunc("/api/v1/public/imagine", servePublicPage("public/pages/imagine.html"))
+	mux.HandleFunc("/api/v1/public/voice", servePublicPage("public/pages/voice.html"))
+	mux.HandleFunc("/api/v1/public/video", servePublicPage("public/pages/video.html"))
 
 	// Protected Web UI
-	staticHandler := http.StripPrefix(cfg.AdminPath, web.StaticHandler())
+	staticHandler := http.StripPrefix(cfg.AdminPath, staticRootHandler)
 	mux.HandleFunc(cfg.AdminPath+"/", func(w http.ResponseWriter, r *http.Request) {
 		// Serve login page (static)
 		if r.URL.Path == cfg.AdminPath+"/login.html" {

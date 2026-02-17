@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Public Access</title>
+  <link rel="stylesheet" href="/static/public/css/public.css">
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div>
+        <h1 class="title">Public Access</h1>
+        <p class="subtitle">Use public key for verify / imagine / voice / video.</p>
+      </div>
+      <nav class="nav">
+        <a href="/login">Login</a>
+        <a href="/imagine">Imagine</a>
+        <a href="/voice">Voice</a>
+        <a href="/video">Video</a>
+      </nav>
+    </header>
+
+    <section class="card stack">
+      <div class="field">
+        <label for="publicKey">Public Key</label>
+        <input id="publicKey" type="password" placeholder="Enter public key">
+      </div>
+      <div class="row">
+        <button id="saveKeyBtn" class="btn secondary" type="button">Save Key</button>
+        <button id="verifyBtn" class="btn" type="button">Verify</button>
+      </div>
+      <div id="status" class="status"></div>
+    </section>
+  </main>
+
+  <script src="/static/public/js/common.js"></script>
+  <script src="/static/public/js/login.js"></script>
+</body>
+</html>

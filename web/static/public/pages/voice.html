@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Voice Token</title>
+  <link rel="stylesheet" href="/static/public/css/public.css">
+</head>
+<body>
+  <main class="page stack">
+    <header class="header">
+      <div>
+        <h1 class="title">Voice Token</h1>
+        <p class="subtitle">Fetch LiveKit token from public voice endpoint.</p>
+      </div>
+      <nav class="nav">
+        <a href="/login">Login</a>
+        <a href="/imagine">Imagine</a>
+        <a href="/voice">Voice</a>
+        <a href="/video">Video</a>
+      </nav>
+    </header>
+
+    <section class="card stack">
+      <div class="row">
+        <div class="field">
+          <label for="voice">Voice</label>
+          <input id="voice" type="text" value="ara">
+        </div>
+        <div class="field">
+          <label for="personality">Personality</label>
+          <input id="personality" type="text" value="assistant">
+        </div>
+        <div class="field compact">
+          <label for="speed">Speed</label>
+          <input id="speed" type="number" min="0.1" step="0.1" value="1">
+        </div>
+      </div>
+      <div class="row">
+        <button id="fetchBtn" class="btn" type="button">Fetch Token</button>
+      </div>
+      <div id="status" class="status"></div>
+      <div class="field">
+        <label for="urlOutput">LiveKit URL</label>
+        <input id="urlOutput" type="text" readonly>
+      </div>
+      <div class="field">
+        <label for="tokenOutput">Token</label>
+        <textarea id="tokenOutput" class="mono" readonly></textarea>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/public/js/common.js"></script>
+  <script src="/static/public/js/voice.js"></script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Imagine Stream</title>
+  <link rel="stylesheet" href="/static/public/css/public.css">
+</head>
+<body>
+  <main class="page stack">
+    <header class="header">
+      <div>
+        <h1 class="title">Imagine Stream</h1>
+        <p class="subtitle">Real-time image generation using public endpoints.</p>
+      </div>
+      <nav class="nav">
+        <a href="/login">Login</a>
+        <a href="/imagine">Imagine</a>
+        <a href="/voice">Voice</a>
+        <a href="/video">Video</a>
+      </nav>
+    </header>
+
+    <section class="card stack">
+      <div class="field">
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" placeholder="Describe the image"></textarea>
+      </div>
+      <div class="row">
+        <div class="field compact">
+          <label for="ratio">Aspect Ratio</label>
+          <select id="ratio">
+            <option value="2:3" selected>2:3</option>
+            <option value="1:1">1:1</option>
+            <option value="3:2">3:2</option>
+            <option value="16:9">16:9</option>
+            <option value="9:16">9:16</option>
+          </select>
+        </div>
+        <div class="field compact">
+          <label for="nsfw">NSFW</label>
+          <select id="nsfw">
+            <option value="true" selected>true</option>
+            <option value="false">false</option>
+          </select>
+        </div>
+        <div class="field compact">
+          <label for="concurrent">Concurrent</label>
+          <select id="concurrent">
+            <option value="1" selected>1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
+        </div>
+        <div class="field compact">
+          <label for="mode">Mode</label>
+          <select id="mode">
+            <option value="auto" selected>AUTO</option>
+            <option value="ws">WS</option>
+            <option value="sse">SSE</option>
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <button id="startBtn" class="btn" type="button">Start</button>
+        <button id="stopBtn" class="btn danger" type="button">Stop</button>
+        <button id="clearBtn" class="btn secondary" type="button">Clear</button>
+      </div>
+      <div id="status" class="status"></div>
+    </section>
+
+    <section class="card">
+      <div id="imageGrid" class="image-grid"></div>
+    </section>
+  </main>
+
+  <script src="/static/public/js/common.js"></script>
+  <script src="/static/public/js/imagine.js"></script>
+</body>
+</html>

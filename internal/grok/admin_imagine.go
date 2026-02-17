@@ -2,9 +2,12 @@ package grok
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +86,20 @@ func normalizeImagineImageURL(raw string) string {
 		}
 	}
 	return u
+}
+
+func imagineImageB64FromURL(raw string) string {
+	u := normalizeImagineImageURL(raw)
+	mediaType, fileName, ok := parseFilesPath(u)
+	if !ok || mediaType != "image" || strings.TrimSpace(fileName) == "" {
+		return ""
+	}
+	fullPath := filepath.Join(cacheBaseDir, mediaType, fileName)
+	data, err := os.ReadFile(fullPath)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
 }
 
 func cleanupImagineSessionsLocked(now time.Time) {
@@ -377,10 +394,16 @@ func (h *Handler) runImagineLoop(
 		nowMillis := time.Now().UnixMilli()
 		for _, img := range images {
 			sequence++
+			fileURL := normalizeImagineImageURL(img.URL)
+			b64 := strings.TrimSpace(img.B64)
+			if b64 == "" && fileURL != "" {
+				b64 = imagineImageB64FromURL(fileURL)
+			}
 			if !emit(map[string]interface{}{
 				"type":         "image",
-				"b64_json":     img.B64,
-				"file_url":     img.URL,
+				"b64_json":     b64,
+				"file_url":     fileURL,
+				"url":          fileURL,
 				"sequence":     sequence,
 				"created_at":   nowMillis,
 				"elapsed_ms":   elapsedMS,
