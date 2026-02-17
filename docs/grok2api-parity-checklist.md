@@ -125,6 +125,43 @@ Reference: `chenyme/grok2api` README + API behavior (`/v1/chat/completions`, `/v
   - `/login` `/imagine` `/voice` `/video` pages are exposed only when public is enabled
   - static assets are available at `/static/public/*`
 
+## Admin Page Path Parity
+
+- [x] Added grok2api-style admin page aliases:
+  - `/admin` -> `/admin/`
+  - `/admin/login` -> `/admin/login.html`
+  - `/admin/config` `/admin/cache` `/admin/token` -> authenticated admin index render
+
+## Route Coverage Scan (Upstream `5936099`)
+
+- [x] Re-scanned FastAPI route set from upstream and compared to `cmd/server/main.go`.
+- [x] No missing API endpoints found at route layer (after prefix/wildcard normalization).
+
+## Public Frontend Parity (Imagine/Video)
+
+- [x] `public/imagine` interaction depth enhanced:
+  - mode switch upgraded to `AUTO/WS/SSE` button group
+  - added runtime status stats (`images`, `active`, `avg latency`, runtime mode)
+  - added behavior toggles (`auto scroll`, `auto download`, `auto filter`, `reverse insert`) with local persistence
+  - added optional File System API folder picker for save destination (`Select Save Folder`)
+  - added batch selection workflow (`Batch`, `Select All/Clear All`, selected counter)
+  - added batch download with ZIP packaging when `JSZip` is available (fallback to per-image download)
+  - added image lightbox navigation (`prev/next/escape`) and keyboard support
+  - added config-driven defaults bootstrap from `/v1/public/imagine/config` (`nsfw`, `final_min_bytes`)
+  - running-session updates now auto-apply on key setting changes (`mode`, `ratio`, `nsfw`, `concurrent`) via controlled restart
+- [x] `public/video` interaction depth enhanced:
+  - added progress bar + indeterminate state + elapsed timer
+  - added runtime metadata panel (`aspect`, `length`, `resolution`, `preset`)
+  - added reference image local upload/clear flow (data URI conversion)
+  - added preview card list (`open`/`download`) and raw stream panel separation
+  - improved SSE delta parsing for progress text and video URL extraction (`<video>`, markdown link, file URL)
+  - aligned SSE URL behavior to include `public_key` query when public key exists locally
+- [x] `public/voice` interaction depth enhanced:
+  - upgraded from token-only page to direct LiveKit session controls (`start`, `stop`)
+  - added runtime status/meta panel, session logs, and audio track mount area
+  - added activity visualizer for live session feedback
+  - retained token/url visibility for diagnostics (`Fetch Token`)
+
 ## Request Decoding Compatibility
 
 - [x] `chat/completions` now accepts loose JSON types for common fields:
@@ -153,3 +190,4 @@ Reference: `chenyme/grok2api` README + API behavior (`/v1/chat/completions`, `/v
 
 - [ ] `/v1/models` still uses this project’s unified model listing logic (cross-channel capable), not strictly grok2api-only semantics.
 - [ ] Error body format is still plain `http.Error` text in many paths (not fully migrated to a unified JSON error schema).
+- [ ] Public frontend still has selective UX simplifications vs upstream (no toast system, lighter visual card system, fewer advanced toolbar interactions).

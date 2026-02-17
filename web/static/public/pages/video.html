@@ -11,7 +11,7 @@
     <header class="header">
       <div>
         <h1 class="title">Video Stream</h1>
-        <p class="subtitle">Start a public video task and inspect SSE output.</p>
+        <p class="subtitle">Public video generation with progress, previews and reference-image upload.</p>
       </div>
       <nav class="nav">
         <a href="/login">Login</a>
@@ -26,6 +26,7 @@
         <label for="prompt">Prompt</label>
         <textarea id="prompt" placeholder="Describe the video"></textarea>
       </div>
+
       <div class="row">
         <div class="field compact">
           <label for="ratio">Aspect Ratio</label>
@@ -61,12 +62,6 @@
             <option value="custom">custom</option>
           </select>
         </div>
-      </div>
-      <div class="row">
-        <div class="field">
-          <label for="imageUrl">Image URL (optional for image-to-video)</label>
-          <input id="imageUrl" type="text" placeholder="https://... or data:image/...">
-        </div>
         <div class="field compact">
           <label for="effort">Reasoning Effort</label>
           <select id="effort">
@@ -80,18 +75,68 @@
           </select>
         </div>
       </div>
+
+      <div class="row">
+        <div class="field">
+          <label for="imageUrl">Image URL / Data URI (optional, image-to-video)</label>
+          <input id="imageUrl" type="text" placeholder="https://... or data:image/...">
+        </div>
+        <div class="ref-actions">
+          <input id="imageFileInput" type="file" accept="image/*" class="hidden-file-input">
+          <button id="selectImageFileBtn" class="btn secondary small" type="button">Upload</button>
+          <button id="clearImageFileBtn" class="btn secondary small" type="button">Clear</button>
+        </div>
+      </div>
+      <div id="imageFileName" class="file-name">No file selected</div>
+
       <div class="row">
         <button id="startBtn" class="btn" type="button">Start</button>
         <button id="stopBtn" class="btn danger" type="button">Stop</button>
+        <button id="clearBtn" class="btn secondary" type="button">Clear Output</button>
       </div>
+
       <div id="status" class="status"></div>
+
+      <div class="progress-wrap">
+        <div id="progressBar" class="progress-bar">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <div class="progress-meta">
+          <span id="progressText">0%</span>
+          <span id="durationValue">Elapsed -</span>
+        </div>
+      </div>
+
+      <div class="meta-grid">
+        <div class="meta-item">
+          <div class="meta-label">Aspect</div>
+          <div id="aspectValue" class="meta-value">-</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Length</div>
+          <div id="lengthValue" class="meta-value">-</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Resolution</div>
+          <div id="resolutionValue" class="meta-value">-</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Preset</div>
+          <div id="presetValue" class="meta-value">-</div>
+        </div>
+      </div>
     </section>
 
     <section class="card stack">
-      <div class="video-wrap">
-        <video id="videoOutput" controls></video>
+      <div class="row between">
+        <h2 class="section-title">Preview</h2>
       </div>
-      <a id="videoLink" class="mono" target="_blank" rel="noopener"></a>
+      <div id="videoEmpty" class="empty-state">Waiting for generated video.</div>
+      <div id="videoStage" class="video-stage"></div>
+    </section>
+
+    <section class="card stack">
+      <label for="logOutput">Raw Stream</label>
       <pre id="logOutput" class="log"></pre>
     </section>
   </main>

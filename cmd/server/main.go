@@ -307,6 +307,58 @@ func main() {
 
 	// Protected Web UI
 	staticHandler := http.StripPrefix(cfg.AdminPath, staticRootHandler)
+	isAdminAuthenticated := func(r *http.Request) bool {
+		cookie, err := r.Cookie("session_token")
+		authenticated := err == nil && auth.ValidateSessionToken(cookie.Value)
+		if authenticated {
+			return true
+		}
+		adminToken := cfg.AdminToken
+		authHeader := r.Header.Get("Authorization")
+		return adminToken != "" && (authHeader == "Bearer "+adminToken || authHeader == adminToken || r.Header.Get("X-Admin-Token") == adminToken)
+	}
+	renderAdminIndex := func(w http.ResponseWriter, r *http.Request) {
+		err := tmplRenderer.RenderIndex(w, r, cfg, s)
+		if err != nil {
+			slog.Error("Failed to render template", "error", err)
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		}
+	}
+
+	// grok2api admin page-compatible aliases
+	mux.HandleFunc(cfg.AdminPath, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		http.Redirect(w, r, cfg.AdminPath+"/", http.StatusFound)
+	})
+	mux.HandleFunc(cfg.AdminPath+"/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		rr := r.Clone(r.Context())
+		rr.URL.Path = cfg.AdminPath + "/login.html"
+		staticHandler.ServeHTTP(w, rr)
+	})
+	adminAliasPage := func(path string) {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if !isAdminAuthenticated(r) {
+				http.Redirect(w, r, cfg.AdminPath+"/login.html", http.StatusFound)
+				return
+			}
+			renderAdminIndex(w, r)
+		})
+	}
+	adminAliasPage(cfg.AdminPath + "/config")
+	adminAliasPage(cfg.AdminPath + "/cache")
+	adminAliasPage(cfg.AdminPath + "/token")
+
 	mux.HandleFunc(cfg.AdminPath+"/", func(w http.ResponseWriter, r *http.Request) {
 		// Serve login page (static)
 		if r.URL.Path == cfg.AdminPath+"/login.html" {
@@ -321,28 +373,14 @@ func main() {
 			return
 		}
 
-		// Authentication check
-		cookie, err := r.Cookie("session_token")
-		authenticated := err == nil && auth.ValidateSessionToken(cookie.Value)
-
-		if !authenticated {
-			adminToken := cfg.AdminToken
-			authHeader := r.Header.Get("Authorization")
-			authenticated = adminToken != "" && (authHeader == "Bearer "+adminToken || authHeader == adminToken || r.Header.Get("X-Admin-Token") == adminToken)
-		}
-
-		if !authenticated {
+		if !isAdminAuthenticated(r) {
 			http.Redirect(w, r, cfg.AdminPath+"/login.html", http.StatusFound)
 			return
 		}
 
 		// Render template-based index page
 		if r.URL.Path == cfg.AdminPath+"/" || r.URL.Path == cfg.AdminPath {
-			err := tmplRenderer.RenderIndex(w, r, cfg, s)
-			if err != nil {
-				slog.Error("Failed to render template", "error", err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			}
+			renderAdminIndex(w, r)
 			return
 		}
 

@@ -11,7 +11,7 @@
     <header class="header">
       <div>
         <h1 class="title">Imagine Stream</h1>
-        <p class="subtitle">Real-time image generation using public endpoints.</p>
+        <p class="subtitle">Real-time image generation with WS/SSE fallback and waterfall controls.</p>
       </div>
       <nav class="nav">
         <a href="/login">Login</a>
@@ -26,6 +26,7 @@
         <label for="prompt">Prompt</label>
         <textarea id="prompt" placeholder="Describe the image"></textarea>
       </div>
+
       <div class="row">
         <div class="field compact">
           <label for="ratio">Aspect Ratio</label>
@@ -52,29 +53,77 @@
             <option value="3">3</option>
           </select>
         </div>
-        <div class="field compact">
-          <label for="mode">Mode</label>
-          <select id="mode">
-            <option value="auto" selected>AUTO</option>
-            <option value="ws">WS</option>
-            <option value="sse">SSE</option>
-          </select>
-        </div>
       </div>
+
+      <div class="mode-switch" role="group" aria-label="Connection mode">
+        <button id="modeAuto" class="mode-btn" data-mode="auto" type="button">AUTO</button>
+        <button id="modeWS" class="mode-btn" data-mode="ws" type="button">WS</button>
+        <button id="modeSSE" class="mode-btn" data-mode="sse" type="button">SSE</button>
+      </div>
+
+      <div class="row switches">
+        <label class="switch-chip"><input id="autoScrollToggle" type="checkbox" checked><span>Auto Scroll</span></label>
+        <label class="switch-chip"><input id="autoDownloadToggle" type="checkbox"><span>Auto Download</span></label>
+        <label class="switch-chip"><input id="autoFilterToggle" type="checkbox"><span>Auto Filter</span></label>
+        <label class="switch-chip"><input id="reverseInsertToggle" type="checkbox"><span>Reverse Insert</span></label>
+      </div>
+
+      <div class="row">
+        <button id="selectFolderBtn" class="btn secondary small" type="button">Select Save Folder</button>
+        <span id="folderPath" class="folder-path">Browser default download path</span>
+      </div>
+
       <div class="row">
         <button id="startBtn" class="btn" type="button">Start</button>
         <button id="stopBtn" class="btn danger" type="button">Stop</button>
         <button id="clearBtn" class="btn secondary" type="button">Clear</button>
       </div>
+
       <div id="status" class="status"></div>
+
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Images</div>
+          <div id="countValue" class="stat-value">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Active</div>
+          <div id="activeValue" class="stat-value">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Avg Latency</div>
+          <div id="latencyValue" class="stat-value">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Mode</div>
+          <div id="modeValue" class="stat-value">AUTO</div>
+        </div>
+      </div>
     </section>
 
-    <section class="card">
+    <section class="card stack">
+      <div class="row between">
+        <h2 class="section-title">Waterfall</h2>
+        <div class="batch-actions">
+          <button id="batchToggleBtn" class="btn secondary small" type="button">Batch</button>
+          <button id="selectAllBtn" class="btn secondary small hidden" type="button">Select All</button>
+          <button id="downloadSelectedBtn" class="btn secondary small hidden" type="button">Download <span id="selectedCount">0</span></button>
+        </div>
+      </div>
+      <div id="emptyState" class="empty-state">Waiting for generated images.</div>
       <div id="imageGrid" class="image-grid"></div>
     </section>
   </main>
 
+  <div id="lightbox" class="lightbox" aria-hidden="true">
+    <button id="lightboxClose" class="lightbox-close" type="button" aria-label="Close">x</button>
+    <button id="lightboxPrev" class="lightbox-nav prev" type="button" aria-label="Previous"><</button>
+    <img id="lightboxImg" src="" alt="Generated image preview">
+    <button id="lightboxNext" class="lightbox-nav next" type="button" aria-label="Next">></button>
+  </div>
+
   <script src="/static/public/js/common.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="/static/public/js/imagine.js"></script>
 </body>
 </html>

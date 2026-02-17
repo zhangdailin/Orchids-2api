@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Voice Token</title>
+  <title>Voice Session</title>
   <link rel="stylesheet" href="/static/public/css/public.css">
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js"></script>
 </head>
 <body>
   <main class="page stack">
     <header class="header">
       <div>
-        <h1 class="title">Voice Token</h1>
-        <p class="subtitle">Fetch LiveKit token from public voice endpoint.</p>
+        <h1 class="title">Voice Session</h1>
+        <p class="subtitle">Start a LiveKit voice session from public voice endpoint.</p>
       </div>
       <nav class="nav">
         <a href="/login">Login</a>
@@ -23,13 +24,33 @@
 
     <section class="card stack">
       <div class="row">
-        <div class="field">
+        <div class="field compact">
           <label for="voice">Voice</label>
-          <input id="voice" type="text" value="ara">
+          <select id="voice">
+            <option value="ara" selected>ara</option>
+            <option value="eve">eve</option>
+            <option value="leo">leo</option>
+            <option value="rex">rex</option>
+            <option value="sal">sal</option>
+            <option value="gork">gork</option>
+          </select>
         </div>
-        <div class="field">
+        <div class="field compact">
           <label for="personality">Personality</label>
-          <input id="personality" type="text" value="assistant">
+          <select id="personality">
+            <option value="assistant" selected>assistant</option>
+            <option value="custom">custom</option>
+            <option value="therapist">therapist</option>
+            <option value="storyteller">storyteller</option>
+            <option value="meditation">meditation</option>
+            <option value="doc">doc</option>
+            <option value="unhinged">unhinged</option>
+            <option value="sexy">sexy</option>
+            <option value="motivation">motivation</option>
+            <option value="conspiracy">conspiracy</option>
+            <option value="romantic">romantic</option>
+            <option value="argumentative">argumentative</option>
+          </select>
         </div>
         <div class="field compact">
           <label for="speed">Speed</label>
@@ -37,9 +58,35 @@
         </div>
       </div>
       <div class="row">
-        <button id="fetchBtn" class="btn" type="button">Fetch Token</button>
+        <button id="startBtn" class="btn" type="button">Start Session</button>
+        <button id="stopBtn" class="btn danger" type="button">Stop Session</button>
+        <button id="fetchBtn" class="btn secondary" type="button">Fetch Token</button>
+        <button id="clearLogBtn" class="btn secondary" type="button">Clear Log</button>
+        <button id="copyLogBtn" class="btn secondary" type="button">Copy Log</button>
       </div>
       <div id="status" class="status"></div>
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-label">Voice</div>
+          <div id="statusVoice" class="stat-value">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Personality</div>
+          <div id="statusPersonality" class="stat-value">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Speed</div>
+          <div id="statusSpeed" class="stat-value">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">LiveKit</div>
+          <div id="statusURL" class="stat-value">-</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Activity</label>
+        <div id="visualizer" class="visualizer"></div>
+      </div>
       <div class="field">
         <label for="urlOutput">LiveKit URL</label>
         <input id="urlOutput" type="text" readonly>
@@ -47,6 +94,14 @@
       <div class="field">
         <label for="tokenOutput">Token</label>
         <textarea id="tokenOutput" class="mono" readonly></textarea>
+      </div>
+      <div class="field">
+        <label for="logOutput">Session Log</label>
+        <pre id="logOutput" class="log"></pre>
+      </div>
+      <div class="field">
+        <label>Audio Output</label>
+        <div id="audioRoot" class="audio-root"></div>
       </div>
     </section>
   </main>
