@@ -148,7 +148,7 @@ func TestBuildChatPayload_InjectsSamplingOverrides(t *testing.T) {
 	}
 	spec := ModelSpec{ID: "grok-3", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3"}
 
-	payload, err := h.buildChatPayload(context.Background(), "", spec, "hello", "hello", nil, nil, nil, req)
+	payload, err := h.buildChatPayload(context.Background(), "", spec, "hello", nil, nil, nil, req)
 	if err != nil {
 		t.Fatalf("buildChatPayload error: %v", err)
 	}

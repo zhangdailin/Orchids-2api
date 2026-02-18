@@ -48,27 +48,6 @@ func (h *Handler) applyDefaultChatStream(req *ChatCompletionsRequest) {
 	req.Stream = h.defaultChatStream()
 }
 
-func looksLikeImageRequest(prompt string) bool {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return false
-	}
-	ld := strings.ToLower(prompt)
-	neg := strings.Contains(prompt, "不要图片") ||
-		strings.Contains(prompt, "不需要图片") ||
-		strings.Contains(prompt, "别发图片") ||
-		strings.Contains(prompt, "不要照片") ||
-		strings.Contains(prompt, "不需要照片") ||
-		strings.Contains(prompt, "别发照片")
-	if neg {
-		return false
-	}
-	return strings.Contains(prompt, "图片") ||
-		strings.Contains(prompt, "照片") ||
-		strings.Contains(ld, "image") ||
-		strings.Contains(ld, "picture")
-}
-
 func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -206,87 +185,6 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// Scheme 1 (hard): if the user asks for images, prefer /images/generations and return images directly.
-	// This avoids Grok chat's frequent 502s and the imagine flow that reports imageAttachmentCount but returns no URLs.
-	resolveImageOpts := func() (int, string) {
-		countHint := userPrompt
-		if countHint == "" {
-			countHint = text
-		}
-		n := inferRequestedImageCount(countHint, 2)
-		size := "1024x1024"
-		if req.ImageConfig != nil {
-			if req.ImageConfig.N > 0 {
-				n = req.ImageConfig.N
-			}
-			if s := strings.TrimSpace(req.ImageConfig.Size); s != "" {
-				size = s
-			}
-		}
-		if n < 1 {
-			n = 1
-		}
-		if n > 10 {
-			n = 10
-		}
-		return n, size
-	}
-	rewritePublicBase := func(imgs []string) {
-		if publicBase == "" {
-			return
-		}
-		for i, u := range imgs {
-			u = strings.TrimSpace(u)
-			if u == "" {
-				continue
-			}
-			// Rewrite loopback URLs returned by local call to the public base.
-			if strings.HasPrefix(u, "http://127.0.0.1:") || strings.HasPrefix(u, "http://localhost:") {
-				if idx := strings.Index(u, "/grok/"); idx >= 0 {
-					u = publicBase + u[idx:]
-				}
-			} else if strings.HasPrefix(u, "/") {
-				u = publicBase + u
-			}
-			imgs[i] = u
-		}
-	}
-
-	if len(attachments) == 0 {
-		if looksLikeImageRequest(userPrompt) {
-			slog.Debug("grok chat intent routed to images",
-				"model", req.Model,
-				"latest_user_chars", utf8.RuneCountInString(userPrompt),
-			)
-			n, size := resolveImageOpts()
-			ctx2, cancel := context.WithTimeout(r.Context(), 90*time.Second)
-			defer cancel()
-			imgPrompt := strings.TrimSpace(userPrompt)
-			if imgPrompt == "" {
-				imgPrompt = "图片"
-			}
-			var imgs []string
-			for attempt := 0; attempt < 3; attempt++ {
-				out, _ := h.callLocalImagesGenerationsWithOptions(ctx2, "grok-imagine-1.0", imgPrompt, n, size, "url", nil)
-				imgs = normalizeGeneratedImageURLs(out, n)
-				if len(imgs) > 0 {
-					break
-				}
-			}
-			rewritePublicBase(imgs)
-
-			if len(imgs) > 0 {
-				// Keep image-mode deterministic: return images only.
-				h.replyChatTextAndImages(w, req.Model, "", imgs, req.Stream)
-				return
-			}
-
-			// Prefer images/generations even on failure: do NOT fall back to Grok chat.
-			http.Error(w, "no image generated", http.StatusBadGateway)
-			return
-		}
-	}
-
 	sess, err := h.openChatAccountSession(r.Context())
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
@@ -303,7 +201,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				return nil, fmt.Errorf("attachment upload failed: %w", upErr)
 			}
 		}
-		return h.buildChatPayload(r.Context(), token, spec, text, userPrompt, fileAttachments, attachments, req.VideoConfig, &req)
+		return h.buildChatPayload(r.Context(), token, spec, text, fileAttachments, attachments, req.VideoConfig, &req)
 	}
 
 	payload, err := buildPayload(sess.token)
@@ -334,7 +232,6 @@ func (h *Handler) buildChatPayload(
 	token string,
 	spec ModelSpec,
 	text string,
-	userPrompt string,
 	fileAttachments []string,
 	attachmentInputs []AttachmentInput,
 	videoCfg *VideoConfig,
@@ -372,27 +269,6 @@ func (h *Handler) buildChatPayload(
 				modelConfigOverride[k] = v
 			}
 		}
-	}
-
-	// If the user request looks like image generation, ask Grok to run its image generation tool
-	// within the same chat request (no grok-imagine fallback).
-	imagePrompt := strings.TrimSpace(userPrompt)
-	if imagePrompt == "" {
-		imagePrompt = strings.TrimSpace(text)
-	}
-	looksLikeImageReq := looksLikeImageRequest(imagePrompt)
-	if looksLikeImageReq {
-		if to, ok := payload["toolOverrides"].(map[string]interface{}); ok {
-			to["imageGen"] = true
-		} else {
-			payload["toolOverrides"] = map[string]interface{}{"imageGen": true}
-		}
-		payload["enableImageGeneration"] = true
-		payload["enableImageStreaming"] = false
-		payload["imageGenerationCount"] = inferRequestedImageCount(imagePrompt, 1)
-		payload["disableTextFollowUps"] = true
-		payload["returnRawGrokInXaiRequest"] = false
-		payload["disableMemory"] = false
 	}
 
 	if !spec.IsVideo {
