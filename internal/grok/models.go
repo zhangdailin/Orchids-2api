@@ -30,6 +30,7 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.1-expert", Name: "Grok 4.1 Expert", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_EXPERT"},
 	{ID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
 	{ID: "grok-4.1", Name: "Grok 4.1", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_MINI_THINKING"}, // compat alias
+	{ID: "grok-4.20-beta", Name: "Grok 4.20 Beta", UpstreamModel: "grok-420", ModelMode: "MODEL_MODE_GROK_420"},
 	{ID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
 	{ID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_FAST", IsImage: true},
 	{ID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsVideo: true},

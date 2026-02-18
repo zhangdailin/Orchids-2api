@@ -187,6 +187,7 @@ func (s *Store) seedModels() error {
 		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 11},
 		{ID: "102", Channel: "Grok", ModelID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 12},
 		{ID: "103", Channel: "Grok", ModelID: "grok-4.1", Name: "Grok 4.1", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 13},
+		{ID: "107", Channel: "Grok", ModelID: "grok-4.20-beta", Name: "Grok 4.20 Beta", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 14},
 		{ID: "104", Channel: "Grok", ModelID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 15},
 		{ID: "105", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 16},
 		{ID: "106", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 17},

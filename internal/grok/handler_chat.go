@@ -48,6 +48,27 @@ func (h *Handler) applyDefaultChatStream(req *ChatCompletionsRequest) {
 	req.Stream = h.defaultChatStream()
 }
 
+func looksLikeImageRequest(prompt string) bool {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return false
+	}
+	ld := strings.ToLower(prompt)
+	neg := strings.Contains(prompt, "不要图片") ||
+		strings.Contains(prompt, "不需要图片") ||
+		strings.Contains(prompt, "别发图片") ||
+		strings.Contains(prompt, "不要照片") ||
+		strings.Contains(prompt, "不需要照片") ||
+		strings.Contains(prompt, "别发照片")
+	if neg {
+		return false
+	}
+	return strings.Contains(prompt, "图片") ||
+		strings.Contains(prompt, "照片") ||
+		strings.Contains(ld, "image") ||
+		strings.Contains(ld, "picture")
+}
+
 func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -160,6 +181,17 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	userPrompt := strings.TrimSpace(extractLastUserText(req.Messages))
+	if userPrompt == "" {
+		userPrompt = strings.TrimSpace(text)
+	}
+	slog.Debug("grok chat prompt context",
+		"model", req.Model,
+		"history_chars", utf8.RuneCountInString(strings.TrimSpace(text)),
+		"latest_user_chars", utf8.RuneCountInString(userPrompt),
+		"attachments", len(attachments),
+		"stream", req.Stream,
+	)
 	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
 		http.Error(w, "empty message", http.StatusBadRequest)
 		return
@@ -177,7 +209,11 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	// Scheme 1 (hard): if the user asks for images, prefer /images/generations and return images directly.
 	// This avoids Grok chat's frequent 502s and the imagine flow that reports imageAttachmentCount but returns no URLs.
 	resolveImageOpts := func() (int, string) {
-		n := inferRequestedImageCount(text, 2)
+		countHint := userPrompt
+		if countHint == "" {
+			countHint = text
+		}
+		n := inferRequestedImageCount(countHint, 2)
 		size := "1024x1024"
 		if req.ImageConfig != nil {
 			if req.ImageConfig.N > 0 {
@@ -217,14 +253,15 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if len(attachments) == 0 {
-		ld := strings.ToLower(text)
-		neg := strings.Contains(text, "不要图片") || strings.Contains(text, "不需要图片") || strings.Contains(text, "别发图片") || strings.Contains(text, "不要照片") || strings.Contains(text, "不需要照片") || strings.Contains(text, "别发照片")
-		looksLikeImageReq := !neg && strings.TrimSpace(text) != "" && (strings.Contains(text, "图片") || strings.Contains(text, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture"))
-		if looksLikeImageReq {
+		if looksLikeImageRequest(userPrompt) {
+			slog.Debug("grok chat intent routed to images",
+				"model", req.Model,
+				"latest_user_chars", utf8.RuneCountInString(userPrompt),
+			)
 			n, size := resolveImageOpts()
 			ctx2, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 			defer cancel()
-			imgPrompt := strings.TrimSpace(text)
+			imgPrompt := strings.TrimSpace(userPrompt)
 			if imgPrompt == "" {
 				imgPrompt = "图片"
 			}
@@ -266,7 +303,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				return nil, fmt.Errorf("attachment upload failed: %w", upErr)
 			}
 		}
-		return h.buildChatPayload(r.Context(), token, spec, text, fileAttachments, attachments, req.VideoConfig, &req)
+		return h.buildChatPayload(r.Context(), token, spec, text, userPrompt, fileAttachments, attachments, req.VideoConfig, &req)
 	}
 
 	payload, err := buildPayload(sess.token)
@@ -297,6 +334,7 @@ func (h *Handler) buildChatPayload(
 	token string,
 	spec ModelSpec,
 	text string,
+	userPrompt string,
 	fileAttachments []string,
 	attachmentInputs []AttachmentInput,
 	videoCfg *VideoConfig,
@@ -338,9 +376,11 @@ func (h *Handler) buildChatPayload(
 
 	// If the user request looks like image generation, ask Grok to run its image generation tool
 	// within the same chat request (no grok-imagine fallback).
-	ld := strings.ToLower(text)
-	neg := strings.Contains(text, "不要图片") || strings.Contains(text, "不需要图片") || strings.Contains(text, "别发图片") || strings.Contains(text, "不要照片") || strings.Contains(text, "不需要照片") || strings.Contains(text, "别发照片")
-	looksLikeImageReq := !neg && strings.TrimSpace(text) != "" && (strings.Contains(text, "图片") || strings.Contains(text, "照片") || strings.Contains(ld, "image") || strings.Contains(ld, "picture"))
+	imagePrompt := strings.TrimSpace(userPrompt)
+	if imagePrompt == "" {
+		imagePrompt = strings.TrimSpace(text)
+	}
+	looksLikeImageReq := looksLikeImageRequest(imagePrompt)
 	if looksLikeImageReq {
 		if to, ok := payload["toolOverrides"].(map[string]interface{}); ok {
 			to["imageGen"] = true
@@ -349,7 +389,7 @@ func (h *Handler) buildChatPayload(
 		}
 		payload["enableImageGeneration"] = true
 		payload["enableImageStreaming"] = false
-		payload["imageGenerationCount"] = inferRequestedImageCount(text, 1)
+		payload["imageGenerationCount"] = inferRequestedImageCount(imagePrompt, 1)
 		payload["disableTextFollowUps"] = true
 		payload["returnRawGrokInXaiRequest"] = false
 		payload["disableMemory"] = false
@@ -522,6 +562,14 @@ func (f *streamMarkupFilter) feed(chunk string) string {
 			if end < 0 {
 				// wait for more data
 				break
+			}
+			raw := f.pending[:end+len(toolEnd)]
+			if line := extractToolUsageCardText(raw); line != "" {
+				if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
+					out.WriteString("\n")
+				}
+				out.WriteString(line)
+				out.WriteString("\n")
 			}
 			f.pending = f.pending[end+len(toolEnd):]
 			f.inTool = false

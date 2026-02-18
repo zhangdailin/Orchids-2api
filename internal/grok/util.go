@@ -180,13 +180,87 @@ func stripToolAndRenderMarkup(text string) string {
 	if strings.TrimSpace(text) == "" {
 		return text
 	}
-	// Remove xai tool cards (some upstream variants omit the leading '<')
-	text = regexp.MustCompile(`(?is)<xai:tool_usage_card.*?</xai:tool_usage_card>`).ReplaceAllString(text, "")
-	text = regexp.MustCompile(`(?is)xai:tool_usage_card.*?</xai:tool_usage_card>`).ReplaceAllString(text, "")
-	text = regexp.MustCompile(`(?is)xai:tool_usage_card.*?(?:</xai:tool_usage_card>|\z)`).ReplaceAllString(text, "")
+	// Convert xai tool cards into readable text.
+	text = regexp.MustCompile(`(?is)<?xai:tool_usage_card[^>]*>.*?</xai:tool_usage_card>`).ReplaceAllStringFunc(text, func(raw string) string {
+		line := extractToolUsageCardText(raw)
+		if line == "" {
+			return ""
+		}
+		return "\n" + line + "\n"
+	})
+	// Drop incomplete tool cards.
+	text = regexp.MustCompile(`(?is)<?xai:tool_usage_card.*?(?:</xai:tool_usage_card>|\z)`).ReplaceAllString(text, "")
 	// Remove grok render tags (allow optional leading '<')
 	text = regexp.MustCompile(`(?is)<?grok:render.*?</grok:render>`).ReplaceAllString(text, "")
 	return strings.TrimSpace(text)
+}
+
+func extractToolUsageCardText(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	tagText := func(input, tag string) string {
+		pat := fmt.Sprintf(`(?is)<%s>(.*?)</%s>`, regexp.QuoteMeta(tag), regexp.QuoteMeta(tag))
+		m := regexp.MustCompile(pat).FindStringSubmatch(input)
+		if len(m) < 2 {
+			return ""
+		}
+		val := strings.TrimSpace(m[1])
+		// unwrap <![CDATA[...]]>
+		val = regexp.MustCompile(`(?is)<!\[CDATA\[(.*?)\]\]>`).ReplaceAllString(val, "$1")
+		return strings.TrimSpace(val)
+	}
+	name := tagText(raw, "xai:tool_name")
+	argsRaw := tagText(raw, "xai:tool_args")
+
+	var payload map[string]interface{}
+	if strings.TrimSpace(argsRaw) != "" {
+		_ = json.Unmarshal([]byte(argsRaw), &payload)
+	}
+	read := func(keys ...string) string {
+		for _, key := range keys {
+			v, _ := payload[key]
+			s := strings.TrimSpace(fmt.Sprint(v))
+			if s != "" && s != "<nil>" {
+				return s
+			}
+		}
+		return ""
+	}
+
+	label := strings.TrimSpace(name)
+	text := strings.TrimSpace(argsRaw)
+	switch label {
+	case "web_search":
+		label = "[WebSearch]"
+		if s := read("query", "q"); s != "" {
+			text = s
+		}
+	case "search_images":
+		label = "[SearchImage]"
+		if s := read("image_description", "description", "query"); s != "" {
+			text = s
+		}
+	case "chatroom_send":
+		label = "[AgentThink]"
+		if s := read("message"); s != "" {
+			text = s
+		}
+	}
+
+	switch {
+	case label != "" && text != "":
+		return strings.TrimSpace(label + " " + text)
+	case label != "":
+		return label
+	case text != "":
+		return text
+	default:
+		// Fallback: strip tags and return plain text if any.
+		return strings.TrimSpace(regexp.MustCompile(`(?is)<[^>]+>`).ReplaceAllString(raw, ""))
+	}
 }
 
 func extractRenderableImageLinks(value interface{}) []string {
@@ -366,6 +440,36 @@ func extractMessageAndAttachments(messages []ChatMessage, isVideo bool) (string,
 	return strings.Join(parts, "\n\n"), attachments, nil
 }
 
+func extractLastUserText(messages []ChatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if normalizeMessageRole(msg.Role) != "user" {
+			continue
+		}
+		switch content := msg.Content.(type) {
+		case string:
+			return strings.TrimSpace(content)
+		case []interface{}:
+			parts := make([]string, 0, len(content))
+			for _, block := range content {
+				m, ok := block.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				if strings.EqualFold(fmt.Sprint(m["type"]), "text") {
+					if s, ok := m["text"].(string); ok && strings.TrimSpace(s) != "" {
+						parts = append(parts, strings.TrimSpace(s))
+					}
+				}
+			}
+			return strings.TrimSpace(strings.Join(parts, "\n"))
+		default:
+			return strings.TrimSpace(extractContentText(content))
+		}
+	}
+	return ""
+}
+
 func extractContentText(content interface{}) string {
 	switch v := content.(type) {
 	case string:
@@ -472,12 +576,20 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 		"limittokens":      {},
 		"max_tokens":       {},
 		"maxtokens":        {},
+		"max_queries":      {},
+		"maxqueries":       {},
+		"query_limit":      {},
+		"querylimit":       {},
+		"queries_limit":    {},
+		"querieslimit":     {},
 		"token_limit":      {},
 		"tokenlimit":       {},
 		"tokens_limit":     {},
 		"tokenslimit":      {},
 		"total_tokens":     {},
 		"totaltokens":      {},
+		"total_queries":    {},
+		"totalqueries":     {},
 		"quota":            {},
 		"quota_limit":      {},
 		"quotalimit":       {},
@@ -493,6 +605,10 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 		"remainingtokens":    {},
 		"tokens_remaining":   {},
 		"tokensremaining":    {},
+		"remaining_queries":  {},
+		"remainingqueries":   {},
+		"queries_remaining":  {},
+		"queriesremaining":   {},
 		"quota_remaining":    {},
 		"quotaremaining":     {},
 		"remaining_requests": {},

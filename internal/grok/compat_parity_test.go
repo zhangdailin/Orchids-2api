@@ -52,6 +52,29 @@ func TestResolveModelOrDynamic_AcceptsUnknownGrokTextModel(t *testing.T) {
 	}
 }
 
+func TestResolveModel_Grok420BetaMapping(t *testing.T) {
+	spec, ok := ResolveModel("grok-4.20-beta")
+	if !ok {
+		t.Fatalf("ResolveModel(grok-4.20-beta) should succeed")
+	}
+	if spec.UpstreamModel != "grok-420" {
+		t.Fatalf("upstream=%q want grok-420", spec.UpstreamModel)
+	}
+	if spec.ModelMode != "MODEL_MODE_GROK_420" {
+		t.Fatalf("mode=%q want MODEL_MODE_GROK_420", spec.ModelMode)
+	}
+}
+
+func TestResolveModel_Grok420BetaHyphenAlias(t *testing.T) {
+	spec, ok := ResolveModel("grok-4-20-beta")
+	if !ok {
+		t.Fatalf("ResolveModel(grok-4-20-beta) should succeed")
+	}
+	if spec.ID != "grok-4.20-beta" {
+		t.Fatalf("id=%q want grok-4.20-beta", spec.ID)
+	}
+}
+
 func TestResolveModelOrDynamic_RejectsUnknownImagineModel(t *testing.T) {
 	if _, ok := ResolveModelOrDynamic("grok-imagine-2.0"); ok {
 		t.Fatalf("ResolveModelOrDynamic(grok-imagine-2.0) should fail")
@@ -125,7 +148,7 @@ func TestBuildChatPayload_InjectsSamplingOverrides(t *testing.T) {
 	}
 	spec := ModelSpec{ID: "grok-3", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_GROK_3"}
 
-	payload, err := h.buildChatPayload(context.Background(), "", spec, "hello", nil, nil, nil, req)
+	payload, err := h.buildChatPayload(context.Background(), "", spec, "hello", "hello", nil, nil, nil, req)
 	if err != nil {
 		t.Fatalf("buildChatPayload error: %v", err)
 	}

@@ -16,13 +16,16 @@ func TestNormalizeGrokSSOToken(t *testing.T) {
 }
 
 func TestExtractGrokModelIDsFromText(t *testing.T) {
-	text := `models: grok-4.2, "grok-5", and alias grok-4-2`
+	text := `models: grok-4.2, "grok-5", "grok-4.20-beta", and alias grok-4-2`
 	ids := extractGrokModelIDsFromText(text)
 	if slices.Contains(ids, "grok-4.2") {
 		t.Fatalf("grok-4.2 should be filtered out: %+v", ids)
 	}
 	if !slices.Contains(ids, "grok-5") {
 		t.Fatalf("expected grok-5 in ids: %+v", ids)
+	}
+	if !slices.Contains(ids, "grok-4.20-beta") {
+		t.Fatalf("expected grok-4.20-beta in ids: %+v", ids)
 	}
 }
 
