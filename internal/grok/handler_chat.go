@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"orchids-api/internal/util"
 )
 
 func detectPublicBaseURL(r *http.Request) string {
@@ -395,7 +397,11 @@ func (h *Handler) uploadSingleInput(ctx context.Context, token, input string) (s
 	}
 	if isRemoteURL(data) {
 		var err error
-		data, err = fetchRemoteAsDataURI(data, 30*time.Second)
+		proxyFunc := http.ProxyFromEnvironment
+		if h != nil && h.cfg != nil {
+			proxyFunc = util.ProxyFunc(h.cfg.ProxyHTTP, h.cfg.ProxyHTTPS, h.cfg.ProxyUser, h.cfg.ProxyPass, h.cfg.ProxyBypass)
+		}
+		data, err = fetchRemoteAsDataURI(data, 30*time.Second, proxyFunc)
 		if err != nil {
 			return "", "", err
 		}
@@ -558,6 +564,8 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	seenFull := map[string]bool{}
 	pendingPart := map[string]string{}
 	emitted := map[string]bool{}
+	sawModelMessage := false
+	emittedFromToken := false
 
 	var mf *streamMarkupFilter
 	if !hasAttachments {
@@ -632,13 +640,21 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				if cleaned != "" {
 					emitChunk(map[string]interface{}{"content": cleaned}, nil)
 				}
+			} else if !sawModelMessage {
+				// Fallback path: use token deltas only until we observe modelResponse.
+				if cleaned := mf.feed(tokenDelta); cleaned != "" {
+					cleaned = stripLeadingAngleNoise(cleaned)
+					if cleaned != "" {
+						emitChunk(map[string]interface{}{"content": cleaned}, nil)
+						emittedFromToken = true
+					}
+				}
 			}
-			// Text streaming path (mf != nil): do NOT emit token deltas.
-			// Grok token stream can include partial UTF-8 boundaries and markup noise; rely on modelResponse.message instead.
 		}
 		if mr, ok := resp["modelResponse"].(map[string]interface{}); ok {
 			if msg, ok := mr["message"].(string); ok && strings.TrimSpace(msg) != "" && msg != lastMessage {
 				lastMessage = msg
+				sawModelMessage = true
 				rawAll.WriteString(msg)
 				if mf == nil {
 					cleaned := stripToolAndRenderMarkup(msg)
@@ -646,7 +662,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 					if cleaned != "" {
 						emitChunk(map[string]interface{}{"content": cleaned}, nil)
 					}
-				} else {
+				} else if !emittedFromToken {
 					// Text streaming path: feed full messages into the filter (handles tool/render blocks) and emit the cleaned text.
 					if cleaned := mf.feed(msg); cleaned != "" {
 						cleaned = stripLeadingAngleNoise(cleaned)
@@ -736,6 +752,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 				emitChunk(map[string]interface{}{"content": tail}, nil)
 			}
 		}
+		if emittedFromToken && !sawModelMessage && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
+			slog.Debug("grok stream fallback used token deltas (no modelResponse)", "model", model)
+		}
 	}
 	// Emit any pending part-0 previews only if we never saw a full variant.
 	// Try to fetch/emit the full variant first; if it doesn't exist, fall back to the preview.
@@ -776,23 +795,20 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 
 func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, userPrompt string, body io.Reader) {
 	id := "chatcmpl_" + randomHex(8)
-	var content strings.Builder
 	lastMessage := ""
 	sawToken := false
 	videoURL := ""
 	var imageCandidates []string
+	var tokenContent strings.Builder
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
 		if tokenDelta, ok := resp["token"].(string); ok && tokenDelta != "" {
 			sawToken = true
-			content.WriteString(tokenDelta)
+			tokenContent.WriteString(tokenDelta)
 		}
 		if mr, ok := resp["modelResponse"].(map[string]interface{}); ok {
 			if msg, ok := mr["message"].(string); ok && strings.TrimSpace(msg) != "" && msg != lastMessage {
 				lastMessage = msg
-				if !sawToken {
-					content.WriteString(msg)
-				}
 				if strings.Contains(msg, "<grok:render") || strings.Contains(msg, "tool_usage_card") {
 					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
 				}
@@ -813,18 +829,26 @@ func (h *Handler) collectChat(w http.ResponseWriter, model string, spec ModelSpe
 		return
 	}
 
+	tokenClean := stripLeadingAngleNoise(sanitizeText(stripToolAndRenderMarkup(tokenContent.String())))
+	modelClean := stripLeadingAngleNoise(sanitizeText(stripToolAndRenderMarkup(lastMessage)))
+
+	finalContent := tokenClean
+	if modelClean != "" && (finalContent == "" || len(modelClean) > len(finalContent)) {
+		finalContent = modelClean
+	}
+	if !sawToken && modelClean != "" {
+		finalContent = modelClean
+	}
+
 	if videoURL != "" {
 		if name, err := h.cacheMediaURL(context.Background(), token, videoURL, "video"); err == nil && name != "" {
 			videoURL = "/grok/v1/files/video/" + name
 		}
-		if content.Len() > 0 {
-			content.WriteString("\n")
+		if strings.TrimSpace(finalContent) != "" {
+			finalContent += "\n"
 		}
-		content.WriteString(videoURL)
+		finalContent += videoURL
 	}
-
-	finalContent := stripToolAndRenderMarkup(content.String())
-	finalContent = stripLeadingAngleNoise(sanitizeText(finalContent))
 
 	// Append any collected image links as Markdown, after text cleanup.
 	imgs := normalizeImageURLs(imageCandidates, 8)

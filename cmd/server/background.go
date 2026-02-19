@@ -20,6 +20,7 @@ import (
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
+	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
 )
 
@@ -114,7 +115,11 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			if strings.TrimSpace(acc.ClientCookie) == "" {
 				continue
 			}
-			info, err := clerk.FetchAccountInfo(acc.ClientCookie)
+			proxyFunc := http.ProxyFromEnvironment
+			if cfg != nil {
+				proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+			}
+			info, err := clerk.FetchAccountInfoWithSessionProxy(acc.ClientCookie, acc.SessionCookie, proxyFunc)
 			if err != nil {
 				errLower := strings.ToLower(err.Error())
 				switch {
@@ -157,7 +162,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				if strings.TrimSpace(uid) == "" {
 					uid = acc.UserID
 				}
-				creditsInfo, creditsErr := orchids.FetchCredits(creditsCtx, info.JWT, uid)
+				creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(creditsCtx, info.JWT, uid, proxyFunc)
 				creditsCancel()
 				if creditsErr != nil {
 					slog.Warn("Orchids credits sync failed", "account", acc.Name, "error", creditsErr)
@@ -225,59 +230,66 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 		}()
 
 		syncModels := func() {
-			accounts, err := s.GetEnabledAccounts(context.Background())
-			if err != nil {
-				slog.Warn("上游模型同步: 获取账号失败", "error", err)
-				return
-			}
-			var client *orchids.Client
-			hasOrchidsAccount := false
-			for _, acc := range accounts {
-				if !isOrchidsAccountType(acc.AccountType) {
-					continue
-				}
-				hasOrchidsAccount = true
-				client = orchids.NewFromAccount(acc, cfg)
-				break
-			}
-			if client == nil {
-				if !hasOrchidsAccount {
-					slog.Debug("上游模型同步: 无 Orchids 账号，跳过")
-					return
-				}
-				client = orchids.New(cfg)
-			}
-
 			fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			upstreamModels, err := client.FetchUpstreamModels(fetchCtx)
-			if err != nil {
-				slog.Warn("上游模型同步: 获取失败", "error", err)
-				return
+			proxyFunc := http.ProxyFromEnvironment
+			if cfg != nil {
+				proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
 			}
-			if len(upstreamModels) == 0 {
+			publicModels, pubErr := orchids.FetchPublicModelChoicesWithProxy(fetchCtx, proxyFunc)
+			if pubErr != nil {
+				slog.Warn("上游模型同步: 公共模型抓取失败，使用 fallback", "error", pubErr)
+			}
+
+			if len(publicModels) == 0 {
 				slog.Debug("上游模型同步: 无模型返回")
 				return
 			}
 
 			added := 0
-			for _, um := range upstreamModels {
-				modelID := strings.TrimSpace(um.ID)
+			updated := 0
+			disabled := 0
+			publicSet := map[string]string{}
+			for _, pm := range publicModels {
+				modelID := strings.TrimSpace(pm.ID)
 				if modelID == "" {
 					continue
 				}
-				if _, err := s.GetModelByModelID(context.Background(), modelID); err == nil {
+				name := strings.TrimSpace(pm.Name)
+				if name == "" {
+					name = modelID
+				}
+				publicSet[modelID] = name
+			}
+			for modelID, name := range publicSet {
+				if existing, err := s.GetModelByModelID(context.Background(), modelID); err == nil && existing != nil {
+					needsUpdate := false
+					if !strings.EqualFold(existing.Channel, "orchids") {
+						existing.Channel = "Orchids"
+						needsUpdate = true
+					}
+					if existing.Status != store.ModelStatusAvailable {
+						existing.Status = store.ModelStatusAvailable
+						needsUpdate = true
+					}
+					if strings.TrimSpace(existing.Name) != name {
+						existing.Name = name
+						needsUpdate = true
+					}
+					if needsUpdate {
+						if err := s.UpdateModel(context.Background(), existing); err != nil {
+							slog.Warn("上游模型同步: 更新模型失败", "model_id", modelID, "error", err)
+						} else {
+							updated++
+						}
+					}
 					continue
 				}
-				channel := "Orchids"
-				if strings.TrimSpace(um.OwnedBy) != "" {
-					channel = um.OwnedBy
-				}
 				newModel := &store.Model{
-					Channel: channel,
+					Channel: "Orchids",
 					ModelID: modelID,
-					Name:    modelID,
+					Name:    name,
 					Status:  store.ModelStatusAvailable,
 				}
 				if err := s.CreateModel(context.Background(), newModel); err != nil {
@@ -285,12 +297,35 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 					continue
 				}
 				added++
-				slog.Info("上游模型同步: 新增模型", "model_id", modelID, "channel", channel)
+				slog.Info("上游模型同步: 新增模型", "model_id", modelID, "channel", "Orchids")
+			}
+
+			if existing, err := s.ListModels(context.Background()); err == nil {
+				for _, m := range existing {
+					if !strings.EqualFold(strings.TrimSpace(m.Channel), "orchids") {
+						continue
+					}
+					id := strings.TrimSpace(m.ModelID)
+					if id == "" {
+						continue
+					}
+					if _, ok := publicSet[id]; ok {
+						continue
+					}
+					if m.Status != store.ModelStatusOffline {
+						m.Status = store.ModelStatusOffline
+						if err := s.UpdateModel(context.Background(), m); err != nil {
+							slog.Warn("上游模型同步: 下线模型失败", "model_id", id, "error", err)
+							continue
+						}
+						disabled++
+					}
+				}
 			}
 			if added > 0 {
-				slog.Info("上游模型同步完成", "total_upstream", len(upstreamModels), "added", added)
+				slog.Info("上游模型同步完成", "total_public", len(publicModels), "added", added, "updated", updated, "disabled", disabled)
 			} else {
-				slog.Debug("上游模型同步完成，无新增", "total_upstream", len(upstreamModels))
+				slog.Debug("上游模型同步完成，无新增", "total_public", len(publicModels), "updated", updated, "disabled", disabled)
 			}
 		}
 

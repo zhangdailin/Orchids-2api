@@ -19,6 +19,7 @@ import (
 	"orchids-api/internal/debug"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 type Client struct {
@@ -73,20 +74,16 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 		timeout = defaultRequestTimeout
 	}
 
-	var proxyURL *url.URL
-	if cfg != nil && cfg.ProxyHTTP != "" {
-		parsedURL, err := url.Parse(cfg.ProxyHTTP)
-		if err == nil {
-			if cfg.ProxyUser != "" && cfg.ProxyPass != "" {
-				parsedURL.User = url.UserPassword(cfg.ProxyUser, cfg.ProxyPass)
-			}
-			proxyURL = parsedURL
-		}
+	var proxyFunc func(*http.Request) (*url.URL, error)
+	if cfg != nil {
+		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+	} else {
+		proxyFunc = http.ProxyFromEnvironment
 	}
 
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: newUTLSTransport(proxyURL),
+		Transport: newUTLSTransport(proxyFunc),
 	}
 }
 

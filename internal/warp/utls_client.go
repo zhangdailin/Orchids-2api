@@ -18,19 +18,20 @@ import (
 )
 
 type utlsTransport struct {
-	proxyURL *url.URL
-	h2Trans  *http2.Transport
-	h1Trans  *http.Transport
+	proxyFunc func(*http.Request) (*url.URL, error)
+	h2Trans   *http2.Transport
+	h1Trans   *http.Transport
 }
 
-func newUTLSTransport(pu *url.URL) http.RoundTripper {
+func newUTLSTransport(proxyFunc func(*http.Request) (*url.URL, error)) http.RoundTripper {
 	return &utlsTransport{
-		proxyURL: pu,
-		h2Trans:  &http2.Transport{},
+		proxyFunc: proxyFunc,
+		h2Trans:   &http2.Transport{},
 		h1Trans: &http.Transport{
 			MaxIdleConns:        100,
 			IdleConnTimeout:     90 * time.Second,
 			TLSHandshakeTimeout: 10 * time.Second,
+			Proxy:               proxyFunc,
 		},
 	}
 }
@@ -49,7 +50,7 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 
 func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != "https" {
-		return http.DefaultTransport.RoundTrip(req)
+		return t.h1Trans.RoundTrip(req)
 	}
 
 	addr := req.URL.Host
@@ -63,18 +64,27 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var tlsConn net.Conn // the connection to pass to TLS (may be buffered)
 	var err error
 
-	if t.proxyURL != nil {
-		slog.Debug("Warp AI: Dialing proxy", "proxy", t.proxyURL.Host)
-		conn, err := dialer.DialContext(ctx, "tcp", t.proxyURL.Host)
+	var proxyURL *url.URL
+	if t.proxyFunc != nil {
+		parsed, err := t.proxyFunc(req)
+		if err != nil {
+			return nil, err
+		}
+		proxyURL = parsed
+	}
+
+	if proxyURL != nil {
+		slog.Debug("Warp AI: Dialing proxy", "proxy", proxyURL.Host)
+		conn, err := dialer.DialContext(ctx, "tcp", proxyURL.Host)
 		if err != nil {
 			return nil, fmt.Errorf("proxy dial failed: %w", err)
 		}
 
 		slog.Debug("Warp AI: Sending CONNECT", "addr", addr)
 		connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", addr, addr)
-		if t.proxyURL.User != nil {
-			user := t.proxyURL.User.Username()
-			pass, _ := t.proxyURL.User.Password()
+		if proxyURL.User != nil {
+			user := proxyURL.User.Username()
+			pass, _ := proxyURL.User.Password()
 			auth := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
 			connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", auth)
 		}

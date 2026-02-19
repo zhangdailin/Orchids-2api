@@ -16,11 +16,11 @@ const graphqlURL = "https://app.warp.dev/graphql/v2"
 
 // RequestLimitInfo holds the user's request limit and usage information.
 type RequestLimitInfo struct {
-	IsUnlimited                 bool   `json:"isUnlimited"`
-	NextRefreshTime             string `json:"nextRefreshTime"`
-	RequestLimit                int    `json:"requestLimit"`
+	IsUnlimited                  bool   `json:"isUnlimited"`
+	NextRefreshTime              string `json:"nextRefreshTime"`
+	RequestLimit                 int    `json:"requestLimit"`
 	RequestsUsedSinceLastRefresh int    `json:"requestsUsedSinceLastRefresh"`
-	RequestLimitRefreshDuration string `json:"requestLimitRefreshDuration"`
+	RequestLimitRefreshDuration  string `json:"requestLimitRefreshDuration"`
 }
 
 // BonusGrant holds bonus credit grant information.
@@ -47,16 +47,16 @@ type ModelSpec struct {
 
 // ModelChoice represents a single model option within a feature category.
 type ModelChoice struct {
-	DisplayName    string        `json:"displayName"`
-	BaseModelName  string        `json:"baseModelName"`
-	ID             string        `json:"id"`
-	ReasoningLevel string        `json:"reasoningLevel"`
-	UsageMetadata  UsageMetadata `json:"usageMetadata"`
-	Description    string        `json:"description"`
-	DisableReason  string        `json:"disableReason"`
-	VisionSupported bool         `json:"visionSupported"`
-	Spec           ModelSpec     `json:"spec"`
-	Provider       string        `json:"provider"`
+	DisplayName     string        `json:"displayName"`
+	BaseModelName   string        `json:"baseModelName"`
+	ID              string        `json:"id"`
+	ReasoningLevel  string        `json:"reasoningLevel"`
+	UsageMetadata   UsageMetadata `json:"usageMetadata"`
+	Description     string        `json:"description"`
+	DisableReason   string        `json:"disableReason"`
+	VisionSupported bool          `json:"visionSupported"`
+	Spec            ModelSpec     `json:"spec"`
+	Provider        string        `json:"provider"`
 }
 
 // FeatureModelCategory holds the default and available choices for a feature.
@@ -157,7 +157,7 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
 
 // FetchRequestLimitInfo queries the Warp GraphQL API for the user's request
 // limit info and bonus grants.
-func FetchRequestLimitInfo(ctx context.Context, jwt string) (*RequestLimitInfo, []BonusGrant, error) {
+func FetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string) (*RequestLimitInfo, []BonusGrant, error) {
 	body := graphqlRequest{
 		Query: getRequestLimitInfoQuery,
 		Variables: map[string]interface{}{
@@ -165,7 +165,7 @@ func FetchRequestLimitInfo(ctx context.Context, jwt string) (*RequestLimitInfo, 
 		},
 	}
 
-	raw, err := doGraphQL(ctx, jwt, "GetRequestLimitInfo", body)
+	raw, err := doGraphQL(ctx, client, jwt, "GetRequestLimitInfo", body)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -226,7 +226,7 @@ func FetchRequestLimitInfo(ctx context.Context, jwt string) (*RequestLimitInfo, 
 
 // FetchFeatureModelChoices queries the Warp GraphQL API for available model
 // choices across feature categories.
-func FetchFeatureModelChoices(ctx context.Context, jwt string) (*FeatureModelChoices, error) {
+func FetchFeatureModelChoices(ctx context.Context, client *http.Client, jwt string) (*FeatureModelChoices, error) {
 	body := graphqlRequest{
 		Query: getFeatureModelChoicesQuery,
 		Variables: map[string]interface{}{
@@ -234,7 +234,7 @@ func FetchFeatureModelChoices(ctx context.Context, jwt string) (*FeatureModelCho
 		},
 	}
 
-	raw, err := doGraphQL(ctx, jwt, "GetFeatureModelChoices", body)
+	raw, err := doGraphQL(ctx, client, jwt, "GetFeatureModelChoices", body)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +333,7 @@ func parseFeatureModelCategory(v interface{}) (*FeatureModelCategory, error) {
 
 // doGraphQL sends a GraphQL request to the Warp API and returns the parsed
 // JSON response.
-func doGraphQL(ctx context.Context, jwt, operationName string, body graphqlRequest) (map[string]interface{}, error) {
+func doGraphQL(ctx context.Context, client *http.Client, jwt, operationName string, body graphqlRequest) (map[string]interface{}, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("warp graphql: marshal request: %w", err)
@@ -359,7 +359,10 @@ func doGraphQL(ctx context.Context, jwt, operationName string, body graphqlReque
 	req.Header.Set("accept", "*/*")
 	req.Header.Set("accept-encoding", "gzip")
 
-	resp, err := http.DefaultClient.Do(req)
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("warp graphql %s: %w", operationName, err)
 	}
@@ -418,7 +421,7 @@ func (c *Client) GetRequestLimitInfo(ctx context.Context) (*RequestLimitInfo, []
 	if jwt == "" {
 		return nil, nil, fmt.Errorf("warp graphql: jwt missing")
 	}
-	return FetchRequestLimitInfo(ctx, jwt)
+	return FetchRequestLimitInfo(ctx, c.httpClient, jwt)
 }
 
 // GetFeatureModelChoices fetches available model choices using the client's
@@ -438,5 +441,5 @@ func (c *Client) GetFeatureModelChoices(ctx context.Context) (*FeatureModelChoic
 	if jwt == "" {
 		return nil, fmt.Errorf("warp graphql: jwt missing")
 	}
-	return FetchFeatureModelChoices(ctx, jwt)
+	return FetchFeatureModelChoices(ctx, c.httpClient, jwt)
 }

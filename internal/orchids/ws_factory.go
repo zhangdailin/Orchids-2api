@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"orchids-api/internal/util"
 )
 
 // createWSConnection creates a new WebSocket connection (factory for pool)
@@ -29,8 +31,14 @@ func (c *Client) createWSConnection() (*websocket.Conn, error) {
 		"Origin":     []string{"https://orchids.app"},
 	}
 
+	proxyFunc := http.ProxyFromEnvironment
+	if c.config != nil {
+		proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
+	}
+
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 45 * time.Second,
+		Proxy:            proxyFunc,
 	}
 
 	conn, _, err := dialer.Dial(wsURL, headers)

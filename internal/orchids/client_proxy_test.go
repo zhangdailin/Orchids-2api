@@ -52,3 +52,55 @@ func TestNewFromAccount_ProxyAppliedToEachAccount(t *testing.T) {
 		}
 	}
 }
+
+func TestNewHTTPClient_ProxyBypassAndHTTPS(t *testing.T) {
+	cfg := &config.Config{
+		ProxyHTTP:   "http://proxy.local:3128",
+		ProxyHTTPS:  "http://secure.proxy:8443",
+		ProxyUser:   "user",
+		ProxyPass:   "pass",
+		ProxyBypass: []string{"example.com"},
+	}
+
+	client := newHTTPClient(cfg)
+	if client == nil || client.Transport == nil {
+		t.Fatal("expected http client transport")
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatal("expected http.Transport")
+	}
+	if transport.Proxy == nil {
+		t.Fatal("expected proxy func")
+	}
+
+	bypassReq := &http.Request{URL: &url.URL{Scheme: "https", Host: "example.com"}}
+	proxyURL, err := transport.Proxy(bypassReq)
+	if err != nil {
+		t.Fatalf("proxy func failed: %v", err)
+	}
+	if proxyURL != nil {
+		t.Fatalf("expected bypass to skip proxy, got %v", proxyURL)
+	}
+
+	httpsReq := &http.Request{URL: &url.URL{Scheme: "https", Host: "orchids.app"}}
+	proxyURL, err = transport.Proxy(httpsReq)
+	if err != nil {
+		t.Fatalf("proxy func failed: %v", err)
+	}
+	if proxyURL == nil || proxyURL.Host != "secure.proxy:8443" {
+		t.Fatalf("unexpected https proxy: %v", proxyURL)
+	}
+	if proxyURL.User == nil || proxyURL.User.Username() != "user" {
+		t.Fatalf("unexpected proxy user: %v", proxyURL.User)
+	}
+
+	httpReq := &http.Request{URL: &url.URL{Scheme: "http", Host: "orchids.app"}}
+	proxyURL, err = transport.Proxy(httpReq)
+	if err != nil {
+		t.Fatalf("proxy func failed: %v", err)
+	}
+	if proxyURL == nil || proxyURL.Host != "proxy.local:3128" {
+		t.Fatalf("unexpected http proxy: %v", proxyURL)
+	}
+}

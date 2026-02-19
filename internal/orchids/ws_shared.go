@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
+	"orchids-api/internal/util"
 )
 
 const (
@@ -506,7 +508,11 @@ func (c *Client) getWSToken() (string, error) {
 	}
 
 	if c.config != nil && strings.TrimSpace(c.config.ClientCookie) != "" {
-		info, err := clerk.FetchAccountInfoWithProjectAndSession(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID)
+		proxyFunc := http.ProxyFromEnvironment
+		if c.config != nil {
+			proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
+		}
+		info, err := clerk.FetchAccountInfoWithProjectAndSessionProxy(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID, proxyFunc)
 		if err == nil && info.JWT != "" {
 			return info.JWT, nil
 		}

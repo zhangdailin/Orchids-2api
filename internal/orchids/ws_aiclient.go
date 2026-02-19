@@ -16,6 +16,7 @@ import (
 	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 var orchidsAIClientModels = []string{
@@ -98,6 +99,11 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 	defer cancel()
 	startPool := time.Now()
 
+	proxyFunc := http.ProxyFromEnvironment
+	if c.config != nil {
+		proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
+	}
+
 	// Get connection from pool (or create new if pool unavailable)
 	var conn *websocket.Conn
 	var err error
@@ -122,6 +128,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 			}
 			dialer := websocket.Dialer{
 				HandshakeTimeout: orchidsWSConnectTimeout,
+				Proxy:            proxyFunc,
 			}
 			conn, _, err = dialer.DialContext(ctx, wsURL, headers)
 			if err != nil {
@@ -164,6 +171,7 @@ func (c *Client) sendRequestWSAIClient(ctx context.Context, req upstream.Upstrea
 		}
 		dialer := websocket.Dialer{
 			HandshakeTimeout: orchidsWSConnectTimeout,
+			Proxy:            proxyFunc,
 		}
 		conn, _, err = dialer.DialContext(ctx, wsURL, headers)
 		if err != nil {

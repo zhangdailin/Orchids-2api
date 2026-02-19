@@ -26,6 +26,7 @@ import (
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
+	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
 )
 
@@ -353,7 +354,12 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if acc.ClientCookie != "" && acc.SessionID == "" && !strings.EqualFold(acc.AccountType, "warp") {
-			info, err := clerk.FetchAccountInfoWithSession(acc.ClientCookie, acc.SessionCookie)
+			cfg := a.config.Load()
+			proxyFunc := http.ProxyFromEnvironment
+			if cfg != nil {
+				proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+			}
+			info, err := clerk.FetchAccountInfoWithSessionProxy(acc.ClientCookie, acc.SessionCookie, proxyFunc)
 			if err != nil {
 				slog.Warn("Failed to fetch account info, saving without session data", "error", err)
 			} else {
@@ -573,13 +579,16 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			} else {
-				info, err := clerk.FetchAccountInfoWithSession(acc.ClientCookie, acc.SessionCookie)
+				cfg := a.config.Load()
+				proxyFunc := http.ProxyFromEnvironment
+				if cfg != nil {
+					proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+				}
+				info, err := clerk.FetchAccountInfoWithSessionProxy(acc.ClientCookie, acc.SessionCookie, proxyFunc)
 				if err != nil {
 					refreshErr := err
 					// Fallback: when Clerk cannot enumerate active sessions, try session-id token endpoint.
 					if strings.Contains(strings.ToLower(err.Error()), "no active sessions found") && strings.TrimSpace(acc.SessionID) != "" {
-						cfg := a.config.Load()
-
 						orchidsClient := orchids.NewFromAccount(acc, cfg)
 						jwt, jwtErr := orchidsClient.GetToken()
 						if jwtErr == nil && strings.TrimSpace(jwt) != "" {
@@ -621,7 +630,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 						if strings.TrimSpace(uid) == "" {
 							uid = acc.UserID
 						}
-						creditsInfo, creditsErr := orchids.FetchCredits(r.Context(), info.JWT, uid)
+						creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(r.Context(), info.JWT, uid, proxyFunc)
 						if creditsErr != nil {
 							slog.Warn("Orchids credits sync failed on refresh", "account", acc.Name, "error", creditsErr)
 						} else if creditsInfo != nil {

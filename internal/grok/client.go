@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/util"
 )
 
 const (
@@ -52,19 +53,31 @@ func New(cfg *config.Config) *Client {
 	if cfg != nil && cfg.RequestTimeout > 0 {
 		timeout = time.Duration(cfg.RequestTimeout) * time.Second
 	}
-	baseProxy := resolveGrokProxy(cfg, strings.TrimSpace(getProxyField(cfg, "base")))
-	if baseProxy == nil {
-		baseProxy = resolveFallbackProxy(cfg)
+	baseProxyOverride := strings.TrimSpace(getProxyField(cfg, "base"))
+	assetProxyOverride := strings.TrimSpace(getProxyField(cfg, "asset"))
+	baseProxy := resolveGrokProxy(cfg, baseProxyOverride)
+	assetProxy := resolveGrokProxy(cfg, assetProxyOverride)
+
+	var bypass []string
+	if cfg != nil {
+		bypass = cfg.ProxyBypass
 	}
-	assetProxy := resolveGrokProxy(cfg, strings.TrimSpace(getProxyField(cfg, "asset")))
-	if assetProxy == nil {
-		assetProxy = baseProxy
+	baseProxyFunc := http.ProxyFromEnvironment
+	if cfg != nil {
+		baseProxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+	}
+	if baseProxy != nil {
+		baseProxyFunc = util.ProxyFuncFromURL(baseProxy, bypass)
+	}
+	assetProxyFunc := baseProxyFunc
+	if assetProxy != nil {
+		assetProxyFunc = util.ProxyFuncFromURL(assetProxy, bypass)
 	}
 
-	baseClient := newHTTPClient(cfg, timeout, baseProxy)
+	baseClient := newHTTPClient(cfg, timeout, baseProxyFunc)
 	assetClient := baseClient
 	if assetProxy != nil && (baseProxy == nil || assetProxy.String() != baseProxy.String()) {
-		assetClient = newHTTPClient(cfg, timeout, assetProxy)
+		assetClient = newHTTPClient(cfg, timeout, assetProxyFunc)
 	}
 	return &Client{
 		cfg:         cfg,
@@ -908,20 +921,20 @@ func resolveGrokProxy(cfg *config.Config, proxyAddr string) *url.URL {
 	return u
 }
 
-func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyURL *url.URL) *http.Client {
+func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 20
 	transport.IdleConnTimeout = 90 * time.Second
-	if proxyURL != nil {
-		transport.Proxy = http.ProxyURL(proxyURL)
+	if proxyFunc != nil {
+		transport.Proxy = proxyFunc
 	}
 	if cfg != nil && cfg.GrokUseUTLS {
 		transport = nil
 	}
 	var rt http.RoundTripper
 	if cfg != nil && cfg.GrokUseUTLS {
-		rt = newUTLSTransport(proxyURL)
+		rt = newUTLSTransport(proxyFunc)
 	} else {
 		rt = transport
 	}

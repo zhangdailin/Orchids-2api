@@ -1018,7 +1018,7 @@ func isRemoteURL(raw string) bool {
 	return scheme == "http" || scheme == "https"
 }
 
-func fetchRemoteAsDataURI(rawURL string, timeout time.Duration) (string, error) {
+func fetchRemoteAsDataURI(rawURL string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) (string, error) {
 	u := strings.TrimSpace(rawURL)
 	if u == "" {
 		return "", fmt.Errorf("empty url")
@@ -1027,6 +1027,11 @@ func fetchRemoteAsDataURI(rawURL string, timeout time.Duration) (string, error) 
 		timeout = 30 * time.Second
 	}
 	client := &http.Client{Timeout: timeout}
+	if proxyFunc != nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = proxyFunc
+		client.Transport = transport
+	}
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return "", err

@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 const defaultUpstreamBaseURL = "https://orchids-server.calmstone-6964e08a.westeurope.azurecontainerapps.io"
@@ -101,7 +101,6 @@ func shouldLogNoActiveSession(key string) bool {
 
 func newHTTPClient(cfg *config.Config) *http.Client {
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   100,
 		IdleConnTimeout:       90 * time.Second,
@@ -110,13 +109,10 @@ func newHTTPClient(cfg *config.Config) *http.Client {
 		ResponseHeaderTimeout: 30 * time.Second,
 	}
 
-	if cfg != nil && cfg.ProxyHTTP != "" {
-		if u, err := url.Parse(cfg.ProxyHTTP); err == nil {
-			if cfg.ProxyUser != "" && cfg.ProxyPass != "" {
-				u.User = url.UserPassword(cfg.ProxyUser, cfg.ProxyPass)
-			}
-			transport.Proxy = http.ProxyURL(u)
-		}
+	if cfg != nil {
+		transport.Proxy = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+	} else {
+		transport.Proxy = http.ProxyFromEnvironment
 	}
 
 	return &http.Client{
@@ -207,7 +203,11 @@ func (c *Client) GetToken() (string, error) {
 				return cached, nil
 			}
 
-			info, err := clerk.FetchAccountInfoWithSession(c.account.ClientCookie, c.account.SessionCookie)
+			proxyFunc := http.ProxyFromEnvironment
+			if c.config != nil {
+				proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
+			}
+			info, err := clerk.FetchAccountInfoWithSessionProxy(c.account.ClientCookie, c.account.SessionCookie, proxyFunc)
 			if err == nil && info != nil {
 				// Update runtime config (used by some upstream payload fields)
 				c.applyAccountInfo(info)
@@ -269,7 +269,11 @@ func (c *Client) forceRefreshToken() (string, error) {
 	}
 
 	if strings.TrimSpace(c.config.ClientCookie) != "" {
-		info, err := clerk.FetchAccountInfoWithProjectAndSession(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID)
+		proxyFunc := http.ProxyFromEnvironment
+		if c.config != nil {
+			proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
+		}
+		info, err := clerk.FetchAccountInfoWithProjectAndSessionProxy(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID, proxyFunc)
 		if err == nil && info.JWT != "" {
 			c.applyAccountInfo(info)
 			c.persistAccountInfo(info)

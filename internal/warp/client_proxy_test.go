@@ -1,6 +1,8 @@
 package warp
 
 import (
+	"net/http"
+	"net/url"
 	"testing"
 
 	"orchids-api/internal/config"
@@ -28,17 +30,73 @@ func TestNewFromAccount_ProxyAppliedToEachAccount(t *testing.T) {
 		if !ok || transport == nil {
 			t.Fatalf("expected utls transport for account %d", acc.ID)
 		}
-		if transport.proxyURL == nil {
-			t.Fatalf("expected proxy url for account %d", acc.ID)
+		if transport.proxyFunc == nil {
+			t.Fatalf("expected proxy func for account %d", acc.ID)
 		}
-		if transport.proxyURL.Host != "proxy.local:3128" {
-			t.Fatalf("unexpected proxy host for account %d: %s", acc.ID, transport.proxyURL.Host)
+		proxyURL, err := transport.proxyFunc(&http.Request{URL: &url.URL{Scheme: "https", Host: "example.com"}})
+		if err != nil {
+			t.Fatalf("proxy func failed for account %d: %v", acc.ID, err)
 		}
-		if transport.proxyURL.User == nil || transport.proxyURL.User.Username() != "user" {
+		if proxyURL == nil {
+			t.Fatalf("proxy url is nil for account %d", acc.ID)
+		}
+		if proxyURL.Host != "proxy.local:3128" {
+			t.Fatalf("unexpected proxy host for account %d: %s", acc.ID, proxyURL.Host)
+		}
+		if proxyURL.User == nil || proxyURL.User.Username() != "user" {
 			t.Fatalf("unexpected proxy user for account %d", acc.ID)
 		}
-		if pass, ok := transport.proxyURL.User.Password(); !ok || pass != "pass" {
+		if pass, ok := proxyURL.User.Password(); !ok || pass != "pass" {
 			t.Fatalf("unexpected proxy password for account %d", acc.ID)
 		}
+	}
+}
+
+func TestNewHTTPClient_ProxyBypassAndHTTPS(t *testing.T) {
+	cfg := &config.Config{
+		ProxyHTTP:   "http://proxy.local:3128",
+		ProxyHTTPS:  "http://secure.proxy:8443",
+		ProxyUser:   "user",
+		ProxyPass:   "pass",
+		ProxyBypass: []string{"warp.com"},
+	}
+
+	client := newHTTPClient(0, cfg)
+	if client == nil || client.Transport == nil {
+		t.Fatal("expected http client transport")
+	}
+	transport, ok := client.Transport.(*utlsTransport)
+	if !ok || transport == nil {
+		t.Fatal("expected utls transport")
+	}
+	if transport.proxyFunc == nil {
+		t.Fatal("expected proxy func")
+	}
+
+	bypassReq := &http.Request{URL: &url.URL{Scheme: "https", Host: "warp.com"}}
+	proxyURL, err := transport.proxyFunc(bypassReq)
+	if err != nil {
+		t.Fatalf("proxy func failed: %v", err)
+	}
+	if proxyURL != nil {
+		t.Fatalf("expected bypass to skip proxy, got %v", proxyURL)
+	}
+
+	httpsReq := &http.Request{URL: &url.URL{Scheme: "https", Host: "example.com"}}
+	proxyURL, err = transport.proxyFunc(httpsReq)
+	if err != nil {
+		t.Fatalf("proxy func failed: %v", err)
+	}
+	if proxyURL == nil || proxyURL.Host != "secure.proxy:8443" {
+		t.Fatalf("unexpected https proxy: %v", proxyURL)
+	}
+
+	httpReq := &http.Request{URL: &url.URL{Scheme: "http", Host: "example.com"}}
+	proxyURL, err = transport.proxyFunc(httpReq)
+	if err != nil {
+		t.Fatalf("proxy func failed: %v", err)
+	}
+	if proxyURL == nil || proxyURL.Host != "proxy.local:3128" {
+		t.Fatalf("unexpected http proxy: %v", proxyURL)
 	}
 }

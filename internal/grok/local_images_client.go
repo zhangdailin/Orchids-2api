@@ -59,7 +59,10 @@ func (h *Handler) callLocalImagesGenerationsWithOptions(
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	client := &http.Client{Transport: transport}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -57,14 +57,22 @@ type AccountInfo struct {
 }
 
 func FetchAccountInfo(clientCookie string) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSession(clientCookie, "", "")
+	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, "", "", nil)
 }
 
 func FetchAccountInfoWithSession(clientCookie string, sessionCookie string) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSession(clientCookie, sessionCookie, "")
+	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, sessionCookie, "", nil)
+}
+
+func FetchAccountInfoWithSessionProxy(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
+	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, sessionCookie, "", proxyFunc)
 }
 
 func FetchAccountInfoWithProjectAndSession(clientCookie string, sessionCookie string, customProjectID string) (*AccountInfo, error) {
+	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, sessionCookie, customProjectID, nil)
+}
+
+func FetchAccountInfoWithProjectAndSessionProxy(clientCookie string, sessionCookie string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
 	url := fmt.Sprintf("%s/v1/client?__clerk_api_version=%s&_clerk_js_version=%s", ClerkBaseURL, ClerkAPIVersion, ClerkJSVersion)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -82,6 +90,11 @@ func FetchAccountInfoWithProjectAndSession(clientCookie string, sessionCookie st
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
+	if proxyFunc != nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = proxyFunc
+		client.Transport = transport
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch client info: %w", err)
