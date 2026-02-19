@@ -33,6 +33,20 @@ function copyFieldValue(fieldId) {
   }
 }
 
+function parseProxyBypass(raw) {
+  if (!raw) return [];
+  return raw
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeProxyBypass(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") return parseProxyBypass(value);
+  return [];
+}
+
 // Load configuration from API
 async function loadConfiguration() {
   try {
@@ -45,6 +59,12 @@ async function loadConfiguration() {
 
     document.getElementById("cfg_admin_pass").value = cfg.admin_pass || "";
     document.getElementById("cfg_admin_token").value = cfg.admin_token || "";
+    document.getElementById("cfg_proxy_http").value = cfg.proxy_http || "";
+    document.getElementById("cfg_proxy_https").value = cfg.proxy_https || "";
+    document.getElementById("cfg_proxy_user").value = cfg.proxy_user || "";
+    document.getElementById("cfg_proxy_pass").value = cfg.proxy_pass || "";
+    const proxyBypass = normalizeProxyBypass(cfg.proxy_bypass);
+    document.getElementById("cfg_proxy_bypass").value = proxyBypass.join("\n");
 
     const cacheTokenCount = document.getElementById("cfg_cache_token_count");
     const cacheEnabled = typeof cfg.cache_token_count === "boolean" ? cfg.cache_token_count : true;
@@ -62,9 +82,15 @@ async function loadConfiguration() {
 
 // Save configuration to API
 async function saveConfiguration() {
+  const proxyBypassRaw = document.getElementById("cfg_proxy_bypass").value;
   const data = {
     admin_pass: document.getElementById("cfg_admin_pass").value,
     admin_token: document.getElementById("cfg_admin_token").value,
+    proxy_http: document.getElementById("cfg_proxy_http").value.trim(),
+    proxy_https: document.getElementById("cfg_proxy_https").value.trim(),
+    proxy_user: document.getElementById("cfg_proxy_user").value.trim(),
+    proxy_pass: document.getElementById("cfg_proxy_pass").value,
+    proxy_bypass: parseProxyBypass(proxyBypassRaw),
     cache_token_count: document.getElementById("cfg_cache_token_count").checked,
     cache_ttl: parseInt(document.getElementById("cfg_cache_ttl").value, 10) || 5,
     cache_strategy: document.getElementById("cfg_cache_strategy").value,

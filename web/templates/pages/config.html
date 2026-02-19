@@ -116,6 +116,48 @@
             </div>
           </div>
         </div>
+
+        <!-- Proxy Config -->
+        <div
+          style="margin-top: 24px; padding: 20px; background: rgba(139, 146, 168, 0.05); border: 1px solid var(--border-color); border-radius: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <h3 style="font-size: 1rem; color: var(--text-main); margin: 0;">代理配置</h3>
+              <span
+                style="font-size: 0.8rem; color: var(--accent-blue); background: rgba(34, 211, 238, 0.1); padding: 2px 6px; border-radius: 4px;">HTTP/HTTPS</span>
+            </div>
+            <span style="font-size: 0.8rem; color: var(--text-secondary);">留空表示直连</span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 16px;">
+            <div>
+              <label class="form-label">HTTP 代理</label>
+              <input type="text" id="cfg_proxy_http" class="form-input" placeholder="http://host:port">
+            </div>
+            <div>
+              <label class="form-label">HTTPS 代理</label>
+              <input type="text" id="cfg_proxy_https" class="form-input" placeholder="http://host:port">
+            </div>
+            <div>
+              <label class="form-label">代理用户名</label>
+              <input type="text" id="cfg_proxy_user" class="form-input" placeholder="可选">
+            </div>
+            <div>
+              <label class="form-label">代理密码</label>
+              <div style="position: relative;">
+                <input type="password" id="cfg_proxy_pass" class="form-input" placeholder="可选">
+                <span
+                  style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--text-secondary);"
+                  onclick="togglePassword('cfg_proxy_pass')">👁️</span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label class="form-label">直连域名/网段</label>
+            <textarea id="cfg_proxy_bypass" class="form-input" rows="3" placeholder="每行一个域名或 CIDR，例如 example.com 或 10.0.0.0/8"></textarea>
+          </div>
+        </div>
       </div>
 
       <div id="authConfig" class="config-section" style="padding: 24px; display: none;">

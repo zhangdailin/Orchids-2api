@@ -28,6 +28,9 @@ type Config struct {
 	RedisPassword string `json:"redis_password"`
 	RedisDB       int    `json:"redis_db"`
 	RedisPrefix   string `json:"redis_prefix"`
+	CacheTokenCount bool   `json:"cache_token_count"`
+	CacheTTL        int    `json:"cache_ttl"`
+	CacheStrategy   string `json:"cache_strategy"`
 
 	// ── Per-client state (used by orchids client, not configurable) ──
 	SessionID     string `json:"-"`
@@ -81,18 +84,15 @@ type Config struct {
 	TokenRefreshInterval      int      `json:"-"`
 	AutoRefreshToken          bool     `json:"-"`
 	OutputTokenCount          bool     `json:"-"`
-	CacheTokenCount           bool     `json:"-"`
-	CacheTTL                  int      `json:"-"`
-	CacheStrategy             string   `json:"-"`
 	LoadBalancerCacheTTL      int      `json:"-"`
 	ConcurrencyLimit          int      `json:"-"`
 	ConcurrencyTimeout        int      `json:"-"`
 	AdaptiveTimeout           bool     `json:"-"`
-	ProxyHTTP                 string   `json:"-"`
-	ProxyHTTPS                string   `json:"-"`
-	ProxyUser                 string   `json:"-"`
-	ProxyPass                 string   `json:"-"`
-	ProxyBypass               []string `json:"-"`
+	ProxyHTTP                 string   `json:"proxy_http"`
+	ProxyHTTPS                string   `json:"proxy_https"`
+	ProxyUser                 string   `json:"proxy_user"`
+	ProxyPass                 string   `json:"proxy_pass"`
+	ProxyBypass               []string `json:"proxy_bypass"`
 	AutoRegEnabled            bool     `json:"-"`
 	AutoRegThreshold          int      `json:"-"`
 	AutoRegScript             string   `json:"-"`
@@ -179,6 +179,12 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.RedisPrefix == "" {
 		cfg.RedisPrefix = "orchids:"
 	}
+	if cfg.CacheTTL <= 0 {
+		cfg.CacheTTL = 5
+	}
+	if strings.TrimSpace(cfg.CacheStrategy) == "" {
+		cfg.CacheStrategy = "mix"
+	}
 	// Always apply hardcoded values
 	ApplyHardcoded(cfg)
 }
@@ -219,8 +225,6 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.Retry429Interval = 60
 	cfg.TokenRefreshInterval = 1
 	cfg.AutoRefreshToken = true
-	cfg.CacheTTL = 5
-	cfg.CacheStrategy = "moderate"
 	cfg.LoadBalancerCacheTTL = 5
 	cfg.ConcurrencyLimit = 100
 	cfg.ConcurrencyTimeout = 300
