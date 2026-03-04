@@ -44,8 +44,8 @@ var modelByID = func() map[string]ModelSpec {
 }()
 
 var deprecatedModelIDSet = map[string]struct{}{
-	"grok-4.2": {},
-	"grok-4.20": {},
+	"grok-4.2":       {},
+	"grok-4.20":      {},
 	"grok-4.20-beta": {},
 }
 
@@ -56,15 +56,6 @@ func IsDeprecatedModelID(modelID string) bool {
 	}
 	_, deprecated := deprecatedModelIDSet[id]
 	return deprecated
-}
-
-func IsSupportedModelID(modelID string) bool {
-	id := normalizeModelID(modelID)
-	if id == "" {
-		return false
-	}
-	_, ok := modelByID[id]
-	return ok
 }
 
 func normalizeModelID(modelID string) string {

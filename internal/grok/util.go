@@ -226,7 +226,7 @@ func extractToolUsageCardText(raw string) string {
 	}
 	read := func(keys ...string) string {
 		for _, key := range keys {
-			v, _ := payload[key]
+			v := payload[key]
 			s := strings.TrimSpace(fmt.Sprint(v))
 			if s != "" && s != "<nil>" {
 				return s

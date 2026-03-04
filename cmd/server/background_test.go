@@ -44,27 +44,6 @@ func TestBuildGrokVersionProbes(t *testing.T) {
 	}
 }
 
-func TestIsOrchidsAccountType(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{name: "empty defaults to orchids", in: "", want: true},
-		{name: "orchids", in: "orchids", want: true},
-		{name: "orchids uppercase", in: "ORCHIDS", want: true},
-		{name: "warp", in: "warp", want: false},
-		{name: "grok", in: "grok", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isOrchidsAccountType(tt.in); got != tt.want {
-				t.Fatalf("isOrchidsAccountType(%q)=%v want=%v", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestLimitProbeModelIDs(t *testing.T) {
 	items := []string{"a", "b", "c", "d"}
 

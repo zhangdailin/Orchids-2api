@@ -56,20 +56,8 @@ type AccountInfo struct {
 	JWT          string
 }
 
-func FetchAccountInfo(clientCookie string) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, "", "", nil)
-}
-
-func FetchAccountInfoWithSession(clientCookie string, sessionCookie string) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, sessionCookie, "", nil)
-}
-
 func FetchAccountInfoWithSessionProxy(clientCookie string, sessionCookie string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {
 	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, sessionCookie, "", proxyFunc)
-}
-
-func FetchAccountInfoWithProjectAndSession(clientCookie string, sessionCookie string, customProjectID string) (*AccountInfo, error) {
-	return FetchAccountInfoWithProjectAndSessionProxy(clientCookie, sessionCookie, customProjectID, nil)
 }
 
 func FetchAccountInfoWithProjectAndSessionProxy(clientCookie string, sessionCookie string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*AccountInfo, error) {

@@ -45,10 +45,6 @@ var publicModelCache = struct {
 
 const publicModelCacheTTL = 30 * time.Minute
 
-func FetchPublicModelChoices(ctx context.Context) ([]PublicModelChoice, error) {
-	return FetchPublicModelChoicesWithProxy(ctx, nil)
-}
-
 func FetchPublicModelChoicesWithProxy(ctx context.Context, proxyFunc func(*http.Request) (*url.URL, error)) ([]PublicModelChoice, error) {
 	publicModelCache.mu.Lock()
 	if time.Now().Before(publicModelCache.expires) && len(publicModelCache.items) > 0 {

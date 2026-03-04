@@ -71,19 +71,6 @@ func (b *BaseHandler) EnsureModelEnabled(ctx context.Context, modelID, channel s
 	return nil
 }
 
-// SelectAccountByChannel picks the next available account for the given channel
-// using the load balancer.
-func (b *BaseHandler) SelectAccountByChannel(ctx context.Context, channel string, excludeIDs []int64) (*store.Account, error) {
-	if b == nil || b.LB == nil {
-		return nil, fmt.Errorf("load balancer not configured")
-	}
-	acc, err := b.LB.GetNextAccountExcludingByChannel(ctx, excludeIDs, channel)
-	if err != nil {
-		return nil, err
-	}
-	return acc, nil
-}
-
 // NewBaseHandler creates a BaseHandler with the given load balancer.
 func NewBaseHandler(lb *loadbalancer.LoadBalancer) *BaseHandler {
 	return &BaseHandler{LB: lb}

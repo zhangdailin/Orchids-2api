@@ -151,11 +151,7 @@ func TestShardedMapConcurrentSetGet(t *testing.T) {
 		readSuccess := true
 		for i := range values {
 			key := string(rune('a' + (i % 26)))
-			_, ok := m.Get(key)
-			if !ok {
-				// Key might not exist if multiple goroutines used same key
-				// This is expected behavior, not an error
-			}
+			_, _ = m.Get(key)
 		}
 
 		return readSuccess

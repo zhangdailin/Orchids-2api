@@ -804,11 +804,6 @@ func parseGrokMajorMinor(modelID string) (major int, minor int, ok bool) {
 	return majorNum, minorNum, true
 }
 
-func isOrchidsAccountType(accountType string) bool {
-	t := strings.ToLower(strings.TrimSpace(accountType))
-	return t == "" || t == "orchids"
-}
-
 func limitProbeModelIDs(modelIDs []string, max int) ([]string, bool) {
 	if max <= 0 || len(modelIDs) <= max {
 		return modelIDs, false

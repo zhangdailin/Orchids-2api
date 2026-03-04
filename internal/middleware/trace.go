@@ -56,11 +56,6 @@ func TraceMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// TraceFunc 是 TraceMiddleware 的 HandlerFunc 版本
-func TraceFunc(next http.HandlerFunc) http.HandlerFunc {
-	return TraceMiddleware(next).ServeHTTP
-}
-
 // GetTraceID 从 context 获取 trace ID
 func GetTraceID(ctx context.Context) string {
 	if ctx == nil {
@@ -70,20 +65,6 @@ func GetTraceID(ctx context.Context) string {
 		return traceID
 	}
 	return ""
-}
-
-// WithTraceID 创建带有 trace ID 的新 context
-func WithTraceID(ctx context.Context, traceID string) context.Context {
-	return context.WithValue(ctx, traceIDKey{}, traceID)
-}
-
-// LogWithTrace 返回带有 trace ID 的 logger
-func LogWithTrace(ctx context.Context) *slog.Logger {
-	traceID := GetTraceID(ctx)
-	if traceID == "" {
-		return slog.Default()
-	}
-	return slog.Default().With("trace_id", traceID)
 }
 
 // TracedResponseWriter 包装 ResponseWriter 以记录响应状态
@@ -173,16 +154,6 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 // Chain 链式组合多个中间件
 func Chain(middlewares ...func(http.Handler) http.Handler) func(http.Handler) http.Handler {
 	return func(final http.Handler) http.Handler {
-		for i := len(middlewares) - 1; i >= 0; i-- {
-			final = middlewares[i](final)
-		}
-		return final
-	}
-}
-
-// ChainFunc 链式组合多个中间件（HandlerFunc 版本）
-func ChainFunc(middlewares ...func(http.HandlerFunc) http.HandlerFunc) func(http.HandlerFunc) http.HandlerFunc {
-	return func(final http.HandlerFunc) http.HandlerFunc {
 		for i := len(middlewares) - 1; i >= 0; i-- {
 			final = middlewares[i](final)
 		}

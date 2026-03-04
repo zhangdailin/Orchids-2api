@@ -2,8 +2,6 @@
 package errors
 
 import (
-	"errors"
-	"fmt"
 	"github.com/goccy/go-json"
 	"net/http"
 )
@@ -14,37 +12,6 @@ type AppError struct {
 	Message    string `json:"message"`
 	HTTPStatus int    `json:"-"`
 	Cause      error  `json:"-"`
-}
-
-func (e *AppError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("[%s] %s: %v", e.Code, e.Message, e.Cause)
-	}
-	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
-}
-
-func (e *AppError) Unwrap() error {
-	return e.Cause
-}
-
-// WithCause 返回带有原因的新错误
-func (e *AppError) WithCause(cause error) *AppError {
-	return &AppError{
-		Code:       e.Code,
-		Message:    e.Message,
-		HTTPStatus: e.HTTPStatus,
-		Cause:      cause,
-	}
-}
-
-// WithMessage 返回带有自定义消息的新错误
-func (e *AppError) WithMessage(msg string) *AppError {
-	return &AppError{
-		Code:       e.Code,
-		Message:    msg,
-		HTTPStatus: e.HTTPStatus,
-		Cause:      e.Cause,
-	}
 }
 
 // ToJSON 返回错误的 JSON 表示
@@ -187,39 +154,4 @@ func New(code, message string, httpStatus int) *AppError {
 		Message:    message,
 		HTTPStatus: httpStatus,
 	}
-}
-
-// Wrap 包装标准错误为应用错误
-func Wrap(err error, appErr *AppError) *AppError {
-	if err == nil {
-		return nil
-	}
-	return appErr.WithCause(err)
-}
-
-// Is 检查错误是否为指定的应用错误
-func Is(err error, target *AppError) bool {
-	var appErr *AppError
-	if errors.As(err, &appErr) {
-		return appErr.Code == target.Code
-	}
-	return false
-}
-
-// GetHTTPStatus 从错误获取 HTTP 状态码
-func GetHTTPStatus(err error) int {
-	var appErr *AppError
-	if errors.As(err, &appErr) {
-		return appErr.HTTPStatus
-	}
-	return http.StatusInternalServerError
-}
-
-// GetCode 从错误获取错误码
-func GetCode(err error) string {
-	var appErr *AppError
-	if errors.As(err, &appErr) {
-		return appErr.Code
-	}
-	return CodeInternalError
 }

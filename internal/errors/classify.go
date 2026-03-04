@@ -1,9 +1,6 @@
 package errors
 
-import (
-	"net/http"
-	"strings"
-)
+import "strings"
 
 // HasExplicitHTTPStatus checks whether an error string contains an explicit
 // reference to the given HTTP status code (e.g. "HTTP 401", "status=429").
@@ -107,15 +104,4 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	default:
 		return UpstreamErrorClass{Category: "unknown", Retryable: true, SwitchAccount: true}
 	}
-}
-
-// WriteJSON is a convenience function that writes a JSON error response
-// matching the OpenAI/Claude error envelope format.
-func WriteJSON(w http.ResponseWriter, code string, message string, httpStatus int) {
-	e := &AppError{
-		Code:       code,
-		Message:    message,
-		HTTPStatus: httpStatus,
-	}
-	e.WriteResponse(w)
 }

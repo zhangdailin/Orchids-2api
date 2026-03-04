@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,7 +10,7 @@ import (
 
 func TestResolveWorkdir_NoSessionFallbackWithoutExplicitConversation(t *testing.T) {
 	ss := NewMemorySessionStore(30*time.Minute, 100)
-	ss.SetWorkdir(nil, "k1", "/stale/workdir")
+	ss.SetWorkdir(context.TODO(), "k1", "/stale/workdir")
 
 	h := &Handler{
 		sessionStore: ss,

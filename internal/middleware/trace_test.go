@@ -105,26 +105,6 @@ func TestTraceMiddleware(t *testing.T) {
 	})
 }
 
-func TestTraceFunc(t *testing.T) {
-	called := false
-	handler := TraceFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		traceID := GetTraceID(r.Context())
-		if traceID == "" {
-			t.Error("trace ID not found in context")
-		}
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-
-	handler.ServeHTTP(w, req)
-
-	if !called {
-		t.Error("handler was not called")
-	}
-}
-
 func TestGetTraceID(t *testing.T) {
 	t.Run("returns empty for context without trace ID", func(t *testing.T) {
 		ctx := context.Background()
@@ -135,35 +115,9 @@ func TestGetTraceID(t *testing.T) {
 
 	t.Run("returns trace ID from context", func(t *testing.T) {
 		expected := "test-trace-id"
-		ctx := WithTraceID(context.Background(), expected)
+		ctx := context.WithValue(context.Background(), traceIDKey{}, expected)
 		if got := GetTraceID(ctx); got != expected {
 			t.Errorf("GetTraceID(ctx) = %q, want %q", got, expected)
-		}
-	})
-}
-
-func TestWithTraceID(t *testing.T) {
-	expected := "my-trace-id"
-	ctx := WithTraceID(context.Background(), expected)
-	got := GetTraceID(ctx)
-	if got != expected {
-		t.Errorf("GetTraceID after WithTraceID = %q, want %q", got, expected)
-	}
-}
-
-func TestLogWithTrace(t *testing.T) {
-	t.Run("returns logger without trace ID", func(t *testing.T) {
-		logger := LogWithTrace(context.Background())
-		if logger == nil {
-			t.Error("LogWithTrace returned nil")
-		}
-	})
-
-	t.Run("returns logger with trace ID", func(t *testing.T) {
-		ctx := WithTraceID(context.Background(), "test-id")
-		logger := LogWithTrace(ctx)
-		if logger == nil {
-			t.Error("LogWithTrace returned nil")
 		}
 	})
 }
@@ -320,45 +274,6 @@ func TestChain(t *testing.T) {
 	chained.ServeHTTP(w, req)
 
 	expected := []string{"m1-before", "m2-before", "handler", "m2-after", "m1-after"}
-	if len(order) != len(expected) {
-		t.Fatalf("order length = %d, want %d", len(order), len(expected))
-	}
-	for i, v := range expected {
-		if order[i] != v {
-			t.Errorf("order[%d] = %q, want %q", i, order[i], v)
-		}
-	}
-}
-
-func TestChainFunc(t *testing.T) {
-	var order []string
-
-	m1 := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			order = append(order, "m1")
-			next(w, r)
-		}
-	}
-
-	m2 := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			order = append(order, "m2")
-			next(w, r)
-		}
-	}
-
-	final := func(w http.ResponseWriter, r *http.Request) {
-		order = append(order, "handler")
-	}
-
-	chained := ChainFunc(m1, m2)(final)
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-
-	chained.ServeHTTP(w, req)
-
-	expected := []string{"m1", "m2", "handler"}
 	if len(order) != len(expected) {
 		t.Fatalf("order length = %d, want %d", len(order), len(expected))
 	}
