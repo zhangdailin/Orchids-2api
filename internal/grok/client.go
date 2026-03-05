@@ -126,6 +126,8 @@ var baseHeaders = http.Header{
 }
 
 func (c *Client) headers(token string) http.Header {
+	token = NormalizeSSOToken(token)
+
 	// 从预分配的模板克隆请求头
 	h := make(http.Header, len(baseHeaders))
 	for k, v := range baseHeaders {
@@ -320,7 +322,13 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 }
 
 func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
+	token = NormalizeSSOToken(token)
+	if strings.TrimSpace(token) == "" {
+		return nil, fmt.Errorf("empty token")
+	}
+
 	model := strings.TrimSpace(modelID)
+	explicitModel := model != ""
 	if model == "" {
 		model = "grok-4-1-thinking-1129"
 	}
@@ -332,6 +340,32 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 		}
 	}
 
+	info, err := c.getUsageBySpec(ctx, token, spec)
+	if err == nil {
+		return info, nil
+	}
+
+	// Keep explicit model deterministic. For implicit defaults, degrade to grok-3
+	// if upstream rejects the default model to preserve quota availability.
+	if explicitModel {
+		return nil, err
+	}
+	status := parseUpstreamStatus(err)
+	if status != http.StatusBadRequest && status != http.StatusNotFound && !isGrokModelNotFoundError(err) {
+		return nil, err
+	}
+	fallback, ok := ResolveModel("grok-3")
+	if !ok {
+		return nil, err
+	}
+	info, fallbackErr := c.getUsageBySpec(ctx, token, fallback)
+	if fallbackErr == nil {
+		return info, nil
+	}
+	return nil, fmt.Errorf("grok usage fallback failed (default_err=%v, fallback_err=%w)", err, fallbackErr)
+}
+
+func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpec) (*RateLimitInfo, error) {
 	payload := map[string]interface{}{
 		"requestKind": "DEFAULT",
 		"modelName":   strings.TrimSpace(spec.UpstreamModel),
@@ -360,6 +394,14 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 		return info, nil
 	}
 	return parseRateLimitInfo(resp.Header), nil
+}
+
+func isGrokModelNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "model is not found") || strings.Contains(lower, "model not found")
 }
 
 func (c *Client) uploadFile(ctx context.Context, token, fileName, fileMimeType, contentBase64 string) (string, string, error) {

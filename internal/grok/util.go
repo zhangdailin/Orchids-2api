@@ -26,6 +26,7 @@ var (
 	reToolUsageCardBlock      = regexp.MustCompile(`(?is)<?xai:tool_usage_card[^>]*>.*?</xai:tool_usage_card>`)
 	reToolUsageCardIncomplete = regexp.MustCompile(`(?is)<?xai:tool_usage_card.*?(?:</xai:tool_usage_card>|\z)`)
 	reGrokRenderBlock         = regexp.MustCompile(`(?is)<?grok:render.*?</grok:render>`)
+	reRateNumber              = regexp.MustCompile(`[-+]?\d+(?:\.\d+)?`)
 )
 
 func randomHex(n int) string {
@@ -572,12 +573,26 @@ func NormalizeSSOToken(raw string) string {
 	if token == "" {
 		return ""
 	}
-	lower := strings.ToLower(token)
-	if idx := strings.Index(lower, "sso="); idx >= 0 {
-		token = token[idx+len("sso="):]
-		if semi := strings.Index(token, ";"); semi >= 0 {
-			token = token[:semi]
+
+	// Cookie-style input: scan pairs and prefer exact "sso" key.
+	if strings.Contains(token, ";") {
+		parts := strings.Split(token, ";")
+		for _, part := range parts {
+			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(kv[0]), "sso") {
+				return strings.TrimSpace(kv[1])
+			}
 		}
+		return strings.TrimSpace(token)
+	}
+
+	// Plain "sso=<token>" input.
+	lower := strings.ToLower(strings.TrimSpace(token))
+	if strings.HasPrefix(lower, "sso=") {
+		return strings.TrimSpace(token[len("sso="):])
 	}
 	return strings.TrimSpace(token)
 }
@@ -634,33 +649,32 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 	}
 
 	limitKeys := map[string]struct{}{
-		"limit":            {},
-		"limit_tokens":     {},
-		"limittokens":      {},
-		"max_tokens":       {},
-		"maxtokens":        {},
-		"max_queries":      {},
-		"maxqueries":       {},
-		"query_limit":      {},
-		"querylimit":       {},
-		"queries_limit":    {},
-		"querieslimit":     {},
-		"token_limit":      {},
-		"tokenlimit":       {},
-		"tokens_limit":     {},
-		"tokenslimit":      {},
-		"total_tokens":     {},
-		"totaltokens":      {},
-		"total_queries":    {},
-		"totalqueries":     {},
-		"quota":            {},
-		"quota_limit":      {},
-		"quotalimit":       {},
-		"request_limit":    {},
-		"requestlimit":     {},
-		"requests_limit":   {},
-		"requestslimit":    {},
-		"request_limiters": {},
+		"limit":          {},
+		"limit_tokens":   {},
+		"limittokens":    {},
+		"max_tokens":     {},
+		"maxtokens":      {},
+		"max_queries":    {},
+		"maxqueries":     {},
+		"query_limit":    {},
+		"querylimit":     {},
+		"queries_limit":  {},
+		"querieslimit":   {},
+		"token_limit":    {},
+		"tokenlimit":     {},
+		"tokens_limit":   {},
+		"tokenslimit":    {},
+		"total_tokens":   {},
+		"totaltokens":    {},
+		"total_queries":  {},
+		"totalqueries":   {},
+		"quota":          {},
+		"quota_limit":    {},
+		"quotalimit":     {},
+		"request_limit":  {},
+		"requestlimit":   {},
+		"requests_limit": {},
+		"requestslimit":  {},
 	}
 	remainingKeys := map[string]struct{}{
 		"remaining":          {},
@@ -693,7 +707,7 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 
 	limit, okLimit := findNumberByKeys(payload, limitKeys)
 	remaining, okRemaining := findNumberByKeys(payload, remainingKeys)
-	resetRaw, okReset := findValueByKeys(payload, resetKeys)
+	resetAt, okReset := findResetByKeys(payload, resetKeys)
 
 	if !okLimit && !okRemaining && !okReset {
 		return nil
@@ -704,7 +718,7 @@ func parseRateLimitPayload(payload map[string]interface{}) *RateLimitInfo {
 		Remaining: remaining,
 	}
 	if okReset {
-		info.ResetAt = parseRateLimitReset(fmt.Sprint(resetRaw))
+		info.ResetAt = resetAt
 	}
 	return info
 }
@@ -715,15 +729,56 @@ func classifyAccountStatusFromError(errStr string) string {
 }
 
 func findNumberByKeys(value interface{}, keys map[string]struct{}) (int64, bool) {
-	raw, ok := findValueByKeys(value, keys)
-	if !ok {
-		return 0, false
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for k, item := range v {
+			if _, ok := keys[normalizeRateKey(k)]; !ok {
+				continue
+			}
+			if n, ok := parseNumberAny(item); ok {
+				return n, true
+			}
+		}
+		for _, item := range v {
+			if out, ok := findNumberByKeys(item, keys); ok {
+				return out, true
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if out, ok := findNumberByKeys(item, keys); ok {
+				return out, true
+			}
+		}
 	}
+	return 0, false
+}
+
+func parseNumberAny(raw interface{}) (int64, bool) {
 	switch v := raw.(type) {
 	case int:
 		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int32:
+		return int64(v), true
 	case int64:
 		return v, true
+	case uint:
+		return int64(v), true
+	case uint8:
+		return int64(v), true
+	case uint16:
+		return int64(v), true
+	case uint32:
+		return int64(v), true
+	case uint64:
+		if v > uint64(1<<63-1) {
+			return 0, false
+		}
+		return int64(v), true
 	case float64:
 		return int64(v), true
 	case float32:
@@ -738,32 +793,37 @@ func findNumberByKeys(value interface{}, keys map[string]struct{}) (int64, bool)
 		return 0, false
 	case string:
 		return parseRateLimitValue(v)
+	case map[string]interface{}, []interface{}:
+		return 0, false
 	default:
 		return parseRateLimitValue(fmt.Sprint(v))
 	}
 }
 
-func findValueByKeys(value interface{}, keys map[string]struct{}) (interface{}, bool) {
+func findResetByKeys(value interface{}, keys map[string]struct{}) (time.Time, bool) {
 	switch v := value.(type) {
 	case map[string]interface{}:
 		for k, item := range v {
-			if _, ok := keys[normalizeRateKey(k)]; ok {
-				return item, true
+			if _, ok := keys[normalizeRateKey(k)]; !ok {
+				continue
+			}
+			if t := parseRateLimitReset(fmt.Sprint(item)); !t.IsZero() {
+				return t, true
 			}
 		}
 		for _, item := range v {
-			if out, ok := findValueByKeys(item, keys); ok {
+			if out, ok := findResetByKeys(item, keys); ok {
 				return out, true
 			}
 		}
 	case []interface{}:
 		for _, item := range v {
-			if out, ok := findValueByKeys(item, keys); ok {
+			if out, ok := findResetByKeys(item, keys); ok {
 				return out, true
 			}
 		}
 	}
-	return nil, false
+	return time.Time{}, false
 }
 
 func normalizeRateKey(key string) string {
@@ -796,6 +856,14 @@ func parseRateLimitValue(raw string) (int64, bool) {
 	if f, err := strconv.ParseFloat(raw, 64); err == nil {
 		return int64(f), true
 	}
+	if token := reRateNumber.FindString(raw); token != "" {
+		if v, err := strconv.ParseInt(token, 10, 64); err == nil {
+			return v, true
+		}
+		if f, err := strconv.ParseFloat(token, 64); err == nil {
+			return int64(f), true
+		}
+	}
 	return 0, false
 }
 
@@ -803,6 +871,9 @@ func parseRateLimitReset(raw string) time.Time {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t
 	}
 	if v, ok := parseRateLimitValue(raw); ok {
 		// Treat large values as milliseconds.
@@ -812,9 +883,6 @@ func parseRateLimitReset(raw string) time.Time {
 		if v > 0 {
 			return time.Unix(v, 0)
 		}
-	}
-	if t, err := time.Parse(time.RFC3339, raw); err == nil {
-		return t
 	}
 	return time.Time{}
 }

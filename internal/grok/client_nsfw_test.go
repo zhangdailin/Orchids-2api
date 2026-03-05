@@ -3,6 +3,7 @@ package grok
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -26,5 +27,17 @@ func TestEnableNSFWDetailed_EmptyToken(t *testing.T) {
 	}
 	if res.Error == "" {
 		t.Fatalf("EnableNSFWDetailed should return error message")
+	}
+}
+
+func TestHeaders_NormalizeSSOToken(t *testing.T) {
+	c := New(nil)
+	h := c.headers("sso=token-abc; Path=/; HttpOnly")
+	cookie := h.Get("Cookie")
+	if !strings.Contains(cookie, "sso=token-abc; sso-rw=token-abc") {
+		t.Fatalf("unexpected cookie=%q", cookie)
+	}
+	if strings.Contains(cookie, "sso=sso=") {
+		t.Fatalf("token should be normalized, cookie=%q", cookie)
 	}
 }

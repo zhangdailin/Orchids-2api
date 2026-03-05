@@ -3,6 +3,7 @@ package grok
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeSSOToken(t *testing.T) {
@@ -13,6 +14,7 @@ func TestNormalizeSSOToken(t *testing.T) {
 		{in: "abc", want: "abc"},
 		{in: "sso=abc123", want: "abc123"},
 		{in: "foo=1; sso=abc123; bar=2", want: "abc123"},
+		{in: "notsso=abc123", want: "notsso=abc123"},
 	}
 	for _, tt := range tests {
 		got := NormalizeSSOToken(tt.in)
@@ -109,6 +111,62 @@ func TestParseRateLimitPayload_AcceptsQueriesFields(t *testing.T) {
 	}
 	if info.Remaining != 23 {
 		t.Fatalf("remaining=%d want=23", info.Remaining)
+	}
+}
+
+func TestParseRateLimitPayload_SkipsNonNumericMatchedField(t *testing.T) {
+	payload := map[string]interface{}{
+		"quota": map[string]interface{}{
+			"kind": "daily",
+		},
+		"limits": map[string]interface{}{
+			"maxQueries":       140,
+			"remainingQueries": 23,
+		},
+	}
+
+	for i := 0; i < 200; i++ {
+		info := parseRateLimitPayload(payload)
+		if info == nil {
+			t.Fatalf("parseRateLimitPayload returned nil at iter=%d", i)
+		}
+		if info.Limit != 140 {
+			t.Fatalf("limit=%d want=140 iter=%d", info.Limit, i)
+		}
+		if info.Remaining != 23 {
+			t.Fatalf("remaining=%d want=23 iter=%d", info.Remaining, i)
+		}
+	}
+}
+
+func TestParseRateLimitValue_ComplexFormats(t *testing.T) {
+	tests := []struct {
+		in   string
+		want int64
+	}{
+		{in: "100;w=3600", want: 100},
+		{in: "23/50", want: 23},
+		{in: "remaining=42", want: 42},
+		{in: "  7.9 requests", want: 7},
+	}
+
+	for _, tt := range tests {
+		got, ok := parseRateLimitValue(tt.in)
+		if !ok {
+			t.Fatalf("parseRateLimitValue(%q) not parsed", tt.in)
+		}
+		if got != tt.want {
+			t.Fatalf("parseRateLimitValue(%q)=%d want=%d", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestParseRateLimitReset_RFC3339(t *testing.T) {
+	raw := "2026-03-05T19:00:00Z"
+	got := parseRateLimitReset(raw)
+	want, _ := time.Parse(time.RFC3339, raw)
+	if !got.Equal(want) {
+		t.Fatalf("parseRateLimitReset(%q)=%v want=%v", raw, got, want)
 	}
 }
 
