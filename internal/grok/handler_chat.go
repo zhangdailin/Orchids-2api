@@ -675,8 +675,6 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 	emittedFromToken := false
 	lastTextChunkNorm := ""
 	var emittedText strings.Builder
-	var replayBaseRunes []rune
-	replayCursor := -1
 
 	var mf *streamMarkupFilter
 	if !hasAttachments {
@@ -715,44 +713,6 @@ func (h *Handler) streamChat(w http.ResponseWriter, model string, spec ModelSpec
 		content = collapsed
 		norm := strings.TrimSpace(content)
 		if norm == "" {
-			return
-		}
-
-		if replayCursor >= 0 && len(replayBaseRunes) > 0 {
-			chunkRunes := []rune(content)
-			matched := replayCursor+len(chunkRunes) <= len(replayBaseRunes)
-			if matched {
-				for i := range chunkRunes {
-					if replayBaseRunes[replayCursor+i] != chunkRunes[i] {
-						matched = false
-						break
-					}
-				}
-			}
-			if matched {
-				replayCursor += len(chunkRunes)
-				if h != nil && h.cfg != nil && h.cfg.DebugEnabled {
-					slog.Debug("grok stream skip replayed text chunk", "cursor", replayCursor, "total", len(replayBaseRunes))
-				}
-				if replayCursor >= len(replayBaseRunes) {
-					replayCursor = -1
-					replayBaseRunes = nil
-				}
-				return
-			}
-			replayCursor = -1
-			replayBaseRunes = nil
-		}
-
-		if replayCursor < 0 &&
-			utf8.RuneCountInString(norm) >= 24 &&
-			utf8.RuneCountInString(strings.TrimSpace(emittedText.String())) >= 120 &&
-			strings.HasPrefix(strings.TrimSpace(emittedText.String()), norm) {
-			replayBaseRunes = []rune(strings.TrimSpace(emittedText.String()))
-			replayCursor = len([]rune(norm))
-			if h != nil && h.cfg != nil && h.cfg.DebugEnabled {
-				slog.Debug("grok stream detected replay from start", "replay_len", replayCursor, "base_len", len(replayBaseRunes))
-			}
 			return
 		}
 

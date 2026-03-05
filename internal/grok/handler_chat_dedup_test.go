@@ -40,28 +40,6 @@ func TestStreamChat_DedupsGreetingRepeat(t *testing.T) {
 	}
 }
 
-func TestStreamChat_SkipsReplayFromStart(t *testing.T) {
-	h := &Handler{}
-	rec := httptest.NewRecorder()
-
-	base := "today shanghai is rainy with around seven to thirteen celsius, humid and breezy; carry an umbrella, wear layered clothes, and keep warm when going out at night for commuting."
-	dup := base + base
-	body := strings.NewReader(
-		`{"result":{"response":{"token":"` + base + `"}}}` +
-			`{"result":{"response":{"token":"` + base + `"}}}`,
-	)
-
-	h.streamChat(rec, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, body)
-	contents := extractStreamTextContents(t, rec.Body.String())
-	combined := strings.Join(contents, "")
-	if strings.Contains(combined, dup) {
-		t.Fatalf("unexpected replayed response in stream, combined=%q", combined)
-	}
-	if combined != base {
-		t.Fatalf("expected replay from start to be suppressed, got=%q", combined)
-	}
-}
-
 func extractStreamTextContents(t *testing.T, raw string) []string {
 	t.Helper()
 	lines := strings.Split(raw, "\n")
