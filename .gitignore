@@ -7,6 +7,7 @@ debug-logs
 *.dylib
 orchids-api
 orchids-server
+server
 
 # Test binary
 *.test
@@ -24,6 +25,10 @@ vendor/
 # IDE
 .idea/
 .vscode/
+.agent/
+.claude/
+.omc/
+internal/grok/.omc/
 *.swp
 *.swo
 *~
@@ -49,6 +54,7 @@ logs/
 # Build
 build/
 dist/
+tmp_aiclient/
 
 # Test
 test/

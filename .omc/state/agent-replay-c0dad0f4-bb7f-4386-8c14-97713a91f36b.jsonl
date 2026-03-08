@@ -1,5 +1,0 @@
-{"t":0,"agent":"system","event":"skill_invoked","skill_name":"oh-my-claudecode:hud"}
-{"t":0,"agent":"a520b2f","agent_type":"Explore","event":"agent_start","parent_mode":"none"}
-{"t":0,"agent":"a520b2f","agent_type":"Explore","event":"agent_stop","success":true,"duration_ms":306653}
-{"t":0,"agent":"system","event":"skill_invoked","skill_name":"oh-my-claudecode:mcp-setup"}
-{"t":0,"agent":"a1333ca","agent_type":"unknown","event":"agent_stop","success":true}
