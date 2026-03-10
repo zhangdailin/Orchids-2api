@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	apperrors "orchids-api/internal/errors"
+	"orchids-api/internal/modelpolicy"
+	"orchids-api/internal/store"
 )
 
 type PublicModelResponse struct {
@@ -20,32 +22,30 @@ type PublicModelsListResponse struct {
 	Data   []PublicModelResponse `json:"data"`
 }
 
-var grok2apiModelAllowlist = map[string]struct{}{
-	"grok-3":                 {},
-	"grok-3-mini":            {},
-	"grok-3-thinking":        {},
-	"grok-4":                 {},
-	"grok-4-mini":            {},
-	"grok-4-thinking":        {},
-	"grok-4-heavy":           {},
-	"grok-4.1-mini":          {},
-	"grok-4.1-fast":          {},
-	"grok-4.1-expert":        {},
-	"grok-4.1-thinking":      {},
-	"grok-420":               {},
-	"grok-imagine-1.0":       {},
-	"grok-imagine-1.0-fast":  {},
-	"grok-imagine-1.0-edit":  {},
-	"grok-imagine-1.0-video": {},
+func normalizePublicModelChannel(channel string) string {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return "orchids"
+	}
+	return channel
 }
 
-func isGrok2APISupportedModelID(modelID string) bool {
-	id := strings.ToLower(strings.TrimSpace(modelID))
-	if id == "" {
-		return false
+func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
+	if m == nil {
+		return "", false
 	}
-	_, ok := grok2apiModelAllowlist[id]
-	return ok
+
+	mChannel := normalizePublicModelChannel(m.Channel)
+	if filterChannel != "" && !strings.EqualFold(mChannel, filterChannel) {
+		return mChannel, false
+	}
+	if !m.Status.Enabled() {
+		return mChannel, false
+	}
+	if strings.EqualFold(mChannel, "grok") && !modelpolicy.IsVisibleGrokModel(m.ModelID, m.Verified) {
+		return mChannel, false
+	}
+	return mChannel, true
 }
 
 func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
@@ -72,23 +72,8 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 
 	var publicModels []PublicModelResponse
 	for _, m := range allModels {
-		mChannel := m.Channel
-		if strings.TrimSpace(mChannel) == "" {
-			mChannel = "orchids" // Default assumption
-		}
-		if strings.EqualFold(mChannel, "grok") && !isGrok2APISupportedModelID(m.ModelID) {
-			continue
-		}
-
-		// If filtering is active (e.g. /orchids/v1/models), skip models from other channels
-		if filterChannel != "" {
-			if !strings.EqualFold(mChannel, filterChannel) {
-				continue
-			}
-		}
-
-		// Only return enabled models for public API
-		if !m.Status.Enabled() {
+		mChannel, ok := isVisiblePublicModel(m, filterChannel)
+		if !ok {
 			continue
 		}
 
@@ -96,7 +81,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			ID:      m.ModelID, // Use the actual model ID (e.g. "claude-3-opus") not the DB ID
 			Object:  "model",
 			Created: 1677610602, // Echo a static timestamp or 0 if unknown
-			OwnedBy: m.Channel,
+			OwnedBy: mChannel,
 		})
 	}
 
@@ -150,24 +135,18 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check channel filter if applicable
 	filterChannel := channelFromPath(path)
-	if filterChannel != "" {
-		mChannel := m.Channel
-		if strings.TrimSpace(mChannel) == "" {
-			mChannel = "orchids"
-		}
-		if !strings.EqualFold(mChannel, filterChannel) {
-			apperrors.New("invalid_request_error", "Model not found in this channel", http.StatusNotFound).WriteResponse(w)
-			return
-		}
+	mChannel, ok := isVisiblePublicModel(m, filterChannel)
+	if !ok {
+		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
+		return
 	}
 
 	resp := PublicModelResponse{
 		ID:      m.ModelID,
 		Object:  "model",
 		Created: 1677610602,
-		OwnedBy: m.Channel,
+		OwnedBy: mChannel,
 	}
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

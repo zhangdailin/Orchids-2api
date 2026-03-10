@@ -1101,6 +1101,36 @@ type UpstreamModelsResponse struct {
 	Data   []UpstreamModel `json:"data"`
 }
 
+type upstreamModelsEnvelope struct {
+	Object string          `json:"object"`
+	Data   []UpstreamModel `json:"data"`
+	Models []UpstreamModel `json:"models"`
+}
+
+func decodeUpstreamModelsResponse(body []byte) ([]UpstreamModel, error) {
+	var envelope upstreamModelsEnvelope
+	envelopeErr := json.Unmarshal(body, &envelope)
+	if envelopeErr == nil {
+		if envelope.Data != nil {
+			return envelope.Data, nil
+		}
+		if envelope.Models != nil {
+			return envelope.Models, nil
+		}
+	}
+
+	var direct []UpstreamModel
+	directErr := json.Unmarshal(body, &direct)
+	if directErr == nil {
+		return direct, nil
+	}
+
+	if envelopeErr != nil {
+		return nil, envelopeErr
+	}
+	return nil, directErr
+}
+
 func (c *Client) FetchUpstreamModels(ctx context.Context) ([]UpstreamModel, error) {
 	token, err := c.GetToken()
 	if err != nil {
@@ -1136,14 +1166,18 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]UpstreamModel, erro
 		}
 
 		if resp.StatusCode == http.StatusOK {
-			var parsed UpstreamModelsResponse
-			if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-				resp.Body.Close()
-				// Try parsing as just []UpstreamModel
-				return nil, err
-			}
+			body, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			return parsed.Data, nil
+			if readErr != nil {
+				lastErr = readErr
+				continue
+			}
+			models, decodeErr := decodeUpstreamModelsResponse(body)
+			if decodeErr != nil {
+				lastErr = fmt.Errorf("upstream models decode failed for %s: %w", p, decodeErr)
+				continue
+			}
+			return models, nil
 		}
 
 		// Read body for error details

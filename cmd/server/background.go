@@ -19,6 +19,7 @@ import (
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
@@ -328,17 +329,13 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 			fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			proxyFunc := http.ProxyFromEnvironment
-			if cfg != nil {
-				proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
-			}
-			publicModels, pubErr := orchids.FetchPublicModelChoicesWithProxy(fetchCtx, proxyFunc)
-			if pubErr != nil {
-				slog.Warn("上游模型同步: 公共模型抓取失败，使用 fallback", "error", pubErr)
+			publicModels, source, sourceErr := fetchOrchidsModelChoices(fetchCtx, cfg, s)
+			if sourceErr != nil {
+				slog.Warn("上游模型同步: 模型抓取回退", "source", source, "error", sourceErr)
 			}
 
 			if len(publicModels) == 0 {
-				slog.Debug("上游模型同步: 无模型返回")
+				slog.Debug("上游模型同步: 无模型返回", "source", source)
 				return
 			}
 
@@ -418,9 +415,9 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 				}
 			}
 			if added > 0 {
-				slog.Info("上游模型同步完成", "total_public", len(publicModels), "added", added, "updated", updated, "disabled", disabled)
+				slog.Info("上游模型同步完成", "source", source, "total_public", len(publicModels), "added", added, "updated", updated, "disabled", disabled)
 			} else {
-				slog.Debug("上游模型同步完成，无新增", "total_public", len(publicModels), "updated", updated, "disabled", disabled)
+				slog.Debug("上游模型同步完成，无新增", "source", source, "total_public", len(publicModels), "updated", updated, "disabled", disabled)
 			}
 		}
 
@@ -577,8 +574,10 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 				if _, exists := pendingSeen[modelID]; exists {
 					continue
 				}
-				if _, err := s.GetModelByModelID(context.Background(), modelID); err == nil {
-					continue
+				if existing, err := s.GetModelByModelID(context.Background(), modelID); err == nil && existing != nil {
+					if modelpolicy.IsVisibleGrokModel(modelID, existing.Verified) && existing.Status.Enabled() {
+						continue
+					}
 				}
 				pendingSeen[modelID] = struct{}{}
 				pendingNames[modelID] = strings.TrimSpace(spec.Name)
@@ -615,11 +614,25 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 				if name == "" {
 					name = modelID
 				}
+				if existing, err := s.GetModelByModelID(context.Background(), modelID); err == nil && existing != nil {
+					existing.Channel = "Grok"
+					existing.Name = name
+					existing.Status = store.ModelStatusAvailable
+					existing.Verified = true
+					if err := s.UpdateModel(context.Background(), existing); err != nil {
+						slog.Warn("Grok 模型同步: 更新模型失败", "model_id", modelID, "error", err)
+						continue
+					}
+					added++
+					slog.Info("Grok 模型同步: 验证模型", "model_id", modelID)
+					continue
+				}
 				newModel := &store.Model{
-					Channel: "Grok",
-					ModelID: modelID,
-					Name:    name,
-					Status:  store.ModelStatusAvailable,
+					Channel:  "Grok",
+					ModelID:  modelID,
+					Name:     name,
+					Status:   store.ModelStatusAvailable,
+					Verified: true,
 				}
 				if err := s.CreateModel(context.Background(), newModel); err != nil {
 					// Handle create races gracefully.
@@ -663,6 +676,62 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 			}
 		}
 	}()
+}
+
+func hasOrchidsModelSyncCredentials(acc *store.Account) bool {
+	if acc == nil || !strings.EqualFold(acc.AccountType, "orchids") {
+		return false
+	}
+	return strings.TrimSpace(acc.Token) != "" ||
+		strings.TrimSpace(acc.ClientCookie) != "" ||
+		strings.TrimSpace(acc.SessionID) != ""
+}
+
+func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.Store) ([]orchids.PublicModelChoice, string, error) {
+	accounts, err := s.GetEnabledAccounts(ctx)
+	if err == nil {
+		for _, acc := range accounts {
+			if !hasOrchidsModelSyncCredentials(acc) {
+				continue
+			}
+			client := orchids.NewFromAccount(acc, cfg)
+			upstreamModels, fetchErr := client.FetchUpstreamModels(ctx)
+			client.Close()
+			if fetchErr == nil && len(upstreamModels) > 0 {
+				out := make([]orchids.PublicModelChoice, 0, len(upstreamModels))
+				for _, m := range upstreamModels {
+					id := strings.TrimSpace(m.ID)
+					if id == "" {
+						continue
+					}
+					out = append(out, orchids.PublicModelChoice{
+						ID:   id,
+						Name: id,
+					})
+				}
+				if len(out) > 0 {
+					return out, "upstream_api", nil
+				}
+			}
+			if fetchErr != nil {
+				err = fetchErr
+				break
+			}
+		}
+	}
+
+	proxyFunc := http.ProxyFromEnvironment
+	if cfg != nil {
+		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+	}
+	publicModels, fallbackErr := orchids.FetchPublicModelChoicesWithProxy(ctx, proxyFunc)
+	if fallbackErr != nil {
+		if err != nil {
+			return publicModels, "public_page_fallback", fmt.Errorf("upstream api fetch failed: %v; fallback failed: %w", err, fallbackErr)
+		}
+		return publicModels, "public_page_fallback", fallbackErr
+	}
+	return publicModels, "public_page_fallback", err
 }
 
 var grokModelIDPattern = regexp.MustCompile(`\bgrok-[a-z0-9][a-z0-9.-]*\b`)

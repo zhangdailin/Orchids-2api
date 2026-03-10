@@ -8,6 +8,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"path/filepath"
 	"strings"
@@ -65,7 +66,19 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 }
 
 func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error {
-	return h.base.EnsureModelEnabled(ctx, normalizeModelID(modelID), "grok")
+	id := normalizeModelID(modelID)
+	if h != nil && h.lb != nil && h.lb.Store != nil {
+		if m, err := h.lb.Store.GetModelByModelID(ctx, id); err == nil && m != nil {
+			if !modelpolicy.IsVisibleGrokModel(id, m.Verified) {
+				return fmt.Errorf("model not found")
+			}
+		} else if !modelpolicy.IsPublicGrokModelID(id) {
+			return fmt.Errorf("model not found")
+		}
+	} else if !modelpolicy.IsPublicGrokModelID(id) {
+		return fmt.Errorf("model not found")
+	}
+	return h.base.EnsureModelEnabled(ctx, id, "grok")
 }
 
 func isAutoRegisterableGrokModel(modelID string) bool {
@@ -80,34 +93,70 @@ func isAutoRegisterableGrokModel(modelID string) bool {
 }
 
 func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool {
-	if h == nil || h.lb == nil || h.lb.Store == nil {
+	if h == nil || h.lb == nil || h.lb.Store == nil || h.client == nil {
 		return false
 	}
 	id := normalizeModelID(modelID)
 	if !isAutoRegisterableGrokModel(id) {
 		return false
 	}
+	if _, ok := ResolveModelOrDynamic(id); !ok {
+		return false
+	}
 
-	if m, err := h.lb.Store.GetModelByModelID(ctx, id); err == nil && m != nil {
+	if existing, err := h.lb.Store.GetModelByModelID(ctx, id); err == nil && existing != nil {
+		if modelpolicy.IsVisibleGrokModel(id, existing.Verified) && existing.Status.Enabled() {
+			return true
+		}
+	}
+
+	sess, err := h.openChatAccountSession(ctx)
+	if err != nil {
+		return false
+	}
+	defer sess.Close()
+
+	verifyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if _, err := h.client.GetUsage(verifyCtx, sess.token, id); err != nil {
+		slog.Debug("Auto verify grok model failed", "model_id", id, "error", err)
+		return false
+	}
+
+	name := id
+	if spec, ok := ResolveModelOrDynamic(id); ok && strings.TrimSpace(spec.Name) != "" {
+		name = strings.TrimSpace(spec.Name)
+	}
+
+	if existing, err := h.lb.Store.GetModelByModelID(ctx, id); err == nil && existing != nil {
+		existing.Channel = "Grok"
+		existing.Name = name
+		existing.Status = store.ModelStatusAvailable
+		existing.Verified = true
+		if err := h.lb.Store.UpdateModel(ctx, existing); err != nil {
+			slog.Warn("Auto verify grok model update failed", "model_id", id, "error", err)
+			return false
+		}
+		slog.Info("Auto verified grok model", "model_id", id)
 		return true
 	}
 
 	newModel := &store.Model{
-		Channel: "Grok",
-		ModelID: id,
-		Name:    id,
-		Status:  store.ModelStatusAvailable,
+		Channel:  "Grok",
+		ModelID:  id,
+		Name:     name,
+		Status:   store.ModelStatusAvailable,
+		Verified: true,
 	}
 	if err := h.lb.Store.CreateModel(ctx, newModel); err != nil {
-		// Handle create races gracefully.
 		if m, checkErr := h.lb.Store.GetModelByModelID(ctx, id); checkErr == nil && m != nil {
-			return true
+			return modelpolicy.IsVisibleGrokModel(id, m.Verified) && m.Status.Enabled()
 		}
-		slog.Warn("Auto register grok model failed", "model_id", id, "error", err)
+		slog.Warn("Auto verify grok model create failed", "model_id", id, "error", err)
 		return false
 	}
 
-	slog.Info("Auto registered grok model", "model_id", id)
+	slog.Info("Auto verified grok model", "model_id", id)
 	return true
 }
 

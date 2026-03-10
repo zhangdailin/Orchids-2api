@@ -573,9 +573,132 @@ func normalizeToolInputForToolName(toolName, toolInput string) string {
 			return "{}"
 		}
 		return string(b)
+	case "read":
+		normalized := normalizeWarpReadToolInput(input)
+		if normalized != "" {
+			return normalized
+		}
+		return input
 	default:
 		return input
 	}
+}
+
+func normalizeWarpReadToolInput(input string) string {
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		return ""
+	}
+	path := extractWarpReadPath(payload)
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	minimal := map[string]string{"file_path": path}
+	b, err := json.Marshal(minimal)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+func extractWarpReadPath(payload map[string]interface{}) string {
+	for _, key := range []string{"file_path", "path"} {
+		if raw, ok := payload[key]; ok {
+			if path := extractWarpPathLikeString(raw); path != "" {
+				return path
+			}
+		}
+	}
+	for _, raw := range payload {
+		if path := extractWarpPathLikeString(raw); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func extractWarpPathLikeString(raw interface{}) string {
+	switch v := raw.(type) {
+	case string:
+		return findWarpPathInString(v)
+	case []interface{}:
+		for _, item := range v {
+			if path := extractWarpPathLikeString(item); path != "" {
+				return path
+			}
+		}
+	case map[string]interface{}:
+		for _, item := range v {
+			if path := extractWarpPathLikeString(item); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+func findWarpPathInString(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == '\n' || r == '\r'
+	})
+	if len(lines) == 0 {
+		lines = []string{trimmed}
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if path := trimWarpPathCandidate(line); path != "" {
+			return path
+		}
+		if idx := strings.Index(line, "/"); idx >= 0 {
+			if path := trimWarpPathCandidate(line[idx:]); path != "" {
+				return path
+			}
+		}
+		if idx := findWarpWindowsPathStart(line); idx >= 0 {
+			if path := trimWarpPathCandidate(line[idx:]); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+func trimWarpPathCandidate(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, "\"'")
+	s = strings.TrimRight(s, ",")
+	s = strings.TrimRight(s, "]})")
+	if looksLikeWarpPathCandidate(s) {
+		return s
+	}
+	return ""
+}
+
+func looksLikeWarpPathCandidate(s string) bool {
+	if s == "" {
+		return false
+	}
+	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") {
+		return true
+	}
+	return findWarpWindowsPathStart(s) == 0
+}
+
+func findWarpWindowsPathStart(s string) int {
+	for i := 0; i+2 < len(s); i++ {
+		ch := s[i]
+		if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) && s[i+1] == ':' && (s[i+2] == '\\' || s[i+2] == '/') {
+			return i
+		}
+	}
+	return -1
 }
 
 func parseCallMCPTool(data []byte) (string, string) {

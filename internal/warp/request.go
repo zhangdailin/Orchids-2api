@@ -217,7 +217,7 @@ func extractWarpConversation(messages []prompt.Message, promptText string) (stri
 					}
 					toolResultSeen[key] = struct{}{}
 				}
-				if lastUserTextIdx == -1 || i > lastUserTextIdx || (i == lastUserTextIdx && !hasText) {
+				if lastUserTextIdx == -1 || i >= lastUserTextIdx {
 					toolResults = append(toolResults, toolResult)
 				} else {
 					history = append(history, warpHistoryMessage{
@@ -417,7 +417,11 @@ func formatWarpToolUse(call warpToolCall) string {
 }
 
 func formatWarpToolResult(id, content string) string {
-	content = strings.TrimSpace(content)
+	return formatWarpToolResultWithMode(id, content, false)
+}
+
+func formatWarpToolResultWithMode(id, content string, historyMode bool) string {
+	content = compactWarpToolResultContent(content, historyMode)
 	if id == "" {
 		return fmt.Sprintf("<tool_result>\n%s\n</tool_result>", content)
 	}
@@ -441,12 +445,12 @@ func stringifyWarpValue(value interface{}) string {
 
 func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool) (string, bool) {
 	parts := []string{singleResultPrompt}
-	if disableWarpTools {
-		parts = append(parts, noWarpToolsPrompt)
-	}
 
 	if len(toolResults) > 0 {
-		parts = append(parts, formatWarpHistory(history)...)
+		if disableWarpTools {
+			parts = append(parts, noWarpToolsPrompt)
+		}
+		parts = append(parts, formatWarpFollowupHistory(history)...)
 		for _, tr := range toolResults {
 			parts = append(parts, formatWarpToolResult(tr.ToolCallID, tr.Content))
 		}
@@ -456,6 +460,10 @@ func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults [
 			parts = append(parts, "User: Please analyze the tool results above and provide your response.")
 		}
 		return strings.Join(parts, "\n\n"), false
+	}
+
+	if disableWarpTools {
+		parts = append(parts, noWarpToolsPrompt)
 	}
 
 	if len(history) > 0 {
@@ -495,7 +503,27 @@ func formatWarpHistory(history []warpHistoryMessage) []string {
 				}
 			}
 		case "tool":
-			parts = append(parts, formatWarpToolResult(msg.ToolCallID, msg.Content))
+			parts = append(parts, formatWarpToolResultWithMode(msg.ToolCallID, msg.Content, true))
+		}
+	}
+	return parts
+}
+
+func formatWarpFollowupHistory(history []warpHistoryMessage) []string {
+	if len(history) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(history))
+	for _, msg := range history {
+		switch msg.Role {
+		case "user":
+			if msg.Content != "" {
+				parts = append(parts, "User: "+msg.Content)
+			}
+		case "assistant":
+			if msg.Content != "" {
+				parts = append(parts, "Assistant: "+msg.Content)
+			}
 		}
 	}
 	return parts
@@ -514,7 +542,11 @@ func EstimateInputTokens(promptText, model string, messages []prompt.Message, to
 
 	defs := convertTools(tools)
 	toolSchemaTokens := estimateWarpToolSchemaTokens(defs)
-	historyTokens := estimateWarpTextTokens(formatWarpHistory(history))
+	historyParts := formatWarpHistory(history)
+	if len(toolResults) > 0 {
+		historyParts = formatWarpFollowupHistory(history)
+	}
+	historyTokens := estimateWarpTextTokens(historyParts)
 	toolResultTokens := estimateWarpToolResultTokens(toolResults)
 	queryTokens := tiktoken.EstimateTextTokens(fullQuery)
 	baseTokens := queryTokens - historyTokens - toolResultTokens
