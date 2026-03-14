@@ -1,92 +1,208 @@
 package warp
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
+	"strings"
+	"testing"
 
-func TestNormalizeToolInputForToolName_ReadRecoversPathFromFallbackField(t *testing.T) {
-	t.Parallel()
+	"github.com/goccy/go-json"
 
-	got := normalizeToolInputForToolName("Read", `{"field1":"\n8/Users/dailin/Documents/GitHub/TEST/orchids_accounts.txt"}`)
-	want := `{"file_path":"/Users/dailin/Documents/GitHub/TEST/orchids_accounts.txt"}`
-	if got != want {
-		t.Fatalf("normalizeToolInputForToolName(Read) = %q, want %q", got, want)
+	"orchids-api/internal/upstream"
+)
+
+func TestMapWarpToolCalls_SplitsReadFiles(t *testing.T) {
+	args := `{"paths":["/tmp/a.go","/tmp/b.go"],"start":10,"end":20}`
+	calls := mapWarpToolCalls("read_files", args, "call_read", 0)
+	if len(calls) != 2 {
+		t.Fatalf("len(calls)=%d want 2", len(calls))
+	}
+	if calls[0].Name != "Read_0" || calls[1].Name != "Read_1" {
+		t.Fatalf("unexpected tool names: %#v", calls)
+	}
+
+	var input map[string]interface{}
+	if err := json.Unmarshal([]byte(calls[0].Input), &input); err != nil {
+		t.Fatalf("unmarshal first input: %v", err)
+	}
+	if got := input["file_path"]; got != "/tmp/a.go" {
+		t.Fatalf("file_path=%v want /tmp/a.go", got)
+	}
+	if got := input["offset"]; got != float64(10) {
+		t.Fatalf("offset=%v want 10", got)
+	}
+	if got := input["limit"]; got != float64(20) {
+		t.Fatalf("limit=%v want 20", got)
 	}
 }
 
-func TestNormalizeToolInputForToolName_ReadKeepsValidPath(t *testing.T) {
-	t.Parallel()
-
-	got := normalizeToolInputForToolName("Read", `{"file_path":"/tmp/a.txt","offset":10}`)
-	want := `{"file_path":"/tmp/a.txt"}`
-	if got != want {
-		t.Fatalf("normalizeToolInputForToolName(Read) = %q, want %q", got, want)
-	}
-}
-
-func TestNormalizeToolInputForToolName_ReadPrefersStableProjectFilesFromList(t *testing.T) {
-	t.Parallel()
-
-	got := normalizeToolInputForToolName("Read", `{"files":["/Users/jianxinwei/workspace/cursor-monitor/test_caption_cloud.py","/Users/jianxinwei/workspace/cursor-monitor/README.md","/Users/jianxinwei/workspace/cursor-monitor/requirements.txt"]}`)
-	want := `{"file_path":"/Users/jianxinwei/workspace/cursor-monitor/README.md"}`
-	if got != want {
-		t.Fatalf("normalizeToolInputForToolName(Read) = %q, want %q", got, want)
-	}
-}
-
-func TestDecodeWarpReadFilesPayload_ReturnsAllUniquePaths(t *testing.T) {
-	t.Parallel()
-
-	payload := []byte{
-		0x0a, 0x04, 'a', '.', 'p', 'y',
-		0x0a, 0x04, 'b', '.', 'p', 'y',
-		0x0a, 0x04, 'a', '.', 'p', 'y',
-	}
-
-	got := decodeWarpReadFilesPayload(payload)
-	if len(got) != 2 || got[0] != "a.py" || got[1] != "b.py" {
-		t.Fatalf("decodeWarpReadFilesPayload() = %#v", got)
-	}
-}
-
-func TestDecodeWarpReadFilesPayload_UnwrapsLengthPrefixedPaths(t *testing.T) {
-	t.Parallel()
-
-	pathA := "/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"
-	pathB := "/Users/dailin/Documents/GitHub/truth_social_scraper/utils.py"
-	payload := append([]byte{0x0a, byte(len(pathA) + 1), byte(len(pathA))}, []byte(pathA)...)
-	payload = append(payload, append([]byte{0x0a, byte(len(pathB) + 1), byte(len(pathB))}, []byte(pathB)...)...)
-
-	got := decodeWarpReadFilesPayload(payload)
-	if len(got) != 2 || got[0] != pathA || got[1] != pathB {
-		t.Fatalf("decodeWarpReadFilesPayload() = %#v", got)
-	}
-}
-
-func TestBuildWarpReadFileToolCalls_CreatesOneCallPerPath(t *testing.T) {
-	t.Parallel()
-
-	got := buildWarpReadFileToolCalls("tool_123", []string{
-		"/Users/dailin/Documents/GitHub/truth_social_scraper/api.py",
-		"/Users/dailin/Documents/GitHub/truth_social_scraper/monitor_trump.py",
-		"/Users/dailin/Documents/GitHub/truth_social_scraper/utils.py",
-		"/Users/dailin/Documents/GitHub/truth_social_scraper/dashboard.py",
+func TestTransformWarpToolCall_MapsRunCommandToBash(t *testing.T) {
+	name, input := transformWarpToolCall("run_command", map[string]interface{}{
+		"command": "ls -la",
+		"timeout": 30,
 	})
-	if len(got) != 4 {
-		t.Fatalf("expected 4 tool calls, got %d: %#v", len(got), got)
+	if name != "Bash" {
+		t.Fatalf("name=%q want Bash", name)
 	}
-	for i, want := range []string{
-		`{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/api.py"}`,
-		`{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/monitor_trump.py"}`,
-		`{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/utils.py"}`,
-		`{"file_path":"/Users/dailin/Documents/GitHub/truth_social_scraper/dashboard.py"}`,
-	} {
-		if got[i].Name != "Read" {
-			t.Fatalf("tool call %d name = %q, want Read", i, got[i].Name)
-		}
-		if got[i].Input != want {
-			t.Fatalf("tool call %d input = %q, want %q", i, got[i].Input, want)
-		}
+	if input["command"] != "ls -la" {
+		t.Fatalf("command=%v want ls -la", input["command"])
 	}
-	if got[0].ID != "tool_123_1" || got[3].ID != "tool_123_4" {
-		t.Fatalf("unexpected tool ids: %#v", got)
+}
+
+func TestTransformWarpToolCall_SanitizesEditPayload(t *testing.T) {
+	name, input := transformWarpToolCall("edit_file", map[string]interface{}{
+		"path":       " ./tmp/../tmp/demo.txt\x00 ",
+		"old_string": "  1\tbefore\n  2\tafter",
+		"new_string": "  1\treplaced\n  2\tvalue",
+	})
+	if name != "Edit" {
+		t.Fatalf("name=%q want Edit", name)
 	}
+	if input["file_path"] != "./tmp/demo.txt" {
+		t.Fatalf("file_path=%v want ./tmp/demo.txt", input["file_path"])
+	}
+	if input["old_string"] != "before\nafter" {
+		t.Fatalf("old_string=%q want stripped line numbers", input["old_string"])
+	}
+	if input["new_string"] != "replaced\nvalue" {
+		t.Fatalf("new_string=%q want stripped line numbers", input["new_string"])
+	}
+}
+
+func TestProcessStreamBody_DetectsNonProtobufHTML(t *testing.T) {
+	err := processStreamBody(context.Background(), strings.NewReader("<!doctype html><html><body>challenge</body></html>"), func(upstream.SSEMessage) {}, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var nonProtoErr *nonProtobufStreamError
+	if !errors.As(err, &nonProtoErr) {
+		t.Fatalf("expected nonProtobufStreamError, got %T (%v)", err, err)
+	}
+	if nonProtoErr.Kind != "html" {
+		t.Fatalf("kind=%q want html", nonProtoErr.Kind)
+	}
+	if !strings.Contains(nonProtoErr.Preview, "<!doctype html>") {
+		t.Fatalf("preview=%q missing html prefix", nonProtoErr.Preview)
+	}
+}
+
+func TestShouldRetryWarpStreamWithFirebase(t *testing.T) {
+	if !shouldRetryWarpStreamWithFirebase(&HTTPStatusError{StatusCode: 401}) {
+		t.Fatal("expected 401 to trigger firebase retry")
+	}
+	if shouldRetryWarpStreamWithFirebase(&HTTPStatusError{StatusCode: 302}) {
+		t.Fatal("did not expect redirect status to trigger firebase retry")
+	}
+}
+
+func TestProcessStreamBody_ParsesNestedWarpFrames(t *testing.T) {
+	var events []upstream.SSEMessage
+
+	textFrame := wrapFrame(appendBytesField(2,
+		appendBytesField(1,
+			appendBytesField(1,
+				appendBytesField(1,
+					appendBytesField(5,
+						appendBytesField(3,
+							appendBytesField(1, []byte("hi")),
+						),
+					),
+				),
+			),
+		),
+	))
+	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(8, appendVarintField(2, 3))))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(append(textFrame, finishFrame...)), func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("len(events)=%d want 2", len(events))
+	}
+	if events[0].Type != "model.text-delta" || events[0].Event["delta"] != "hi" {
+		t.Fatalf("first event=%#v want text delta hi", events[0])
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event=%#v want finish", events[1])
+	}
+	usage, _ := events[1].Event["usage"].(map[string]interface{})
+	if usage["inputTokens"] != 3 || usage["outputTokens"] != 0 {
+		t.Fatalf("usage=%#v want inputTokens=3 outputTokens=0", usage)
+	}
+}
+
+func TestProcessStreamBody_FallsBackToLegacySSE(t *testing.T) {
+	var events []upstream.SSEMessage
+
+	payload := appendBytesField(2,
+		appendBytesField(1,
+			appendBytesField(1,
+				appendBytesField(1,
+					appendBytesField(5,
+						appendBytesField(3,
+							appendBytesField(1, []byte("hi")),
+						),
+					),
+				),
+			),
+		),
+	)
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	stream := "data: " + encoded + "\n\n"
+
+	err := processStreamBody(context.Background(), strings.NewReader(stream), func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("len(events)=%d want 2", len(events))
+	}
+	if events[0].Type != "model.text-delta" || events[0].Event["delta"] != "hi" {
+		t.Fatalf("first event=%#v want text delta hi", events[0])
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event=%#v want finish", events[1])
+	}
+}
+
+func TestExtractStringValue_IgnoresBinaryPayload(t *testing.T) {
+	if got := extractStringValue([]byte{0x02, 0x52, 0x00}); got != "" {
+		t.Fatalf("extractStringValue(binary)=%q want empty", got)
+	}
+	if got := extractStringValue([]byte("hello")); got != "hello" {
+		t.Fatalf("extractStringValue(text)=%q want hello", got)
+	}
+}
+
+func appendBytesField(fieldNum int, payload []byte) []byte {
+	var buf []byte
+	buf = appendVarint(buf, uint64(fieldNum<<3|2))
+	buf = appendVarint(buf, uint64(len(payload)))
+	buf = append(buf, payload...)
+	return buf
+}
+
+func appendVarintField(fieldNum int, value uint64) []byte {
+	var buf []byte
+	buf = appendVarint(buf, uint64(fieldNum<<3))
+	buf = appendVarint(buf, value)
+	return buf
+}
+
+func wrapFrame(payload []byte) []byte {
+	out := make([]byte, 4+len(payload))
+	binary.BigEndian.PutUint32(out[:4], uint32(len(payload)))
+	copy(out[4:], payload)
+	return out
 }

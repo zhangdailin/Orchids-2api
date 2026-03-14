@@ -1,17 +1,13 @@
 package warp
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
-
 	"strings"
 	"time"
 
@@ -26,61 +22,43 @@ type Client struct {
 	config     *config.Config
 	account    *store.Account
 	httpClient *http.Client
+	authClient *http.Client
 	session    *session
 }
 
+const defaultRequestTimeout = 300 * time.Second
+
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	if acc == nil {
-		return &Client{config: cfg}
-	}
-	refresh := strings.TrimSpace(acc.RefreshToken)
-	sess := getSession(acc.ID, refresh)
-
-	// Inject JWT token if available, valid, and session is empty
-	if acc.Token != "" {
-		sess.mu.Lock()
-		if sess.jwt == "" {
-			if exp := jwtExpiry(acc.Token); !exp.IsZero() && time.Now().Add(20*time.Minute).Before(exp) {
-				sess.jwt = acc.Token
-				sess.expiresAt = exp
-			}
-		}
-		sess.mu.Unlock()
+		httpClient := newHTTPClient(0, cfg)
+		return &Client{config: cfg, httpClient: httpClient}
 	}
 
-	timeout := defaultRequestTimeout
-	if cfg != nil && cfg.RequestTimeout > 0 {
-		timeout = time.Duration(cfg.RequestTimeout) * time.Second
+	refresh := ResolveRefreshToken(acc)
+	sess := getSession(acc.ID, refresh, acc.DeviceID, acc.RequestID)
+	if token := strings.TrimSpace(acc.Token); token != "" {
+		sess.seedJWT(token)
 	}
-
-	client := newHTTPClient(timeout, cfg)
-	// Set jar under session lock to avoid concurrent mutation
-	sess.mu.Lock()
-	client.Jar = sess.jar
-	sess.mu.Unlock()
+	httpClient := newHTTPClient(0, cfg)
+	authClient := newHTTPClient(0, cfg)
+	httpClient.Jar = sess.jar
+	authClient.Jar = sess.jar
 
 	return &Client{
 		config:     cfg,
 		account:    acc,
-		httpClient: client,
+		httpClient: httpClient,
+		authClient: authClient,
 		session:    sess,
 	}
 }
 
-func (c *Client) Close() {
-	if c == nil || c.httpClient == nil || c.httpClient.Transport == nil {
-		return
-	}
-	if closer, ok := c.httpClient.Transport.(interface{ CloseIdleConnections() }); ok {
-		closer.CloseIdleConnections()
-	}
-}
-
-const defaultRequestTimeout = 120 * time.Second
-
 func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 	if timeout <= 0 {
 		timeout = defaultRequestTimeout
+		if cfg != nil && cfg.RequestTimeout > 0 {
+			timeout = time.Duration(cfg.RequestTimeout) * time.Second
+		}
 	}
 
 	var proxyFunc func(*http.Request) (*url.URL, error)
@@ -90,12 +68,23 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 		proxyFunc = http.ProxyFromEnvironment
 	}
 
-	// Warp currently forces UTLS, meaning we create a fresh RoundTripper per request.
-	// UTLS transports manage their own dialed connections, so connection pooling
-	// relies on the internal implementation of utls.RoundTripper.
 	return &http.Client{
 		Timeout:   timeout,
-		Transport: newUTLSTransport(proxyFunc),
+		Transport: newWarpTransport(proxyFunc),
+	}
+}
+
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+	for _, client := range []*http.Client{c.httpClient, c.authClient} {
+		if client == nil || client.Transport == nil {
+			continue
+		}
+		if closer, ok := client.Transport.(interface{ CloseIdleConnections() }); ok {
+			closer.CloseIdleConnections()
+		}
 	}
 }
 
@@ -109,284 +98,210 @@ func (c *Client) SendRequest(ctx context.Context, prompt string, chatHistory []i
 }
 
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	if c.session == nil {
+	if c == nil || c.session == nil {
 		return fmt.Errorf("warp session not initialized")
 	}
+
 	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()
 
-	cid := clientID
-	if c.account != nil && c.account.SessionID != "" {
-		cid = c.account.SessionID
-	} else if c.account != nil {
-		cid = fmt.Sprintf("warp-%d", c.account.ID)
-	}
-
-	promptText := req.Prompt
-	model := req.Model
-	messages := req.Messages
-	workdir := req.Workdir
-	conversationID := req.ChatSessionID
-
-	if c.config != nil && c.config.DebugEnabled {
-		slog.Debug("Warp AI: Preparing request", "cid", cid, "conversationID", conversationID)
-	}
-
-	if err := c.session.ensureToken(ctx, c.httpClient, cid); err != nil {
-		slog.Warn("Warp AI: ensureToken failed", "error", err)
+	authClient := c.authHTTPClient()
+	if err := c.session.ensureToken(ctx, authClient); err != nil {
 		return err
 	}
-	if err := c.session.ensureLogin(ctx, c.httpClient, cid); err != nil {
-		slog.Warn("Warp AI: ensureLogin failed", "error", err)
+	if err := c.session.ensureLogin(ctx, c.httpClient); err != nil {
 		return err
 	}
 
-	rawToolCount := len(req.Tools)
-	disableWarpTools := false
-	var cfgDisable interface{}
-	if c.config != nil && c.config.WarpDisableTools != nil {
-		disableWarpTools = *c.config.WarpDisableTools
-		cfgDisable = *c.config.WarpDisableTools
+	promptText, payload, err := buildRequestBytes(req)
+	if err != nil {
+		return err
 	}
-	if req.NoTools {
-		disableWarpTools = true
-	}
-	if rawToolCount == 0 {
-		disableWarpTools = true
-	}
-	if c.config != nil && c.config.DebugEnabled {
-		slog.Debug("Warp 工具开关诊断", "cid", cid, "cfg_warp_disable_tools", cfgDisable, "req_no_tools", req.NoTools, "req_tool_count", rawToolCount, "disable_warp_tools", disableWarpTools)
+	if logger != nil {
+		logger.LogConvertedPrompt(promptText)
 	}
 
-	tools := req.Tools
-	if req.NoTools {
-		tools = nil
+	defaultRefresh := func() error {
+		if err := c.session.ensureToken(ctx, authClient); err != nil {
+			return err
+		}
+		return c.session.ensureLogin(ctx, c.httpClient)
+	}
+	return c.streamWithRetry(ctx, payload, req, onMessage, logger, defaultRefresh)
+}
+
+func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *debug.Logger) (*http.Response, error) {
+	jwt := c.session.currentJWT()
+	if jwt == "" {
+		return nil, fmt.Errorf("warp jwt missing")
 	}
 
-	var mcpContext []byte
-	var err error
-	if !disableWarpTools {
-		mcpContext, err = buildMCPContext(tools)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpLegacyAIURL, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("X-Warp-Client-ID", clientID)
+	req.Header.Set("X-Warp-Client-Version", clientVersion)
+	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
+	req.Header.Set("X-Warp-OS-Name", clientOSName)
+	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+	req.Header.Set("User-Agent", "")
+
+	if logger != nil {
+		headers := map[string]string{}
+		for k, v := range req.Header {
+			headers[k] = strings.Join(v, ", ")
+		}
+		logger.LogUpstreamRequest(warpLegacyAIURL, headers, payload)
+	}
+
+	return c.httpClient.Do(req)
+}
+
+func (c *Client) streamWithRetry(ctx context.Context, payload []byte, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger, refresh func() error) error {
+	c.session.beginRequest()
+
+	resp, err := c.doStreamRequest(ctx, payload, logger)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		c.session.clearToken()
+		_ = resp.Body.Close()
+
+		if err := refresh(); err != nil {
+			return err
+		}
+		c.session.beginRequest()
+		resp, err = c.doStreamRequest(ctx, payload, logger)
 		if err != nil {
 			return err
 		}
 	}
+	return c.handleStreamResponse(ctx, req, resp, onMessage, logger)
+}
 
-	payload, err := buildRequestBytes(promptText, model, messages, mcpContext, disableWarpTools, workdir, conversationID)
-	if err != nil {
-		return err
-	}
-
-	jwt := c.session.currentJWT()
-	if jwt == "" {
-		return fmt.Errorf("warp jwt missing")
-	}
-	// 发送前再次校验 JWT 未过期，防止 ensureToken 和发送之间的竞态
-	if exp := jwtExpiry(jwt); !exp.IsZero() && time.Now().Add(1*time.Minute).After(exp) {
-		slog.Warn("Warp AI: JWT expired before send, forcing re-refresh", "cid", cid, "exp", exp)
-		// 清除过期 token 强制重新 refresh
-		c.session.mu.Lock()
-		c.session.jwt = ""
-		c.session.expiresAt = time.Time{}
-		c.session.mu.Unlock()
-		if err := c.session.ensureToken(ctx, c.httpClient, cid); err != nil {
-			return fmt.Errorf("re-refresh after expired JWT: %w", err)
-		}
-		jwt = c.session.currentJWT()
-		if jwt == "" {
-			return fmt.Errorf("warp jwt missing after re-refresh")
-		}
-	}
-
-	resp, err := c.doAIRequest(ctx, cid, jwt, payload, logger)
-	if err != nil {
-		return err
-	}
-
-	if resp.StatusCode == http.StatusForbidden {
-		body403, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		resp.Body.Close()
-		bodyStr := string(body403)
-
-		if strings.Contains(bodyStr, "blocked from using AI features") || strings.Contains(bodyStr, "please upgrade to a paid plan") {
-			slog.Warn("Warp AI: account blocked, attempting anonymous fallback", "cid", cid)
-
-			anonJWT, aErr := AcquireAnonymousJWT(ctx)
-			if aErr != nil {
-				slog.Warn("Warp AI: anonymous fallback failed", "error", aErr)
-
-				return fmt.Errorf("warp api error: HTTP 403 (account blocked, anonymous fallback failed: %v): %s", aErr, strings.TrimSpace(bodyStr))
-			}
-
-			resp, err = c.doAIRequest(ctx, "warp-anon", anonJWT, payload, logger)
-			if err != nil {
-				return err
-			}
-		} else {
-			// Non-blocked 403: body is already read and closed above.
-			// Return the error immediately using the captured body content to
-			// avoid re-reading from a closed response body further down.
-			if logger != nil {
-				logger.LogUpstreamHTTPError(aiURL, resp.StatusCode, bodyStr, nil)
-			}
-			slog.Warn("Warp AI request failed", "status", resp.StatusCode, "body", bodyStr)
-			return fmt.Errorf("warp api error: HTTP 403: %s", strings.TrimSpace(bodyStr))
-		}
+func (c *Client) handleStreamResponse(ctx context.Context, req upstream.UpstreamRequest, resp *http.Response, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	if resp == nil {
+		return fmt.Errorf("warp stream response is nil")
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		resp.Body.Close()
+		_ = resp.Body.Close()
+		bodyText := strings.TrimSpace(string(body))
+		location := ""
+		if resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.String() != warpLegacyAIURL {
+			location = resp.Request.URL.String()
+		}
+		if headerLocation := strings.TrimSpace(resp.Header.Get("Location")); headerLocation != "" {
+			location = headerLocation
+		}
 		if logger != nil {
-			logger.LogUpstreamHTTPError(aiURL, resp.StatusCode, string(body), nil)
+			logger.LogUpstreamHTTPError(warpLegacyAIURL, resp.StatusCode, bodyText, nil)
 		}
+		op := "stream request"
+		if location != "" {
+			op = fmt.Sprintf("%s redirect=%s", op, location)
+		}
+		return &HTTPStatusError{
+			Operation:  op,
+			StatusCode: resp.StatusCode,
+			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
+		}
+	}
 
-		bodyStr := string(body)
-		if resp.StatusCode == http.StatusTooManyRequests && strings.Contains(bodyStr, "No remaining quota") {
-			InvalidateAnonymousToken()
+	if req.ChatSessionID != "" {
+		onMessage(upstream.SSEMessage{
+			Type:  "model.conversation_id",
+			Event: map[string]interface{}{"id": req.ChatSessionID},
+		})
+	}
+
+	var body io.ReadCloser = resp.Body
+	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			_ = resp.Body.Close()
+			return err
 		}
-		headerLog := make(map[string]string)
-		for k, v := range resp.Header {
-			headerLog[k] = strings.Join(v, ", ")
-		}
-		slog.Warn("Warp AI request failed", "status", resp.StatusCode, "headers", headerLog, "body", bodyStr)
-		return fmt.Errorf("warp api error: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(bodyStr))
+		defer gr.Close()
+		body = gr
 	}
 	defer resp.Body.Close()
 
-	var reader io.ReadCloser = resp.Body
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		var err error
-		reader, err = gzip.NewReader(resp.Body)
-		if err != nil {
-			return err
-		}
-		defer reader.Close()
+	return processStreamBody(ctx, body, onMessage, logger)
+}
+
+func shouldRetryWarpStreamWithFirebase(err error) bool {
+	if err == nil {
+		return false
+	}
+	status := HTTPStatusCode(err)
+	if status == http.StatusUnauthorized {
+		return true
+	}
+	return false
+}
+
+func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
+	if c == nil || c.session == nil {
+		return "", fmt.Errorf("warp session not initialized")
+	}
+	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
+	defer cancel()
+
+	if err := c.session.ensureToken(ctx, c.authHTTPClient()); err != nil {
+		return "", err
+	}
+	return c.session.currentJWT(), nil
+}
+
+func (c *Client) ForceRefreshAccount(ctx context.Context) (string, error) {
+	if c == nil || c.session == nil {
+		return "", fmt.Errorf("warp session not initialized")
+	}
+	ctx, cancel := withDefaultTimeout(ctx, c.requestTimeout())
+	defer cancel()
+
+	c.session.clearToken()
+	if err := c.session.ensureToken(ctx, c.authHTTPClient()); err != nil {
+		return "", err
+	}
+	return c.session.currentJWT(), nil
+}
+
+func (c *Client) SyncAccountState() bool {
+	if c == nil || c.account == nil || c.session == nil {
+		return false
 	}
 
-	bufReader := bufio.NewReader(reader)
-	var dataBuilder strings.Builder
-	dataEventCount := 0
-	parsedEventCount := 0
-	toolCallSeen := false
-	finishSent := false
-	ctxDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = resp.Body.Close()
-		case <-ctxDone:
-		}
-	}()
-	defer close(ctxDone)
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		line, err := bufReader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
-		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			if dataBuilder.Len() == 0 {
-				continue
-			}
-			data := dataBuilder.String()
-			dataBuilder.Reset()
-			dataEventCount++
-			if logger != nil {
-				logger.LogUpstreamSSE("warp_data", data)
-			}
-			payloadBytes, err := decodeWarpPayload(data)
-			if err != nil {
-				if logger != nil {
-					logger.LogUpstreamSSE("warp_decode_error", err.Error())
-				}
-				continue
-			}
-			parsed, err := parseResponseEvent(payloadBytes)
-			if err != nil {
-				if logger != nil {
-					logger.LogUpstreamSSE("warp_parse_error", err.Error())
-				}
-				continue
-			}
-			parsedEventCount++
-			if parsed.ConversationID != "" {
-				onMessage(upstream.SSEMessage{Type: "model.conversation_id", Event: map[string]interface{}{"id": parsed.ConversationID}})
-			}
-			if parsed.Error != "" {
-				slog.Warn("Warp upstream error in stream", "error", parsed.Error)
-				return fmt.Errorf("warp stream error: %s", parsed.Error)
-			}
-			for _, delta := range parsed.TextDeltas {
-				onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": delta}})
-			}
-			for _, delta := range parsed.ReasoningDeltas {
-				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{"delta": delta}})
-			}
-			for _, call := range parsed.ToolCalls {
-				toolCallSeen = true
-				onMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": call.ID, "toolName": call.Name, "input": call.Input}})
-			}
-			if parsed.Finish != nil {
-				finishSent = true
-				finish := map[string]interface{}{
-					"finishReason": "end_turn",
-				}
-				if toolCallSeen {
-					finish["finishReason"] = "tool_use"
-				}
-				if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
-					finish["usage"] = map[string]interface{}{
-						"inputTokens":  parsed.Finish.InputTokens,
-						"outputTokens": parsed.Finish.OutputTokens,
-					}
-				}
-				onMessage(upstream.SSEMessage{Type: "model.finish", Event: finish})
-			}
-			continue
-		}
-		if strings.HasPrefix(line, ":") {
-			continue
-		}
-		if strings.HasPrefix(line, "data:") {
-			dataBuilder.WriteString(strings.TrimSpace(line[5:]))
-			continue
-		}
-		// ignore event: or other lines
-	}
+	jwt := c.session.currentJWT()
+	refresh := c.session.currentRefreshToken()
 
-	// Send finish if stream ended without explicit finish event
-	if dataEventCount == 0 {
-		if logger != nil {
-			logger.LogUpstreamSSE("warp_empty_stream", "stream ended without any SSE data events")
-		}
-		return fmt.Errorf("warp stream ended without any SSE data events")
+	changed := false
+	if jwt != "" && jwt != c.account.Token {
+		c.account.Token = jwt
+		changed = true
 	}
-	if parsedEventCount == 0 {
-		if logger != nil {
-			logger.LogUpstreamSSE("warp_unparsed_stream", fmt.Sprintf("received %d SSE data events but none parsed", dataEventCount))
-		}
-		return fmt.Errorf("warp stream received %d SSE data events but none parsed", dataEventCount)
+	if refresh != "" && refresh != c.account.RefreshToken {
+		c.account.RefreshToken = refresh
+		changed = true
 	}
-
-	if !finishSent {
-		if !toolCallSeen {
-			onMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn"}})
-		} else {
-			onMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
-		}
+	if deviceID := c.session.currentDeviceID(); deviceID != "" && deviceID != c.account.DeviceID {
+		c.account.DeviceID = deviceID
+		changed = true
 	}
-
-	return nil
+	if requestID := c.session.currentRequestID(); requestID != "" && requestID != c.account.RequestID {
+		c.account.RequestID = requestID
+		changed = true
+	}
+	return changed
 }
 
 func (c *Client) requestTimeout() time.Duration {
@@ -394,6 +309,16 @@ func (c *Client) requestTimeout() time.Duration {
 		return time.Duration(c.config.RequestTimeout) * time.Second
 	}
 	return defaultRequestTimeout
+}
+
+func (c *Client) authHTTPClient() *http.Client {
+	if c != nil && c.authClient != nil {
+		return c.authClient
+	}
+	if c != nil {
+		return c.httpClient
+	}
+	return nil
 }
 
 func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -404,154 +329,4 @@ func withDefaultTimeout(ctx context.Context, timeout time.Duration) (context.Con
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, timeout)
-}
-
-func (c *Client) breakerKey() string {
-	if c == nil || c.account == nil {
-		return "warp:default"
-	}
-	if name := strings.TrimSpace(c.account.Name); name != "" {
-		return "warp:" + name
-	}
-	if c.account.ID > 0 {
-		return fmt.Sprintf("warp:%d", c.account.ID)
-	}
-	return "warp:default"
-}
-
-func decodeWarpPayload(data string) ([]byte, error) {
-	if data == "" {
-		return nil, fmt.Errorf("empty payload")
-	}
-	if decoded, err := base64.RawURLEncoding.DecodeString(data); err == nil {
-		return decoded, nil
-	}
-	if decoded, err := base64.URLEncoding.DecodeString(data); err == nil {
-		return decoded, nil
-	}
-	return base64.StdEncoding.DecodeString(data)
-}
-
-func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
-	if c.session == nil {
-		return "", fmt.Errorf("warp session not initialized")
-	}
-	cid := clientID
-	if c.account != nil && c.account.SessionID != "" {
-		cid = c.account.SessionID
-	} else if c.account != nil {
-		cid = fmt.Sprintf("warp-%d", c.account.ID)
-	}
-	if err := c.session.ensureToken(ctx, c.httpClient, cid); err != nil {
-		return "", err
-	}
-	jwt := c.session.currentJWT()
-	if jwt == "" {
-		return "", fmt.Errorf("warp jwt missing")
-	}
-	return jwt, nil
-}
-
-// EnsureLogin validates that the session can successfully log in.
-// It refreshes the JWT if needed and then performs the login call.
-func (c *Client) EnsureLogin(ctx context.Context) error {
-	if c.session == nil {
-		return fmt.Errorf("warp session not initialized")
-	}
-	cid := clientID
-	if c.account != nil && c.account.SessionID != "" {
-		cid = c.account.SessionID
-	} else if c.account != nil {
-		cid = fmt.Sprintf("warp-%d", c.account.ID)
-	}
-	if err := c.session.ensureToken(ctx, c.httpClient, cid); err != nil {
-		return err
-	}
-	return c.session.ensureLogin(ctx, c.httpClient, cid)
-}
-
-// SyncAccountState 同步内存会话中的 JWT 和 refresh_token 到账号信息，返回是否有变更。
-func (c *Client) SyncAccountState() bool {
-	if c == nil || c.session == nil || c.account == nil {
-		return false
-	}
-	// 先读取值（这些方法内部会加锁/解锁）
-	jwt := strings.TrimSpace(c.session.currentJWT())
-	newRefresh := strings.TrimSpace(c.session.currentRefreshToken())
-
-	// 加锁保护对 account 字段的写入，防止与其他 goroutine 并发读取时发生数据竞争
-	c.session.mu.Lock()
-	defer c.session.mu.Unlock()
-
-	changed := false
-	if jwt != "" && jwt != c.account.Token {
-		c.account.Token = jwt
-		changed = true
-	}
-	// 同步 refresh_token，防止服务重启后使用已轮换的旧令牌
-	if newRefresh != "" && newRefresh != c.account.RefreshToken {
-		c.account.RefreshToken = newRefresh
-		changed = true
-	}
-	return changed
-}
-
-func (c *Client) doAIRequest(ctx context.Context, cid, jwt string, payload []byte, logger *debug.Logger) (*http.Response, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, aiURL, bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	request.Header.Set("x-warp-client-id", clientID)
-	request.Header.Set("accept", "text/event-stream")
-	request.Header.Set("content-type", "application/x-protobuf")
-	request.Header.Set("x-warp-client-version", clientVersion)
-	request.Header.Set("x-warp-os-category", osCategory)
-	request.Header.Set("x-warp-os-name", osName)
-	request.Header.Set("x-warp-os-version", osVersion)
-	request.Header.Set("authorization", "Bearer "+jwt)
-	request.Header.Set("accept-encoding", "identity")
-	request.Header.Set("content-length", fmt.Sprintf("%d", len(payload)))
-	request.Header.Set("user-agent", "")
-
-	if logger != nil {
-		headers := make(map[string]string)
-		for k, v := range request.Header {
-			headers[k] = strings.Join(v, ", ")
-		}
-		logger.LogUpstreamRequest(aiURL, headers, payload)
-	}
-
-	breaker := upstream.GetAccountBreaker(c.breakerKey())
-	start := time.Now()
-
-	if c.config != nil && c.config.DebugEnabled {
-		reqHeaders := make(map[string]string)
-		for k, v := range request.Header {
-			reqHeaders[k] = strings.Join(v, ", ")
-		}
-		slog.Debug("Warp AI: Dispatching request", "url", aiURL, "cid", cid, "headers", reqHeaders, "body_size", len(payload))
-	}
-
-	result, err := breaker.Execute(func() (interface{}, error) {
-		return c.httpClient.Do(request)
-	})
-	if err != nil {
-		if c.config != nil && c.config.DebugEnabled {
-			slog.Info("Warp AI: Request Failed", "cid", cid, "duration", time.Since(start), "error", err)
-		}
-		return nil, err
-	}
-	if c.config != nil && c.config.DebugEnabled {
-		slog.Debug("Warp AI: Response Headers Received", "cid", cid, "duration", time.Since(start))
-	}
-	resp, ok := result.(*http.Response)
-	if !ok || resp == nil {
-		return nil, fmt.Errorf("warp api error: unexpected response type")
-	}
-	return resp, nil
-}
-
-// jwtExpiry parses the exp claim from a JWT token and returns the expiry time.
-func jwtExpiry(token string) time.Time {
-	return util.JWTExpiry(token, 0)
 }

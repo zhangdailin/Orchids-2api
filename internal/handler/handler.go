@@ -830,6 +830,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Info("Upstream attempt completed", "trace_id", traceID, "attempt", upstreamReq.Attempt)
 				break
 			}
+			errStr := err.Error()
+			errClass := classifyUpstreamError(errStr)
+			if isWarpRequest {
+				h.refundWarpCredits(apiClient, errClass.Category)
+			}
 			if sh.hasAnyOutput() {
 				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 				sh.finishResponse("end_turn")
@@ -837,8 +842,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Check for non-retriable errors
-			errStr := err.Error()
-			errClass := classifyUpstreamError(errStr)
 			slog.Error("Request error", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err, "category", errClass.Category, "retryable", errClass.Retryable)
 			// 标记账号状态（auth 类错误始终标记，无论是否可重试）
 			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {

@@ -164,6 +164,8 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 	writeString(acc.SessionID)
 	writeString(acc.ClientCookie)
 	writeString(acc.RefreshToken)
+	writeString(acc.DeviceID)
+	writeString(acc.RequestID)
 	writeString(acc.SessionCookie)
 	writeString(acc.ClientUat)
 	writeString(acc.ProjectID)

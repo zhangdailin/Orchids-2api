@@ -4,18 +4,347 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"github.com/goccy/go-json"
 	"html"
 	"strings"
 	"time"
 
+	"github.com/goccy/go-json"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
+	"orchids-api/internal/upstream"
 )
+
+type InputTokenEstimate struct {
+	Profile          string
+	QueryTokens      int
+	BasePromptTokens int
+	HistoryTokens    int
+	ToolResultTokens int
+	ToolSchemaTokens int
+	ToolCount        int
+	Total            int
+}
+
+type promptBuild struct {
+	Full            string
+	Query           string
+	BasePrompt      string
+	HistoryText     string
+	ToolResultsText string
+}
+
+type renderedBlock struct {
+	role         string
+	text         string
+	isToolResult bool
+}
+
+func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
+	built := buildPrompt(req.Prompt, req.Messages, req.System, req.Tools, req.NoTools, req.Workdir)
+	if strings.TrimSpace(built.Full) == "" {
+		return "", nil, fmt.Errorf("empty warp prompt")
+	}
+
+	disableWarpTools := req.NoTools || len(req.Tools) == 0
+	payload, err := buildRequestBytesFromTemplate(
+		built.Full,
+		normalizeWarpTemplateModel(req.Model),
+		isNewWarpConversation(req),
+		disableWarpTools,
+		req.Workdir,
+	)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if !disableWarpTools {
+		mcpContext, err := buildMCPContext(req.Tools)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(mcpContext) > 0 {
+			payload = append(payload, encodeBytesField(6, mcpContext)...)
+		}
+	}
+
+	return built.Full, payload, nil
+}
+
+func buildPrompt(promptText string, messages []prompt.Message, systemItems []prompt.SystemItem, _ []interface{}, _ bool, _ string) promptBuild {
+	systemText := buildSystemText(systemItems, messages)
+	rendered, queryText := renderConversation(messages, promptText)
+
+	var conversation strings.Builder
+	var historyText strings.Builder
+	var toolResultsText strings.Builder
+	for _, block := range rendered {
+		section := renderConversationBlock(block)
+		conversation.WriteString(section)
+		if block.isToolResult {
+			toolResultsText.WriteString(section)
+		} else {
+			historyText.WriteString(section)
+		}
+	}
+
+	basePrompt := systemText + "<|conversation|>\n"
+
+	var full strings.Builder
+	full.WriteString(basePrompt)
+	full.WriteString(conversation.String())
+	full.WriteString("<|end_conversation|>\n")
+	full.WriteString("<|assistant|>\n")
+
+	return promptBuild{
+		Full:            full.String(),
+		Query:           queryText,
+		BasePrompt:      basePrompt,
+		HistoryText:     historyText.String(),
+		ToolResultsText: toolResultsText.String(),
+	}
+}
+
+func buildSystemText(systemItems []prompt.SystemItem, messages []prompt.Message) string {
+	var custom []string
+	for _, item := range systemItems {
+		if text := sanitizeUTF8(strings.TrimSpace(item.Text)); text != "" {
+			custom = append(custom, text)
+		}
+	}
+	for _, msg := range messages {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "system") {
+			continue
+		}
+		if text := extractMessageText(msg.Content); text != "" {
+			custom = append(custom, text)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("<|system_prompt|>\n")
+	b.WriteString("You are an AI assistant integrated into Warp terminal. ")
+	b.WriteString("You help users with coding tasks, terminal commands, and software development. ")
+	b.WriteString("Follow the user's instructions carefully and provide helpful, accurate responses.\n")
+	b.WriteString("<|end_system_prompt|>\n")
+
+	for _, text := range custom {
+		b.WriteString(text)
+		if !strings.HasSuffix(text, "\n") {
+			b.WriteByte('\n')
+		}
+	}
+
+	b.WriteString("<|agent_mode|>\n")
+	b.WriteString("You have access to tools. Use them when needed.\n")
+	b.WriteString("Format your responses clearly. Use markdown for code blocks. ")
+	b.WriteString("When executing commands, show the command and explain the output. ")
+	b.WriteString("Be concise but thorough.\n")
+	b.WriteString("Do not execute destructive commands without confirmation. ")
+	b.WriteString("Do not access or modify files outside the user's workspace. ")
+	b.WriteString("Respect the user's privacy and do not share sensitive information.\n")
+
+	return b.String()
+}
+
+func renderConversation(messages []prompt.Message, promptText string) ([]renderedBlock, string) {
+	if len(messages) == 0 {
+		promptText = strings.TrimSpace(promptText)
+		if promptText == "" {
+			return nil, ""
+		}
+		promptText = sanitizeUTF8(promptText)
+		return []renderedBlock{{role: "user", text: promptText}}, promptText
+	}
+
+	var out []renderedBlock
+	lastUserText := ""
+	for _, msg := range messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		if role == "" || role == "system" {
+			continue
+		}
+
+		text, toolResults := renderMessageContent(msg.Content)
+		if text != "" {
+			out = append(out, renderedBlock{role: role, text: text})
+			if role == "user" {
+				lastUserText = text
+			}
+		}
+		for _, result := range toolResults {
+			out = append(out, renderedBlock{role: "tool", text: result, isToolResult: true})
+		}
+	}
+
+	if len(out) == 0 && strings.TrimSpace(promptText) != "" {
+		text := sanitizeUTF8(strings.TrimSpace(promptText))
+		out = append(out, renderedBlock{role: "user", text: text})
+		lastUserText = text
+	}
+
+	return out, lastUserText
+}
+
+func renderMessageContent(content prompt.MessageContent) (string, []string) {
+	if content.IsString() {
+		return sanitizeUTF8(strings.TrimSpace(content.GetText())), nil
+	}
+
+	var textParts []string
+	var toolResults []string
+	for _, block := range content.GetBlocks() {
+		switch block.Type {
+		case "text":
+			if text := sanitizeUTF8(strings.TrimSpace(block.Text)); text != "" {
+				textParts = append(textParts, text)
+			}
+		case "tool_result":
+			payload := stringifyValue(block.Content)
+			if payload == "" {
+				payload = "{}"
+			}
+			name := strings.TrimSpace(block.Name)
+			if name != "" {
+				toolResults = append(toolResults, fmt.Sprintf("<|tool_result:%s|>\n%s\n", name, payload))
+			} else if block.ToolUseID != "" {
+				toolResults = append(toolResults, fmt.Sprintf("<|tool_result:%s|>\n%s\n", block.ToolUseID, payload))
+			} else {
+				toolResults = append(toolResults, "<|tool_result|>\n"+payload+"\n")
+			}
+		}
+	}
+
+	return sanitizeUTF8(strings.TrimSpace(strings.Join(textParts, "\n"))), toolResults
+}
+
+func renderConversationBlock(block renderedBlock) string {
+	switch block.role {
+	case "assistant":
+		return "<|assistant|>\n" + block.text + "\n"
+	case "tool":
+		return block.text
+	default:
+		return "<|user|>\n" + block.text + "\n"
+	}
+}
+
+func extractMessageText(content prompt.MessageContent) string {
+	if content.IsString() {
+		return sanitizeUTF8(strings.TrimSpace(content.GetText()))
+	}
+
+	var parts []string
+	for _, block := range content.GetBlocks() {
+		if block.Type == "text" {
+			if text := strings.TrimSpace(block.Text); text != "" {
+				parts = append(parts, sanitizeUTF8(text))
+			}
+		}
+	}
+	return sanitizeUTF8(strings.TrimSpace(strings.Join(parts, "\n")))
+}
+
+func sanitizeUTF8(text string) string {
+	return strings.ToValidUTF8(text, "")
+}
+
+func stringifyValue(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return sanitizeUTF8(strings.TrimSpace(t))
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return sanitizeUTF8(fmt.Sprint(t))
+		}
+		return sanitizeUTF8(string(b))
+	}
+}
+
+func appendStringField(buf []byte, fieldNum int, value string) []byte {
+	if value == "" {
+		return buf
+	}
+	buf = appendVarint(buf, uint64(fieldNum<<3|2))
+	buf = appendVarint(buf, uint64(len(value)))
+	buf = append(buf, value...)
+	return buf
+}
+
+func appendVarint(buf []byte, v uint64) []byte {
+	for v >= 0x80 {
+		buf = append(buf, byte(v)|0x80)
+		v >>= 7
+	}
+	buf = append(buf, byte(v))
+	return buf
+}
+
+func isNewWarpConversation(req upstream.UpstreamRequest) bool {
+	if strings.TrimSpace(req.ChatSessionID) != "" {
+		return false
+	}
+	if len(req.Messages) == 0 {
+		return true
+	}
+	meaningful := 0
+	for _, msg := range req.Messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		if role == "" || role == "system" {
+			continue
+		}
+		meaningful++
+		if role == "assistant" {
+			return false
+		}
+		if !msg.Content.IsString() {
+			for _, block := range msg.Content.GetBlocks() {
+				switch block.Type {
+				case "tool_result", "tool_use":
+					return false
+				}
+			}
+		}
+	}
+	return meaningful <= 1
+}
+
+func EstimateInputTokens(promptText, _ string, messages []prompt.Message, _ []interface{}, _ bool) (InputTokenEstimate, error) {
+	built := buildPrompt(promptText, messages, nil, nil, false, "")
+	baseTokens := tiktoken.EstimateTextTokens(built.BasePrompt)
+	historyTokens := tiktoken.EstimateTextTokens(built.HistoryText)
+	toolResultTokens := tiktoken.EstimateTextTokens(built.ToolResultsText)
+	queryTokens := tiktoken.EstimateTextTokens(built.Query)
+	total := baseTokens + historyTokens + toolResultTokens
+
+	return InputTokenEstimate{
+		Profile:          "warp-codefreemax",
+		QueryTokens:      queryTokens,
+		BasePromptTokens: baseTokens,
+		HistoryTokens:    historyTokens,
+		ToolResultTokens: toolResultTokens,
+		ToolSchemaTokens: 0,
+		ToolCount:        0,
+		Total:            total,
+	}, nil
+}
+
+func ResolveModelAlias(model string) string {
+	canonical := canonicalModelID(model)
+	if canonical == "" {
+		return ""
+	}
+	if _, ok := canonicalModelAliases[canonical]; ok {
+		return canonical
+	}
+	return ""
+}
 
 type encoder struct {
 	b []byte
@@ -55,37 +384,6 @@ func (e *encoder) writeMessage(field int, msg []byte) {
 	e.b = append(e.b, msg...)
 }
 
-type warpToolCall struct {
-	ID        string
-	Name      string
-	Arguments string
-}
-
-type warpHistoryMessage struct {
-	Role       string
-	Content    string
-	ToolCalls  []warpToolCall
-	ToolCallID string
-}
-
-type warpToolResult struct {
-	ToolCallID string
-	Content    string
-	ToolName   string
-	Arguments  string
-}
-
-type InputTokenEstimate struct {
-	Profile          string
-	QueryTokens      int
-	BasePromptTokens int
-	HistoryTokens    int
-	ToolResultTokens int
-	ToolSchemaTokens int
-	ToolCount        int
-	Total            int
-}
-
 var realRequestTemplate = mustDecodeHex("0a00125a0a430a1e0a0d2f55736572732f6c6f66796572120d2f55736572732f6c6f6679657212070a054d61634f531a0a0a037a73681203352e39220c08eeb8d3cb0610908ef0bd0232130a110a0f0a09e4bda0e5a5bde591801a0020011a660a210a0f636c617564652d342d352d6f707573220e636c692d6167656e742d6175746f1001180120013001380140014a1306070c08090f0e000b100a141113120203010d500158016001680170017801800101880101a80101b201070a1406070c0201b801012264121e0a0a656e747279706f696e7412101a0e555345525f494e4954494154454412200a1a69735f6175746f5f726573756d655f61667465725f6572726f721202200012200a1a69735f6175746f64657465637465645f757365725f717565727912022001")
 
 var supportedToolsPattern = mustDecodeHex("4a1306070c08090f0e000b100a141113120203010d")
@@ -99,12 +397,12 @@ func mustDecodeHex(s string) []byte {
 	return b
 }
 
-func encodeVarint(value int) []byte {
+func encodeVarintInt(value int) []byte {
 	if value < 0 {
 		return []byte{0}
 	}
 	x := uint64(value)
-	out := make([]byte, 0, 10) // varint max 10 bytes
+	out := make([]byte, 0, 10)
 	for x >= 0x80 {
 		out = append(out, byte(x)|0x80)
 		x >>= 7
@@ -113,674 +411,12 @@ func encodeVarint(value int) []byte {
 	return out
 }
 
-func buildRequestBytes(promptText, model string, messages []prompt.Message, mcpContext []byte, disableWarpTools bool, workdir, conversationID string) ([]byte, error) {
-	userText, history, toolResults, err := extractWarpConversation(messages, promptText)
-	if err != nil {
-		return nil, err
-	}
-	normalizedModel := normalizeModel(model)
-
-	fullQuery, isNew := buildWarpQuery(userText, history, toolResults, disableWarpTools, workdir)
-	if fullQuery == "" {
-		return nil, fmt.Errorf("empty prompt")
-	}
-
-	// 有真实上游 conversationID 时标记为非新对话，让上游延续会话。
-	// 本地生成的随机 ID（chat_ 前缀）不应覆盖 isNew，否则首次请求会被错误标记为续接。
-	isUpstreamConvID := conversationID != "" && !strings.HasPrefix(conversationID, "chat_")
-	if isUpstreamConvID {
-		isNew = false
-	}
-
-	// 统一使用模板路径构建请求。历史已由 buildWarpQuery 扁平化到 fullQuery 中。
-	// 注意：在 task_context 中注入 conversationID 会触发 Warp 400
-	// (invalid AIAgentRequest: cannot parse invalid wire-format data)。
-	// 当前保持空 task_context，依赖历史拼接延续上下文。
-	reqBytes, err := buildRequestBytesFromTemplate(fullQuery, normalizedModel, isNew, disableWarpTools, workdir)
-	if err != nil {
-		return nil, err
-	}
-	if len(mcpContext) > 0 {
-		reqBytes = append(reqBytes, encodeBytesField(6, mcpContext)...)
-	}
-	return reqBytes, nil
-}
-
-type parsedWarpMessage struct {
-	role        string
-	text        string
-	toolUses    []prompt.ContentBlock
-	toolResults []prompt.ContentBlock
-}
-
-func extractWarpConversation(messages []prompt.Message, promptText string) (string, []warpHistoryMessage, []warpToolResult, error) {
-	if len(messages) == 0 {
-		promptText = strings.TrimSpace(stripWarpMetaTags(promptText))
-		if promptText == "" {
-			return "", nil, nil, fmt.Errorf("empty prompt")
-		}
-		return promptText, nil, nil, nil
-	}
-
-	parsed := make([]parsedWarpMessage, 0, len(messages))
-	for _, msg := range messages {
-		role := strings.ToLower(strings.TrimSpace(msg.Role))
-		if role == "system" {
-			continue
-		}
-		text, toolUses, toolResults := splitWarpContent(msg.Content)
-		text = strings.TrimSpace(stripWarpMetaTags(text))
-		if role == "user" && len(toolUses) == 0 && len(toolResults) == 0 && shouldDropWarpSyntheticUserContext(text) {
-			continue
-		}
-		parsed = append(parsed, parsedWarpMessage{
-			role:        role,
-			text:        text,
-			toolUses:    toolUses,
-			toolResults: toolResults,
-		})
-	}
-
-	lastUserIdx := -1
-	for i, msg := range parsed {
-		if msg.role == "user" {
-			lastUserIdx = i
-		}
-	}
-
-	var (
-		userText    string
-		history     []warpHistoryMessage
-		toolResults []warpToolResult
-	)
-	currentToolResultSeen := map[string]struct{}{}
-	historyToolResultSeen := map[string]struct{}{}
-	toolCallsByID := map[string]warpToolCall{}
-
-	for i, msg := range parsed {
-		switch msg.role {
-		case "user":
-			hasText := strings.TrimSpace(msg.text) != ""
-			isCurrentTurn := i == lastUserIdx
-			if hasText {
-				if isCurrentTurn {
-					userText = msg.text
-				} else {
-					history = append(history, warpHistoryMessage{Role: "user", Content: msg.text})
-				}
-			}
-
-			for _, block := range msg.toolResults {
-				call := toolCallsByID[block.ToolUseID]
-				toolResult := warpToolResult{
-					ToolCallID: block.ToolUseID,
-					Content:    normalizeWarpToolResultContent(stringifyWarpValue(block.Content)),
-					ToolName:   call.Name,
-					Arguments:  call.Arguments,
-				}
-				if isNoiseToolResult(toolResult.Content) {
-					continue
-				}
-				key := toolResultDedupKey(toolResult)
-				if key != "" {
-					if isCurrentTurn {
-						if _, ok := currentToolResultSeen[key]; ok {
-							continue
-						}
-						currentToolResultSeen[key] = struct{}{}
-					} else {
-						if _, ok := historyToolResultSeen[key]; ok {
-							continue
-						}
-						historyToolResultSeen[key] = struct{}{}
-					}
-				}
-				if lastUserIdx == -1 || isCurrentTurn {
-					toolResults = append(toolResults, toolResult)
-				} else {
-					history = append(history, warpHistoryMessage{
-						Role:       "tool",
-						Content:    toolResult.Content,
-						ToolCallID: toolResult.ToolCallID,
-					})
-				}
-			}
-
-		case "assistant":
-			toolCalls := convertWarpToolCalls(msg.toolUses)
-			for _, tc := range toolCalls {
-				if strings.TrimSpace(tc.ID) == "" {
-					continue
-				}
-				toolCallsByID[tc.ID] = tc
-			}
-			if lastUserIdx == -1 || i < lastUserIdx {
-				content := strings.TrimSpace(stripWarpMetaTags(msg.text))
-				if content != "" || len(toolCalls) > 0 {
-					history = append(history, warpHistoryMessage{
-						Role:      "assistant",
-						Content:   content,
-						ToolCalls: toolCalls,
-					})
-				}
-			}
-		}
-	}
-
-	if userText == "" && len(toolResults) == 0 {
-		return "", nil, nil, fmt.Errorf("no user message or tool results found")
-	}
-	return userText, history, toolResults, nil
-}
-
-// stripWarpMetaTags 清理系统提示残留（system-reminder/IDE 上下文）
-func stripWarpMetaTags(text string) string {
-	if text == "" {
-		return text
-	}
-	out := stripTagBlocks(text, "system-reminder")
-	out = stripTagBlocks(out, "ide_opened_file")
-	out = stripTagBlocks(out, "ide_selection")
-	out = filterWarpLogLines(out)
-	return strings.TrimSpace(out)
-}
-
-func stripTagBlocks(text, tag string) string {
-	startTag := "<" + tag + ">"
-	endTag := "</" + tag + ">"
-	if !strings.Contains(text, startTag) {
-		return text
-	}
-	var sb strings.Builder
-	sb.Grow(len(text))
-	i := 0
-	for i < len(text) {
-		start := strings.Index(text[i:], startTag)
-		if start == -1 {
-			sb.WriteString(text[i:])
-			break
-		}
-		sb.WriteString(text[i : i+start])
-		endStart := i + start + len(startTag)
-		end := strings.Index(text[endStart:], endTag)
-		if end == -1 {
-			// No closing tag found — preserve the remaining text as-is
-			sb.WriteString(text[i+start:])
-			break
-		}
-		i = endStart + end + len(endTag)
-	}
-	return sb.String()
-}
-
-func filterWarpLogLines(text string) string {
-	if text == "" {
-		return text
-	}
-	if !strings.Contains(text, "[System:") && !strings.Contains(text, "[Scanning:") {
-		return text
-	}
-	lines := strings.Split(text, "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[System:") || strings.HasPrefix(trimmed, "[Scanning:") {
-			continue
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
-}
-
-func shouldDropWarpSyntheticUserContext(text string) bool {
-	if strings.TrimSpace(text) == "" {
-		return false
-	}
-	lower := strings.ToLower(text)
-	markers := 0
-	for _, marker := range []string{
-		"you are an interactive agent that helps users with software engineering tasks",
-		"# environment",
-		"primary working directory:",
-		"# auto memory",
-		"gitstatus:",
-		"recent commits:",
-	} {
-		if strings.Contains(lower, marker) {
-			markers++
-		}
-	}
-	return markers >= 3
-}
-
-func isNoiseToolResult(content string) bool {
-	if content == "" {
-		return false
-	}
-	lower := strings.ToLower(content)
-	if strings.Contains(lower, "unsupported tool") {
-		return true
-	}
-	if strings.Contains(lower, "unsupported tool:") {
-		return true
-	}
-	if strings.Contains(lower, "<tool_use_error>") || strings.Contains(lower, "no such tool available") {
-		return true
-	}
-	if isBenignNoopShellError(lower) {
-		return true
-	}
-	return false
-}
-
-func toolResultDedupKey(result warpToolResult) string {
-	content := strings.TrimSpace(result.Content)
-	id := strings.TrimSpace(result.ToolCallID)
-	if content == "" && id == "" {
-		return ""
-	}
-	if shouldDedupToolResultByContent(content) {
-		return "content:" + content
-	}
-	return id + "|" + content
-}
-
-func shouldDedupToolResultByContent(content string) bool {
-	lower := strings.ToLower(content)
-	if strings.Contains(lower, "eoferror: eof when reading a line") {
-		return true
-	}
-	return looksLikeWarpLargeReadOutput(content)
-}
-
-func isBenignNoopShellError(lower string) bool {
-	if strings.Contains(lower, "no matches found:") && strings.Contains(lower, "*") {
-		return true
-	}
-	if strings.Contains(lower, "rm:") && strings.Contains(lower, "no such file or directory") {
-		return true
-	}
-	if strings.Contains(lower, "cannot remove") && strings.Contains(lower, "no such file or directory") {
-		return true
-	}
-	return false
-}
-
-func splitWarpContent(content prompt.MessageContent) (string, []prompt.ContentBlock, []prompt.ContentBlock) {
-	if content.IsString() {
-		return content.GetText(), nil, nil
-	}
-
-	var (
-		textParts   []string
-		toolUses    []prompt.ContentBlock
-		toolResults []prompt.ContentBlock
-	)
-	for _, block := range content.GetBlocks() {
-		switch block.Type {
-		case "text":
-			textParts = append(textParts, block.Text)
-		case "tool_use":
-			toolUses = append(toolUses, block)
-		case "tool_result":
-			toolResults = append(toolResults, block)
-		}
-	}
-	return strings.Join(textParts, ""), toolUses, toolResults
-}
-
-func convertWarpToolCalls(blocks []prompt.ContentBlock) []warpToolCall {
-	if len(blocks) == 0 {
-		return nil
-	}
-	toolCalls := make([]warpToolCall, 0, len(blocks))
-	for _, block := range blocks {
-		if block.Type != "tool_use" {
-			continue
-		}
-		args := stringifyWarpValue(block.Input)
-		toolCalls = append(toolCalls, warpToolCall{
-			ID:        block.ID,
-			Name:      block.Name,
-			Arguments: args,
-		})
-	}
-	return toolCalls
-}
-
-func formatWarpToolUse(call warpToolCall) string {
-	name := strings.TrimSpace(call.Name)
-	if name == "" {
-		return ""
-	}
-	args := strings.TrimSpace(call.Arguments)
-	if args == "" {
-		args = "{}"
-	}
-	id := strings.TrimSpace(call.ID)
-	if id == "" {
-		return fmt.Sprintf("<tool_use name=\"%s\">\n%s\n</tool_use>", html.EscapeString(name), args)
-	}
-	return fmt.Sprintf("<tool_use id=\"%s\" name=\"%s\">\n%s\n</tool_use>", html.EscapeString(id), html.EscapeString(name), args)
-}
-
-func formatWarpToolResult(id, content string) string {
-	return formatWarpToolResultWithMode(id, content, false)
-}
-
-func formatWarpToolResultWithMode(id, content string, historyMode bool) string {
-	content = compactWarpToolResultContent(content, historyMode)
-	if id == "" {
-		return fmt.Sprintf("<tool_result>\n%s\n</tool_result>", content)
-	}
-	return fmt.Sprintf("<tool_result id=\"%s\">\n%s\n</tool_result>", html.EscapeString(id), content)
-}
-
-func stringifyWarpValue(value interface{}) string {
-	if value == nil {
-		return ""
-	}
-	switch v := value.(type) {
-	case string:
-		return v
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Sprintf("%v", value)
-	}
-	return string(encoded)
-}
-
-func buildWarpQuery(userText string, history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool, workdir string) (string, bool) {
-	parts := []string{singleResultPrompt}
-	userText = normalizeWarpUserText(userText, history, toolResults, workdir)
-
-	if len(toolResults) > 0 {
-		if disableWarpTools {
-			parts = append(parts, noWarpToolsPrompt)
-		}
-		parts = append(parts, formatWarpFollowupHistory(history)...)
-		for _, tr := range toolResults {
-			if formatted := formatWarpToolUse(warpToolCall{
-				ID:        tr.ToolCallID,
-				Name:      tr.ToolName,
-				Arguments: tr.Arguments,
-			}); formatted != "" {
-				parts = append(parts, formatted)
-			}
-			parts = append(parts, formatWarpToolResult(tr.ToolCallID, tr.Content))
-		}
-		if strings.TrimSpace(userText) != "" {
-			parts = append(parts, "User: "+userText)
-		} else {
-			parts = append(parts, "User: Please analyze the tool results above and provide your response.")
-		}
-		return strings.Join(parts, "\n\n"), false
-	}
-
-	if disableWarpTools {
-		parts = append(parts, noWarpToolsPrompt)
-	}
-
-	if len(history) > 0 {
-		parts = append(parts, formatWarpHistory(history)...)
-		if strings.TrimSpace(userText) != "" {
-			parts = append(parts, "User: "+userText)
-		}
-		return strings.Join(parts, "\n\n"), false // 有历史时不是新对话
-	}
-
-	if strings.TrimSpace(userText) == "" {
-		return "", true
-	}
-	if len(parts) > 0 {
-		parts = append(parts, userText)
-		return strings.Join(parts, "\n\n"), true
-	}
-	return userText, true
-}
-
-func normalizeWarpUserText(userText string, history []warpHistoryMessage, toolResults []warpToolResult, workdir string) string {
-	userText = strings.TrimSpace(userText)
-	workdir = strings.TrimSpace(workdir)
-	if userText == "" {
-		return userText
-	}
-	if len(history) > 0 || len(toolResults) > 0 {
-		return userText
-	}
-
-	lower := strings.ToLower(userText)
-	hasOptimizeVerb := strings.Contains(lower, "优化") || strings.Contains(lower, "改进") || strings.Contains(lower, "重构") ||
-		strings.Contains(lower, "optimize") || strings.Contains(lower, "improve") || strings.Contains(lower, "refactor")
-	hasAbstractTarget := strings.Contains(lower, "方案") || strings.Contains(lower, "设计") || strings.Contains(lower, "实现") ||
-		strings.Contains(lower, "plan") || strings.Contains(lower, "design") || strings.Contains(lower, "implementation")
-	if !hasOptimizeVerb || !hasAbstractTarget {
-		return userText
-	}
-	if workdir != "" {
-		return userText + "\n\n[Interpretation: Treat \"this plan/design/implementation\" as the current local project/codebase in the working directory " + workdir + ". Inspect the repository and propose concrete codebase optimizations instead of asking for a separate plan document.]"
-	}
-	return userText + "\n\n[Interpretation: Treat \"this plan/design/implementation\" as the current local project/codebase. If more context is needed, inspect the current local repository with client tools instead of asking for a separate plan document.]"
-}
-
-func formatWarpHistory(history []warpHistoryMessage) []string {
-	if len(history) == 0 {
-		return nil
-	}
-	parts := make([]string, 0, len(history))
-	for _, msg := range history {
-		switch msg.Role {
-		case "user":
-			parts = append(parts, "User: "+msg.Content)
-		case "assistant":
-			if msg.Content != "" {
-				parts = append(parts, "Assistant: "+msg.Content)
-			}
-			for _, tc := range msg.ToolCalls {
-				if formatted := formatWarpToolUse(tc); formatted != "" {
-					parts = append(parts, formatted)
-				}
-			}
-		case "tool":
-			parts = append(parts, formatWarpToolResultWithMode(msg.ToolCallID, msg.Content, true))
-		}
-	}
-	return parts
-}
-
-func formatWarpFollowupHistory(history []warpHistoryMessage) []string {
-	if len(history) == 0 {
-		return nil
-	}
-	parts := make([]string, 0, len(history))
-	for _, msg := range history {
-		switch msg.Role {
-		case "user":
-			if msg.Content != "" {
-				parts = append(parts, "User: "+msg.Content)
-			}
-		case "assistant":
-			content := stripWarpExploratoryAssistantText(msg.Content)
-			if content != "" {
-				parts = append(parts, "Assistant: "+content)
-			}
-		}
-	}
-	return parts
-}
-
-func stripWarpExploratoryAssistantText(content string) string {
-	lines := strings.Split(content, "\n")
-	kept := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if isWeakWarpExplorationAssistantLine(trimmed) {
-			continue
-		}
-		kept = append(kept, line)
-	}
-	return strings.TrimSpace(strings.Join(kept, "\n"))
-}
-
-func isWeakWarpExplorationAssistantLine(text string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" || strings.HasPrefix(text, "[Used tool:") {
-		return false
-	}
-	if len([]rune(text)) > 240 {
-		return false
-	}
-
-	lower := strings.ToLower(strings.Join(strings.Fields(text), " "))
-	intro := []string{
-		"let me",
-		"i'll first",
-		"i will first",
-		"让我先",
-		"我先",
-	}
-	action := []string{
-		"look",
-		"read",
-		"explore",
-		"examine",
-		"analyze",
-		"identify",
-		"understand",
-		"inspect",
-		"check",
-		"review",
-		"learn",
-		"看看",
-		"看一下",
-		"了解",
-		"阅读",
-		"读取",
-		"理解",
-		"分析",
-		"审查",
-	}
-
-	hasIntro := false
-	for _, marker := range intro {
-		if strings.Contains(lower, marker) {
-			hasIntro = true
-			break
-		}
-	}
-	if !hasIntro {
-		return false
-	}
-	for _, marker := range action {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func EstimateInputTokens(promptText, model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool) (InputTokenEstimate, error) {
-	userText, history, toolResults, err := extractWarpConversation(messages, promptText)
-	if err != nil {
-		return InputTokenEstimate{}, err
-	}
-
-	fullQuery, _ := buildWarpQuery(userText, history, toolResults, disableWarpTools, "")
-	if strings.TrimSpace(fullQuery) == "" {
-		return InputTokenEstimate{}, fmt.Errorf("empty warp query")
-	}
-
-	defs := convertTools(tools)
-	toolSchemaTokens := estimateWarpToolSchemaTokens(defs)
-	historyParts := formatWarpHistory(history)
-	if len(toolResults) > 0 {
-		historyParts = formatWarpFollowupHistory(history)
-	}
-	historyTokens := estimateWarpTextTokens(historyParts)
-	toolResultTokens := estimateWarpToolResultTokens(toolResults)
-	queryTokens := tiktoken.EstimateTextTokens(fullQuery)
-	baseTokens := queryTokens - historyTokens - toolResultTokens
-	if baseTokens < 0 {
-		baseTokens = queryTokens
-	}
-
-	return InputTokenEstimate{
-		Profile:          classifyWarpProfile(history, toolResults, disableWarpTools, len(defs)),
-		QueryTokens:      queryTokens,
-		BasePromptTokens: baseTokens,
-		HistoryTokens:    historyTokens,
-		ToolResultTokens: toolResultTokens,
-		ToolSchemaTokens: toolSchemaTokens,
-		ToolCount:        len(defs),
-		Total:            queryTokens + toolSchemaTokens,
-	}, nil
-}
-
-func classifyWarpProfile(history []warpHistoryMessage, toolResults []warpToolResult, disableWarpTools bool, toolCount int) string {
-	switch {
-	case len(toolResults) > 0:
-		return "warp-tool-result"
-	case len(history) > 0:
-		return "warp-history"
-	case toolCount > 0 && !disableWarpTools:
-		return "warp-tools"
-	case disableWarpTools:
-		return "warp-no-tools"
-	default:
-		return "warp"
-	}
-}
-
-func estimateWarpTextTokens(parts []string) int {
-	if len(parts) == 0 {
-		return 0
-	}
-	return tiktoken.EstimateTextTokens(strings.Join(parts, "\n\n"))
-}
-
-func estimateWarpToolResultTokens(results []warpToolResult) int {
-	if len(results) == 0 {
-		return 0
-	}
-	parts := make([]string, 0, len(results))
-	for _, tr := range results {
-		if formatted := formatWarpToolUse(warpToolCall{
-			ID:        tr.ToolCallID,
-			Name:      tr.ToolName,
-			Arguments: tr.Arguments,
-		}); formatted != "" {
-			parts = append(parts, formatted)
-		}
-		parts = append(parts, formatWarpToolResult(tr.ToolCallID, tr.Content))
-	}
-	return estimateWarpTextTokens(parts)
-}
-
-func estimateWarpToolSchemaTokens(defs []toolDef) int {
-	if len(defs) == 0 {
-		return 0
-	}
-	parts := make([]string, 0, len(defs))
-	for _, def := range defs {
-		var sb strings.Builder
-		sb.WriteString(def.Name)
-		if desc := strings.TrimSpace(def.Description); desc != "" {
-			sb.WriteString("\n")
-			sb.WriteString(desc)
-		}
-		if len(def.Schema) > 0 {
-			if raw, err := json.Marshal(def.Schema); err == nil && len(raw) > 0 {
-				sb.WriteString("\n")
-				sb.Write(raw)
-			}
-		}
-		parts = append(parts, sb.String())
-	}
-	return estimateWarpTextTokens(parts)
+func normalizeWarpTemplateModel(model string) string {
+	canonical := canonicalModelID(model)
+	if canonical == "" {
+		return defaultModel
+	}
+	return canonical
 }
 
 func buildRequestBytesFromTemplate(userText, model string, isNew bool, disableWarpTools bool, workdir string) ([]byte, error) {
@@ -788,7 +424,7 @@ func buildRequestBytesFromTemplate(userText, model string, isNew bool, disableWa
 
 	newQueryBytes := []byte(userText)
 	userQueryContent := []byte{0x0a}
-	userQueryContent = append(userQueryContent, encodeVarint(len(newQueryBytes))...)
+	userQueryContent = append(userQueryContent, encodeVarintInt(len(newQueryBytes))...)
 	userQueryContent = append(userQueryContent, newQueryBytes...)
 	userQueryContent = append(userQueryContent, 0x1a, 0x00, 0x20)
 	if isNew {
@@ -798,30 +434,28 @@ func buildRequestBytesFromTemplate(userText, model string, isNew bool, disableWa
 	}
 
 	userQueryTotalLen := len(userQueryContent)
-	userInputContent := append([]byte{0x0a}, encodeVarint(userQueryTotalLen)...)
+	userInputContent := append([]byte{0x0a}, encodeVarintInt(userQueryTotalLen)...)
 	userInputContent = append(userInputContent, userQueryContent...)
 
-	inputsContent := append([]byte{0x0a}, encodeVarint(len(userInputContent))...)
+	inputsContent := append([]byte{0x0a}, encodeVarintInt(len(userInputContent))...)
 	inputsContent = append(inputsContent, userInputContent...)
 
-	userInputsContent := append([]byte{0x32}, encodeVarint(len(inputsContent))...)
+	userInputsContent := append([]byte{0x32}, encodeVarintInt(len(inputsContent))...)
 	userInputsContent = append(userInputsContent, inputsContent...)
 
 	contextEnc := encoder{}
 	contextEnc.writeMessage(1, buildInputContext(workdir))
 	contextPart := contextEnc.bytes()
 	newInputContent := append(append([]byte(nil), contextPart...), userInputsContent...)
-	newInputMsg := append([]byte{0x12}, encodeVarint(len(newInputContent))...)
+	newInputMsg := append([]byte{0x12}, encodeVarintInt(len(newInputContent))...)
 	newInputMsg = append(newInputMsg, newInputContent...)
 
-	// settings 起点基于模板原始 Input 长度 (0x5a = 90)
 	settingsStart := 2 + 2 + 90
 	if settingsStart > len(template) {
 		return nil, fmt.Errorf("warp template: invalid settings offset")
 	}
 	rest := template[settingsStart:]
 
-	// 模板开头保留空 task_context: 0a 00
 	result := append([]byte{0x0a, 0x00}, newInputMsg...)
 	result = append(result, rest...)
 	result = patchTemplateModel(result, model)
@@ -832,12 +466,6 @@ func buildRequestBytesFromTemplate(userText, model string, isNew bool, disableWa
 	return result, nil
 }
 
-// patchTemplateModel rewrites the model entry in the static Warp protobuf template.
-// The template currently stores one model slot as:
-// 0a <entry_len> 0a <model_len> <model> 22 <id_len> <identifier>
-// and is wrapped by a settings field:
-// 1a <settings_len> ...
-// We patch model bytes and adjust the two enclosing single-byte lengths.
 func patchTemplateModel(data []byte, model string) []byte {
 	target := strings.TrimSpace(model)
 	if target == "" {
@@ -932,7 +560,6 @@ func removeSupportedTools(data []byte) []byte {
 		return result
 	}
 
-	// Decode the settings length as a proper varint (may be >1 byte for lengths ≥128)
 	origSettingsLen, varintLen := decodeVarintAt(data, settingsTagPos+1)
 	if varintLen == 0 {
 		return result
@@ -952,8 +579,7 @@ func removeSupportedTools(data []byte) []byte {
 		if newLen < 0 {
 			newLen = 0
 		}
-		newVarint := encodeVarint(newLen)
-		// Replace the old varint with the new one; lengths may differ
+		newVarint := encodeVarintInt(newLen)
 		insertPos := settingsTagPos + 1
 		oldEnd := insertPos + varintLen
 		if oldEnd > len(result) {
@@ -966,8 +592,6 @@ func removeSupportedTools(data []byte) []byte {
 	return result
 }
 
-// decodeVarintAt reads a varint starting at data[offset] and returns (value, bytesConsumed).
-// Returns (0, 0) if the varint cannot be read.
 func decodeVarintAt(data []byte, offset int) (int, int) {
 	var x uint64
 	var s uint
@@ -1028,7 +652,6 @@ func buildInputContext(workdir string) []byte {
 	ctx.writeMessage(2, osCtx.bytes())
 	ctx.writeMessage(3, shell.bytes())
 	ctx.writeMessage(4, ts.bytes())
-
 	return ctx.bytes()
 }
 
@@ -1037,6 +660,7 @@ func buildMCPContext(tools []interface{}) ([]byte, error) {
 	if len(converted) == 0 {
 		return nil, nil
 	}
+
 	ctx := encoder{}
 	for _, tool := range converted {
 		toolMsg := encoder{}
@@ -1055,7 +679,6 @@ func buildMCPContext(tools []interface{}) ([]byte, error) {
 		}
 		ctx.writeMessage(2, toolMsg.bytes())
 	}
-
 	return ctx.bytes(), nil
 }
 
@@ -1134,6 +757,7 @@ func convertTools(tools []interface{}) []toolDef {
 	if len(tools) == 0 {
 		return nil
 	}
+
 	defs := make([]toolDef, 0, len(tools))
 	seen := make(map[string]struct{})
 	for _, raw := range tools {
@@ -1141,6 +765,7 @@ func convertTools(tools []interface{}) []toolDef {
 		if !ok {
 			continue
 		}
+
 		if typ, _ := m["type"].(string); typ == "function" {
 			if fn, ok := m["function"].(map[string]interface{}); ok {
 				name, _ := fn["name"].(string)
@@ -1153,23 +778,22 @@ func convertTools(tools []interface{}) []toolDef {
 				}
 				description, _ := fn["description"].(string)
 				schema := compactWarpSchemaForTool(name, schemaMap(fn["parameters"]))
-				if name != "" {
-					key := strings.ToLower(strings.TrimSpace(name))
-					if key == "" {
-						continue
-					}
-					if _, exists := seen[key]; exists {
-						continue
-					}
-					seen[key] = struct{}{}
-					defs = append(defs, toolDef{Name: name, Description: compactWarpDescription(description), Schema: schema})
-					if len(defs) >= maxWarpToolCount {
-						break
-					}
+				key := strings.ToLower(strings.TrimSpace(name))
+				if key == "" {
+					continue
 				}
-				continue
+				if _, exists := seen[key]; exists {
+					continue
+				}
+				seen[key] = struct{}{}
+				defs = append(defs, toolDef{Name: name, Description: compactWarpDescription(description), Schema: schema})
+				if len(defs) >= maxWarpToolCount {
+					break
+				}
 			}
+			continue
 		}
+
 		name, _ := m["name"].(string)
 		if orchids.DefaultToolMapper.IsBlocked(name) {
 			continue
@@ -1184,19 +808,17 @@ func convertTools(tools []interface{}) []toolDef {
 			schema = schemaMap(m["parameters"])
 		}
 		schema = compactWarpSchemaForTool(name, schema)
-		if name != "" {
-			key := strings.ToLower(strings.TrimSpace(name))
-			if key == "" {
-				continue
-			}
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-			defs = append(defs, toolDef{Name: name, Description: compactWarpDescription(description), Schema: schema})
-			if len(defs) >= maxWarpToolCount {
-				break
-			}
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		defs = append(defs, toolDef{Name: name, Description: compactWarpDescription(description), Schema: schema})
+		if len(defs) >= maxWarpToolCount {
+			break
 		}
 	}
 	return defs
@@ -1264,31 +886,34 @@ func filterWarpSchemaProperties(name string, schema map[string]interface{}) map[
 	if !ok || len(props) == 0 {
 		return schema
 	}
+
 	filtered := make(map[string]interface{}, len(props))
 	for key, value := range props {
 		if _, keep := allowed[key]; keep {
 			filtered[key] = value
 		}
 	}
+
 	out := make(map[string]interface{}, len(schema))
 	for key, value := range schema {
 		switch key {
 		case "properties":
 			out[key] = filtered
 		case "required":
-			if raw, ok := value.([]interface{}); ok {
-				req := make([]interface{}, 0, len(raw))
-				for _, item := range raw {
-					name, _ := item.(string)
-					if _, keep := allowed[name]; keep {
-						req = append(req, item)
-					}
-				}
-				if len(req) > 0 {
-					out[key] = req
-				}
-			} else {
+			raw, ok := value.([]interface{})
+			if !ok {
 				out[key] = value
+				continue
+			}
+			req := make([]interface{}, 0, len(raw))
+			for _, item := range raw {
+				propName, _ := item.(string)
+				if _, keep := allowed[propName]; keep {
+					req = append(req, item)
+				}
+			}
+			if len(req) > 0 {
+				out[key] = req
 			}
 		default:
 			out[key] = value
@@ -1375,69 +1000,24 @@ func warpSchemaJSONLen(schema map[string]interface{}) int {
 	return len(raw)
 }
 
-func normalizeModel(model string) string {
-	normalized := normalizeWarpModelKey(model)
-	if normalized == "" {
-		return defaultModel
-	}
-	if mapped, ok := warpModelMap[normalized]; ok {
-		return mapped
-	}
-	return defaultModel
+type warpToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
 }
 
-// ResolveModelAlias maps a user-facing model ID to a Warp upstream model ID.
-// Returns empty string if no known mapping exists.
-func ResolveModelAlias(model string) string {
-	normalized := normalizeWarpModelKey(model)
-	if normalized == "" {
+func formatWarpToolUse(call warpToolCall) string {
+	name := strings.TrimSpace(call.Name)
+	if name == "" {
 		return ""
 	}
-	if mapped, ok := warpModelMap[normalized]; ok {
-		return mapped
+	args := strings.TrimSpace(call.Arguments)
+	if args == "" {
+		args = "{}"
 	}
-	return ""
-}
-
-var modelKeyReplacements = [][2]string{
-	{"4.6", "4-6"}, {"4.5", "4-5"}, {"2.5", "2-5"},
-	{"5.1", "5-1"}, {"5.2", "5-2"},
-}
-
-func normalizeWarpModelKey(model string) string {
-	normalized := strings.ToLower(strings.TrimSpace(model))
-	if normalized == "" {
-		return ""
+	id := strings.TrimSpace(call.ID)
+	if id == "" {
+		return fmt.Sprintf("<tool_use name=\"%s\">\n%s\n</tool_use>", html.EscapeString(name), args)
 	}
-	for _, r := range modelKeyReplacements {
-		normalized = strings.ReplaceAll(normalized, r[0], r[1])
-	}
-	return normalized
-}
-
-var warpModelMap = map[string]string{
-	"claude-4-sonnet":            "claude-4-sonnet",
-	"claude-4-5-sonnet":          "claude-4-5-sonnet",
-	"claude-4-5-sonnet-thinking": "claude-4-5-sonnet-thinking",
-	"claude-4-6-sonnet":          "claude-4-6-sonnet-high",
-	"claude-sonnet-4-6":          "claude-4-6-sonnet-high",
-	"claude-4-6-opus-high":       "claude-4-6-opus-high",
-	"claude-4-6-opus-max":        "claude-4-6-opus-max",
-	"claude-4-6-sonnet-high":     "claude-4-6-sonnet-high",
-	"claude-4-6-sonnet-max":      "claude-4-6-sonnet-max",
-	"claude-4-6-opus":            "claude-4-6-opus-high",
-	"claude-opus-4-6":            "claude-4-6-opus-high",
-	"claude-4-5-opus-thinking":   "claude-4-5-opus-thinking",
-	"gemini-2-5-pro":             "gemini-2-5-pro",
-	"gemini-3-pro":               "gemini-3-pro",
-	"claude-4-5-haiku":           "claude-4-5-haiku",
-	"claude-4-5-opus":            "claude-4-5-opus",
-	"gpt-5-1-codex-low":          "gpt-5-1-codex-low",
-	"gpt-5-1-codex-medium":       "gpt-5-1-codex-medium",
-	"gpt-5-1-codex-high":         "gpt-5-1-codex-high",
-	"gpt-5-1-codex-max-low":      "gpt-5-1-codex-max-low",
-	"gpt-5-1-codex-max-medium":   "gpt-5-1-codex-max-medium",
-	"gpt-5-1-codex-max-high":     "gpt-5-1-codex-max-high",
-	"gpt-5-1-codex-max-xhigh":    "gpt-5-1-codex-max-xhigh",
-	"gpt-5-2-codex-low":          "gpt-5-2-codex-low",
+	return fmt.Sprintf("<tool_use id=\"%s\" name=\"%s\">\n%s\n</tool_use>", html.EscapeString(id), html.EscapeString(name), args)
 }

@@ -161,8 +161,8 @@ func TestHandleCountTokens_WarpUsesWarpEstimator(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected breakdown object, got %#v", resp["breakdown"])
 	}
-	if v, ok := breakdown["tools_tokens"].(float64); !ok || v <= 0 {
-		t.Fatalf("expected warp tools_tokens > 0, got %#v", breakdown["tools_tokens"])
+	if v, ok := breakdown["tools_tokens"].(float64); !ok || v != 0 {
+		t.Fatalf("expected warp tools_tokens = 0 in CodeFreeMax mode, got %#v", breakdown["tools_tokens"])
 	}
 	if v, ok := breakdown["system_context_tokens"].(float64); !ok || v != 0 {
 		t.Fatalf("expected warp system_context_tokens = 0, got %#v", breakdown["system_context_tokens"])

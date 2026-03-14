@@ -1,19 +1,55 @@
 package warp
 
 import (
+	"bufio"
+	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/goccy/go-json"
 	"hash/fnv"
 	"io"
 	"math"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/goccy/go-json"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"orchids-api/internal/debug"
 	"orchids-api/internal/orchids"
+	"orchids-api/internal/upstream"
 )
+
+type toolCall struct {
+	ID    string
+	Name  string
+	Input string
+}
+
+type finishInfo struct {
+	InputTokens  int
+	OutputTokens int
+}
+
+type nonProtobufStreamError struct {
+	Kind    string
+	Preview string
+}
+
+func (e *nonProtobufStreamError) Error() string {
+	if e == nil {
+		return "warp returned non-protobuf response"
+	}
+	if e.Preview == "" {
+		return fmt.Sprintf("warp returned non-protobuf %s response", e.Kind)
+	}
+	return fmt.Sprintf("warp returned non-protobuf %s response: %s", e.Kind, e.Preview)
+}
 
 type decoder struct {
 	data []byte
@@ -106,15 +142,343 @@ type parsedEvent struct {
 	Error           string
 }
 
-type toolCall struct {
-	ID    string
-	Name  string
-	Input string
+func (e *parsedEvent) hasSignals() bool {
+	if e == nil {
+		return false
+	}
+	return strings.TrimSpace(e.ConversationID) != "" ||
+		len(e.TextDeltas) > 0 ||
+		len(e.ReasoningDeltas) > 0 ||
+		len(e.ToolCalls) > 0 ||
+		e.Finish != nil ||
+		strings.TrimSpace(e.Error) != ""
 }
 
-type finishInfo struct {
-	InputTokens  int
-	OutputTokens int
+func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	if closer, ok := reader.(io.Closer); ok {
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = closer.Close()
+			case <-done:
+			}
+		}()
+		defer close(done)
+	}
+
+	br := bufio.NewReaderSize(reader, 64*1024)
+	sawFrame := false
+	sawToolCall := false
+	toolCallIndex := 0
+
+	for {
+		frame, err := readFrame(br)
+		if err != nil {
+			var nonProtoErr *nonProtobufStreamError
+			if errors.As(err, &nonProtoErr) && nonProtoErr.Kind == "sse" {
+				return processSSEStreamBody(ctx, br, onMessage, logger)
+			}
+			if err == io.EOF {
+				break
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		sawFrame = true
+		if logger != nil {
+			logger.LogUpstreamSSE("warp_frame", fmt.Sprintf("bytes=%d", len(frame)))
+		}
+		_, done, err := emitWarpPayload(frame, onMessage, &sawToolCall, &toolCallIndex)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
+
+	if !sawFrame {
+		return fmt.Errorf("warp stream ended without protobuf frames")
+	}
+
+	reason := "end_turn"
+	if sawToolCall {
+		reason = "tool_use"
+	}
+	onMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": reason},
+	})
+	return nil
+}
+
+func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	var dataBuilder strings.Builder
+	dataEventCount := 0
+	parsedEventCount := 0
+	sawToolCall := false
+	toolCallIndex := 0
+	finishSent := false
+
+	flush := func() error {
+		if dataBuilder.Len() == 0 {
+			return nil
+		}
+		data := dataBuilder.String()
+		dataBuilder.Reset()
+		dataEventCount++
+		if logger != nil {
+			logger.LogUpstreamSSE("warp_data", data)
+		}
+
+		payloadBytes, err := decodeWarpPayload(data)
+		if err != nil {
+			if logger != nil {
+				logger.LogUpstreamSSE("warp_decode_error", err.Error())
+			}
+			return nil
+		}
+
+		handled, done, err := emitWarpPayload(payloadBytes, onMessage, &sawToolCall, &toolCallIndex)
+		if err != nil {
+			return err
+		}
+		if handled {
+			parsedEventCount++
+		}
+		if done {
+			finishSent = true
+		}
+		return nil
+	}
+
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if flushErr := flush(); flushErr != nil {
+					return flushErr
+				}
+				break
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			if err := flush(); err != nil {
+				return err
+			}
+			if finishSent {
+				return nil
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataBuilder.WriteString(strings.TrimSpace(line[5:]))
+		}
+	}
+
+	if dataEventCount == 0 {
+		return fmt.Errorf("warp stream ended without any SSE data events")
+	}
+	if parsedEventCount == 0 {
+		return fmt.Errorf("warp stream received %d SSE data events but none parsed", dataEventCount)
+	}
+	if !finishSent {
+		reason := "end_turn"
+		if sawToolCall {
+			reason = "tool_use"
+		}
+		onMessage(upstream.SSEMessage{
+			Type:  "model.finish",
+			Event: map[string]interface{}{"finishReason": reason},
+		})
+	}
+	return nil
+}
+
+func decodeWarpPayload(data string) ([]byte, error) {
+	if data == "" {
+		return nil, fmt.Errorf("empty payload")
+	}
+	if decoded, err := base64.RawURLEncoding.DecodeString(data); err == nil {
+		return decoded, nil
+	}
+	if decoded, err := base64.URLEncoding.DecodeString(data); err == nil {
+		return decoded, nil
+	}
+	return base64.StdEncoding.DecodeString(data)
+}
+
+func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolCall *bool, toolCallIndex *int) (bool, bool, error) {
+	if parsed, err := parseResponseEvent(frame); err == nil && parsed.hasSignals() {
+		if parsed.ConversationID != "" {
+			onMessage(upstream.SSEMessage{
+				Type:  "model.conversation_id",
+				Event: map[string]interface{}{"id": parsed.ConversationID},
+			})
+		}
+		for _, delta := range parsed.TextDeltas {
+			if strings.TrimSpace(delta) == "" {
+				continue
+			}
+			onMessage(upstream.SSEMessage{
+				Type:  "model.text-delta",
+				Event: map[string]interface{}{"delta": delta},
+			})
+		}
+		for _, delta := range parsed.ReasoningDeltas {
+			if strings.TrimSpace(delta) == "" {
+				continue
+			}
+			onMessage(upstream.SSEMessage{
+				Type:  "model.reasoning-delta",
+				Event: map[string]interface{}{"delta": delta},
+			})
+		}
+		for _, call := range parsed.ToolCalls {
+			*sawToolCall = true
+			onMessage(upstream.SSEMessage{
+				Type: "model.tool-call",
+				Event: map[string]interface{}{
+					"toolCallId": call.ID,
+					"toolName":   call.Name,
+					"input":      call.Input,
+				},
+			})
+		}
+		if parsed.Error != "" {
+			return true, false, fmt.Errorf("warp stream error: %s", parsed.Error)
+		}
+		if parsed.Finish != nil {
+			finish := map[string]interface{}{
+				"finishReason": "end_turn",
+			}
+			if *sawToolCall {
+				finish["finishReason"] = "tool_use"
+			}
+			if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
+				finish["usage"] = map[string]interface{}{
+					"inputTokens":  parsed.Finish.InputTokens,
+					"outputTokens": parsed.Finish.OutputTokens,
+				}
+			}
+			onMessage(upstream.SSEMessage{Type: "model.finish", Event: finish})
+			return true, true, nil
+		}
+		return true, false, nil
+	}
+
+	fields := ParseRawProtobuf(frame)
+	handled := false
+
+	for _, value := range fields[1] {
+		if text := extractStringValue(value); text != "" {
+			handled = true
+			onMessage(upstream.SSEMessage{
+				Type:  "model.text-delta",
+				Event: map[string]interface{}{"delta": text},
+			})
+		}
+	}
+
+	for _, value := range fields[2] {
+		if text := extractStringValue(value); text != "" {
+			handled = true
+			onMessage(upstream.SSEMessage{
+				Type:  "model.reasoning-delta",
+				Event: map[string]interface{}{"delta": text},
+			})
+		}
+	}
+
+	for _, value := range fields[3] {
+		payload, ok := value.([]byte)
+		if !ok || len(payload) == 0 {
+			continue
+		}
+		calls := parseToolCalls(ParseRawProtobuf(payload), *toolCallIndex)
+		for _, call := range calls {
+			handled = true
+			*sawToolCall = true
+			*toolCallIndex = *toolCallIndex + 1
+			onMessage(upstream.SSEMessage{
+				Type: "model.tool-call",
+				Event: map[string]interface{}{
+					"toolCallId": call.ID,
+					"toolName":   call.Name,
+					"input":      call.Input,
+				},
+			})
+		}
+	}
+
+	if errMsg := firstNonEmptyString(fields[6]); errMsg != "" {
+		return true, false, fmt.Errorf("warp stream error: %s", errMsg)
+	}
+
+	if isDone(fields[4]) {
+		finish := map[string]interface{}{
+			"finishReason": "end_turn",
+		}
+		if *sawToolCall {
+			finish["finishReason"] = "tool_use"
+		}
+		if usage := parseUsage(fields[5]); usage != nil {
+			finish["usage"] = map[string]interface{}{
+				"inputTokens":  usage.InputTokens,
+				"outputTokens": usage.OutputTokens,
+			}
+		}
+		onMessage(upstream.SSEMessage{Type: "model.finish", Event: finish})
+		return true, true, nil
+	}
+
+	return handled, false, nil
+}
+
+func readFrame(reader *bufio.Reader) ([]byte, error) {
+	header, err := reader.Peek(4)
+	if err != nil {
+		return nil, err
+	}
+	size := binary.BigEndian.Uint32(header)
+	if size == 0 {
+		if _, err := reader.Discard(4); err != nil {
+			return nil, err
+		}
+		return nil, io.EOF
+	}
+	if size > 16*1024*1024 {
+		if preview, kind, ok := sniffNonProtobufResponse(reader); ok {
+			return nil, &nonProtobufStreamError{
+				Kind:    kind,
+				Preview: preview,
+			}
+		}
+		return nil, fmt.Errorf("warp protobuf frame too large: %d", size)
+	}
+	if _, err := reader.Discard(4); err != nil {
+		return nil, err
+	}
+	frame := make([]byte, size)
+	if _, err := io.ReadFull(reader, frame); err != nil {
+		return nil, err
+	}
+	return frame, nil
 }
 
 func parseResponseEvent(data []byte) (*parsedEvent, error) {
@@ -126,7 +490,7 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 			return out, err
 		}
 		switch field {
-		case 1: // init
+		case 1:
 			if wire != 2 {
 				if err := d.skip(wire); err != nil {
 					return out, err
@@ -138,7 +502,7 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 				return out, err
 			}
 			parseStreamInit(payload, out)
-		case 2: // client_actions
+		case 2:
 			if wire != 2 {
 				if err := d.skip(wire); err != nil {
 					return out, err
@@ -150,7 +514,7 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 				return out, err
 			}
 			parseClientActions(payload, out)
-		case 3: // finished
+		case 3:
 			if wire != 2 {
 				if err := d.skip(wire); err != nil {
 					return out, err
@@ -161,8 +525,8 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 			if err != nil {
 				return out, err
 			}
-			parseStreamFinished(payload, out)
-		case 4: // error
+			parseNestedStreamFinished(payload, out)
+		case 4:
 			if wire != 2 {
 				if err := d.skip(wire); err != nil {
 					return out, err
@@ -173,7 +537,7 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 			if err != nil {
 				return out, err
 			}
-			out.Error = parseStreamError(payload)
+			out.Error = parseNestedStreamError(payload)
 		default:
 			if err := d.skip(wire); err != nil {
 				return out, err
@@ -229,7 +593,7 @@ func parseClientAction(data []byte, out *parsedEvent) {
 			return
 		}
 		switch field {
-		case 1: // create_task
+		case 1:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -239,7 +603,7 @@ func parseClientAction(data []byte, out *parsedEvent) {
 				return
 			}
 			parseCreateTask(payload, out)
-		case 3: // add_messages_to_task
+		case 3:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -249,7 +613,7 @@ func parseClientAction(data []byte, out *parsedEvent) {
 				return
 			}
 			parseAddMessages(payload, out)
-		case 4: // update_task_message
+		case 4:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -259,7 +623,7 @@ func parseClientAction(data []byte, out *parsedEvent) {
 				return
 			}
 			parseUpdateTaskMessage(payload, out)
-		case 5: // append_to_message_content
+		case 5:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -378,7 +742,7 @@ func parseMessage(data []byte, out *parsedEvent) {
 			return
 		}
 		switch field {
-		case 3: // agent_output
+		case 3:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -388,7 +752,7 @@ func parseMessage(data []byte, out *parsedEvent) {
 				return
 			}
 			parseAgentOutput(payload, out)
-		case 4: // tool_call
+		case 4:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -397,7 +761,7 @@ func parseMessage(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			parseToolCall(payload, out)
+			parseNestedToolCall(payload, out)
 		default:
 			_ = d.skip(wire)
 		}
@@ -420,27 +784,26 @@ func parseAgentOutput(data []byte, out *parsedEvent) {
 			return
 		}
 		switch field {
-		case 1: // text
+		case 1:
 			out.TextDeltas = append(out.TextDeltas, string(payload))
-		case 2: // reasoning
+		case 2:
 			out.ReasoningDeltas = append(out.ReasoningDeltas, string(payload))
 		}
 	}
 }
 
-func parseToolCall(data []byte, out *parsedEvent) {
+func parseNestedToolCall(data []byte, out *parsedEvent) {
 	d := decoder{data: data}
 	toolID := ""
 	toolName := ""
 	toolInput := ""
-	var readFilesPaths []string
 	for !d.eof() {
 		field, wire, err := d.readKey()
 		if err != nil {
 			return
 		}
 		switch field {
-		case 1: // tool_call_id
+		case 1:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -450,7 +813,7 @@ func parseToolCall(data []byte, out *parsedEvent) {
 				return
 			}
 			toolID = string(payload)
-		case 12: // call_mcp_tool
+		case 12:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -464,7 +827,7 @@ func parseToolCall(data []byte, out *parsedEvent) {
 				toolName = name
 				toolInput = input
 			}
-		case 5: // read_files — always parse, even if toolName was set by an earlier field
+		case 5:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -473,10 +836,10 @@ func parseToolCall(data []byte, out *parsedEvent) {
 			if err != nil {
 				return
 			}
-			if paths := decodeWarpReadFilesPayload(payload); len(paths) > 0 {
-				// The warp server sends an initial empty placeholder event, followed by
-				// a separate event with the real file paths — skip the placeholder.
-				readFilesPaths = append(readFilesPaths[:0], paths...)
+			resolvedName, resolvedInput := parseFallbackToolInput("read_files", payload)
+			if resolvedInput != "" && resolvedInput != "{}" {
+				toolName = resolvedName
+				toolInput = resolvedInput
 			}
 		default:
 			if toolName == "" && wire == 2 {
@@ -499,13 +862,6 @@ func parseToolCall(data []byte, out *parsedEvent) {
 			_ = d.skip(wire)
 		}
 	}
-	if len(readFilesPaths) > 0 {
-		calls := buildWarpReadFileToolCalls(toolID, readFilesPaths)
-		if len(calls) > 0 {
-			out.ToolCalls = append(out.ToolCalls, calls...)
-		}
-		return
-	}
 	if toolName == "" {
 		return
 	}
@@ -518,12 +874,427 @@ func parseToolCall(data []byte, out *parsedEvent) {
 		return
 	}
 	if toolID == "" {
-		toolID = fallbackToolCallID(toolName, toolInput)
+		toolID = nestedFallbackToolCallID(toolName, toolInput)
 	}
 	out.ToolCalls = append(out.ToolCalls, toolCall{ID: toolID, Name: toolName, Input: toolInput})
 }
 
-func fallbackToolCallID(toolName, toolInput string) string {
+func sniffNonProtobufResponse(reader *bufio.Reader) (preview string, kind string, ok bool) {
+	const maxPeek = 256
+	peeked, err := reader.Peek(maxPeek)
+	if err != nil && len(peeked) == 0 {
+		return "", "", false
+	}
+
+	text := sanitizeResponsePreview(peeked)
+	if text == "" {
+		return "", "", false
+	}
+	lower := strings.ToLower(text)
+
+	switch {
+	case strings.HasPrefix(lower, "<!doctype"), strings.HasPrefix(lower, "<html"), strings.HasPrefix(lower, "<?xml"), strings.HasPrefix(lower, "<head"), strings.HasPrefix(lower, "<body"):
+		return text, "html", true
+	case strings.HasPrefix(lower, "data:"), strings.HasPrefix(lower, "event:"), strings.HasPrefix(lower, ":"):
+		return text, "sse", true
+	case strings.HasPrefix(lower, "{"), strings.HasPrefix(lower, "["):
+		return text, "json", true
+	case looksMostlyText(peeked):
+		return text, "text", true
+	default:
+		return "", "", false
+	}
+}
+
+func sanitizeResponsePreview(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	text := strings.ToValidUTF8(string(data), "")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	text = strings.NewReplacer(
+		"\r", "\\r",
+		"\n", "\\n",
+		"\t", "\\t",
+	).Replace(text)
+	if len(text) > 160 {
+		text = text[:160] + "..."
+	}
+	return text
+}
+
+func looksMostlyText(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	printable := 0
+	total := 0
+	for _, b := range data {
+		if b == 0 {
+			return false
+		}
+		if b == '\r' || b == '\n' || b == '\t' || (b >= 0x20 && b <= 0x7e) {
+			printable++
+		}
+		total++
+		if total >= 32 {
+			break
+		}
+	}
+	return total > 0 && printable*100/total >= 85
+}
+
+func looksLikeDisplayStringBytes(data []byte) bool {
+	if len(data) == 0 || !utf8.Valid(data) {
+		return false
+	}
+	printable := 0
+	total := 0
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
+		data = data[size:]
+		total++
+		switch {
+		case r == utf8.RuneError && size == 1:
+			return false
+		case r == 0:
+			return false
+		case r == '\n' || r == '\r' || r == '\t':
+			printable++
+		case r >= 0x20:
+			printable++
+		}
+	}
+	return total > 0 && printable*100/total >= 85
+}
+
+func ParseRawProtobuf(data []byte) map[uint32][]interface{} {
+	result := make(map[uint32][]interface{})
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return result
+		}
+		data = data[n:]
+
+		switch typ {
+		case protowire.VarintType:
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return result
+			}
+			result[uint32(num)] = append(result[uint32(num)], v)
+			data = data[n:]
+		case protowire.Fixed32Type:
+			v, n := protowire.ConsumeFixed32(data)
+			if n < 0 {
+				return result
+			}
+			result[uint32(num)] = append(result[uint32(num)], v)
+			data = data[n:]
+		case protowire.Fixed64Type:
+			v, n := protowire.ConsumeFixed64(data)
+			if n < 0 {
+				return result
+			}
+			result[uint32(num)] = append(result[uint32(num)], v)
+			data = data[n:]
+		case protowire.BytesType:
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return result
+			}
+			result[uint32(num)] = append(result[uint32(num)], v)
+			data = data[n:]
+		default:
+			return result
+		}
+	}
+	return result
+}
+
+func extractStringValue(v interface{}) string {
+	switch t := v.(type) {
+	case []byte:
+		if !looksLikeDisplayStringBytes(t) {
+			return ""
+		}
+		return strings.TrimSpace(strings.ToValidUTF8(string(t), ""))
+	case string:
+		if !looksLikeDisplayStringBytes([]byte(t)) {
+			return ""
+		}
+		return strings.TrimSpace(strings.ToValidUTF8(t, ""))
+	default:
+		return ""
+	}
+}
+
+func firstNonEmptyString(values []interface{}) string {
+	for _, value := range values {
+		if text := extractStringValue(value); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func isDone(values []interface{}) bool {
+	for _, value := range values {
+		if flag, ok := value.(uint64); ok && flag == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func parseUsage(values []interface{}) *finishInfo {
+	for _, value := range values {
+		payload, ok := value.([]byte)
+		if !ok || len(payload) == 0 {
+			continue
+		}
+		fields := ParseRawProtobuf(payload)
+		usage := &finishInfo{}
+		if len(fields[1]) > 0 {
+			if n, ok := fields[1][0].(uint64); ok {
+				usage.InputTokens = int(n)
+			}
+		}
+		if len(fields[2]) > 0 {
+			if n, ok := fields[2][0].(uint64); ok {
+				usage.OutputTokens = int(n)
+			}
+		}
+		return usage
+	}
+	return nil
+}
+
+func parseToolCalls(fields map[uint32][]interface{}, index int) []toolCall {
+	name := firstNonEmptyString(fields[1])
+	args := firstNonEmptyString(fields[2])
+	callID := firstNonEmptyString(fields[3])
+	if name == "" {
+		return nil
+	}
+	return mapWarpToolCalls(name, args, callID, index)
+}
+
+func mapWarpToolCalls(name, rawArgs, callID string, index int) []toolCall {
+	args := map[string]interface{}{}
+	if strings.TrimSpace(rawArgs) != "" {
+		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+			args["raw"] = strings.TrimSpace(rawArgs)
+		}
+	}
+
+	baseName, transformed := transformWarpToolCall(name, args)
+	if strings.EqualFold(name, "read_files") {
+		paths := extractReadPaths(args)
+		if len(paths) > 1 {
+			calls := make([]toolCall, 0, len(paths))
+			for i, path := range paths {
+				input := map[string]interface{}{"file_path": path}
+				if start, ok := args["start"]; ok {
+					input["offset"] = start
+				}
+				if end, ok := args["end"]; ok {
+					input["limit"] = end
+				}
+				calls = append(calls, toolCall{
+					ID:    derivedCallID(callID, name, index+i),
+					Name:  fmt.Sprintf("%s_%d", baseName, i),
+					Input: marshalToolInput(input),
+				})
+			}
+			return calls
+		}
+	}
+
+	return []toolCall{{
+		ID:    derivedCallID(callID, name, index),
+		Name:  baseName,
+		Input: marshalToolInput(transformed),
+	}}
+}
+
+func transformWarpToolCall(name string, args map[string]interface{}) (string, map[string]interface{}) {
+	baseName := name
+	if mapped, ok := warpToClientToolMap[name]; ok {
+		baseName = mapped
+	}
+	baseName = orchids.NormalizeToolName(baseName)
+
+	out := map[string]interface{}{}
+	switch name {
+	case "grep":
+		copyIfPresent(out, "pattern", args, "pattern")
+		copyIfPresent(out, "path", args, "path")
+		copyIfPresent(out, "glob", args, "include")
+	case "file_glob":
+		copyIfPresent(out, "pattern", args, "pattern")
+		copyIfPresent(out, "path", args, "path")
+	case "read_files":
+		if paths := extractReadPaths(args); len(paths) > 0 {
+			out["file_path"] = paths[0]
+		}
+		copyIfPresent(out, "offset", args, "start")
+		copyIfPresent(out, "limit", args, "end")
+	case "edit_file":
+		copyStringIfPresent(out, "file_path", args, "path", sanitizeFileName)
+		copyStringIfPresent(out, "old_string", args, "old_string", stripLineNumberPrefixes)
+		copyStringIfPresent(out, "new_string", args, "new_string", stripLineNumberPrefixes)
+	case "write_file", "create_file":
+		copyStringIfPresent(out, "file_path", args, "path", sanitizeFileName)
+		copyStringIfPresent(out, "content", args, "content", stripLineNumberPrefixes)
+	case "run_command":
+		copyIfPresent(out, "command", args, "command")
+		copyIfPresent(out, "timeout", args, "timeout")
+	case "list_directory":
+		copyIfPresent(out, "path", args, "path")
+	case "subagent":
+		for k, v := range args {
+			out[k] = v
+		}
+	default:
+		for k, v := range args {
+			out[k] = v
+		}
+	}
+
+	if len(out) == 0 {
+		out = map[string]interface{}{}
+	}
+	return baseName, out
+}
+
+func copyIfPresent(dst map[string]interface{}, dstKey string, src map[string]interface{}, srcKey string) {
+	if value, ok := src[srcKey]; ok {
+		dst[dstKey] = value
+	}
+}
+
+func copyStringIfPresent(dst map[string]interface{}, dstKey string, src map[string]interface{}, srcKey string, transform func(string) string) {
+	value, ok := src[srcKey]
+	if !ok {
+		return
+	}
+
+	text := fmt.Sprintf("%v", value)
+	if transform != nil {
+		text = transform(text)
+	}
+	dst[dstKey] = text
+}
+
+func extractReadPaths(args map[string]interface{}) []string {
+	var out []string
+	appendPath := func(value interface{}) {
+		if path := extractSinglePath(value); path != "" {
+			out = append(out, path)
+		}
+	}
+
+	if value, ok := args["paths"]; ok {
+		switch paths := value.(type) {
+		case []interface{}:
+			for _, path := range paths {
+				appendPath(path)
+			}
+		default:
+			appendPath(paths)
+		}
+	}
+	if len(out) == 0 {
+		appendPath(args["path"])
+		appendPath(args["file_path"])
+	}
+
+	seen := map[string]struct{}{}
+	uniq := out[:0]
+	for _, path := range out {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		uniq = append(uniq, path)
+	}
+	return uniq
+}
+
+func extractSinglePath(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return ""
+	}
+}
+
+func derivedCallID(callID, toolName string, index int) string {
+	callID = strings.TrimSpace(callID)
+	if callID != "" {
+		if index <= 0 {
+			return callID
+		}
+		return fmt.Sprintf("%s_%d", callID, index)
+	}
+	name := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(toolName), " ", "_"))
+	if name == "" {
+		name = "tool"
+	}
+	return fmt.Sprintf("call_%s_%d", name, index)
+}
+
+func marshalToolInput(input map[string]interface{}) string {
+	if len(input) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(input)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func sanitizeFileName(name string) string {
+	name = strings.ReplaceAll(name, "\x00", "")
+	name = filepath.Clean(name)
+	name = strings.TrimSpace(name)
+	return name
+}
+
+var lineNumberPrefixRe = regexp.MustCompile(`(?m)^\s*\d+\t`)
+
+func stripLineNumberPrefixes(text string) string {
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 {
+		return text
+	}
+
+	matchCount := 0
+	nonEmpty := 0
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		nonEmpty++
+		if lineNumberPrefixRe.MatchString(line) {
+			matchCount++
+		}
+	}
+
+	if nonEmpty > 0 && float64(matchCount)/float64(nonEmpty) > 0.5 {
+		return lineNumberPrefixRe.ReplaceAllString(text, "")
+	}
+	return text
+}
+
+func nestedFallbackToolCallID(toolName, toolInput string) string {
 	name := strings.ToLower(strings.TrimSpace(toolName))
 	input := strings.TrimSpace(toolInput)
 	if input == "" {
@@ -837,7 +1608,7 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 				break
 			}
 			switch field {
-			case 1: // command
+			case 1:
 				if wire != 2 {
 					_ = d.skip(wire)
 					continue
@@ -849,7 +1620,7 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 				if cmd := string(b); cmd != "" {
 					input["command"] = cmd
 				}
-			case 2: // is_read_only
+			case 2:
 				if wire != 0 {
 					_ = d.skip(wire)
 					continue
@@ -859,7 +1630,7 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 					break
 				}
 				input["is_read_only"] = v != 0
-			case 3: // uses_pager
+			case 3:
 				if wire != 0 {
 					_ = d.skip(wire)
 					continue
@@ -869,7 +1640,7 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 					break
 				}
 				input["uses_pager"] = v != 0
-			case 5: // is_risky
+			case 5:
 				if wire != 0 {
 					_ = d.skip(wire)
 					continue
@@ -879,7 +1650,7 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 					break
 				}
 				input["is_risky"] = v != 0
-			case 6: // wait_until_complete
+			case 6:
 				if wire != 0 {
 					_ = d.skip(wire)
 					continue
@@ -904,11 +1675,28 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 	case "apply_file_diffs":
 		return parseApplyFileDiffsPayload(payload)
 	case "read_files":
-		files := decodeWarpReadFilesPayload(payload)
+		var files []string
+		d := decoder{data: payload}
+		for !d.eof() {
+			field, wire, err := d.readKey()
+			if err != nil {
+				break
+			}
+			if field == 1 && wire == 2 {
+				b, err := d.readBytes()
+				if err != nil {
+					break
+				}
+				if path := strings.TrimSpace(string(b)); path != "" {
+					files = append(files, path)
+				}
+			} else {
+				_ = d.skip(wire)
+			}
+		}
 		if len(files) == 0 {
 			return "Read", "{}"
 		}
-		// Pick the best file to read (prefer project-relevant files)
 		path := pickWarpPreferredReadPath(files)
 		if path == "" {
 			path = files[0]
@@ -920,8 +1708,6 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 		}
 		return "Read", string(b)
 	default:
-		// Generic protobuf extraction: pull all string fields so non-shell
-		// tools don't receive empty input.
 		input := map[string]interface{}{}
 		d := decoder{data: payload}
 		for !d.eof() {
@@ -930,13 +1716,13 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 				break
 			}
 			switch wire {
-			case 0: // varint
+			case 0:
 				v, err := d.readVarint()
 				if err != nil {
 					break
 				}
 				input[fmt.Sprintf("field%d", field)] = v
-			case 2: // length-delimited (string/bytes)
+			case 2:
 				b, err := d.readBytes()
 				if err != nil {
 					break
@@ -957,156 +1743,6 @@ func parseFallbackToolInput(toolName string, payload []byte) (string, string) {
 		}
 		return toolName, string(b)
 	}
-}
-
-func decodeWarpReadFilesPayload(payload []byte) []string {
-	var files []string
-	d := decoder{data: payload}
-	for !d.eof() {
-		field, wire, err := d.readKey()
-		if err != nil {
-			break
-		}
-		if field == 1 && wire == 2 {
-			b, err := d.readBytes()
-			if err != nil {
-				break
-			}
-			if path := decodeWarpReadFilePath(b); path != "" {
-				files = append(files, path)
-			}
-			continue
-		}
-		_ = d.skip(wire)
-	}
-	return uniqueWarpPaths(files)
-}
-
-func decodeWarpReadFilePath(raw []byte) string {
-	for _, candidate := range []string{
-		unwrapWarpLengthPrefixedString(raw),
-		strings.TrimSpace(string(raw)),
-	} {
-		if path := normalizeWarpReadFilePathCandidate(candidate); path != "" {
-			return path
-		}
-	}
-	return ""
-}
-
-func unwrapWarpLengthPrefixedString(raw []byte) string {
-	if len(raw) < 2 {
-		return ""
-	}
-	d := decoder{data: raw}
-	length, err := d.readVarint()
-	if err != nil {
-		return ""
-	}
-	if length == 0 || d.pos >= len(raw) || int(length) != len(raw[d.pos:]) {
-		return ""
-	}
-	candidate := string(raw[d.pos:])
-	if !utf8.ValidString(candidate) {
-		return ""
-	}
-	return strings.TrimSpace(candidate)
-}
-
-func normalizeWarpReadFilePathCandidate(candidate string) string {
-	candidate = strings.TrimSpace(candidate)
-	if candidate == "" {
-		return ""
-	}
-	if path := findWarpPathInString(candidate); path != "" {
-		return path
-	}
-	candidate = strings.Trim(candidate, "\"'")
-	candidate = strings.TrimRight(candidate, ",")
-	candidate = strings.TrimRight(candidate, "]})")
-	if looksLikeWarpRelativePathCandidate(candidate) {
-		return candidate
-	}
-	return ""
-}
-
-func looksLikeWarpRelativePathCandidate(s string) bool {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return false
-	}
-	if looksLikeWarpPathCandidate(s) {
-		return true
-	}
-	if strings.ContainsAny(s, "\n\r\t{}[]<>|`") {
-		return false
-	}
-	if strings.Count(s, " ") > 1 {
-		return false
-	}
-	lower := strings.ToLower(s)
-	for _, suffix := range []string{
-		".md", ".txt", ".py", ".go", ".js", ".jsx", ".ts", ".tsx",
-		".json", ".yaml", ".yml", ".toml", ".lock", ".ini", ".cfg",
-	} {
-		if strings.HasSuffix(lower, suffix) {
-			return true
-		}
-	}
-	switch lower {
-	case "readme", "makefile", "dockerfile":
-		return true
-	}
-	return strings.Contains(s, "/") || strings.Contains(s, "\\")
-}
-
-func buildWarpReadFileToolCalls(toolID string, files []string) []toolCall {
-	files = uniqueWarpPaths(files)
-	if len(files) == 0 {
-		return nil
-	}
-	out := make([]toolCall, 0, len(files))
-	for idx, path := range files {
-		if normalized := normalizeWarpReadFilePathCandidate(path); normalized != "" {
-			path = normalized
-		}
-		inputBytes, err := json.Marshal(map[string]string{"file_path": path})
-		if err != nil {
-			continue
-		}
-		callID := strings.TrimSpace(toolID)
-		if callID == "" {
-			callID = fallbackToolCallID("Read", string(inputBytes))
-		} else if len(files) > 1 {
-			callID = fmt.Sprintf("%s_%d", callID, idx+1)
-		}
-		out = append(out, toolCall{
-			ID:    callID,
-			Name:  "Read",
-			Input: string(inputBytes),
-		})
-	}
-	return out
-}
-
-func uniqueWarpPaths(paths []string) []string {
-	if len(paths) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(paths))
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		out = append(out, path)
-	}
-	return out
 }
 
 func parseApplyFileDiffsPayload(payload []byte) (string, string) {
@@ -1131,7 +1767,7 @@ func parseApplyFileDiffsPayload(payload []byte) (string, string) {
 			break
 		}
 		switch field {
-		case 2: // file_diffs
+		case 2:
 			if editPath == "" {
 				p, oldStr, newStr := parseApplyFileDiffItem(b)
 				if strings.TrimSpace(p) != "" {
@@ -1140,7 +1776,7 @@ func parseApplyFileDiffsPayload(payload []byte) (string, string) {
 					editNew = newStr
 				}
 			}
-		case 3: // new_files
+		case 3:
 			if writePath == "" {
 				p, c := parseApplyFileDiffNewFile(b)
 				if strings.TrimSpace(p) != "" {
@@ -1197,9 +1833,9 @@ func parseApplyFileDiffNewFile(payload []byte) (string, string) {
 			break
 		}
 		switch field {
-		case 1: // file_path
+		case 1:
 			path = string(b)
-		case 2: // content
+		case 2:
 			content = string(b)
 		}
 	}
@@ -1217,7 +1853,7 @@ func parseApplyFileDiffItem(payload []byte) (string, string, string) {
 			break
 		}
 		switch field {
-		case 1: // file_path
+		case 1:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -1227,7 +1863,7 @@ func parseApplyFileDiffItem(payload []byte) (string, string, string) {
 				break
 			}
 			path = string(b)
-		case 3: // replacements
+		case 3:
 			if wire != 2 {
 				_ = d.skip(wire)
 				continue
@@ -1308,7 +1944,7 @@ func fallbackToolName(field int) string {
 	}
 }
 
-func parseStreamFinished(data []byte, out *parsedEvent) {
+func parseNestedStreamFinished(data []byte, out *parsedEvent) {
 	d := decoder{data: data}
 	inputTokens := 0
 	outputTokens := 0
@@ -1322,7 +1958,7 @@ func parseStreamFinished(data []byte, out *parsedEvent) {
 			if err != nil {
 				break
 			}
-			in, outTok := parseTokenUsage(payload)
+			in, outTok := parseNestedTokenUsage(payload)
 			inputTokens += in
 			outputTokens += outTok
 			continue
@@ -1332,7 +1968,7 @@ func parseStreamFinished(data []byte, out *parsedEvent) {
 	out.Finish = &finishInfo{InputTokens: inputTokens, OutputTokens: outputTokens}
 }
 
-func parseTokenUsage(data []byte) (int, int) {
+func parseNestedTokenUsage(data []byte) (int, int) {
 	d := decoder{data: data}
 	inputTokens := 0
 	outputTokens := 0
@@ -1342,7 +1978,7 @@ func parseTokenUsage(data []byte) (int, int) {
 			break
 		}
 		switch field {
-		case 2: // total_input
+		case 2:
 			if wire != 0 {
 				_ = d.skip(wire)
 				continue
@@ -1352,7 +1988,7 @@ func parseTokenUsage(data []byte) (int, int) {
 				break
 			}
 			inputTokens = int(v)
-		case 3: // output
+		case 3:
 			if wire != 0 {
 				_ = d.skip(wire)
 				continue
@@ -1369,9 +2005,7 @@ func parseTokenUsage(data []byte) (int, int) {
 	return inputTokens, outputTokens
 }
 
-// parseStreamError extracts an error message from a protobuf error field.
-// It tries to read string fields (field 1 = message, field 2 = code).
-func parseStreamError(data []byte) string {
+func parseNestedStreamError(data []byte) string {
 	d := decoder{data: data}
 	errMsg := ""
 	errCode := ""

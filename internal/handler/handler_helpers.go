@@ -229,6 +229,55 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient, s
 	}
 }
 
+type creditRefundClient interface {
+	RefundCredits(ctx context.Context, reason string) error
+}
+
+func shouldRefundWarpCredits(category string) bool {
+	switch strings.TrimSpace(category) {
+	case "canceled", "timeout", "network", "server", "unknown":
+		return true
+	default:
+		return false
+	}
+}
+
+func refundReasonForWarpCategory(category string) string {
+	switch strings.TrimSpace(category) {
+	case "canceled":
+		return "request_canceled"
+	case "timeout":
+		return "request_timeout"
+	case "network":
+		return "network_error"
+	case "server":
+		return "server_error"
+	default:
+		return "upstream_error"
+	}
+}
+
+func (h *Handler) refundWarpCredits(client UpstreamClient, category string) {
+	if !shouldRefundWarpCredits(category) {
+		return
+	}
+
+	refundable, ok := client.(creditRefundClient)
+	if !ok {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	reason := refundReasonForWarpCategory(category)
+	if err := refundable.RefundCredits(ctx, reason); err != nil {
+		slog.Warn("Warp refund credits failed", "category", category, "reason", reason, "error", err)
+		return
+	}
+	slog.Info("Warp credits refunded", "category", category, "reason", reason)
+}
+
 // upstreamErrorClass is a local alias for the centralized type.
 type upstreamErrorClass = apperrors.UpstreamErrorClass
 

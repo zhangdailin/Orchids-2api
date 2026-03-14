@@ -425,72 +425,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 		}
 
 		syncWarpModels := func() {
-			accounts, err := s.GetEnabledAccounts(context.Background())
-			if err != nil {
-				slog.Warn("Warp 模型同步: 获取账号失败", "error", err)
-				return
-			}
-			var warpAcc *store.Account
-			for _, acc := range accounts {
-				if strings.EqualFold(acc.AccountType, "warp") && strings.TrimSpace(acc.Token) != "" {
-					warpAcc = acc
-					break
-				}
-			}
-			if warpAcc == nil {
-				slog.Debug("Warp 模型同步: 无可用 Warp 账号")
-				return
-			}
-
-			warpClient := warp.NewFromAccount(warpAcc, cfg)
-			fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			choices, err := warpClient.GetFeatureModelChoices(fetchCtx)
-			if err != nil {
-				slog.Warn("Warp 模型同步: 获取失败", "error", err)
-				return
-			}
-
-			seen := make(map[string]bool)
-			added := 0
-			categories := []*warp.FeatureModelCategory{choices.AgentMode, choices.Planning, choices.Coding, choices.CliAgent}
-			for _, cat := range categories {
-				if cat == nil {
-					continue
-				}
-				for _, choice := range cat.Choices {
-					modelID := strings.TrimSpace(choice.ID)
-					if modelID == "" || seen[modelID] {
-						continue
-					}
-					seen[modelID] = true
-					if _, err := s.GetModelByModelID(context.Background(), modelID); err == nil {
-						continue
-					}
-					displayName := choice.DisplayName
-					if displayName == "" {
-						displayName = modelID
-					}
-					newModel := &store.Model{
-						Channel: "Warp",
-						ModelID: modelID,
-						Name:    displayName + " (Warp)",
-						Status:  store.ModelStatusAvailable,
-					}
-					if err := s.CreateModel(context.Background(), newModel); err != nil {
-						slog.Warn("Warp 模型同步: 创建模型失败", "model_id", modelID, "error", err)
-						continue
-					}
-					added++
-					slog.Info("Warp 模型同步: 新增模型", "model_id", modelID, "name", displayName)
-				}
-			}
-			if added > 0 {
-				slog.Info("Warp 模型同步完成", "added", added)
-			} else {
-				slog.Debug("Warp 模型同步完成，无新增")
-			}
+			slog.Debug("Warp 模型同步已停用：CodeFreeMax 对齐模式不提供 feature model choices")
 		}
 
 		syncGrokModels := func() {

@@ -185,7 +185,27 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	updated.NSFWEnabled = acc.NSFWEnabled
 	updated.SessionID = acc.SessionID
 	updated.ClientCookie = acc.ClientCookie
-	updated.RefreshToken = acc.RefreshToken
+	if strings.EqualFold(updated.AccountType, "warp") {
+		if strings.TrimSpace(acc.RefreshToken) == "" {
+			updated.RefreshToken = existing.RefreshToken
+		} else {
+			updated.RefreshToken = acc.RefreshToken
+		}
+		if strings.TrimSpace(acc.DeviceID) == "" {
+			updated.DeviceID = existing.DeviceID
+		} else {
+			updated.DeviceID = acc.DeviceID
+		}
+		if strings.TrimSpace(acc.RequestID) == "" {
+			updated.RequestID = existing.RequestID
+		} else {
+			updated.RequestID = acc.RequestID
+		}
+	} else {
+		updated.RefreshToken = acc.RefreshToken
+		updated.DeviceID = acc.DeviceID
+		updated.RequestID = acc.RequestID
+	}
 	if acc.SessionCookie == "" {
 		updated.SessionCookie = existing.SessionCookie
 	} else {

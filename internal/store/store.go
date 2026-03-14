@@ -19,6 +19,8 @@ type Account struct {
 	SessionID     string    `json:"session_id"`
 	ClientCookie  string    `json:"client_cookie"`
 	RefreshToken  string    `json:"refresh_token,omitempty"`
+	DeviceID      string    `json:"device_id,omitempty"`
+	RequestID     string    `json:"request_id,omitempty"`
 	SessionCookie string    `json:"session_cookie"`
 	ClientUat     string    `json:"client_uat"`
 	ProjectID     string    `json:"project_id"`

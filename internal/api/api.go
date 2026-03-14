@@ -79,10 +79,9 @@ func normalizeWarpTokenInput(acc *store.Account) {
 	if acc == nil || !strings.EqualFold(acc.AccountType, "warp") {
 		return
 	}
-	if acc.RefreshToken == "" && acc.ClientCookie != "" {
-		acc.RefreshToken = acc.ClientCookie
-	}
+	acc.RefreshToken = warp.ResolveRefreshToken(acc)
 	// Warp 只使用 refresh_token，清理 client_cookie 避免混用
+	acc.Token = ""
 	acc.ClientCookie = ""
 	acc.SessionCookie = ""
 }
@@ -93,9 +92,9 @@ func normalizeWarpTokenOutput(acc *store.Account) *store.Account {
 	}
 	copyAcc := *acc
 	if strings.EqualFold(copyAcc.AccountType, "warp") {
-		if copyAcc.RefreshToken == "" && copyAcc.ClientCookie != "" {
-			copyAcc.RefreshToken = copyAcc.ClientCookie
-		}
+		copyAcc.RefreshToken = warp.ResolveRefreshToken(&copyAcc)
+		// Warp 对外只暴露 refresh_token，避免把运行时 JWT 当成用户凭据回填到前端。
+		copyAcc.Token = ""
 		copyAcc.ClientCookie = ""
 		copyAcc.SessionCookie = ""
 	}
@@ -227,7 +226,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 	if strings.EqualFold(acc.AccountType, "warp") {
 		cfg := a.config.Load()
 		warpClient := warp.NewFromAccount(acc, cfg)
-		jwt, err := warpClient.RefreshAccount(ctx)
+		jwt, err := warpClient.ForceRefreshAccount(ctx)
 		if err != nil {
 			httpStatus := http.StatusBadRequest
 			if code := warp.HTTPStatusCode(err); code >= 400 {
@@ -242,28 +241,17 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		acc.Token = jwt
 		warpClient.SyncAccountState()
 
-		loginCtx, loginCancel := context.WithTimeout(ctx, 15*time.Second)
-		loginErr := warpClient.EnsureLogin(loginCtx)
-		loginCancel()
-		if loginErr != nil {
-			httpStatus := http.StatusBadRequest
-			if code := warp.HTTPStatusCode(loginErr); code >= 400 {
-				httpStatus = code
-			}
-			accountStatus := ""
-			if httpStatus == http.StatusUnauthorized || httpStatus == http.StatusForbidden || httpStatus == http.StatusTooManyRequests {
-				accountStatus = strconv.Itoa(httpStatus)
-			}
-			return accountStatus, httpStatus, fmt.Errorf("Failed to login warp account: %w", loginErr)
-		}
-
 		limitCtx, limitCancel := context.WithTimeout(ctx, 15*time.Second)
 		limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
 		limitCancel()
 		if limitErr == nil && limitInfo != nil {
-			if limitInfo.IsUnlimited {
+			if planTier := strings.ToLower(strings.TrimSpace(limitInfo.PlanTier)); planTier != "" {
+				acc.Subscription = planTier
+			} else if planName := strings.ToLower(strings.TrimSpace(limitInfo.PlanName)); planName != "" {
+				acc.Subscription = planName
+			} else if limitInfo.IsUnlimited {
 				acc.Subscription = "unlimited"
-			} else {
+			} else if strings.TrimSpace(acc.Subscription) == "" {
 				acc.Subscription = "free"
 			}
 			totalLimit := float64(limitInfo.RequestLimit)
@@ -278,6 +266,8 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 					acc.QuotaResetAt = t
 				}
 			}
+		} else if limitErr != nil {
+			slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", limitErr)
 		}
 		return "", 0, nil
 	}
@@ -890,6 +880,17 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 
 		if acc.SessionID == "" {
 			acc.SessionID = existing.SessionID
+		}
+		if strings.EqualFold(acc.AccountType, "warp") {
+			if strings.TrimSpace(acc.RefreshToken) == "" {
+				acc.RefreshToken = existing.RefreshToken
+			}
+			if strings.TrimSpace(acc.DeviceID) == "" {
+				acc.DeviceID = existing.DeviceID
+			}
+			if strings.TrimSpace(acc.RequestID) == "" {
+				acc.RequestID = existing.RequestID
+			}
 		}
 		if acc.SessionCookie == "" {
 			acc.SessionCookie = existing.SessionCookie

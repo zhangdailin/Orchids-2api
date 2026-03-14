@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"orchids-api/internal/config"
+	"orchids-api/internal/util"
+
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/http2"
 )
@@ -30,7 +33,28 @@ type utlsTransport struct {
 	proxyFunc func(*http.Request) (*url.URL, error)
 	h2Trans   *http2.Transport
 	h1Trans   *http.Transport
-	h2Pool    sync.Map // host -> *h2ConnEntry
+	h2Pool    sync.Map
+}
+
+func newAuthHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+		if cfg != nil && cfg.RequestTimeout > 0 {
+			timeout = time.Duration(cfg.RequestTimeout) * time.Second
+		}
+	}
+
+	var proxyFunc func(*http.Request) (*url.URL, error)
+	if cfg != nil {
+		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+	} else {
+		proxyFunc = http.ProxyFromEnvironment
+	}
+
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: newUTLSTransport(proxyFunc),
+	}
 }
 
 func (t *utlsTransport) CloseIdleConnections() {
@@ -70,9 +94,6 @@ func newUTLSTransport(proxyFunc func(*http.Request) (*url.URL, error)) http.Roun
 	}
 }
 
-// bufferedConn wraps a net.Conn with a bufio.Reader so that any data already
-// buffered by the reader (e.g. after reading the CONNECT response) is not lost
-// when the connection is handed off to the TLS layer.
 type bufferedConn struct {
 	net.Conn
 	br *bufio.Reader
@@ -82,8 +103,6 @@ func (c *bufferedConn) Read(b []byte) (int, error) {
 	return c.br.Read(b)
 }
 
-// tryPooledH2 tries to reuse a cached H2 connection for the given address.
-// Returns (nil, nil) if no usable connection is cached.
 func (t *utlsTransport) tryPooledH2(req *http.Request, addr string) (*http.Response, error) {
 	val, ok := t.h2Pool.Load(addr)
 	if !ok {
@@ -101,7 +120,6 @@ func (t *utlsTransport) tryPooledH2(req *http.Request, addr string) (*http.Respo
 	}
 	resp, err := cc.RoundTrip(req)
 	if err != nil {
-		// Connection might be dead, evict and let caller create a new one
 		t.h2Pool.Delete(addr)
 		return nil, nil
 	}
@@ -118,7 +136,6 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		addr += ":443"
 	}
 
-	// Try cached H2 connection first (no proxy only for simplicity)
 	var proxyURL *url.URL
 	if t.proxyFunc != nil {
 		parsed, err := t.proxyFunc(req)
@@ -134,21 +151,19 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
-	// No pooled connection available, create a new one
 	ctx := req.Context()
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
 
-	var tlsConn net.Conn // the connection to pass to TLS (may be buffered)
+	var tlsConn net.Conn
 	var err error
 
 	if proxyURL != nil {
-		slog.Debug("Warp AI: Dialing proxy", "proxy", proxyURL.Host)
+		slog.Debug("Warp auth: dialing proxy", "proxy", proxyURL.Host)
 		conn, err := dialer.DialContext(ctx, "tcp", proxyURL.Host)
 		if err != nil {
 			return nil, fmt.Errorf("proxy dial failed: %w", err)
 		}
 
-		slog.Debug("Warp AI: Sending CONNECT", "addr", addr)
 		connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", addr, addr)
 		if proxyURL.User != nil {
 			user := proxyURL.User.Username()
@@ -157,7 +172,6 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			connectReq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", auth)
 		}
 		connectReq += "\r\n"
-		// Fix #11: check conn.Write error
 		if _, err := conn.Write([]byte(connectReq)); err != nil {
 			conn.Close()
 			return nil, fmt.Errorf("proxy connect write failed: %w", err)
@@ -169,61 +183,45 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 			conn.Close()
 			return nil, fmt.Errorf("proxy connect failed: %w", err)
 		}
-		// Fix #12: close the CONNECT response body
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			conn.Close()
 			return nil, fmt.Errorf("proxy connect status: %d", resp.StatusCode)
 		}
-		slog.Debug("Warp AI: Proxy CONNECT successful")
-
-		// Fix #4: wrap conn with buffered reader to preserve any buffered data
 		if br.Buffered() > 0 {
 			tlsConn = &bufferedConn{Conn: conn, br: br}
 		} else {
 			tlsConn = conn
 		}
 	} else {
-		slog.Debug("Warp AI: Dialing direct", "addr", addr)
 		tlsConn, err = dialer.DialContext(ctx, "tcp", addr)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// TLS Handshake
 	host, _, _ := net.SplitHostPort(addr)
-	slog.Debug("Warp AI: Starting uTLS handshake", "host", host, "addr", addr)
 	config := &utls.Config{
 		ServerName: host,
 		NextProtos: []string{"h2", "http/1.1"},
 	}
 
-	// Use Chrome 131 spec with natural ALPN (h2 + http/1.1) to avoid
-	// CDN fingerprint detection that drops connections with mismatched ALPN.
 	spec, err := utls.UTLSIdToSpec(utls.HelloChrome_131)
-
 	uconn := utls.UClient(tlsConn, config, utls.HelloCustom)
 	if err == nil {
 		uconn.ApplyPreset(&spec)
 	}
 	if err := uconn.Handshake(); err != nil {
 		tlsConn.Close()
-		slog.Warn("Warp AI: uTLS handshake failed", "host", host, "error", err)
 		return nil, fmt.Errorf("utls handshake: %w", err)
 	}
 
-	protocol := uconn.ConnectionState().NegotiatedProtocol
-	slog.Debug("Warp AI: uTLS handshake successful", "protocol", protocol)
-
-	if protocol == "h2" {
-		// Use http2 Transport and cache the connection for reuse
+	if uconn.ConnectionState().NegotiatedProtocol == "h2" {
 		clientConn, err := t.h2Trans.NewClientConn(uconn)
 		if err != nil {
 			uconn.Close()
 			return nil, fmt.Errorf("h2 new client conn: %w", err)
 		}
-		// Cache for reuse (no proxy only); close any stale connection being replaced.
 		if proxyURL == nil {
 			entry := &h2ConnEntry{conn: clientConn, created: time.Now()}
 			if old, loaded := t.h2Pool.Swap(addr, entry); loaded {
@@ -239,8 +237,6 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return clientConn.RoundTrip(req)
 	}
 
-	// Fix #13: use a one-off transport but ensure it is closed after use
-	// to avoid leaking idle connections and goroutines.
 	connUsed := false
 	h1 := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -258,13 +254,10 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		uconn.Close()
 		return nil, err
 	}
-	// Wrap the response body to close the transport when the body is fully read
 	resp.Body = &transportClosingBody{ReadCloser: resp.Body, transport: h1}
 	return resp, nil
 }
 
-// transportClosingBody wraps a response body and closes idle connections on
-// the one-off transport when the body is closed, preventing resource leaks.
 type transportClosingBody struct {
 	io.ReadCloser
 	transport *http.Transport

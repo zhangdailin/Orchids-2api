@@ -6,501 +6,574 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/util"
 )
 
 type session struct {
 	mu             sync.Mutex
+	refreshToken   string
 	jwt            string
 	expiresAt      time.Time
-	refreshToken   string
+	deviceID       string
+	requestID      string
 	loggedIn       bool
 	lastLogin      time.Time
-	lastUsed       time.Time // for cache eviction
-	refreshing     bool      // prevents concurrent refresh attempts
-	refreshDone    chan struct{}
-	clientVersion  string
-	osCategory     string
-	osName         string
-	osVersion      string
 	experimentID   string
 	experimentBuck string
 	jar            http.CookieJar
+	lastUsed       time.Time
+	refreshing     bool
+	refreshDone    chan struct{}
 }
 
 type refreshResponse struct {
-	AccessToken  string      `json:"access_token"`
-	IDToken      string      `json:"idToken"`
-	ExpiresIn    json.Number `json:"expires_in"`
-	RefreshToken string      `json:"refresh_token"`
-	ExpiresInAlt json.Number `json:"expiresIn"`
-	RefreshAlt   string      `json:"refreshToken"`
+	AccessToken     string      `json:"access_token"`
+	IDToken         string      `json:"id_token"`
+	IDTokenAlt      string      `json:"idToken"`
+	RefreshToken    string      `json:"refresh_token"`
+	RefreshTokenAlt string      `json:"refreshToken"`
+	ExpiresIn       interface{} `json:"expires_in"`
+	ExpiresInAlt    interface{} `json:"expiresIn"`
 }
 
 var sessionCache sync.Map
-var sessionCount int64 // approximate count for eviction
-var sessionCountMu sync.Mutex
-
-const maxSessionCacheSize = 10000
 
 func sessionKey(accountID int64, refreshToken string) string {
 	if accountID > 0 {
 		return fmt.Sprintf("warp:%d", accountID)
 	}
+	refreshToken = strings.TrimSpace(refreshToken)
 	if refreshToken == "" {
 		return "warp:anon"
 	}
-	if len(refreshToken) > 16 {
-		return "warp:tok:" + refreshToken[:16]
-	}
-	return "warp:tok:" + refreshToken
+	sum := sha256.Sum256([]byte(refreshToken))
+	return "warp:" + hex.EncodeToString(sum[:8])
 }
 
-func getSession(accountID int64, refreshToken string) *session {
-	// Simple parsing for format: email----device----token
-	if strings.Contains(refreshToken, "----") {
-		parts := strings.Split(refreshToken, "----")
-		if len(parts) > 0 {
-			refreshToken = strings.TrimSpace(parts[len(parts)-1])
-		}
-	}
-
+func getSession(accountID int64, refreshToken, deviceID, requestID string) *session {
+	refreshToken = normalizeRefreshToken(refreshToken)
+	deviceID, requestID = ensureSessionIDs(deviceID, requestID)
 	key := sessionKey(accountID, refreshToken)
 
-	// Optimistic check to avoid allocating cookiejar & struct if cached
-	if val, ok := sessionCache.Load(key); ok {
-		sess := val.(*session)
+	if cached, ok := sessionCache.Load(key); ok {
+		sess := cached.(*session)
 		sess.mu.Lock()
 		sess.lastUsed = time.Now()
+		if sess.jar == nil {
+			sess.jar = mustNewCookieJar()
+		}
 		if refreshToken != "" && sess.refreshToken != refreshToken {
-			// refresh_token 变更时更新会话，避免旧令牌导致认证异常
 			sess.refreshToken = refreshToken
 			sess.jwt = ""
 			sess.expiresAt = time.Time{}
 			sess.loggedIn = false
 			sess.lastLogin = time.Time{}
+		}
+		if sess.deviceID == "" {
+			sess.deviceID = deviceID
+		}
+		if sess.requestID == "" {
+			sess.requestID = requestID
 		}
 		sess.mu.Unlock()
 		return sess
 	}
 
-	// Session not found, allocate fully and try inserting
-	jar, _ := cookiejar.New(nil)
-	newSess := &session{
-		refreshToken:  refreshToken,
-		clientVersion: clientVersion,
-		osCategory:    osCategory,
-		osName:        osName,
-		osVersion:     osVersion,
-		jar:           jar,
-		lastUsed:      time.Now(),
+	sess := &session{
+		refreshToken: refreshToken,
+		deviceID:     deviceID,
+		requestID:    requestID,
+		jar:          mustNewCookieJar(),
+		lastUsed:     time.Now(),
 	}
-	val, loaded := sessionCache.LoadOrStore(key, newSess)
-	sess := val.(*session)
-
-	if loaded {
-		// Another goroutine inserted it between our Load and LoadOrStore
-		sess.mu.Lock()
-		sess.lastUsed = time.Now()
-		if refreshToken != "" && sess.refreshToken != refreshToken {
-			sess.refreshToken = refreshToken
-			sess.jwt = ""
-			sess.expiresAt = time.Time{}
-			sess.loggedIn = false
-			sess.lastLogin = time.Time{}
-		}
-		sess.mu.Unlock()
-	} else {
-		// New session inserted — track count and evict if needed
-		sessionCountMu.Lock()
-		sessionCount++
-		if sessionCount > maxSessionCacheSize {
-			go evictStaleSessions()
-		}
-		sessionCountMu.Unlock()
-	}
-	return sess
+	actual, _ := sessionCache.LoadOrStore(key, sess)
+	return actual.(*session)
 }
 
-// evictStaleSessions removes sessions not used in the last 2 hours.
-func evictStaleSessions() {
-	cutoff := time.Now().Add(-2 * time.Hour)
-	evicted := 0
-	sessionCache.Range(func(key, value interface{}) bool {
-		sess := value.(*session)
-		sess.mu.Lock()
-		lastUsed := sess.lastUsed
-		sess.mu.Unlock()
-		if lastUsed.Before(cutoff) {
-			sessionCache.Delete(key)
-			evicted++
-		}
-		return true
-	})
-	if evicted > 0 {
-		sessionCountMu.Lock()
-		sessionCount -= int64(evicted)
-		if sessionCount < 0 {
-			sessionCount = 0
-		}
-		sessionCountMu.Unlock()
-		slog.Info("Evicted stale warp sessions", "evicted", evicted)
+func mustNewCookieJar() http.CookieJar {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil
 	}
+	return jar
+}
+
+func NormalizeRefreshToken(refreshToken string) string {
+	return normalizeRefreshToken(refreshToken)
+}
+
+func normalizeRefreshToken(refreshToken string) string {
+	refreshToken = strings.TrimSpace(strings.Trim(refreshToken, "\"'"))
+	if refreshToken == "" {
+		return ""
+	}
+
+	if token := extractRefreshTokenFromJSON(refreshToken); token != "" {
+		refreshToken = token
+	}
+	if token := extractRefreshTokenFromPairs(refreshToken); token != "" {
+		refreshToken = token
+	}
+	if strings.Contains(refreshToken, "----") {
+		parts := strings.Split(refreshToken, "----")
+		refreshToken = strings.TrimSpace(parts[len(parts)-1])
+		if token := extractRefreshTokenFromPairs(refreshToken); token != "" {
+			refreshToken = token
+		}
+	}
+
+	return strings.TrimSpace(strings.Trim(refreshToken, "\"'"))
+}
+
+func extractRefreshTokenFromJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	first := raw[0]
+	if first != '{' && first != '[' {
+		return ""
+	}
+
+	var decoded interface{}
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return ""
+	}
+	return findRefreshTokenValue(decoded)
+}
+
+func findRefreshTokenValue(value interface{}) string {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for key, item := range v {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "refresh_token", "refreshtoken":
+				if token := normalizeRefreshTokenValue(item); token != "" {
+					return token
+				}
+			}
+			if token := findRefreshTokenValue(item); token != "" {
+				return token
+			}
+		}
+	case []interface{}:
+		for _, item := range v {
+			if token := findRefreshTokenValue(item); token != "" {
+				return token
+			}
+		}
+	}
+	return ""
+}
+
+func normalizeRefreshTokenValue(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(strings.Trim(v, "\"'"))
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	default:
+		return strings.TrimSpace(strings.Trim(fmt.Sprintf("%v", v), "\"'"))
+	}
+}
+
+func extractRefreshTokenFromPairs(raw string) string {
+	candidates := []string{strings.TrimSpace(raw)}
+	if idx := strings.Index(raw, "?"); idx >= 0 && idx < len(raw)-1 {
+		candidates = append(candidates, strings.TrimSpace(raw[idx+1:]))
+	}
+
+	replacer := strings.NewReplacer(";", "&", "\n", "&", "\r", "&")
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		normalized := replacer.Replace(candidate)
+		values := make(url.Values)
+		for _, segment := range strings.Split(normalized, "&") {
+			segment = strings.TrimSpace(segment)
+			if segment == "" {
+				continue
+			}
+			key, value, ok := strings.Cut(segment, "=")
+			if !ok {
+				key, value, ok = strings.Cut(segment, ":")
+			}
+			if !ok {
+				continue
+			}
+			key = strings.TrimSpace(key)
+			value = strings.TrimSpace(value)
+			decoded, err := url.QueryUnescape(value)
+			if err == nil {
+				value = decoded
+			}
+			values.Add(key, value)
+		}
+		for _, key := range []string{"refresh_token", "refreshToken"} {
+			if token := strings.TrimSpace(values.Get(key)); token != "" {
+				return strings.TrimSpace(strings.Trim(token, "\"'"))
+			}
+		}
+	}
+	return ""
+}
+
+func ensureSessionIDs(deviceID, requestID string) (string, string) {
+	deviceID = strings.TrimSpace(deviceID)
+	requestID = strings.TrimSpace(requestID)
+	if deviceID == "" {
+		deviceID = newSessionUUID()
+	}
+	if requestID == "" {
+		requestID = newSessionUUID()
+	}
+	return deviceID, requestID
+}
+
+func newSessionUUID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
+		copy(buf, sum[:16])
+	}
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+
+	encoded := hex.EncodeToString(buf)
+	return fmt.Sprintf("%s-%s-%s-%s-%s",
+		encoded[0:8],
+		encoded[8:12],
+		encoded[12:16],
+		encoded[16:20],
+		encoded[20:32],
+	)
 }
 
 func (s *session) tokenValid() bool {
-	if s.jwt == "" || s.expiresAt.IsZero() {
+	if s == nil || s.jwt == "" || s.expiresAt.IsZero() {
 		return false
 	}
-	return time.Now().Add(20 * time.Minute).Before(s.expiresAt)
+	return time.Now().Add(5 * time.Minute).Before(s.expiresAt)
 }
 
-func (s *session) ensureToken(ctx context.Context, httpClient *http.Client, cid string) error {
-	const maxRefreshAttempts = 3
-	for attempt := 0; attempt < maxRefreshAttempts; attempt++ {
+func (s *session) seedJWT(jwt string) {
+	jwt = strings.TrimSpace(jwt)
+	if jwt == "" {
+		return
+	}
+	exp := util.JWTExpiry(jwt, 0)
+	if exp.IsZero() || time.Now().Add(5*time.Minute).After(exp) {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokenValid() {
+		return
+	}
+	s.jwt = jwt
+	s.expiresAt = exp
+}
+
+func (s *session) ensureToken(ctx context.Context, httpClient *http.Client) error {
+	s.mu.Lock()
+	if s.tokenValid() {
+		s.lastUsed = time.Now()
+		s.mu.Unlock()
+		return nil
+	}
+	if s.refreshing {
+		wait := s.refreshDone
+		s.mu.Unlock()
+		if wait != nil {
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		if s.tokenValid() {
-			s.mu.Unlock()
 			return nil
 		}
-		// If another goroutine is already refreshing, wait for it
-		if s.refreshing {
-			ch := s.refreshDone
-			s.mu.Unlock()
-			if ch != nil {
-				select {
-				case <-ch:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-			// After waiting, loop to re-check token
-			continue
-		}
-		// Mark that we are refreshing
-		s.refreshing = true
-		s.refreshDone = make(chan struct{})
-		s.mu.Unlock()
-
-		err := s.refreshTokenRequest(ctx, httpClient, cid)
-
-		s.mu.Lock()
-		s.refreshing = false
-		close(s.refreshDone)
-		s.refreshDone = nil
-		s.mu.Unlock()
-
-		return err
+		return fmt.Errorf("warp refresh did not produce a valid token")
 	}
-	return fmt.Errorf("ensureToken: max refresh attempts (%d) exceeded", maxRefreshAttempts)
-}
 
-func isTransientNetworkError(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := strings.ToLower(err.Error())
-	return strings.HasSuffix(s, ": eof") || s == "eof" ||
-		strings.Contains(s, "connection reset") ||
-		strings.Contains(s, "connection refused") ||
-		strings.Contains(s, "broken pipe") ||
-		strings.Contains(s, "use of closed")
-}
-
-func (s *session) refreshTokenRequest(ctx context.Context, httpClient *http.Client, cid string) error {
-	s.mu.Lock()
-	refreshToken := strings.TrimSpace(s.refreshToken)
+	s.refreshing = true
+	s.refreshDone = make(chan struct{})
 	s.mu.Unlock()
 
-	var payload []byte
-	if refreshToken != "" {
-		payload = []byte("grant_type=refresh_token&refresh_token=" + url.QueryEscape(refreshToken))
-	} else {
-		decoded, err := base64.StdEncoding.DecodeString(refreshTokenB64)
-		if err != nil {
-			return fmt.Errorf("decode built-in refresh token: %w", err)
-		}
-		payload = decoded
-	}
+	err := s.refresh(ctx, httpClient)
 
-	const maxAuthRetries = 2
-	var lastErr error
-	for attempt := 0; attempt <= maxAuthRetries; attempt++ {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if attempt > 0 {
-			slog.Info("Warp AI: Retrying refresh token request", "cid", cid, "attempt", attempt)
-			time.Sleep(time.Duration(attempt) * time.Second)
-		}
-		lastErr = s.doRefreshTokenRequest(ctx, httpClient, cid, payload)
-		if lastErr == nil {
-			return nil
-		}
-		if !isTransientNetworkError(lastErr) {
-			return lastErr
-		}
-		slog.Warn("Warp AI: Refresh request transient error, will retry", "cid", cid, "attempt", attempt, "error", lastErr)
-	}
-	return lastErr
+	s.mu.Lock()
+	s.refreshing = false
+	close(s.refreshDone)
+	s.refreshDone = nil
+	s.mu.Unlock()
+
+	return err
 }
 
-func (s *session) doRefreshTokenRequest(ctx context.Context, httpClient *http.Client, cid string, payload []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, refreshURL, bytes.NewReader(payload))
+func (s *session) clearToken() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.jwt = ""
+	s.expiresAt = time.Time{}
+	s.loggedIn = false
+	s.lastLogin = time.Time{}
+}
+
+func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
+	s.mu.Lock()
+	refreshToken := normalizeRefreshToken(s.refreshToken)
+	s.mu.Unlock()
+
+	if refreshToken == "" {
+		return fmt.Errorf("warp refresh token is empty")
+	}
+
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpFirebaseURL, bytes.NewBufferString(form.Encode()))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("x-warp-client-version", clientVersion)
-	req.Header.Set("x-warp-os-category", osCategory)
-	req.Header.Set("x-warp-os-name", osName)
-	req.Header.Set("x-warp-os-version", osVersion)
-	req.Header.Set("content-type", "application/x-www-form-urlencoded")
-	req.Header.Set("accept", "*/*")
-	req.Header.Set("accept-encoding", "gzip")
-
-
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-
-		slog.Warn("Warp AI: Refresh request failed", "cid", cid, "error", err)
 		return err
 	}
 	defer resp.Body.Close()
 
-	var reader io.ReadCloser = resp.Body
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		reader, err = gzip.NewReader(resp.Body)
-		if err != nil {
-			return err
-		}
-		defer reader.Close()
-	}
-
-	body, err := io.ReadAll(reader)
+	body, err := readLimitedBody(resp, 1<<20)
 	if err != nil {
-		slog.Warn("Warp refresh body read failed", "error", err)
 		return err
 	}
-
-
-
 	if resp.StatusCode != http.StatusOK {
-		retryAfter := parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now())
-		slog.Warn("Warp AI: Refresh failed", "cid", cid, "status", resp.StatusCode, "retry_after", retryAfter.String(), "body", string(body))
-		return &HTTPStatusError{Operation: "refresh token", StatusCode: resp.StatusCode, RetryAfter: retryAfter}
+		return &HTTPStatusError{
+			Operation:  "refresh token",
+			StatusCode: resp.StatusCode,
+			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 
 	var parsed refreshResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return err
+		return fmt.Errorf("decode warp refresh response: %w", err)
 	}
 
-	accessToken := parsed.AccessToken
-	if accessToken == "" {
-		accessToken = parsed.IDToken
+	jwt := strings.TrimSpace(parsed.IDToken)
+	if jwt == "" {
+		jwt = strings.TrimSpace(parsed.IDTokenAlt)
 	}
-	if accessToken == "" {
-		return fmt.Errorf("warp refresh token response missing access token")
+	if jwt == "" {
+		jwt = strings.TrimSpace(parsed.AccessToken)
+	}
+	if jwt == "" {
+		return fmt.Errorf("warp refresh response missing id_token")
 	}
 
-	var expiresIn int64
-	if v, err := parsed.ExpiresIn.Int64(); err == nil && v > 0 {
-		expiresIn = v
-	}
-	if expiresIn <= 0 {
-		if v, err := parsed.ExpiresInAlt.Int64(); err == nil && v > 0 {
-			expiresIn = v
+	expiry := util.JWTExpiry(jwt, 0)
+	if expiry.IsZero() {
+		if seconds := parseExpiresIn(parsed.ExpiresIn); seconds > 0 {
+			expiry = time.Now().Add(time.Duration(seconds) * time.Second)
+		} else if seconds := parseExpiresIn(parsed.ExpiresInAlt); seconds > 0 {
+			expiry = time.Now().Add(time.Duration(seconds) * time.Second)
 		}
 	}
-	if expiresIn <= 0 {
-		expiresIn = 3600
+	if expiry.IsZero() {
+		expiry = time.Now().Add(55 * time.Minute)
 	}
 
-	newRefresh := parsed.RefreshToken
-	if newRefresh == "" {
-		newRefresh = parsed.RefreshAlt
-	}
-
-	// 用 JWT 实际 exp 声明校验，防止 refresh 端点返回已过期的缓存 token
-	actualExp := jwtExpiry(accessToken)
-	expiresByResponse := time.Now().Add(time.Duration(expiresIn) * time.Second)
-
-	effectiveExpiry := expiresByResponse
-	if !actualExp.IsZero() {
-		// 如果 JWT 实际过期时间早于 expires_in 推算值，以实际值为准
-		if actualExp.Before(effectiveExpiry) {
-			effectiveExpiry = actualExp
-		}
-		// 如果 JWT 已过期或即将在 1 分钟内过期，拒绝使用
-		if time.Now().Add(1 * time.Minute).After(actualExp) {
-			slog.Warn("Warp AI: Refresh returned already-expired JWT", "cid", cid, "exp", actualExp, "now", time.Now())
-			return fmt.Errorf("refresh returned expired JWT (exp=%s)", actualExp.Format(time.RFC3339))
-		}
+	refresh := strings.TrimSpace(parsed.RefreshToken)
+	if refresh == "" {
+		refresh = strings.TrimSpace(parsed.RefreshTokenAlt)
 	}
 
 	s.mu.Lock()
-	s.jwt = accessToken
-	s.expiresAt = effectiveExpiry
-	if newRefresh != "" {
-		s.refreshToken = newRefresh
+	s.jwt = jwt
+	s.expiresAt = expiry
+	if refresh != "" {
+		s.refreshToken = normalizeRefreshToken(refresh)
+	} else {
+		s.refreshToken = normalizeRefreshToken(s.refreshToken)
 	}
-	// 刷新令牌后需要重新登录，避免旧 cookie 失效
 	s.loggedIn = false
 	s.lastLogin = time.Time{}
+	s.lastUsed = time.Now()
 	s.mu.Unlock()
 
 	return nil
 }
 
-func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client, cid string) error {
+func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) error {
+	if s == nil {
+		return fmt.Errorf("warp session is nil")
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
 	s.mu.Lock()
 	if s.loggedIn && time.Since(s.lastLogin) < 30*time.Minute {
+		s.lastUsed = time.Now()
 		s.mu.Unlock()
 		return nil
 	}
-	jwt := s.jwt
-	if s.experimentID == "" {
-		s.experimentID = newUUID()
+	jwt := strings.TrimSpace(s.jwt)
+	if jwt == "" {
+		s.mu.Unlock()
+		return fmt.Errorf("warp jwt missing")
 	}
-	if s.experimentBuck == "" {
+	if strings.TrimSpace(s.experimentID) == "" {
+		s.experimentID = newSessionUUID()
+	}
+	if strings.TrimSpace(s.experimentBuck) == "" {
 		s.experimentBuck = newExperimentBucket()
 	}
 	experimentID := s.experimentID
-	experimentBucket := s.experimentBuck
+	experimentBuck := s.experimentBuck
 	s.mu.Unlock()
 
-	if jwt == "" {
-		return fmt.Errorf("missing jwt")
-	}
-
-	const maxAuthRetries = 2
-	var lastErr error
-	for attempt := 0; attempt <= maxAuthRetries; attempt++ {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if attempt > 0 {
-			slog.Info("Warp AI: Retrying login request", "cid", cid, "attempt", attempt)
-			time.Sleep(time.Duration(attempt) * time.Second)
-		}
-		lastErr = s.doLogin(ctx, httpClient, cid, jwt, experimentID, experimentBucket)
-		if lastErr == nil {
-			return nil
-		}
-		if !isTransientNetworkError(lastErr) {
-			return lastErr
-		}
-		slog.Warn("Warp AI: Login request transient error, will retry", "cid", cid, "attempt", attempt, "error", lastErr)
-	}
-	return lastErr
-}
-
-func (s *session) doLogin(ctx context.Context, httpClient *http.Client, cid, jwt, experimentID, experimentBucket string) error {
-	re, err := http.NewRequestWithContext(ctx, http.MethodPost, loginURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpLegacyLoginURL, nil)
 	if err != nil {
 		return err
 	}
-	re.Header.Set("x-warp-client-id", "warp-app")
-	re.Header.Set("x-warp-client-version", clientVersion)
-	re.Header.Set("x-warp-os-category", osCategory)
-	re.Header.Set("x-warp-os-name", osName)
-	re.Header.Set("x-warp-os-version", osVersion)
-	re.Header.Set("authorization", "Bearer "+jwt)
-	re.Header.Set("x-warp-experiment-id", experimentID)
-	re.Header.Set("x-warp-experiment-bucket", experimentBucket)
-	re.Header.Set("accept", "*/*")
-	re.Header.Set("accept-encoding", "gzip")
-	re.Header.Set("content-length", "0")
+	req.Header.Set("X-Warp-Client-ID", clientID)
+	req.Header.Set("X-Warp-Client-Version", clientVersion)
+	req.Header.Set("X-Warp-OS-Category", clientOSCategory)
+	req.Header.Set("X-Warp-OS-Name", clientOSName)
+	req.Header.Set("X-Warp-OS-Version", clientOSVersion)
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("X-Warp-Experiment-Id", experimentID)
+	req.Header.Set("X-Warp-Experiment-Bucket", experimentBuck)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Content-Length", "0")
 
-
-
-	resp, err := httpClient.Do(re)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-
-		slog.Warn("Warp AI: Login request failed", "cid", cid, "error", err)
 		return err
 	}
 	defer resp.Body.Close()
 
-	var reader io.ReadCloser = resp.Body
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		reader, err = gzip.NewReader(resp.Body)
-		if err != nil {
-			return err
-		}
-		defer reader.Close()
-	}
-
-	body, err := io.ReadAll(reader)
-	if err != nil {
-		slog.Warn("Warp login body read failed", "error", err)
+	if _, err := readLimitedBody(resp, 1<<20); err != nil {
 		return err
 	}
-
-
-
 	if resp.StatusCode != http.StatusNoContent {
-		slog.Warn("Warp AI: Login failed", "cid", cid, "status", resp.StatusCode, "body", string(body))
-		return &HTTPStatusError{Operation: "login", StatusCode: resp.StatusCode}
+		return &HTTPStatusError{
+			Operation:  "login",
+			StatusCode: resp.StatusCode,
+			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 
 	s.mu.Lock()
 	s.loggedIn = true
 	s.lastLogin = time.Now()
+	s.lastUsed = time.Now()
 	s.mu.Unlock()
 	return nil
 }
 
-func newUUID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+func newExperimentBucket() string {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		sum := sha256.Sum256([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
+		return hex.EncodeToString(sum[:])
 	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	sum := sha256.Sum256(buf)
+	return hex.EncodeToString(sum[:])
 }
 
-func newExperimentBucket() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
+func readLimitedBody(resp *http.Response, limit int64) ([]byte, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, nil
 	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
+	var reader io.Reader = resp.Body
+	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer gr.Close()
+		reader = gr
+	}
+	return io.ReadAll(io.LimitReader(reader, limit))
+}
+
+func parseExpiresIn(raw interface{}) int64 {
+	switch v := raw.(type) {
+	case string:
+		n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return n
+	case float64:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	default:
+		return 0
+	}
 }
 
 func (s *session) currentJWT() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.jwt
+	return strings.TrimSpace(s.jwt)
 }
 
 func (s *session) currentRefreshToken() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.refreshToken
+	return strings.TrimSpace(s.refreshToken)
 }
 
-// InvalidateSession 清除指定账号的 session 缓存，使下次请求重新创建会话。
+func (s *session) currentDeviceID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.TrimSpace(s.deviceID)
+}
+
+func (s *session) currentRequestID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.TrimSpace(s.requestID)
+}
+
+func (s *session) beginRequest() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if strings.TrimSpace(s.requestID) == "" {
+		s.requestID = newSessionUUID()
+	}
+	s.lastUsed = time.Now()
+	return s.requestID
+}
+
 func InvalidateSession(accountID int64) {
 	if accountID <= 0 {
 		return
 	}
-	key := fmt.Sprintf("warp:%d", accountID)
-	sessionCache.Delete(key)
+	sessionCache.Delete(sessionKey(accountID, ""))
 }
