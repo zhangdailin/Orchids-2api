@@ -382,7 +382,7 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolC
 		return true, false, nil
 	}
 
-	fields := ParseRawProtobuf(frame)
+	fields := parseRawProtobuf(frame)
 	handled := false
 
 	for _, value := range fields[1] {
@@ -410,7 +410,7 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), sawToolC
 		if !ok || len(payload) == 0 {
 			continue
 		}
-		calls := parseToolCalls(ParseRawProtobuf(payload), *toolCallIndex)
+		calls := parseToolCalls(parseRawProtobuf(payload), *toolCallIndex)
 		for _, call := range calls {
 			handled = true
 			*sawToolCall = true
@@ -899,7 +899,7 @@ func sniffNonProtobufResponse(reader *bufio.Reader) (preview string, kind string
 		return text, "sse", true
 	case strings.HasPrefix(lower, "{"), strings.HasPrefix(lower, "["):
 		return text, "json", true
-	case looksMostlyText(peeked):
+	case looksLikeDisplayStringBytes(peeked):
 		return text, "text", true
 	default:
 		return "", "", false
@@ -926,26 +926,7 @@ func sanitizeResponsePreview(data []byte) string {
 	return text
 }
 
-func looksMostlyText(data []byte) bool {
-	if len(data) == 0 {
-		return false
-	}
-	printable := 0
-	total := 0
-	for _, b := range data {
-		if b == 0 {
-			return false
-		}
-		if b == '\r' || b == '\n' || b == '\t' || (b >= 0x20 && b <= 0x7e) {
-			printable++
-		}
-		total++
-		if total >= 32 {
-			break
-		}
-	}
-	return total > 0 && printable*100/total >= 85
-}
+
 
 func looksLikeDisplayStringBytes(data []byte) bool {
 	if len(data) == 0 || !utf8.Valid(data) {
@@ -971,7 +952,7 @@ func looksLikeDisplayStringBytes(data []byte) bool {
 	return total > 0 && printable*100/total >= 85
 }
 
-func ParseRawProtobuf(data []byte) map[uint32][]interface{} {
+func parseRawProtobuf(data []byte) map[uint32][]interface{} {
 	result := make(map[uint32][]interface{})
 	for len(data) > 0 {
 		num, typ, n := protowire.ConsumeTag(data)
@@ -1057,7 +1038,7 @@ func parseUsage(values []interface{}) *finishInfo {
 		if !ok || len(payload) == 0 {
 			continue
 		}
-		fields := ParseRawProtobuf(payload)
+		fields := parseRawProtobuf(payload)
 		usage := &finishInfo{}
 		if len(fields[1]) > 0 {
 			if n, ok := fields[1][0].(uint64); ok {

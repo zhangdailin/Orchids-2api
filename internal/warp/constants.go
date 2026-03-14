@@ -4,7 +4,6 @@ import "strings"
 
 const (
 	warpAPIBaseURL     = "https://app.warp.dev"
-	warpStreamURL      = warpAPIBaseURL + "/api/v1/ai/stream"
 	warpGraphQLURL     = warpAPIBaseURL + "/graphql"
 	warpGraphQLV2URL   = warpAPIBaseURL + "/graphql/v2"
 	warpLegacyAIURL    = warpAPIBaseURL + "/ai/multi-agent"
@@ -24,15 +23,7 @@ const (
 
 const defaultModel = "auto"
 
-const noWarpToolsPrompt = `TOOL RULES:
-- Do not use Warp built-in tools.
-- Use only client-provided tool calls.`
 
-const singleResultPrompt = `RESPONSE RULES:
-- After tool actions, return one concise final message.
-- Do not repeat the same summary or preface.
-- Treat delete "no matches found" / "No such file or directory" as a no-op.
-- For EOF or interactive stdin errors, do not rerun unchanged commands; note the shell is non-interactive and give a non-interactive alternative.`
 
 var canonicalModelAliases = map[string]string{
 	"claude-4-sonnet":            "claude-4-sonnet",

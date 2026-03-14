@@ -28,8 +28,8 @@ func TestNormalizeRefreshToken_ExtractsCommonFormats(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := NormalizeRefreshToken(tt.raw); got != tt.want {
-				t.Fatalf("NormalizeRefreshToken(%q)=%q want %q", tt.raw, got, tt.want)
+			if got := normalizeRefreshToken(tt.raw); got != tt.want {
+				t.Fatalf("normalizeRefreshToken(%q)=%q want %q", tt.raw, got, tt.want)
 			}
 		})
 	}

@@ -116,7 +116,7 @@ const refundCreditsMutation = `mutation RefundCredits($requestId: String!, $reas
   }
 }`
 
-func FetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string) (*RequestLimitInfo, []BonusGrant, error) {
+func fetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string) (*RequestLimitInfo, []BonusGrant, error) {
 	payload := map[string]interface{}{
 		"query":         getRequestLimitInfoQuery,
 		"operationName": "GetRequestLimitInfo",
@@ -197,7 +197,7 @@ func FetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string)
 	}, bonuses, nil
 }
 
-func RefundCredits(ctx context.Context, client *http.Client, jwt, requestID, reason string) error {
+func refundCredits(ctx context.Context, client *http.Client, jwt, requestID, reason string) error {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return fmt.Errorf("warp request id is empty")
@@ -301,7 +301,7 @@ func (c *Client) GetRequestLimitInfo(ctx context.Context) (*RequestLimitInfo, []
 	if err := c.session.ensureToken(ctx, client); err != nil {
 		return nil, nil, err
 	}
-	return FetchRequestLimitInfo(ctx, client, c.session.currentJWT())
+	return fetchRequestLimitInfo(ctx, client, c.session.currentJWT())
 }
 
 func (c *Client) RefundCredits(ctx context.Context, reason string) error {
@@ -312,7 +312,7 @@ func (c *Client) RefundCredits(ctx context.Context, reason string) error {
 	if err := c.session.ensureToken(ctx, client); err != nil {
 		return err
 	}
-	return RefundCredits(ctx, client, c.session.currentJWT(), c.session.currentRequestID(), reason)
+	return refundCredits(ctx, client, c.session.currentJWT(), c.session.currentRequestID(), reason)
 }
 
 func requestContextPayload() map[string]interface{} {

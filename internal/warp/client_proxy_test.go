@@ -38,8 +38,6 @@ func TestNewFromAccount_ProxyAppliedToEachAccount(t *testing.T) {
 		}
 		var proxyFunc func(*http.Request) (*url.URL, error)
 		switch transport := client.httpClient.Transport.(type) {
-		case *utlsTransport:
-			proxyFunc = transport.proxyFunc
 		case *warpTransport:
 			proxyFunc = transport.proxyFunc
 		default:

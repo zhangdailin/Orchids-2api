@@ -238,17 +238,6 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 	return processStreamBody(ctx, body, onMessage, logger)
 }
 
-func shouldRetryWarpStreamWithFirebase(err error) bool {
-	if err == nil {
-		return false
-	}
-	status := HTTPStatusCode(err)
-	if status == http.StatusUnauthorized {
-		return true
-	}
-	return false
-}
-
 func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
 	if c == nil || c.session == nil {
 		return "", fmt.Errorf("warp session not initialized")
@@ -261,6 +250,7 @@ func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
 	}
 	return c.session.currentJWT(), nil
 }
+
 
 func (c *Client) ForceRefreshAccount(ctx context.Context) (string, error) {
 	if c == nil || c.session == nil {

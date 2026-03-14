@@ -90,14 +90,8 @@ func TestProcessStreamBody_DetectsNonProtobufHTML(t *testing.T) {
 	}
 }
 
-func TestShouldRetryWarpStreamWithFirebase(t *testing.T) {
-	if !shouldRetryWarpStreamWithFirebase(&HTTPStatusError{StatusCode: 401}) {
-		t.Fatal("expected 401 to trigger firebase retry")
-	}
-	if shouldRetryWarpStreamWithFirebase(&HTTPStatusError{StatusCode: 302}) {
-		t.Fatal("did not expect redirect status to trigger firebase retry")
-	}
-}
+
+
 
 func TestProcessStreamBody_ParsesNestedWarpFrames(t *testing.T) {
 	var events []upstream.SSEMessage

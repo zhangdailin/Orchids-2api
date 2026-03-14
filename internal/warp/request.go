@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
-	"html"
 	"strings"
 	"time"
 
@@ -267,15 +266,7 @@ func stringifyValue(v interface{}) string {
 	}
 }
 
-func appendStringField(buf []byte, fieldNum int, value string) []byte {
-	if value == "" {
-		return buf
-	}
-	buf = appendVarint(buf, uint64(fieldNum<<3|2))
-	buf = appendVarint(buf, uint64(len(value)))
-	buf = append(buf, value...)
-	return buf
-}
+
 
 func appendVarint(buf []byte, v uint64) []byte {
 	for v >= 0x80 {
@@ -397,19 +388,7 @@ func mustDecodeHex(s string) []byte {
 	return b
 }
 
-func encodeVarintInt(value int) []byte {
-	if value < 0 {
-		return []byte{0}
-	}
-	x := uint64(value)
-	out := make([]byte, 0, 10)
-	for x >= 0x80 {
-		out = append(out, byte(x)|0x80)
-		x >>= 7
-	}
-	out = append(out, byte(x))
-	return out
-}
+
 
 func normalizeWarpTemplateModel(model string) string {
 	canonical := canonicalModelID(model)
@@ -424,7 +403,7 @@ func buildRequestBytesFromTemplate(userText, model string, isNew bool, disableWa
 
 	newQueryBytes := []byte(userText)
 	userQueryContent := []byte{0x0a}
-	userQueryContent = append(userQueryContent, encodeVarintInt(len(newQueryBytes))...)
+	userQueryContent = append(userQueryContent, appendVarint(nil, uint64(len(newQueryBytes)))...)
 	userQueryContent = append(userQueryContent, newQueryBytes...)
 	userQueryContent = append(userQueryContent, 0x1a, 0x00, 0x20)
 	if isNew {
@@ -434,20 +413,20 @@ func buildRequestBytesFromTemplate(userText, model string, isNew bool, disableWa
 	}
 
 	userQueryTotalLen := len(userQueryContent)
-	userInputContent := append([]byte{0x0a}, encodeVarintInt(userQueryTotalLen)...)
+	userInputContent := append([]byte{0x0a}, appendVarint(nil, uint64(userQueryTotalLen))...)
 	userInputContent = append(userInputContent, userQueryContent...)
 
-	inputsContent := append([]byte{0x0a}, encodeVarintInt(len(userInputContent))...)
+	inputsContent := append([]byte{0x0a}, appendVarint(nil, uint64(len(userInputContent)))...)
 	inputsContent = append(inputsContent, userInputContent...)
 
-	userInputsContent := append([]byte{0x32}, encodeVarintInt(len(inputsContent))...)
+	userInputsContent := append([]byte{0x32}, appendVarint(nil, uint64(len(inputsContent)))...)
 	userInputsContent = append(userInputsContent, inputsContent...)
 
 	contextEnc := encoder{}
 	contextEnc.writeMessage(1, buildInputContext(workdir))
 	contextPart := contextEnc.bytes()
 	newInputContent := append(append([]byte(nil), contextPart...), userInputsContent...)
-	newInputMsg := append([]byte{0x12}, encodeVarintInt(len(newInputContent))...)
+	newInputMsg := append([]byte{0x12}, appendVarint(nil, uint64(len(newInputContent)))...)
 	newInputMsg = append(newInputMsg, newInputContent...)
 
 	settingsStart := 2 + 2 + 90
@@ -579,7 +558,7 @@ func removeSupportedTools(data []byte) []byte {
 		if newLen < 0 {
 			newLen = 0
 		}
-		newVarint := encodeVarintInt(newLen)
+		newVarint := appendVarint(nil, uint64(newLen))
 		insertPos := settingsTagPos + 1
 		oldEnd := insertPos + varintLen
 		if oldEnd > len(result) {
@@ -1000,24 +979,4 @@ func warpSchemaJSONLen(schema map[string]interface{}) int {
 	return len(raw)
 }
 
-type warpToolCall struct {
-	ID        string
-	Name      string
-	Arguments string
-}
 
-func formatWarpToolUse(call warpToolCall) string {
-	name := strings.TrimSpace(call.Name)
-	if name == "" {
-		return ""
-	}
-	args := strings.TrimSpace(call.Arguments)
-	if args == "" {
-		args = "{}"
-	}
-	id := strings.TrimSpace(call.ID)
-	if id == "" {
-		return fmt.Sprintf("<tool_use name=\"%s\">\n%s\n</tool_use>", html.EscapeString(name), args)
-	}
-	return fmt.Sprintf("<tool_use id=\"%s\" name=\"%s\">\n%s\n</tool_use>", html.EscapeString(id), html.EscapeString(name), args)
-}

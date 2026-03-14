@@ -111,9 +111,7 @@ func mustNewCookieJar() http.CookieJar {
 	return jar
 }
 
-func NormalizeRefreshToken(refreshToken string) string {
-	return normalizeRefreshToken(refreshToken)
-}
+
 
 func normalizeRefreshToken(refreshToken string) string {
 	refreshToken = strings.TrimSpace(strings.Trim(refreshToken, "\"'"))
