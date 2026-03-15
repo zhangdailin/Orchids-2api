@@ -29,6 +29,12 @@ type refundingErrorUpstreamEdge struct {
 	refundReasons []string
 }
 
+type directErrorUpstreamEdge struct {
+	err             error
+	calls           int
+	sawNilOnMessage bool
+}
+
 type blockingUpstreamEdge struct {
 	events    []upstream.SSEMessage
 	entered   chan struct{}
@@ -67,6 +73,25 @@ func (m *refundingErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context,
 func (m *refundingErrorUpstreamEdge) RefundCredits(ctx context.Context, reason string) error {
 	m.refundReasons = append(m.refundReasons, reason)
 	return nil
+}
+
+func (m *directErrorUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	return m.err
+}
+
+func (m *directErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	m.calls++
+	m.sawNilOnMessage = onMessage == nil
+	if req.DirectSSE != nil {
+		req.DirectSSE.ObserveStopReason("error")
+		req.DirectSSE.WriteDirectSSE("error", []byte(`{"type":"error","error":{"type":"error","code":"bad_request","message":"boom"}}`), true)
+		req.DirectSSE.FinishDirectSSE("error")
+	}
+	return m.err
+}
+
+func (m *directErrorUpstreamEdge) OwnsFinalSSELifecycle() bool {
+	return true
 }
 
 func (m *blockingUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -134,6 +159,45 @@ func TestHandleMessages_WarpErrorTriggersRefund(t *testing.T) {
 	}
 	if upstreamClient.refundReasons[0] != "network_error" {
 		t.Fatalf("refund reason=%q want network_error", upstreamClient.refundReasons[0])
+	}
+}
+
+func TestHandleMessages_OrchidsDirectErrorDoesNotRetryAfterFinalSSE(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 2, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	upstreamClient := &directErrorUpstreamEdge{err: errors.New("dial tcp: connection reset by peer")}
+	h.client = upstreamClient
+
+	payload := map[string]any{
+		"model":    "claude-3-5-sonnet",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   true,
+	}
+	b, _ := json.Marshal(payload)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	h.HandleMessages(rec, req)
+
+	if upstreamClient.calls != 1 {
+		t.Fatalf("expected exactly one upstream call, got %d", upstreamClient.calls)
+	}
+	if !upstreamClient.sawNilOnMessage {
+		t.Fatal("expected Orchids direct SSE path to bypass onMessage callback")
+	}
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	if count := strings.Count(out, "event: error"); count != 1 {
+		t.Fatalf("expected exactly one error event, got %d: %s", count, out)
+	}
+	if !strings.Contains(out, "boom") {
+		t.Fatalf("expected direct error payload, got: %s", out)
+	}
+	if strings.Contains(out, "Retrying request") {
+		t.Fatalf("did not expect retry marker after direct final error, got: %s", out)
 	}
 }
 

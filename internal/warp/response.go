@@ -865,12 +865,9 @@ func parseNestedToolCall(data []byte, out *parsedEvent) {
 	if toolName == "" {
 		return
 	}
-	toolName = orchids.NormalizeToolName(toolName)
+	toolName = orchids.NormalizeToolNameFallback(toolName)
 	toolInput = normalizeToolInputForToolName(toolName, toolInput)
 	if isIncompleteToolCall(toolName, toolInput) {
-		return
-	}
-	if orchids.DefaultToolMapper.IsBlocked(toolName) {
 		return
 	}
 	if toolID == "" {
@@ -1108,7 +1105,7 @@ func transformWarpToolCall(name string, args map[string]interface{}) (string, ma
 	if mapped, ok := warpToClientToolMap[name]; ok {
 		baseName = mapped
 	}
-	baseName = orchids.NormalizeToolName(baseName)
+	baseName = orchids.NormalizeToolNameFallback(baseName)
 
 	out := map[string]interface{}{}
 	switch name {

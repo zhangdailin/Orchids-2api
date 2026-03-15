@@ -146,24 +146,21 @@ func (c *Client) streamSSEBody(
 	reader := perf.AcquireBufioReader(body)
 	defer perf.ReleaseBufioReader(reader)
 
-	state := newOrchidsRequestState(req)
+	runtime := newOrchidsRequestRuntime(req, onMessage)
+	state := &runtime.state
 	var lineScratch []byte
-
-	if state.stream {
-		emitOrchidsMessageStart(&state, onMessage)
-	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return state, ctx.Err()
+			return *state, ctx.Err()
 		default:
 		}
 
 		line, nextScratch, err := readLineBytes(reader, lineScratch)
 		lineScratch = nextScratch[:0]
 		if err != nil && err != io.EOF {
-			return state, err
+			return *state, err
 		}
 		if err == io.EOF && len(line) == 0 {
 			break
@@ -176,7 +173,7 @@ func (c *Client) streamSSEBody(
 			}
 			continue
 		}
-		if handled, shouldBreak := c.handleOrchidsRawMessage(rawBytes, &state, onMessage, logger, req.Tools); handled {
+		if handled, shouldBreak := runtime.handleRawMessage(rawBytes, logger, req.Tools); handled {
 			if shouldBreak {
 				goto done
 			}
@@ -194,7 +191,7 @@ func (c *Client) streamSSEBody(
 			continue
 		}
 
-		if shouldBreak := c.handleOrchidsMessage(msg, rawBytes, &state, onMessage, logger, req.Tools); shouldBreak {
+		if shouldBreak := runtime.handleDecodedMessage(msg, rawBytes, logger, req.Tools); shouldBreak {
 			goto done
 		}
 		if err == io.EOF {
@@ -203,13 +200,13 @@ func (c *Client) streamSSEBody(
 	}
 
 done:
-	if err := finalizeOrchidsTransport(ctx, &state, onMessage); err != nil {
+	if err := runtime.finalize(ctx); err != nil {
 		if state.errorMsg != "" {
 			slog.Warn("Orchids SSE stream ended with upstream error", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", orchidsChatSessionID(req), "error", state.errorMsg)
 		}
-		return state, err
+		return *state, err
 	}
-	return state, nil
+	return *state, nil
 }
 
 func orchidsSSEDataPayloadBytes(line []byte) ([]byte, bool) {

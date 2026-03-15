@@ -1,6 +1,5 @@
 package orchids
 
-import "orchids-api/internal/upstream"
 
 func extractOrchidsErrorPayload(msg map[string]interface{}) (code string, message string) {
 	if data, ok := msg["data"].(map[string]interface{}); ok {
@@ -40,23 +39,3 @@ func extractOrchidsFastErrorPayload(msg orchidsFastErrorMessage) (code string, m
 	return code, message
 }
 
-func emitOrchidsTokensFromMessage(state *requestState, msg map[string]interface{}, onMessage func(upstream.SSEMessage)) {
-	data, _ := msg["data"].(map[string]interface{})
-	if data == nil {
-		return
-	}
-	emitOrchidsUsageMapEvent(state, data, onMessage)
-}
-
-func dispatchOrchidsModelMessage(
-	msg map[string]interface{},
-	state *requestState,
-	onMessage func(upstream.SSEMessage),
-	clientTools []interface{},
-) bool {
-	event, ok := msg["event"].(map[string]interface{})
-	if !ok {
-		return false
-	}
-	return emitOrchidsModelEvent(event, state, onMessage, clientTools, msg)
-}

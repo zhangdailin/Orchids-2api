@@ -6,150 +6,7 @@ import (
 	"github.com/goccy/go-json"
 )
 
-type canonicalToolMapper struct {
-	toOrchids   map[string]string
-	fromOrchids map[string]string
-}
 
-// ToolMapper mirrors CodeFreeMax's per-request client tool index.
-type ToolMapper struct {
-	Tools []map[string]interface{}
-	index map[string]map[string]interface{}
-}
-
-// NormalizedTool mirrors CodeFreeMax's tool-name normalization tuple.
-type NormalizedTool struct {
-	Original  string
-	Lowercase string
-	SnakeCase string
-}
-
-// DefaultToolMapper remains the thin repo-compatibility bridge used outside the Orchids stream path.
-var DefaultToolMapper = newCanonicalToolMapper()
-
-func newCanonicalToolMapper() *canonicalToolMapper {
-	tm := &canonicalToolMapper{
-		toOrchids:   make(map[string]string),
-		fromOrchids: make(map[string]string),
-	}
-
-	tm.addMapping("Str_Replace_Editor", "Edit")
-	tm.addMapping("str_replace_editor", "Edit")
-	tm.addMapping("View", "Read")
-	tm.addMapping("view", "Read")
-	tm.addMapping("ReadFile", "Read")
-	tm.addMapping("read_file", "Read")
-	tm.addMapping("ListDir", "Glob")
-	tm.addMapping("list_dir", "Glob")
-	tm.addMapping("list_directory", "Glob")
-	tm.addMapping("LS", "Glob")
-	tm.addMapping("RipGrepTool", "Grep")
-	tm.addMapping("ripgrep", "Grep")
-	tm.addMapping("search_code", "Grep")
-	tm.addMapping("SearchCode", "Grep")
-	tm.addMapping("GlobTool", "Glob")
-	tm.addMapping("glob", "Glob")
-	tm.addMapping("find_files", "Glob")
-	tm.addMapping("Execute", "Bash")
-	tm.addMapping("execute", "Bash")
-	tm.addMapping("execute_command", "Bash")
-	tm.addMapping("execute-command", "Bash")
-	tm.addMapping("run_command", "Bash")
-	tm.addMapping("runcommand", "Bash")
-	tm.addMapping("RunCommand", "Bash")
-	tm.addMapping("launch-process", "Bash")
-	tm.addMapping("WriteFile", "Write")
-	tm.addMapping("write_file", "Write")
-	tm.addMapping("CreateFile", "Write")
-	tm.addMapping("create_file", "Write")
-	tm.addMapping("save-file", "Write")
-	tm.addMapping("Write", "Write")
-
-	tm.addMapping("run_shell_command", "Bash")
-	tm.addMapping("write_to_long_running_shell_command", "Bash")
-	tm.addMapping("search_codebase", "Grep")
-	tm.addMapping("grep", "Grep")
-	tm.addMapping("file_glob", "Glob")
-	tm.addMapping("file_glob_v2", "Glob")
-	tm.addMapping("read_files", "Read")
-	tm.addMapping("apply_file_diffs", "Edit")
-
-	tm.addMapping("update_todo_list", "TodoWrite")
-	tm.addMapping("todo", "TodoWrite")
-	tm.addMapping("todo_write", "TodoWrite")
-	tm.addMapping("todowrite", "TodoWrite")
-	tm.addMapping("ask_followup_question", "AskUserQuestion")
-	tm.addMapping("ask", "AskUserQuestion")
-	tm.addMapping("enter_plan_mode", "EnterPlanMode")
-	tm.addMapping("exit_plan_mode", "ExitPlanMode")
-	tm.addMapping("new_task", "Task")
-	tm.addMapping("task_output", "TaskOutput")
-	tm.addMapping("task_stop", "TaskStop")
-	tm.addMapping("use_skill", "Skill")
-	tm.addMapping("skill", "Skill")
-
-	tm.addMapping("web_fetch", "WebFetch")
-	tm.addMapping("webfetch", "WebFetch")
-	tm.addMapping("fetch", "WebFetch")
-
-	tm.addMapping("query-docs", "mcp__context7__query-docs")
-	tm.addMapping("resolve-library-id", "mcp__context7__resolve-library-id")
-	tm.addMapping("mcp__context7__query-docs", "mcp__context7__query-docs")
-	tm.addMapping("mcp__context7__resolve-library-id", "mcp__context7__resolve-library-id")
-
-	tm.addCanonical("Bash")
-	tm.addCanonical("Read")
-	tm.addCanonical("Edit")
-	tm.addCanonical("Write")
-	tm.addCanonical("Glob")
-	tm.addCanonical("Grep")
-	tm.addCanonical("TodoWrite")
-	tm.addCanonical("AskUserQuestion")
-	tm.addCanonical("EnterPlanMode")
-	tm.addCanonical("ExitPlanMode")
-	tm.addCanonical("Task")
-	tm.addCanonical("TaskOutput")
-	tm.addCanonical("TaskStop")
-	tm.addCanonical("Skill")
-	tm.addCanonical("WebFetch")
-	tm.addCanonical("mcp__context7__query-docs")
-	tm.addCanonical("mcp__context7__resolve-library-id")
-
-	return tm
-}
-
-func (tm *canonicalToolMapper) addMapping(from, to string) {
-	tm.toOrchids[from] = to
-	tm.toOrchids[strings.ToLower(from)] = to
-}
-
-func (tm *canonicalToolMapper) addCanonical(name string) {
-	if strings.TrimSpace(name) == "" {
-		return
-	}
-	tm.fromOrchids[strings.ToLower(name)] = name
-}
-
-func (tm *canonicalToolMapper) ToOrchids(name string) string {
-	if mapped, ok := tm.toOrchids[name]; ok {
-		return mapped
-	}
-	if mapped, ok := tm.toOrchids[strings.ToLower(strings.TrimSpace(name))]; ok {
-		return mapped
-	}
-	return name
-}
-
-func (tm *canonicalToolMapper) FromOrchids(name string) string {
-	if mapped, ok := tm.fromOrchids[strings.ToLower(strings.TrimSpace(name))]; ok {
-		return mapped
-	}
-	return name
-}
-
-func (tm *canonicalToolMapper) IsBlocked(string) bool {
-	return false
-}
 
 func buildClientToolMapper(clientTools []interface{}) *ToolMapper {
 	tools := toolMapsFromInterfaces(clientTools)
@@ -175,165 +32,115 @@ func (tm *ToolMapper) buildIndex() {
 	}
 }
 
-func NormalizeToolName(name string) string {
-	return DefaultToolMapper.ToOrchids(name)
+// ToolMapper manages the mapping between client tool definitions and Orchids tool names.
+type ToolMapper struct {
+	Tools []map[string]interface{}
+	index map[string]map[string]interface{}
 }
 
-func normalizeToolMatchName(name string) *NormalizedTool {
-	name = strings.TrimSpace(name)
+// NormalizedTool holds the normalized form of a tool name for matching.
+type NormalizedTool struct {
+	Original  string
+	Lowercase string
+	SnakeCase string
+}
+
+func NormalizeToolName(name string) *NormalizedTool {
 	if name == "" {
 		return &NormalizedTool{}
 	}
 	lower := strings.ToLower(name)
+	snake := toSnakeCase(lower)
 	return &NormalizedTool{
 		Original:  name,
 		Lowercase: lower,
-		SnakeCase: toSnakeCase(lower),
+		SnakeCase: snake,
 	}
 }
 
+// NormalizeToolNameFallback provides backward compatibility for the warp and handler packages.
+func NormalizeToolNameFallback(name string) string {
+    switch strings.ToLower(strings.TrimSpace(name)) {
+    case "str_replace_editor", "edit", "apply_file_diffs": return "Edit"
+    case "view", "readfile", "read_file", "read_files", "read": return "Read"
+    case "listdir", "list_dir", "list_directory", "ls", "globtool", "glob", "find_files", "file_glob", "file_glob_v2": return "Glob"
+    case "ripgreptool", "ripgrep", "search_code", "search_codebase", "grep": return "Grep"
+    case "execute", "execute_command", "execute-command", "run_command", "runcommand", "launch-process", "run_shell_command", "bash": return "Bash"
+    case "writefile", "write_file", "create_file", "createfile", "save-file", "write": return "Write"
+    case "update_todo_list", "todo", "todo_write", "todowrite": return "TodoWrite"
+    case "web_fetch", "webfetch", "fetch": return "WebFetch"
+    case "ask_followup_question", "ask": return "AskUserQuestion"
+    case "enter_plan_mode": return "EnterPlanMode"
+    case "exit_plan_mode": return "ExitPlanMode"
+    case "new_task": return "Task"
+    case "task_output": return "TaskOutput"
+    case "task_stop": return "TaskStop"
+    case "use_skill", "skill": return "Skill"
+    default: return name
+    }
+}
+
+
+
+
 func MapToolNameToClient(orchidsName string, clientTools []interface{}, toolMapper *ToolMapper) string {
-	normalized := normalizeToolMatchName(orchidsName)
+	normalized := NormalizeToolName(orchidsName)
 	if normalized.Original == "" {
 		return orchidsName
 	}
 
+
 	tools := toolMapperClientTools(clientTools, toolMapper)
-	if len(tools) == 0 {
-		return MapOrchidsToolToAnthropic(orchidsName)
-	}
 
 	for _, tool := range tools {
 		name := toolSpecName(tool)
-		if name == normalized.Original {
-			return name
-		}
-	}
-
-	for _, tool := range tools {
-		name := toolSpecName(tool)
-		if name == "" {
-			continue
-		}
-		if strings.ToLower(name) == normalized.Lowercase {
-			return name
-		}
-	}
-
-	for _, tool := range tools {
-		name := toolSpecName(tool)
-		if name == "" {
-			continue
-		}
-		if toSnakeCase(strings.ToLower(name)) == normalized.SnakeCase {
-			return name
-		}
-	}
-
-	if aliases, ok := orchidsToolAliases[normalized.SnakeCase]; ok {
-		for _, tool := range tools {
-			name := toolSpecName(tool)
-			if name == "" {
-				continue
-			}
-			toolSnake := toSnakeCase(strings.ToLower(name))
-			for _, alias := range aliases {
-				if toolSnake == alias || strings.ToLower(name) == alias {
-					return name
-				}
-			}
-		}
-	}
-
-	for _, tool := range tools {
-		name := toolSpecName(tool)
-		if name == "" {
-			continue
-		}
-		toolSnake := toSnakeCase(strings.ToLower(name))
-		if aliases, ok := orchidsToolAliases[toolSnake]; ok {
-			for _, alias := range aliases {
-				if alias == normalized.SnakeCase || alias == normalized.Lowercase {
-					return name
-				}
-			}
-		}
-	}
-
-	if aliases, ok := orchidsToolAliases[normalized.SnakeCase]; ok {
-		for _, tool := range tools {
-			name := toolSpecName(tool)
-			if name == "" {
-				continue
-			}
-			for _, alias := range aliases {
-				if strings.EqualFold(name, alias) {
-					return name
-				}
-			}
-		}
-	}
-
-	if toolMapper != nil && len(toolMapper.Tools) > 0 {
-		type candidate struct {
-			name       string
-			matchCount int
-			distance   int
-		}
-
-		aliasKeys := collectAliasKeys(toolMapper)
-		var candidates []candidate
-
-		for _, tool := range tools {
-			name := toolSpecName(tool)
-			if name == "" {
-				continue
-			}
-			toolAliases := getToolAliases(tool)
-			if len(toolAliases) == 0 {
-				continue
-			}
-
-			matchCount := 0
-			for _, key := range aliasKeys {
-				if _, found := toolMapper.index[key]; found {
-					break
-				}
-				matchCount++
-			}
-			if matchCount < len(aliasKeys) || len(aliasKeys) == 0 {
-				continue
-			}
-
-			candidates = append(candidates, candidate{
-				name:       name,
-				matchCount: matchCount,
-				distance:   len(toolAliases) - matchCount,
-			})
-		}
-
-		if len(candidates) > 0 {
-			best := candidates[0]
-			for _, candidate := range candidates[1:] {
-				if candidate.matchCount > best.matchCount ||
-					(candidate.matchCount == best.matchCount && candidate.distance < best.distance) {
-					best = candidate
-				}
-			}
-			return best.name
-		}
-	}
-
-	// This last bridge is intentionally repo-local: our client tool names are not Orchids-native.
-	canonical := strings.TrimSpace(DefaultToolMapper.ToOrchids(normalized.Original))
-	if canonical != "" {
-		for _, tool := range tools {
-			name := toolSpecName(tool)
-			if name == "" {
-				continue
-			}
-			if strings.EqualFold(DefaultToolMapper.ToOrchids(name), canonical) {
+		if name != "" {
+			if strings.ToLower(name) == normalized.Lowercase {
 				return name
+			}
+			if toSnakeCase(strings.ToLower(name)) == normalized.SnakeCase {
+				return name
+			}
+		}
+	}
+
+	for _, tool := range tools {
+		name := toolSpecName(tool)
+		if name != "" {
+			if toolAliases := getToolAliases(tool); toolAliases != nil {
+				for _, alias := range toolAliases {
+					if alias == normalized.SnakeCase || alias == normalized.Lowercase || strings.EqualFold(alias, orchidsName) {
+						return name
+					}
+				}
+			}
+		}
+	}
+
+	if aliases, ok := orchidsToolAliases[normalized.SnakeCase]; ok {
+		for _, tool := range tools {
+			name := toolSpecName(tool)
+			if name != "" {
+				for _, alias := range aliases {
+					toolSnake := toSnakeCase(strings.ToLower(name))
+					if toolSnake == alias || strings.ToLower(name) == alias || strings.EqualFold(name, alias) {
+						return name
+					}
+				}
+			}
+		}
+	}
+
+	for _, tool := range tools {
+		name := toolSpecName(tool)
+		if name != "" {
+			toolSnake := toSnakeCase(strings.ToLower(name))
+			if toolAliases, ok := orchidsToolAliases[toolSnake]; ok {
+				for _, alias := range toolAliases {
+					if alias == normalized.SnakeCase || alias == normalized.Lowercase {
+						return name
+					}
+				}
 			}
 		}
 	}

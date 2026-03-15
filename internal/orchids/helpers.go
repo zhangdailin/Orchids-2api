@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"net/url"
 )
 
 func mapStringValue(msg map[string]interface{}, keys ...string) string {
@@ -49,4 +50,22 @@ func trimTrailingLineBreakBytes(line []byte) []byte {
 		line = line[:len(line)-1]
 	}
 	return line
+}
+
+func urlEncode(value string) string {
+	return url.QueryEscape(value)
+}
+
+func truncateTextWithEllipsis(text string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
+	if len(text) <= maxLen {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
+	}
+	return string(runes[:maxLen]) + "…[truncated]"
 }

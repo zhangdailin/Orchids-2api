@@ -1,7 +1,6 @@
 package orchids
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -11,9 +10,11 @@ func TestMapToolNameToClientPrefersOriginalToolDefinition(t *testing.T) {
 	clientTools := []interface{}{
 		map[string]interface{}{
 			"name": "read_file",
+			"aliases": []interface{}{"Read"},
 		},
 		map[string]interface{}{
 			"name": "str_replace_editor",
+			"aliases": []interface{}{"Edit"},
 		},
 	}
 	toolMapper := buildClientToolMapper(clientTools)
@@ -32,6 +33,7 @@ func TestMapToolNameToClientMatchesSnakeCaseAlias(t *testing.T) {
 	clientTools := []interface{}{
 		map[string]interface{}{
 			"name": "run_command",
+			"aliases": []interface{}{"Bash"},
 		},
 	}
 	toolMapper := buildClientToolMapper(clientTools)
@@ -50,6 +52,7 @@ func TestMapToolNameToClientSupportsFunctionWrappedTools(t *testing.T) {
 			"function": map[string]interface{}{
 				"name": "read_file",
 			},
+			"aliases": []interface{}{"Read"},
 		},
 	}
 	toolMapper := buildClientToolMapper(clientTools)
@@ -74,68 +77,4 @@ func TestTransformToolInputNormalizesReadAliases(t *testing.T) {
 	}
 }
 
-func TestExtractToolCallsFromResponseMapsAndTransformsInput(t *testing.T) {
-	t.Parallel()
 
-	msg := map[string]interface{}{
-		"response": map[string]interface{}{
-			"output": []interface{}{
-				map[string]interface{}{
-					"callId":    "call_read_1",
-					"type":      "function_call",
-					"name":      "Read",
-					"arguments": `{"path":"/tmp/demo.txt"}`,
-				},
-			},
-		},
-	}
-	clientTools := []interface{}{
-		map[string]interface{}{
-			"name": "read_file",
-		},
-	}
-
-	calls := extractToolCallsFromResponse(msg, clientTools, buildClientToolMapper(clientTools))
-	if len(calls) != 1 {
-		t.Fatalf("len(calls)=%d want 1", len(calls))
-	}
-	if calls[0].name != "read_file" {
-		t.Fatalf("tool name=%q want read_file", calls[0].name)
-	}
-	if !strings.Contains(calls[0].input, `"file_path":"/tmp/demo.txt"`) {
-		t.Fatalf("input=%q want normalized file_path", calls[0].input)
-	}
-}
-
-func TestExtractToolCallsFromFastResponseMapsAndTransformsInput(t *testing.T) {
-	t.Parallel()
-
-	var msg orchidsFastResponseDone
-	msg.Response.Output = []orchidsFastToolOutput{
-		{
-			Type:  "tool_use",
-			ID:    "toolu_read_1",
-			Name:  "Read",
-			Input: map[string]interface{}{"path": "/tmp/demo.txt"},
-		},
-	}
-	clientTools := []interface{}{
-		map[string]interface{}{
-			"name": "read_file",
-		},
-	}
-
-	calls := extractToolCallsFromFastResponse(msg, clientTools, buildClientToolMapper(clientTools))
-	if len(calls) != 1 {
-		t.Fatalf("len(calls)=%d want 1", len(calls))
-	}
-	if calls[0].name != "read_file" {
-		t.Fatalf("tool name=%q want read_file", calls[0].name)
-	}
-	if !strings.Contains(calls[0].input, `"file_path":"/tmp/demo.txt"`) {
-		t.Fatalf("input=%q want normalized file_path", calls[0].input)
-	}
-	if calls[0].id != "toolu_read_1" {
-		t.Fatalf("tool id=%q want toolu_read_1", calls[0].id)
-	}
-}

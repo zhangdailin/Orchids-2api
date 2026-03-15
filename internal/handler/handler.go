@@ -164,6 +164,13 @@ func ownsFinalSSELifecycle(client UpstreamClient) bool {
 	return ok && owner.OwnsFinalSSELifecycle()
 }
 
+func upstreamMessageHandler(sh *streamHandler, orchidsOwnsFinalSSE bool) func(upstream.SSEMessage) {
+	if orchidsOwnsFinalSSE {
+		return nil
+	}
+	return sh.handleMessage
+}
+
 func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest) string {
 	if lastUserIsToolResultFollowup(req.Messages) {
 		return ""
@@ -723,6 +730,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if orchidsOwnsFinalSSE {
 			upstreamReq.DirectSSE = sh
 		}
+		primaryHandler := upstreamMessageHandler(sh, orchidsOwnsFinalSSE)
 		var attempt int
 		for {
 			if attempt > 0 {
@@ -800,7 +808,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					batchReq.ChatSessionID = latestChatSessionID
 					isLast := i == len(warpBatches)-1
 					if isLast {
-						err = sender.SendRequestWithPayload(r.Context(), batchReq, sh.handleMessage, logger)
+						err = sender.SendRequestWithPayload(r.Context(), batchReq, primaryHandler, logger)
 					} else {
 						intermediateConversationID := ""
 						intermediateTextDeltas := 0
@@ -854,7 +862,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				slog.Warn("Falling back to legacy SendRequest (Workdir lost!)", "type", fmt.Sprintf("%T", apiClient))
-				err = apiClient.SendRequest(r.Context(), builtPrompt, chatHistory, mappedModel, sh.handleMessage, logger)
+				err = apiClient.SendRequest(r.Context(), builtPrompt, chatHistory, mappedModel, primaryHandler, logger)
 			}
 			slog.Info("Upstream client returned", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 
@@ -862,6 +870,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				sh.forceFinishIfMissing()
 				slog.Info("Upstream attempt completed", "trace_id", traceID, "attempt", upstreamReq.Attempt)
 				break
+			}
+			if orchidsOwnsFinalSSE && sh.hasReturnedResponse() {
+				slog.Warn("Upstream returned after Orchids already finalized SSE", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+				return
 			}
 			errStr := err.Error()
 			errClass := classifyUpstreamError(errStr)

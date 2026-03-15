@@ -748,10 +748,7 @@ func convertTools(tools []interface{}) []toolDef {
 		if typ, _ := m["type"].(string); typ == "function" {
 			if fn, ok := m["function"].(map[string]interface{}); ok {
 				name, _ := fn["name"].(string)
-				if orchids.DefaultToolMapper.IsBlocked(name) {
-					continue
-				}
-				name = orchids.NormalizeToolName(name)
+				name = orchids.NormalizeToolNameFallback(name)
 				if !isSupportedWarpTool(name) {
 					continue
 				}
@@ -774,10 +771,7 @@ func convertTools(tools []interface{}) []toolDef {
 		}
 
 		name, _ := m["name"].(string)
-		if orchids.DefaultToolMapper.IsBlocked(name) {
-			continue
-		}
-		name = orchids.NormalizeToolName(name)
+		name = orchids.NormalizeToolNameFallback(name)
 		if !isSupportedWarpTool(name) {
 			continue
 		}

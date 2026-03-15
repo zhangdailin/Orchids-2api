@@ -3,8 +3,6 @@ package orchids
 import (
 	"context"
 	"fmt"
-
-	"orchids-api/internal/upstream"
 )
 
 func orchidsFinishReason(state *requestState) string {
@@ -17,7 +15,7 @@ func orchidsFinishReason(state *requestState) string {
 func finalizeOrchidsTransport(
 	ctx context.Context,
 	state *requestState,
-	onMessage func(upstream.SSEMessage),
+	writer *SSEWriter,
 ) error {
 	if state.errorMsg != "" {
 		return fmt.Errorf("orchids upstream error: %s", state.errorMsg)
@@ -25,7 +23,9 @@ func finalizeOrchidsTransport(
 
 	if !state.finishSent {
 		state.finishReason = orchidsFinishReason(state)
-		emitOrchidsCompletionTail(state, onMessage)
+		if writer != nil {
+			_ = writer.WriteMessageEnd()
+		}
 	}
 
 	return nil

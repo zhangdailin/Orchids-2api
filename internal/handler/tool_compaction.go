@@ -74,7 +74,7 @@ func supportedToolNames(tools []interface{}) []string {
 		if name == "" {
 			continue
 		}
-		mappedName := orchids.DefaultToolMapper.ToOrchids(name)
+		mappedName := orchids.NormalizeToolNameFallback(name)
 		if !isPromptToolSupported(mappedName) {
 			continue
 		}
@@ -130,7 +130,7 @@ func compactIncomingTools(tools []interface{}) []interface{} {
 			continue
 		}
 
-		mappedName := orchids.DefaultToolMapper.ToOrchids(name)
+		mappedName := orchids.NormalizeToolNameFallback(name)
 		if !isPromptToolSupported(mappedName) {
 			continue
 		}

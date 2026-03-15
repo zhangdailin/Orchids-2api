@@ -1,8 +1,6 @@
 package orchids
 
 import (
-	"strings"
-
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/upstream"
@@ -11,30 +9,32 @@ import (
 type requestState struct {
 	textStarted         bool
 	reasoningStarted    bool
-	nextBlockIndex      int
-	textBlockIndex      int
-	reasoningBlockIndex int
+	blockCount          int
 	finishSent          bool
 	sawToolCall         bool
 	stream              bool
 	responseStarted     bool
 	messageStarted      bool
+	toolCallHasInput    bool
 	modelName           string
 	finishReason        string
-	inputTokens         int
-	outputTokens        int
+	pendingToolInput    string
+	currentToolCall     *orchidsToolCallState
+	inputTokens          int64
+	outputTokens         int64
+	cacheReadInputTokens int64
 	errorMsg            string
 	directSSE           upstream.DirectSSEEmitter
 	toolMapper          *ToolMapper
-	lastPendingToolID   string
-	pendingToolInputs   map[string]*orchidsPendingToolInput
 	emittedToolCallIDs  map[string]struct{}
 }
 
-type orchidsPendingToolInput struct {
-	name       string
-	blockIndex int
-	buf        strings.Builder
+type orchidsToolCallState struct {
+	id          string
+	name        string
+	input       string
+	hasInput    bool
+	inputLength int64
 }
 
 func cloneRawJSON(data []byte) json.RawMessage {
@@ -47,11 +47,10 @@ func cloneRawJSON(data []byte) json.RawMessage {
 func newOrchidsRequestState(req upstream.UpstreamRequest) requestState {
 	modelName := normalizeOrchidsAgentModel(req.Model)
 	return requestState{
-		stream:              req.Stream,
-		modelName:           modelName,
-		textBlockIndex:      -1,
-		reasoningBlockIndex: -1,
-		directSSE:           req.DirectSSE,
-		toolMapper:          buildClientToolMapper(req.Tools),
+		stream:     req.Stream,
+		modelName:  modelName,
+		blockCount: 8,
+		directSSE:  req.DirectSSE,
+		toolMapper: buildClientToolMapper(req.Tools),
 	}
 }

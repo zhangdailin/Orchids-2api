@@ -508,50 +508,31 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return errors.New("orchids client is nil")
 	}
 	cfg := c.config
-	mode := ""
 	timeout := 120
 	debugEnabled := false
 	if cfg != nil {
-		mode = strings.ToLower(strings.TrimSpace(cfg.UpstreamMode))
 		if cfg.RequestTimeout > 0 {
 			timeout = cfg.RequestTimeout
 		}
 		debugEnabled = cfg.DebugEnabled
 	}
+	transport := c.resolveTransport()
 	if debugEnabled {
-		slog.Debug("Sending upstream request", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "mode", mode, "url", c.upstreamURL(), "timeout", timeout)
+		slog.Debug("Sending upstream request", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "transport", transport, "url", c.upstreamURL(), "timeout", timeout)
 	}
-	if mode == "ws" || mode == "websocket" {
-		slog.Info("Orchids transport dispatch", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "transport", "ws", "chat_session_id", req.ChatSessionID, "model", req.Model)
-		err := c.sendRequestWS(ctx, req, onMessage, logger)
-		if err != nil {
-			if isWSFallback(err) && ctx.Err() == nil {
-				slog.Warn("Orchids transport fallback", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "from", "ws", "to", "sse", "chat_session_id", req.ChatSessionID, "error", err)
-				if logger != nil {
-					logger.LogUpstreamSSE("ws_fallback", err.Error())
-				}
-				return c.sendRequestSSE(ctx, req, onMessage, logger)
-			}
-			return err
-		}
+	slog.Info("Orchids transport dispatch", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "transport", transport, "chat_session_id", req.ChatSessionID, "model", req.Model)
+	err := c.dispatchTransport(ctx, transport, req, onMessage, logger)
+	if err == nil {
 		return nil
 	}
-	slog.Info("Orchids transport dispatch", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "transport", "sse", "chat_session_id", req.ChatSessionID, "model", req.Model)
-	return c.sendRequestSSE(ctx, req, onMessage, logger)
-}
-
-func (c *Client) handleOrchidsRawMessage(
-	rawData []byte,
-	state *requestState,
-	onMessage func(upstream.SSEMessage),
-	logger *debug.Logger,
-	clientTools []interface{},
-) (handled bool, shouldBreak bool) {
-	var envelope orchidsFastEnvelope
-	if err := json.Unmarshal(rawData, &envelope); err != nil {
-		return false, false
+	if transport == orchidsTransportWS && isWSFallback(err) && ctx.Err() == nil {
+		slog.Warn("Orchids transport fallback", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "from", orchidsTransportWS, "to", orchidsTransportSSE, "chat_session_id", req.ChatSessionID, "error", err)
+		if logger != nil {
+			logger.LogUpstreamSSE("ws_fallback", err.Error())
+		}
+		return c.dispatchTransport(ctx, orchidsTransportSSE, req, onMessage, logger)
 	}
-	return dispatchOrchidsFastEvent(rawData, envelope, state, onMessage, logger, clientTools)
+	return err
 }
 
 func extractOrchidsFastText(msg orchidsFastTextMessage) string {

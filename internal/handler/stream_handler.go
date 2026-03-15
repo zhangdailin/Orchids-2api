@@ -1467,7 +1467,7 @@ func normalizeUpstreamToolCall(name, input, workdir string) (string, string) {
 }
 
 func normalizeUpstreamToolName(name string) string {
-	mapped := orchids.NormalizeToolName(name)
+	mapped := orchids.NormalizeToolNameFallback(name)
 	if strings.TrimSpace(mapped) == "" {
 		return name
 	}
@@ -2896,6 +2896,12 @@ func (h *streamHandler) hasAnyOutput() bool {
 	has = h.outputEstimator.HasText() || (h.outputTokens-h.thinkingTokens) > 0
 	h.outputMu.Unlock()
 	return has
+}
+
+func (h *streamHandler) hasReturnedResponse() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.hasReturn
 }
 
 func (h *streamHandler) shouldSkipIntroDelta(delta string) bool {

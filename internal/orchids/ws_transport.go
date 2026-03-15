@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"github.com/goccy/go-json"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 
+	"orchids-api/internal/clerk"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 var orchidsAgentModelMap = map[string]string{
@@ -38,6 +41,27 @@ var orchidsAgentModelMap = map[string]string{
 }
 
 const orchidsAgentDefaultModel = "claude-sonnet-4-6"
+
+const (
+	orchidsWSConnectTimeout = 5 * time.Second
+	orchidsWSReadTimeout    = 600 * time.Second
+	orchidsWSRequestTimeout = 60 * time.Second
+	orchidsWSPingInterval   = 10 * time.Second
+	orchidsWSUserAgent      = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Orchids/0.0.57 Chrome/138.0.7204.251 Electron/37.10.3 Safari/537.36"
+	orchidsWSOrigin         = "https://www.orchids.app"
+)
+
+type wsFallbackError struct {
+	err error
+}
+
+func (e wsFallbackError) Error() string {
+	return e.err.Error()
+}
+
+func (e wsFallbackError) Unwrap() error {
+	return e.err
+}
 
 // Orchids Event Types
 const (
@@ -67,6 +91,63 @@ const (
 	EventModel              = "model"
 	EventResponseStarted    = "response_started"
 )
+
+func (c *Client) getWSToken() (string, error) {
+	if c.config != nil && strings.TrimSpace(c.config.UpstreamToken) != "" {
+		return c.config.UpstreamToken, nil
+	}
+
+	if c.config != nil && strings.TrimSpace(c.config.ClientCookie) != "" {
+		proxyFunc := http.ProxyFromEnvironment
+		if c.config != nil {
+			proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
+		}
+		info, err := clerk.FetchAccountInfoWithProjectAndSessionProxy(c.config.ClientCookie, c.config.SessionCookie, c.config.ProjectID, proxyFunc)
+		if err == nil && info.JWT != "" {
+			return info.JWT, nil
+		}
+	}
+
+	return c.GetToken()
+}
+
+func (c *Client) dialWSConnection(ctx context.Context) (*websocket.Conn, error) {
+	if c.config == nil {
+		return nil, fmt.Errorf("config is nil")
+	}
+
+	token, err := c.getWSToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ws token: %w", err)
+	}
+
+	wsURL := c.buildWSURL(token)
+	if wsURL == "" {
+		return nil, fmt.Errorf("ws url not configured")
+	}
+
+	headers := http.Header{
+		"User-Agent": []string{orchidsWSUserAgent},
+		"Origin":     []string{orchidsWSOrigin},
+	}
+
+	proxyFunc := http.ProxyFromEnvironment
+	if c.config != nil {
+		proxyFunc = util.ProxyFunc(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser, c.config.ProxyPass, c.config.ProxyBypass)
+	}
+
+	dialer := websocket.Dialer{
+		HandshakeTimeout: orchidsWSConnectTimeout,
+		Proxy:            proxyFunc,
+	}
+
+	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial WebSocket: %w", err)
+	}
+
+	return conn, nil
+}
 
 func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	slog.Debug("sendRequestWS called", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "workdir", req.Workdir, "model", req.Model)
@@ -137,11 +218,8 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 	firstReceived := false
 	receivedAnyMessage := false
 
-	state := newOrchidsRequestState(req)
-
-	if state.stream {
-		emitOrchidsMessageStart(&state, onMessage)
-	}
+	runtime := newOrchidsRequestRuntime(req, onMessage)
+	state := &runtime.state
 
 	// Start Keep-Alive Ping Loop
 	go func() {
@@ -195,7 +273,7 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 			break
 		}
 
-		handled, shouldBreak := c.handleOrchidsRawMessage(data, &state, onMessage, logger, req.Tools)
+		handled, shouldBreak := runtime.handleRawMessage(data, logger, req.Tools)
 		if handled {
 			receivedAnyMessage = true
 			if !firstReceived {
@@ -227,13 +305,13 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 		}
 		firstReceived = true
 
-		shouldBreak = c.handleOrchidsMessage(msg, data, &state, onMessage, logger, req.Tools)
+		shouldBreak = runtime.handleDecodedMessage(msg, data, logger, req.Tools)
 		if shouldBreak {
 			break
 		}
 	}
 
-	if err := finalizeOrchidsTransport(ctx, &state, onMessage); err != nil {
+	if err := runtime.finalize(ctx); err != nil {
 		if state.errorMsg != "" {
 			slog.Warn("Orchids WS stream ended with upstream error", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "error", state.errorMsg)
 		}
@@ -245,17 +323,6 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 
 	slog.Info("Orchids WS request completed", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "saw_tool_call", state.sawToolCall, "response_started", state.responseStarted)
 	return nil
-}
-
-func (c *Client) handleOrchidsMessage(
-	msg map[string]interface{},
-	rawData []byte,
-	state *requestState,
-	onMessage func(upstream.SSEMessage),
-	logger *debug.Logger,
-	clientTools []interface{},
-) bool {
-	return dispatchOrchidsDecodedEvent(msg, rawData, state, onMessage, logger, clientTools)
 }
 
 func (c *Client) buildWSURL(token string) string {

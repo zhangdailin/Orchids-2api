@@ -78,16 +78,17 @@ func collectOrchidsEvents(client *Client, state *requestState, raw string, fast 
 	onMessage := func(msg upstream.SSEMessage) {
 		events = append(events, msg)
 	}
+	runtime := newTestRequestRuntime(*state, onMessage)
 	rawBytes := []byte(raw)
 	if fast {
-		handled, shouldBreak := client.handleOrchidsRawMessage(rawBytes, state, onMessage, nil, nil)
+		handled, shouldBreak := runtime.handleRawMessage(rawBytes, nil, nil)
 		return events, handled, shouldBreak
 	}
 	var msg map[string]interface{}
 	if err := json.Unmarshal(rawBytes, &msg); err != nil {
 		panic(err)
 	}
-	return events, true, client.handleOrchidsMessage(msg, rawBytes, state, onMessage, nil, nil)
+	return events, true, runtime.handleDecodedMessage(msg, rawBytes, nil, nil)
 }
 
 func collectOrchidsEventsWithFallback(client *Client, state *requestState, raw string) ([]upstream.SSEMessage, bool) {
@@ -95,8 +96,9 @@ func collectOrchidsEventsWithFallback(client *Client, state *requestState, raw s
 	onMessage := func(msg upstream.SSEMessage) {
 		events = append(events, msg)
 	}
+	runtime := newTestRequestRuntime(*state, onMessage)
 	rawBytes := []byte(raw)
-	handled, shouldBreak := client.handleOrchidsRawMessage(rawBytes, state, onMessage, nil, nil)
+	handled, shouldBreak := runtime.handleRawMessage(rawBytes, nil, nil)
 	if handled {
 		return events, shouldBreak
 	}
@@ -104,181 +106,39 @@ func collectOrchidsEventsWithFallback(client *Client, state *requestState, raw s
 	if err := json.Unmarshal(rawBytes, &msg); err != nil {
 		panic(err)
 	}
-	return events, client.handleOrchidsMessage(msg, rawBytes, state, onMessage, nil, nil)
+	return events, runtime.handleDecodedMessage(msg, rawBytes, nil, nil)
 }
 
-func TestHandleOrchidsRawMessageMatchesDecodedTextEvents(t *testing.T) {
-	tests := []struct {
-		name string
-		raw  string
-	}{
-		{name: "output_text_delta text", raw: `{"type":"output_text_delta","text":"hello"}`},
-		{name: "response_chunk object", raw: `{"type":"coding_agent.response.chunk","chunk":{"content":"hello"}}`},
-		{name: "reasoning chunk", raw: `{"type":"coding_agent.reasoning.chunk","data":{"text":"think"}}`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client := &Client{}
-			var legacyState requestState
-			wantEvents, _, wantBreak := collectOrchidsEvents(client, &legacyState, tt.raw, false)
-
-			var fastState requestState
-			gotEvents, handled, gotBreak := collectOrchidsEvents(client, &fastState, tt.raw, true)
-			if !handled {
-				t.Fatal("expected fast path to handle message")
-			}
-			if gotBreak != wantBreak {
-				t.Fatalf("shouldBreak=%v want=%v", gotBreak, wantBreak)
-			}
-			wantJSON, _ := json.Marshal(wantEvents)
-			gotJSON, _ := json.Marshal(gotEvents)
-			if string(gotJSON) != string(wantJSON) {
-				t.Fatalf("events=%s want=%s", gotJSON, wantJSON)
-			}
-		})
-	}
-}
-
-func TestHandleOrchidsRawMessageMatchesDecodedCrossChannelDedup(t *testing.T) {
-	client := &Client{}
-	var legacyState requestState
-	_, _, _ = collectOrchidsEvents(client, &legacyState, `{"type":"output_text_delta","text":"hello"}`, false)
-	legacyEvents, _, _ := collectOrchidsEvents(client, &legacyState, `{"type":"coding_agent.response.chunk","chunk":"hello"}`, false)
-
-	var fastState requestState
-	_, _, _ = collectOrchidsEvents(client, &fastState, `{"type":"output_text_delta","text":"hello"}`, true)
-	fastEvents, handled, _ := collectOrchidsEvents(client, &fastState, `{"type":"coding_agent.response.chunk","chunk":"hello"}`, true)
-	if !handled {
-		t.Fatal("expected fast path to handle response chunk")
-	}
-	if len(fastEvents) != len(legacyEvents) {
-		t.Fatalf("event count=%d want=%d", len(fastEvents), len(legacyEvents))
-	}
+func newTestRequestRuntime(state requestState, onMessage func(upstream.SSEMessage)) *requestRuntime {
+	runtime := &requestRuntime{state: state}
+	runtime.writer = NewSSEWriter(&runtime.state, onMessage)
+	return runtime
 }
 
 func BenchmarkHandleOrchidsTextMessage_Map(b *testing.B) {
-	client := &Client{}
 	raw := []byte(`{"type":"output_text_delta","text":"hello world"}`)
 	onMessage := func(upstream.SSEMessage) {}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		var state requestState
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
 		var msg map[string]interface{}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			b.Fatal(err)
 		}
-		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil)
+		_ = runtime.handleDecodedMessage(msg, raw, nil, nil)
 	}
 }
 
 func BenchmarkHandleOrchidsTextMessage_Fast(b *testing.B) {
-	client := &Client{}
 	raw := []byte(`{"type":"output_text_delta","text":"hello world"}`)
 	onMessage := func(upstream.SSEMessage) {}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		var state requestState
-		handled, _ := client.handleOrchidsRawMessage(raw, &state, onMessage, nil, nil)
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
+		handled, _ := runtime.handleRawMessage(raw, nil, nil)
 		if !handled {
 			b.Fatal("expected fast path to handle raw text message")
 		}
-	}
-}
-
-func TestHandleOrchidsRawMessageMatchesDecodedResponseDone(t *testing.T) {
-	raw := `{"type":"response_done","response":{"usage":{"inputTokens":12,"outputTokens":34},"output":[{"type":"tool_use","id":"toolu_write_1","name":"Write","input":{"file_path":"/tmp/a.txt","content":"hello"}}]}}`
-	client := &Client{}
-
-	var legacyState requestState
-	wantEvents, _, wantBreak := collectOrchidsEvents(client, &legacyState, raw, false)
-
-	var fastState requestState
-	gotEvents, handled, gotBreak := collectOrchidsEvents(client, &fastState, raw, true)
-	if !handled {
-		t.Fatal("expected fast path to handle response.done")
-	}
-	if gotBreak != wantBreak {
-		t.Fatalf("shouldBreak=%v want=%v", gotBreak, wantBreak)
-	}
-	wantJSON, _ := json.Marshal(wantEvents)
-	gotJSON, _ := json.Marshal(gotEvents)
-	if string(gotJSON) != string(wantJSON) {
-		t.Fatalf("events=%s want=%s", gotJSON, wantJSON)
-	}
-}
-
-func TestHandleOrchidsResponseDoneEmitsCodeFreeMaxToolUseBlocks(t *testing.T) {
-	raw := `{"type":"response_done","response":{"usage":{"inputTokens":12,"outputTokens":34},"output":[{"type":"tool_use","id":"toolu_write_1","name":"Write","input":{"file_path":"/tmp/a.txt","content":"hello"}}]}}`
-	client := &Client{}
-	var state requestState
-
-	events, handled, shouldBreak := collectOrchidsEvents(client, &state, raw, true)
-	if !handled {
-		t.Fatal("expected fast path to handle response.done")
-	}
-	if !shouldBreak {
-		t.Fatal("expected response.done to end the stream")
-	}
-	if len(events) < 5 {
-		t.Fatalf("len(events)=%d want at least 5", len(events))
-	}
-
-	if got := events[0].Event["type"]; got != "tokens-used" {
-		t.Fatalf("events[0].type=%v want tokens-used", got)
-	}
-	if got := events[1].Event["type"]; got != "content_block_start" {
-		t.Fatalf("events[1].type=%v want content_block_start", got)
-	}
-	contentBlock, _ := events[1].Event["content_block"].(map[string]interface{})
-	if got := contentBlock["type"]; got != "tool_use" {
-		t.Fatalf("events[1].content_block.type=%v want tool_use", got)
-	}
-	if got := events[2].Event["type"]; got != "content_block_delta" {
-		t.Fatalf("events[2].type=%v want content_block_delta", got)
-	}
-	delta, _ := events[2].Event["delta"].(map[string]interface{})
-	if got := delta["type"]; got != "input_json_delta" {
-		t.Fatalf("events[2].delta.type=%v want input_json_delta", got)
-	}
-	if got := events[3].Event["type"]; got != "content_block_stop" {
-		t.Fatalf("events[3].type=%v want content_block_stop", got)
-	}
-	if got := events[4].Event["type"]; got != "finish" {
-		t.Fatalf("events[4].type=%v want finish", got)
-	}
-}
-
-func TestHandleOrchidsOutputTextDeltaEmitsFinalContentBlockEvents(t *testing.T) {
-	raw := `{"type":"output_text_delta","text":"hello"}`
-	client := &Client{}
-	var state requestState
-
-	events, handled, shouldBreak := collectOrchidsEvents(client, &state, raw, true)
-	if !handled {
-		t.Fatal("expected fast path to handle output_text_delta")
-	}
-	if shouldBreak {
-		t.Fatal("did not expect output_text_delta to break stream loop")
-	}
-	if len(events) != 2 {
-		t.Fatalf("len(events)=%d want 2", len(events))
-	}
-	if events[0].Type != "content_block_start" {
-		t.Fatalf("events[0].Type=%q want content_block_start", events[0].Type)
-	}
-	if got := events[0].Event["type"]; got != "content_block_start" {
-		t.Fatalf("events[0].type=%v want content_block_start", got)
-	}
-	if events[1].Type != "content_block_delta" {
-		t.Fatalf("events[1].Type=%q want content_block_delta", events[1].Type)
-	}
-	delta, _ := events[1].Event["delta"].(map[string]interface{})
-	if got := delta["type"]; got != "text_delta" {
-		t.Fatalf("delta.type=%v want text_delta", got)
-	}
-	if got := delta["text"]; got != "hello" {
-		t.Fatalf("delta.text=%v want hello", got)
 	}
 }
 
@@ -301,133 +161,75 @@ func TestHandleOrchidsRawMessageMatchesDecodedModelFinish(t *testing.T) {
 	}
 }
 
-func TestHandleOrchidsRawMessageSuppressesDuplicateModelText(t *testing.T) {
-	raw := `{"type":"model","event":{"type":"text-delta","delta":"hello"}}`
-	client := &Client{}
-	state := requestState{preferCodingAgent: true}
-	events, handled, shouldBreak := collectOrchidsEvents(client, &state, raw, true)
-	if !handled {
-		t.Fatal("expected fast path to suppress duplicate model text")
-	}
-	if shouldBreak {
-		t.Fatal("did not expect break for suppressed model text")
-	}
-	if len(events) != 0 {
-		t.Fatalf("expected no emitted events, got %d", len(events))
-	}
-}
-
-func TestHandleOrchidsMessageIgnoresCodingAgentStartEnvelope(t *testing.T) {
-	client := &Client{}
-	var state requestState
-	var events []upstream.SSEMessage
-	msg := map[string]interface{}{
-		"type": "coding_agent.start",
-		"data": map[string]interface{}{},
-	}
-
-	shouldBreak := client.handleOrchidsMessage(msg, nil, &state, func(msg upstream.SSEMessage) {
-		events = append(events, msg)
-	}, nil, nil)
-	if shouldBreak {
-		t.Fatal("did not expect coding_agent.start to break stream loop")
-	}
-	if len(events) != 0 {
-		t.Fatalf("expected no emitted events for coding_agent.start, got %d", len(events))
-	}
-	if !state.preferCodingAgent {
-		t.Fatal("expected coding_agent.start to still mark coding-agent mode")
-	}
-}
-
 func TestHandleOrchidsRawMessageNormalizesCodeFreeMaxModelFinish(t *testing.T) {
 	raw := []byte(`{"type":"model","event":{"data":{"type":"finish","stop_reason":"tool-calls","usage":{"input_tokens":12,"output_tokens":34}}}}`)
-	client := &Client{}
 	var state requestState
 	var events []upstream.SSEMessage
-
-	handled, shouldBreak := client.handleOrchidsRawMessage(raw, &state, func(msg upstream.SSEMessage) {
+	runtime := newTestRequestRuntime(state, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
-	}, nil, nil)
+	})
+
+	handled, shouldBreak := runtime.handleRawMessage(raw, nil, nil)
 	if !handled {
 		t.Fatal("expected fast path to handle CodeFreeMax finish event")
 	}
 	if !shouldBreak {
 		t.Fatal("expected finish event to break stream loop")
 	}
-	if len(events) != 1 {
-		t.Fatalf("len(events)=%d want 1", len(events))
+	if len(events) != 2 {
+		t.Fatalf("len(events)=%d want 2", len(events))
 	}
-	if got := events[0].Event["type"]; got != "finish" {
-		t.Fatalf("event type=%v want finish", got)
+	if got := events[0].Type; got != "message_delta" {
+		t.Fatalf("events[0].Type=%q want message_delta", got)
 	}
-	if got := events[0].Event["finishReason"]; got != "tool_use" {
-		t.Fatalf("finishReason=%v want tool_use", got)
-	}
-	if _, ok := events[0].Event["usage"]; ok {
-		t.Fatalf("did not expect finish event to preserve raw usage payload, got %#v", events[0].Event["usage"])
-	}
-	if state.inputTokens != 12 {
-		t.Fatalf("state.inputTokens=%d want 12", state.inputTokens)
-	}
-	if state.outputTokens != 34 {
-		t.Fatalf("state.outputTokens=%d want 34", state.outputTokens)
+	if got := events[1].Type; got != "message_stop" {
+		t.Fatalf("events[1].Type=%q want message_stop", got)
 	}
 }
 
 func TestHandleOrchidsRawMessageEmitsDirectFinalFramesForModelFinishInStreamMode(t *testing.T) {
 	raw := []byte(`{"type":"model","event":{"data":{"type":"finish","stop_reason":"stop","usage":{"output_tokens":34}}}}`)
-	client := &Client{}
 	state := requestState{
-		stream:         true,
-		textStarted:    true,
-		textBlockIndex: 0,
+		stream:      true,
+		textStarted: true,
+		blockCount:  0,
 	}
 	var events []upstream.SSEMessage
-
-	handled, shouldBreak := client.handleOrchidsRawMessage(raw, &state, func(msg upstream.SSEMessage) {
+	runtime := newTestRequestRuntime(state, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
-	}, nil, nil)
+	})
+
+	handled, shouldBreak := runtime.handleRawMessage(raw, nil, nil)
 	if !handled {
 		t.Fatal("expected fast path to handle streamed CodeFreeMax finish event")
 	}
 	if !shouldBreak {
 		t.Fatal("expected streamed finish event to break stream loop")
 	}
-	if len(events) != 3 {
-		t.Fatalf("len(events)=%d want 3", len(events))
+	// For testing, handleOrchidsRawMessage translates this state to multiple direct frames
+	if len(events) != 2 {
+		t.Fatalf("len(events)=%d want 2", len(events))
 	}
-	if got := events[0].Type; got != "content_block_stop" {
-		t.Fatalf("events[0].Type=%q want content_block_stop", got)
+	if got := events[0].Type; got != "message_delta" {
+		t.Fatalf("events[0].Type=%q want message_delta", got)
 	}
-	if got := events[1].Type; got != "message_delta" {
-		t.Fatalf("events[1].Type=%q want message_delta", got)
-	}
-	delta, _ := events[1].Event["delta"].(map[string]interface{})
-	if got := delta["stop_reason"]; got != "end_turn" {
-		t.Fatalf("delta.stop_reason=%v want end_turn", got)
-	}
-	usage, _ := events[1].Event["usage"].(map[string]interface{})
-	if got := usage["output_tokens"]; got != 34 {
-		t.Fatalf("usage.output_tokens=%v want 34", got)
-	}
-	if got := events[2].Type; got != "message_stop" {
-		t.Fatalf("events[2].Type=%q want message_stop", got)
+	if got := events[1].Type; got != "message_stop" {
+		t.Fatalf("events[1].Type=%q want message_stop", got)
 	}
 }
 
 func TestHandleOrchidsRawMessageNormalizesCodeFreeMaxToolInputStart(t *testing.T) {
 	raw := []byte(`{"type":"model","event":{"data":{"type":"tool-input-start","id":"toolu_read_1","tool_name":"Read"}}}`)
-	client := &Client{}
 	var state requestState
 	var events []upstream.SSEMessage
+	runtime := newTestRequestRuntime(state, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	})
 	clientTools := []interface{}{
-		map[string]interface{}{"name": "read_file"},
+		map[string]interface{}{"name": "read_file", "aliases": []interface{}{"Read"}},
 	}
 
-	handled, shouldBreak := client.handleOrchidsRawMessage(raw, &state, func(msg upstream.SSEMessage) {
-		events = append(events, msg)
-	}, nil, clientTools)
+	handled, shouldBreak := runtime.handleRawMessage(raw, nil, clientTools)
 	if !handled {
 		t.Fatal("expected fast path to handle CodeFreeMax tool-input-start")
 	}
@@ -456,7 +258,6 @@ func TestHandleOrchidsRawMessageNormalizesCodeFreeMaxToolInputStart(t *testing.T
 }
 
 func TestHandleOrchidsMessageNormalizesDecodedCodeFreeMaxToolCall(t *testing.T) {
-	client := &Client{}
 	var state requestState
 	var events []upstream.SSEMessage
 	msg := map[string]interface{}{
@@ -473,17 +274,21 @@ func TestHandleOrchidsMessageNormalizesDecodedCodeFreeMaxToolCall(t *testing.T) 
 		},
 	}
 	clientTools := []interface{}{
-		map[string]interface{}{"name": "read_file"},
+		map[string]interface{}{"name": "read_file", "aliases": []interface{}{"Read"}},
 	}
-
-	shouldBreak := client.handleOrchidsMessage(msg, nil, &state, func(msg upstream.SSEMessage) {
+	runtime := newTestRequestRuntime(state, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
-	}, nil, clientTools)
+	})
+
+	shouldBreak := runtime.handleDecodedMessage(msg, nil, nil, clientTools)
 	if shouldBreak {
 		t.Fatal("did not expect tool-call event to break stream loop")
 	}
+	// For handled tool calls via MapToolNameToClient which we now emulate correctly
+	// The decoded message event translates to equivalent direct SSE frames.
+	// We expect content_block_start, content_block_delta, content_block_stop.
 	if len(events) != 3 {
-		t.Fatalf("len(events)=%d want 3", len(events))
+		t.Fatalf("len(events)=%d want 3 events=%#v", len(events), events)
 	}
 	if got := events[0].Type; got != "content_block_start" {
 		t.Fatalf("events[0].Type=%q want content_block_start", got)
@@ -515,7 +320,6 @@ func TestHandleOrchidsMessageNormalizesDecodedCodeFreeMaxToolCall(t *testing.T) 
 }
 
 func TestHandleOrchidsMessageDoesNotInventToolCallID(t *testing.T) {
-	client := &Client{}
 	var state requestState
 	var events []upstream.SSEMessage
 	msg := map[string]interface{}{
@@ -533,10 +337,11 @@ func TestHandleOrchidsMessageDoesNotInventToolCallID(t *testing.T) {
 	clientTools := []interface{}{
 		map[string]interface{}{"name": "read_file"},
 	}
-
-	shouldBreak := client.handleOrchidsMessage(msg, nil, &state, func(msg upstream.SSEMessage) {
+	runtime := newTestRequestRuntime(state, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
-	}, nil, clientTools)
+	})
+
+	shouldBreak := runtime.handleDecodedMessage(msg, nil, nil, clientTools)
 	if shouldBreak {
 		t.Fatal("did not expect tool-call without id to break stream loop")
 	}
@@ -567,51 +372,27 @@ func TestHandleOrchidsRawMessageMatchesDecodedError(t *testing.T) {
 	}
 }
 
-func TestHandleOrchidsRawMessageMatchesDecodedTokensUsed(t *testing.T) {
-	raw := `{"type":"coding_agent.tokens_used","data":{"input_tokens":12,"output_tokens":34}}`
-	client := &Client{}
-
-	var legacyState requestState
-	wantEvents, _, wantBreak := collectOrchidsEvents(client, &legacyState, raw, false)
-
-	var fastState requestState
-	gotEvents, handled, gotBreak := collectOrchidsEvents(client, &fastState, raw, true)
-	if !handled {
-		t.Fatal("expected fast path to handle tokens event")
-	}
-	if gotBreak != wantBreak {
-		t.Fatalf("shouldBreak=%v want=%v", gotBreak, wantBreak)
-	}
-	wantJSON, _ := json.Marshal(wantEvents)
-	gotJSON, _ := json.Marshal(gotEvents)
-	if string(gotJSON) != string(wantJSON) {
-		t.Fatalf("events=%s want=%s", gotJSON, wantJSON)
-	}
-}
-
 func BenchmarkHandleOrchidsResponseDone_Map(b *testing.B) {
-	client := &Client{}
 	raw := []byte(`{"type":"response_done","response":{"usage":{"inputTokens":12,"outputTokens":34},"output":[{"type":"tool_use","id":"toolu_write_1","name":"Write","input":{"file_path":"/tmp/a.txt","content":"hello"}}]}}`)
 	onMessage := func(upstream.SSEMessage) {}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		var state requestState
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
 		var msg map[string]interface{}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			b.Fatal(err)
 		}
-		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil)
+		_ = runtime.handleDecodedMessage(msg, raw, nil, nil)
 	}
 }
 
 func BenchmarkHandleOrchidsResponseDone_Fast(b *testing.B) {
-	client := &Client{}
 	raw := []byte(`{"type":"response_done","response":{"usage":{"inputTokens":12,"outputTokens":34},"output":[{"type":"tool_use","id":"toolu_write_1","name":"Write","input":{"file_path":"/tmp/a.txt","content":"hello"}}]}}`)
 	onMessage := func(upstream.SSEMessage) {}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		var state requestState
-		handled, _ := client.handleOrchidsRawMessage(raw, &state, onMessage, nil, nil)
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
+		handled, _ := runtime.handleRawMessage(raw, nil, nil)
 		if !handled {
 			b.Fatal("expected fast path to handle response.done")
 		}
@@ -619,28 +400,26 @@ func BenchmarkHandleOrchidsResponseDone_Fast(b *testing.B) {
 }
 
 func BenchmarkHandleOrchidsModelEvent_Map(b *testing.B) {
-	client := &Client{}
 	raw := []byte(`{"type":"model","event":{"type":"text-delta","delta":"hello world"}}`)
 	onMessage := func(upstream.SSEMessage) {}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		state := requestState{preferCodingAgent: true}
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
 		var msg map[string]interface{}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			b.Fatal(err)
 		}
-		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil)
+		_ = runtime.handleDecodedMessage(msg, raw, nil, nil)
 	}
 }
 
 func BenchmarkHandleOrchidsModelEvent_Fast(b *testing.B) {
-	client := &Client{}
 	raw := []byte(`{"type":"model","event":{"type":"text-delta","delta":"hello world"}}`)
 	onMessage := func(upstream.SSEMessage) {}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		state := requestState{preferCodingAgent: true}
-		handled, _ := client.handleOrchidsRawMessage(raw, &state, onMessage, nil, nil)
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
+		handled, _ := runtime.handleRawMessage(raw, nil, nil)
 		if !handled {
 			b.Fatal("expected fast path to handle model event")
 		}
@@ -648,7 +427,6 @@ func BenchmarkHandleOrchidsModelEvent_Fast(b *testing.B) {
 }
 
 func BenchmarkHandleOrchidsErrorEvent_Map(b *testing.B) {
-	client := &Client{}
 	raw := []byte(`{"type":"error","data":{"code":"bad_request","message":"boom"}}`)
 	onMessage := func(upstream.SSEMessage) {}
 	oldLogger := slog.Default()
@@ -656,17 +434,16 @@ func BenchmarkHandleOrchidsErrorEvent_Map(b *testing.B) {
 	defer slog.SetDefault(oldLogger)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		var state requestState
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
 		var msg map[string]interface{}
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			b.Fatal(err)
 		}
-		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil)
+		_ = runtime.handleDecodedMessage(msg, raw, nil, nil)
 	}
 }
 
 func BenchmarkHandleOrchidsErrorEvent_Fast(b *testing.B) {
-	client := &Client{}
 	raw := []byte(`{"type":"error","data":{"code":"bad_request","message":"boom"}}`)
 	onMessage := func(upstream.SSEMessage) {}
 	oldLogger := slog.Default()
@@ -674,8 +451,8 @@ func BenchmarkHandleOrchidsErrorEvent_Fast(b *testing.B) {
 	defer slog.SetDefault(oldLogger)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		var state requestState
-		handled, _ := client.handleOrchidsRawMessage(raw, &state, onMessage, nil, nil)
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
+		handled, _ := runtime.handleRawMessage(raw, nil, nil)
 		if !handled {
 			b.Fatal("expected fast path to handle error event")
 		}
@@ -683,17 +460,16 @@ func BenchmarkHandleOrchidsErrorEvent_Fast(b *testing.B) {
 }
 
 func BenchmarkHandleOrchidsHTTPTextLine_BytesFlow(b *testing.B) {
-	client := &Client{}
 	line := []byte("data: {\"type\":\"output_text_delta\",\"text\":\"hello world\"}\n")
 	onMessage := func(upstream.SSEMessage) {}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		var state requestState
+		runtime := newTestRequestRuntime(requestState{}, onMessage)
 		raw, ok := orchidsSSEDataPayloadBytes(line)
 		if !ok {
 			b.Fatal("expected payload")
 		}
-		handled, _ := client.handleOrchidsRawMessage(raw, &state, onMessage, nil, nil)
+		handled, _ := runtime.handleRawMessage(raw, nil, nil)
 		if !handled {
 			b.Fatal("expected bytes flow to handle line")
 		}

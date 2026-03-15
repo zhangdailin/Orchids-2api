@@ -6,14 +6,24 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
-	"orchids-api/internal/upstream"
 )
+
+func decodeOrchidsModelEvent(raw json.RawMessage) map[string]interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	var event map[string]interface{}
+	if err := json.Unmarshal(raw, &event); err != nil {
+		return nil
+	}
+	return event
+}
 
 func dispatchOrchidsFastEvent(
 	rawData []byte,
 	envelope orchidsFastEnvelope,
 	state *requestState,
-	onMessage func(upstream.SSEMessage),
+	writer *SSEWriter,
 	logger *debug.Logger,
 	clientTools []interface{},
 ) (handled bool, shouldBreak bool) {
@@ -27,61 +37,11 @@ func dispatchOrchidsFastEvent(
 		if logger != nil {
 			logger.LogUpstreamSSE(envelope.Type, string(rawData))
 		}
-		if !markOrchidsResponseStarted(state) {
-			return true, false
+		if !state.responseStarted {
+			state.StartResponse()
 		}
 		return true, false
-	case EventReasoningCompleted:
-		if logger != nil {
-			logger.LogUpstreamSSE(envelope.Type, string(rawData))
-		}
-		markOrchidsCodingAgent(state)
-		NewSSEWriter(state, onMessage).WriteReasoningEnd()
-		return true, false
-	case EventCodingAgentTokens:
-		var msg orchidsFastTokensMessage
-		if err := json.Unmarshal(rawData, &msg); err != nil {
-			return false, false
-		}
-		if logger != nil {
-			logger.LogUpstreamSSE(msg.Type, string(rawData))
-		}
-		emitOrchidsUsageEvent(state, msg.Data, onMessage)
-		return true, false
-	case EventReasoningChunk, EventOutputTextDelta, EventResponseChunk:
-		var msg orchidsFastTextMessage
-		if err := json.Unmarshal(rawData, &msg); err != nil {
-			return false, false
-		}
-		text := extractOrchidsFastText(msg)
-		if logger != nil {
-			logger.LogUpstreamSSE(msg.Type, string(rawData))
-		}
-		if text == "" {
-			return true, false
-		}
-		markOrchidsCodingAgent(state)
-		if msg.Type == EventReasoningChunk {
-			emitOrchidsReasoningDelta(state, onMessage, text)
-			return true, false
-		}
-		emitOrchidsTextDelta(state, onMessage, msg.Type, text)
-		return true, false
-	case EventResponseDone:
-		var msg orchidsFastResponseDone
-		if err := json.Unmarshal(rawData, &msg); err != nil {
-			return false, false
-		}
-		if logger != nil {
-			logger.LogUpstreamSSE(msg.Type, string(rawData))
-		}
-		return true, handleOrchidsFastCompletion(msg, state, onMessage, clientTools)
-	case EventCodingAgentEnd, EventComplete:
-		if logger != nil {
-			logger.LogUpstreamSSE(envelope.Type, string(rawData))
-		}
-		emitOrchidsCompletionTail(state, onMessage)
-		return true, true
+
 	case EventModel:
 		var msg orchidsFastModelMessage
 		if err := json.Unmarshal(rawData, &msg); err != nil {
@@ -94,7 +54,18 @@ func dispatchOrchidsFastEvent(
 		if len(event) == 0 {
 			return true, false
 		}
-		return true, emitOrchidsModelEvent(event, state, onMessage, clientTools, event)
+
+		err := handleModelEvent(state, writer, event, state.toolMapper, clientTools)
+		if err != nil {
+			slog.Error("error handling model event", "error", err)
+		}
+		// CodeFreeMax loops until finishReason is set. Since we stream, checking finishSent might not exist,
+		// but we can check if finishReason is populated to break.
+		shouldBreak := state.finishReason != ""
+		if shouldBreak {
+			_ = writer.WriteMessageEnd()
+		}
+		return true, shouldBreak
 	case "error":
 		var msg orchidsFastErrorMessage
 		if err := json.Unmarshal(rawData, &msg); err != nil {
@@ -109,7 +80,7 @@ func dispatchOrchidsFastEvent(
 		}
 		slog.Warn("Orchids upstream error event", "code", errCode, "message", errMsg)
 		setOrchidsErrorState(state, errCode, errMsg, false)
-		emitOrchidsErrorEvent(state, onMessage, errCode, errMsg)
+		emitOrchidsErrorEvent(writer, errCode, errMsg)
 		return true, true
 	default:
 		return false, false
@@ -120,7 +91,7 @@ func dispatchOrchidsDecodedEvent(
 	msg map[string]interface{},
 	rawData []byte,
 	state *requestState,
-	onMessage func(upstream.SSEMessage),
+	writer *SSEWriter,
 	logger *debug.Logger,
 	clientTools []interface{},
 ) bool {
@@ -133,55 +104,23 @@ func dispatchOrchidsDecodedEvent(
 	case EventConnected:
 		return false
 	case EventResponseStarted:
-		if !markOrchidsResponseStarted(state) {
-			return false
+		if !state.responseStarted {
+			state.StartResponse()
 		}
 		return false
-	case EventCodingAgentStart, EventCodingAgentInit:
-		if state.suppressStarts {
-			return false
-		}
-		markOrchidsCodingAgent(state)
-		return false
-	case EventCodingAgentTokens:
-		emitOrchidsTokensFromMessage(state, msg, onMessage)
-		return false
-	case EventCreditsExhausted:
-		errCode, errMsg := extractOrchidsErrorPayload(msg)
-		if errCode == "" {
-			errCode = "credits_exhausted"
-		}
-		if errMsg == "" {
-			errMsg = "You have run out of credits."
-		}
-		slog.Warn("Orchids credits exhausted", "code", errCode, "message", errMsg)
-		setOrchidsErrorState(state, errCode, errMsg, true)
-		emitOrchidsErrorEvent(state, onMessage, errCode, errMsg)
-		return true
-	case EventResponseDone, EventCodingAgentEnd, EventComplete:
-		return handleOrchidsCompletionMessage(msgType, msg, state, onMessage, clientTools)
-	case EventReasoningChunk:
-		markOrchidsCodingAgent(state)
-		emitOrchidsReasoningDelta(state, onMessage, extractOrchidsText(msg))
-		return false
-	case EventReasoningCompleted:
-		markOrchidsCodingAgent(state)
-		NewSSEWriter(state, onMessage).WriteReasoningEnd()
-		return false
-	case EventOutputTextDelta, EventResponseChunk:
-		markOrchidsCodingAgent(state)
-		emitOrchidsTextDelta(state, onMessage, msgType, extractOrchidsText(msg))
-		return false
-	case EventWriteStart, EventWriteContentStart, EventEditStart:
-		return false
-	case EventWriteChunk, EventEditChunk:
-		return false
-	case EventWriteCompleted:
-		return false
-	case EventEditCompleted, EventEditFileCompleted:
-		return false
+
 	case EventModel:
-		return dispatchOrchidsModelMessage(msg, state, onMessage, clientTools)
+		modelEvent := msg
+		if nested, ok := msg["event"].(map[string]interface{}); ok && len(nested) > 0 {
+			modelEvent = nested
+		}
+		_ = handleModelEvent(state, writer, modelEvent, state.toolMapper, clientTools)
+
+		isFinished := state.finishReason != ""
+		if isFinished {
+			_ = writer.WriteMessageEnd()
+		}
+		return isFinished
 	case "error":
 		errCode, errMsg := extractOrchidsErrorPayload(msg)
 		if errMsg == "" {
@@ -189,10 +128,9 @@ func dispatchOrchidsDecodedEvent(
 		}
 		slog.Warn("Orchids upstream error event", "code", errCode, "message", errMsg)
 		setOrchidsErrorState(state, errCode, errMsg, false)
-		emitOrchidsErrorEvent(state, onMessage, errCode, errMsg)
+		emitOrchidsErrorEvent(writer, errCode, errMsg)
 		return true
-	case EventTodoWriteStart, EventRunItemStream, EventToolCallOutput:
-		return false
+
 	default:
 		return false
 	}

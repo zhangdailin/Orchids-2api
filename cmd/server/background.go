@@ -628,7 +628,7 @@ func hasOrchidsModelSyncCredentials(acc *store.Account) bool {
 		strings.TrimSpace(acc.SessionID) != ""
 }
 
-func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.Store) ([]orchids.PublicModelChoice, string, error) {
+func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.Store) ([]orchidsPublicModelChoice, string, error) {
 	accounts, err := s.GetEnabledAccounts(ctx)
 	if err == nil {
 		for _, acc := range accounts {
@@ -639,13 +639,13 @@ func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.
 			upstreamModels, fetchErr := client.FetchUpstreamModels(ctx)
 			client.Close()
 			if fetchErr == nil && len(upstreamModels) > 0 {
-				out := make([]orchids.PublicModelChoice, 0, len(upstreamModels))
+				out := make([]orchidsPublicModelChoice, 0, len(upstreamModels))
 				for _, m := range upstreamModels {
 					id := strings.TrimSpace(m.ID)
 					if id == "" {
 						continue
 					}
-					out = append(out, orchids.PublicModelChoice{
+					out = append(out, orchidsPublicModelChoice{
 						ID:   id,
 						Name: id,
 					})
@@ -665,7 +665,7 @@ func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.
 	if cfg != nil {
 		proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
 	}
-	publicModels, fallbackErr := orchids.FetchPublicModelChoicesWithProxy(ctx, proxyFunc)
+	publicModels, fallbackErr := fetchOrchidsPublicModelChoicesWithProxy(ctx, proxyFunc)
 	if fallbackErr != nil {
 		if err != nil {
 			return publicModels, "public_page_fallback", fmt.Errorf("upstream api fetch failed: %v; fallback failed: %w", err, fallbackErr)
