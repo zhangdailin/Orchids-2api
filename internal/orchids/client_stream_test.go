@@ -87,7 +87,7 @@ func collectOrchidsEvents(client *Client, state *requestState, raw string, fast 
 	if err := json.Unmarshal(rawBytes, &msg); err != nil {
 		panic(err)
 	}
-	return events, true, client.handleOrchidsMessage(msg, rawBytes, state, onMessage, nil, nil, nil, "", nil)
+	return events, true, client.handleOrchidsMessage(msg, rawBytes, state, onMessage, nil, nil)
 }
 
 func collectOrchidsEventsWithFallback(client *Client, state *requestState, raw string) ([]upstream.SSEMessage, bool) {
@@ -104,7 +104,7 @@ func collectOrchidsEventsWithFallback(client *Client, state *requestState, raw s
 	if err := json.Unmarshal(rawBytes, &msg); err != nil {
 		panic(err)
 	}
-	return events, client.handleOrchidsMessage(msg, rawBytes, state, onMessage, nil, nil, nil, "", nil)
+	return events, client.handleOrchidsMessage(msg, rawBytes, state, onMessage, nil, nil)
 }
 
 func TestHandleOrchidsRawMessageMatchesDecodedTextEvents(t *testing.T) {
@@ -168,7 +168,7 @@ func BenchmarkHandleOrchidsTextMessage_Map(b *testing.B) {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			b.Fatal(err)
 		}
-		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil, nil, "", nil)
+		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil)
 	}
 }
 
@@ -408,7 +408,7 @@ func TestHandleOrchidsMessageNormalizesDecodedCodeFreeMaxToolCall(t *testing.T) 
 
 	shouldBreak := client.handleOrchidsMessage(msg, nil, &state, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
-	}, nil, nil, nil, "", clientTools)
+	}, nil, clientTools)
 	if shouldBreak {
 		t.Fatal("did not expect tool-call event to break stream loop")
 	}
@@ -479,7 +479,7 @@ func BenchmarkHandleOrchidsResponseDone_Map(b *testing.B) {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			b.Fatal(err)
 		}
-		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil, nil, "", nil)
+		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil)
 	}
 }
 
@@ -508,7 +508,7 @@ func BenchmarkHandleOrchidsModelEvent_Map(b *testing.B) {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			b.Fatal(err)
 		}
-		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil, nil, "", nil)
+		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil)
 	}
 }
 
@@ -540,7 +540,7 @@ func BenchmarkHandleOrchidsErrorEvent_Map(b *testing.B) {
 		if err := json.Unmarshal(raw, &msg); err != nil {
 			b.Fatal(err)
 		}
-		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil, nil, "", nil)
+		_ = client.handleOrchidsMessage(msg, raw, &state, onMessage, nil, nil)
 	}
 }
 

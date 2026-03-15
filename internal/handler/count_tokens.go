@@ -39,7 +39,7 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 			req.System,
 			true, /* noThinking */
 		)
-		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, req.Tools)
+		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
 		profile = meta.Profile
 	}
 

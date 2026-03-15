@@ -108,6 +108,52 @@ func TestHandleMessages_Orchids_StreamAndJSON(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Orchids_DoesNotFilterToolCallsByDeclaredTools(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "model.tool-call", Event: map[string]any{
+			"toolCallId": "tool_edit_1",
+			"toolName":   "Edit",
+			"input":      `{"file_path":"/tmp/demo.txt","old_string":"hello","new_string":"world"}`,
+		}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "tool_use"}},
+	}}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "claude-3-5-sonnet",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   false,
+		"tools": []map[string]any{
+			{
+				"type": "function",
+				"function": map[string]any{
+					"name": "Read",
+					"parameters": map[string]any{
+						"type": "object",
+					},
+				},
+			},
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, `"type":"tool_use"`) {
+		t.Fatalf("expected tool_use block, got: %s", out)
+	}
+	if !strings.Contains(out, `"name":"Edit"`) {
+		t.Fatalf("expected Edit tool call to pass through, got: %s", out)
+	}
+}
+
 func TestHandleMessages_Warp_StreamAndJSON(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

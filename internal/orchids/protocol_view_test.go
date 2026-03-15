@@ -55,7 +55,7 @@ func TestBuildCodeFreeMaxPromptAndHistoryWithMeta_UsesProtocolProfile(t *testing
 	}
 }
 
-func TestBuildCodeFreeMaxPromptAndHistoryWithMeta_ToolResultOnlyTurnUsesResolvedText(t *testing.T) {
+func TestBuildCodeFreeMaxPromptAndHistoryWithMeta_ToolResultOnlyTurnStaysRaw(t *testing.T) {
 	t.Parallel()
 
 	messages := []prompt.Message{
@@ -86,10 +86,13 @@ func TestBuildCodeFreeMaxPromptAndHistoryWithMeta_ToolResultOnlyTurnUsesResolved
 	if !meta.NoThinking {
 		t.Fatalf("NoThinking=%v want true", meta.NoThinking)
 	}
-	if !strings.Contains(promptText, "Original user request:") {
-		t.Fatalf("promptText=%q want resolved tool-result prompt", promptText)
+	if strings.Contains(promptText, "Original user request:") {
+		t.Fatalf("promptText=%q unexpectedly contains local follow-up prompt", promptText)
 	}
-	if !strings.Contains(promptText, "Tool result:") {
-		t.Fatalf("promptText=%q want tool result section", promptText)
+	if strings.Contains(promptText, "Tool result:") {
+		t.Fatalf("promptText=%q unexpectedly contains tool result section", promptText)
+	}
+	if strings.TrimSpace(promptText) != "" {
+		t.Fatalf("promptText=%q want empty raw prompt for tool-result-only current turn", promptText)
 	}
 }

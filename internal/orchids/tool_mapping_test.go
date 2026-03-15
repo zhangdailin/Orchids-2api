@@ -25,6 +25,20 @@ func TestMapToolNameToClientPrefersOriginalToolDefinition(t *testing.T) {
 	}
 }
 
+func TestMapToolNameToClientMatchesSnakeCaseAlias(t *testing.T) {
+	t.Parallel()
+
+	clientTools := []interface{}{
+		map[string]interface{}{
+			"name": "run_command",
+		},
+	}
+
+	if got := MapToolNameToClient("Bash", clientTools); got != "run_command" {
+		t.Fatalf("MapToolNameToClient(Bash) = %q want run_command", got)
+	}
+}
+
 func TestTransformToolInputNormalizesReadAliases(t *testing.T) {
 	t.Parallel()
 

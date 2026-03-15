@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -27,6 +26,7 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		return errors.New("orchids client is nil")
 	}
 	cfg := c.config
+	chatSessionID := orchidsChatSessionID(req)
 	debugEnabled := cfg != nil && cfg.DebugEnabled
 	timeout := 120 * time.Second
 	if cfg != nil && cfg.RequestTimeout > 0 {
@@ -54,7 +54,8 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		req.ProjectID = projectID
 	}
 
-	prepared := c.buildSSEAgentRequest(req)
+	projectID := orchidsProjectID(cfg, req)
+	orchidsReq := c.buildSSEAgentRequest(req)
 	breakerKey := ""
 	if cfg != nil {
 		breakerKey = cfg.Email
@@ -63,12 +64,12 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 	buf := perf.AcquireByteBuffer()
 	defer perf.ReleaseByteBuffer(buf)
 
-	if err := json.NewEncoder(buf).Encode(prepared.Request); err != nil {
+	if err := json.NewEncoder(buf).Encode(orchidsReq); err != nil {
 		return err
 	}
 
 	url := c.upstreamURL()
-	slog.Info("Orchids SSE request start", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", prepared.Meta.ChatSessionID, "project_id", prepared.Meta.ProjectID, "message_items", len(prepared.Request.Messages), "system_present", prepared.Request.System != "")
+	slog.Info("Orchids SSE request start", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "project_id", projectID, "message_items", len(orchidsReq.Messages), "system_present", orchidsReq.System != "")
 
 	breaker := upstream.GetAccountBreaker(breakerKey)
 	start := time.Now()
@@ -82,6 +83,8 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		httpReq.Header.Set("Accept", "text/event-stream")
 		httpReq.Header.Set("Authorization", "Bearer "+token)
 		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("User-Agent", orchidsWSUserAgent)
+		httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
 		httpReq.Header.Set("X-Orchids-Api-Version", "2")
 
 		if logger != nil {
@@ -89,9 +92,11 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 				"Accept":                "text/event-stream",
 				"Authorization":         "Bearer [REDACTED]",
 				"Content-Type":          "application/json",
+				"User-Agent":            orchidsWSUserAgent,
+				"X-Requested-With":      "XMLHttpRequest",
 				"X-Orchids-Api-Version": "2",
 			}
-			logger.LogUpstreamRequest(url, headers, prepared.Request)
+			logger.LogUpstreamRequest(url, headers, orchidsReq)
 		}
 
 		return c.httpClient.Do(httpReq)
@@ -101,7 +106,7 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		if logger != nil {
 			logger.LogUpstreamHTTPError(url, 0, "", err)
 		}
-		slog.Warn("Orchids SSE request failed before response", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", prepared.Meta.ChatSessionID, "error", err)
+		slog.Warn("Orchids SSE request failed before response", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "error", err)
 		if debugEnabled {
 			slog.Info("[Performance] Upstream Request Failed", "duration", time.Since(start), "error", err)
 		}
@@ -113,14 +118,14 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 
 	resp := result.(*http.Response)
 	defer resp.Body.Close()
-	slog.Info("Orchids SSE response headers received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", prepared.Meta.ChatSessionID, "status_code", resp.StatusCode)
+	slog.Info("Orchids SSE response headers received", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "status_code", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("upstream request failed with status %d (failed to read error body: %v)", resp.StatusCode, err)
 		}
-		slog.Warn("Orchids SSE non-200 response", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", prepared.Meta.ChatSessionID, "status_code", resp.StatusCode)
+		slog.Warn("Orchids SSE non-200 response", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "status_code", resp.StatusCode)
 		return fmt.Errorf("upstream request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -129,7 +134,7 @@ func (c *Client) sendRequestSSE(ctx context.Context, req upstream.UpstreamReques
 		return err
 	}
 
-	slog.Info("Orchids SSE request completed", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", prepared.Meta.ChatSessionID, "saw_tool_call", state.sawToolCall, "response_started", state.responseStarted)
+	slog.Info("Orchids SSE request completed", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "saw_tool_call", state.sawToolCall, "response_started", state.responseStarted)
 	return nil
 }
 
@@ -144,7 +149,6 @@ func (c *Client) streamSSEBody(
 	defer perf.ReleaseBufioReader(reader)
 
 	state := newOrchidsRequestState(req)
-	var fsWG sync.WaitGroup
 	var lineScratch []byte
 
 	if state.stream {
@@ -192,7 +196,7 @@ func (c *Client) streamSSEBody(
 			continue
 		}
 
-		if shouldBreak := c.handleOrchidsMessage(msg, rawBytes, &state, onMessage, logger, nil, &fsWG, req.Workdir, req.Tools); shouldBreak {
+		if shouldBreak := c.handleOrchidsMessage(msg, rawBytes, &state, onMessage, logger, req.Tools); shouldBreak {
 			goto done
 		}
 		if err == io.EOF {
@@ -201,9 +205,9 @@ func (c *Client) streamSSEBody(
 	}
 
 done:
-	if err := finalizeOrchidsTransport(ctx, "SSE", &state, onMessage, &fsWG); err != nil {
+	if err := finalizeOrchidsTransport(ctx, &state, onMessage); err != nil {
 		if state.errorMsg != "" {
-			slog.Warn("Orchids SSE stream ended with upstream error", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", req.ChatSessionID, "error", state.errorMsg)
+			slog.Warn("Orchids SSE stream ended with upstream error", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", orchidsChatSessionID(req), "error", state.errorMsg)
 		}
 		return state, err
 	}

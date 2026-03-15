@@ -8,89 +8,18 @@ import (
 	"orchids-api/internal/util"
 )
 
-func stripSystemReminders(text string) string {
-	text = stripNestedTaggedBlock(text, "system-reminder")
-	for _, tag := range []string{
-		"local-command-caveat",
-		"command-name",
-		"command-message",
-		"command-args",
-		"local-command-stdout",
-		"local-command-stderr",
-		"local-command-exit-code",
-	} {
-		text = stripSimpleTaggedBlock(text, tag)
-	}
-	return strings.TrimSpace(text)
-}
-
-func stripNestedTaggedBlock(text string, tag string) string {
-	startTag := "<" + tag + ">"
-	endTag := "</" + tag + ">"
-	if !strings.Contains(text, startTag) {
-		return text
-	}
-	var sb strings.Builder
-	sb.Grow(len(text))
-	i := 0
-	for i < len(text) {
-		start := strings.Index(text[i:], startTag)
-		if start == -1 {
-			sb.WriteString(text[i:])
-			break
-		}
-		sb.WriteString(text[i : i+start])
-		endStart := i + start + len(startTag)
-		end := strings.LastIndex(text[endStart:], endTag)
-		if end == -1 {
-			sb.WriteString(text[i+start:])
-			break
-		}
-		i = endStart + end + len(endTag)
-	}
-	return sb.String()
-}
-
-func stripSimpleTaggedBlock(text string, tag string) string {
-	startTag := "<" + tag + ">"
-	endTag := "</" + tag + ">"
-	if !strings.Contains(text, startTag) {
-		return text
-	}
-	var sb strings.Builder
-	sb.Grow(len(text))
-	i := 0
-	for i < len(text) {
-		start := strings.Index(text[i:], startTag)
-		if start == -1 {
-			sb.WriteString(text[i:])
-			break
-		}
-		sb.WriteString(text[i : i+start])
-		blockStart := i + start
-		endStart := blockStart + len(startTag)
-		end := strings.Index(text[endStart:], endTag)
-		if end == -1 {
-			sb.WriteString(text[blockStart:])
-			break
-		}
-		i = endStart + end + len(endTag)
-	}
-	return sb.String()
-}
-
 func hasUserPlainText(msg prompt.Message) bool {
 	if msg.Role != "user" {
 		return false
 	}
 	if msg.Content.IsString() {
-		return stripSystemReminders(msg.Content.GetText()) != ""
+		return strings.TrimSpace(msg.Content.GetText()) != ""
 	}
 	for _, block := range msg.Content.GetBlocks() {
 		if block.Type != "text" {
 			continue
 		}
-		if stripSystemReminders(block.Text) != "" {
+		if strings.TrimSpace(block.Text) != "" {
 			return true
 		}
 	}
@@ -104,7 +33,7 @@ func findLatestUserText(messages []prompt.Message) string {
 			continue
 		}
 		if msg.Content.IsString() {
-			text := stripSystemReminders(msg.Content.GetText())
+			text := strings.TrimSpace(msg.Content.GetText())
 			if text != "" {
 				return text
 			}
@@ -114,7 +43,7 @@ func findLatestUserText(messages []prompt.Message) string {
 				if block.Type != "text" {
 					continue
 				}
-				text := stripSystemReminders(block.Text)
+				text := strings.TrimSpace(block.Text)
 				if text != "" {
 					parts = append(parts, text)
 				}
@@ -134,7 +63,7 @@ func extractSystemPrompt(messages []prompt.Message) string {
 			continue
 		}
 		if msg.Content.IsString() {
-			text := stripSystemReminders(msg.Content.GetText())
+			text := strings.TrimSpace(msg.Content.GetText())
 			if text != "" {
 				parts = append(parts, text)
 			}
@@ -144,7 +73,7 @@ func extractSystemPrompt(messages []prompt.Message) string {
 			if block.Type != "text" {
 				continue
 			}
-			text := stripSystemReminders(block.Text)
+			text := strings.TrimSpace(block.Text)
 			if text != "" {
 				parts = append(parts, text)
 			}
@@ -154,7 +83,7 @@ func extractSystemPrompt(messages []prompt.Message) string {
 }
 
 func resolveCurrentUserTurnText(messages []prompt.Message, currentUserIdx int, userText string) string {
-	userText = strings.TrimSpace(stripSystemReminders(userText))
+	userText = strings.TrimSpace(userText)
 	if currentUserIdx < 0 || currentUserIdx >= len(messages) {
 		return userText
 	}
@@ -210,7 +139,7 @@ func buildAttributedCurrentToolResultText(messages []prompt.Message, currentUser
 	for _, block := range msg.Content.GetBlocks() {
 		switch block.Type {
 		case "text":
-			text := strings.TrimSpace(stripSystemReminders(block.Text))
+			text := strings.TrimSpace(block.Text)
 			if text != "" {
 				parts = append(parts, text)
 			}
@@ -218,7 +147,7 @@ func buildAttributedCurrentToolResultText(messages []prompt.Message, currentUser
 			text := strings.TrimSpace(util.NormalizePersistedToolResultText(extractToolResultText(block.Content)))
 			text = strings.ReplaceAll(text, "<tool_use_error>", "")
 			text = strings.ReplaceAll(text, "</tool_use_error>", "")
-			text = strings.TrimSpace(stripSystemReminders(text))
+			text = strings.TrimSpace(text)
 			if text == "" {
 				continue
 			}
@@ -572,7 +501,7 @@ func findCurrentUserMessageIndex(messages []prompt.Message) int {
 			case "tool_result", "image", "document":
 				return i
 			case "text":
-				if stripSystemReminders(block.Text) != "" {
+				if strings.TrimSpace(block.Text) != "" {
 					return i
 				}
 			}
@@ -599,7 +528,7 @@ func isToolResultOnlyUserMessage(messages []prompt.Message, idx int) bool {
 		case "tool_result":
 			hasToolResult = true
 		case "text":
-			if strings.TrimSpace(stripSystemReminders(block.Text)) != "" {
+			if strings.TrimSpace(block.Text) != "" {
 				return false
 			}
 		default:

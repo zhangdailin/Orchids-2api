@@ -604,6 +604,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("Warp token estimation fallback to generic breakdown", "error", err)
 			breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 		}
+	} else if isOrchidsProtocol {
+		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
 	} else {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	}
@@ -630,7 +632,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
 	sh.setDisallowToolCalls(gateNoTools)
-	sh.setAllowedToolNames(orchids.SupportedToolNames(effectiveTools))
+	if !isOrchidsProtocol {
+		sh.setAllowedToolNames(orchids.SupportedToolNames(effectiveTools))
+	}
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	// 捕获上游返回的 conversationID，持久化到 session 以便后续请求复用

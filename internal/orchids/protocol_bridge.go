@@ -41,21 +41,6 @@ func orchidsChatSessionID(req upstream.UpstreamRequest) string {
 	return chatSessionID
 }
 
-type orchidsPreparedRequest struct {
-	Request OrchidsRequest
-	Meta    orchidsTransportMeta
-}
-
-func buildOrchidsPreparedRequest(req upstream.UpstreamRequest, cfg *config.Config) orchidsPreparedRequest {
-	return orchidsPreparedRequest{
-		Request: buildOrchidsRequest(req, cfg),
-		Meta: orchidsTransportMeta{
-			ProjectID:     orchidsProjectID(cfg, req),
-			ChatSessionID: orchidsChatSessionID(req),
-		},
-	}
-}
-
-func (c *Client) buildSSEAgentRequest(req upstream.UpstreamRequest) orchidsPreparedRequest {
-	return buildOrchidsPreparedRequest(req, c.config)
+func (c *Client) buildSSEAgentRequest(req upstream.UpstreamRequest) OrchidsRequest {
+	return buildOrchidsRequest(req, c.config)
 }

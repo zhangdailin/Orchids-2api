@@ -99,25 +99,11 @@ type Client struct {
 	account    *store.Account
 	httpClient *http.Client
 	fsCache    *perf.TTLCache
-	wsPool     *upstream.WSPool
-	wsWriteMu  sync.Mutex // Protects concurrent writes to WebSocket
+	wsWriteMu  sync.Mutex
 }
 
 type TokenResponse struct {
 	JWT string `json:"jwt"`
-}
-
-type orchidsTransportRequest struct {
-	OrchidsRequest
-	ProjectID     string            `json:"projectId,omitempty"`
-	ChatSessionID string            `json:"chatSessionId,omitempty"`
-	Prompt        string            `json:"prompt,omitempty"`
-	Tools         []orchidsToolSpec `json:"tools,omitempty"`
-}
-
-type orchidsTransportMeta struct {
-	ProjectID     string
-	ChatSessionID string
 }
 
 type cachedToken struct {
@@ -191,7 +177,6 @@ func New(cfg *config.Config) *Client {
 		httpClient: newHTTPClient(cfg),
 		fsCache:    perf.NewTTLCache(60*time.Second, 5000),
 	}
-	c.wsPool = upstream.NewWSPool(c.createWSConnection, 5, 20)
 	return c
 }
 
@@ -250,7 +235,6 @@ func NewFromAccount(acc *store.Account, base *config.Config) *Client {
 		httpClient: newHTTPClient(cfg),
 		fsCache:    perf.NewTTLCache(60*time.Second, 5000),
 	}
-	c.wsPool = upstream.NewWSPool(c.createWSConnection, 5, 20)
 	return c
 }
 
@@ -258,12 +242,38 @@ func (c *Client) Close() {
 	if c == nil {
 		return
 	}
-	if c.wsPool != nil {
-		c.wsPool.Close()
-	}
 	if c.fsCache != nil {
 		c.fsCache.Close()
 	}
+}
+
+func (c *Client) wsConnectionKey() string {
+	parts := make([]string, 0, 4)
+
+	if c.account != nil && c.account.ID != 0 {
+		parts = append(parts, fmt.Sprintf("account:%d", c.account.ID))
+	}
+
+	if c.config != nil {
+		if sessionID := strings.TrimSpace(c.config.SessionID); sessionID != "" {
+			parts = append(parts, "session:"+sessionID)
+		} else if email := strings.ToLower(strings.TrimSpace(c.config.Email)); email != "" {
+			parts = append(parts, "email:"+email)
+		}
+
+		if wsURL := strings.TrimSpace(c.config.OrchidsWSURL); wsURL != "" {
+			parts = append(parts, "ws:"+wsURL)
+		}
+
+		if proxyKey := util.GenerateProxyKey(c.config.ProxyHTTP, c.config.ProxyHTTPS, c.config.ProxyUser); proxyKey != "" {
+			parts = append(parts, "proxy:"+proxyKey)
+		}
+	}
+
+	if len(parts) == 0 {
+		return "orchids:default"
+	}
+	return strings.Join(parts, "|")
 }
 
 func (c *Client) GetToken() (string, error) {

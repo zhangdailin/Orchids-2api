@@ -2,10 +2,8 @@ package orchids
 
 import (
 	"log/slog"
-	"sync"
 
 	"github.com/goccy/go-json"
-	"github.com/gorilla/websocket"
 
 	"orchids-api/internal/debug"
 	"orchids-api/internal/upstream"
@@ -121,15 +119,11 @@ func dispatchOrchidsFastEvent(
 }
 
 func dispatchOrchidsDecodedEvent(
-	client *Client,
 	msg map[string]interface{},
 	rawData []byte,
 	state *requestState,
 	onMessage func(upstream.SSEMessage),
 	logger *debug.Logger,
-	conn *websocket.Conn,
-	fsWG *sync.WaitGroup,
-	workdir string,
 	clientTools []interface{},
 ) bool {
 	msgType, _ := msg["type"].(string)

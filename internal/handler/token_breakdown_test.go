@@ -48,6 +48,26 @@ func TestEstimateInputTokenBreakdown_SplitsSystemContext(t *testing.T) {
 	}
 }
 
+func TestEstimateOrchidsInputTokenBreakdown_ExcludesTools(t *testing.T) {
+	t.Parallel()
+
+	prompt := "<sys>\nsystem\n</sys>\n<user>\nhello\n</user>"
+	history := []map[string]string{
+		{"role": "assistant", "content": "previous reply"},
+	}
+
+	bd := estimateOrchidsInputTokenBreakdown(prompt, history)
+	if bd.BasePromptTokens <= 0 {
+		t.Fatalf("expected base prompt tokens > 0")
+	}
+	if bd.HistoryTokens <= 0 {
+		t.Fatalf("expected history tokens > 0")
+	}
+	if bd.ToolsTokens != 0 {
+		t.Fatalf("expected orchids tools tokens = 0, got %d", bd.ToolsTokens)
+	}
+}
+
 func TestHandleCountTokens_ReturnsBreakdown(t *testing.T) {
 	t.Parallel()
 
@@ -107,6 +127,9 @@ func TestHandleCountTokens_ReturnsBreakdown(t *testing.T) {
 		if _, ok := breakdown[key].(float64); !ok {
 			t.Fatalf("expected breakdown key %q as number, got %#v", key, breakdown[key])
 		}
+	}
+	if toolsTokens, _ := breakdown["tools_tokens"].(float64); toolsTokens != 0 {
+		t.Fatalf("expected orchids tools_tokens=0, got %#v", breakdown["tools_tokens"])
 	}
 }
 

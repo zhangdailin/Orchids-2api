@@ -151,29 +151,13 @@ func (tm *ToolMapper) FromOrchids(name string) string {
 	return name
 }
 
-// IsBlocked checks if a tool should be blocked.
-// 可以在这里添加工具过滤逻辑
-var blockedTools = map[string]bool{
-	"web_search":               true,
-	"WebSearch":                true,
-	"SQL":                      true,
-	"server":                   true,
-	"suggest_plan":             true,
-	"suggest_create_plan":      true,
-	"suggest_new_conversation": true,
-	"read_mcp_resource":        true,
-	// 添加其他需要屏蔽的云端工具
-}
-
-// IsBlocked returns true if the tool should be blocked.
-func (tm *ToolMapper) IsBlocked(name string) bool {
-	lower := strings.ToLower(name)
-	return blockedTools[name] || blockedTools[lower]
-}
-
 // NormalizeToolName standardizes tool name for consistent handling.
 func NormalizeToolName(name string) string {
 	return DefaultToolMapper.ToOrchids(name)
+}
+
+func (tm *ToolMapper) IsBlocked(string) bool {
+	return false
 }
 
 func MapToolNameToClient(orchidsName string, clientTools []interface{}) string {
@@ -182,120 +166,196 @@ func MapToolNameToClient(orchidsName string, clientTools []interface{}) string {
 		return rawName
 	}
 
-	standardName := DefaultToolMapper.ToOrchids(rawName)
+	standardName := NormalizeToolName(rawName)
 	rawLower := strings.ToLower(rawName)
 	rawSnake := toSnakeCase(rawLower)
+	tools := toolMapsFromInterfaces(clientTools)
+	if len(tools) == 0 {
+		return MapOrchidsToolToAnthropic(rawName)
+	}
 
-	for _, tool := range toolMapsFromInterfaces(clientTools) {
+	for _, tool := range tools {
 		name, _, _ := extractToolSpecFields(tool)
-		if strings.TrimSpace(name) == "" {
+		name = strings.TrimSpace(name)
+		if name == "" {
 			continue
 		}
 		if name == rawName {
 			return name
 		}
+	}
+
+	for _, tool := range tools {
+		name, _, _ := extractToolSpecFields(tool)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
 		if strings.EqualFold(name, rawName) {
-			return name
-		}
-		if strings.EqualFold(DefaultToolMapper.ToOrchids(name), standardName) {
-			return name
-		}
-		nameLower := strings.ToLower(strings.TrimSpace(name))
-		if nameLower == rawLower || toSnakeCase(nameLower) == rawSnake {
 			return name
 		}
 	}
 
-	return DefaultToolMapper.FromOrchids(standardName)
+	for _, tool := range tools {
+		name, _, _ := extractToolSpecFields(tool)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if strings.ToLower(name) == rawLower {
+			return name
+		}
+	}
+
+	for _, tool := range tools {
+		name, _, _ := extractToolSpecFields(tool)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if toSnakeCase(strings.ToLower(name)) == rawSnake {
+			return name
+		}
+	}
+
+	if aliases, ok := orchidsToolAliases[rawSnake]; ok {
+		for _, tool := range tools {
+			name, _, _ := extractToolSpecFields(tool)
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			toolSnake := toSnakeCase(strings.ToLower(name))
+			for _, alias := range aliases {
+				if toolSnake == alias || strings.ToLower(name) == alias {
+					return name
+				}
+			}
+		}
+	}
+
+	for _, tool := range tools {
+		name, _, _ := extractToolSpecFields(tool)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		toolSnake := toSnakeCase(strings.ToLower(name))
+		if aliases, ok := orchidsToolAliases[toolSnake]; ok {
+			for _, alias := range aliases {
+				if alias == rawSnake || alias == rawLower {
+					return name
+				}
+			}
+		}
+	}
+
+	if aliases, ok := orchidsToolAliases[rawSnake]; ok {
+		for _, tool := range tools {
+			name, _, _ := extractToolSpecFields(tool)
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			for _, alias := range aliases {
+				if strings.EqualFold(name, alias) {
+					return name
+				}
+			}
+		}
+	}
+
+	for _, tool := range tools {
+		name, _, _ := extractToolSpecFields(tool)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if strings.EqualFold(NormalizeToolName(name), standardName) {
+			return name
+		}
+	}
+
+	return MapOrchidsToolToAnthropic(rawName)
 }
 
 func TransformToolInput(toolName, clientName string, input map[string]interface{}) map[string]interface{} {
 	if input == nil {
-		return nil
+		input = make(map[string]interface{})
 	}
 
-	standardName := strings.ToLower(strings.TrimSpace(DefaultToolMapper.ToOrchids(toolName)))
-	if standardName == "" {
-		standardName = strings.ToLower(strings.TrimSpace(DefaultToolMapper.ToOrchids(clientName)))
+	lowerTool := strings.ToLower(strings.TrimSpace(toolName))
+	lowerClient := strings.ToLower(strings.TrimSpace(clientName))
+	if lowerTool == "" {
+		lowerTool = strings.ToLower(strings.TrimSpace(NormalizeToolName(clientName)))
 	}
-	if standardName == "" {
+	if lowerTool == "" {
 		return copyToolInput(input)
 	}
 
-	switch standardName {
-	case "read":
-		filePath := mapStringValue(input, "file_path", "path", "filePath", "filepath", "content")
+	if lowerTool == "ls" || lowerTool == "list" || lowerTool == "glob" {
+		if strings.Contains(lowerClient, "/") {
+			return copyToolInput(input)
+		}
+	}
+
+	if lowerTool == "ls" && lowerClient == "glob" {
 		result := copyToolInput(input)
-		if filePath != "" {
-			result["file_path"] = filePath
-			delete(result, "path")
-			delete(result, "filePath")
-			delete(result, "filepath")
+		if _, ok := result["content"]; !ok {
+			result["content"] = []interface{}{}
 		}
 		return result
+	}
 
-	case "write":
-		result := copyToolInput(input)
-		if filePath := mapStringValue(input, "file_path", "path", "filePath", "filepath"); filePath != "" {
-			result["file_path"] = filePath
-			delete(result, "path")
-			delete(result, "filePath")
-			delete(result, "filepath")
+	if lowerTool == "ls" && strings.Contains(lowerClient, ".") {
+		return copyToolInput(input)
+	}
+
+	if lowerTool == "read" || lowerTool == "readfile" {
+		result := make(map[string]interface{})
+		filePath := mapStringValue(input, "file_path", "path")
+		if filePath == "" {
+			filePath = mapStringValue(input, "content")
 		}
-		if content := mapStringValue(input, "content", "text", "new_string", "newText", "new_text"); content != "" {
+		result["file_path"] = filePath
+		for key, value := range input {
+			if key == "file_path" || key == "path" {
+				continue
+			}
+			result[key] = value
+		}
+		return result
+	}
+
+	if lowerTool == "bash" || strings.Contains(lowerTool, "edit") || strings.Contains(lowerTool, "write") {
+		result := make(map[string]interface{})
+		if content := mapStringValue(input, "content"); content != "" {
 			result["content"] = content
 		}
-		return result
-
-	case "edit":
-		result := copyToolInput(input)
-		if filePath := mapStringValue(input, "file_path", "path", "filePath", "filepath"); filePath != "" {
-			result["file_path"] = filePath
-			delete(result, "path")
-			delete(result, "filePath")
-			delete(result, "filepath")
-		}
-		if oldString := mapStringValue(input, "old_string", "oldText", "old_text"); oldString != "" {
-			result["old_string"] = oldString
-		}
-		if newString := mapStringValue(input, "new_string", "newText", "new_text", "content", "text"); newString != "" {
-			result["new_string"] = newString
-		}
-		return result
-
-	case "glob":
-		result := copyToolInput(input)
-		if pattern := mapStringValue(input, "pattern", "glob", "query"); pattern != "" {
-			result["pattern"] = pattern
-		}
-		if path := mapStringValue(input, "path", "root", "file_path"); path != "" {
-			result["path"] = path
-			delete(result, "root")
-			delete(result, "file_path")
-		}
-		return result
-
-	case "grep":
-		result := copyToolInput(input)
-		if pattern := mapStringValue(input, "pattern", "query", "regexp"); pattern != "" {
-			result["pattern"] = pattern
-		}
-		if path := mapStringValue(input, "path", "root", "file_path"); path != "" {
-			result["path"] = path
-			delete(result, "root")
-			delete(result, "file_path")
-		}
-		return result
-
-	case "bash":
-		result := copyToolInput(input)
-		if command := mapStringValue(input, "command", "content", "text", "cmd"); command != "" {
-			result["command"] = command
+		if path := mapStringValue(input, "path"); path != "" {
+			if existing, ok := result["content"].(string); ok && existing != "" {
+				result["content"] = existing + "\n" + path
+			} else {
+				result["content"] = path
+			}
+		} else if _, ok := result["content"]; !ok {
+			result["content"] = ""
 		}
 		return result
 	}
 
 	return copyToolInput(input)
+}
+
+func MapOrchidsToolToAnthropic(orchidsName string) string {
+	if mapped, ok := orchidsToAnthropicMap[strings.TrimSpace(orchidsName)]; ok {
+		return mapped
+	}
+	normalized := NormalizeToolName(orchidsName)
+	if mapped, ok := orchidsToAnthropicMap[strings.TrimSpace(normalized)]; ok {
+		return mapped
+	}
+	return DefaultToolMapper.FromOrchids(normalized)
 }
 
 func transformToolInputJSON(toolName, clientName, raw string) string {
@@ -343,6 +403,20 @@ func copyToolInput(input map[string]interface{}) map[string]interface{} {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+var orchidsToolAliases = map[string][]string{
+	"id":      {"text"},
+	"name":    {"text"},
+	"content": {"code"},
+	"source":  {"input"},
+}
+
+var orchidsToAnthropicMap = map[string]string{
+	"str_replace_editor": "str_replace_editor",
+	"bash":               "bash",
+	"computer":           "computer",
+	"text_editor":        "text_editor",
 }
 
 func toSnakeCase(value string) string {

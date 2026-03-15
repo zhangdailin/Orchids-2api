@@ -30,11 +30,6 @@ var (
 	jwtLikePattern  = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`)
 )
 
-type orchidsWSRequest struct {
-	Type string                  `json:"type"`
-	Data orchidsTransportRequest `json:"data"`
-}
-
 type orchidsToolSpec struct {
 	ToolSpecification struct {
 		Name        string                 `json:"name"`
@@ -63,7 +58,7 @@ func SupportedToolNames(tools []interface{}) []string {
 	seen := make(map[string]struct{}, len(promptToolOrder))
 	for _, tool := range tools {
 		name, _, _ := extractToolSpecFields(tool)
-		if name == "" || DefaultToolMapper.IsBlocked(name) {
+		if name == "" {
 			continue
 		}
 		mappedName := DefaultToolMapper.ToOrchids(name)
@@ -168,7 +163,7 @@ func convertOrchidsTools(tools []interface{}) []orchidsToolSpec {
 	seen := make(map[string]struct{})
 	for _, tool := range tools {
 		name, description, inputSchema := extractToolSpecFields(tool)
-		if name == "" || DefaultToolMapper.IsBlocked(name) {
+		if name == "" {
 			continue
 		}
 
@@ -222,7 +217,7 @@ func compactIncomingTools(tools []interface{}) []interface{} {
 		}
 
 		name, description, schema := extractToolSpecFields(rawMap)
-		if name == "" || DefaultToolMapper.IsBlocked(name) {
+		if name == "" {
 			continue
 		}
 

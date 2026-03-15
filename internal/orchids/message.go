@@ -162,7 +162,7 @@ func extractOrchidsMessageContent(content interface{}, contentType string) (stri
 	switch contentType {
 	case "string":
 		if text, ok := content.(string); ok {
-			return strings.TrimSpace(stripSystemReminders(text)), false
+			return strings.TrimSpace(text), false
 		}
 		return "", false
 	case "slice":
@@ -186,7 +186,7 @@ func extractOrchidsMessageContent(content interface{}, contentType string) (stri
 				continue
 			case "text":
 				text, _ := block["text"].(string)
-				text = strings.TrimSpace(stripSystemReminders(text))
+				text = strings.TrimSpace(text)
 				if strings.Contains(text, "<search_quality_reflection>") || text == "" {
 					continue
 				}
@@ -226,12 +226,6 @@ func extractOrchidsMessageContent(content interface{}, contentType string) (stri
 
 func formatOrchidsConversationMediaBlock(block map[string]interface{}, kind string) string {
 	if source, ok := block["source"].(map[string]interface{}); ok {
-		if url, ok := source["url"].(string); ok && strings.TrimSpace(url) != "" {
-			if kind == "image" {
-				return fmt.Sprintf("![image](%s)", strings.TrimSpace(url))
-			}
-			return fmt.Sprintf("[document](%s)", strings.TrimSpace(url))
-		}
 		mediaType, _ := source["media_type"].(string)
 		data, _ := source["data"].(string)
 		mediaType = strings.TrimSpace(mediaType)
@@ -242,13 +236,6 @@ func formatOrchidsConversationMediaBlock(block map[string]interface{}, kind stri
 			}
 			return fmt.Sprintf("[document](data:%s)", data)
 		}
-	}
-
-	if url, ok := block["url"].(string); ok && strings.TrimSpace(url) != "" {
-		if kind == "image" {
-			return fmt.Sprintf("![image](%s)", strings.TrimSpace(url))
-		}
-		return fmt.Sprintf("[document](%s)", strings.TrimSpace(url))
 	}
 
 	return ""

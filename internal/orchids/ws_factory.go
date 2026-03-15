@@ -1,17 +1,16 @@
 package orchids
 
 import (
+	"context"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/websocket"
 
 	"orchids-api/internal/util"
 )
 
-// createWSConnection creates a new WebSocket connection (factory for pool)
-func (c *Client) createWSConnection() (*websocket.Conn, error) {
+func (c *Client) dialWSConnection(ctx context.Context) (*websocket.Conn, error) {
 	if c.config == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -27,8 +26,8 @@ func (c *Client) createWSConnection() (*websocket.Conn, error) {
 	}
 
 	headers := http.Header{
-		"User-Agent": []string{"Mozilla/5.0"},
-		"Origin":     []string{"https://orchids.app"},
+		"User-Agent": []string{orchidsWSUserAgent},
+		"Origin":     []string{orchidsWSOrigin},
 	}
 
 	proxyFunc := http.ProxyFromEnvironment
@@ -37,11 +36,11 @@ func (c *Client) createWSConnection() (*websocket.Conn, error) {
 	}
 
 	dialer := websocket.Dialer{
-		HandshakeTimeout: 45 * time.Second,
+		HandshakeTimeout: orchidsWSConnectTimeout,
 		Proxy:            proxyFunc,
 	}
 
-	conn, _, err := dialer.Dial(wsURL, headers)
+	conn, _, err := dialer.DialContext(ctx, wsURL, headers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial WebSocket: %w", err)
 	}

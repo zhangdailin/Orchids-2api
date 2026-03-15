@@ -27,6 +27,18 @@ func TestExtractOrchidsMessageContent_ToolResultOnly(t *testing.T) {
 	}
 }
 
+func TestExtractOrchidsMessageContent_PreservesSystemReminderText(t *testing.T) {
+	t.Parallel()
+
+	text, toolResultOnly := extractOrchidsMessageContent("<system-reminder>keep me</system-reminder>", "string")
+	if toolResultOnly {
+		t.Fatal("toolResultOnly=true want false")
+	}
+	if text != "<system-reminder>keep me</system-reminder>" {
+		t.Fatalf("text=%q want raw string content", text)
+	}
+}
+
 func TestBuildOrchidsConversationHistory_ExcludesCurrentUserTurn(t *testing.T) {
 	t.Parallel()
 

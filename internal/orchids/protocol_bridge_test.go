@@ -35,28 +35,28 @@ func TestBuildSSEAgentRequestCarriesProtocolContext(t *testing.T) {
 
 	payload := client.buildSSEAgentRequest(req)
 
-	if payload.Meta.ProjectID != "proj_cfg" {
-		t.Fatalf("ProjectID=%q want proj_cfg", payload.Meta.ProjectID)
+	if got := orchidsProjectID(client.config, req); got != "proj_cfg" {
+		t.Fatalf("orchidsProjectID()=%q want proj_cfg", got)
 	}
-	if payload.Meta.ChatSessionID != "chat_fixed" {
-		t.Fatalf("ChatSessionID=%q want chat_fixed", payload.Meta.ChatSessionID)
+	if got := orchidsChatSessionID(req); got != "chat_fixed" {
+		t.Fatalf("orchidsChatSessionID()=%q want chat_fixed", got)
 	}
-	if payload.Request.MaxTokens != 4096 {
-		t.Fatalf("MaxTokens=%d want 4096", payload.Request.MaxTokens)
+	if payload.MaxTokens != 4096 {
+		t.Fatalf("MaxTokens=%d want 4096", payload.MaxTokens)
 	}
-	if got := payload.Request.Config["thinkingMode"]; got != "enabled" {
+	if got := payload.Config["thinkingMode"]; got != "enabled" {
 		t.Fatalf("Config[thinkingMode]=%#v want enabled", got)
 	}
-	if len(payload.Request.Messages) != 2 {
-		t.Fatalf("len(Messages)=%d want 2", len(payload.Request.Messages))
+	if len(payload.Messages) != 2 {
+		t.Fatalf("len(Messages)=%d want 2", len(payload.Messages))
 	}
-	if got := extractRequestMessageText(t, payload.Request.Messages[0]); got != "hello" {
+	if got := extractRequestMessageText(t, payload.Messages[0]); got != "hello" {
 		t.Fatalf("first message text=%q want hello", got)
 	}
-	if payload.Request.System != "system rules" {
-		t.Fatalf("System=%q want system rules", payload.Request.System)
+	if payload.System != "system rules" {
+		t.Fatalf("System=%q want system rules", payload.System)
 	}
-	assertBareOrchidsRequestJSON(t, payload.Request)
+	assertBareOrchidsRequestJSON(t, payload)
 }
 
 func TestBuildSSEAgentRequestOmitsPromptWhenProtocolContextIsPresent(t *testing.T) {
@@ -78,7 +78,7 @@ func TestBuildSSEAgentRequestOmitsPromptWhenProtocolContextIsPresent(t *testing.
 	}
 
 	payload := client.buildSSEAgentRequest(req)
-	assertBareOrchidsRequestJSON(t, payload.Request)
+	assertBareOrchidsRequestJSON(t, payload)
 }
 
 func TestBuildSSEAgentRequestKeepsPromptWithoutProtocolContext(t *testing.T) {
@@ -97,13 +97,13 @@ func TestBuildSSEAgentRequestKeepsPromptWithoutProtocolContext(t *testing.T) {
 	}
 
 	payload := client.buildSSEAgentRequest(req)
-	if len(payload.Request.Messages) != 1 {
-		t.Fatalf("len(Messages)=%d want 1", len(payload.Request.Messages))
+	if len(payload.Messages) != 1 {
+		t.Fatalf("len(Messages)=%d want 1", len(payload.Messages))
 	}
-	if got := extractRequestMessageText(t, payload.Request.Messages[0]); got != "hello from prompt only" {
+	if got := extractRequestMessageText(t, payload.Messages[0]); got != "hello from prompt only" {
 		t.Fatalf("prompt fallback=%q want prompt-only fallback", got)
 	}
-	assertBareOrchidsRequestJSON(t, payload.Request)
+	assertBareOrchidsRequestJSON(t, payload)
 }
 
 func TestBuildWSRequestIncludesProtocolContext(t *testing.T) {
@@ -133,26 +133,26 @@ func TestBuildWSRequestIncludesProtocolContext(t *testing.T) {
 		t.Fatalf("buildWSRequest() error = %v", err)
 	}
 
-	if payload.Meta.ProjectID != "proj_ws" {
-		t.Fatalf("projectId=%q want proj_ws", payload.Meta.ProjectID)
+	if got := orchidsProjectID(client.config, req); got != "proj_ws" {
+		t.Fatalf("orchidsProjectID()=%q want proj_ws", got)
 	}
-	if got := payload.Request.Config["thinkingMode"]; got != "disabled" {
+	if got := payload.Config["thinkingMode"]; got != "disabled" {
 		t.Fatalf("Config[thinkingMode]=%#v want disabled", got)
 	}
-	if payload.Request.MaxTokens != 2048 {
-		t.Fatalf("maxTokens=%d want 2048", payload.Request.MaxTokens)
+	if payload.MaxTokens != 2048 {
+		t.Fatalf("maxTokens=%d want 2048", payload.MaxTokens)
 	}
-	msgs := payload.Request.Messages
+	msgs := payload.Messages
 	if len(msgs) != 2 || extractRequestMessageText(t, msgs[1]) != "ok" {
 		t.Fatalf("messages=%#v want original protocol messages", msgs)
 	}
-	if payload.Request.System != "system rules" {
-		t.Fatalf("system=%q want original system text", payload.Request.System)
+	if payload.System != "system rules" {
+		t.Fatalf("system=%q want original system text", payload.System)
 	}
-	if payload.Request.ModelName != "claude-sonnet-4-6" {
-		t.Fatalf("modelName=%q want claude-sonnet-4-6", payload.Request.ModelName)
+	if payload.ModelName != "claude-sonnet-4-6" {
+		t.Fatalf("modelName=%q want claude-sonnet-4-6", payload.ModelName)
 	}
-	assertBareOrchidsRequestJSON(t, payload.Request)
+	assertBareOrchidsRequestJSON(t, *payload)
 }
 
 func TestBuildWSRequestSkipsSyntheticToolResultsForProtocolMessages(t *testing.T) {
@@ -179,10 +179,10 @@ func TestBuildWSRequestSkipsSyntheticToolResultsForProtocolMessages(t *testing.T
 		t.Fatalf("buildWSRequest() error = %v", err)
 	}
 
-	if len(payload.Request.Messages) != 3 {
-		t.Fatalf("len(Messages)=%d want 3", len(payload.Request.Messages))
+	if len(payload.Messages) != 3 {
+		t.Fatalf("len(Messages)=%d want 3", len(payload.Messages))
 	}
-	assertBareOrchidsRequestJSON(t, payload.Request)
+	assertBareOrchidsRequestJSON(t, *payload)
 }
 
 func sampleProtocolMessages() []prompt.Message {
