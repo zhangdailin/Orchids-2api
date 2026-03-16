@@ -66,14 +66,11 @@ async function loadConfiguration() {
     const proxyBypass = normalizeProxyBypass(cfg.proxy_bypass);
     document.getElementById("cfg_proxy_bypass").value = proxyBypass.join("\n");
 
-    const cacheTokenCount = document.getElementById("cfg_cache_token_count");
-    const cacheEnabled = typeof cfg.cache_token_count === "boolean" ? cfg.cache_token_count : true;
-    cacheTokenCount.checked = cacheEnabled;
+    const cacheTokenCount = document.getElementById("cfg_enable_token_cache");
+    cacheTokenCount.checked = !!cfg.enable_token_cache;
 
-    document.getElementById("cfg_cache_ttl").value = cfg.cache_ttl || 5;
-
-    const rawStrategy = String(cfg.cache_strategy || "mix").toLowerCase();
-    document.getElementById("cfg_cache_strategy").value = rawStrategy === "split" ? "split" : "mix";
+    document.getElementById("cfg_token_cache_ttl").value = cfg.token_cache_ttl || 300;
+    document.getElementById("cfg_token_cache_strategy").value = cfg.token_cache_strategy || "1";
 
   } catch (err) {
     showToast("加载配置失败", "error");
@@ -91,9 +88,9 @@ async function saveConfiguration() {
     proxy_user: document.getElementById("cfg_proxy_user").value.trim(),
     proxy_pass: document.getElementById("cfg_proxy_pass").value,
     proxy_bypass: parseProxyBypass(proxyBypassRaw),
-    cache_token_count: document.getElementById("cfg_cache_token_count").checked,
-    cache_ttl: parseInt(document.getElementById("cfg_cache_ttl").value, 10) || 5,
-    cache_strategy: document.getElementById("cfg_cache_strategy").value,
+    enable_token_cache: document.getElementById("cfg_enable_token_cache").checked,
+    token_cache_ttl: parseInt(document.getElementById("cfg_token_cache_ttl").value, 10) || 300,
+    token_cache_strategy: document.getElementById("cfg_token_cache_strategy").value,
   };
 
   try {
@@ -481,14 +478,14 @@ function toggleCacheConfig(checked) {
 }
 
 function updateMemoryEstimation() {
-  const ttlInput = document.getElementById("cfg_cache_ttl");
-  const strategyInput = document.getElementById("cfg_cache_strategy");
+  const ttlInput = document.getElementById("cfg_token_cache_ttl");
+  const strategyInput = document.getElementById("cfg_token_cache_strategy");
   if (!ttlInput || !strategyInput) return;
 
-  const ttlMin = parseInt(ttlInput.value, 10) || 5;
+  const ttlMin = parseInt(ttlInput.value, 10) || 300;
   const strategy = strategyInput.value;
-  const mult = strategy === "split" ? 2 : 1;
-  const ttlSec = ttlMin * 60;
+  const mult = (strategy === "1" || strategy === "0") ? 2 : 1;
+  const ttlSec = ttlMin; // Already in seconds now
 
   const ttlEl = document.getElementById("estTTLSeconds");
   const multEl = document.getElementById("estStrategyMult");
@@ -496,7 +493,7 @@ function updateMemoryEstimation() {
   if (ttlEl) ttlEl.textContent = String(ttlSec);
   if (multEl) multEl.textContent = mult === 2 ? "× 2" : "× 1";
   if (titleEl) {
-    titleEl.textContent = `内存估算 (当前: TTL=${ttlMin}分钟, ${strategy === "split" ? "分离缓存×2" : "混合缓存×1"})`;
+    titleEl.textContent = `内存估算 (当前: TTL=${ttlMin}秒, 系数=${mult})`;
   }
 
   const calc = (qps) => {
@@ -518,18 +515,18 @@ async function loadCacheStats() {
   if (!statsEl) return;
 
   try {
-    const res = await fetch("/api/config/cache/stats");
+    const res = await fetch("/api/token-cache/stats");
     if (!res.ok) {
       throw new Error(await res.text());
     }
     const data = await res.json();
 
-    if (data.status === "disabled") {
+    if (data.code !== 0 || !data.data.connected) {
       statsEl.textContent = "缓存未启用";
       return;
     }
 
-    statsEl.textContent = `缓存条目: ${Number(data.count) || 0} 条，占用内存: ${formatBytes(data.size_bytes)}`;
+    statsEl.textContent = `缓存条目: ${Number(data.data.key_count) || 0} 条，占用内存: ${data.data.memory_used_str || "0 B"}`;
   } catch (err) {
     statsEl.textContent = "缓存统计加载失败";
   }
@@ -538,7 +535,7 @@ async function loadCacheStats() {
 async function clearCache() {
   if (!confirm("确定要清空 Token 用量缓存吗？")) return;
   try {
-    const res = await fetch("/api/config/cache/clear", { method: "POST" });
+    const res = await fetch("/api/token-cache/clear", { method: "POST" });
     if (!res.ok) throw new Error(await res.text());
     showToast("缓存已清空");
     loadCacheStats();
@@ -550,7 +547,7 @@ async function clearCache() {
 // Load configuration on page load
 document.addEventListener('DOMContentLoaded', () => {
   loadConfiguration().then(() => {
-    const cacheEnabled = !!document.getElementById("cfg_cache_token_count")?.checked;
+    const cacheEnabled = !!document.getElementById("cfg_enable_token_cache")?.checked;
     toggleCacheConfig(cacheEnabled);
     updateMemoryEstimation();
     if (cacheEnabled) {

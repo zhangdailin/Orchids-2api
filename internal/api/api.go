@@ -35,6 +35,7 @@ import (
 type API struct {
 	store        *store.Store
 	tokenCache   tokencache.Cache
+	promptCache  tokencache.PromptCache
 	adminUser    string
 	adminPass    string
 	loginLimiter *middleware.RateLimiter
@@ -456,6 +457,10 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		a.config.Store(cfg)
 	}
 	return a
+}
+
+func (a *API) SetPromptCache(cache tokencache.PromptCache) {
+	a.promptCache = cache
 }
 
 func secureCompare(a, b string) bool {

@@ -30,8 +30,11 @@ type Config struct {
 	RedisDB         int    `json:"redis_db"`
 	RedisPrefix     string `json:"redis_prefix"`
 	CacheTokenCount bool   `json:"cache_token_count"`
-	CacheTTL        int    `json:"cache_ttl"`
-	CacheStrategy   string `json:"cache_strategy"`
+	CacheTTL           int    `json:"cache_ttl"`
+	CacheStrategy      string `json:"cache_strategy"`
+	EnableTokenCache   bool   `json:"enable_token_cache"`
+	TokenCacheTTL      int    `json:"token_cache_ttl"`
+	TokenCacheStrategy string `json:"token_cache_strategy"`
 
 	// ── Per-client state (used by orchids client, not configurable) ──
 	SessionID     string `json:"-"`
@@ -188,6 +191,12 @@ func ApplyDefaults(cfg *Config) {
 	}
 	if strings.TrimSpace(cfg.CacheStrategy) == "" {
 		cfg.CacheStrategy = "mix"
+	}
+	if cfg.TokenCacheTTL <= 0 {
+		cfg.TokenCacheTTL = 300
+	}
+	if strings.TrimSpace(cfg.TokenCacheStrategy) == "" {
+		cfg.TokenCacheStrategy = "1"
 	}
 	// Always apply hardcoded values
 	ApplyHardcoded(cfg)

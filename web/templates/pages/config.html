@@ -62,7 +62,7 @@
                 style="font-size: 0.8rem; color: var(--accent-blue); background: rgba(34, 211, 238, 0.1); padding: 2px 6px; border-radius: 4px;">Beta</span>
             </div>
             <label class="toggle">
-              <input type="checkbox" id="cfg_cache_token_count" onchange="toggleCacheConfig(this.checked)">
+              <input type="checkbox" id="cfg_enable_token_cache" onchange="toggleCacheConfig(this.checked)">
               <span class="toggle-slider"></span>
             </label>
           </div>
@@ -70,14 +70,16 @@
           <div id="cacheConfigDetails" style="display: none;">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
               <div>
-                <label class="form-label">缓存有效期 (分钟)</label>
-                <input type="number" id="cfg_cache_ttl" class="form-input" value="5" oninput="updateMemoryEstimation()">
+                <label class="form-label">缓存有效期 (秒)</label>
+                <input type="number" id="cfg_token_cache_ttl" class="form-input" value="300" oninput="updateMemoryEstimation()">
               </div>
               <div>
                 <label class="form-label">缓存策略</label>
-                <select id="cfg_cache_strategy" class="form-input" onchange="updateMemoryEstimation()">
-                  <option value="split">分离缓存 (不同模型独立计数)</option>
-                  <option value="mix">混合缓存 (所有模型共用计数)</option>
+                <select id="cfg_token_cache_strategy" class="form-input" onchange="updateMemoryEstimation()">
+                  <option value="0">System + Tools 整体缓存</option>
+                  <option value="1">System / Tools 分离缓存</option>
+                  <option value="2">仅缓存 System Prompt</option>
+                  <option value="3">仅缓存 Tools 定义</option>
                 </select>
               </div>
             </div>

@@ -182,15 +182,23 @@ func (w *SSEWriter) WriteMessageEnd() error {
 		finishReason = "end_turn"
 	}
 
+	usageEvent := map[string]interface{}{
+		"input_tokens":  w.state.inputTokens,
+		"output_tokens": w.state.outputTokens,
+	}
+	if w.state.cacheReadInputTokens > 0 {
+		usageEvent["cache_read_input_tokens"] = w.state.cacheReadInputTokens
+	}
+	if w.state.cacheCreationInputTokens > 0 {
+		usageEvent["cache_creation_input_tokens"] = w.state.cacheCreationInputTokens
+	}
+
 	deltaEvent := map[string]interface{}{
 		"type": "message_delta",
 		"delta": map[string]interface{}{
 			"stop_reason": finishReason,
 		},
-		"usage": map[string]interface{}{
-			"input_tokens":  w.state.inputTokens,
-			"output_tokens": w.state.outputTokens,
-		},
+		"usage": usageEvent,
 	}
 
 	if direct := w.directEmitter(); direct != nil {

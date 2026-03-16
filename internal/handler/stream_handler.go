@@ -258,6 +258,8 @@ type streamHandler struct {
 	outputTokens             int
 	thinkingTokens           int
 	inputTokens              int
+	cacheReadTokens          int
+	cacheCreationTokens      int
 	activeThinkingBlockIndex int
 	activeThinkingSSEIndex   int
 	activeTextBlockIndex     int
@@ -850,15 +852,22 @@ func (h *streamHandler) finalizeOutputTokens() {
 }
 
 func (h *streamHandler) setUsageTokens(input, output int) {
-	h.outputMu.Lock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.useUpstreamUsage = true
 	if input >= 0 {
 		h.inputTokens = input
 	}
 	if output >= 0 {
 		h.outputTokens = output
-		h.useUpstreamUsage = true
 	}
-	h.outputMu.Unlock()
+}
+
+func (h *streamHandler) setCacheTokens(read, creation int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cacheReadTokens = read
+	h.cacheCreationTokens = creation
 }
 
 func (h *streamHandler) resetRoundState() {

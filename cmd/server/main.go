@@ -105,6 +105,12 @@ func main() {
 	h.SetTokenCache(tokenCache)
 	apiHandler.SetTokenCache(tokenCache)
 
+	// Prompt cache: memory-based for now (simulating Anthropic prompt caching)
+	promptCache := tokencache.NewMemoryPromptCache(time.Duration(cfg.TokenCacheTTL)*time.Second, 10000)
+	h.SetPromptCache(promptCache)
+	apiHandler.SetPromptCache(promptCache)
+	slog.Info("Prompt cache initialized", "ttl", cfg.TokenCacheTTL)
+
 	// Session store: use Redis when available, fall back to memory
 	if redisClient := s.RedisClient(); redisClient != nil {
 		sessionStore := handler.NewRedisSessionStore(redisClient, s.RedisPrefix(), 30*time.Minute)

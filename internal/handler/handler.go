@@ -43,6 +43,7 @@ type Handler struct {
 	clientCache   *accountClientCache
 	loadBalancer  *loadbalancer.LoadBalancer
 	tokenCache    tokencache.Cache
+	promptCache   tokencache.PromptCache
 	auditLogger   audit.Logger
 
 	sessionStore SessionStore
@@ -125,6 +126,10 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 
 func (h *Handler) SetTokenCache(cache tokencache.Cache) {
 	h.tokenCache = cache
+}
+
+func (h *Handler) SetPromptCache(cache tokencache.PromptCache) {
+	h.promptCache = cache
 }
 
 // SetSessionStore replaces the default in-memory session store.
@@ -632,6 +637,38 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		inputTokens = h.estimateInputTokens(r.Context(), req.Model, builtPrompt)
 	}
 
+	var cacheReadTokens, cacheCreationTokens int
+	if h.config.EnableTokenCache && h.promptCache != nil {
+		sysText := ""
+		if len(req.System) > 0 {
+			if sysBytes, err := json.Marshal(req.System); err == nil {
+				sysText = string(sysBytes)
+			}
+		}
+		toolsText := ""
+		if len(effectiveTools) > 0 {
+			if toolsBytes, err := json.Marshal(effectiveTools); err == nil {
+				toolsText = string(toolsBytes)
+			}
+		}
+
+		rTokens, crTokens := h.promptCache.CheckPromptCache(
+			h.config.TokenCacheStrategy,
+			breakdown.SystemContextTokens,
+			breakdown.ToolsTokens,
+			sysText,
+			toolsText,
+		)
+		cacheReadTokens = rTokens
+		cacheCreationTokens = crTokens
+		
+		// Subtract cacheReadTokens from the base inputTokens 
+		// if simulating prompt caching billing behavior
+		if inputTokens >= cacheReadTokens {
+			inputTokens -= cacheReadTokens
+		}
+	}
+
 	// Detect Response Format (Anthropic vs OpenAI)
 	responseFormat := adapter.DetectResponseFormat(r.URL.Path)
 
@@ -644,6 +681,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
+	sh.setCacheTokens(cacheReadTokens, cacheCreationTokens)
 	// 捕获上游返回的 conversationID，持久化到 session 以便后续请求复用
 	sh.onConversationID = func(id string) {
 		if conversationKey == "" {

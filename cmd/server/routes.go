@@ -75,8 +75,9 @@ func registerRoutes(
 	mux.HandleFunc("/api/export", sessionAuth(apiHandler.HandleExport))
 	mux.HandleFunc("/api/import", sessionAuth(apiHandler.HandleImport))
 	mux.HandleFunc("/api/config", sessionAuth(apiHandler.HandleConfig))
-	mux.HandleFunc("/api/config/cache/stats", sessionAuth(apiHandler.HandleCacheStats))
 	mux.HandleFunc("/api/config/cache/clear", sessionAuth(apiHandler.HandleCacheClear))
+	mux.HandleFunc("/api/token-cache/stats", sessionAuth(apiHandler.HandleTokenCacheStats))
+	mux.HandleFunc("/api/token-cache/clear", sessionAuth(apiHandler.HandleTokenCacheClear))
 
 	// Admin routes with dual prefix: /api/v1/admin/* and /v1/admin/*
 	adminPrefixes := []string{"/api/v1/admin", "/v1/admin"}

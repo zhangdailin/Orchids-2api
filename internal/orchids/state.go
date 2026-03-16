@@ -20,10 +20,11 @@ type requestState struct {
 	finishReason        string
 	pendingToolInput    string
 	currentToolCall     *orchidsToolCallState
-	inputTokens          int64
-	outputTokens         int64
-	cacheReadInputTokens int64
-	errorMsg            string
+	inputTokens              int64
+	outputTokens             int64
+	cacheReadInputTokens     int64
+	cacheCreationInputTokens int64
+	errorMsg                 string
 	directSSE           upstream.DirectSSEEmitter
 	toolMapper          *ToolMapper
 	emittedToolCallIDs  map[string]struct{}

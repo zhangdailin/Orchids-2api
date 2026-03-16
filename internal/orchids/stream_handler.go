@@ -46,6 +46,10 @@ func (s *requestState) SetCacheReadInputTokens(tokens int64) {
 	s.cacheReadInputTokens = tokens
 }
 
+func (s *requestState) SetCacheCreationInputTokens(tokens int64) {
+	s.cacheCreationInputTokens = tokens
+}
+
 func (s *requestState) SetFinishReason(reason string) {
 	s.finishReason = reason
 }
@@ -175,6 +179,9 @@ func handleFinishEvent(state *requestState, writer *SSEWriter, data map[string]i
 			}
 			if v, _, ok := parseOrchidsUsageValue(usage, "cache_read_input_tokens"); ok {
 				state.SetCacheReadInputTokens(v)
+			}
+			if v, _, ok := parseOrchidsUsageValue(usage, "cache_creation_input_tokens"); ok {
+				state.SetCacheCreationInputTokens(v)
 			}
 		}
 	}
