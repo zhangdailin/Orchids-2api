@@ -11,6 +11,7 @@ import (
 	"orchids-api/internal/bolt"
 	"orchids-api/internal/config"
 	"orchids-api/internal/orchids"
+	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -92,6 +93,9 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	}
 	if strings.EqualFold(acc.AccountType, "bolt") {
 		return bolt.NewFromAccount(acc, cfg)
+	}
+	if strings.EqualFold(acc.AccountType, "puter") {
+		return puter.NewFromAccount(acc, cfg)
 	}
 	return orchids.NewFromAccount(acc, cfg)
 }

@@ -103,6 +103,7 @@ func TestChannelFromPath(t *testing.T) {
 		{path: "/orchids/v1/messages", want: "orchids"},
 		{path: "/warp/v1/messages", want: "warp"},
 		{path: "/bolt/v1/messages", want: "bolt"},
+		{path: "/puter/v1/messages", want: "puter"},
 		{path: "/grok/v1/chat/completions", want: "grok"},
 		{path: "/v1/messages", want: ""},
 	}

@@ -27,6 +27,7 @@ import (
 	"orchids-api/internal/grok"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/orchids"
+	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/util"
@@ -64,6 +65,12 @@ var boltFetchRootData = func(ctx context.Context, acc *store.Account, cfg *confi
 	client := bolt.NewFromAccount(acc, cfg)
 	defer client.Close()
 	return client.FetchRootData(ctx)
+}
+
+var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
+	client := puter.NewFromAccount(acc, cfg)
+	defer client.Close()
+	return client.VerifyAuthToken(ctx)
 }
 
 func normalizeGrokVerifyModelID(raw string) string {
@@ -235,6 +242,7 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		"quota_remaining": 0.0,
 		"quota_mode":      "remaining",
 		"quota_unit":      "credits",
+		"quota_supported": true,
 	}
 	if acc == nil {
 		return fields
@@ -279,6 +287,13 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		fields["quota_remaining"] = remaining
 		fields["quota_mode"] = "used"
 		fields["quota_unit"] = "requests"
+	case "puter":
+		fields["quota_limit"] = 0.0
+		fields["quota_used"] = 0.0
+		fields["quota_remaining"] = 0.0
+		fields["quota_mode"] = "unknown"
+		fields["quota_unit"] = "credits"
+		fields["quota_supported"] = false
 	default:
 		fields["quota_limit"] = limit
 		remaining := current
@@ -428,6 +443,23 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			return status, httpStatus, fmt.Errorf("Failed to verify bolt account: %w", err)
 		}
 		bolt.ApplyRootData(acc, rootData)
+		return "", 0, nil
+	}
+
+	if strings.EqualFold(acc.AccountType, "puter") {
+		if strings.TrimSpace(acc.ClientCookie) == "" &&
+			strings.TrimSpace(acc.Token) == "" &&
+			strings.TrimSpace(acc.SessionCookie) == "" {
+			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify puter account: missing auth token")
+		}
+		if err := puterVerifyAccount(ctx, acc, a.config.Load()); err != nil {
+			status := classifyAccountStatusFromError(err.Error())
+			httpStatus := http.StatusBadGateway
+			if status != "" {
+				httpStatus = httpStatusFromAccountStatus(status)
+			}
+			return status, httpStatus, fmt.Errorf("Failed to verify puter account: %w", err)
+		}
 		return "", 0, nil
 	}
 

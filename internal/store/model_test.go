@@ -95,3 +95,61 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 		t.Fatalf("expected different records for shared model id, got same id %q", boltModel.ID)
 	}
 }
+
+func TestSeedModels_IncludesPuterClaudeModels(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	ctx := context.Background()
+	model, err := s.GetModelByChannelAndModelID(ctx, "puter", "claude-opus-4-5")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
+	}
+	if model.Channel != "Puter" {
+		t.Fatalf("model.Channel = %q, want Puter", model.Channel)
+	}
+}
+
+func TestSeedModels_IncludesPuterNonClaudeModels(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	ctx := context.Background()
+	for _, tc := range []string{"gpt-5.1", "gemini-2.5-pro", "grok-3", "mistral-large-latest", "deepseek-chat"} {
+		model, err := s.GetModelByChannelAndModelID(ctx, "puter", tc)
+		if err != nil {
+			t.Fatalf("GetModelByChannelAndModelID(%q) error = %v", tc, err)
+		}
+		if model.Channel != "Puter" {
+			t.Fatalf("model.Channel = %q, want Puter", model.Channel)
+		}
+	}
+}

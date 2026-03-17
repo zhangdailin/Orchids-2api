@@ -12,9 +12,12 @@
 | `/warp/v1/messages/count_tokens` | POST | 输入 Token 估算（Warp 通道） |
 | `/bolt/v1/messages` | POST | Claude Messages 代理（Bolt 通道） |
 | `/bolt/v1/messages/count_tokens` | POST | 输入 Token 估算（Bolt 通道） |
+| `/puter/v1/messages` | POST | Claude Messages 代理（Puter 通道） |
+| `/puter/v1/messages/count_tokens` | POST | 输入 Token 估算（Puter 通道） |
 | `/orchids/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Orchids） |
 | `/warp/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Warp） |
 | `/bolt/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Bolt） |
+| `/puter/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Puter） |
 | `/grok/v1/chat/completions` | POST | OpenAI Chat Completions 兼容（Grok） |
 | `/grok/v1/images/generations` | POST | Grok 图片生成 |
 | `/grok/v1/images/edits` | POST | Grok 图片编辑（multipart） |
@@ -24,6 +27,7 @@
 | `/orchids/v1/models` | GET | Orchids 可用模型 |
 | `/warp/v1/models` | GET | Warp 可用模型 |
 | `/bolt/v1/models` | GET | Bolt 可用模型 |
+| `/puter/v1/models` | GET | Puter 可用模型 |
 | `/grok/v1/models` | GET | Grok 可用模型 |
 | `/health` | GET | 健康检查 |
 | `/metrics` | GET | Prometheus 指标 |

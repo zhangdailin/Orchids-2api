@@ -44,6 +44,11 @@ const fallbackAgentModes = {
     "claude-sonnet-4-5",
     "claude-3-7-sonnet-20250219",
   ],
+  puter: [
+    "claude-opus-4-5",
+    "claude-sonnet-4-5",
+    "claude-3-7-sonnet-20250219",
+  ],
   grok: [
     "grok-3",
     "grok-3-mini",
@@ -152,18 +157,21 @@ function normalizeAccountType(acc) {
 
 function getQuotaStats(acc) {
   if (!acc) return null;
+  const type = normalizeAccountType(acc);
+  if (type === "puter") {
+    return { supported: false, unknown: true };
+  }
   const explicitLimit = Math.floor(acc.quota_limit || 0);
   const hasExplicitRemaining = acc.quota_remaining !== undefined && acc.quota_remaining !== null;
   if (explicitLimit > 0 && hasExplicitRemaining) {
     const remaining = Math.max(0, Math.floor(acc.quota_remaining || 0));
     const used = Math.max(0, explicitLimit - remaining);
     const pctRemaining = explicitLimit > 0 ? Math.min(100, Math.round((remaining / explicitLimit) * 100)) : 0;
-    return { limit: explicitLimit, remaining, used, pctRemaining };
+    return { supported: true, limit: explicitLimit, remaining, used, pctRemaining };
   }
 
   const limit = Math.floor(acc.usage_limit || 0);
   if (limit <= 0) return null;
-  const type = normalizeAccountType(acc);
   const current = Math.floor(acc.usage_current || 0);
   let remaining = 0;
   if (type === "warp") {
@@ -173,7 +181,7 @@ function getQuotaStats(acc) {
   }
   const used = Math.max(0, limit - remaining);
   const pctRemaining = limit > 0 ? Math.min(100, Math.round((remaining / limit) * 100)) : 0;
-  return { limit, remaining, used, pctRemaining };
+  return { supported: true, limit, remaining, used, pctRemaining };
 }
 
 function getAccountToken(acc) {
@@ -187,6 +195,9 @@ function getAccountToken(acc) {
   }
   if (type === 'bolt') {
     return acc.session_cookie || acc.client_cookie || acc.token || '';
+  }
+  if (type === 'puter') {
+    return acc.client_cookie || acc.token || acc.session_cookie || '';
   }
   return acc.client_cookie || acc.token || '';
 }
@@ -223,6 +234,13 @@ function applyTokenLabels(type) {
     hint.textContent = accountId
       ? "Bolt 编辑时仅保存第一行 __session，并保留当前 project_id"
       : "支持批量添加 Bolt。每行一个 __session，project_id 共用下方输入";
+    input.required = true;
+  } else if (type === 'puter') {
+    label.textContent = "Auth Token";
+    input.placeholder = "每行一个 Puter auth_token";
+    hint.textContent = accountId
+      ? "Puter 编辑时仅保存第一行 auth_token"
+      : "支持批量添加 Puter。每行一个 auth_token";
     input.required = true;
   } else {
     label.textContent = "__session";
@@ -262,7 +280,7 @@ function resolveAgentMode(type, preferredValue = "") {
 function renderPlatformTabs() {
   const container = document.getElementById("platformFilters");
   if (!container) return;
-  const defaultTypes = ["orchids", "warp", "bolt", "grok"];
+  const defaultTypes = ["orchids", "warp", "bolt", "puter", "grok"];
   const types = new Set([...defaultTypes, ...accounts.map(normalizeAccountType)]);
   const sorted = Array.from(types).sort();
   const tabs = [...sorted];
@@ -337,6 +355,10 @@ function evaluateAccountStatus(acc) {
   } else if (type === 'bolt') {
     if (!getAccountToken(acc) || !acc.project_id) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Bolt __session 或 project_id' };
+    }
+  } else if (type === 'puter') {
+    if (!getAccountToken(acc)) {
+      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Puter auth_token' };
     }
   } else if (!acc.session_id && !acc.session_cookie) {
     return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少会话信息' };
@@ -640,7 +662,10 @@ function renderAccounts() {
     const tdQuota = document.createElement("td");
     tdQuota.style.fontSize = "0.85rem";
     const quota = getQuotaStats(acc);
-    if (quota) {
+    if (quota && quota.unknown) {
+      tdQuota.style.color = "#64748b";
+      tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(Puter 暂无稳定额度接口)</span>`;
+    } else if (quota) {
       const pct = quota.pctRemaining;
       const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
       tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
@@ -964,6 +989,8 @@ async function saveAccount(e) {
       } else if (type === 'bolt') {
         payload.session_cookie = credentials[0];
         payload.project_id = projectId;
+      } else if (type === 'puter') {
+        payload.client_cookie = credentials[0];
       } else {
         payload.client_cookie = credentials[0];
       }
@@ -989,6 +1016,8 @@ async function saveAccount(e) {
         } else if (type === 'bolt') {
           payload.session_cookie = item;
           payload.project_id = projectId;
+        } else if (type === 'puter') {
+          payload.client_cookie = item;
         } else {
           payload.client_cookie = item;
         }
@@ -1015,6 +1044,8 @@ async function saveAccount(e) {
     } else if (type === 'bolt') {
       payload.session_cookie = credentials[0];
       payload.project_id = projectId;
+    } else if (type === 'puter') {
+      payload.client_cookie = credentials[0];
     } else {
       payload.client_cookie = credentials[0];
     }
@@ -1112,6 +1143,10 @@ function formatTokenDisplay(acc) {
   if (type === 'bolt' && getAccountToken(acc)) {
     const session = getAccountToken(acc);
     return session.length > 24 ? session.substring(0, 8) + '...' + session.substring(session.length - 8) : session;
+  }
+  if (type === 'puter' && getAccountToken(acc)) {
+    const token = getAccountToken(acc);
+    return token.length > 24 ? token.substring(0, 8) + '...' + token.substring(token.length - 8) : token;
   }
   if (acc.session_id) {
     return acc.session_id.substring(0, 30) + '...';

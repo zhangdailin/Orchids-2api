@@ -132,6 +132,7 @@ func main() {
 	registry.Register("orchids", provider.NewOrchidsProvider())
 	registry.Register("warp", provider.NewWarpProvider())
 	registry.Register("bolt", provider.NewBoltProvider())
+	registry.Register("puter", provider.NewPuterProvider())
 	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {
 		if p := registry.Get(acc.AccountType); p != nil {
 			if client, ok := p.NewClient(acc, c).(handler.UpstreamClient); ok {

@@ -160,3 +160,27 @@ func TestValidateModelAvailability_BoltUsesChannelSpecificModel(t *testing.T) {
 		t.Fatalf("validateModelAvailability() model = %q, want %q", got.ModelID, "claude-opus-4-6")
 	}
 }
+
+func TestValidateModelAvailability_PuterUsesChannelSpecificModel(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+
+	got, err := h.validateModelAvailability(ctx, "claude-opus-4-5", "puter")
+	if err != nil {
+		t.Fatalf("validateModelAvailability() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("validateModelAvailability() returned nil model")
+	}
+	if got.Channel != "Puter" {
+		t.Fatalf("validateModelAvailability() channel = %q, want %q", got.Channel, "Puter")
+	}
+	if got.ModelID != "claude-opus-4-5" {
+		t.Fatalf("validateModelAvailability() model = %q, want %q", got.ModelID, "claude-opus-4-5")
+	}
+}

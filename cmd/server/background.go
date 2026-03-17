@@ -428,6 +428,107 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 			slog.Debug("Warp 模型同步已停用：CodeFreeMax 对齐模式不提供 feature model choices")
 		}
 
+		syncPuterModels := func() {
+			proxyFunc := http.ProxyFromEnvironment
+			if cfg != nil {
+				proxyFunc = util.ProxyFunc(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser, cfg.ProxyPass, cfg.ProxyBypass)
+			}
+
+			models, err := fetchPuterPublicModelChoices(context.Background(), proxyFunc)
+			if err != nil {
+				slog.Warn("Puter 模型同步: 获取模型列表失败", "error", err)
+				return
+			}
+			if len(models) == 0 {
+				slog.Debug("Puter 模型同步: 无模型返回")
+				return
+			}
+
+			publicSet := make(map[string]string, len(models))
+			for _, model := range models {
+				if model.ID == "" {
+					continue
+				}
+				name := strings.TrimSpace(model.Name)
+				if name == "" {
+					name = model.ID
+				}
+				publicSet[model.ID] = name
+			}
+
+			added := 0
+			updated := 0
+			disabled := 0
+
+			for modelID, name := range publicSet {
+				existing, err := s.GetModelByChannelAndModelID(context.Background(), "puter", modelID)
+				if err == nil && existing != nil {
+					needsUpdate := false
+					if !strings.EqualFold(existing.Channel, "puter") {
+						existing.Channel = "Puter"
+						needsUpdate = true
+					}
+					if existing.Status != store.ModelStatusAvailable {
+						existing.Status = store.ModelStatusAvailable
+						needsUpdate = true
+					}
+					if strings.TrimSpace(existing.Name) != name {
+						existing.Name = name
+						needsUpdate = true
+					}
+					if needsUpdate {
+						if err := s.UpdateModel(context.Background(), existing); err != nil {
+							slog.Warn("Puter 模型同步: 更新模型失败", "model_id", modelID, "error", err)
+						} else {
+							updated++
+						}
+					}
+					continue
+				}
+
+				if err := s.CreateModel(context.Background(), &store.Model{
+					Channel: "Puter",
+					ModelID: modelID,
+					Name:    name,
+					Status:  store.ModelStatusAvailable,
+				}); err != nil {
+					slog.Warn("Puter 模型同步: 创建模型失败", "model_id", modelID, "error", err)
+					continue
+				}
+				added++
+				slog.Info("Puter 模型同步: 新增模型", "model_id", modelID)
+			}
+
+			if existingModels, err := s.ListModels(context.Background()); err == nil {
+				for _, m := range existingModels {
+					if !strings.EqualFold(strings.TrimSpace(m.Channel), "puter") {
+						continue
+					}
+					id := strings.TrimSpace(m.ModelID)
+					if id == "" {
+						continue
+					}
+					if _, ok := publicSet[id]; ok {
+						continue
+					}
+					if m.Status != store.ModelStatusOffline {
+						m.Status = store.ModelStatusOffline
+						if err := s.UpdateModel(context.Background(), m); err != nil {
+							slog.Warn("Puter 模型同步: 下线模型失败", "model_id", id, "error", err)
+							continue
+						}
+						disabled++
+					}
+				}
+			}
+
+			if added > 0 {
+				slog.Info("Puter 模型同步完成", "total_public", len(publicSet), "added", added, "updated", updated, "disabled", disabled)
+			} else {
+				slog.Debug("Puter 模型同步完成，无新增", "total_public", len(publicSet), "updated", updated, "disabled", disabled)
+			}
+		}
+
 		syncGrokModels := func() {
 			accounts, err := s.GetEnabledAccounts(context.Background())
 			if err != nil {
@@ -602,6 +703,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 		}
 		syncModels()
 		syncWarpModels()
+		syncPuterModels()
 		syncGrokModels()
 
 		ticker := time.NewTicker(30 * time.Minute)
@@ -613,6 +715,7 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 			case <-ticker.C:
 				syncModels()
 				syncWarpModels()
+				syncPuterModels()
 				syncGrokModels()
 			}
 		}

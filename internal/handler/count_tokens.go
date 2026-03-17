@@ -3,6 +3,7 @@ package handler
 import (
 	"github.com/goccy/go-json"
 	"net/http"
+	"strings"
 
 	"orchids-api/internal/debug"
 	"orchids-api/internal/orchids"
@@ -27,11 +28,16 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 
 	breakdown := inputTokenBreakdown{}
 	profile := ""
-	if channelFromPath(r.URL.Path) == "warp" {
+	channel := channelFromPath(r.URL.Path)
+	if channel == "warp" {
 		if warpBD, warpProfile, err := estimateWarpInputTokenBreakdown("", req.Model, req.Messages, req.Tools, len(req.Tools) == 0); err == nil {
 			breakdown = warpBD
 			profile = warpProfile
 		}
+	}
+	if breakdown.Total == 0 && (channel == "bolt" || channel == "puter") {
+		breakdown = estimateInputTokenBreakdown(strings.TrimSpace(extractUserText(req.Messages)), nil, req.Tools)
+		profile = channel
 	}
 	if breakdown.Total == 0 {
 		builtPrompt, promptHistory, meta := orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(

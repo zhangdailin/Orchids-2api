@@ -25,7 +25,7 @@
           <h3 style="font-size: 1.1rem; font-weight: 700;">API 地址格式</h3>
         </div>
         <div style="background: rgba(12, 14, 26, 0.4); padding: 12px 16px; border-radius: 8px; font-family: monospace; font-size: 1.1rem; color: var(--accent-cyan); border: 1px solid var(--border-color);">
-          Orchids/Warp/Bolt: <span data-api-base></span>/{渠道}/v1
+          Orchids/Warp/Bolt/Puter: <span data-api-base></span>/{渠道}/v1
           <br />
           Grok: <span data-api-base></span>/grok/v1
         </div>
@@ -45,6 +45,9 @@
           <span style="font-weight: 700; color: var(--accent-orange);">Bolt 账号说明:</span>
           Bolt 账号需要同时填写 <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);">__session</code>
           和 <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);">project_id</code>。
+          <br />
+          <span style="font-weight: 700; color: var(--accent-orange);">Puter 账号说明:</span>
+          Puter 账号当前只需要填写 <code style="background: rgba(251, 191, 36, 0.15); padding: 2px 6px; border-radius: 4px; color: var(--accent-orange);">auth_token</code>。
         </div>
       </div>
 
@@ -58,6 +61,12 @@
           <code style="background: rgba(34, 197, 94, 0.12); padding: 2px 6px; border-radius: 4px; color: var(--accent-green);">claude-opus-4-5-20251101</code>。
           <br />
           前端配置里还会出现实验默认值或活动文案，但这些信息不等于“稳定公开可选模型”，所以不会直接并入公开模型列表。
+          <br />
+          <span style="font-weight: 700; color: var(--accent-green);">Puter 模型说明:</span>
+          Puter 当前采用参考仓库里的“无前缀主模型”清单，已包含 Claude / OpenAI / Gemini / Grok / DeepSeek / Mistral 等主模型族；
+          但像 <code style="background: rgba(34, 197, 94, 0.12); padding: 2px 6px; border-radius: 4px; color: var(--accent-green);">openrouter:</code>、
+          <code style="background: rgba(34, 197, 94, 0.12); padding: 2px 6px; border-radius: 4px; color: var(--accent-green);">togetherai:</code>
+          这类聚合源前缀模型暂时不直接暴露到模型管理里。
         </div>
       </div>
 
@@ -104,6 +113,18 @@
               <td>
                 <code style="color: var(--accent-green);">claude-sonnet-4-6</code>
                 <span class="tag" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); font-size: 0.7rem;">Bolt</span>
+              </td>
+              <td>
+                <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>
+                <span class="tag" style="background: rgba(251, 191, 36, 0.15); color: var(--accent-orange); border: 1px solid rgba(251, 191, 36, 0.3);">OpenAI</span>
+              </td>
+            </tr>
+            <tr>
+              <td><span class="tag" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">Puter</span></td>
+              <td><code style="color: var(--accent-cyan);" data-api-path="/puter/v1"></code></td>
+              <td>
+                <code style="color: var(--accent-green);">claude-opus-4-5</code>
+                <span class="tag" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); font-size: 0.7rem;">Puter</span>
               </td>
               <td>
                 <span class="tag" style="background: rgba(52, 211, 153, 0.15); color: var(--accent-green); border: 1px solid rgba(52, 211, 153, 0.3);">Claude</span>

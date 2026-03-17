@@ -306,6 +306,49 @@ func TestHandleMessages_Bolt_OpenAINonStreamJSON(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "model", Event: map[string]any{"type": "text-start"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "puter-hi"}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+	}}
+
+	mkBody := func(stream bool) []byte {
+		payload := map[string]any{
+			"model":    "claude-opus-4-5",
+			"messages": []map[string]any{{"role": "user", "content": "hi"}},
+			"system":   []any{},
+			"stream":   stream,
+		}
+		b, _ := json.Marshal(payload)
+		return b
+	}
+
+	{
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(false)))
+		h.HandleMessages(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "puter-hi") {
+			t.Fatalf("expected upstream text in response")
+		}
+	}
+
+	{
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(true)))
+		h.HandleMessages(rec, req)
+		out := rec.Body.String()
+		if !strings.Contains(out, "puter-hi") {
+			t.Fatalf("expected text delta in SSE")
+		}
+	}
+}
+
 func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

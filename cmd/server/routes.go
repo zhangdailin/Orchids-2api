@@ -42,9 +42,11 @@ func registerRoutes(
 	mux.HandleFunc("/warp/v1/messages/count_tokens", limiter.Limit(h.HandleCountTokens))
 	mux.HandleFunc("/bolt/v1/messages", limiter.Limit(h.HandleMessages))
 	mux.HandleFunc("/bolt/v1/messages/count_tokens", limiter.Limit(h.HandleCountTokens))
+	mux.HandleFunc("/puter/v1/messages", limiter.Limit(h.HandleMessages))
+	mux.HandleFunc("/puter/v1/messages/count_tokens", limiter.Limit(h.HandleCountTokens))
 
 	// --- Model routes (4 channel prefixes → same handlers) ---
-	modelPrefixes := []string{"/orchids/v1", "/warp/v1", "/bolt/v1", "/grok/v1", "/v1"}
+	modelPrefixes := []string{"/orchids/v1", "/warp/v1", "/bolt/v1", "/puter/v1", "/grok/v1", "/v1"}
 	registerWithPrefixes(mux, modelPrefixes, "/models", h.HandleModels)
 	registerWithPrefixes(mux, modelPrefixes, "/models/", h.HandleModelByID)
 
@@ -52,6 +54,7 @@ func registerRoutes(
 	mux.HandleFunc("/orchids/v1/chat/completions", limiter.Limit(h.HandleMessages))
 	mux.HandleFunc("/warp/v1/chat/completions", limiter.Limit(h.HandleMessages))
 	mux.HandleFunc("/bolt/v1/chat/completions", limiter.Limit(h.HandleMessages))
+	mux.HandleFunc("/puter/v1/chat/completions", limiter.Limit(h.HandleMessages))
 
 	grokPrefixes := []string{"/grok/v1", "/v1"}
 	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", limiter.Limit(grokHandler.HandleChatCompletions))

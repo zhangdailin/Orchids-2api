@@ -596,11 +596,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "bolt") {
 		isBoltRequest = true
 	}
+	isPuterRequest := strings.EqualFold(forcedChannel, "puter")
+	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
+		isPuterRequest = true
+	}
 	if isWarpRequest {
 		// Warp passthrough mode: do not trim history/tool results.
 		slog.Debug("Checkpoint: warp passthrough, skip trim/sanitize")
 	} else if isBoltRequest {
 		slog.Debug("Checkpoint: bolt passthrough, skip context trimming")
+	} else if isPuterRequest {
+		slog.Debug("Checkpoint: puter passthrough, skip context trimming")
 	} else {
 		// Orchids: do not trim message/tool_result content to preserve full context.
 		slog.Debug("Checkpoint: orchids passthrough, skip context trimming")
@@ -664,13 +670,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
 	slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
-	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest
+	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest && !isPuterRequest
 
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		mappedModel = req.Model
 	} else if isBoltRequest {
+		mappedModel = strings.TrimSpace(req.Model)
+	} else if isPuterRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
@@ -686,6 +694,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		promptMeta = orchids.PromptBuildMeta{
 			Profile:    "bolt",
+			NoThinking: noThinking,
+		}
+	} else if isPuterRequest {
+		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
+		if builtPrompt == "" {
+			builtPrompt = "puter request"
+		}
+		promptMeta = orchids.PromptBuildMeta{
+			Profile:    "puter",
 			NoThinking: noThinking,
 		}
 	} else {
@@ -765,6 +782,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 		}
 	} else if isBoltRequest {
+		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
+	} else if isPuterRequest {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	} else if isOrchidsProtocol {
 		breakdown = estimateOrchidsInputTokenBreakdown(builtPrompt, promptHistory)
