@@ -353,6 +353,12 @@ func buildBoltWorkspacePrompt(workdir string) []string {
 
 	parts := make([]string, 0, 5)
 	projectName := filepath.Base(filepath.Clean(workdir))
+	if strings.Contains(workdir, "\\") {
+		windowsPath := strings.ReplaceAll(workdir, "\\", "/")
+		if base := filepath.Base(filepath.Clean(windowsPath)); strings.TrimSpace(base) != "" {
+			projectName = base
+		}
+	}
 	if projectName != "" && projectName != "." && projectName != string(filepath.Separator) {
 		parts = append(parts, "当前项目目录名: "+projectName)
 	}
