@@ -392,6 +392,42 @@ func TestBuildRequest_EncodesToolResultsAsUserContentAndDropsAssistantToolInvoca
 	}
 }
 
+func TestBuildRequest_SkipsToolRoleMessages(t *testing.T) {
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "hi"}},
+			{Role: "assistant", Content: prompt.MessageContent{Text: "hello"}},
+			{
+				Role: "tool",
+				Content: prompt.MessageContent{
+					Text: "Model tried to call unavailable tool 'WebSearch'. Available tools: builtin_web_search.",
+				},
+			},
+			{Role: "user", Content: prompt.MessageContent{Text: "现在上海的天气怎么样"}},
+		},
+	}
+
+	boltReq := client.buildRequest(req, "sb1-demo")
+	if len(boltReq.Messages) != 3 {
+		t.Fatalf("messages len=%d want 3", len(boltReq.Messages))
+	}
+	for _, msg := range boltReq.Messages {
+		if msg.Role == "tool" {
+			t.Fatalf("unexpected tool role message in bolt request: %#v", msg)
+		}
+		if strings.Contains(msg.Content, "unavailable tool") {
+			t.Fatalf("unexpected tool error content in bolt request: %#v", msg)
+		}
+	}
+}
+
 func TestFetchRootData_UsesSessionCookie(t *testing.T) {
 	prevRootURL := boltRootDataURL
 	t.Cleanup(func() { boltRootDataURL = prevRootURL })

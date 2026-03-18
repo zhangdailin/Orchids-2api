@@ -256,6 +256,10 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *R
 	for _, msg := range req.Messages {
 		blocks := normalizeBlocks(msg)
 
+		if shouldSkipBoltMessage(msg.Role, blocks) {
+			continue
+		}
+
 		boltMsg := Message{
 			ID:    generateRandomID(16),
 			Role:  msg.Role,
@@ -289,6 +293,19 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *R
 	}
 
 	return boltReq
+}
+
+func shouldSkipBoltMessage(role string, blocks []prompt.ContentBlock) bool {
+	switch strings.TrimSpace(strings.ToLower(role)) {
+	case "tool":
+		text := strings.TrimSpace(extractTextContent(blocks))
+		if text == "" {
+			return true
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func buildSystemPrompt(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
