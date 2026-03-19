@@ -265,6 +265,47 @@ func TestBuildWithMeta_UltraMinDisablesThinking(t *testing.T) {
 	}
 }
 
+func TestBuildWithMeta_PreservesLargeHistoryWithoutBudgetCompression(t *testing.T) {
+	t.Parallel()
+
+	olderUser := "older-user " + strings.Repeat("alpha beta gamma ", 1200)
+	olderAssistant := "older-assistant " + strings.Repeat("delta epsilon zeta ", 1200)
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: olderUser}},
+		{Role: "assistant", Content: prompt.MessageContent{Text: olderAssistant}},
+		{Role: "user", Content: prompt.MessageContent{Text: "请继续分析上面的上下文"}},
+	}
+
+	promptText, chatHistory, _ := BuildWithMeta(messages, nil, "claude-opus-4-6", false, "/tmp/project", 12000)
+	if strings.Contains(promptText, "<context_budget_note>") {
+		t.Fatalf("prompt should not include budget note: %q", promptText)
+	}
+	if len(chatHistory) != 2 {
+		t.Fatalf("expected full history to be preserved, got %#v", chatHistory)
+	}
+	if got := chatHistory[0]["content"]; strings.Contains(got, "[compressed ") || strings.Contains(got, "[history_summary]") {
+		t.Fatalf("older user message should not be budget-compressed: %q", got)
+	}
+	if got := chatHistory[0]["content"]; !strings.Contains(got, "alpha beta gamma") || !strings.Contains(got, "older-user") {
+		t.Fatalf("older user message lost key content: %q", got)
+	}
+	if got := chatHistory[1]["content"]; strings.Contains(got, "[compressed ") || strings.Contains(got, "[history_summary]") {
+		t.Fatalf("older assistant message should not be budget-compressed: %q", got)
+	}
+	if got := chatHistory[1]["content"]; !strings.Contains(got, "delta epsilon zeta") || !strings.Contains(got, "older-assistant") {
+		t.Fatalf("older assistant message lost key content: %q", got)
+	}
+}
+
+func TestTrimSystemContextToBudget_Passthrough(t *testing.T) {
+	t.Parallel()
+
+	input := strings.TrimSpace(strings.Repeat("system context line\n", 500))
+	if got := trimSystemContextToBudget(input, 12000); got != input {
+		t.Fatalf("trimSystemContextToBudget should preserve full system context")
+	}
+}
+
 func TestConvertWarpChatHistory_CompressesHistoricalToolResults(t *testing.T) {
 	t.Parallel()
 

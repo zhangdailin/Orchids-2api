@@ -34,15 +34,17 @@ const (
 )
 
 const (
-	sseEventPrefix                 = "event: "
-	sseDataPrefix                  = "data: "
-	sseLineBreak                   = "\n\n"
-	sseDataJoin                    = "\ndata: "
-	sseDoneLine                    = "data: [DONE]\n\n"
-	sseKeepAlive                   = ": keep-alive\n\n"
-	sseDeferredFlushFrameThreshold = 4
-	sseDeferredFlushByteThreshold  = 2048
-	sseBufferedWriteMax            = 4096
+	sseEventPrefix                  = "event: "
+	sseDataPrefix                   = "data: "
+	sseLineBreak                    = "\n\n"
+	sseDataJoin                     = "\ndata: "
+	sseDoneLine                     = "data: [DONE]\n\n"
+	sseKeepAlive                    = ": keep-alive\n\n"
+	sseDeferredFlushFrameThreshold  = 4
+	sseDeferredFlushByteThreshold   = 2048
+	sseBufferedWriteMax             = 4096
+	genericEmptyOutputFallbackText  = "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
+	duplicateToolResultFallbackText = "A duplicate mutating tool call was suppressed to avoid repeating a side effect. Treat the prior tool result as the final outcome."
 )
 
 var (
@@ -287,25 +289,26 @@ type streamHandler struct {
 	ssePayloadScratch     []byte
 
 	// Tool Handling (proxy mode only)
-	toolBlocks                  map[string]int
-	pendingToolCalls            []toolCall
-	toolInputNames              map[string]string
-	toolInputBuffers            map[string]*strings.Builder
-	toolInputHadDelta           map[string]bool
-	pendingDirectToolUses       map[int]*directToolUseState
-	toolCallHandled             map[string]bool
-	toolCallEmitted             map[string]struct{}
-	currentToolInputID          string
-	toolCallCount               int
-	skippedDirectBlockIndices   map[int]struct{}
-	suppressedToolCalls         int
-	bashCallDedup               map[string]struct{}
-	seedToolDedup               map[string]struct{}
-	toolDedupCount              int
-	toolDedupKeys               map[string]int
-	introDedup                  map[string]struct{}
-	noToolsFallbackText         string
-	suppressEmptyOutputFallback bool
+	toolBlocks                    map[string]int
+	pendingToolCalls              []toolCall
+	toolInputNames                map[string]string
+	toolInputBuffers              map[string]*strings.Builder
+	toolInputHadDelta             map[string]bool
+	pendingDirectToolUses         map[int]*directToolUseState
+	toolCallHandled               map[string]bool
+	toolCallEmitted               map[string]struct{}
+	currentToolInputID            string
+	toolCallCount                 int
+	skippedDirectBlockIndices     map[int]struct{}
+	suppressedToolCalls           int
+	bashCallDedup                 map[string]struct{}
+	seedToolDedup                 map[string]struct{}
+	toolDedupCount                int
+	toolDedupKeys                 map[string]int
+	introDedup                    map[string]struct{}
+	noToolsFallbackText           string
+	suppressEmptyOutputFallback   bool
+	preferPriorToolResultFallback bool
 
 	// Throttling
 	lastScanTime time.Time
@@ -390,6 +393,12 @@ func (h *streamHandler) setNoToolsFallbackText(text string) {
 func (h *streamHandler) setSuppressEmptyOutputFallback(suppress bool) {
 	h.mu.Lock()
 	h.suppressEmptyOutputFallback = suppress
+	h.mu.Unlock()
+}
+
+func (h *streamHandler) setPreferPriorToolResultFallback(prefer bool) {
+	h.mu.Lock()
+	h.preferPriorToolResultFallback = prefer
 	h.mu.Unlock()
 }
 
@@ -963,12 +972,17 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 		return
 	}
 
+	candidates := make(map[string]string)
 	for i, msg := range messages {
 		if i <= lastUserTextIdx || strings.ToLower(strings.TrimSpace(msg.Role)) != "assistant" {
 			continue
 		}
 		for _, block := range msg.Content.GetBlocks() {
 			if block.Type != "tool_use" {
+				continue
+			}
+			toolID := strings.TrimSpace(block.ID)
+			if toolID == "" {
 				continue
 			}
 			nameKey := strings.ToLower(strings.TrimSpace(block.Name))
@@ -983,9 +997,38 @@ func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Messag
 			if key == "" {
 				continue
 			}
-			h.seedToolDedup[key] = struct{}{}
-			h.bashCallDedup[key] = struct{}{}
+			candidates[toolID] = key
 		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+
+	successfulKeys := make(map[string]struct{})
+	for i, msg := range messages {
+		if i <= lastUserTextIdx || !strings.EqualFold(strings.TrimSpace(msg.Role), "user") || msg.Content.IsString() {
+			continue
+		}
+		for _, block := range msg.Content.GetBlocks() {
+			if block.Type != "tool_result" {
+				continue
+			}
+			key, ok := candidates[strings.TrimSpace(block.ToolUseID)]
+			if !ok || key == "" {
+				continue
+			}
+			text := strings.TrimSpace(extractToolResultContent(block.Content))
+			if text == "" || looksLikeToolResultFailure(text) {
+				delete(successfulKeys, key)
+				continue
+			}
+			successfulKeys[key] = struct{}{}
+		}
+	}
+
+	for key := range successfulKeys {
+		h.seedToolDedup[key] = struct{}{}
+		h.bashCallDedup[key] = struct{}{}
 	}
 }
 
@@ -2230,7 +2273,7 @@ func (h *streamHandler) finishResponse(stopReason string) {
 
 	// Ensure there's some text output before closing if we return end_turn with no output
 	if stopReason != "tool_use" && h.noToolsFallbackText == "" && !h.suppressEmptyOutputFallback && !h.hasAnyOutput() {
-		emptyMsg := "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
+		emptyMsg := h.emptyOutputFallbackText()
 		if h.isStream {
 			h.emitTextBlockWithMode(emptyMsg, false)
 		} else {
@@ -2494,6 +2537,15 @@ func (h *streamHandler) writeSSEBytesLocked(event string, data []byte) {
 
 func (h *streamHandler) emitTextBlock(text string) {
 	h.emitTextBlockWithMode(text, false)
+}
+
+func (h *streamHandler) emptyOutputFallbackText() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.preferPriorToolResultFallback && h.toolDedupCount > 0 {
+		return duplicateToolResultFallbackText
+	}
+	return genericEmptyOutputFallbackText
 }
 
 func (h *streamHandler) emitTextBlockWithMode(text string, final bool) {

@@ -90,9 +90,6 @@ func TestProcessStreamBody_DetectsNonProtobufHTML(t *testing.T) {
 	}
 }
 
-
-
-
 func TestProcessStreamBody_ParsesNestedWarpFrames(t *testing.T) {
 	var events []upstream.SSEMessage
 
@@ -167,6 +164,87 @@ func TestProcessStreamBody_FallsBackToLegacySSE(t *testing.T) {
 	}
 	if events[1].Type != "model.finish" {
 		t.Fatalf("second event=%#v want finish", events[1])
+	}
+}
+
+func TestProcessStreamBody_SuppressesUnsupportedNestedServerFallback(t *testing.T) {
+	var events []upstream.SSEMessage
+
+	messagePayload := appendBytesField(3, appendBytesField(1, []byte("4")))
+	messagePayload = append(messagePayload,
+		appendBytesField(4, appendBytesField(4, appendBytesField(1, []byte("bogus"))))...,
+	)
+	textAndToolFrame := wrapFrame(appendBytesField(2,
+		appendBytesField(1,
+			appendBytesField(1,
+				appendBytesField(1,
+					appendBytesField(5, messagePayload),
+				),
+			),
+		),
+	))
+	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(8, appendVarintField(2, 1))))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(append(textAndToolFrame, finishFrame...)), func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("len(events)=%d want 2", len(events))
+	}
+	if events[0].Type != "model.text-delta" || events[0].Event["delta"] != "4" {
+		t.Fatalf("first event=%#v want text delta 4", events[0])
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event=%#v want finish", events[1])
+	}
+	if got, _ := events[1].Event["finishReason"].(string); got != "end_turn" {
+		t.Fatalf("finishReason=%q want end_turn", got)
+	}
+}
+
+func TestProcessStreamBody_PreservesSupportedNestedShellFallback(t *testing.T) {
+	var events []upstream.SSEMessage
+
+	messagePayload := appendBytesField(4, appendBytesField(2, appendBytesField(1, []byte("pwd"))))
+	toolFrame := wrapFrame(appendBytesField(2,
+		appendBytesField(1,
+			appendBytesField(1,
+				appendBytesField(1,
+					appendBytesField(5, messagePayload),
+				),
+			),
+		),
+	))
+	finishFrame := wrapFrame(appendBytesField(3, appendBytesField(8, appendVarintField(2, 1))))
+
+	err := processStreamBody(context.Background(), bytes.NewReader(append(toolFrame, finishFrame...)), func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("len(events)=%d want 2", len(events))
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event=%#v want tool call", events[0])
+	}
+	if got, _ := events[0].Event["toolName"].(string); got != "Bash" {
+		t.Fatalf("toolName=%q want Bash", got)
+	}
+	if got, _ := events[0].Event["input"].(string); !strings.Contains(got, `"command":"pwd"`) {
+		t.Fatalf("input=%q want command pwd", got)
+	}
+	if events[1].Type != "model.finish" {
+		t.Fatalf("second event=%#v want finish", events[1])
+	}
+	if got, _ := events[1].Event["finishReason"].(string); got != "tool_use" {
+		t.Fatalf("finishReason=%q want tool_use", got)
 	}
 }
 

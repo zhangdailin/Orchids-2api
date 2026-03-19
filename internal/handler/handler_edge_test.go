@@ -383,6 +383,103 @@ func TestHandleMessages_Dedup_Stream(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Dedup_Stream_StainlessRetryInFlightReturnsExplicitError(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	blocking := &blockingUpstreamEdge{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		events: []upstream.SSEMessage{
+			{Type: "model", Event: map[string]any{"type": "text-start"}},
+			{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "ok"}},
+			{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+		},
+	}
+	h.client = blocking
+
+	payload := map[string]any{
+		"model":    "claude-3-5-sonnet",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   true,
+	}
+	b, _ := json.Marshal(payload)
+
+	rec1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	done1 := make(chan struct{})
+	go func() {
+		h.HandleMessages(rec1, req1)
+		close(done1)
+	}()
+
+	<-blocking.entered
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req2.Header.Set("X-Stainless-Retry-Count", "1")
+	h.HandleMessages(rec2, req2)
+
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if got := rec2.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After=%q want 1", got)
+	}
+	if !strings.Contains(rec2.Body.String(), "overloaded_error") {
+		t.Fatalf("expected overloaded_error body, got: %s", rec2.Body.String())
+	}
+	if strings.Contains(rec2.Body.String(), "message_start") {
+		t.Fatalf("did not expect empty Anthropic SSE duplicate body, got: %s", rec2.Body.String())
+	}
+
+	close(blocking.release)
+	<-done1
+}
+
+func TestHandleMessages_Dedup_Stream_StainlessRetryAfterFinishReturnsConflict(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
+		{Type: "model", Event: map[string]any{"type": "text-start"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "ok"}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+	}}
+
+	payload := map[string]any{
+		"model":    "claude-3-5-sonnet",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   true,
+	}
+	b, _ := json.Marshal(payload)
+
+	rec1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	h.HandleMessages(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected first request 200, got %d", rec1.Code)
+	}
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
+	req2.Header.Set("X-Stainless-Retry-Count", "1")
+	h.HandleMessages(rec2, req2)
+
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if got := rec2.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("did not expect Retry-After for completed duplicate, got %q", got)
+	}
+	if !strings.Contains(rec2.Body.String(), "invalid_request_error") {
+		t.Fatalf("expected invalid_request_error body, got: %s", rec2.Body.String())
+	}
+	if strings.Contains(rec2.Body.String(), "message_start") {
+		t.Fatalf("did not expect empty Anthropic SSE duplicate body, got: %s", rec2.Body.String())
+	}
+}
+
 func TestHandleMessages_Dedup_OpenAIStream(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

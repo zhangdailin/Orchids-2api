@@ -1108,3 +1108,15 @@ func TestExplicitlyRequestsDeepAnalysis(t *testing.T) {
 		})
 	}
 }
+
+func TestLooksLikeToolResultFailure_RecognizesEditValidationError(t *testing.T) {
+	if !looksLikeToolResultFailure("File has not been read yet. Read it first before writing to it.") {
+		t.Fatalf("expected edit validation failure to be recognized")
+	}
+	if !looksLikeToolResultFailure("old_string not found in file") {
+		t.Fatalf("expected old_string-not-found failure to be recognized")
+	}
+	if looksLikeToolResultFailure("Done") {
+		t.Fatalf("did not expect successful tool result to be treated as failure")
+	}
+}

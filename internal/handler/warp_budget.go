@@ -10,19 +10,13 @@ import (
 )
 
 const (
-	warpMessageSoftLimit  = 2200
-	warpMessageHardLimit  = 900
-	warpSummaryKeepRecent = 8
-	warpSummaryMaxChars   = 2600
-	warpSummaryItemChars  = 220
-	warpSummaryMaxDepth   = 2
+	warpSummaryItemChars = 220
+	warpSummaryMaxDepth  = 2
 )
 
-// enforceWarpBudget trims Warp messages to keep total prompt+messages within a hard token budget.
-// Strategy: compress first, trim last.
-// 1) Compress tool_result blocks and oversized text blocks.
-// 2) Summarize older messages while keeping recent raw turns.
-// 3) Drop oldest messages only as a hard fallback.
+// enforceWarpBudget is now a passthrough for Warp requests.
+// Warp models support much larger contexts, so we keep the original
+// messages intact instead of compressing, summarizing, or trimming them.
 type warpTokenBreakdown struct {
 	PromptTokens   int
 	MessagesTokens int
@@ -31,103 +25,14 @@ type warpTokenBreakdown struct {
 }
 
 func enforceWarpBudget(model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool, maxTokens int) (trimmed []prompt.Message, before warpTokenBreakdown, after warpTokenBreakdown, compressedBlocks int, summarizedMessages int, droppedMessages int) {
-	budget := maxTokens
-	if budget <= 0 {
-		budget = 12000
-	}
-	if budget > 12000 {
-		budget = 12000
-	}
 	if len(messages) == 0 {
 		empty := estimateWarpTokensBreakdown(model, nil, tools, disableWarpTools)
 		return nil, empty, empty, 0, 0, 0
 	}
 
-	// Stage 1: tool_result compression.
-	compressed, compressedCount := compressToolResults(messages, 1800, "warp")
-	working := compressed
-
-	// Stage 2: compress long text blocks/messages.
-	if textCompressed, count := compressWarpMessages(working, warpMessageSoftLimit); count > 0 {
-		working = textCompressed
-		compressedCount += count
-	}
-
-	beforeBD := estimateWarpTokensBreakdown(model, working, tools, disableWarpTools)
-	if beforeBD.Total <= budget {
-		return working, beforeBD, beforeBD, compressedCount, 0, 0
-	}
-
-	// Stage 3: summarize older history, keep recent raw turns.
-	keepRecent := warpSummaryKeepRecent
-	if keepRecent > len(working) {
-		keepRecent = len(working)
-	}
-	for beforeBD.Total > budget && len(working) > 2 {
-		if keepRecent < 2 {
-			keepRecent = 2
-		}
-		next, merged, changed := summarizeOlderWarpMessages(working, keepRecent, warpSummaryMaxChars)
-		if !changed {
-			if keepRecent > 2 {
-				keepRecent--
-				continue
-			}
-			break
-		}
-		working = next
-		summarizedMessages += merged
-		beforeBD = estimateWarpTokensBreakdown(model, working, tools, disableWarpTools)
-		if beforeBD.Total <= budget {
-			return working, beforeBD, beforeBD, compressedCount, summarizedMessages, 0
-		}
-		if keepRecent > 2 {
-			keepRecent--
-		}
-	}
-
-	// Stage 4: harder per-message compression.
-	if harder, count := compressWarpMessages(working, warpMessageHardLimit); count > 0 {
-		working = harder
-		compressedCount += count
-		beforeBD = estimateWarpTokensBreakdown(model, working, tools, disableWarpTools)
-		if beforeBD.Total <= budget {
-			return working, beforeBD, beforeBD, compressedCount, summarizedMessages, 0
-		}
-	}
-
-	// Stage 5 hard fallback: drop oldest messages until within budget.
-	work := cloneMessages(working)
-	beforeTokens := beforeBD
-
-	// Find last user message index.
-	lastUser := -1
-	for i := len(work) - 1; i >= 0; i-- {
-		if work[i].Role == "user" {
-			lastUser = i
-			break
-		}
-	}
-	if lastUser == -1 {
-		lastUser = len(work) - 1
-	}
-
-	start := 0
-	for start < lastUser && len(work[start:]) > 1 {
-		testMsgs := work[start+1:]
-		bd := estimateWarpTokensBreakdown(model, testMsgs, tools, disableWarpTools)
-		if bd.Total <= budget {
-			start++
-			break
-		}
-		start++
-	}
-	trimmed = work[start:]
-	if len(trimmed) == 0 {
-		trimmed = work[len(work)-1:]
-	}
-	afterTokens := estimateWarpTokensBreakdown(model, trimmed, tools, disableWarpTools)
-	return trimmed, beforeTokens, afterTokens, compressedCount, summarizedMessages, start
+	trimmed = cloneMessages(messages)
+	before = estimateWarpTokensBreakdown(model, trimmed, tools, disableWarpTools)
+	return trimmed, before, before, 0, 0, 0
 }
 
 func estimateWarpTokensBreakdown(model string, messages []prompt.Message, tools []interface{}, disableWarpTools bool) warpTokenBreakdown {

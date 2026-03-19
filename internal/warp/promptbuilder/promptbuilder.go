@@ -70,6 +70,5 @@ func BuildWithMetaAndTools(messages []prompt.Message, system []prompt.SystemItem
 		promptText = injectThinkingPrefix(promptText)
 	}
 
-	promptText, chatHistory = enforceWarpPromptBudget(promptText, chatHistory, maxTokens)
-	return promptText, chatHistory, meta
+	return promptText, normalizeWarpPromptHistory(chatHistory), meta
 }

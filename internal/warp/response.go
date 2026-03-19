@@ -849,6 +849,9 @@ func parseNestedToolCall(data []byte, out *parsedEvent) {
 					return
 				}
 				fallbackName := fallbackToolName(field)
+				if !shouldEmitWarpFallbackToolName(fallbackName) {
+					continue
+				}
 				resolvedName, resolvedInput := parseFallbackToolInput(fallbackName, payload)
 				if strings.TrimSpace(resolvedName) == "" {
 					resolvedName = fallbackName
@@ -866,7 +869,7 @@ func parseNestedToolCall(data []byte, out *parsedEvent) {
 	if toolName == "" {
 		return
 	}
-	toolName = orchids.NormalizeToolNameFallback(toolName)
+	toolName = normalizeWarpFallbackToolName(toolName)
 	toolInput = normalizeToolInputForToolName(toolName, toolInput)
 	if isIncompleteToolCall(toolName, toolInput) {
 		return
@@ -1097,6 +1100,24 @@ func mapWarpToolCalls(name, rawArgs, callID string, index int) []toolCall {
 		Name:  baseName,
 		Input: marshalToolInput(transformed),
 	}}
+}
+
+func normalizeWarpFallbackToolName(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "write_to_long_running_shell_command":
+		return "Bash"
+	default:
+		return orchids.NormalizeToolNameFallback(name)
+	}
+}
+
+func shouldEmitWarpFallbackToolName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(normalizeWarpFallbackToolName(name))) {
+	case "bash", "grep", "glob", "read", "edit", "write":
+		return true
+	default:
+		return false
+	}
 }
 
 func transformWarpToolCall(name string, args map[string]interface{}) (string, map[string]interface{}) {

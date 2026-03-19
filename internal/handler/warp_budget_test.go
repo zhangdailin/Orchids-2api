@@ -8,7 +8,7 @@ import (
 	"orchids-api/internal/prompt"
 )
 
-func TestEnforceWarpBudget_SummarizesOlderMessagesBeforeDropping(t *testing.T) {
+func TestEnforceWarpBudget_PreservesLargeHistory(t *testing.T) {
 	t.Parallel()
 
 	messages := make([]prompt.Message, 0, 14)
@@ -25,25 +25,27 @@ func TestEnforceWarpBudget_SummarizesOlderMessagesBeforeDropping(t *testing.T) {
 		})
 	}
 
-	trimmed, _, after, _, summarized, dropped := enforceWarpBudget("auto-efficient", messages, nil, true, 2600)
-	if len(trimmed) == 0 {
-		t.Fatalf("expected non-empty trimmed messages")
+	trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget("auto-efficient", messages, nil, true, 2600)
+	if len(trimmed) != len(messages) {
+		t.Fatalf("expected message count unchanged, got %d want %d", len(trimmed), len(messages))
 	}
-	if summarized == 0 {
-		t.Fatalf("expected summarized messages > 0")
+	if compressed != 0 || summarized != 0 || dropped != 0 {
+		t.Fatalf("expected no budget actions, got compressed=%d summarized=%d dropped=%d", compressed, summarized, dropped)
 	}
-	if dropped != 0 {
-		t.Fatalf("expected summary stage to fit budget without dropping, dropped=%d", dropped)
+	if before.Total != after.Total {
+		t.Fatalf("expected token estimate unchanged, before=%d after=%d", before.Total, after.Total)
 	}
-	if !trimmed[0].Content.IsString() || !strings.Contains(trimmed[0].Content.GetText(), "[history_summary]") {
-		t.Fatalf("expected first message to be summary")
-	}
-	if after.Total > 2600 {
-		t.Fatalf("expected tokens within budget after summarization, got %d", after.Total)
+	for i := range trimmed {
+		if trimmed[i].Role != messages[i].Role {
+			t.Fatalf("message %d role changed: got %q want %q", i, trimmed[i].Role, messages[i].Role)
+		}
+		if trimmed[i].Content.GetText() != messages[i].Content.GetText() {
+			t.Fatalf("message %d content changed", i)
+		}
 	}
 }
 
-func TestEnforceWarpBudget_FallsBackToWindowWhenStillOverBudget(t *testing.T) {
+func TestEnforceWarpBudget_PreservesOversizedMessages(t *testing.T) {
 	t.Parallel()
 
 	messages := []prompt.Message{
@@ -52,15 +54,20 @@ func TestEnforceWarpBudget_FallsBackToWindowWhenStillOverBudget(t *testing.T) {
 		{Role: "user", Content: prompt.MessageContent{Text: "u2 " + strings.Repeat("x", 4000)}},
 	}
 
-	trimmed, _, after, compressed, summarized, dropped := enforceWarpBudget("auto-efficient", messages, nil, true, 350)
-	if len(trimmed) == 0 {
-		t.Fatalf("expected at least one message")
+	trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget("auto-efficient", messages, nil, true, 350)
+	if len(trimmed) != len(messages) {
+		t.Fatalf("expected oversized messages to be preserved, got %d want %d", len(trimmed), len(messages))
 	}
-	if compressed == 0 && summarized == 0 && dropped == 0 {
-		t.Fatalf("expected at least one budget action to be applied")
+	if compressed != 0 || summarized != 0 || dropped != 0 {
+		t.Fatalf("expected no budget actions, got compressed=%d summarized=%d dropped=%d", compressed, summarized, dropped)
 	}
-	if after.Total > 350 {
-		t.Fatalf("expected final tokens within budget, got %d", after.Total)
+	if before.Total != after.Total {
+		t.Fatalf("expected token estimate unchanged, before=%d after=%d", before.Total, after.Total)
+	}
+	for i := range trimmed {
+		if trimmed[i].Content.GetText() != messages[i].Content.GetText() {
+			t.Fatalf("message %d content changed", i)
+		}
 	}
 }
 

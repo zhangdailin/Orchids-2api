@@ -945,6 +945,28 @@ func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequeste
 	}
 }
 
+func TestStreamHandler_FinishResponse_UsesPriorToolResultFallbackForSuppressedDuplicateMutations(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false}
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	defer sh.release()
+
+	sh.setPreferPriorToolResultFallback(true)
+	sh.toolDedupCount = 1
+	sh.suppressedToolCalls = 1
+	sh.finishResponse("end_turn")
+
+	out := rec.buf.String()
+	if !strings.Contains(out, duplicateToolResultFallbackText) {
+		t.Fatalf("expected duplicate-tool fallback text in SSE output, got: %s", out)
+	}
+	if strings.Contains(out, genericEmptyOutputFallbackText) {
+		t.Fatalf("did not expect generic empty fallback when duplicate-tool fallback is preferred, got: %s", out)
+	}
+}
+
 func TestStreamHandler_FinishResponse_InjectsNoToolsFallbackDespiteInternalBlocks(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()

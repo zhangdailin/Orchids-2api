@@ -1128,6 +1128,11 @@ func looksLikeToolResultFailure(text string) bool {
 		"permission denied",
 		"is a directory",
 		"current working directory is ",
+		"file has not been read yet",
+		"read it first before writing to it",
+		"old_string not found",
+		"string to replace not found",
+		"could not find old_string",
 	} {
 		if strings.Contains(lower, marker) {
 			return true

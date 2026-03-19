@@ -480,6 +480,82 @@ func TestWarpToolResultFollowupWithText_DisablesTools(t *testing.T) {
 	}
 }
 
+func TestWarpToolResultFollowup_DuplicateWriteFallsBackToPriorToolResult(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{
+		eventsByOp: [][]upstream.SSEMessage{
+			{
+				{
+					Type: "model.tool-call",
+					Event: map[string]interface{}{
+						"toolCallId": "tool_new_1",
+						"toolName":   "Write",
+						"input":      `{"file_path":"scratch.txt","content":"alpha\nbeta\n"}`,
+					},
+				},
+				{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}},
+			},
+		},
+	}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-opus-4-6",
+		"stream":false,
+		"messages":[
+			{
+				"role":"user",
+				"content":[
+					{"type":"text","text":"Create scratch.txt with alpha and beta"}
+				]
+			},
+			{
+				"role":"assistant",
+				"content":[
+					{"type":"tool_use","id":"tool_old_1","name":"Write","input":{"file_path":"scratch.txt","content":"alpha\nbeta\n"}}
+				]
+			},
+			{
+				"role":"user",
+				"content":[
+					{"type":"tool_result","tool_use_id":"tool_old_1","content":"Done"}
+				]
+			}
+		],
+		"tools":[
+			{
+				"name":"Write",
+				"description":"Write a file",
+				"input_schema":{
+					"type":"object",
+					"properties":{
+						"file_path":{"type":"string"},
+						"content":{"type":"string"}
+					},
+					"required":["file_path","content"]
+				}
+			}
+		]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	out := rec.Body.String()
+	if !strings.Contains(out, duplicateToolResultFallbackText) {
+		t.Fatalf("expected duplicate-tool-result fallback in response, got: %s", out)
+	}
+	if strings.Contains(out, genericEmptyOutputFallbackText) {
+		t.Fatalf("did not expect generic empty fallback in response, got: %s", out)
+	}
+}
+
 func TestWarpToolResultFollowup_SplitsCurrentTurnAndChainsConversationIDs(t *testing.T) {
 	t.Parallel()
 

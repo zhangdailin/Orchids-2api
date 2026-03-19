@@ -520,6 +520,167 @@ func TestSeedSideEffectDedupFromMessages_SuppressRepeatDeleteAcrossTurns(t *test
 	}
 }
 
+func TestSeedSideEffectDedupFromMessages_DoesNotSuppressFailedEditRetryAfterRead(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	history := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "把第三行改掉"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:  "tool_use",
+						ID:    "tool_edit_1",
+						Name:  "Edit",
+						Input: map[string]interface{}{"file_path": "/tmp/demo.txt", "old_string": "three", "new_string": "LONG_SESSION_OK"},
+					},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:      "tool_result",
+						ToolUseID: "tool_edit_1",
+						Content:   "File has not been read yet. Read it first before writing to it.",
+					},
+				},
+			},
+		},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:  "tool_use",
+						ID:    "tool_read_1",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "/tmp/demo.txt"},
+					},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:      "tool_result",
+						ToolUseID: "tool_read_1",
+						Content:   "one\ntwo\nthree",
+					},
+				},
+			},
+		},
+	}
+	h.seedSideEffectDedupFromMessages(history)
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "tool_edit_2",
+			"toolName":   "Edit",
+			"input":      `{"file_path":"/tmp/demo.txt","old_string":"three","new_string":"LONG_SESSION_OK"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if h.toolDedupCount != 0 {
+		t.Fatalf("expected failed edit retry not to be deduped, got %d", h.toolDedupCount)
+	}
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected retry edit tool call to be emitted, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["name"].(string); got != "Edit" {
+		t.Fatalf("expected Edit tool call, got %q", got)
+	}
+}
+
+func TestSeedSideEffectDedupFromMessages_SuppressesRepeatSuccessfulEditAcrossTurns(t *testing.T) {
+	t.Parallel()
+
+	h := newStreamHandler(
+		&config.Config{OutputTokenMode: "final"},
+		httptest.NewRecorder(),
+		debug.New(false, false),
+		false,
+		false,
+		adapter.FormatAnthropic,
+		"",
+	)
+	defer h.release()
+
+	history := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "把第三行改掉"}},
+		{
+			Role: "assistant",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:  "tool_use",
+						ID:    "tool_edit_1",
+						Name:  "Edit",
+						Input: map[string]interface{}{"file_path": "/tmp/demo.txt", "old_string": "three", "new_string": "LONG_SESSION_OK"},
+					},
+				},
+			},
+		},
+		{
+			Role: "user",
+			Content: prompt.MessageContent{
+				Blocks: []prompt.ContentBlock{
+					{
+						Type:      "tool_result",
+						ToolUseID: "tool_edit_1",
+						Content:   "Done",
+					},
+				},
+			},
+		},
+	}
+	h.seedSideEffectDedupFromMessages(history)
+
+	h.handleMessage(upstream.SSEMessage{
+		Type: "model.tool-call",
+		Event: map[string]interface{}{
+			"toolCallId": "tool_edit_2",
+			"toolName":   "Edit",
+			"input":      `{"file_path":"/tmp/demo.txt","old_string":"three","new_string":"LONG_SESSION_OK"}`,
+		},
+	})
+	h.handleMessage(upstream.SSEMessage{
+		Type:  "model.finish",
+		Event: map[string]interface{}{"finishReason": "tool_use"},
+	})
+
+	if h.toolDedupCount != 1 {
+		t.Fatalf("expected successful edit retry to be deduped, got %d", h.toolDedupCount)
+	}
+	if len(h.contentBlocks) != 1 {
+		t.Fatalf("expected fallback text block after deduped repeat edit, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
+	}
+	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
+		t.Fatalf("expected fallback text block, got %q", got)
+	}
+}
+
 func TestSeedSideEffectDedupFromMessages_DoesNotUseOlderTurnBeforeLatestUserText(t *testing.T) {
 	t.Parallel()
 

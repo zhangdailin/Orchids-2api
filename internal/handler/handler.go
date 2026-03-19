@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	rtdebug "runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,7 +29,6 @@ import (
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
-	"orchids-api/internal/warp"
 	warpprompt "orchids-api/internal/warp/promptbuilder"
 )
 
@@ -365,6 +365,34 @@ func (h *Handler) finishRequest(hash string) {
 	h.dedupStore.Finish(context.Background(), hash)
 }
 
+func stainlessRetryCount(r *http.Request) int {
+	if r == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(r.Header.Get("X-Stainless-Retry-Count"))
+	if raw == "" {
+		return 0
+	}
+	count, err := strconv.Atoi(raw)
+	if err != nil || count < 0 {
+		return 0
+	}
+	return count
+}
+
+func writeRetryDedupError(w http.ResponseWriter, inFlight bool) {
+	status := http.StatusConflict
+	code := apperrors.CodeInvalidRequest
+	message := "Automatic retry suppressed because an identical request was already handled recently."
+	if inFlight {
+		status = http.StatusTooManyRequests
+		code = apperrors.CodeOverloaded
+		message = "Automatic retry suppressed because an identical request is still in progress. Retry again shortly."
+		w.Header().Set("Retry-After", "1")
+	}
+	apperrors.New(code, message, status).WriteResponse(w)
+}
+
 func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat) {
 	if req.Stream {
 		if responseFormat == adapter.FormatOpenAI {
@@ -373,17 +401,17 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 			w.Header().Set("Connection", "keep-alive")
 
 			type openAIStreamChoice struct {
-				Index        int `json:"index"`
-				Delta        struct {
+				Index int `json:"index"`
+				Delta struct {
 					Role string `json:"role,omitempty"`
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason,omitempty"`
 			}
 			type openAIStreamChunk struct {
-				ID      string `json:"id"`
-				Object  string `json:"object"`
-				Created int64  `json:"created"`
-				Model   string `json:"model"`
+				ID      string               `json:"id"`
+				Object  string               `json:"object"`
+				Created int64                `json:"created"`
+				Model   string               `json:"model"`
 				Choices []openAIStreamChoice `json:"choices"`
 			}
 			startChunk := openAIStreamChunk{
@@ -407,7 +435,7 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 				Choices []struct {
 					Index        int            `json:"index"`
 					Delta        map[string]any `json:"delta"`
-					FinishReason *string `json:"finish_reason,omitempty"`
+					FinishReason *string        `json:"finish_reason,omitempty"`
 				} `json:"choices"`
 			}{
 				ID:      "dup",
@@ -417,7 +445,7 @@ func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeReques
 				Choices: []struct {
 					Index        int            `json:"index"`
 					Delta        map[string]any `json:"delta"`
-					FinishReason *string `json:"finish_reason,omitempty"`
+					FinishReason *string        `json:"finish_reason,omitempty"`
 				}{{
 					Index:        0,
 					Delta:        map[string]any{},
@@ -547,11 +575,24 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	reqHash := h.computeRequestHash(r, bodyBytes)
 	semanticHash := h.computeSemanticRequestHash(r, req)
 	traceID := shortRequestTrace(reqHash)
-	slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", r.Header.Get("X-Stainless-Retry-Count"))
+	retryCount := stainlessRetryCount(r)
+	slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", retryCount)
 
 	exactKey := "exact:" + reqHash
 	registeredKeys := []string{}
 	if dup, inFlight := h.registerRequest(exactKey); dup {
+		if retryCount > 0 {
+			slog.Warn("Duplicate retry request rejected", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent(), "retry_count", retryCount)
+			logger.LogEarlyExit("duplicate_retry_request", map[string]interface{}{
+				"hash":        exactKey,
+				"in_flight":   inFlight,
+				"path":        r.URL.Path,
+				"kind":        "exact",
+				"retry_count": retryCount,
+			})
+			writeRetryDedupError(w, inFlight)
+			return
+		}
 		slog.Warn("Duplicate request suppressed", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
 		logger.LogEarlyExit("duplicate_request", map[string]interface{}{
 			"hash":      exactKey,
@@ -569,6 +610,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if dup, inFlight := h.registerRequest(semanticKey); dup {
 			for i := len(registeredKeys) - 1; i >= 0; i-- {
 				h.finishRequest(registeredKeys[i])
+			}
+			if retryCount > 0 {
+				slog.Warn("Semantic duplicate retry request rejected", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent(), "retry_count", retryCount)
+				logger.LogEarlyExit("duplicate_retry_request", map[string]interface{}{
+					"hash":        semanticKey,
+					"in_flight":   inFlight,
+					"path":        r.URL.Path,
+					"kind":        "semantic",
+					"retry_count": retryCount,
+				})
+				writeRetryDedupError(w, inFlight)
+				return
 			}
 			slog.Warn("Semantic duplicate request suppressed", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
 			logger.LogEarlyExit("duplicate_request", map[string]interface{}{
@@ -937,6 +990,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh := newStreamHandler(
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
+	sh.setPreferPriorToolResultFallback(lastUserIsToolResultFollowup(upstreamMessages))
 	sh.setDisallowToolCalls(gateNoTools)
 	if !isOrchidsProtocol {
 		sh.setAllowedToolNames(supportedToolNames(effectiveTools))
@@ -1073,30 +1127,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				slog.Debug("Using SendRequestWithPayload")
 				warpBatches := []warpToolResultBatch{{Messages: upstreamMessages}}
 				if isWarpRequest {
-					// Enforce hard token budget for Warp requests to avoid runaway context cost.
-					if _, isWarp := apiClient.(*warp.Client); isWarp {
-						budget := h.config.ContextMaxTokens
-						if budget <= 0 || budget > 12000 {
-							budget = 12000
-						}
-						trimmed, before, after, compressed, summarized, dropped := enforceWarpBudget(mappedModel, upstreamMessages, effectiveTools, gateNoTools, budget)
-						if before.Total != after.Total || compressed > 0 || summarized > 0 || dropped > 0 {
-							slog.Debug(
-								"Warp budget applied",
-								"budget", budget,
-								"tokens_before", before.Total,
-								"tokens_after", after.Total,
-								"prompt_tokens", after.PromptTokens,
-								"messages_tokens", after.MessagesTokens,
-								"tool_tokens", after.ToolTokens,
-								"compressed_blocks", compressed,
-								"summarized_messages", summarized,
-								"dropped_messages", dropped,
-							)
-						}
-						upstreamMessages = trimmed
-					}
-
 					if h.config.WarpSplitToolResults || lastUserIsToolResultFollowup(upstreamMessages) {
 						batches, total := splitWarpToolResults(upstreamMessages, 1)
 						if len(batches) > 1 {
