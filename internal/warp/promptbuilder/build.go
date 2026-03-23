@@ -106,28 +106,40 @@ func supportedToolNames(tools []interface{}) []string {
 		return nil
 	}
 
-	seen := make(map[string]struct{}, len(promptToolOrder))
+	seen := make(map[string]struct{}, len(tools))
+	custom := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		name := extractToolSpecName(tool)
 		if name == "" {
 			continue
 		}
-		mappedName := normalizeSupportedToolName(name)
-		if mappedName == "" {
+		name = strings.TrimSpace(name)
+		if name == "" {
 			continue
 		}
-		seen[strings.ToLower(mappedName)] = struct{}{}
+		mappedName := normalizeSupportedToolName(name)
+		if mappedName != "" {
+			seen[strings.ToLower(mappedName)] = struct{}{}
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		custom = append(custom, name)
 	}
 	if len(seen) == 0 {
 		return nil
 	}
 
-	out := make([]string, 0, len(seen))
+	out := make([]string, 0, len(seen)+len(custom))
 	for _, name := range promptToolOrder {
 		if _, ok := seen[strings.ToLower(name)]; ok {
 			out = append(out, name)
 		}
 	}
+	out = append(out, custom...)
 	return out
 }
 

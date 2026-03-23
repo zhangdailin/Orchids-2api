@@ -73,6 +73,32 @@ func appendChatCompletionChunkWithUsage(dst []byte, id string, created int64, mo
 	return dst
 }
 
+func appendChatCompletionSnapshotChunkWithUsage(dst []byte, id string, created int64, model, fingerprint, messageContent string, finish string, hasFinish bool, usage map[string]interface{}) []byte {
+	dst = append(dst, `{"id":`...)
+	dst = strconv.AppendQuote(dst, id)
+	dst = append(dst, `,"object":"chat.completion.chunk","created":`...)
+	dst = strconv.AppendInt(dst, created, 10)
+	dst = append(dst, `,"model":`...)
+	dst = strconv.AppendQuote(dst, model)
+	dst = append(dst, `,"service_tier":null`...)
+	dst = append(dst, `,"system_fingerprint":`...)
+	dst = strconv.AppendQuote(dst, fingerprint)
+	dst = append(dst, `,"choices":[{"index":0,"delta":{},"message":{"role":"assistant","content":`...)
+	dst = strconv.AppendQuote(dst, messageContent)
+	dst = append(dst, `},"logprobs":null,"finish_reason":`...)
+	if hasFinish {
+		dst = strconv.AppendQuote(dst, finish)
+	} else {
+		dst = append(dst, `null`...)
+	}
+	dst = append(dst, `}]`...)
+	if hasFinish {
+		dst = appendUsage(dst, usage)
+	}
+	dst = append(dst, '}')
+	return dst
+}
+
 func appendChatCompletionToolCallsChunk(dst []byte, id string, created int64, model, fingerprint string, toolCalls []map[string]interface{}, finish string, hasFinish bool) []byte {
 	return appendChatCompletionToolCallsChunkWithUsage(dst, id, created, model, fingerprint, toolCalls, finish, hasFinish, nil)
 }
@@ -166,12 +192,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var req ChatCompletionsRequest
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
-		return
-	}
-	if err := json.Unmarshal(raw, &req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
@@ -351,7 +372,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		h.streamChat(w, &req, req.Model, spec, sess.token, publicBase, hasAttachments, req.Tools, req.ToolChoice, resp.Body, logger)
 		return
 	}
-	h.collectChat(w, &req, req.Model, spec, sess.token, publicBase, req.Tools, req.ToolChoice, resp.Body, logger)
+	h.collectChat(w, &req, req.Model, spec, sess.token, publicBase, hasAttachments, req.Tools, req.ToolChoice, resp.Body, logger)
 }
 
 func (h *Handler) buildChatPayload(
@@ -1033,28 +1054,40 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	lastMessage := ""
 	sentAny := false
 	var finalUsage map[string]interface{}
+	enableMediaExtraction := hasAttachments || spec.IsVideo
 	// Image URL stream handling: prefer full image variants over -part-0 previews.
-	seenFull := map[string]bool{}
-	pendingPart := map[string]string{}
-	emitted := map[string]bool{}
+	seenFull := map[string]bool(nil)
+	pendingPart := map[string]string(nil)
+	emitted := map[string]bool(nil)
+	if enableMediaExtraction {
+		seenFull = map[string]bool{}
+		pendingPart = map[string]string{}
+		emitted = map[string]bool{}
+	}
 	sawModelMessage := false
 	lastTextChunkNorm := ""
 	var tokenFallback strings.Builder
 	emittedModelMessage := ""
 	pendingModelMessage := ""
 	toolStreamMode := toolCallsEnabled(tools, toolChoice)
+	toolParser := newToolCallParser(tools, toolChoice)
+	finalSnapshotEnabled := !toolStreamMode && !spec.IsVideo
 	emittedToolCalls := false
 	toolCallIndex := 0
 	toolStreamState := "text"
 	toolStreamBuffer := ""
 	toolStreamPartial := ""
 	toolStreamSawEvents := false
+	finalSnapshotMarkdown := make([]string, 0, 4)
 
 	var mf *streamMarkupFilter
 	if !hasAttachments && !toolStreamMode {
 		mf = &streamMarkupFilter{}
 	}
-	textRefCollector := newStreamTextImageRefCollector()
+	var textRefCollector *streamTextImageRefCollector
+	if enableMediaExtraction {
+		textRefCollector = newStreamTextImageRefCollector()
+	}
 	chunkScratch := make([]byte, 0, 256)
 
 	emitChunk := func(role, content string, finish string, hasFinish bool) {
@@ -1075,13 +1108,15 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		if toolStreamMode {
 			return
 		}
-		collapsed := collapseDuplicatedLongChunk(content)
-		if collapsed != content && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
-			slog.Debug("grok stream collapsed duplicated text chunk",
-				"before_chars", utf8.RuneCountInString(strings.TrimSpace(content)),
-				"after_chars", utf8.RuneCountInString(strings.TrimSpace(collapsed)))
+		if len(content) >= 24 {
+			collapsed := collapseDuplicatedLongChunk(content)
+			if collapsed != content && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
+				slog.Debug("grok stream collapsed duplicated text chunk",
+					"before_chars", utf8.RuneCountInString(strings.TrimSpace(content)),
+					"after_chars", utf8.RuneCountInString(strings.TrimSpace(collapsed)))
+			}
+			content = collapsed
 		}
-		content = collapsed
 		norm := strings.TrimSpace(content)
 		if norm == "" {
 			return
@@ -1123,6 +1158,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	}
 
 	emitImageURL := func(raw string) {
+		if !enableMediaExtraction {
+			return
+		}
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
 			return
@@ -1149,6 +1187,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			val = publicBase + val
 		}
 		if md := formatImageMarkdown(val); md != "" {
+			finalSnapshotMarkdown = append(finalSnapshotMarkdown, md)
 			emitChunk("", md, "", false)
 			emitted[raw] = true
 		}
@@ -1238,7 +1277,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			}
 
 			toolStreamBuffer += data[:endIdx]
-			if toolCall := parseToolCallBlock(toolStreamBuffer, tools, toolChoice); toolCall != nil {
+			if toolCall := toolParser.parseBlock(toolStreamBuffer); toolCall != nil {
 				emitToolCallsChunk("", []map[string]interface{}{toolCall}, "", false)
 				emittedToolCalls = true
 				toolStreamSawEvents = true
@@ -1262,7 +1301,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			return
 		}
 		raw := toolStreamBuffer + toolStreamPartial
-		if toolCall := parseToolCallBlock(raw, tools, toolChoice); toolCall != nil {
+		if toolCall := toolParser.parseBlock(raw); toolCall != nil {
 			emitToolCallsChunk("", []map[string]interface{}{toolCall}, "", false)
 			emittedToolCalls = true
 			toolStreamSawEvents = true
@@ -1297,7 +1336,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 				// Suppress thinking tokens to avoid leaking chain-of-thought.
 				return nil
 			}
-			textRefCollector.feed(tokenDelta)
+			if textRefCollector != nil {
+				textRefCollector.feed(tokenDelta)
+			}
 			if toolStreamMode {
 				handleToolStreamChunk(tokenDelta)
 			} else if !sawModelMessage {
@@ -1308,10 +1349,12 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			if msg := extractUpstreamMessage(mr); strings.TrimSpace(msg) != "" && msg != lastMessage {
 				lastMessage = msg
 				sawModelMessage = true
-				textRefCollector.feed(msg)
+				if textRefCollector != nil {
+					textRefCollector.feed(msg)
+				}
 				if pendingModelMessage != "" {
 					stable := commonPrefixText(pendingModelMessage, msg)
-					if stable != "" && stable != emittedModelMessage {
+					if stable != "" && stable != emittedModelMessage && strings.HasPrefix(stable, emittedModelMessage) {
 						if delta := streamMessageDelta(emittedModelMessage, stable); delta != "" {
 							emitCleanText(delta)
 							emittedModelMessage = stable
@@ -1320,7 +1363,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 				}
 				pendingModelMessage = msg
 				if toolStreamMode && !toolStreamSawEvents && !emittedToolCalls {
-					textContent, toolCalls := parseToolCalls(strings.TrimSpace(msg), tools, toolChoice)
+					textContent, toolCalls := toolParser.parseCalls(strings.TrimSpace(msg))
 					if len(toolCalls) > 0 {
 						emitToolCallsChunk(textContent, toolCalls, "", false)
 						emittedToolCalls = true
@@ -1331,10 +1374,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
 				}
 			}
-			forEachImageCandidateFromValue(mr, true, true, 80, emitImageURL)
+			if enableMediaExtraction {
+				forEachImageCandidateFromValue(mr, true, true, 80, emitImageURL)
+			}
 		}
 		// Broader fallback: sometimes URLs live outside modelResponse.
-		forEachImageCandidateFromValue(resp, true, true, 120, emitImageURL)
+		if enableMediaExtraction {
+			forEachImageCandidateFromValue(resp, true, true, 120, emitImageURL)
+		}
 		if spec.IsVideo {
 			if progress, videoURL, _, ok := extractVideoProgress(resp); ok {
 				if progress > 0 && progress < 100 {
@@ -1381,9 +1428,10 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	}
 
 	finalBufferedText := ""
+	finalSnapshotContent := ""
 	// Flush any remaining buffered text (avoids "no content" when stream ends quickly).
 	if mf != nil {
-		if pendingModelMessage != "" && pendingModelMessage != emittedModelMessage {
+		if pendingModelMessage != "" && pendingModelMessage != emittedModelMessage && strings.HasPrefix(pendingModelMessage, emittedModelMessage) {
 			if delta := streamMessageDelta(emittedModelMessage, pendingModelMessage); delta != "" {
 				emitCleanText(delta)
 			}
@@ -1401,7 +1449,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			slog.Debug("grok stream fallback used token deltas (no modelResponse)", "model", model)
 		}
 	} else {
-		if pendingModelMessage != "" && pendingModelMessage != emittedModelMessage {
+		if pendingModelMessage != "" && pendingModelMessage != emittedModelMessage && strings.HasPrefix(pendingModelMessage, emittedModelMessage) {
 			if delta := streamMessageDelta(emittedModelMessage, pendingModelMessage); delta != "" {
 				if cleaned := sanitizeUpstreamText(delta); cleaned != "" {
 					if toolStreamMode {
@@ -1421,29 +1469,46 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			}
 		}
 	}
+	finalUsageText := strings.TrimSpace(finalBufferedText)
+	if !toolStreamMode {
+		switch {
+		case strings.TrimSpace(pendingModelMessage) != "":
+			finalSnapshotContent = collapseDuplicatedLongChunk(sanitizeUpstreamText(pendingModelMessage))
+		case tokenFallback.Len() > 0:
+			finalSnapshotContent = collapseDuplicatedLongChunk(sanitizeUpstreamText(tokenFallback.String()))
+		}
+		if len(finalSnapshotMarkdown) > 0 {
+			finalSnapshotContent += strings.Join(finalSnapshotMarkdown, "")
+		}
+		if finalUsageText == "" {
+			finalUsageText = strings.TrimSpace(finalSnapshotContent)
+		}
+	}
 	// Emit any pending part-0 previews only if we never saw a full variant.
 	// Try to fetch/emit the full variant first; if it doesn't exist, fall back to the preview.
-	for full, part := range pendingPart {
-		if seenFull[full] {
-			continue
-		}
-		// Try full (cache through this server for client reachability).
-		if name, err := h.cacheMediaURL(context.Background(), token, full, "image"); err == nil && name != "" {
-			val := "/grok/v1/files/image/" + name
-			if publicBase != "" && strings.HasPrefix(val, "/") {
-				val = publicBase + val
+	if enableMediaExtraction {
+		for full, part := range pendingPart {
+			if seenFull[full] {
+				continue
 			}
-			if md := formatImageMarkdown(val); md != "" {
-				emitChunk("", md, "", false)
+			// Try full (cache through this server for client reachability).
+			if name, err := h.cacheMediaURL(context.Background(), token, full, "image"); err == nil && name != "" {
+				val := "/grok/v1/files/image/" + name
+				if publicBase != "" && strings.HasPrefix(val, "/") {
+					val = publicBase + val
+				}
+				if md := formatImageMarkdown(val); md != "" {
+					emitChunk("", md, "", false)
+				}
+				continue
 			}
-			continue
+			// Fall back to preview.
+			emitImageURL(part)
 		}
-		// Fall back to preview.
-		emitImageURL(part)
-	}
 
-	// Final pass: emit URL/path candidates found in incremental text collector.
-	textRefCollector.emit(emitImageURL)
+		// Final pass: emit URL/path candidates found in incremental text collector.
+		textRefCollector.emit(emitImageURL)
+	}
 
 	if toolStreamMode {
 		flushToolStreamChunk()
@@ -1459,7 +1524,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 			}
 			return
 		}
-		textContent, toolCalls := parseToolCalls(strings.TrimSpace(finalBufferedText), tools, toolChoice)
+		textContent, toolCalls := toolParser.parseCalls(strings.TrimSpace(finalBufferedText))
 		textContent = strings.TrimSpace(textContent)
 		if len(toolCalls) > 0 {
 			finalUsage = buildChatUsagePayload(req, textContent, toolCalls)
@@ -1475,8 +1540,20 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		}
 	}
 
-	finalUsage = buildChatUsagePayload(req, strings.TrimSpace(finalBufferedText), nil)
-	emitChunk("", "", "stop", true)
+	finalUsage = buildChatUsagePayload(req, finalUsageText, nil)
+	if finalSnapshotEnabled && finalSnapshotContent != "" {
+		raw := appendChatCompletionSnapshotChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, finalSnapshotContent, "stop", true, finalUsage)
+		chunkScratch = raw[:0]
+		writeSSEBytes(w, "", raw)
+		if logger != nil {
+			logger.LogOutputSSE("", string(raw))
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	} else {
+		emitChunk("", "", "stop", true)
+	}
 	writeSSEBytes(w, "", []byte("[DONE]"))
 	if logger != nil {
 		logger.LogOutputSSE("", "[DONE]")
@@ -1486,11 +1563,12 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	}
 }
 
-func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest, model string, spec ModelSpec, token string, publicBase string, tools []ToolDef, toolChoice interface{}, body io.Reader, logger *debug.Logger) {
+func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, tools []ToolDef, toolChoice interface{}, body io.Reader, logger *debug.Logger) {
 	id := "chatcmpl_" + randomHex(8)
 	lastMessage := ""
 	videoURL := ""
 	fingerprint := ""
+	enableMediaExtraction := hasAttachments || spec.IsVideo
 	imageCandidates := make([]string, 0, 8)
 	imageCandidateSet := map[string]struct{}{}
 	var tokenContent strings.Builder
@@ -1534,9 +1612,13 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 					slog.Debug("grok message contains render/tool markup", "has_modelResponse", true)
 				}
 			}
-			forEachImageCandidateFromValue(mr, true, false, 0, addImageCandidate)
+			if enableMediaExtraction {
+				forEachImageCandidateFromValue(mr, true, false, 0, addImageCandidate)
+			}
 		}
-		forEachImageCandidateFromValue(resp, false, false, 0, addImageCandidate)
+		if enableMediaExtraction {
+			forEachImageCandidateFromValue(resp, false, false, 0, addImageCandidate)
+		}
 		if spec.IsVideo {
 			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 && strings.TrimSpace(vurl) != "" {
 				videoURL = strings.TrimSpace(vurl)
@@ -1560,7 +1642,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 
 	var toolCalls []map[string]interface{}
 	if toolCallsEnabled(tools, toolChoice) {
-		textContent, parsedToolCalls := parseToolCalls(finalContent, tools, toolChoice)
+		textContent, parsedToolCalls := newToolCallParser(tools, toolChoice).parseCalls(finalContent)
 		finalContent = strings.TrimSpace(textContent)
 		toolCalls = parsedToolCalls
 	}
@@ -1579,16 +1661,18 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 	}
 
 	// Append any collected image links as Markdown, after text cleanup.
-	imgs := normalizeImageURLs(imageCandidates, 8)
-	for _, u := range imgs {
-		val, errV := h.imageOutputValue(context.Background(), token, u, "url")
-		if errV != nil || strings.TrimSpace(val) == "" {
-			val = u
+	if enableMediaExtraction {
+		imgs := normalizeImageURLs(imageCandidates, 8)
+		for _, u := range imgs {
+			val, errV := h.imageOutputValue(context.Background(), token, u, "url")
+			if errV != nil || strings.TrimSpace(val) == "" {
+				val = u
+			}
+			if publicBase != "" && strings.HasPrefix(val, "/") {
+				val = publicBase + val
+			}
+			finalContent += formatImageMarkdown(val)
 		}
-		if publicBase != "" && strings.HasPrefix(val, "/") {
-			val = publicBase + val
-		}
-		finalContent += formatImageMarkdown(val)
 	}
 	resp := map[string]interface{}{
 		"id":                 id,

@@ -12,6 +12,7 @@ import (
 	"orchids-api/internal/store"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,12 +20,16 @@ const maxEditImageBytes = 50 * 1024 * 1024
 
 var cacheBaseDir = filepath.Join("data", "tmp")
 
+const grokModelValidationCacheTTL = 3 * time.Second
+
 type Handler struct {
-	base        *handler.BaseHandler
-	cfg         *config.Config
-	lb          *loadbalancer.LoadBalancer
-	client      *Client
-	connTracker loadbalancer.ConnTracker
+	base         *handler.BaseHandler
+	cfg          *config.Config
+	lb           *loadbalancer.LoadBalancer
+	client       *Client
+	connTracker  loadbalancer.ConnTracker
+	modelCacheMu sync.RWMutex
+	modelCache   map[string]time.Time
 }
 
 type chatAccountSession struct {
@@ -45,7 +50,38 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		lb:          lb,
 		client:      New(cfg),
 		connTracker: loadbalancer.NewMemoryConnTracker(),
+		modelCache:  make(map[string]time.Time),
 	}
+}
+
+func (h *Handler) isModelValidationCached(modelID string) bool {
+	if h == nil || strings.TrimSpace(modelID) == "" {
+		return false
+	}
+	h.modelCacheMu.RLock()
+	expiresAt, ok := h.modelCache[modelID]
+	h.modelCacheMu.RUnlock()
+	if !ok {
+		return false
+	}
+	if time.Now().Before(expiresAt) {
+		return true
+	}
+	h.modelCacheMu.Lock()
+	if staleAt, ok := h.modelCache[modelID]; ok && !time.Now().Before(staleAt) {
+		delete(h.modelCache, modelID)
+	}
+	h.modelCacheMu.Unlock()
+	return false
+}
+
+func (h *Handler) cacheValidatedModel(modelID string) {
+	if h == nil || strings.TrimSpace(modelID) == "" {
+		return
+	}
+	h.modelCacheMu.Lock()
+	h.modelCache[modelID] = time.Now().Add(grokModelValidationCacheTTL)
+	h.modelCacheMu.Unlock()
 }
 
 func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, error) {
@@ -69,10 +105,14 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 
 func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error {
 	id := normalizeModelID(modelID)
+	if h.isModelValidationCached(id) {
+		return nil
+	}
 	if h == nil || h.lb == nil || h.lb.Store == nil {
 		if !modelpolicy.IsPublicGrokModelID(id) {
 			return fmt.Errorf("model not found")
 		}
+		h.cacheValidatedModel(id)
 		return nil
 	}
 
@@ -93,6 +133,7 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 	if !strings.EqualFold(channel, "grok") {
 		return fmt.Errorf("model not found")
 	}
+	h.cacheValidatedModel(id)
 	return nil
 }
 
@@ -121,6 +162,7 @@ func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool
 
 	if existing, err := h.lb.Store.GetModelByModelID(ctx, id); err == nil && existing != nil {
 		if modelpolicy.IsVisibleGrokModel(id, existing.Verified) && existing.Status.Enabled() {
+			h.cacheValidatedModel(id)
 			return true
 		}
 	}
@@ -152,6 +194,7 @@ func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool
 			slog.Warn("Auto verify grok model update failed", "model_id", id, "error", err)
 			return false
 		}
+		h.cacheValidatedModel(id)
 		slog.Debug("Auto verified grok model", "model_id", id)
 		return true
 	}
@@ -165,12 +208,16 @@ func (h *Handler) tryAutoRegisterModel(ctx context.Context, modelID string) bool
 	}
 	if err := h.lb.Store.CreateModel(ctx, newModel); err != nil {
 		if m, checkErr := h.lb.Store.GetModelByModelID(ctx, id); checkErr == nil && m != nil {
+			if modelpolicy.IsVisibleGrokModel(id, m.Verified) && m.Status.Enabled() {
+				h.cacheValidatedModel(id)
+			}
 			return modelpolicy.IsVisibleGrokModel(id, m.Verified) && m.Status.Enabled()
 		}
 		slog.Warn("Auto verify grok model create failed", "model_id", id, "error", err)
 		return false
 	}
 
+	h.cacheValidatedModel(id)
 	slog.Debug("Auto verified grok model", "model_id", id)
 	return true
 }

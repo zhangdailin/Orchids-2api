@@ -9,20 +9,19 @@ import (
 )
 
 type ChatCompletionsRequest struct {
-	Model             string          `json:"model"`
-	Messages          []ChatMessage   `json:"messages"`
-	Stream            bool            `json:"stream"`
-	StreamProvided    bool            `json:"-"`
-	Thinking          *string         `json:"thinking,omitempty"`
-	ReasoningEffort   *string         `json:"reasoning_effort,omitempty"`
-	Temperature       *float64        `json:"temperature,omitempty"`
-	TopP              *float64        `json:"top_p,omitempty"`
-	VideoConfig       *VideoConfig    `json:"video_config,omitempty"`
-	ImageConfig       *ImageConfig    `json:"image_config,omitempty"`
-	Tools             []ToolDef       `json:"tools,omitempty"`
-	ToolChoice        interface{}     `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
-	Raw               json.RawMessage `json:"-"`
+	Model             string        `json:"model"`
+	Messages          []ChatMessage `json:"messages"`
+	Stream            bool          `json:"stream"`
+	StreamProvided    bool          `json:"-"`
+	Thinking          *string       `json:"thinking,omitempty"`
+	ReasoningEffort   *string       `json:"reasoning_effort,omitempty"`
+	Temperature       *float64      `json:"temperature,omitempty"`
+	TopP              *float64      `json:"top_p,omitempty"`
+	VideoConfig       *VideoConfig  `json:"video_config,omitempty"`
+	ImageConfig       *ImageConfig  `json:"image_config,omitempty"`
+	Tools             []ToolDef     `json:"tools,omitempty"`
+	ToolChoice        interface{}   `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool         `json:"parallel_tool_calls,omitempty"`
 }
 
 type ChatMessage struct {
@@ -220,19 +219,18 @@ func (c *ImageConfig) UnmarshalJSON(data []byte) error {
 
 func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	type rawChatRequest struct {
-		Model             string          `json:"model"`
-		Messages          []ChatMessage   `json:"messages"`
-		Stream            interface{}     `json:"stream"`
-		Thinking          *string         `json:"thinking,omitempty"`
-		ReasoningEffort   *string         `json:"reasoning_effort,omitempty"`
-		Temperature       interface{}     `json:"temperature,omitempty"`
-		TopP              interface{}     `json:"top_p,omitempty"`
-		VideoConfig       *VideoConfig    `json:"video_config,omitempty"`
-		ImageConfig       *ImageConfig    `json:"image_config,omitempty"`
-		Tools             []ToolDef       `json:"tools,omitempty"`
-		ToolChoice        interface{}     `json:"tool_choice,omitempty"`
-		ParallelToolCalls interface{}     `json:"parallel_tool_calls,omitempty"`
-		Raw               json.RawMessage `json:"-"`
+		Model             string        `json:"model"`
+		Messages          []ChatMessage `json:"messages"`
+		Stream            interface{}   `json:"stream"`
+		Thinking          *string       `json:"thinking,omitempty"`
+		ReasoningEffort   *string       `json:"reasoning_effort,omitempty"`
+		Temperature       interface{}   `json:"temperature,omitempty"`
+		TopP              interface{}   `json:"top_p,omitempty"`
+		VideoConfig       *VideoConfig  `json:"video_config,omitempty"`
+		ImageConfig       *ImageConfig  `json:"image_config,omitempty"`
+		Tools             []ToolDef     `json:"tools,omitempty"`
+		ToolChoice        interface{}   `json:"tool_choice,omitempty"`
+		ParallelToolCalls interface{}   `json:"parallel_tool_calls,omitempty"`
 	}
 
 	var raw rawChatRequest
@@ -280,7 +278,6 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	if _, ok := rawMap["parallel_tool_calls"]; ok {
 		r.ParallelToolCalls = &parallelToolCalls
 	}
-	r.Raw = append(r.Raw[:0], data...)
 	return nil
 }
 

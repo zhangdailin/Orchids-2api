@@ -230,6 +230,89 @@ func TestPuterToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t 
 	}
 }
 
+func TestPuterOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testing.T) {
+	t.Parallel()
+
+	client := &fakePayloadClient{}
+	h := newTestHandler(client)
+
+	body := []byte(`{
+		"model":"claude-sonnet-4-6",
+		"stream":false,
+		"conversation_id":"puter_openai_tool_followup",
+		"messages":[
+			{"role":"user","content":"Create note.txt with hello world"},
+			{"role":"assistant","content":null,"tool_calls":[
+				{"id":"call_write_1","type":"function","function":{"name":"Write","arguments":"{\"file_path\":\"note.txt\",\"content\":\"hello world\"}"}}
+			]},
+			{"role":"tool","tool_call_id":"call_write_1","content":"Write succeeded: note.txt created with hello world"}
+		],
+		"tools":[
+			{"type":"function","function":{"name":"Write","description":"Write content to a file","parameters":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}}}
+		]
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/puter/v1/chat/completions", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("request status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 upstream call, got %d", len(calls))
+	}
+	if calls[0].NoTools {
+		t.Fatalf("expected openai puter tool follow-up to keep tools enabled")
+	}
+
+	if len(calls[0].Messages) != 3 {
+		t.Fatalf("expected 3 normalized messages, got %d", len(calls[0].Messages))
+	}
+
+	assistantMsg := calls[0].Messages[1]
+	if assistantMsg.Role != "assistant" {
+		t.Fatalf("assistant role = %q, want assistant", assistantMsg.Role)
+	}
+	if assistantMsg.Content.IsString() {
+		t.Fatal("expected assistant tool call message to normalize into content blocks")
+	}
+	assistantBlocks := assistantMsg.Content.GetBlocks()
+	if len(assistantBlocks) != 1 {
+		t.Fatalf("assistant blocks len = %d, want 1", len(assistantBlocks))
+	}
+	if assistantBlocks[0].Type != "tool_use" || assistantBlocks[0].Name != "Write" || assistantBlocks[0].ID != "call_write_1" {
+		t.Fatalf("unexpected assistant tool_use block: %#v", assistantBlocks[0])
+	}
+	input, ok := assistantBlocks[0].Input.(map[string]interface{})
+	if !ok {
+		t.Fatalf("assistant tool input type = %T, want map[string]interface{}", assistantBlocks[0].Input)
+	}
+	if input["file_path"] != "note.txt" || input["content"] != "hello world" {
+		t.Fatalf("assistant tool input = %#v", input)
+	}
+
+	toolResultMsg := calls[0].Messages[2]
+	if toolResultMsg.Role != "user" {
+		t.Fatalf("tool result role = %q, want user", toolResultMsg.Role)
+	}
+	if toolResultMsg.Content.IsString() {
+		t.Fatal("expected tool result follow-up to normalize into content blocks")
+	}
+	resultBlocks := toolResultMsg.Content.GetBlocks()
+	if len(resultBlocks) != 1 {
+		t.Fatalf("tool result blocks len = %d, want 1", len(resultBlocks))
+	}
+	if resultBlocks[0].Type != "tool_result" || resultBlocks[0].ToolUseID != "call_write_1" {
+		t.Fatalf("unexpected tool_result block: %#v", resultBlocks[0])
+	}
+	if got, ok := resultBlocks[0].Content.(string); !ok || !strings.Contains(got, "Write succeeded") {
+		t.Fatalf("tool_result content = %#v", resultBlocks[0].Content)
+	}
+}
+
 func TestBoltToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testing.T) {
 	t.Parallel()
 

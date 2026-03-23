@@ -8,7 +8,7 @@ import (
 
 // warpTransport keeps the proxy function inspectable in tests while delegating
 // actual I/O to the standard library transport. This mirrors CodeFreeMax's
-// plain gclient usage more closely than the older custom uTLS transport.
+// plain gclient usage while keeping the transport path minimal.
 type warpTransport struct {
 	base      *http.Transport
 	proxyFunc func(*http.Request) (*url.URL, error)

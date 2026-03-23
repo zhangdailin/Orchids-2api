@@ -3,6 +3,7 @@ package adapter
 import (
 	"bytes"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/goccy/go-json"
@@ -166,7 +167,47 @@ var (
 	openAIIDMarker              = []byte("\"id\":")
 	openAINameMarker            = []byte("\"name\":")
 	openAIStopQuoted            = []byte("\"stop\"")
+	openAIToolCallsQuoted       = []byte("\"tool_calls\"")
+	openAILengthQuoted          = []byte("\"length\"")
+	openAIContentFilterQuoted   = []byte("\"content_filter\"")
+	openAIToolUseQuoted         = []byte("\"tool_use\"")
+	openAIEndTurnQuoted         = []byte("\"end_turn\"")
+	openAIMaxTokensQuoted       = []byte("\"max_tokens\"")
+	openAIRefusalQuoted         = []byte("\"refusal\"")
 )
+
+func normalizeOpenAIStopReasonQuoted(quotedStopReason []byte) []byte {
+	switch {
+	case len(quotedStopReason) == 0,
+		bytes.Equal(quotedStopReason, []byte(`""`)),
+		bytes.Equal(quotedStopReason, openAIStopQuoted),
+		bytes.Equal(quotedStopReason, openAIEndTurnQuoted):
+		return openAIStopQuoted
+	case bytes.Equal(quotedStopReason, openAIToolUseQuoted):
+		return openAIToolCallsQuoted
+	case bytes.Equal(quotedStopReason, openAIMaxTokensQuoted):
+		return openAILengthQuoted
+	case bytes.Equal(quotedStopReason, openAIRefusalQuoted):
+		return openAIContentFilterQuoted
+	default:
+		return quotedStopReason
+	}
+}
+
+func normalizeOpenAIStopReason(stopReason string) string {
+	switch strings.TrimSpace(stopReason) {
+	case "", "stop", "end_turn":
+		return "stop"
+	case "tool_use":
+		return "tool_calls"
+	case "max_tokens":
+		return "length"
+	case "refusal":
+		return "content_filter"
+	default:
+		return strings.TrimSpace(stopReason)
+	}
+}
 
 func extractJSONStringValueAfter(data []byte, marker []byte) ([]byte, bool) {
 	idx := bytes.Index(data, marker)
@@ -343,10 +384,10 @@ func appendOpenAIChunkFast(dst []byte, msgID string, created int64, event string
 		}
 	case "message_delta":
 		if quotedStopReason, ok := extractJSONStringValueAfter(data, openAIStopReasonMarker); ok {
-			return appendOpenAIChunkMessageDelta(dst, msgID, created, quotedStopReason)
+			return appendOpenAIChunkMessageDelta(dst, msgID, created, normalizeOpenAIStopReasonQuoted(quotedStopReason))
 		}
 	case "message_stop":
-		return appendOpenAIChunkMessageDelta(dst, msgID, created, openAIStopQuoted)
+		return nil, false
 	}
 	return nil, false
 }
@@ -424,9 +465,10 @@ func buildOpenAIChunkSlow(msgID string, created int64, event string, data []byte
 		if err := json.Unmarshal(data, &payload); err != nil || payload.Delta == nil || payload.Delta.StopReason == nil {
 			return nil, false
 		}
-		choice.FinishReason = payload.Delta.StopReason
+		mapped := normalizeOpenAIStopReason(*payload.Delta.StopReason)
+		choice.FinishReason = stringPtr(mapped)
 	case "message_stop":
-		choice.FinishReason = stringPtr("stop")
+		return nil, false
 	case "content_block_stop":
 		return nil, false
 	default:

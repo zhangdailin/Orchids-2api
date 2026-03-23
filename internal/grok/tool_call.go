@@ -9,6 +9,27 @@ import (
 
 var toolCallBlockRE = regexp.MustCompile(`(?s)<tool_call>\s*(.*?)\s*</tool_call>`)
 
+type toolCallParser struct {
+	forcedTool string
+	validNames map[string]struct{}
+}
+
+func newToolCallParser(tools []ToolDef, toolChoice interface{}) toolCallParser {
+	validNames := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if !strings.EqualFold(strings.TrimSpace(tool.Type), "function") {
+			continue
+		}
+		if name := strings.TrimSpace(fmt.Sprint(tool.Function["name"])); name != "" {
+			validNames[name] = struct{}{}
+		}
+	}
+	return toolCallParser{
+		forcedTool: forcedToolName(toolChoice),
+		validNames: validNames,
+	}
+}
+
 func forcedToolName(toolChoice interface{}) string {
 	choice, ok := toolChoice.(map[string]interface{})
 	if !ok {
@@ -167,6 +188,11 @@ func repairToolCallJSON(text string) map[string]interface{} {
 }
 
 func parseToolCallBlock(rawJSON string, tools []ToolDef, toolChoice interface{}) map[string]interface{} {
+	parser := newToolCallParser(tools, toolChoice)
+	return parser.parseBlock(rawJSON)
+}
+
+func (p toolCallParser) parseBlock(rawJSON string) map[string]interface{} {
 	if strings.TrimSpace(rawJSON) == "" {
 		return nil
 	}
@@ -178,26 +204,16 @@ func parseToolCallBlock(rawJSON string, tools []ToolDef, toolChoice interface{})
 		return nil
 	}
 
-	validNames := make(map[string]struct{})
-	for _, tool := range tools {
-		if !strings.EqualFold(strings.TrimSpace(tool.Type), "function") {
-			continue
-		}
-		if name := strings.TrimSpace(fmt.Sprint(tool.Function["name"])); name != "" {
-			validNames[name] = struct{}{}
-		}
-	}
-
 	name := strings.TrimSpace(fmt.Sprint(parsed["name"]))
 	if name == "" {
 		return nil
 	}
-	if len(validNames) > 0 {
-		if _, ok := validNames[name]; !ok {
+	if len(p.validNames) > 0 {
+		if _, ok := p.validNames[name]; !ok {
 			return nil
 		}
 	}
-	if forced := forcedToolName(toolChoice); forced != "" && name != forced {
+	if p.forcedTool != "" && name != p.forcedTool {
 		return nil
 	}
 
@@ -282,6 +298,11 @@ func formatToolHistory(messages []ChatMessage) []ChatMessage {
 }
 
 func parseToolCalls(content string, tools []ToolDef, toolChoice interface{}) (string, []map[string]interface{}) {
+	parser := newToolCallParser(tools, toolChoice)
+	return parser.parseCalls(content)
+}
+
+func (p toolCallParser) parseCalls(content string) (string, []map[string]interface{}) {
 	if strings.TrimSpace(content) == "" {
 		return content, nil
 	}
@@ -303,7 +324,7 @@ func parseToolCalls(content string, tools []ToolDef, toolChoice interface{}) (st
 		}
 		block := strings.TrimSpace(content[m[2]:m[3]])
 		lastEnd = m[1]
-		if toolCall := parseToolCallBlock(block, tools, toolChoice); toolCall != nil {
+		if toolCall := p.parseBlock(block); toolCall != nil {
 			toolCalls = append(toolCalls, toolCall)
 		}
 	}

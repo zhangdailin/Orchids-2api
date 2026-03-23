@@ -393,10 +393,21 @@ func extractToolDefinition(tool interface{}) (string, string, string) {
 }
 
 func asString(v interface{}) string {
-	if s, ok := v.(string); ok {
-		return strings.TrimSpace(s)
+	if v == nil {
+		return ""
 	}
-	return strings.TrimSpace(fmt.Sprint(v))
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if s == "<nil>" {
+			return ""
+		}
+		return s
+	}
+	s := strings.TrimSpace(fmt.Sprint(v))
+	if s == "<nil>" {
+		return ""
+	}
+	return s
 }
 
 func marshalCompactJSON(v interface{}) string {

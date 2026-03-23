@@ -78,7 +78,6 @@
 | `orchids_cc_entrypoint_mode` | `auto` | 入口模式 |
 | `orchids_fs_ignore` | `["debug-logs","data",".claude"]` | 忽略目录 |
 | `grok_api_base_url` | `https://grok.com` | Grok 基础地址 |
-| `grok_use_utls` | `true` | Grok 默认启用 uTLS |
 | `warp_disable_tools` | `false` | Warp 工具默认开启 |
 | `warp_max_tool_results` | `10` | Warp 单轮工具结果上限 |
 | `warp_max_history_messages` | `20` | Warp 历史消息上限 |

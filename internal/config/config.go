@@ -70,7 +70,6 @@ type Config struct {
 	GrokCFBM                  string   `json:"-"`
 	GrokBaseProxyURL          string   `json:"-"`
 	GrokAssetProxyURL         string   `json:"-"`
-	GrokUseUTLS               bool     `json:"-"`
 	GrokTemporary             *bool    `json:"grok_temporary,omitempty"`
 	GrokDisableMemory         *bool    `json:"grok_disable_memory,omitempty"`
 	GrokCustomInstruction     string   `json:"grok_custom_instruction,omitempty"`
@@ -221,7 +220,6 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.OrchidsFSIgnore = []string{"debug-logs", "data", ".claude"}
 	cfg.GrokAPIBaseURL = "https://grok.com"
 	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-	cfg.GrokUseUTLS = true
 	v := false
 	cfg.WarpDisableTools = &v
 	cfg.WarpMaxToolResults = 10

@@ -254,3 +254,22 @@ func TestSupportedToolNames_NormalizesAndOrdersTools(t *testing.T) {
 		}
 	}
 }
+
+func TestDeclaredToolNames_KeepCustomAndCanonicalAliases(t *testing.T) {
+	tools := []interface{}{
+		map[string]interface{}{"name": "workspace_search"},
+		map[string]interface{}{"name": "read_files"},
+		map[string]interface{}{"name": "Read"},
+	}
+
+	got := declaredToolNames(tools)
+	want := []string{"workspace_search", "read_files", "Read"}
+	if len(got) != len(want) {
+		t.Fatalf("declaredToolNames len=%d want=%d (%#v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("declaredToolNames[%d]=%q want %q (%#v)", i, got[i], want[i], got)
+		}
+	}
+}

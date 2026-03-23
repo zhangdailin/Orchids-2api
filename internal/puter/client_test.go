@@ -116,6 +116,22 @@ func TestReadStreamText_StripsDataPrefixAndUsesDelta(t *testing.T) {
 	}
 }
 
+func TestAsString_NilLikeValuesReturnEmpty(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+	}{
+		{name: "nil", value: nil},
+		{name: "literal-nil-string", value: "<nil>"},
+	}
+
+	for _, tt := range tests {
+		if got := asString(tt.value); got != "" {
+			t.Fatalf("%s: asString() = %q, want empty", tt.name, got)
+		}
+	}
+}
+
 func TestParseToolCalls_StripsToolCallMarkup(t *testing.T) {
 	toolCalls, text := parseToolCalls("before <tool_call>{\"name\":\"Read\",\"input\":{\"path\":\"/tmp/a\"}}</tool_call> after")
 	if len(toolCalls) != 1 {
@@ -169,6 +185,39 @@ func TestParseToolCalls_AcceptsWholeToolUseJSON(t *testing.T) {
 	}
 }
 
+func TestParseToolCalls_GeneratesToolCallIDWhenMissingOrNil(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "missing-id",
+			raw:  `<tool_call>{"name":"Write","input":{"file_path":"note.txt","content":"alpha beta"}}</tool_call>`,
+		},
+		{
+			name: "null-id",
+			raw:  `<tool_call>{"id":null,"name":"Write","input":{"file_path":"note.txt","content":"alpha beta"}}</tool_call>`,
+		},
+		{
+			name: "literal-nil-id",
+			raw:  `<tool_call>{"id":"<nil>","name":"Write","input":{"file_path":"note.txt","content":"alpha beta"}}</tool_call>`,
+		},
+	}
+
+	for _, tt := range tests {
+		toolCalls, text := parseToolCalls(tt.raw)
+		if len(toolCalls) != 1 {
+			t.Fatalf("%s: toolCalls len = %d, want 1", tt.name, len(toolCalls))
+		}
+		if !strings.HasPrefix(toolCalls[0].ID, "toolu_") {
+			t.Fatalf("%s: toolCalls[0].ID = %q, want generated toolu_* id", tt.name, toolCalls[0].ID)
+		}
+		if text != "" {
+			t.Fatalf("%s: text = %q, want empty", tt.name, text)
+		}
+	}
+}
+
 func TestSendRequestWithPayload_ParsesArgumentsAliasToolCall(t *testing.T) {
 	prevURL := puterAPIURL
 	t.Cleanup(func() { puterAPIURL = prevURL })
@@ -216,6 +265,46 @@ func TestSendRequestWithPayload_ParsesArgumentsAliasToolCall(t *testing.T) {
 	}
 	if got := events[1].Event["finishReason"]; got != "tool_use" {
 		t.Fatalf("finishReason = %v, want tool_use", got)
+	}
+}
+
+func TestSendRequestWithPayload_GeneratesToolCallIDWhenUpstreamOmitsIt(t *testing.T) {
+	prevURL := puterAPIURL
+	t.Cleanup(func() { puterAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "{\"type\":\"text\",\"text\":\"<tool_call>{\\\"id\\\":null,\\\"name\\\":\\\"Write\\\",\\\"input\\\":{\\\"file_path\\\":\\\"note.txt\\\",\\\"content\\\":\\\"alpha beta\\\"}}</tool_call>\"}\n")
+	}))
+	defer srv.Close()
+	puterAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	var events []upstream.SSEMessage
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-5",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "use Write"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(events))
+	}
+	if events[0].Type != "model.tool-call" {
+		t.Fatalf("first event type = %q, want model.tool-call", events[0].Type)
+	}
+	toolCallID, _ := events[0].Event["toolCallId"].(string)
+	if !strings.HasPrefix(toolCallID, "toolu_") {
+		t.Fatalf("toolCallId = %q, want generated toolu_* id", toolCallID)
+	}
+	if toolCallID == "<nil>" {
+		t.Fatal("toolCallId should not be <nil>")
 	}
 }
 

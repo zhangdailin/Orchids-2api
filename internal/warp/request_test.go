@@ -76,3 +76,60 @@ func TestEstimateInputTokens_CodeFreeMaxProfile(t *testing.T) {
 		t.Fatalf("expected positive total tokens, got %d", estimate.Total)
 	}
 }
+
+func TestConvertTools_PreservesCustomMCPTools(t *testing.T) {
+	t.Parallel()
+
+	tools := []interface{}{
+		map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        "workspace_search",
+				"description": strings.Repeat("search project symbols ", 40),
+				"parameters": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query": map[string]interface{}{
+							"type":        "string",
+							"description": "term to search for",
+						},
+						"top_k": map[string]interface{}{
+							"type": "integer",
+						},
+					},
+				},
+			},
+		},
+		map[string]interface{}{
+			"name":        "Read",
+			"description": "read file",
+			"input_schema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"file_path": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+
+	got := convertTools(tools)
+	if len(got) != 2 {
+		t.Fatalf("convertTools len=%d want=2 (%#v)", len(got), got)
+	}
+	if got[0].Name != "workspace_search" {
+		t.Fatalf("custom tool name=%q want workspace_search", got[0].Name)
+	}
+	if !strings.HasSuffix(got[0].Description, "...[truncated]") {
+		t.Fatalf("custom tool description=%q want truncated suffix", got[0].Description)
+	}
+	props, ok := got[0].Schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("custom tool properties type=%T", got[0].Schema["properties"])
+	}
+	if _, ok := props["query"]; !ok {
+		t.Fatalf("custom tool schema lost query property: %#v", got[0].Schema)
+	}
+	if got[1].Name != "Read" {
+		t.Fatalf("builtin tool name=%q want Read", got[1].Name)
+	}
+}

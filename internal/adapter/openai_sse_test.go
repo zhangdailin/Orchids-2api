@@ -121,13 +121,19 @@ func TestBuildOpenAIChunk(t *testing.T) {
 				Object:  "chat.completion.chunk",
 				Created: 123,
 				Model:   "",
-				Choices: []openAIChoice{{Index: 0, FinishReason: stringPtr("tool_use")}},
+				Choices: []openAIChoice{{Index: 0, FinishReason: stringPtr("tool_calls")}},
 			},
 		},
 		{
 			name:   "message stop",
 			event:  "message_stop",
 			data:   []byte("{\"type\":\"message_stop\"}"),
+			wantOK: false,
+		},
+		{
+			name:   "message delta end_turn maps to stop",
+			event:  "message_delta",
+			data:   []byte("{\"delta\":{\"stop_reason\":\"end_turn\"}}"),
 			wantOK: true,
 			want: openAIChunk{
 				ID:      "msg_1",
@@ -223,11 +229,11 @@ func TestBuildOpenAIChunkFastMatchesSlow(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fastRaw, fastOK := buildOpenAIChunkFast("msg_1", 123, tt.event, tt.data)
 			slowRaw, slowOK := buildOpenAIChunkSlow("msg_1", 123, tt.event, tt.data)
-			if !fastOK {
-				t.Fatal("fast path did not match")
+			if fastOK != slowOK {
+				t.Fatalf("fastOK=%v slowOK=%v", fastOK, slowOK)
 			}
-			if !slowOK {
-				t.Fatal("slow path did not match")
+			if !fastOK {
+				return
 			}
 
 			var fastChunk openAIChunk

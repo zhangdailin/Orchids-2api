@@ -266,8 +266,6 @@ func stringifyValue(v interface{}) string {
 	}
 }
 
-
-
 func appendVarint(buf []byte, v uint64) []byte {
 	for v >= 0x80 {
 		buf = append(buf, byte(v)|0x80)
@@ -387,8 +385,6 @@ func mustDecodeHex(s string) []byte {
 	}
 	return b
 }
-
-
 
 func normalizeWarpTemplateModel(model string) string {
 	canonical := canonicalModelID(model)
@@ -668,12 +664,12 @@ type toolDef struct {
 }
 
 const (
-	maxWarpToolCount         = 8
-	maxWarpToolDescLen       = 128
-	maxWarpToolSchemaJSONLen = 1024
+	maxWarpToolCount         = 32
+	maxWarpToolDescLen       = 512
+	maxWarpToolSchemaJSONLen = 4096
 )
 
-var supportedWarpTools = map[string]struct{}{
+var warpBuiltinToolNames = map[string]struct{}{
 	"Bash":      {},
 	"Read":      {},
 	"Edit":      {},
@@ -727,8 +723,8 @@ var warpToolAllowedProps = map[string]map[string]struct{}{
 	},
 }
 
-func isSupportedWarpTool(name string) bool {
-	_, ok := supportedWarpTools[name]
+func isWarpBuiltinTool(name string) bool {
+	_, ok := warpBuiltinToolNames[name]
 	return ok
 }
 
@@ -744,44 +740,17 @@ func convertTools(tools []interface{}) []toolDef {
 		if !ok {
 			continue
 		}
-
-		if typ, _ := m["type"].(string); typ == "function" {
-			if fn, ok := m["function"].(map[string]interface{}); ok {
-				name, _ := fn["name"].(string)
-				name = orchids.NormalizeToolNameFallback(name)
-				if !isSupportedWarpTool(name) {
-					continue
-				}
-				description, _ := fn["description"].(string)
-				schema := compactWarpSchemaForTool(name, schemaMap(fn["parameters"]))
-				key := strings.ToLower(strings.TrimSpace(name))
-				if key == "" {
-					continue
-				}
-				if _, exists := seen[key]; exists {
-					continue
-				}
-				seen[key] = struct{}{}
-				defs = append(defs, toolDef{Name: name, Description: compactWarpDescription(description), Schema: schema})
-				if len(defs) >= maxWarpToolCount {
-					break
-				}
-			}
+		name, description, schema := extractWarpToolSpecFields(m)
+		name = strings.TrimSpace(name)
+		if name == "" {
 			continue
 		}
 
-		name, _ := m["name"].(string)
-		name = orchids.NormalizeToolNameFallback(name)
-		if !isSupportedWarpTool(name) {
-			continue
+		canonicalName := orchids.NormalizeToolNameFallback(name)
+		key := strings.ToLower(name)
+		if isWarpBuiltinTool(canonicalName) {
+			key = "builtin:" + strings.ToLower(canonicalName)
 		}
-		description, _ := m["description"].(string)
-		schema := schemaMap(m["input_schema"])
-		if schema == nil {
-			schema = schemaMap(m["parameters"])
-		}
-		schema = compactWarpSchemaForTool(name, schema)
-		key := strings.ToLower(strings.TrimSpace(name))
 		if key == "" {
 			continue
 		}
@@ -789,12 +758,58 @@ func convertTools(tools []interface{}) []toolDef {
 			continue
 		}
 		seen[key] = struct{}{}
-		defs = append(defs, toolDef{Name: name, Description: compactWarpDescription(description), Schema: schema})
+
+		schema = compactWarpSchemaForTool(canonicalName, schema)
+		defs = append(defs, toolDef{
+			Name:        name,
+			Description: compactWarpDescription(description),
+			Schema:      schema,
+		})
 		if len(defs) >= maxWarpToolCount {
 			break
 		}
 	}
 	return defs
+}
+
+func extractWarpToolSpecFields(tool map[string]interface{}) (string, string, map[string]interface{}) {
+	if tool == nil {
+		return "", "", nil
+	}
+
+	var name string
+	var description string
+	var schema map[string]interface{}
+
+	if fn, ok := tool["function"].(map[string]interface{}); ok {
+		if v, ok := fn["name"].(string); ok {
+			name = v
+		}
+		if v, ok := fn["description"].(string); ok {
+			description = v
+		}
+		schema = schemaMap(fn["parameters"])
+		if schema == nil {
+			schema = schemaMap(fn["input_schema"])
+		}
+	}
+	if name == "" {
+		if v, ok := tool["name"].(string); ok {
+			name = v
+		}
+	}
+	if description == "" {
+		if v, ok := tool["description"].(string); ok {
+			description = v
+		}
+	}
+	if schema == nil {
+		schema = schemaMap(tool["input_schema"])
+	}
+	if schema == nil {
+		schema = schemaMap(tool["parameters"])
+	}
+	return name, description, schema
 }
 
 func schemaMap(v interface{}) map[string]interface{} {
@@ -972,5 +987,3 @@ func warpSchemaJSONLen(schema map[string]interface{}) int {
 	}
 	return len(raw)
 }
-
-

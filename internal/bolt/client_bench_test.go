@@ -51,8 +51,8 @@ func BenchmarkPrepareRequest(b *testing.B) {
 	req := benchmarkBoltRequest()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		prepared := prepareRequest(req, "sb1-demo")
-		if prepared.Request == nil || prepared.InputEstimate.Total == 0 {
+		boltReq, estimate := prepareRequest(req, "sb1-demo")
+		if boltReq == nil || estimate.Total == 0 {
 			b.Fatal("unexpected empty prepared request")
 		}
 	}

@@ -1033,7 +1033,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh.setPreferPriorToolResultFallback(lastUserIsToolResultFollowup(upstreamMessages))
 	sh.setDisallowToolCalls(gateNoTools)
 	if !isOrchidsProtocol {
-		sh.setAllowedToolNames(supportedToolNames(effectiveTools))
+		sh.setAllowedToolNames(declaredToolNames(effectiveTools))
 	}
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens

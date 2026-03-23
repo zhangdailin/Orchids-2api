@@ -42,7 +42,7 @@ func TestCollectChat_EmitsOpenAIParityMetadata(t *testing.T) {
 			`{"result":{"response":{"modelResponse":{"responseId":"resp_123","message":"hello","metadata":{"llm_info":{"modelHash":"hash-2"}}}}}}`,
 	)
 
-	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello world"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", nil, nil, body, nil)
+	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello world"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
@@ -97,7 +97,7 @@ func TestCollectChat_PrependsPublicBaseForCachedVideoURL(t *testing.T) {
 		`{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100,"videoUrl":"` + server.URL + `/demo.mp4"}}}}`,
 	)
 
-	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-420", ModelSpec{ID: "grok-420", IsVideo: true}, "", "https://example.com", nil, nil, body, nil)
+	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-420", ModelSpec{ID: "grok-420", IsVideo: true}, "", "https://example.com", false, nil, nil, body, nil)
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
@@ -155,13 +155,17 @@ func TestStreamChat_PrefersModelResponseOverNoisyTokens(t *testing.T) {
 			`{"result":{"response":{"modelResponse":{"message":"你好！我是 Grok，xAI AI 助手，不是之前提到的那个。"}}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if strings.Contains(combined, "你！rok，") {
 		t.Fatalf("unexpected noisy token leak, combined=%q raw=%q", combined, rec.Body.String())
 	}
 	if !strings.Contains(combined, "你好！我是 Grok，xAI AI 助手，不是之前提到的那个。") {
 		t.Fatalf("expected final modelResponse text, combined=%q raw=%q", combined, rec.Body.String())
+	}
+	finalContent := extractStreamFinalMessageContent(t, rec.Body.String())
+	if finalContent != "你好！我是 Grok，xAI AI 助手，不是之前提到的那个。" {
+		t.Fatalf("expected final snapshot message, got=%q raw=%q", finalContent, rec.Body.String())
 	}
 }
 
@@ -174,10 +178,35 @@ func TestStreamChat_FallsBackToTokenWhenModelResponseMissing(t *testing.T) {
 			`{"result":{"response":{"token":"！我是 Grok。"}}}`,
 	)
 
-	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", true, nil, nil, body, nil)
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "你好"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if !strings.Contains(combined, "你好！我是 Grok。") {
 		t.Fatalf("expected token fallback text, combined=%q raw=%q", combined, rec.Body.String())
+	}
+	finalContent := extractStreamFinalMessageContent(t, rec.Body.String())
+	if finalContent != "你好！我是 Grok。" {
+		t.Fatalf("expected token fallback final snapshot, got=%q raw=%q", finalContent, rec.Body.String())
+	}
+}
+
+func TestStreamChat_RewriteFallsBackToFinalSnapshot(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+
+	body := strings.NewReader(
+		`{"result":{"response":{"modelResponse":{"message":"The answer is 4"}}}}` +
+			`{"result":{"response":{"modelResponse":{"message":"The answer is 42"}}}}` +
+			`{"result":{"response":{"modelResponse":{"message":"The result is 42"}}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "answer?"}}}, "grok-420", ModelSpec{ID: "grok-420"}, "", "", false, nil, nil, body, nil)
+	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
+	if strings.Contains(combined, "The answer is 4The result is 42") {
+		t.Fatalf("expected rewrite suffix to stay out of delta stream, combined=%q raw=%q", combined, rec.Body.String())
+	}
+	finalContent := extractStreamFinalMessageContent(t, rec.Body.String())
+	if finalContent != "The result is 42" {
+		t.Fatalf("expected final snapshot to carry rewritten text, got=%q raw=%q", finalContent, rec.Body.String())
 	}
 }
 
@@ -441,6 +470,40 @@ func extractStreamTextContents(t *testing.T, raw string) []string {
 	return out
 }
 
+func extractStreamFinalMessageContent(t *testing.T, raw string) string {
+	t.Helper()
+	lines := strings.Split(raw, "\n")
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" || strings.TrimSpace(payload) == "" {
+			continue
+		}
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(payload), &obj); err != nil {
+			continue
+		}
+		choices, ok := obj["choices"].([]interface{})
+		if !ok || len(choices) == 0 {
+			continue
+		}
+		choice, ok := choices[0].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		message, ok := choice["message"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if content, _ := message["content"].(string); strings.TrimSpace(content) != "" {
+			return content
+		}
+	}
+	return ""
+}
+
 func TestAppendChatCompletionChunkMatchesMapEncoding(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -519,6 +582,33 @@ func TestAppendChatCompletionChunkMatchesMapEncoding(t *testing.T) {
 				t.Fatalf("got=%#v want=%#v", got, want)
 			}
 		})
+	}
+}
+
+func TestAppendChatCompletionSnapshotChunk_FinalIncludesMessage(t *testing.T) {
+	raw := appendChatCompletionSnapshotChunkWithUsage(make([]byte, 0, 256), "chatcmpl_1", 123, "grok-4", "fp-1", "hello world", "stop", true, nil)
+	var got map[string]interface{}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal got: %v", err)
+	}
+	choices, ok := got["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		t.Fatalf("choices missing: %#v", got)
+	}
+	choice, _ := choices[0].(map[string]interface{})
+	delta, _ := choice["delta"].(map[string]interface{})
+	if len(delta) != 0 {
+		t.Fatalf("expected empty delta, got=%#v", delta)
+	}
+	message, _ := choice["message"].(map[string]interface{})
+	if content, _ := message["content"].(string); content != "hello world" {
+		t.Fatalf("message.content=%q want=%q", content, "hello world")
+	}
+	if finish, _ := choice["finish_reason"].(string); finish != "stop" {
+		t.Fatalf("finish_reason=%q want=stop", finish)
+	}
+	if _, ok := got["usage"].(map[string]interface{}); !ok {
+		t.Fatalf("usage missing: %#v", got)
 	}
 }
 

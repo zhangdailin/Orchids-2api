@@ -94,6 +94,44 @@ func supportedToolNames(tools []interface{}) []string {
 	return out
 }
 
+func declaredToolNames(tools []interface{}) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(tools)*2)
+	out := make([]string, 0, len(tools)*2)
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, name)
+	}
+
+	for _, tool := range tools {
+		name, _, _ := extractIncomingToolSpecFields(tool)
+		if name == "" {
+			continue
+		}
+		add(name)
+		mappedName := orchids.NormalizeToolNameFallback(name)
+		if !strings.EqualFold(strings.TrimSpace(name), strings.TrimSpace(mappedName)) {
+			add(mappedName)
+		}
+	}
+
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func estimateCompactedToolsTokens(tools []interface{}) int {
 	if len(tools) == 0 {
 		return 0

@@ -45,6 +45,41 @@ func TestBuildWithMetaAndTools_UsesDeclaredToolList(t *testing.T) {
 	}
 }
 
+func TestBuildWithMetaAndTools_ListsCustomMCPTools(t *testing.T) {
+	t.Parallel()
+
+	messages := []prompt.Message{
+		{Role: "user", Content: prompt.MessageContent{Text: "帮我搜索仓库里的任务定义"}},
+	}
+	tools := []interface{}{
+		map[string]interface{}{
+			"name":        "Read",
+			"description": "read file",
+			"input_schema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"file_path": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+		map[string]interface{}{
+			"name":        "workspace_search",
+			"description": "search indexed workspace symbols",
+			"input_schema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string"},
+				},
+			},
+		},
+	}
+
+	promptText, _, _ := BuildWithMetaAndTools(messages, nil, "claude-opus-4-6", true, "/tmp/project", tools)
+	if !strings.Contains(promptText, "Allowed tools only: Read, workspace_search.") {
+		t.Fatalf("expected prompt to include custom MCP tool, got: %s", promptText)
+	}
+}
+
 func TestBuildWithMeta_ToolResultOnlyPromptIncludesQuestionAndResult(t *testing.T) {
 	t.Parallel()
 

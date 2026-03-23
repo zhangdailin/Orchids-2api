@@ -164,6 +164,118 @@ func TestSendRequestWithPayload_FlushesUnclosedJSONCodeFenceAsToolCall(t *testin
 	}
 }
 
+func TestSendRequestWithPayload_PreservesMarkdownCodeFenceLanguageAcrossChunks(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	chunk1, err := json.Marshal("计算器已创建，运行方式：\n```")
+	if err != nil {
+		t.Fatalf("marshal chunk1: %v", err)
+	}
+	chunk2, err := json.Marshal("bash\npython calculator.py\n```")
+	if err != nil {
+		t.Fatalf("marshal chunk2: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "0:"+string(chunk1)+"\n")
+		_, _ = io.WriteString(w, "0:"+string(chunk2)+"\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":9}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	var events []upstream.SSEMessage
+	err = client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "写一个计算器"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("events len=%d want 3", len(events))
+	}
+	if events[0].Type != "model.text-delta" || events[1].Type != "model.text-delta" {
+		t.Fatalf("unexpected event types: %v, %v", events[0].Type, events[1].Type)
+	}
+	if events[2].Type != "model.finish" {
+		t.Fatalf("third event type=%q want model.finish", events[2].Type)
+	}
+	got := events[0].Event["delta"].(string) + events[1].Event["delta"].(string)
+	want := "计算器已创建，运行方式：\n```bash\npython calculator.py\n```"
+	if got != want {
+		t.Fatalf("delta=%q want %q", got, want)
+	}
+}
+
+func TestSendRequestWithPayload_StripsBoltToolTranscriptFromFinalText(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	chunk, err := json.Marshal("Read 1 file (ctrl+o to expand)\n\n● Write(calculator.py)\n  ⎿  Wrote 42 lines to calculator.py\n       1 def add(a, b): return a + b\n\n● 计算器已创建，运行方式：\n```bash\npython calculator.py\n```")
+	if err != nil {
+		t.Fatalf("marshal chunk: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "0:"+string(chunk)+"\n")
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":9}}\n")
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "sb1-demo",
+	}, nil)
+
+	var events []upstream.SSEMessage
+	err = client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "写一个计算器"}},
+		},
+	}, func(msg upstream.SSEMessage) {
+		events = append(events, msg)
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("events len=%d want 3", len(events))
+	}
+	if events[0].Type != "model.text-delta" || events[1].Type != "model.text-delta" {
+		t.Fatalf("unexpected event types: %v, %v", events[0].Type, events[1].Type)
+	}
+	if events[2].Type != "model.finish" {
+		t.Fatalf("third event type=%q want model.finish", events[2].Type)
+	}
+	got := events[0].Event["delta"].(string) + events[1].Event["delta"].(string)
+	if strings.Contains(got, "ctrl+o to expand") || strings.Contains(got, "Write(calculator.py)") || strings.Contains(got, "Wrote 42 lines") {
+		t.Fatalf("delta still contains tool transcript: %q", got)
+	}
+	want := "计算器已创建，运行方式：\n```bash\npython calculator.py\n```"
+	if got != want {
+		t.Fatalf("delta=%q want %q", got, want)
+	}
+}
+
 func TestSendRequestWithPayload_HandlesBoltToolInvocationFramesAndFinalDMarker(t *testing.T) {
 	prevURL := boltAPIURL
 	t.Cleanup(func() { boltAPIURL = prevURL })
@@ -203,7 +315,7 @@ func TestSendRequestWithPayload_HandlesBoltToolInvocationFramesAndFinalDMarker(t
 		t.Fatalf("events len=%d want 2, events=%v", len(events), events)
 	}
 	if events[0].Type != "model.tool-call" {
-		t.Fatalf("first event type=%q want model.tool-call", events[0].Type)
+		t.Fatalf("first event type=%q want model.text-delta", events[0].Type)
 	}
 	if got := events[0].Event["toolName"]; got != "Bash" {
 		t.Fatalf("toolName=%v want Bash", got)
@@ -349,13 +461,7 @@ func TestEstimateInputTokens_SplitsPromptBuckets(t *testing.T) {
 	}
 }
 
-func TestBuildRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
-	client := NewFromAccount(&store.Account{
-		AccountType:   "bolt",
-		SessionCookie: "session-token",
-		ProjectID:     "sb1-demo",
-	}, nil)
-
+func TestPrepareRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model:   "claude-opus-4-6",
 		Workdir: "d:\\Code\\Orchids-2api",
@@ -369,7 +475,7 @@ func TestBuildRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
 		},
 	}
 
-	boltReq := client.buildRequest(req, "sb1-demo")
+	boltReq, _ := prepareRequest(req, "sb1-demo")
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "当前项目目录名: Orchids-2api") {
 		t.Fatalf("system prompt missing project name hint: %s", boltReq.GlobalSystemPrompt)
 	}
@@ -405,13 +511,7 @@ func TestBuildRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
 	}
 }
 
-func TestBuildRequest_PreservesMCPSystemContext(t *testing.T) {
-	client := NewFromAccount(&store.Account{
-		AccountType:   "bolt",
-		SessionCookie: "session-token",
-		ProjectID:     "sb1-demo",
-	}, nil)
-
+func TestPrepareRequest_PreservesMCPSystemContext(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model: "claude-opus-4-6",
 		System: []prompt.SystemItem{
@@ -420,7 +520,7 @@ func TestBuildRequest_PreservesMCPSystemContext(t *testing.T) {
 		},
 	}
 
-	boltReq := client.buildRequest(req, "sb1-demo")
+	boltReq, _ := prepareRequest(req, "sb1-demo")
 	if strings.Contains(strings.ToLower(boltReq.GlobalSystemPrompt), "anthropic's official cli for claude") {
 		t.Fatalf("system prompt should strip claude code boilerplate: %s", boltReq.GlobalSystemPrompt)
 	}
@@ -435,13 +535,7 @@ func TestBuildRequest_PreservesMCPSystemContext(t *testing.T) {
 	}
 }
 
-func TestBuildRequest_AddsHistoryAwarePathRecoveryInstructions(t *testing.T) {
-	client := NewFromAccount(&store.Account{
-		AccountType:   "bolt",
-		SessionCookie: "session-token",
-		ProjectID:     "sb1-demo",
-	}, nil)
-
+func TestPrepareRequest_AddsHistoryAwarePathRecoveryInstructions(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model:   "claude-opus-4-6",
 		Workdir: "d:\\Code\\Orchids-2api",
@@ -481,7 +575,7 @@ func TestBuildRequest_AddsHistoryAwarePathRecoveryInstructions(t *testing.T) {
 		},
 	}
 
-	boltReq := client.buildRequest(req, "sb1-demo")
+	boltReq, _ := prepareRequest(req, "sb1-demo")
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "`/tmp/cc-agent/sb1-demo/project`") {
 		t.Fatalf("system prompt missing invalid-history path hint: %s", boltReq.GlobalSystemPrompt)
 	}
@@ -496,13 +590,7 @@ func TestBuildRequest_AddsHistoryAwarePathRecoveryInstructions(t *testing.T) {
 	}
 }
 
-func TestBuildRequest_EncodesToolResultsAsUserContentAndDropsAssistantToolInvocations(t *testing.T) {
-	client := NewFromAccount(&store.Account{
-		AccountType:   "bolt",
-		SessionCookie: "session-token",
-		ProjectID:     "sb1-demo",
-	}, nil)
-
+func TestPrepareRequest_EncodesToolResultsAsUserContentAndDropsAssistantToolInvocations(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model: "claude-opus-4-6",
 		Messages: []prompt.Message{
@@ -535,7 +623,7 @@ func TestBuildRequest_EncodesToolResultsAsUserContentAndDropsAssistantToolInvoca
 		},
 	}
 
-	boltReq := client.buildRequest(req, "sb1-demo")
+	boltReq, _ := prepareRequest(req, "sb1-demo")
 	if len(boltReq.Messages) != 2 {
 		t.Fatalf("messages len=%d want 2", len(boltReq.Messages))
 	}
@@ -556,13 +644,7 @@ func TestBuildRequest_EncodesToolResultsAsUserContentAndDropsAssistantToolInvoca
 	}
 }
 
-func TestBuildRequest_SkipsToolRoleMessages(t *testing.T) {
-	client := NewFromAccount(&store.Account{
-		AccountType:   "bolt",
-		SessionCookie: "session-token",
-		ProjectID:     "sb1-demo",
-	}, nil)
-
+func TestPrepareRequest_SkipsToolRoleMessages(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model: "claude-opus-4-6",
 		Messages: []prompt.Message{
@@ -578,7 +660,7 @@ func TestBuildRequest_SkipsToolRoleMessages(t *testing.T) {
 		},
 	}
 
-	boltReq := client.buildRequest(req, "sb1-demo")
+	boltReq, _ := prepareRequest(req, "sb1-demo")
 	if len(boltReq.Messages) != 3 {
 		t.Fatalf("messages len=%d want 3", len(boltReq.Messages))
 	}

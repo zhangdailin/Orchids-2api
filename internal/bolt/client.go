@@ -81,11 +81,6 @@ type InputTokenEstimate struct {
 	Total               int
 }
 
-type preparedRequest struct {
-	Request       *Request
-	InputEstimate InputTokenEstimate
-}
-
 type builtMessages struct {
 	Items         []Message
 	HistoryTokens int
@@ -236,8 +231,8 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("missing bolt project id")
 	}
 
-	prepared := prepareRequest(req, projectID)
-	body, err := json.Marshal(prepared.Request)
+	boltReq, inputEstimate := prepareRequest(req, projectID)
+	body, err := json.Marshal(boltReq)
 	if err != nil {
 		return fmt.Errorf("failed to marshal bolt request: %w", err)
 	}
@@ -264,7 +259,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("bolt API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	converter := newOutboundConverter(req.Model, prepared.InputEstimate.Total)
+	converter := newOutboundConverter(req.Model, inputEstimate.Total)
 	return converter.ProcessStream(resp.Body, func(msg upstream.SSEMessage) error {
 		if onMessage != nil {
 			onMessage(msg)
@@ -287,56 +282,46 @@ func (c *Client) applyCommonHeaders(req *http.Request) {
 }
 
 func EstimateInputTokens(req upstream.UpstreamRequest) InputTokenEstimate {
-	return prepareRequest(req, strings.TrimSpace(req.ProjectID)).InputEstimate
+	_, estimate := prepareRequest(req, strings.TrimSpace(req.ProjectID))
+	return estimate
 }
 
-func prepareRequest(req upstream.UpstreamRequest, projectID string) preparedRequest {
+func prepareRequest(req upstream.UpstreamRequest, projectID string) (*Request, InputTokenEstimate) {
 	promptParts := buildSystemPromptParts(req.System, req.Workdir, req.Tools, req.NoTools, req.Messages)
 	messages := buildBoltMessages(req.Messages)
 
-	prepared := preparedRequest{
-		Request: &Request{
-			ID:                   generateRandomID(16),
-			SelectedModel:        strings.TrimSpace(req.Model),
-			IsFirstPrompt:        false,
-			PromptMode:           "build",
-			EffortLevel:          "high",
-			ProjectID:            projectID,
-			GlobalSystemPrompt:   promptParts.FullPrompt,
-			ProjectPrompt:        promptParts.FullPrompt,
-			StripeStatus:         "not-configured",
-			HostingProvider:      "bolt",
-			SupportIntegrations:  true,
-			UsesInspectedElement: false,
-			ErrorReasoning:       nil,
-			FeaturePreviews: FeaturePreviews{
-				Reasoning: false,
-				Diffs:     false,
-			},
-			ProjectFiles: ProjectFiles{
-				Visible: boltEmptyInterfaces,
-				Hidden:  boltEmptyInterfaces,
-			},
-			RunningCommands: boltEmptyInterfaces,
-			Dependencies:    boltEmptyInterfaces,
-			Problems:        "",
-			Messages:        messages.Items,
+	boltReq := &Request{
+		ID:                   generateRandomID(16),
+		SelectedModel:        strings.TrimSpace(req.Model),
+		IsFirstPrompt:        false,
+		PromptMode:           "build",
+		EffortLevel:          "high",
+		ProjectID:            projectID,
+		GlobalSystemPrompt:   promptParts.FullPrompt,
+		ProjectPrompt:        promptParts.FullPrompt,
+		StripeStatus:         "not-configured",
+		HostingProvider:      "bolt",
+		SupportIntegrations:  true,
+		UsesInspectedElement: false,
+		ErrorReasoning:       nil,
+		FeaturePreviews: FeaturePreviews{
+			Reasoning: false,
+			Diffs:     false,
 		},
+		ProjectFiles: ProjectFiles{
+			Visible: boltEmptyInterfaces,
+			Hidden:  boltEmptyInterfaces,
+		},
+		RunningCommands: boltEmptyInterfaces,
+		Dependencies:    boltEmptyInterfaces,
+		Problems:        "",
+		Messages:        messages.Items,
 	}
-	prepared.InputEstimate = estimatePreparedRequestInput(promptParts, messages.HistoryTokens)
-	return prepared
-}
-
-func (c *Client) buildRequest(req upstream.UpstreamRequest, projectID string) *Request {
-	return prepareRequest(req, projectID).Request
+	return boltReq, estimatePreparedRequestInput(promptParts, messages.HistoryTokens)
 }
 
 func shouldSkipBoltMessage(role string) bool {
 	return strings.EqualFold(strings.TrimSpace(role), "tool")
-}
-
-func buildSystemPrompt(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) string {
-	return buildSystemPromptParts(system, workdir, tools, noTools, messages).FullPrompt
 }
 
 func buildSystemPromptParts(system []prompt.SystemItem, workdir string, tools []interface{}, noTools bool, messages []prompt.Message) systemPromptParts {
@@ -778,6 +763,22 @@ func sanitizeBoltMessageText(text string) string {
 	return strings.TrimSpace(stripTaggedBoltText(text))
 }
 
+func sanitizeBoltAssistantText(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	text = stripNestedTaggedBlock(text, "thinking")
+	text = stripTaggedBoltText(text)
+	text = stripCCEntrypointLines(text)
+	text = stripBoltEnvironmentLines(text)
+	text = stripBoltToolTranscript(text)
+	text = collapseBoltBlankLines(text)
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return text
+}
+
 func stripTaggedBoltText(text string) string {
 	text = stripNestedTaggedBlock(text, "system-reminder")
 	for _, tag := range boltStripTaggedNames {
@@ -903,6 +904,103 @@ func looksLikeBoltEnvironmentBlock(text string) bool {
 	return markers >= 2
 }
 
+func stripBoltToolTranscript(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	filtered := make([]string, 0, len(lines))
+	inTranscript := false
+	justExitedTranscript := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(strings.ReplaceAll(line, "\u00a0", " "))
+		if isBoltToolTranscriptHeader(trimmed) {
+			inTranscript = true
+			justExitedTranscript = false
+			continue
+		}
+		if inTranscript {
+			if trimmed == "" || isBoltIndentedTranscriptLine(line) || strings.HasPrefix(trimmed, "⎿") || strings.HasPrefix(trimmed, "... +") || strings.HasPrefix(trimmed, "… +") {
+				continue
+			}
+			inTranscript = false
+			justExitedTranscript = true
+		}
+
+		if justExitedTranscript {
+			if cleaned, ok := stripBoltTranscriptBullet(trimmed); ok {
+				line = cleaned
+				trimmed = cleaned
+			}
+			justExitedTranscript = false
+		}
+
+		filtered = append(filtered, strings.TrimRight(line, " \t"))
+	}
+
+	return strings.Join(filtered, "\n")
+}
+
+func isBoltToolTranscriptHeader(line string) bool {
+	if line == "" {
+		return false
+	}
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, "ctrl+o to expand") {
+		return true
+	}
+	if !strings.HasPrefix(line, "● ") {
+		return false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line, "● "))
+	for _, name := range supportedBoltToolOrder {
+		if strings.HasPrefix(rest, name+"(") {
+			return true
+		}
+	}
+	return false
+}
+
+func isBoltIndentedTranscriptLine(line string) bool {
+	if line == "" {
+		return false
+	}
+	switch line[0] {
+	case ' ', '\t':
+		return true
+	default:
+		return false
+	}
+}
+
+func stripBoltTranscriptBullet(line string) (string, bool) {
+	if !strings.HasPrefix(line, "● ") {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(line, "● ")), true
+}
+
+func collapseBoltBlankLines(text string) string {
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	prevBlank := false
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			if prevBlank {
+				continue
+			}
+			prevBlank = true
+			out = append(out, "")
+			continue
+		}
+		prevBlank = false
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
 func normalizeBlocks(msg prompt.Message) []prompt.ContentBlock {
 	if msg.Content.IsString() {
 		text := msg.Content.GetText()
@@ -1020,14 +1118,16 @@ func generateRandomID(length int) string {
 }
 
 type outboundConverter struct {
-	model          string
-	inCodeBlock    bool
-	codeBuffer     strings.Builder
-	inputTokens    int
-	outputTokens   int
-	emittedToolUse bool
-	seenToolCalls  map[string]struct{}
-	suppressText   bool
+	model                   string
+	inCodeBlock             bool
+	codeBuffer              strings.Builder
+	codeFenceHeader         strings.Builder
+	awaitingCodeFenceHeader bool
+	inputTokens             int
+	outputTokens            int
+	emittedToolUse          bool
+	seenToolCalls           map[string]struct{}
+	suppressText            bool
 }
 
 func newOutboundConverter(model string, inputTokens int) *outboundConverter {
@@ -1203,33 +1303,32 @@ func (c *outboundConverter) processTextContent(text string, textBuffer *strings.
 				textBuffer.Reset()
 			}
 			c.inCodeBlock = true
-			afterMarker = strings.TrimPrefix(afterMarker, "json")
-			c.codeBuffer.WriteString(afterMarker)
-			return nil
+			c.awaitingCodeFenceHeader = true
+			c.codeFenceHeader.Reset()
+			c.codeBuffer.Reset()
+			text = afterMarker
 		}
 	}
 
 	if c.inCodeBlock {
-		if c.codeBuffer.Len() == 0 {
-			text = strings.TrimPrefix(text, "json")
-			text = strings.TrimPrefix(text, "JSON")
-			text = strings.TrimPrefix(text, "\n")
-		}
 		if idx := strings.Index(text, "```"); idx >= 0 {
 			beforeEnd := text[:idx]
 			afterEnd := text[idx+3:]
-			c.codeBuffer.WriteString(beforeEnd)
-			codeContent := strings.TrimSpace(c.codeBuffer.String())
+			c.appendCodeBlockContent(beforeEnd)
+			codeContent := strings.Trim(c.codeBuffer.String(), "\r\n")
+			fenceHeader := strings.TrimSpace(c.codeFenceHeader.String())
 			c.codeBuffer.Reset()
+			c.codeFenceHeader.Reset()
 			c.inCodeBlock = false
-			if err := c.processCodeBlock(codeContent, textBuffer, writer); err != nil {
+			c.awaitingCodeFenceHeader = false
+			if err := c.processCodeBlock(fenceHeader, codeContent, textBuffer, writer); err != nil {
 				return err
 			}
 			if afterEnd != "" {
 				textBuffer.WriteString(afterEnd)
 			}
 		} else {
-			c.codeBuffer.WriteString(text)
+			c.appendCodeBlockContent(text)
 		}
 		return nil
 	}
@@ -1238,19 +1337,48 @@ func (c *outboundConverter) processTextContent(text string, textBuffer *strings.
 	return nil
 }
 
-func (c *outboundConverter) processCodeBlock(content string, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
+func (c *outboundConverter) appendCodeBlockContent(text string) {
+	if !c.awaitingCodeFenceHeader {
+		c.codeBuffer.WriteString(text)
+		return
+	}
+	if text == "" {
+		return
+	}
+
+	if idx := strings.IndexAny(text, "\r\n"); idx >= 0 {
+		c.codeFenceHeader.WriteString(text[:idx])
+		c.awaitingCodeFenceHeader = false
+		next := idx + 1
+		if text[idx] == '\r' && next < len(text) && text[next] == '\n' {
+			next++
+		}
+		if next < len(text) {
+			c.codeBuffer.WriteString(text[next:])
+		}
+		return
+	}
+
+	c.codeFenceHeader.WriteString(text)
+}
+
+func (c *outboundConverter) processCodeBlock(fenceHeader string, content string, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if toolCalls := extractToolCallsFromJSON([]byte(content)); len(toolCalls) > 0 {
 		return c.flushTextAndSendToolCalls(toolCalls, textBuffer, writer)
 	}
 
-	textBuffer.WriteString("```json\n")
+	textBuffer.WriteString("```")
+	if fenceHeader != "" {
+		textBuffer.WriteString(fenceHeader)
+	}
+	textBuffer.WriteByte('\n')
 	textBuffer.WriteString(content)
 	textBuffer.WriteString("\n```")
 	return nil
 }
 
 func (c *outboundConverter) sendTextDelta(text string, writer func(upstream.SSEMessage) error) error {
-	text = strings.TrimSpace(text)
+	text = sanitizeBoltAssistantText(text)
 	if text == "" {
 		return nil
 	}
@@ -1435,10 +1563,13 @@ func (c *outboundConverter) sendEndEvents(endEvent *EndEvent, writer func(upstre
 
 func (c *outboundConverter) flushAndFinish(endEvent *EndEvent, textBuffer *strings.Builder, writer func(upstream.SSEMessage) error) error {
 	if c.inCodeBlock && c.codeBuffer.Len() > 0 {
-		codeContent := strings.TrimSpace(c.codeBuffer.String())
+		codeContent := strings.Trim(c.codeBuffer.String(), "\r\n")
+		fenceHeader := strings.TrimSpace(c.codeFenceHeader.String())
 		c.codeBuffer.Reset()
+		c.codeFenceHeader.Reset()
 		c.inCodeBlock = false
-		if err := c.processCodeBlock(codeContent, textBuffer, writer); err != nil {
+		c.awaitingCodeFenceHeader = false
+		if err := c.processCodeBlock(fenceHeader, codeContent, textBuffer, writer); err != nil {
 			return err
 		}
 	}

@@ -54,6 +54,12 @@ type MessageContent struct {
 }
 
 func (mc *MessageContent) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		mc.Text = ""
+		mc.Blocks = nil
+		return nil
+	}
+
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
 		mc.Text = text
@@ -110,6 +116,103 @@ func (m *Message) ExtractText() string {
 type Message struct {
 	Role    string         `json:"role"`
 	Content MessageContent `json:"content"`
+}
+
+type openAIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type openAIToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function openAIToolCallFunction `json:"function"`
+}
+
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role       string           `json:"role"`
+		Content    json.RawMessage  `json:"content"`
+		ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string           `json:"tool_call_id,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	m.Role = raw.Role
+	content := raw.Content
+	if len(content) == 0 {
+		content = json.RawMessage("null")
+	}
+	if err := json.Unmarshal(content, &m.Content); err != nil {
+		return err
+	}
+
+	switch strings.ToLower(strings.TrimSpace(raw.Role)) {
+	case "assistant":
+		if len(raw.ToolCalls) == 0 {
+			return nil
+		}
+		blocks := make([]ContentBlock, 0, len(raw.ToolCalls)+1)
+		if m.Content.IsString() {
+			if text := m.Content.GetText(); strings.TrimSpace(text) != "" {
+				blocks = append(blocks, ContentBlock{Type: "text", Text: text})
+			}
+		} else if len(m.Content.GetBlocks()) > 0 {
+			blocks = append(blocks, m.Content.GetBlocks()...)
+		}
+		for _, call := range raw.ToolCalls {
+			name := strings.TrimSpace(call.Function.Name)
+			if name == "" {
+				continue
+			}
+			blocks = append(blocks, ContentBlock{
+				Type:  "tool_use",
+				ID:    strings.TrimSpace(call.ID),
+				Name:  name,
+				Input: decodeOpenAIToolArguments(call.Function.Arguments),
+			})
+		}
+		m.Content = MessageContent{Blocks: blocks}
+	case "tool":
+		m.Role = "user"
+		m.Content = MessageContent{Blocks: []ContentBlock{{
+			Type:      "tool_result",
+			ToolUseID: strings.TrimSpace(raw.ToolCallID),
+			Content:   toolResultContentFromMessageContent(m.Content),
+		}}}
+	}
+
+	return nil
+}
+
+func decodeOpenAIToolArguments(raw string) interface{} {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return map[string]interface{}{}
+	}
+
+	var value interface{}
+	if err := json.Unmarshal([]byte(trimmed), &value); err == nil {
+		switch typed := value.(type) {
+		case nil:
+			return map[string]interface{}{}
+		case map[string]interface{}:
+			return typed
+		default:
+			return map[string]interface{}{"value": typed}
+		}
+	}
+
+	return map[string]interface{}{"raw": trimmed}
+}
+
+func toolResultContentFromMessageContent(content MessageContent) string {
+	if content.IsString() {
+		return content.GetText()
+	}
+	return content.ExtractText()
 }
 
 // SystemItem 系统提示词项
