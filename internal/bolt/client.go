@@ -33,11 +33,11 @@ const (
 	defaultRateLimitsURL    = "https://bolt.new/api/rate-limits/user"
 	defaultTeamsRateURL     = "https://bolt.new/api/rate-limits/teams"
 	defaultProjectsURL      = "https://stackblitz.com/api/projects/sb1/fork"
-	defaultAdapterPrompt    = "你正在通过 Orchids 的 Bolt 适配层处理代码代理对话。能直接回答时直接回答；需要改文件、运行命令或提交/推送 git 时，优先直接调用工具，不要只给步骤说明。要用工具时，直接返回严格 JSON，不要先解释计划。"
+	defaultAdapterPrompt    = "你正在通过 Orchids 的 Bolt 适配层处理代码任务。能直接回答就直接回答；需要工具时直接返回 JSON，不要先解释计划。"
 	maxBoltFocusedFileCount = 2
-	maxBoltReadResultRunes  = 900
-	maxBoltFocusedReadRunes = 6000
-	maxBoltShellResultRunes = 1100
+	maxBoltReadResultRunes  = 480
+	maxBoltFocusedReadRunes = 2200
+	maxBoltShellResultRunes = 480
 )
 
 var boltAPIURL = defaultAPIURL
@@ -545,6 +545,7 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 	gitUploadIntent := detectRecentBoltGitUploadIntent(messages)
 	focusedFileAliases := collectFocusedBoltFileAliases(messages)
 	var latestSuccessfulMutationPath string
+	var sawAssistantCompletionAfterLatestMutation bool
 	var lastUserMsgID string
 	var lastSubstantiveUserTask string
 	for _, msg := range messages {
@@ -568,7 +569,7 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 			}
 			lastUserMsgID = boltMsg.ID
 			boltMsg.Content = extractBoltUserContent(blocks, toolUses, gitUploadIntent, focusedFileAliases, lastSubstantiveUserTask, workdir)
-			if shouldInjectBoltExistingFileMutationGuard(standalone, latestSuccessfulMutationPath) {
+			if shouldInjectBoltExistingFileMutationGuard(standalone, latestSuccessfulMutationPath, sawAssistantCompletionAfterLatestMutation) {
 				boltMsg.Content = appendBoltMutationGuard(boltMsg.Content, latestSuccessfulMutationPath)
 			}
 			boltMsg.RawContent = boltMsg.Content
@@ -579,6 +580,9 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 			boltMsg.Content = extractBoltAssistantHistoryContent(blocks)
 			if strings.TrimSpace(boltMsg.Content) != "" {
 				boltMsg.Parts = []Part{{Type: "text", Text: boltMsg.Content}}
+				if looksLikeBoltAssistantCompletionSummary(boltMsg.Content) {
+					sawAssistantCompletionAfterLatestMutation = true
+				}
 			}
 		default:
 			boltMsg.Content = extractTextContent(blocks)
@@ -592,6 +596,7 @@ func buildBoltMessages(messages []prompt.Message, workdir string) builtMessages 
 		built.HistoryTokens += estimateBoltMessageTokens(boltMsg)
 		if path := latestBoltSuccessfulMutationPath(msg, toolUses); strings.TrimSpace(path) != "" {
 			latestSuccessfulMutationPath = path
+			sawAssistantCompletionAfterLatestMutation = false
 		}
 	}
 	return built
@@ -617,12 +622,15 @@ func latestBoltSuccessfulMutationPath(msg prompt.Message, toolUses map[string]bo
 	return ""
 }
 
-func shouldInjectBoltExistingFileMutationGuard(task string, latestSuccessfulMutationPath string) bool {
+func shouldInjectBoltExistingFileMutationGuard(task string, latestSuccessfulMutationPath string, sawAssistantCompletionAfterLatestMutation bool) bool {
 	task = strings.TrimSpace(task)
 	if task == "" || LooksLikeContinuationOnlyText(task) {
 		return false
 	}
 	if strings.TrimSpace(latestSuccessfulMutationPath) == "" {
+		return false
+	}
+	if sawAssistantCompletionAfterLatestMutation {
 		return false
 	}
 	lower := strings.ToLower(task)
@@ -836,30 +844,18 @@ func buildBoltToolUsagePrompt(toolNames []string) []string {
 
 	parts := []string{
 		"可用工具: " + strings.Join(toolHints, "; "),
-		"只能使用上面列出的工具；不要改用任何未声明的工具名，也不要擅自调用 `Task`、`Agent` 或其他额外工具。",
-		"需要工具时，输出纯 JSON，不要加解释、不要加前后缀、不要说“让我先看看项目文件”。",
-		"如果这回合决定调用工具，不要先输出“我来修改”“我先看一下”“让我读取后再改”之类说明文字；第一个非空输出字符应当直接是 `{`，避免浪费 token。",
-		"不要解释当前运行在什么系统或沙箱；如果需要确认目录或文件，直接调用工具。",
-		"如果某次工具结果提示路径不存在，不要据此断言项目为空；应优先改用 `.`、README.md、go.mod、package.json 等项目内相对路径继续调用工具。",
-		"如果文件名已经在用户话语、最近一次 Read/Write/Edit 结果或最近一次有效 Glob 结果里明确出现，优先直接对该路径 Read 或 Edit；不要先对 `.` 做宽泛 Glob。只有目标路径仍不明确时才使用 Glob/Grep。",
+		"只能使用上面列出的工具；需要工具时输出纯 JSON，不要加解释、不要先解释计划；第一个非空输出字符应当直接是 `{`。",
+		"不要解释当前运行在什么系统或沙箱；路径优先用项目内相对路径。若某次工具结果提示路径不存在，不要据此断言项目为空；优先改用 `.`、README.md、go.mod、package.json 等项目内路径继续调用工具。",
+		"如果文件名已经明确出现，优先直接对该路径 Read 或 Edit；不要先对 `.` 做宽泛 Glob。若刚读过同一文件要继续修改，优先沿用同一路径继续 Edit，不要重新从 Glob 开始。",
 		"如果目标文件已经存在，优先使用 Edit 做最小修改；只有在创建新文件，或你明确打算整文件重写且确实需要一次性替换全文时才使用 Write。",
-		"对“添加支持/添加功能/X”这类请求，要让功能真正可用：至少同步补到受影响的解析/状态、核心逻辑、以及输出或交互层；不要只加显示开关、提示文案或空包装函数。",
-		"如果你刚刚已经 Read 了某个文件，接下来要继续修改它，优先沿用同一路径继续 Edit；除非出现明确冲突信号，否则不要重新从 Glob 开始。",
+		"对“添加支持/添加功能/X”这类请求，要让功能真正可用，不要只加显示开关、提示文案或空包装函数；如果用户明确要求修改、创建或继续完善代码，不要声称“已经完成”，也不要停在现状总结。",
 		"如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`，继续坚持项目内相对路径，不要改写成 `/tmp/cc-agent/...` 之类的沙箱绝对路径。",
-		"如果最近一轮 Write/Edit 已经成功返回，优先直接总结已完成的修改；不要仅为了确认结果就再次 Read 同一文件。",
-		"如果最近一轮已经明确返回 `File created successfully at: ...` 或其他成功的 Write/Edit 结果，不要再用 Bash/ls 去 `/tmp/cc-agent/...`、`/mnt/...` 或其他占位目录确认文件是否存在；应直接基于该成功结果继续后续 Edit/Write。",
-		"如果最近一轮 Write/Edit 明确报错，或工具结果里包含 `<tool_use_error>`、`Error editing file`、`String to replace not found` 等失败信号，说明修改尚未完成；不要沿用更早的成功 Write/Edit 来声称已经更新完成，应继续基于最新错误和当前文件上下文调用工具修复，直到出现新的成功结果。",
-		"若 Glob/Read/Bash 已确认根目录为空且用户目标足够具体，直接在 `.` 创建最小可运行实现，不要再追问“要构建什么”。",
-		"空目录初始化时，优先直接使用 Write 创建首个文件，不要在 `No files found` 之后继续反复 Glob、ls 或再次输出空项目澄清。",
-		"如果用户明确要求修改、创建或继续完善代码，而历史里只有 Read/Glob/Grep/Bash 结果、还没有对应的成功 Write/Edit 结果，不要声称“已经完成”“文件已经包含该功能”或“无需进一步操作”；应继续调用工具完成实际修改。",
-		"已读过相关文件后，用户再说“修改/改进/添加 X”时，直接基于已读内容继续 Edit/Write；仅缺关键片段时再补一次 Read。",
-		"连续编程对话里，用户后续补充的技术说明、约束或示例默认都是追加需求；要落地到代码时继续调用工具修改，不要只解释。",
-		"例如用户说“帮我用python写一个计算器”，默认直接在项目根目录创建 `calculator.py`。",
+		"如果最近一轮 Write/Edit 已经成功返回，优先直接总结已完成的修改；不要仅为了确认结果就再次 Read 同一文件。若最近一轮 Write/Edit 明确报错，说明修改尚未完成；不要沿用更早的成功 Write/Edit 来声称已经更新完成。",
+		"连续编程对话里，用户后续补充的技术说明、约束或示例默认都是追加需求；要落地到代码时继续调用工具修改。若刚通过 Glob/Read/Bash 确认项目根目录为空，优先直接使用 Write 创建首个文件；例如用户说“帮我用python写一个计算器”，默认直接在项目根目录创建 `calculator.py`。",
 	}
 	if hasBoltToolName(toolNames, "Task") {
 		parts = append(parts,
-			"只有在本地 Read/Glob/Grep/Bash 不足以完成广泛探索时才使用 `Task`；不要为了确认根目录、空项目或单个文件就先发子任务。",
-			"如果客户端声明的是 `Agent`，上游 Bolt 可能会返回 `Task`；把它视为同一种子代理能力继续执行。",
+			"只有在本地 Read/Glob/Grep/Bash 不足以完成广泛探索时才使用 `Task`；如果客户端声明的是 `Agent`，上游 Bolt 可能会返回 `Task`，把它视为同一种子代理能力继续执行。",
 		)
 	}
 	return parts
@@ -2980,24 +2976,21 @@ func formatBoltToolResultContinuation(gitUploadIntent bool, continuationTask str
 		return "继续完成当前的 git 提交与推送任务。以下结果来自用户本地真实仓库，不是 `/tmp/cc-agent/...` 沙箱。"
 	}
 
-	task := truncateBoltContinuationTask(strings.TrimSpace(continuationTask), 120)
+	task := truncateBoltContinuationTask(strings.TrimSpace(continuationTask), 72)
 	if mutationFailed {
 		if task != "" {
-			return "继续完成用户刚才明确提出的任务：" + task + "。以下是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成，也不要把更早的成功结果当成这次修改已完成。直接继续修复，优先对已读或已存在文件用 Edit；只有缺少马上要改的片段时才补 Read。若报 `String to replace not found` 且路径已知，不要再对 `.` 做 Glob/Grep，必要时直接改用 Write。若决定调用工具，首个非空输出字符直接是 `{`。"
+			return "继续任务：" + task + "。以下是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成。优先沿用已读或已存在文件做 Edit；若决定调用工具，首个非空输出字符直接是 `{`。"
 		}
-		return "以下是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成，也不要把更早的成功结果当成这次修改已完成。直接继续修复，优先对已读或已存在文件用 Edit；只有缺少马上要改的片段时才补 Read。若报 `String to replace not found` 且路径已知，不要再对 `.` 做 Glob/Grep，必要时直接改用 Write。若决定调用工具，首个非空输出字符直接是 `{`。"
+		return "以下是上一轮失败的工具结果。最近一次 Write/Edit 还没成功；不要声称已完成。优先沿用已读或已存在文件做 Edit；若决定调用工具，首个非空输出字符直接是 `{`。"
 	}
 	if mutationSucceeded {
-		if task != "" {
-			return "成功工具结果如下。只做最小确认：按“" + task + "”已创建/更新相应文件；不要补充文件内容细节。"
-		}
-		return "成功工具结果如下。只做最小确认：说明相应文件已创建/更新成功；不要补充文件内容细节。"
+		return "只做最小确认：已创建/更新相应文件；不要补充文件内容细节。"
 	}
 	if task != "" {
-		return "继续完成用户刚才明确提出的任务：" + task + "。以下是上一轮工具结果，直接基于它继续；不要只停在现状总结或表面补丁。添加功能时要改到真正生效，不要只补显示或文案。如果需要改代码，优先沿用已读或已存在文件做 Edit；只有新建文件或明确整文件替换时才用 Write。除非缺少马上要改的片段，否则不要再次 Read 同一路径；路径已明确时也不要重新从 Glob 开始。若决定调用工具，首个非空输出字符直接是 `{`。"
+		return "继续任务：" + task + "。不要只停在现状总结或表面补丁，不要只补显示或文案。优先沿用已读或已存在文件做 Edit；路径已明确时也不要重新从 Glob 开始；首个非空输出字符直接是 `{`。"
 	}
 
-	return "以下是上一轮工具结果，直接基于它继续当前任务；不要只停在现状总结或表面补丁。添加功能时要改到真正生效，不要只补显示或文案。如果需要改代码，优先沿用已读或已存在文件做 Edit；只有新建文件或明确整文件替换时才用 Write。除非缺少马上要改的片段，否则不要再次 Read 同一路径；路径已明确时也不要重新从 Glob 开始。若决定调用工具，首个非空输出字符直接是 `{`。"
+	return "直接基于下面结果继续当前任务。优先沿用已读或已存在文件做 Edit；路径已明确时也不要重新从 Glob 开始；首个非空输出字符直接是 `{`。"
 }
 
 func truncateBoltContinuationTask(text string, limit int) string {

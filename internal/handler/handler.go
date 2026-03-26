@@ -1047,6 +1047,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			"estimated_total_input_tokens", breakdown.Total,
 		)
 	}
+	logger.LogInputTokenBreakdown(
+		breakdownProfile,
+		breakdown.BasePromptTokens,
+		breakdown.SystemContextTokens,
+		breakdown.HistoryTokens,
+		breakdown.ToolsTokens,
+		breakdown.Total,
+	)
 
 	// Token 计数（用于前置 usage 展示）
 	inputTokens := breakdown.Total

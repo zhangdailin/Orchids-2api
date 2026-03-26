@@ -651,7 +651,7 @@ func TestSendRequestWithPayload_RetriesFalseCompletionAfterFailedEdit(t *testing
 	if len(requestBodies) != 2 {
 		t.Fatalf("request count=%d want 2", len(requestBodies))
 	}
-	if !strings.Contains(requestBodies[1], "上一轮你在没有任何新的成功 Write/Edit 工具结果的情况下直接声称已经完成") {
+	if !strings.Contains(requestBodies[1], "RETRY: 上次修改仍失败") {
 		t.Fatalf("second request missing false-completion correction, body=%s", requestBodies[1])
 	}
 	if len(events) != 2 {
@@ -762,7 +762,7 @@ func TestSendRequestWithPayload_RetriesFalseCompletionAfterReadOnlyFollowup(t *t
 	if len(requestBodies) != 2 {
 		t.Fatalf("request count=%d want 2", len(requestBodies))
 	}
-	if !strings.Contains(requestBodies[1], "你上一轮只有 Read 结果，没有任何成功的 Write/Edit") {
+	if !strings.Contains(requestBodies[1], "RETRY: 上次只有 Read、没有新的成功 Write/Edit，不能算完成") {
 		t.Fatalf("second request missing read-only false-completion correction, body=%s", requestBodies[1])
 	}
 	if !strings.Contains(requestBodies[1], "calculator.py") {
@@ -878,10 +878,10 @@ func TestSendRequestWithPayload_RetriesFalseCompletionAfterRepeatedReadCorrectio
 	if len(requestBodies) != 3 {
 		t.Fatalf("request count=%d want 3", len(requestBodies))
 	}
-	if !strings.Contains(requestBodies[1], "不要再次 Read 同一路径") {
+	if !strings.Contains(requestBodies[1], "RETRY: 刚读过 `calculator.py`") {
 		t.Fatalf("second request missing repeated-read correction, body=%s", requestBodies[1])
 	}
-	if !strings.Contains(requestBodies[2], "更早创建成功当成当前任务已经完成") {
+	if !strings.Contains(requestBodies[2], "不要把旧成功或文件存在当成这次已完成") {
 		t.Fatalf("third request missing create-success false-completion correction, body=%s", requestBodies[2])
 	}
 	if len(events) != 2 {
@@ -984,10 +984,10 @@ func TestSendRequestWithPayload_HidesRootProjectProbeAfterFailedMutation(t *test
 	if len(requestBodies) != 2 {
 		t.Fatalf("request count=%d want 2", len(requestBodies))
 	}
-	if !strings.Contains(requestBodies[1], "不要再用根目录 Glob/Grep 去搜索 `*.py`") {
+	if !strings.Contains(requestBodies[1], "RETRY: 别再对根目录做 Glob/Grep 探路") {
 		t.Fatalf("second request missing root-probe correction, body=%s", requestBodies[1])
 	}
-	if !strings.Contains(requestBodies[1], "就直接改用 Write 一次性替换该文件") {
+	if !strings.Contains(requestBodies[1], "若 Edit 命不中，就改用 Write") {
 		t.Fatalf("second request missing write fallback correction, body=%s", requestBodies[1])
 	}
 	if len(events) != 2 {
@@ -1075,7 +1075,7 @@ func TestSendRequestWithPayload_RetriesRepeatedReadAfterReadOnlyFollowup(t *test
 	if len(requestBodies) != 2 {
 		t.Fatalf("request count=%d want 2", len(requestBodies))
 	}
-	if !strings.Contains(requestBodies[1], "不要再次 Read 同一路径") {
+	if !strings.Contains(requestBodies[1], "RETRY: 刚读过 `calculator.py`") {
 		t.Fatalf("second request missing repeated-read correction, body=%s", requestBodies[1])
 	}
 	if len(events) != 2 {
@@ -1156,7 +1156,7 @@ func TestSendRequestWithPayload_RetriesEmptyTurnAfterReadOnlyFollowup(t *testing
 	if len(requestBodies) != 2 {
 		t.Fatalf("request count=%d want 2", len(requestBodies))
 	}
-	if !strings.Contains(requestBodies[1], "不要再次 Read 同一路径，也不要空结束") {
+	if !strings.Contains(requestBodies[1], "RETRY: 已拿到 `calculator.py` 的内容，不要空结束") {
 		t.Fatalf("second request missing empty-turn correction, body=%s", requestBodies[1])
 	}
 	if len(events) != 2 {
@@ -1250,6 +1250,44 @@ func TestEstimateInputTokens_SplitsPromptBuckets(t *testing.T) {
 	}
 }
 
+func TestEstimateInputTokens_AggressivelyCompactsLongFocusedReadHistory(t *testing.T) {
+	req := upstream.UpstreamRequest{
+		Model: "claude-opus-4-6",
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "帮我给 calculator.py 添加科学计数法"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "tool_read",
+						Name:  "Read",
+						Input: map[string]interface{}{"file_path": "calculator.py"},
+					}},
+				},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{
+					Blocks: []prompt.ContentBlock{{
+						Type:      "tool_result",
+						ToolUseID: "tool_read",
+						Content:   strings.Repeat("1234567890", 1200),
+					}},
+				},
+			},
+		},
+	}
+
+	got := EstimateInputTokens(req)
+	if got.HistoryTokens <= 0 {
+		t.Fatalf("HistoryTokens=%d want >0", got.HistoryTokens)
+	}
+	if got.HistoryTokens >= 1200 {
+		t.Fatalf("HistoryTokens=%d want aggressive compaction below 1200", got.HistoryTokens)
+	}
+}
+
 func TestPrepareRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Model:   "claude-opus-4-6",
@@ -1289,7 +1327,7 @@ func TestPrepareRequest_AddsWorkspaceAndToolInstructions(t *testing.T) {
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "不要解释当前运行在什么系统或沙箱") {
 		t.Fatalf("system prompt missing no-sandbox-explanation instruction: %s", boltReq.GlobalSystemPrompt)
 	}
-	if !strings.Contains(boltReq.GlobalSystemPrompt, "如果某次工具结果提示路径不存在，不要据此断言项目为空") {
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "若某次工具结果提示路径不存在，不要据此断言项目为空") {
 		t.Fatalf("system prompt missing path-miss recovery instruction: %s", boltReq.GlobalSystemPrompt)
 	}
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`") {
@@ -1451,7 +1489,7 @@ func TestPrepareRequest_AddsEditFollowupExecutionInstructions(t *testing.T) {
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "不要声称“已经完成”") {
 		t.Fatalf("system prompt missing no-false-completion hint: %s", boltReq.GlobalSystemPrompt)
 	}
-	if !strings.Contains(boltReq.GlobalSystemPrompt, "不要继续追问需求，也不要停在现状总结") {
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "不要停在现状总结") {
 		t.Fatalf("system prompt missing direct-edit follow-up hint: %s", boltReq.GlobalSystemPrompt)
 	}
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "用户后续补充的技术说明、约束或示例") {
@@ -1550,7 +1588,7 @@ func TestPrepareRequest_AddsEmptyProjectDirectCreateInstructions(t *testing.T) {
 	}
 
 	boltReq, _ := prepareRequest(req, "sb1-demo")
-	if !strings.Contains(boltReq.GlobalSystemPrompt, "如果刚通过 Glob/Read/Bash 确认项目根目录为空") {
+	if !strings.Contains(boltReq.GlobalSystemPrompt, "若刚通过 Glob/Read/Bash 确认项目根目录为空") {
 		t.Fatalf("system prompt missing empty-project direct-create instruction: %s", boltReq.GlobalSystemPrompt)
 	}
 	if !strings.Contains(boltReq.GlobalSystemPrompt, "优先直接使用 Write 创建首个文件") {
@@ -1686,8 +1724,11 @@ func TestPrepareRequest_DropsMisleadingNoFilesFoundProbeAfterSuccessfulWrite(t *
 			t.Fatalf("expected misleading no-files-found probe to be trimmed, got messages=%#v", boltReq.Messages)
 		}
 	}
-	if got := boltReq.Messages[2].Content; got != "帮我添加科学计数法" {
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "帮我添加科学计数法") {
 		t.Fatalf("last message content=%q want follow-up edit request", got)
+	}
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "这是新的修改请求") {
+		t.Fatalf("last message content=%q want fresh-modification guard", got)
 	}
 }
 
@@ -2073,7 +2114,7 @@ func TestPrepareRequest_DropsSupersededAssistantCompletionSummaryBeforeLaterEdit
 	if got := boltReq.Messages[1].Content; got != "帮我添加科学计数法" {
 		t.Fatalf("second message content=%q want latest explicit edit request", got)
 	}
-	if got := boltReq.Messages[2].Content; !strings.Contains(got, "继续完成用户刚才明确提出的任务") {
+	if got := boltReq.Messages[2].Content; !strings.Contains(got, "继续任务：") {
 		t.Fatalf("third message content=%q want continuation marker for tool-result follow-up", got)
 	}
 	if got := boltReq.Messages[2].Content; !strings.Contains(got, "帮我添加科学计数法") {
@@ -2135,7 +2176,7 @@ func TestPrepareRequest_DropsInjectedFailureAssistantNoiseBeforeLaterBoltFollowu
 	if got := boltReq.Messages[2].Content; got != "给他添加科学计数法" {
 		t.Fatalf("third message content=%q want latest retry task", got)
 	}
-	if got := boltReq.Messages[3].Content; !strings.Contains(got, "继续完成用户刚才明确提出的任务") {
+	if got := boltReq.Messages[3].Content; !strings.Contains(got, "继续任务：") {
 		t.Fatalf("fourth message content=%q want continuation marker for read follow-up", got)
 	}
 	if got := boltReq.Messages[3].Content; !strings.Contains(got, "def add(a, b)") {
@@ -2416,8 +2457,8 @@ func TestPrepareRequest_DropsEarlierReadFollowupAfterLaterWriteSuccessAcrossTurn
 	if !strings.Contains(got, "updated successfully") {
 		t.Fatalf("expected write success follow-up to remain, got: %q", got)
 	}
-	if !strings.Contains(got, "不要为了确认而再次 Read 同一文件") {
-		t.Fatalf("expected write success follow-up to discourage redundant reread, got: %q", got)
+	if !strings.Contains(got, "只做最小确认") {
+		t.Fatalf("expected write success follow-up to stay at minimal confirmation level, got: %q", got)
 	}
 }
 
@@ -2522,7 +2563,7 @@ func TestPrepareRequest_UsesFailureContinuationForFailedEditFollowup(t *testing.
 	if !strings.Contains(got, "String to replace not found in file.") {
 		t.Fatalf("expected failed edit follow-up to keep the upstream error detail, got: %q", got)
 	}
-	if !strings.Contains(got, "优先对已读或已存在文件用 Edit") {
+	if !strings.Contains(got, "优先沿用已读或已存在文件做 Edit") {
 		t.Fatalf("expected failed edit follow-up to prefer Edit after read/modify flows, got: %q", got)
 	}
 	if !strings.Contains(got, "首个非空输出字符直接是 `{`") {
@@ -2731,7 +2772,7 @@ func TestPrepareRequest_DropsEarlierRepeatedEditFailureForSameFile(t *testing.T)
 
 func TestBuildBoltToolUsagePrompt_IncludesMutationFailureRecoveryRule(t *testing.T) {
 	got := strings.Join(buildBoltToolUsagePrompt([]string{"Read", "Write", "Edit", "Bash"}), "\n")
-	if !strings.Contains(got, "如果最近一轮 Write/Edit 明确报错") {
+	if !strings.Contains(got, "若最近一轮 Write/Edit 明确报错") {
 		t.Fatalf("expected mutation failure recovery rule in tool prompt, got: %q", got)
 	}
 	if !strings.Contains(got, "不要沿用更早的成功 Write/Edit 来声称已经更新完成") {
@@ -2749,7 +2790,7 @@ func TestBuildBoltToolUsagePrompt_IncludesMutationFailureRecoveryRule(t *testing
 	if !strings.Contains(got, "不要重新从 Glob 开始") {
 		t.Fatalf("expected tool prompt to keep following the same file across turns, got: %q", got)
 	}
-	if !strings.Contains(got, "功能真正可用") || !strings.Contains(got, "不要只加显示开关、提示文案或空包装函数") {
+	if !strings.Contains(got, "不要只加显示开关、提示文案或空包装函数") {
 		t.Fatalf("expected tool prompt to require substantive feature implementation, got: %q", got)
 	}
 }
@@ -3008,8 +3049,8 @@ func TestShouldRetryBoltFalseCompletion_ForStalePresenceSummary(t *testing.T) {
 
 func TestShouldRetryBoltInvalidPathToolCall_ForSandboxRead(t *testing.T) {
 	ctx := boltFalseCompletionRetryContext{
-		ReadPath:  "calculator.py",
-		LastTask:  "帮我添加科学计算法",
+		ReadPath: "calculator.py",
+		LastTask: "帮我添加科学计算法",
 	}
 	converter := &outboundConverter{
 		emittedToolUse: true,
