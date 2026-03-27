@@ -405,8 +405,29 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 
 		converter := newOutboundConverter(currentReq.Model, inputEstimate.Total)
 		buffered := make([]upstream.SSEMessage, 0, 8)
+		clientVisibleOutput := false
+		liveForwarding := false
 		err = converter.ProcessStream(resp.Body, logger, func(msg upstream.SSEMessage) error {
+			if liveForwarding {
+				if isBoltClientVisibleMessage(msg, retryContext) {
+					clientVisibleOutput = true
+				}
+				if onMessage != nil {
+					onMessage(msg)
+				}
+				return nil
+			}
 			buffered = append(buffered, msg)
+			if isBoltClientVisibleMessage(msg, retryContext) {
+				clientVisibleOutput = true
+				liveForwarding = true
+				if onMessage != nil {
+					for _, bufferedMsg := range buffered {
+						onMessage(bufferedMsg)
+					}
+				}
+				buffered = buffered[:0]
+			}
 			return nil
 		})
 		resp.Body.Close()
@@ -414,30 +435,32 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 			return err
 		}
 
-		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltFalseCompletion(retryContext, converter) {
+		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltFalseCompletion(retryContext, converter) {
 			currentReq = buildBoltFalseCompletionRetryRequest(currentReq, retryContext)
 			continue
 		}
-		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltInvalidPathToolCall(retryContext, converter) {
+		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltInvalidPathToolCall(retryContext, converter) {
 			currentReq = buildBoltInvalidPathRetryRequest(currentReq, retryContext, converter)
 			continue
 		}
-		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltRepeatedRead(retryContext, converter) {
+		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltRepeatedRead(retryContext, converter) {
 			currentReq = buildBoltRepeatedReadRetryRequest(currentReq, retryContext)
 			continue
 		}
-		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltProjectProbeAfterFailedMutation(retryContext, converter) {
+		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltProjectProbeAfterFailedMutation(retryContext, converter) {
 			currentReq = buildBoltProjectProbeAfterFailedMutationRetryRequest(currentReq, retryContext)
 			continue
 		}
-		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltEmptyTurnAfterRead(retryContext, converter) {
+		if !clientVisibleOutput && attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltEmptyTurnAfterRead(retryContext, converter) {
 			currentReq = buildBoltEmptyTurnRetryRequest(currentReq, retryContext)
 			continue
 		}
 
-		for _, msg := range buffered {
-			if onMessage != nil {
-				onMessage(msg)
+		if !liveForwarding {
+			for _, msg := range buffered {
+				if onMessage != nil {
+					onMessage(msg)
+				}
 			}
 		}
 		return nil
@@ -457,6 +480,22 @@ func (c *Client) applyCommonHeaders(req *http.Request) {
 	req.Header.Set("Pragma", "no-cache")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Cookie", "__session="+c.sessionToken)
+}
+
+func isBoltClientVisibleMessage(msg upstream.SSEMessage, retryContext boltFalseCompletionRetryContext) bool {
+	if shouldBufferBoltVisibleOutput(retryContext) {
+		return false
+	}
+	switch strings.TrimSpace(msg.Type) {
+	case "model.text-delta", "model.tool-call":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldBufferBoltVisibleOutput(ctx boltFalseCompletionRetryContext) bool {
+	return ctx.HasRecentFailedMutation || ctx.HasRecentReadOnlyFollow
 }
 
 func EstimateInputTokens(req upstream.UpstreamRequest) InputTokenEstimate {
@@ -3317,6 +3356,11 @@ func (c *outboundConverter) ProcessStream(reader io.Reader, logger *debug.Logger
 			if err := c.processChunkData(eventData, &textBuffer, writer, true); err != nil {
 				return err
 			}
+			if !c.inCodeBlock && !looksLikeBoltPendingLead(textBuffer.String()) {
+				if err := c.flushTextBuffer(&textBuffer, writer); err != nil {
+					return err
+				}
+			}
 			if c.emittedToolUse {
 				return c.finishImmediatelyAfterToolUse(writer)
 			}
@@ -3325,6 +3369,11 @@ func (c *outboundConverter) ProcessStream(reader io.Reader, logger *debug.Logger
 		case "9", "a":
 			if err := c.processChunkData(eventData, &textBuffer, writer, false); err != nil {
 				return err
+			}
+			if !c.inCodeBlock && !looksLikeBoltPendingLead(textBuffer.String()) {
+				if err := c.flushTextBuffer(&textBuffer, writer); err != nil {
+					return err
+				}
 			}
 			if c.emittedToolUse {
 				return c.finishImmediatelyAfterToolUse(writer)
@@ -3622,6 +3671,17 @@ func (c *outboundConverter) flushTextBuffer(textBuffer *strings.Builder, writer 
 	}
 	textBuffer.Reset()
 	return nil
+}
+
+func looksLikeBoltPendingLead(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasSuffix(trimmed, ":") || strings.HasSuffix(trimmed, "：") {
+		return true
+	}
+	return false
 }
 
 func extractToolCallsFromJSON(data []byte) []ToolCall {

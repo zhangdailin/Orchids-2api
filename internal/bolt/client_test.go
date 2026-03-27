@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -558,6 +559,65 @@ func TestSendRequestWithPayload_UsesPreparedInputEstimateInFinishUsage(t *testin
 	}
 	if got := usage["inputTokens"]; got != want.Total {
 		t.Fatalf("inputTokens=%v want %d", got, want.Total)
+	}
+}
+
+func TestSendRequestWithPayload_StreamsVisibleTextBeforeUpstreamCompletes(t *testing.T) {
+	prevURL := boltAPIURL
+	t.Cleanup(func() { boltAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _ = io.WriteString(w, "0:\"hello\"\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+		time.Sleep(250 * time.Millisecond)
+		_, _ = io.WriteString(w, "e:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":7}}\n")
+		_, _ = io.WriteString(w, "d:{\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":7}}\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+	boltAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{
+		AccountType:   "bolt",
+		SessionCookie: "session-token",
+		ProjectID:     "demo",
+	}, nil)
+
+	gotFirstVisible := make(chan upstream.SSEMessage, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+			Model: "claude-opus-4-6",
+			Messages: []prompt.Message{
+				{Role: "user", Content: prompt.MessageContent{Text: "hello"}},
+			},
+		}, func(msg upstream.SSEMessage) {
+			if msg.Type == "model.text-delta" {
+				select {
+				case gotFirstVisible <- msg:
+				default:
+				}
+			}
+		}, nil)
+	}()
+
+	select {
+	case msg := <-gotFirstVisible:
+		if got := msg.Event["delta"]; got != "hello" {
+			t.Fatalf("delta=%v want hello", got)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("expected visible text to stream before upstream completed")
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
 	}
 }
 
