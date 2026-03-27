@@ -2031,8 +2031,8 @@ func TestPrepareRequest_PreservesMultiTurnEditHistoryAfterWrite(t *testing.T) {
 	if got := boltReq.Messages[0].Content; got != "帮我用python写一个计算器" {
 		t.Fatalf("first message content=%q want original create request", got)
 	}
-	if got := boltReq.Messages[1].Content; !strings.Contains(got, "File created successfully at: calculator.py") {
-		t.Fatalf("second message content=%q want write tool result", got)
+	if got := boltReq.Messages[1].Content; !strings.Contains(got, "只做最小确认") {
+		t.Fatalf("second message content=%q want minimal confirmation after write success", got)
 	}
 	if got := boltReq.Messages[2].Content; got != "完成！计算器已创建在项目目录中。" {
 		t.Fatalf("third message content=%q want assistant completion", got)
@@ -2386,8 +2386,8 @@ func TestPrepareRequest_DropsReadResultsWhenWriteSucceedsForSameFile(t *testing.
 	if strings.Contains(got, "system-reminder") {
 		t.Fatalf("expected system reminder tags to be stripped from tool results, got: %q", got)
 	}
-	if !strings.Contains(got, "updated successfully") {
-		t.Fatalf("expected write success to remain, got: %q", got)
+	if !strings.Contains(got, "只做最小确认") {
+		t.Fatalf("expected minimal confirmation to remain after write success, got: %q", got)
 	}
 }
 

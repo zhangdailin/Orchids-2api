@@ -373,7 +373,8 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 
 	retryContext := summarizeBoltFalseCompletionRetryContext(req.Messages)
 	currentReq := req
-	for attempt := 0; attempt < 3; attempt++ {
+	const maxBoltSelfCorrectAttempts = 3
+	for attempt := 0; attempt < maxBoltSelfCorrectAttempts; attempt++ {
 		boltReq, inputEstimate := prepareRequest(currentReq, projectID)
 		body, err := json.Marshal(boltReq)
 		if err != nil {
@@ -413,23 +414,23 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 			return err
 		}
 
-		if attempt < 2 && shouldRetryBoltFalseCompletion(retryContext, converter) {
+		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltFalseCompletion(retryContext, converter) {
 			currentReq = buildBoltFalseCompletionRetryRequest(currentReq, retryContext)
 			continue
 		}
-		if attempt < 2 && shouldRetryBoltInvalidPathToolCall(retryContext, converter) {
+		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltInvalidPathToolCall(retryContext, converter) {
 			currentReq = buildBoltInvalidPathRetryRequest(currentReq, retryContext, converter)
 			continue
 		}
-		if attempt < 2 && shouldRetryBoltRepeatedRead(retryContext, converter) {
+		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltRepeatedRead(retryContext, converter) {
 			currentReq = buildBoltRepeatedReadRetryRequest(currentReq, retryContext)
 			continue
 		}
-		if attempt < 2 && shouldRetryBoltProjectProbeAfterFailedMutation(retryContext, converter) {
+		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltProjectProbeAfterFailedMutation(retryContext, converter) {
 			currentReq = buildBoltProjectProbeAfterFailedMutationRetryRequest(currentReq, retryContext)
 			continue
 		}
-		if attempt < 2 && shouldRetryBoltEmptyTurnAfterRead(retryContext, converter) {
+		if attempt+1 < maxBoltSelfCorrectAttempts && shouldRetryBoltEmptyTurnAfterRead(retryContext, converter) {
 			currentReq = buildBoltEmptyTurnRetryRequest(currentReq, retryContext)
 			continue
 		}
@@ -483,7 +484,7 @@ func prepareRequest(req upstream.UpstreamRequest, projectID string) (*Request, I
 		SelectedModel:        strings.TrimSpace(req.Model),
 		IsFirstPrompt:        req.IsFirstPrompt,
 		PromptMode:           "build",
-		EffortLevel:          "high",
+		EffortLevel:          "low",
 		ProjectID:            projectID,
 		GlobalSystemPrompt:   promptParts.FullPrompt,
 		ProjectPrompt:        "",
@@ -846,11 +847,9 @@ func buildBoltToolUsagePrompt(toolNames []string) []string {
 		"可用工具: " + strings.Join(toolHints, "; "),
 		"只能使用上面列出的工具；需要工具时输出纯 JSON，不要加解释、不要先解释计划；第一个非空输出字符应当直接是 `{`。",
 		"不要解释当前运行在什么系统或沙箱；路径优先用项目内相对路径。若某次工具结果提示路径不存在，不要据此断言项目为空；优先改用 `.`、README.md、go.mod、package.json 等项目内路径继续调用工具。",
-		"如果文件名已经明确出现，优先直接对该路径 Read 或 Edit；不要先对 `.` 做宽泛 Glob。若刚读过同一文件要继续修改，优先沿用同一路径继续 Edit，不要重新从 Glob 开始。",
-		"如果目标文件已经存在，优先使用 Edit 做最小修改；只有在创建新文件，或你明确打算整文件重写且确实需要一次性替换全文时才使用 Write。",
-		"对“添加支持/添加功能/X”这类请求，要让功能真正可用，不要只加显示开关、提示文案或空包装函数；如果用户明确要求修改、创建或继续完善代码，不要声称“已经完成”，也不要停在现状总结。",
-		"如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`，继续坚持项目内相对路径，不要改写成 `/tmp/cc-agent/...` 之类的沙箱绝对路径。",
-		"如果最近一轮 Write/Edit 已经成功返回，优先直接总结已完成的修改；不要仅为了确认结果就再次 Read 同一文件。若最近一轮 Write/Edit 明确报错，说明修改尚未完成；不要沿用更早的成功 Write/Edit 来声称已经更新完成。",
+		"如果文件名已经明确出现，优先直接对该路径 Read 或 Edit；不要先对 `.` 做宽泛 Glob。若刚读过同一文件要继续修改，优先沿用同一路径继续 Edit，不要重新从 Glob 开始。路径已明确时也不要重新从 Glob 开始。",
+		"如果目标文件已经存在，优先使用 Edit 做最小修改；只有在创建新文件，或你明确打算整文件重写且确实需要一次性替换全文时才使用 Write。对“添加支持/添加功能/X”这类请求，要让功能真正可用，不要只加显示开关、提示文案或空包装函数；如果用户明确要求修改、创建或继续完善代码，不要声称“已经完成”，也不要停在现状总结。",
+		"如果 Write/Edit 的工具结果出现 `Hook PreToolUse` 或 `denied this tool`，继续坚持项目内相对路径，不要改写成 `/tmp/cc-agent/...` 之类的沙箱绝对路径。如果最近一轮 Write/Edit 已经成功返回，优先直接总结已完成的修改；不要仅为了确认结果就再次 Read 同一文件。若最近一轮 Write/Edit 明确报错，说明修改尚未完成；不要沿用更早的成功 Write/Edit 来声称已经更新完成。",
 		"连续编程对话里，用户后续补充的技术说明、约束或示例默认都是追加需求；要落地到代码时继续调用工具修改。若刚通过 Glob/Read/Bash 确认项目根目录为空，优先直接使用 Write 创建首个文件；例如用户说“帮我用python写一个计算器”，默认直接在项目根目录创建 `calculator.py`。",
 	}
 	if hasBoltToolName(toolNames, "Task") {
@@ -867,10 +866,8 @@ func buildBoltGitExecutionPrompt(messages []prompt.Message) []string {
 	}
 	return []string{
 		"用户当前明确要求把当前代码上传到 git / 完成提交推送。这已经构成对本地 git add、git commit、git push 的明确授权。",
-		"这是连续 git 流程；不要重新打招呼，也不要再根据 `/tmp/cc-agent/...` 之类占位路径声称没有 `.git` 仓库。",
-		"如果当前项目已经是 git 仓库，第一步优先直接使用 Bash 执行 git status 或 git status --short；不要先用 ls、Read、Glob 替代。",
-		"这里的“当前代码”默认指当前工作区里的全部改动；除非用户明确只提交部分文件，否则不要只给用户输出命令步骤，应继续直接执行 git status/add/commit/push。",
-		"如果某个 git 步骤已经成功返回结果，不要重复已经成功完成的同一步。",
+		"这是连续 git 流程；不要重新打招呼，也不要再根据 `/tmp/cc-agent/...` 之类占位路径声称没有 `.git` 仓库。如果当前项目已经是 git 仓库，第一步优先直接使用 Bash 执行 git status 或 git status --short；不要先用 ls、Read、Glob 替代。",
+		"这里的“当前代码”默认指当前工作区里的全部改动；除非用户明确只提交部分文件，否则不要只给用户输出命令步骤，应继续直接执行 git status/add/commit/push。如果某个 git 步骤已经成功返回结果，不要重复已经成功完成的同一步。",
 	}
 }
 
@@ -946,8 +943,7 @@ func buildBoltHistoryRecoveryPrompt(workdir string, messages []prompt.Message) [
 		parts = append(parts, "真实项目目录是 `"+workdir+"`。")
 	}
 	if len(missingPaths) > 0 {
-		parts = append(parts, "历史里提到的 `"+strings.Join(missingPaths, "`, `")+"` 当前已不存在；更早的“已创建/已更新/已完成”都视为过期历史。")
-		parts = append(parts, "如果当前任务仍需要这些文件，以当前工作区状态重新创建或修改，不要沿用旧总结。")
+		parts = append(parts, "历史里提到的 `"+strings.Join(missingPaths, "`, `")+"` 当前已不存在；更早的“已创建/已更新/已完成”都视为过期历史。如果当前任务仍需要这些文件，以当前工作区状态重新创建或修改，不要沿用旧总结。")
 	}
 	parts = append(parts, "重新检查项目时用 `.`、README.md、go.mod、package.json 这类项目内相对路径；在至少成功查看一次 `.`、README.md、go.mod、package.json 等项目内路径之前，不要回答“项目为空”。")
 	return parts

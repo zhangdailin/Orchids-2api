@@ -1195,6 +1195,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if maxRetries < 0 {
 			maxRetries = 0
 		}
+		if isBoltRequest && maxRetries > 1 {
+			maxRetries = 1
+		}
 		retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
 		retriesRemaining := maxRetries
 
