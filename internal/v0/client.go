@@ -736,7 +736,7 @@ func isMeaningfulResponseText(text, promptText string) bool {
 		return false
 	}
 	switch strings.ToLower(text) {
-	case "submitnewusermessage", "build", "client", "v0.app":
+	case "submitnewusermessage", "build", "client", "v0.app", "ok", "true", "success", "done":
 		return false
 	}
 	return len([]rune(text)) >= 2
@@ -755,6 +755,9 @@ func fallbackMeaningfulResponseText(rawText, promptText string) string {
 			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		}
 		line = stripCommonResponseWrappers(line)
+		if looksLikeStructuredPayload(line) {
+			continue
+		}
 		if isMeaningfulResponseText(line, promptText) && len([]rune(line)) > len([]rune(best)) {
 			best = line
 		}

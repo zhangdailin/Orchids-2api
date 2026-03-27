@@ -110,6 +110,13 @@ func TestExtractSendResponseText_FallsBackToDataLine(t *testing.T) {
 	}
 }
 
+func TestExtractSendResponseText_DoesNotTreatStatusWordAsReply(t *testing.T) {
+	raw := []byte(`{"ok":true}`)
+	if got := extractSendResponseText(raw, "hi"); got != "" {
+		t.Fatalf("extractSendResponseText()=%q want empty", got)
+	}
+}
+
 func TestExtractSendResponseChatID(t *testing.T) {
 	raw := []byte(`{"referer":"https://v0.app/chat/-abc123","message":"ok"}`)
 	if got := extractSendResponseChatID(raw); got != "-abc123" {
