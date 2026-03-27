@@ -273,11 +273,11 @@ function applyTokenLabels(type) {
       : "支持批量添加 Puter。每行一个 auth_token";
     input.required = true;
   } else if (type === 'v0') {
-    label.textContent = "user_session";
-    input.placeholder = "每行一个 v0 user_session";
+    label.textContent = "Cookie / user_session";
+    input.placeholder = "优先粘贴完整 Cookie Header；至少包含 user_session";
     hint.textContent = accountId
-      ? "v0 编辑时仅保存第一行 user_session"
-      : "支持批量添加 v0。每行一个 user_session，也支持粘贴带 user_session= 的 Cookie 片段";
+      ? "v0 编辑时仅保存第一行。强烈建议使用浏览器完整 Cookie Header，只有裸 user_session 往往不足以发消息"
+      : "支持批量添加 v0。每行一个完整 Cookie Header；若只填 user_session，可能只能查信息，无法正常发消息";
     input.required = true;
   } else {
     label.textContent = "Cookie / __client / __session";

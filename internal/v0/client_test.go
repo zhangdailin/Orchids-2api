@@ -16,6 +16,20 @@ func TestExtractUserSessionFromCookieHeader(t *testing.T) {
 	}
 }
 
+func TestNormalizeCookieHeaderPrefersFullCookieString(t *testing.T) {
+	raw := "foo=bar; user_session=abc123; hello=world"
+	if got := normalizeCookieHeader(raw); got != raw {
+		t.Fatalf("normalizeCookieHeader() = %q, want %q", got, raw)
+	}
+}
+
+func TestNormalizeCookieHeaderWrapsBareSessionToken(t *testing.T) {
+	raw := "abc123"
+	if got := normalizeCookieHeader(raw); got != "user_session=abc123" {
+		t.Fatalf("normalizeCookieHeader() = %q, want %q", got, "user_session=abc123")
+	}
+}
+
 func TestNormalizeWebModelUsesV0Max(t *testing.T) {
 	for _, model := range []string{"", "v0", "v0-max", "v0-1.5-md"} {
 		if got := normalizeWebModel(model); got != "v0-max" {

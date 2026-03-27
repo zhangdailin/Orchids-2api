@@ -52,6 +52,7 @@ type Client struct {
 	account          *store.Account
 	httpClient       *http.Client
 	userSession      string
+	cookieHeader     string
 	sharedHTTPClient bool
 }
 
@@ -160,6 +161,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		account:          acc,
 		httpClient:       util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
 		userSession:      resolveUserSession(acc),
+		cookieHeader:     resolveCookieHeader(acc),
 		sharedHTTPClient: true,
 	}
 }
@@ -171,6 +173,19 @@ func resolveUserSession(acc *store.Account) string {
 	for _, value := range []string{acc.ClientCookie, acc.Token, acc.SessionCookie} {
 		if token := extractUserSession(value); token != "" {
 			return token
+		}
+	}
+	return ""
+}
+
+func resolveCookieHeader(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	for _, value := range []string{acc.ClientCookie, acc.SessionCookie, acc.Token} {
+		cookie := normalizeCookieHeader(value)
+		if cookie != "" {
+			return cookie
 		}
 	}
 	return ""
@@ -190,6 +205,20 @@ func extractUserSession(raw string) string {
 		}
 	}
 	return strings.Trim(strings.TrimSpace(trimmed), "\"'")
+}
+
+func normalizeCookieHeader(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "=") {
+		return strings.Trim(trimmed, "\"'")
+	}
+	if session := extractUserSession(trimmed); session != "" {
+		return "user_session=" + session
+	}
+	return ""
 }
 
 func (c *Client) Close() {
@@ -609,7 +638,7 @@ func (c *Client) doRequest(ctx context.Context, method, target string, body []by
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
 	req.Header.Set("Origin", "https://v0.app")
 	req.Header.Set("Referer", referer)
-	req.Header.Set("Cookie", "user_session="+c.userSession)
+	req.Header.Set("Cookie", firstNonEmpty(c.cookieHeader, "user_session="+c.userSession))
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
