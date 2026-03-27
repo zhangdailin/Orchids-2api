@@ -436,6 +436,12 @@ func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 	headers = headers.Clone()
 
 	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.lb.Store.IncrementAccountStats(ctx, accCopy.ID, 0, 1); err != nil {
+			slog.Warn("grok usage touch failed", "account_id", accCopy.ID, "error", err)
+		}
+
 		info := parseRateLimitInfo(headers)
 		if info == nil {
 			return
@@ -443,9 +449,6 @@ func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 		if !ApplyQuotaInfo(&accCopy, info) {
 			return
 		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
 		if err := h.lb.Store.UpdateAccount(ctx, &accCopy); err != nil {
 			slog.Warn("grok quota update failed", "account_id", accCopy.ID, "error", err)
 		}
