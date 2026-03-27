@@ -3,11 +3,11 @@ package v0
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,8 +27,14 @@ const (
 	defaultPlanInfoURL   = "https://v0.app/chat/api/plan-info"
 	defaultScopesURL     = "https://v0.app/chat/api/scopes"
 	defaultRateLimitURL  = "https://v0.app/chat/api/rate-limit"
-	defaultSendURL       = "https://v0.app/chat/api/send"
+	defaultChatURL       = "https://v0.app/chat/api/chat"
+	defaultLeafURL       = "https://v0.app/chat/api/chat/leaf"
+	defaultLatestChatURL = "https://v0.app/api/chat/chat/latest"
 	defaultModelID       = "v0-max"
+	v0ChatIDLength       = 11
+	v0MessageIDLength    = 32
+	v0PollInterval       = 1500 * time.Millisecond
+	v0MinPollingWindow   = 30 * time.Second
 )
 
 var (
@@ -36,9 +42,9 @@ var (
 	PlanInfoURLForTest   = defaultPlanInfoURL
 	ScopesURLForTest     = defaultScopesURL
 	RateLimitURLForTest  = defaultRateLimitURL
-	SendURLForTest       = defaultSendURL
-	v0ChatURLPattern     = regexp.MustCompile(`https://v0\.app/chat/([A-Za-z0-9_-]+)`)
-	v0FieldPattern       = regexp.MustCompile(`"(?:text|content|response|message|output|completion)"\s*:\s*"((?:[^"\\]|\\.)*)"`)
+	ChatURLForTest       = defaultChatURL
+	LeafURLForTest       = defaultLeafURL
+	LatestChatURLForTest = defaultLatestChatURL
 )
 
 type Client struct {
@@ -105,6 +111,32 @@ type RateLimitInfo struct {
 type ModelChoice struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+type v0LatestResponse struct {
+	OK    bool          `json:"ok"`
+	Value v0LatestValue `json:"value"`
+}
+
+type v0LatestValue struct {
+	NewMessages          []v0ChatMessage                `json:"newMessages"`
+	ResumeUserMessageMap map[string]v0ResumeUserMessage `json:"resumeUserMessageMap"`
+}
+
+type v0ResumeUserMessage struct {
+	ResponseMessageID string `json:"responseMessageId"`
+	Type              string `json:"type"`
+}
+
+type v0ChatMessage struct {
+	ID      string           `json:"id"`
+	Role    string           `json:"role"`
+	Content v0MessageContent `json:"content"`
+}
+
+type v0MessageContent struct {
+	Type  string      `json:"type"`
+	Value interface{} `json:"value"`
 }
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -273,46 +305,63 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return fmt.Errorf("missing v0 user_session")
 	}
 
-	timeoutMs := 180000
-	if c.config != nil && c.config.RequestTimeout > 0 {
-		timeoutMs = c.config.RequestTimeout * 1000
-		if timeoutMs < 30000 {
-			timeoutMs = 30000
-		}
-	}
 	promptText := strings.TrimSpace(c.buildPrompt(req))
 	if promptText == "" {
 		promptText = "hello"
 	}
 	modelID := normalizeWebModel(req.Model)
 	chatID := normalizeChatID(req.ChatSessionID)
-	sendBody, referer, path, err := buildSendRequestBody(promptText, modelID, chatID, estimateMessageIndex(req.Messages))
+	isNewChat := chatID == ""
+	if isNewChat {
+		var err error
+		chatID, err = generateRandomID(v0ChatIDLength)
+		if err != nil {
+			return fmt.Errorf("failed to generate v0 chat id: %w", err)
+		}
+	}
+	userMessageID, err := generateRandomID(v0MessageIDLength)
 	if err != nil {
-		return fmt.Errorf("failed to build v0 send request: %w", err)
+		return fmt.Errorf("failed to generate v0 message id: %w", err)
 	}
-	if logger != nil {
-		logger.LogUpstreamRequest(SendURLForTest, map[string]string{"provider": "v0"}, sendBody)
-	}
-	raw, err := c.doRequest(ctx, http.MethodPost, SendURLForTest, sendBody, referer, "*/*")
+
+	teamSlug, err := c.resolveTeamSlug(ctx)
 	if err != nil {
 		return err
 	}
+
+	var parentID string
+	if !isNewChat {
+		parentID, _ = c.fetchLatestMessageID(ctx, chatID)
+	}
+
+	chatBody, referer, err := buildChatRequestBody(promptText, modelID, chatID, teamSlug, userMessageID, parentID, isNewChat)
+	if err != nil {
+		return fmt.Errorf("failed to build v0 chat request: %w", err)
+	}
 	if logger != nil {
-		logger.LogUpstreamHTTPError(SendURLForTest, http.StatusOK, string(raw), nil)
+		logger.LogUpstreamRequest(ChatURLForTest, map[string]string{"provider": "v0"}, chatBody)
 	}
-	reply := extractSendResponseText(raw, promptText)
-	if reply == "" {
-		return fmt.Errorf("v0 send request succeeded but assistant reply could not be parsed")
+	raw, err := c.doRequest(ctx, http.MethodPost, ChatURLForTest, chatBody, referer, "*/*")
+	if err != nil {
+		return err
 	}
-	resolvedChatID := firstNonEmpty(extractSendResponseChatID(raw), extractChatIDFromPath(path), chatID)
+	if logger != nil && len(raw) > 0 {
+		logger.LogUpstreamHTTPError(ChatURLForTest, http.StatusOK, string(raw), nil)
+	}
+
+	reply, assistantMessageID, err := c.waitForAssistantReply(ctx, chatID, userMessageID)
+	if err != nil {
+		return err
+	}
+	if assistantMessageID != "" {
+		_, _ = c.postLeaf(ctx, chatID, assistantMessageID)
+	}
 
 	if onMessage != nil {
-		if resolvedChatID != "" {
-			onMessage(upstream.SSEMessage{
-				Type:  "model.conversation_id",
-				Event: map[string]interface{}{"id": resolvedChatID},
-			})
-		}
+		onMessage(upstream.SSEMessage{
+			Type:  "model.conversation_id",
+			Event: map[string]interface{}{"id": chatID},
+		})
 		if text := strings.TrimSpace(reply); text != "" {
 			onMessage(upstream.SSEMessage{
 				Type: "model.text-delta",
@@ -529,7 +578,7 @@ func normalizeChatID(chatID string) string {
 	if chatID == "" || strings.HasPrefix(chatID, "chat_") {
 		return ""
 	}
-	return chatID
+	return strings.TrimPrefix(chatID, "-")
 }
 
 func estimateTokens(text string) int {
@@ -572,59 +621,46 @@ func (c *Client) doRequest(ctx context.Context, method, target string, body []by
 	}
 	defer resp.Body.Close()
 
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("v0 request error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return raw, nil
 }
 
-func buildSendRequestBody(promptText, modelID, chatID string, index int) ([]byte, string, string, error) {
-	if index <= 0 {
-		index = 1
-	}
-	path := "/chat"
-	referer := "https://v0.app/chat"
-	genericRoute := "/chat"
-	var chatValue interface{}
-	if chatID != "" {
-		path = "/chat/" + chatID
-		referer = "https://v0.app/chat/" + chatID
-		genericRoute = "/[id]"
-		chatValue = chatID
-	}
-	metaRaw, err := json.Marshal(map[string]interface{}{
-		"text":        promptText + "\n",
-		"index":       index,
-		"imageOnly":   false,
-		"projectId":   nil,
-		"messageMode": "build",
-		"modelId":     modelID,
-	})
-	if err != nil {
-		return nil, "", "", err
-	}
+func buildChatRequestBody(promptText, modelID, chatID, teamSlug, userMessageID, parentID string, isNew bool) ([]byte, string, error) {
 	payload := map[string]interface{}{
-		"action":         "SubmitNewUserMessage",
-		"meta":           string(metaRaw),
-		"referer":        referer,
-		"error_code":     nil,
-		"generic_route":  genericRoute,
-		"call_layer":     "client",
-		"chat_id":        chatValue,
-		"message_id":     nil,
-		"block_id":       nil,
-		"domain":         "v0.app",
-		"path":           path,
-		"query_string":   nil,
-		"browser_width":  1440,
-		"browser_height": 900,
+		"messageContent": map[string]interface{}{
+			"version": 1,
+			"parts": []map[string]string{
+				{"type": "mdx", "content": promptText},
+				{"type": "mdx", "content": "\n"},
+			},
+			"type": "parts",
+		},
+		"messageId": userMessageID,
+		"chatId":    chatID,
+		"isNew":     isNew,
+		"team":      teamSlug,
+		"modelConfiguration": map[string]interface{}{
+			"modelId":          modelID,
+			"imageGenerations": true,
+			"thinking":         false,
+		},
+		"suggestedActionsEnabled":         true,
+		"optimisticConnectedIntegrations": []interface{}{},
+		"optimisticEnvVarKeys":            []interface{}{},
+		"mcpServers":                      []interface{}{},
+		"chatCreationTime":                time.Now().UnixMilli(),
+	}
+	if !isNew && parentID != "" {
+		payload["parentId"] = parentID
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", err
 	}
-	return raw, referer, path, nil
+	return raw, "https://v0.app/chat/" + chatID, nil
 }
 
 func estimateMessageIndex(messages []prompt.Message) int {
@@ -637,132 +673,265 @@ func estimateMessageIndex(messages []prompt.Message) int {
 	return index
 }
 
-func extractSendResponseText(raw []byte, promptText string) string {
-	if len(raw) == 0 {
-		return ""
+func generateRandomID(length int) (string, error) {
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	if length <= 0 {
+		return "", fmt.Errorf("invalid id length")
 	}
-	var parsed interface{}
-	if err := json.Unmarshal(raw, &parsed); err == nil {
-		if text := extractFirstMeaningfulText(parsed, promptText); text != "" {
-			return text
-		}
+	buf := make([]byte, length)
+	randBuf := make([]byte, length)
+	if _, err := rand.Read(randBuf); err != nil {
+		return "", err
 	}
-	matches := v0FieldPattern.FindAllStringSubmatch(string(raw), -1)
-	best := ""
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		var decoded string
-		if err := json.Unmarshal([]byte(`"`+match[1]+`"`), &decoded); err != nil {
-			decoded = match[1]
-		}
-		decoded = strings.TrimSpace(decoded)
-		if isMeaningfulResponseText(decoded, promptText) && len(decoded) > len(best) {
-			best = decoded
-		}
+	for i := range buf {
+		buf[i] = alphabet[int(randBuf[i])%len(alphabet)]
 	}
-	if best != "" {
-		return best
-	}
-	return fallbackMeaningfulResponseText(string(raw), promptText)
+	return string(buf), nil
 }
 
-func extractFirstMeaningfulText(value interface{}, promptText string) string {
-	best := ""
-	var walk func(interface{})
-	walk = func(node interface{}) {
-		switch v := node.(type) {
-		case string:
-			text := strings.TrimSpace(v)
-			if nested := extractMeaningfulTextFromNestedString(text, promptText); nested != "" && len(nested) > len(best) {
-				best = nested
+func (c *Client) resolveTeamSlug(ctx context.Context) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("v0 client is nil")
+	}
+	candidates := make([]string, 0, 4)
+	if c.account != nil {
+		candidates = append(candidates, normalizeTeamSlug(c.account.ProjectID))
+		candidates = append(candidates, normalizeTeamSlug(c.account.Name))
+	}
+
+	scopes, scopesErr := c.FetchScopes(ctx)
+	scopeByID := make(map[string]string, len(scopes))
+	for _, scope := range scopes {
+		if slug := normalizeTeamSlug(scope.Slug); slug != "" {
+			scopeByID[normalizeTeamSlug(scope.ID)] = slug
+			scopeByID[normalizeTeamSlug(scope.Name)] = slug
+			scopeByID[slug] = slug
+		}
+	}
+	for _, candidate := range candidates {
+		if slug := scopeByID[normalizeTeamSlug(candidate)]; slug != "" {
+			return slug, nil
+		}
+		if candidate != "" && scopesErr != nil {
+			return candidate, nil
+		}
+	}
+
+	scopedUser, scopedErr := c.FetchScopedUser(ctx)
+	if scopedUser != nil {
+		for _, candidate := range []string{scopedUser.Scope, scopedUser.TeamID, scopedUser.DefaultTeamID, scopedUser.TeamName} {
+			if slug := scopeByID[normalizeTeamSlug(candidate)]; slug != "" {
+				return slug, nil
 			}
-			if !looksLikeStructuredPayload(text) && isMeaningfulResponseText(text, promptText) && len(text) > len(best) {
-				best = text
+			if normalized := normalizeTeamSlug(candidate); normalized != "" && len(scopes) == 0 {
+				return normalized, nil
 			}
-		case []interface{}:
-			for _, item := range v {
-				walk(item)
+		}
+	}
+
+	for _, scope := range scopes {
+		if slug := normalizeTeamSlug(scope.Slug); slug != "" {
+			return slug, nil
+		}
+	}
+
+	if scopedErr != nil {
+		return "", fmt.Errorf("failed to resolve v0 team slug: %w", scopedErr)
+	}
+	if scopesErr != nil {
+		return "", fmt.Errorf("failed to resolve v0 team slug: %w", scopesErr)
+	}
+	return "", fmt.Errorf("failed to resolve v0 team slug")
+}
+
+func normalizeTeamSlug(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "team:")
+	value = strings.TrimPrefix(value, "project:")
+	value = strings.TrimPrefix(value, "-")
+	return strings.TrimSpace(value)
+}
+
+func (c *Client) fetchLatestMessageID(ctx context.Context, chatID string) (string, error) {
+	latest, err := c.fetchLatestChatMessages(ctx, chatID, 0)
+	if err != nil {
+		return "", err
+	}
+	for i := len(latest.Value.NewMessages) - 1; i >= 0; i-- {
+		if id := strings.TrimSpace(latest.Value.NewMessages[i].ID); id != "" {
+			return id, nil
+		}
+	}
+	return "", nil
+}
+
+func (c *Client) waitForAssistantReply(ctx context.Context, chatID, userMessageID string) (string, string, error) {
+	deadline := time.Now().Add(v0MinPollingWindow)
+	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
+		deadline = dl
+	}
+
+	for {
+		latest, err := c.fetchLatestChatMessages(ctx, chatID, 0)
+		if err == nil {
+			if reply, assistantID := extractAssistantReplyFromLatest(latest, userMessageID); reply != "" {
+				return reply, assistantID, nil
 			}
-		case map[string]interface{}:
-			for key, item := range v {
-				switch strings.ToLower(strings.TrimSpace(key)) {
-				case "text", "content", "response", "message", "output", "completion":
-					walk(item)
-				default:
-					walk(item)
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return "", "", ctx.Err()
+		case <-time.After(v0PollInterval):
+		}
+	}
+	return "", "", fmt.Errorf("v0 assistant reply could not be parsed from latest chat state")
+}
+
+func (c *Client) fetchLatestChatMessages(ctx context.Context, chatID string, lastSyncedAt int64) (*v0LatestResponse, error) {
+	queryURL := LatestChatURLForTest + "?chatId=" + url.QueryEscape(chatID) + "&lastSyncedAt=" + url.QueryEscape(fmt.Sprintf("%d", lastSyncedAt))
+	raw, err := c.doRequest(ctx, http.MethodGet, queryURL, nil, "https://v0.app/chat/"+chatID, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	var parsed v0LatestResponse
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to decode v0 latest chat response: %w", err)
+	}
+	if !parsed.OK {
+		return nil, fmt.Errorf("v0 latest chat request was not accepted")
+	}
+	return &parsed, nil
+}
+
+func extractAssistantReplyFromLatest(latest *v0LatestResponse, userMessageID string) (string, string) {
+	if latest == nil {
+		return "", ""
+	}
+	targetAssistantID := ""
+	if resume, ok := latest.Value.ResumeUserMessageMap[userMessageID]; ok {
+		targetAssistantID = strings.TrimSpace(resume.ResponseMessageID)
+	}
+
+	for _, msg := range latest.Value.NewMessages {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
+			continue
+		}
+		if targetAssistantID != "" && strings.TrimSpace(msg.ID) != targetAssistantID {
+			continue
+		}
+		if text := renderV0MessageContent(msg.Content); text != "" {
+			return text, strings.TrimSpace(msg.ID)
+		}
+	}
+
+	for i := len(latest.Value.NewMessages) - 1; i >= 0; i-- {
+		msg := latest.Value.NewMessages[i]
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
+			continue
+		}
+		if text := renderV0MessageContent(msg.Content); text != "" {
+			return text, strings.TrimSpace(msg.ID)
+		}
+	}
+	return "", ""
+}
+
+func renderV0MessageContent(content v0MessageContent) string {
+	if !strings.EqualFold(strings.TrimSpace(content.Type), "message-binary-format") {
+		return ""
+	}
+	parts := make([]string, 0, 8)
+	appendRenderedV0Node(&parts, content.Value)
+	return cleanupRenderedV0Text(parts)
+}
+
+func appendRenderedV0Node(parts *[]string, node interface{}) {
+	switch v := node.(type) {
+	case string:
+		if text := strings.TrimSpace(stripCommonResponseWrappers(v)); text != "" {
+			*parts = append(*parts, text)
+		}
+	case []interface{}:
+		appendRenderedV0Array(parts, v)
+	case map[string]interface{}:
+		for _, value := range v {
+			appendRenderedV0Node(parts, value)
+		}
+	}
+}
+
+func appendRenderedV0Array(parts *[]string, items []interface{}) {
+	if len(items) == 0 {
+		return
+	}
+	tag, _ := items[0].(string)
+	switch tag {
+	case "AssistantMessageContentPart":
+		return
+	case "text":
+		if len(items) > 2 {
+			if text, ok := items[2].(string); ok {
+				text = decodeV0TextNode(text)
+				if strings.TrimSpace(text) != "" {
+					*parts = append(*parts, text)
 				}
 			}
 		}
-	}
-	walk(value)
-	return best
-}
-
-func extractMeaningfulTextFromNestedString(text, promptText string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	if !(strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") || strings.HasPrefix(text, "\"{") || strings.HasPrefix(text, "\"[")) {
-		return ""
-	}
-	unquoted := text
-	if strings.HasPrefix(unquoted, "\"") {
-		var decoded string
-		if err := json.Unmarshal([]byte(unquoted), &decoded); err == nil {
-			unquoted = strings.TrimSpace(decoded)
+		return
+	case "br":
+		*parts = append(*parts, "\n")
+		return
+	case "p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre":
+		start := len(*parts)
+		for _, item := range items[1:] {
+			appendRenderedV0Node(parts, item)
 		}
+		if len(*parts) > start {
+			*parts = append(*parts, "\n\n")
+		}
+		return
 	}
-	var parsed interface{}
-	if err := json.Unmarshal([]byte(unquoted), &parsed); err != nil {
+
+	start := 0
+	if tag != "" {
+		start = 1
+	}
+	for _, item := range items[start:] {
+		appendRenderedV0Node(parts, item)
+	}
+}
+
+func cleanupRenderedV0Text(parts []string) string {
+	if len(parts) == 0 {
 		return ""
 	}
-	return extractFirstMeaningfulText(parsed, promptText)
-}
-
-func looksLikeStructuredPayload(text string) bool {
-	text = strings.TrimSpace(text)
-	return strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") || strings.HasPrefix(text, "\"{") || strings.HasPrefix(text, "\"[")
-}
-
-func isMeaningfulResponseText(text, promptText string) bool {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return false
+	var builder strings.Builder
+	for _, part := range parts {
+		builder.WriteString(part)
 	}
-	if strings.EqualFold(text, strings.TrimSpace(promptText)) {
-		return false
-	}
-	switch strings.ToLower(text) {
-	case "submitnewusermessage", "build", "client", "v0.app", "ok", "true", "success", "done":
-		return false
-	}
-	return len([]rune(text)) >= 2
-}
-
-func fallbackMeaningfulResponseText(rawText, promptText string) string {
-	rawText = strings.TrimSpace(rawText)
-	if rawText == "" {
-		return ""
-	}
-	lines := strings.Split(rawText, "\n")
-	best := ""
+	text := builder.String()
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	cleaned := make([]string, 0, len(lines))
+	blank := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(strings.ToLower(line), "data:") {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		}
-		line = stripCommonResponseWrappers(line)
-		if looksLikeStructuredPayload(line) {
+		if line == "" {
+			if blank {
+				continue
+			}
+			blank = true
+			cleaned = append(cleaned, "")
 			continue
 		}
-		if isMeaningfulResponseText(line, promptText) && len([]rune(line)) > len([]rune(best)) {
-			best = line
-		}
+		blank = false
+		cleaned = append(cleaned, line)
 	}
-	return best
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
 func stripCommonResponseWrappers(text string) string {
@@ -776,71 +945,26 @@ func stripCommonResponseWrappers(text string) string {
 	text = strings.ReplaceAll(text, "\\n", "\n")
 	text = strings.ReplaceAll(text, "\\t", "\t")
 	text = strings.ReplaceAll(text, "\\\"", "\"")
-	text = strings.TrimSpace(text)
 	return text
 }
 
-func extractSendResponseChatID(raw []byte) string {
-	if match := v0ChatURLPattern.FindSubmatch(raw); len(match) > 1 {
-		return strings.TrimSpace(string(match[1]))
-	}
-	var parsed interface{}
-	if err := json.Unmarshal(raw, &parsed); err == nil {
-		if id := extractChatIDFromValue(parsed); id != "" {
-			return id
-		}
-	}
-	return ""
-}
-
-func extractChatIDFromValue(value interface{}) string {
-	switch v := value.(type) {
-	case map[string]interface{}:
-		for key, item := range v {
-			lower := strings.ToLower(strings.TrimSpace(key))
-			switch lower {
-			case "chatid", "chat_id", "id":
-				if text, ok := item.(string); ok {
-					if id := normalizeChatID(text); id != "" {
-						return id
-					}
-				}
-			case "referer", "url", "pathname", "path":
-				if text, ok := item.(string); ok {
-					if id := extractChatIDFromPath(text); id != "" {
-						return id
-					}
-				}
-			}
-			if id := extractChatIDFromValue(item); id != "" {
-				return id
-			}
-		}
-	case []interface{}:
-		for _, item := range v {
-			if id := extractChatIDFromValue(item); id != "" {
-				return id
-			}
-		}
-	}
-	return ""
-}
-
-func extractChatIDFromPath(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
+func decodeV0TextNode(text string) string {
+	if !utf8.ValidString(text) {
 		return ""
 	}
-	if strings.HasPrefix(value, "https://") || strings.HasPrefix(value, "http://") {
-		if match := v0ChatURLPattern.FindStringSubmatch(value); len(match) > 1 {
-			return strings.TrimSpace(match[1])
-		}
+	text = strings.ReplaceAll(text, "\\n", "\n")
+	text = strings.ReplaceAll(text, "\\t", "\t")
+	text = strings.ReplaceAll(text, "\\\"", "\"")
+	return text
+}
+
+func (c *Client) postLeaf(ctx context.Context, chatID, messageID string) ([]byte, error) {
+	payload, err := json.Marshal(map[string]string{
+		"chatId":    chatID,
+		"messageId": messageID,
+	})
+	if err != nil {
+		return nil, err
 	}
-	parts := strings.Split(value, "/")
-	for i := 0; i < len(parts)-1; i++ {
-		if parts[i] == "chat" && strings.TrimSpace(parts[i+1]) != "" {
-			return strings.TrimSpace(parts[i+1])
-		}
-	}
-	return ""
+	return c.doRequest(ctx, http.MethodPost, LeafURLForTest, payload, "https://v0.app/chat/"+chatID, "application/json")
 }

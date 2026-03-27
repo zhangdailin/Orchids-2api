@@ -55,72 +55,102 @@ func TestBuildSeedModelChoicesReturnsAllKnownV0Models(t *testing.T) {
 	}
 }
 
-func TestBuildSendRequestBody_ForExistingChat(t *testing.T) {
-	raw, referer, path, err := buildSendRequestBody("hi", "v0-auto", "-chat123", 3)
+func TestBuildChatRequestBodyForNewChat(t *testing.T) {
+	raw, referer, err := buildChatRequestBody("你好", "v0-max", "eex3OukD0X7", "team-a", "msg-1", "", true)
 	if err != nil {
-		t.Fatalf("buildSendRequestBody() error = %v", err)
+		t.Fatalf("buildChatRequestBody() error = %v", err)
 	}
-	if referer != "https://v0.app/chat/-chat123" {
-		t.Fatalf("referer=%q want https://v0.app/chat/-chat123", referer)
-	}
-	if path != "/chat/-chat123" {
-		t.Fatalf("path=%q want /chat/-chat123", path)
+	if referer != "https://v0.app/chat/eex3OukD0X7" {
+		t.Fatalf("referer=%q want https://v0.app/chat/eex3OukD0X7", referer)
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if payload["action"] != "SubmitNewUserMessage" {
-		t.Fatalf("action=%v want SubmitNewUserMessage", payload["action"])
+	if payload["chatId"] != "eex3OukD0X7" {
+		t.Fatalf("chatId=%v want eex3OukD0X7", payload["chatId"])
 	}
-	if payload["chat_id"] != "-chat123" {
-		t.Fatalf("chat_id=%v want -chat123", payload["chat_id"])
+	if payload["team"] != "team-a" {
+		t.Fatalf("team=%v want team-a", payload["team"])
 	}
-	if payload["generic_route"] != "/[id]" {
-		t.Fatalf("generic_route=%v want /[id]", payload["generic_route"])
+	if payload["isNew"] != true {
+		t.Fatalf("isNew=%v want true", payload["isNew"])
 	}
-	meta, _ := payload["meta"].(string)
-	if !strings.Contains(meta, `"modelId":"v0-auto"`) {
-		t.Fatalf("meta=%q missing modelId", meta)
-	}
-	if !strings.Contains(meta, `"index":3`) {
-		t.Fatalf("meta=%q missing index", meta)
+	if _, ok := payload["parentId"]; ok {
+		t.Fatalf("parentId should be omitted for new chat")
 	}
 }
 
-func TestExtractSendResponseTextPrefersAssistantText(t *testing.T) {
-	raw := []byte(`{"ok":true,"events":[{"role":"user","text":"hi"},{"role":"assistant","content":"hello from v0"}]}`)
-	if got := extractSendResponseText(raw, "hi"); got != "hello from v0" {
-		t.Fatalf("extractSendResponseText()=%q want hello from v0", got)
+func TestBuildChatRequestBodyForExistingChatIncludesParent(t *testing.T) {
+	raw, _, err := buildChatRequestBody("hi", "v0-auto", "chat123", "team-a", "msg-1", "parent-1", false)
+	if err != nil {
+		t.Fatalf("buildChatRequestBody() error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["parentId"] != "parent-1" {
+		t.Fatalf("parentId=%v want parent-1", payload["parentId"])
+	}
+	modelConfig, _ := payload["modelConfiguration"].(map[string]any)
+	if modelConfig["modelId"] != "v0-auto" {
+		t.Fatalf("modelConfiguration.modelId=%v want v0-auto", modelConfig["modelId"])
 	}
 }
 
-func TestExtractSendResponseText_ParsesNestedJSONString(t *testing.T) {
-	raw := []byte(`{"result":"{\"messages\":[{\"role\":\"assistant\",\"content\":\"hello from nested json\"}]}"}`)
-	if got := extractSendResponseText(raw, "hi"); got != "hello from nested json" {
-		t.Fatalf("extractSendResponseText()=%q want hello from nested json", got)
+func TestExtractAssistantReplyFromLatest(t *testing.T) {
+	latest := &v0LatestResponse{
+		OK: true,
+		Value: v0LatestValue{
+			ResumeUserMessageMap: map[string]v0ResumeUserMessage{
+				"user-msg": {ResponseMessageID: "assistant-msg"},
+			},
+			NewMessages: []v0ChatMessage{
+				{ID: "user-msg", Role: "user"},
+				{
+					ID:   "assistant-msg",
+					Role: "assistant",
+					Content: v0MessageContent{
+						Type: "message-binary-format",
+						Value: []interface{}{
+							[]interface{}{
+								float64(0),
+								[]interface{}{
+									[]interface{}{"AssistantMessageContentPart", map[string]interface{}{"part": map[string]interface{}{"type": "task-thinking-v1"}}},
+									[]interface{}{"p", map[string]interface{}{}, []interface{}{"text", map[string]interface{}{}, "你好！我是 "}, []interface{}{"strong", map[string]interface{}{}, []interface{}{"text", map[string]interface{}{}, "v0"}}},
+									[]interface{}{"p", map[string]interface{}{}, []interface{}{"text", map[string]interface{}{}, "我可以帮助你构建页面。"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	reply, assistantID := extractAssistantReplyFromLatest(latest, "user-msg")
+	if assistantID != "assistant-msg" {
+		t.Fatalf("assistantID=%q want assistant-msg", assistantID)
+	}
+	want := "你好！我是 v0\n\n我可以帮助你构建页面。"
+	if reply != want {
+		t.Fatalf("reply=%q want %q", reply, want)
 	}
 }
 
-func TestExtractSendResponseText_FallsBackToDataLine(t *testing.T) {
-	raw := []byte("data: hello from data line\n\nevent: done\n")
-	if got := extractSendResponseText(raw, "hi"); got != "hello from data line" {
-		t.Fatalf("extractSendResponseText()=%q want hello from data line", got)
+func TestRenderV0MessageContentIgnoresNonMessageBinaryFormat(t *testing.T) {
+	got := renderV0MessageContent(v0MessageContent{Type: "plain", Value: "hello"})
+	if got != "" {
+		t.Fatalf("renderV0MessageContent()=%q want empty", got)
 	}
 }
 
-func TestExtractSendResponseText_DoesNotTreatStatusWordAsReply(t *testing.T) {
-	raw := []byte(`{"ok":true}`)
-	if got := extractSendResponseText(raw, "hi"); got != "" {
-		t.Fatalf("extractSendResponseText()=%q want empty", got)
-	}
-}
-
-func TestExtractSendResponseChatID(t *testing.T) {
-	raw := []byte(`{"referer":"https://v0.app/chat/-abc123","message":"ok"}`)
-	if got := extractSendResponseChatID(raw); got != "-abc123" {
-		t.Fatalf("extractSendResponseChatID()=%q want -abc123", got)
+func TestNormalizeChatIDRemovesLeadingDash(t *testing.T) {
+	if got := normalizeChatID("-abc123"); got != "abc123" {
+		t.Fatalf("normalizeChatID()=%q want abc123", got)
 	}
 }
 
@@ -132,5 +162,25 @@ func TestEstimateMessageIndexCountsUserTurns(t *testing.T) {
 	}
 	if got := estimateMessageIndex(messages); got != 3 {
 		t.Fatalf("estimateMessageIndex()=%d want 3", got)
+	}
+}
+
+func TestCleanupRenderedV0TextCollapsesBlankLines(t *testing.T) {
+	got := cleanupRenderedV0Text([]string{"hello", "\n\n", "\n", "world", "\n\n"})
+	if got != "hello\n\nworld" {
+		t.Fatalf("cleanupRenderedV0Text()=%q want hello\\n\\nworld", got)
+	}
+}
+
+func TestGenerateRandomIDLength(t *testing.T) {
+	got, err := generateRandomID(16)
+	if err != nil {
+		t.Fatalf("generateRandomID() error = %v", err)
+	}
+	if len(got) != 16 {
+		t.Fatalf("len(generateRandomID())=%d want 16", len(got))
+	}
+	if strings.TrimSpace(got) == "" {
+		t.Fatalf("generateRandomID() returned empty string")
 	}
 }
