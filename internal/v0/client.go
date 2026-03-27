@@ -159,7 +159,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	return &Client{
 		config:           cfg,
 		account:          acc,
-		httpClient:       util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
+		httpClient:       util.GetSharedUTLSHTTPClient(proxyKey, timeout, proxyFunc),
 		userSession:      resolveUserSession(acc),
 		cookieHeader:     resolveCookieHeader(acc),
 		sharedHTTPClient: true,
