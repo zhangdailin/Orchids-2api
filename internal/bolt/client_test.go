@@ -2323,8 +2323,11 @@ func TestPrepareRequest_DropsAssistantTextFromToolTurns(t *testing.T) {
 	if got := boltReq.Messages[1].Content; strings.Contains(got, "看来项目中已有一个") {
 		t.Fatalf("expected assistant tool-turn text to be dropped from history, got: %q", got)
 	}
-	if !strings.Contains(boltReq.Messages[1].Content, "updated successfully") {
-		t.Fatalf("expected write result to remain in history, got: %q", boltReq.Messages[1].Content)
+	if strings.Contains(boltReq.Messages[1].Content, "updated successfully") {
+		t.Fatalf("expected write success detail to be omitted from minimal-confirmation follow-up, got: %q", boltReq.Messages[1].Content)
+	}
+	if !strings.Contains(boltReq.Messages[1].Content, "只做最小确认") {
+		t.Fatalf("expected minimal-confirmation follow-up to remain, got: %q", boltReq.Messages[1].Content)
 	}
 }
 
@@ -2454,8 +2457,8 @@ func TestPrepareRequest_DropsEarlierReadFollowupAfterLaterWriteSuccessAcrossTurn
 	if strings.Contains(got, "def add(a, b)") {
 		t.Fatalf("expected earlier read follow-up to be dropped after later write success, got: %q", got)
 	}
-	if !strings.Contains(got, "updated successfully") {
-		t.Fatalf("expected write success follow-up to remain, got: %q", got)
+	if strings.Contains(got, "updated successfully") {
+		t.Fatalf("expected write success detail to be omitted from minimal-confirmation follow-up, got: %q", got)
 	}
 	if !strings.Contains(got, "只做最小确认") {
 		t.Fatalf("expected write success follow-up to stay at minimal confirmation level, got: %q", got)

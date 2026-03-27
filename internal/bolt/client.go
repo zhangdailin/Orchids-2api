@@ -2919,6 +2919,8 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 		hasVisibleToolResult = true
 		break
 	}
+	hasSuccessfulMutation := hasVisibleSuccessfulMutationResult(results)
+	hasFailedMutation := hasVisibleFailedMutationResult(results)
 
 	var sb strings.Builder
 	first := true
@@ -2926,13 +2928,19 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 		sb.WriteString(formatBoltToolResultContinuation(
 			gitUploadIntent,
 			continuationTask,
-			hasVisibleSuccessfulMutationResult(results),
-			hasVisibleFailedMutationResult(results),
+			hasSuccessfulMutation,
+			hasFailedMutation,
 		))
 		first = false
 	}
 	for _, part := range parts {
 		if part.Result != nil && (part.Result.InvalidPath || part.Result.Drop) {
+			continue
+		}
+		// For mutation-success-only follow-ups, keep the continuation terse and avoid
+		// re-feeding Bolt the literal "created/updated successfully" result, which can
+		// bias it toward reissuing the same Write/Edit instead of concluding cleanly.
+		if part.Result != nil && !hasUserText && hasSuccessfulMutation && !hasFailedMutation && part.Result.IsMutation && part.Result.IsSuccess {
 			continue
 		}
 		if strings.TrimSpace(part.Text) == "" {
