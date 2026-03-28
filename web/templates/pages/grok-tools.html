@@ -6,7 +6,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-4">
   <style>
     .main-content.grok-tools-page {
       padding-top: 16px;
@@ -48,6 +48,9 @@
       max-width: none;
       margin-top: 0;
     }
+    .grok-tools-page .grok-shell {
+      padding: 16px;
+    }
     .grok-tools-page .platform-tabs {
       display: inline-flex;
       gap: 6px;
@@ -56,6 +59,9 @@
       border: 1px solid #eaeaea;
       border-radius: 999px;
       box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
+    }
+    .grok-tools-page .grok-tabs {
+      margin-bottom: 10px;
     }
     .grok-tools-page .platform-tabs .tab-item {
       border: 0;
@@ -178,6 +184,73 @@
       display: flex;
       flex-direction: column;
       gap: 16px;
+    }
+    .grok-tools-page .inline-flex-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .grok-tools-page .chat-title-main {
+      min-width: 0;
+    }
+    .grok-tools-page .section-hidden {
+      display: none;
+    }
+    .grok-tools-page .panel-overflow-hidden {
+      overflow: hidden;
+    }
+    .grok-tools-page .meta-grid-spaced {
+      margin-bottom: 16px;
+    }
+    .grok-tools-page .progress-wrap-spaced {
+      margin-bottom: 16px;
+    }
+    .grok-tools-page .voice-speed-block {
+      margin-top: 14px;
+    }
+    .grok-tools-page .function-header-row-tight {
+      justify-content: space-between;
+    }
+    .grok-tools-page .voice-hint-spaced {
+      margin-top: 12px;
+    }
+    .grok-tools-page .cache-inline-actions {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+    .grok-tools-page .cache-inline-actions .btn {
+      width: 100%;
+    }
+    .grok-tools-page .cache-batch-actions,
+    .grok-tools-page .cache-batch-progress {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .grok-tools-page .cache-batch-progress {
+      align-items: center;
+    }
+    .grok-tools-page .cache-progress-text {
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
+    .grok-tools-page .cache-progress-bar {
+      width: 180px;
+      height: 8px;
+    }
+    .grok-tools-page .is-hidden {
+      display: none !important;
+    }
+    .grok-tools-page .table-empty-cell {
+      text-align: center;
+      color: var(--text-secondary);
+      padding: 24px;
+    }
+    .grok-tools-page .table-checkbox-cell {
+      width: 36px;
+      text-align: center;
     }
     .grok-tools-page .function-header-row {
       display: flex;
@@ -3257,6 +3330,18 @@
         width: 100%;
       }
 
+      .grok-tools-page .cache-inline-actions,
+      .grok-tools-page .cache-batch-actions,
+      .grok-tools-page .cache-batch-progress,
+      .grok-tools-page .inline-flex-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .grok-tools-page .cache-progress-bar {
+        width: 100%;
+      }
+
       .grok-tools-page progress {
         width: 100% !important;
       }
@@ -3343,6 +3428,19 @@
       .grok-tools-page .cache-list table {
         min-width: 560px;
       }
+
+      .grok-tools-page .grok-shell {
+        padding: 12px;
+      }
+
+      .grok-tools-page .grok-tabs {
+        margin-bottom: 8px;
+      }
+
+      .grok-tools-page .chat-title-main,
+      .grok-tools-page .chat-title-main > div {
+        width: 100%;
+      }
     }
   </style>
 </head>
@@ -3356,8 +3454,8 @@
       <p>把 Grok 的对话、生成、语音和缓存能力收进一套统一控制台，让调试、切换和排障都在同一个工作台里完成。</p>
     </section>
 
-    <div class="content-card grok-function-card" style="padding: 16px;">
-      <div class="platform-tabs" id="grokToolsTabs" style="margin-bottom: 10px;">
+    <div class="content-card grok-function-card grok-shell">
+      <div class="platform-tabs grok-tabs" id="grokToolsTabs">
         <button class="tab-item active" data-tab="chat" onclick="switchGrokToolTab('chat')">Chat</button>
         <button class="tab-item" data-tab="imagine" onclick="switchGrokToolTab('imagine')">Imagine</button>
         <button class="tab-item" data-tab="video" onclick="switchGrokToolTab('video')">Video</button>
@@ -3365,7 +3463,7 @@
         <button class="tab-item" data-tab="cache" onclick="switchGrokToolTab('cache')">Cache</button>
       </div>
 
-      <section id="grokChatSection" class="chat-main" style="display:none;">
+      <section id="grokChatSection" class="chat-main section-hidden">
         <div class="chat-layout">
           <aside class="chat-sidebar" id="grokChatSidebar">
             <div class="sidebar-header">
@@ -3394,7 +3492,7 @@
           </button>
           <div class="chat-shell">
             <div class="chat-title">
-              <div style="display:flex;align-items:center;gap:10px;">
+              <div class="inline-flex-row chat-title-main">
                 <button id="grokChatSidebarToggle" class="icon-btn sidebar-toggle" type="button" title="会话列表">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <line x1="3" y1="6" x2="21" y2="6"></line>
@@ -3590,7 +3688,7 @@
                 </select>
               </div>
             </div>
-            <div class="meta-grid imagine-status-grid" style="margin-bottom:16px;">
+            <div class="meta-grid imagine-status-grid meta-grid-spaced">
               <div class="meta-item"><div class="meta-label">图片数量</div><div id="imagineCount" class="meta-value">0</div></div>
               <div class="meta-item"><div class="meta-label">活跃任务</div><div id="imagineActive" class="meta-value">0</div></div>
               <div class="meta-item"><div class="meta-label">平均耗时</div><div id="imagineLatency" class="meta-value">-</div></div>
@@ -3603,7 +3701,7 @@
           </div>
         </div>
 
-        <div class="grok-panel imagine-card" style="overflow:hidden;">
+        <div class="grok-panel imagine-card panel-overflow-hidden">
           <div class="waterfall-header">
             <div class="card-title">瀑布流</div>
             <div class="waterfall-actions">
@@ -3623,7 +3721,7 @@
         </div>
       </section>
 
-      <section id="grokVideoSection" class="function-stack" style="display:none;">
+      <section id="grokVideoSection" class="function-stack section-hidden">
         <div class="function-header-row video-header-row">
           <div>
             <h2 class="function-title">Video 视频生成</h2>
@@ -3711,7 +3809,7 @@
               <div class="card-title">运行状态</div>
               <span id="videoStatus" class="status-text">未连接</span>
             </div>
-            <div class="progress-wrap" style="margin-bottom:16px;">
+            <div class="progress-wrap progress-wrap-spaced">
               <div id="videoProgressBar" class="progress-bar">
                 <div id="videoProgressFill" class="progress-fill"></div>
               </div>
@@ -3741,7 +3839,7 @@
         </div>
       </section>
 
-      <section id="grokVoiceSection" class="function-stack" style="display:none;">
+      <section id="grokVoiceSection" class="function-stack section-hidden">
         <div class="function-header-row voice-header-row">
           <div>
             <h2 class="function-title">LiveKit 陪聊</h2>
@@ -3787,14 +3885,14 @@
                   </select>
                 </div>
               </div>
-              <div class="function-settings-block" style="margin-top:14px;">
-                <div class="function-header-row" style="justify-content:space-between;">
+              <div class="function-settings-block voice-speed-block">
+                <div class="function-header-row function-header-row-tight">
                   <label class="field-label" for="voiceSpeed">语速</label>
                   <span class="range-value"><span id="voiceSpeedValue">1.0</span>x</span>
                 </div>
                 <input id="voiceSpeed" class="range-input" type="range" min="0.5" max="2" step="0.1" value="1.0">
               </div>
-              <p class="voice-hint" style="margin-top:12px;">提示：Voice / Personality 会在建立连接前发送到服务端。</p>
+              <p class="voice-hint voice-hint-spaced">提示：Voice / Personality 会在建立连接前发送到服务端。</p>
             </div>
 
             <div class="grok-panel voice-card">
@@ -3834,7 +3932,7 @@
         </div>
       </section>
 
-      <section id="grokCacheSection" class="grok-tools-grid" style="display:none;">
+      <section id="grokCacheSection" class="grok-tools-grid section-hidden">
         <div class="grok-panel">
           <h3>缓存总览</h3>
           <p>本地缓存 + 在线资产概览。</p>
@@ -3857,9 +3955,9 @@
                 <option value="video">video</option>
               </select>
             </div>
-            <div style="display:flex;align-items:flex-end;gap:8px;">
-              <button class="btn btn-outline" id="cacheRefreshBtn" style="width:100%;">刷新</button>
-              <button class="btn btn-danger-outline" id="cacheClearBtn" style="width:100%;">清空</button>
+            <div class="cache-inline-actions">
+              <button class="btn btn-outline" id="cacheRefreshBtn">刷新</button>
+              <button class="btn btn-danger-outline" id="cacheClearBtn">清空</button>
             </div>
           </div>
         </div>
@@ -3880,7 +3978,7 @@
               </thead>
               <tbody id="cacheListBody">
                 <tr>
-                  <td colspan="5" style="text-align:center;color:var(--text-secondary);padding:24px;">暂无数据</td>
+                  <td colspan="5" class="table-empty-cell">暂无数据</td>
                 </tr>
               </tbody>
             </table>
@@ -3890,22 +3988,22 @@
         <div class="grok-panel">
           <h3>在线资产账号</h3>
           <p>支持按账号加载在线资产数量并执行在线清理。</p>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+          <div class="cache-batch-actions">
             <button class="btn btn-outline" id="cacheOnlineLoadSelectedBtn">加载选中统计</button>
             <button class="btn btn-outline" id="cacheOnlineLoadAllBtn">加载全部统计</button>
             <button class="btn btn-danger-outline" id="cacheOnlineClearSelectedBtn">清理选中在线资产</button>
           </div>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">
+          <div class="cache-batch-progress">
             <span class="tag" id="cacheOnlineBatchStatus">空闲</span>
-            <span style="color:var(--text-secondary);font-size:12px;" id="cacheOnlineBatchProgress">0/0</span>
-            <progress id="cacheOnlineBatchBar" value="0" max="100" style="width:180px;height:8px;"></progress>
-            <button class="btn btn-outline" id="cacheOnlineBatchCancelBtn" style="display:none;">取消任务</button>
+            <span class="cache-progress-text" id="cacheOnlineBatchProgress">0/0</span>
+            <progress id="cacheOnlineBatchBar" class="cache-progress-bar" value="0" max="100"></progress>
+            <button class="btn btn-outline is-hidden" id="cacheOnlineBatchCancelBtn">取消任务</button>
           </div>
           <div class="cache-list">
             <table>
               <thead>
                 <tr>
-                  <th style="width:36px;text-align:center;">
+                  <th class="table-checkbox-cell">
                     <input id="cacheOnlineSelectAll" type="checkbox" />
                   </th>
                   <th>Token</th>
@@ -3918,7 +4016,7 @@
               </thead>
               <tbody id="cacheOnlineBody">
                 <tr>
-                  <td colspan="7" style="text-align:center;color:var(--text-secondary);padding:24px;">暂无在线账号</td>
+                  <td colspan="7" class="table-empty-cell">暂无在线账号</td>
                 </tr>
               </tbody>
             </table>
@@ -3936,7 +4034,7 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="{{.AdminPath}}/js/common.js?v=20260328-1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260328-1"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260328-3"></script>
 </body>
 
 </html>
