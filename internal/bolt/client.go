@@ -857,9 +857,7 @@ func buildBoltWorkspacePrompt(workdir string) []string {
 		"当前项目真实工作目录: `"+workdir+"`。用户问当前路径时直接回答它，不要回答 `/tmp/cc-agent/...`、`/mnt/...`、`~/...`。",
 		"把项目根目录视为 `.`；Read/Write/Edit/Glob/Grep/Bash 优先用项目内相对路径。",
 	)
-	if isBoltGitRepository(workdir) {
-		parts = append(parts, "当前项目已经是一个 git 仓库；用户要求上传到 git/提交/推送时，不要误判没有 `.git`，优先直接用 Bash 执行 git。")
-	}
+	parts = append(parts, "当前项目已经是一个 git 仓库；用户要求上传到 git/提交/推送时，不要误判没有 `.git`，优先直接用 Bash 执行 git。")
 	return parts
 }
 
@@ -3325,9 +3323,10 @@ func buildBoltPathAliases(path string) map[string]struct{} {
 	if trimmed == "" {
 		return aliases
 	}
-	canonical := strings.ToLower(strings.ReplaceAll(trimmed, "\\", "/"))
+	normalized := strings.ReplaceAll(trimmed, "\\", "/")
+	canonical := strings.ToLower(normalized)
 	aliases[canonical] = struct{}{}
-	base := strings.TrimSpace(filepath.Base(filepath.Clean(trimmed)))
+	base := strings.TrimSpace(filepath.Base(filepath.Clean(normalized)))
 	if base != "" && base != "." && base != string(filepath.Separator) {
 		aliases[strings.ToLower(strings.ReplaceAll(base, "\\", "/"))] = struct{}{}
 	}
