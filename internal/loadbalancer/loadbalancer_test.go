@@ -190,3 +190,29 @@ func TestIsAccountAvailable_402UsesLongCooldown(t *testing.T) {
 		t.Fatalf("expected status to be cleared after 402 cooldown, got %q", acc.StatusCode)
 	}
 }
+
+func TestMarkAccountStatus_Repeated429RefreshesCooldownStart(t *testing.T) {
+	lb := &LoadBalancer{
+		Store:       &store.Store{},
+		connTracker: NewMemoryConnTracker(),
+		cachedAccounts: []*store.Account{
+			{ID: 1, Name: "Bolt1", AccountType: "bolt", Enabled: true},
+		},
+	}
+	acc := &store.Account{
+		ID:          1,
+		AccountType: "bolt",
+		StatusCode:  "429",
+		LastAttempt: time.Now().Add(-30 * time.Second),
+	}
+
+	before := acc.LastAttempt
+	lb.MarkAccountStatus(context.Background(), acc, "429")
+
+	if !acc.LastAttempt.After(before) {
+		t.Fatalf("expected repeated 429 to refresh cooldown start, before=%v after=%v", before, acc.LastAttempt)
+	}
+	if got := lb.cachedAccounts[0].LastAttempt; !got.After(before) {
+		t.Fatalf("expected cached repeated 429 to refresh cooldown start, before=%v after=%v", before, got)
+	}
+}

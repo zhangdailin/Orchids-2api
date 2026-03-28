@@ -340,19 +340,15 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 		return
 	}
 	lb.mu.Lock()
-	// Early exit if the incoming reference already has the status
-	if acc.StatusCode == status {
-		lb.mu.Unlock()
-		return
-	}
+	now := time.Now()
 	acc.StatusCode = status
-	acc.LastAttempt = time.Now()
+	acc.LastAttempt = now
 
 	// Ensure the cache is updated as well
 	for _, cached := range lb.cachedAccounts {
 		if cached.ID == acc.ID {
 			cached.StatusCode = status
-			cached.LastAttempt = acc.LastAttempt
+			cached.LastAttempt = now
 			break
 		}
 	}
