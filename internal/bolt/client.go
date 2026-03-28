@@ -2888,6 +2888,8 @@ type boltUserContentPart struct {
 }
 
 type boltSerializedToolResult struct {
+	ToolName    string
+	ToolPath    string
 	Text        string
 	InvalidPath bool
 	IsError     bool
@@ -2917,6 +2919,8 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 			rawText = relativizeBoltWorkdirPaths(rawText, workdir)
 			text := compactBoltToolResultText(toolMeta, rawText, focusedFileAliases)
 			result := &boltSerializedToolResult{
+				ToolName:    strings.TrimSpace(toolMeta.Name),
+				ToolPath:    strings.TrimSpace(toolMeta.Path),
 				Text:        text,
 				InvalidPath: toolMeta.InvalidPath || looksLikeInvalidBoltPath(rawText),
 				IsError:     isBoltToolResultError(block, rawText),
@@ -2965,6 +2969,7 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 	}
 
 	hasVisibleToolResult := false
+	var firstVisibleToolResult *boltSerializedToolResult
 	for _, part := range parts {
 		if part.Result == nil {
 			continue
@@ -2973,6 +2978,9 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 			continue
 		}
 		hasVisibleToolResult = true
+		if firstVisibleToolResult == nil {
+			firstVisibleToolResult = part.Result
+		}
 		break
 	}
 	hasSuccessfulMutation := hasVisibleSuccessfulMutationResult(results)
@@ -2985,6 +2993,7 @@ func extractBoltUserContent(blocks []prompt.ContentBlock, toolUses map[string]bo
 			gitUploadIntent,
 			hasSuccessfulMutation,
 			hasFailedMutation,
+			firstVisibleToolResult,
 		))
 		first = false
 	}
@@ -3034,7 +3043,7 @@ func hasVisibleFailedMutationResult(results []*boltSerializedToolResult) bool {
 	return false
 }
 
-func formatBoltToolResultContinuation(gitUploadIntent bool, mutationSucceeded bool, mutationFailed bool) string {
+func formatBoltToolResultContinuation(gitUploadIntent bool, mutationSucceeded bool, mutationFailed bool, result *boltSerializedToolResult) string {
 	if gitUploadIntent {
 		return "下面是上一轮工具结果，来自用户本地真实仓库，不是 `/tmp/cc-agent/...` 沙箱。"
 	}
@@ -3044,7 +3053,19 @@ func formatBoltToolResultContinuation(gitUploadIntent bool, mutationSucceeded bo
 	if mutationSucceeded {
 		return "只做最小确认：已创建/更新相应文件；不要补充文件内容细节。"
 	}
-	return "下面是上一轮工具结果。基于这些结果继续回答；只有在当前问题确实还需要已声明工具时才继续调用，若决定调用工具，首个非空输出字符直接是 `{`。"
+	base := "下面是上一轮工具结果。基于这些结果继续回答；只有在当前问题确实还需要已声明工具时才继续调用，若决定调用工具，首个非空输出字符直接是 `{`。"
+	if result == nil {
+		return base
+	}
+	toolName := strings.TrimSpace(result.ToolName)
+	toolPath := strings.TrimSpace(result.ToolPath)
+	if toolName == "" && toolPath == "" {
+		return base
+	}
+	if toolPath != "" {
+		return base + "\n上一轮工具: " + toolName + "(" + toolPath + ")"
+	}
+	return base + "\n上一轮工具: " + toolName
 }
 
 func extractBoltToolPath(input interface{}) string {

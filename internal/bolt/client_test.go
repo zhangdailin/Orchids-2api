@@ -3267,7 +3267,7 @@ func TestPrepareRequest_DropsStaleMissingWorkspaceHistory(t *testing.T) {
 }
 
 func TestFormatBoltToolResultContinuation_CompressesGeneralFollowupPrompt(t *testing.T) {
-	got := formatBoltToolResultContinuation(false, false, false)
+	got := formatBoltToolResultContinuation(false, false, false, nil)
 	if !strings.Contains(got, "基于这些结果继续回答") {
 		t.Fatalf("expected neutral continuation guidance, got: %q", got)
 	}
@@ -3288,8 +3288,18 @@ func TestFormatBoltToolResultContinuation_CompressesGeneralFollowupPrompt(t *tes
 	}
 }
 
+func TestFormatBoltToolResultContinuation_IncludesPriorToolContext(t *testing.T) {
+	got := formatBoltToolResultContinuation(false, false, false, &boltSerializedToolResult{
+		ToolName: "Read",
+		ToolPath: "/usr/lib/node_modules/openclaw/skills/weather/SKILL.md",
+	})
+	if !strings.Contains(got, "上一轮工具: Read(/usr/lib/node_modules/openclaw/skills/weather/SKILL.md)") {
+		t.Fatalf("expected prior tool context in continuation, got: %q", got)
+	}
+}
+
 func TestFormatBoltToolResultContinuation_SuccessPromptAvoidsFeatureHallucination(t *testing.T) {
-	got := formatBoltToolResultContinuation(false, true, false)
+	got := formatBoltToolResultContinuation(false, true, false, nil)
 	if !strings.Contains(got, "只做最小确认") {
 		t.Fatalf("expected success continuation to enforce minimal confirmation, got: %q", got)
 	}
