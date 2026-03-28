@@ -23,6 +23,8 @@ func TestNormalizeToolNameFallback_CommonOpenClawAliases(t *testing.T) {
 		{in: "subagents", want: "Task"},
 		{in: "sessions_spawn", want: "Task"},
 		{in: "use_skill", want: "Skill"},
+		{in: "mcp__tavily__web_search", want: "web_search"},
+		{in: "mcp__fetch__fetch", want: "web_fetch"},
 	}
 
 	for _, tc := range cases {
@@ -104,4 +106,3 @@ func TestTransformToolInputNormalizesReadAliases(t *testing.T) {
 		t.Fatalf("expected path alias to be removed, got %#v", transformed)
 	}
 }
-

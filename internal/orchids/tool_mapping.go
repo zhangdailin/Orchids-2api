@@ -75,6 +75,10 @@ func NormalizeToolNameFallback(name string) string {
 		return "TodoWrite"
 	case "web_fetch", "webfetch", "fetch":
 		return "WebFetch"
+	case "mcp__fetch__fetch":
+		return "web_fetch"
+	case "mcp__tavily__web_search", "mcp__brave__web_search":
+		return "web_search"
 	case "ask_followup_question", "ask":
 		return "AskUserQuestion"
 	case "enter_plan_mode":
