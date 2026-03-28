@@ -261,14 +261,14 @@ function applyTokenLabels(type) {
       ? "Bolt 编辑时仅保存第一行 __session，并保留当前 project_id"
       : "支持批量添加 Bolt。每行一个 __session，project_id 共用下方输入";
     input.required = true;
-  } else if (type === 'puter') {
-    label.textContent = "Auth Token";
-    input.placeholder = "每行一个 Puter auth_token";
-    hint.textContent = accountId
-      ? "Puter 编辑时仅保存第一行 auth_token"
-      : "支持批量添加 Puter。每行一个 auth_token";
-    input.required = true;
-  } else {
+    } else if (type === 'puter') {
+      label.textContent = "Auth Token";
+      input.placeholder = "每行一个 Puter auth_token";
+      hint.textContent = accountId
+        ? "Puter 编辑时仅保存第一行 auth_token。可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取"
+        : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
+      input.required = true;
+    } else {
     label.textContent = "Cookie / __client / __session";
     input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
     hint.textContent = accountId
