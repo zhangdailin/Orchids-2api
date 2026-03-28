@@ -109,6 +109,19 @@ func FilterSupportedToolNames(names []string) []string {
 	return out
 }
 
+func MinimalSupportedToolSpecs(names []string) []map[string]interface{} {
+	normalized := FilterSupportedToolNames(names)
+	if len(normalized) == 0 {
+		return nil
+	}
+
+	specs := make([]map[string]interface{}, 0, len(normalized))
+	for _, name := range normalized {
+		specs = append(specs, map[string]interface{}{"name": name})
+	}
+	return specs
+}
+
 func LooksLikeContinuationOnlyText(text string) bool {
 	normalized := normalizeContinuationOnlyText(text)
 	if normalized == "" {

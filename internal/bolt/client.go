@@ -1370,7 +1370,6 @@ func supportedBoltToolNames(tools []interface{}) []string {
 	if len(tools) == 0 {
 		return nil
 	}
-
 	rawNames := make([]string, 0, len(tools))
 	for _, raw := range tools {
 		name := strings.TrimSpace(extractBoltToolName(raw))
@@ -1379,9 +1378,7 @@ func supportedBoltToolNames(tools []interface{}) []string {
 		}
 		rawNames = append(rawNames, name)
 	}
-
-	toolNames := FilterSupportedToolNames(rawNames)
-	return toolNames
+	return FilterSupportedToolNames(rawNames)
 }
 
 func extractBoltToolName(raw interface{}) string {

@@ -63,6 +63,10 @@ var incomingToolPropertyAllowlist = map[string]map[string]struct{}{
 }
 
 func supportedToolNames(tools []interface{}) []string {
+	return bolt.FilterSupportedToolNames(collectIncomingToolNames(tools))
+}
+
+func collectIncomingToolNames(tools []interface{}) []string {
 	if len(tools) == 0 {
 		return nil
 	}
@@ -75,8 +79,7 @@ func supportedToolNames(tools []interface{}) []string {
 		}
 		rawNames = append(rawNames, name)
 	}
-
-	return bolt.FilterSupportedToolNames(rawNames)
+	return rawNames
 }
 
 func declaredToolNames(tools []interface{}) []string {

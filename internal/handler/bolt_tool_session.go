@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"orchids-api/internal/bolt"
 	"orchids-api/internal/prompt"
 )
 
@@ -31,20 +32,13 @@ func (h *Handler) persistBoltTools(ctx context.Context, conversationKey string, 
 }
 
 func minimalIncomingToolsFromNames(names []string) []interface{} {
-	if len(names) == 0 {
+	specs := bolt.MinimalSupportedToolSpecs(names)
+	if len(specs) == 0 {
 		return nil
 	}
-	out := make([]interface{}, 0, len(names))
-	for _, name := range names {
-		out = append(out, map[string]interface{}{"name": name})
-	}
-	names = supportedToolNames(out)
-	if len(names) == 0 {
-		return nil
-	}
-	normalized := make([]interface{}, 0, len(names))
-	for _, name := range names {
-		normalized = append(normalized, map[string]interface{}{"name": name})
+	normalized := make([]interface{}, 0, len(specs))
+	for _, spec := range specs {
+		normalized = append(normalized, spec)
 	}
 	return normalized
 }
