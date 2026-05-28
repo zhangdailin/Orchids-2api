@@ -39,30 +39,45 @@ func (w *captureResponseWriter) Write(p []byte) (int, error) {
 func (w *captureResponseWriter) Flush() {}
 
 type ResponsesCreateRequest struct {
-	Model             string                   `json:"model"`
-	Input             interface{}              `json:"input"`
-	Instructions      string                   `json:"instructions,omitempty"`
-	Stream            bool                     `json:"stream,omitempty"`
-	Reasoning         map[string]interface{}   `json:"reasoning,omitempty"`
-	Temperature       *float64                 `json:"temperature,omitempty"`
-	TopP              *float64                 `json:"top_p,omitempty"`
-	Tools             []map[string]interface{} `json:"tools,omitempty"`
-	ToolChoice        interface{}              `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool                    `json:"parallel_tool_calls,omitempty"`
+	Model              string                   `json:"model"`
+	Input              interface{}              `json:"input"`
+	Instructions       string                   `json:"instructions,omitempty"`
+	Stream             bool                     `json:"stream,omitempty"`
+	StreamProvided     bool                     `json:"-"`
+	Reasoning          map[string]interface{}   `json:"reasoning,omitempty"`
+	Temperature        *float64                 `json:"temperature,omitempty"`
+	TopP               *float64                 `json:"top_p,omitempty"`
+	MaxOutputTokens    *int                     `json:"max_output_tokens,omitempty"`
+	Tools              []map[string]interface{} `json:"tools,omitempty"`
+	ToolChoice         interface{}              `json:"tool_choice,omitempty"`
+	ParallelToolCalls  *bool                    `json:"parallel_tool_calls,omitempty"`
+	PreviousResponseID string                   `json:"previous_response_id,omitempty"`
+	Store              *bool                    `json:"store,omitempty"`
+	Metadata           map[string]interface{}   `json:"metadata,omitempty"`
+	Truncation         string                   `json:"truncation,omitempty"`
+	Include            []string                 `json:"include,omitempty"`
+	Background         *bool                    `json:"background,omitempty"`
 }
 
 func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 	type rawResponsesCreateRequest struct {
-		Model             interface{}              `json:"model"`
-		Input             interface{}              `json:"input"`
-		Instructions      interface{}              `json:"instructions,omitempty"`
-		Stream            interface{}              `json:"stream,omitempty"`
-		Reasoning         map[string]interface{}   `json:"reasoning,omitempty"`
-		Temperature       interface{}              `json:"temperature,omitempty"`
-		TopP              interface{}              `json:"top_p,omitempty"`
-		Tools             []map[string]interface{} `json:"tools,omitempty"`
-		ToolChoice        interface{}              `json:"tool_choice,omitempty"`
-		ParallelToolCalls interface{}              `json:"parallel_tool_calls,omitempty"`
+		Model              interface{}              `json:"model"`
+		Input              interface{}              `json:"input"`
+		Instructions       interface{}              `json:"instructions,omitempty"`
+		Stream             interface{}              `json:"stream,omitempty"`
+		Reasoning          map[string]interface{}   `json:"reasoning,omitempty"`
+		Temperature        interface{}              `json:"temperature,omitempty"`
+		TopP               interface{}              `json:"top_p,omitempty"`
+		MaxOutputTokens    interface{}              `json:"max_output_tokens,omitempty"`
+		Tools              []map[string]interface{} `json:"tools,omitempty"`
+		ToolChoice         interface{}              `json:"tool_choice,omitempty"`
+		ParallelToolCalls  interface{}              `json:"parallel_tool_calls,omitempty"`
+		PreviousResponseID interface{}              `json:"previous_response_id,omitempty"`
+		Store              interface{}              `json:"store,omitempty"`
+		Metadata           map[string]interface{}   `json:"metadata,omitempty"`
+		Truncation         interface{}              `json:"truncation,omitempty"`
+		Include            []string                 `json:"include,omitempty"`
+		Background         interface{}              `json:"background,omitempty"`
 	}
 
 	var raw rawResponsesCreateRequest
@@ -81,8 +96,13 @@ func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	maxOutputTokens, err := parseLooseIntAny(raw.MaxOutputTokens)
+	if err != nil {
+		return err
+	}
 	var rawMap map[string]json.RawMessage
 	_ = json.Unmarshal(data, &rawMap)
+	_, streamProvided := rawMap["stream"]
 	var parallel *bool
 	if _, ok := rawMap["parallel_tool_calls"]; ok {
 		v, err := parseLooseBoolAnyForField(raw.ParallelToolCalls, "parallel_tool_calls")
@@ -91,17 +111,45 @@ func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 		}
 		parallel = &v
 	}
+	var store *bool
+	if _, ok := rawMap["store"]; ok {
+		v, err := parseLooseBoolAnyForField(raw.Store, "store")
+		if err != nil {
+			return err
+		}
+		store = &v
+	}
+	var background *bool
+	if _, ok := rawMap["background"]; ok {
+		v, err := parseLooseBoolAnyForField(raw.Background, "background")
+		if err != nil {
+			return err
+		}
+		background = &v
+	}
+	var maxOutput *int
+	if _, ok := rawMap["max_output_tokens"]; ok {
+		maxOutput = &maxOutputTokens
+	}
 
 	r.Model = parseLooseStringAny(raw.Model)
 	r.Input = raw.Input
 	r.Instructions = parseLooseStringAny(raw.Instructions)
 	r.Stream = stream
+	r.StreamProvided = streamProvided
 	r.Reasoning = raw.Reasoning
 	r.Temperature = temp
 	r.TopP = topP
+	r.MaxOutputTokens = maxOutput
 	r.Tools = raw.Tools
 	r.ToolChoice = raw.ToolChoice
 	r.ParallelToolCalls = parallel
+	r.PreviousResponseID = parseLooseStringAny(raw.PreviousResponseID)
+	r.Store = store
+	r.Metadata = raw.Metadata
+	r.Truncation = parseLooseStringAny(raw.Truncation)
+	r.Include = raw.Include
+	r.Background = background
 	return nil
 }
 
@@ -115,6 +163,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	h.applyDefaultResponsesStream(&req)
 	chatReq, err := chatRequestFromResponses(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -151,6 +200,13 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(responsesObjectFromChat(req.Model, chat))
+}
+
+func (h *Handler) applyDefaultResponsesStream(req *ResponsesCreateRequest) {
+	if req == nil || req.StreamProvided {
+		return
+	}
+	req.Stream = h.defaultChatStream()
 }
 
 func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsRequest, error) {
@@ -279,6 +335,10 @@ func normalizeResponsesMessageContent(content interface{}) interface{} {
 			if url := responsesImageURL(part); url != "" {
 				out = append(out, map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": url}})
 			}
+		case "input_file", "file":
+			if url := responsesFileURL(part); url != "" {
+				out = append(out, map[string]interface{}{"type": "file", "file": map[string]interface{}{"url": url}})
+			}
 		default:
 			out = append(out, part)
 		}
@@ -299,6 +359,28 @@ func responsesImageURL(part map[string]interface{}) string {
 				return s
 			}
 		}
+	}
+	return ""
+}
+
+func responsesFileURL(part map[string]interface{}) string {
+	for _, key := range []string{"file", "file_url", "source"} {
+		raw := part[key]
+		switch v := raw.(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return strings.TrimSpace(v)
+			}
+		case map[string]interface{}:
+			for _, nestedKey := range []string{"url", "file_url", "data"} {
+				if s := strings.TrimSpace(fmt.Sprint(v[nestedKey])); s != "" && s != "<nil>" {
+					return s
+				}
+			}
+		}
+	}
+	if s := strings.TrimSpace(fmt.Sprint(part["file_id"])); s != "" && s != "<nil>" {
+		return s
 	}
 	return ""
 }

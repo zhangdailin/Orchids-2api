@@ -11,13 +11,6 @@ const (
 	superDefaultQuota float64 = 140
 )
 
-func quotaDefaultForPool(pool string) float64 {
-	if strings.EqualFold(strings.TrimSpace(pool), "ssosuper") {
-		return superDefaultQuota
-	}
-	return basicDefaultQuota
-}
-
 func InferQuotaLimit(acc *store.Account) float64 {
 	if acc == nil {
 		return basicDefaultQuota

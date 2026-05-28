@@ -187,11 +187,6 @@ func repairToolCallJSON(text string) map[string]interface{} {
 	return parsed
 }
 
-func parseToolCallBlock(rawJSON string, tools []ToolDef, toolChoice interface{}) map[string]interface{} {
-	parser := newToolCallParser(tools, toolChoice)
-	return parser.parseBlock(rawJSON)
-}
-
 func (p toolCallParser) parseBlock(rawJSON string) map[string]interface{} {
 	if strings.TrimSpace(rawJSON) == "" {
 		return nil
