@@ -28,50 +28,6 @@ type orchidsFastEnvelope struct {
 	Type string `json:"type"`
 }
 
-type orchidsFastTextMessage struct {
-	Type  string `json:"type"`
-	Delta string `json:"delta"`
-	Text  string `json:"text"`
-	Data  struct {
-		Text string `json:"text"`
-	} `json:"data"`
-	Chunk json.RawMessage `json:"chunk"`
-}
-
-type orchidsFastChunk struct {
-	Text    string `json:"text"`
-	Content string `json:"content"`
-}
-
-type orchidsFastUsage struct {
-	InputTokens       interface{} `json:"inputTokens"`
-	OutputTokens      interface{} `json:"outputTokens"`
-	InputTokensSnake  interface{} `json:"input_tokens"`
-	OutputTokensSnake interface{} `json:"output_tokens"`
-}
-
-type orchidsFastTokensMessage struct {
-	Type string           `json:"type"`
-	Data orchidsFastUsage `json:"data"`
-}
-
-type orchidsFastToolOutput struct {
-	Type      string      `json:"type"`
-	CallID    string      `json:"callId"`
-	ID        string      `json:"id"`
-	Name      string      `json:"name"`
-	Arguments string      `json:"arguments"`
-	Input     interface{} `json:"input"`
-}
-
-type orchidsFastResponseDone struct {
-	Type     string `json:"type"`
-	Response struct {
-		Usage  orchidsFastUsage        `json:"usage"`
-		Output []orchidsFastToolOutput `json:"output"`
-	} `json:"response"`
-}
-
 type orchidsFastModelMessage struct {
 	Type  string          `json:"type"`
 	Event json.RawMessage `json:"event"`
@@ -602,33 +558,6 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		return c.dispatchTransport(ctx, orchidsTransportSSE, req, onMessage, logger)
 	}
 	return err
-}
-
-func extractOrchidsFastText(msg orchidsFastTextMessage) string {
-	if msg.Delta != "" {
-		return msg.Delta
-	}
-	if msg.Text != "" {
-		return msg.Text
-	}
-	if msg.Data.Text != "" {
-		return msg.Data.Text
-	}
-	if len(msg.Chunk) == 0 {
-		return ""
-	}
-	var chunkText string
-	if err := json.Unmarshal(msg.Chunk, &chunkText); err == nil {
-		return chunkText
-	}
-	var chunk orchidsFastChunk
-	if err := json.Unmarshal(msg.Chunk, &chunk); err != nil {
-		return ""
-	}
-	if chunk.Text != "" {
-		return chunk.Text
-	}
-	return chunk.Content
 }
 
 type UpstreamModel struct {

@@ -336,11 +336,6 @@ func (c *Client) buildWSRequest(req upstream.UpstreamRequest) (*OrchidsRequest, 
 	return &request, nil
 }
 
-func isSuggestionModeText(text string) bool {
-	normalized := strings.ToLower(text)
-	return strings.Contains(normalized, "suggestion mode")
-}
-
 func normalizeOrchidsAgentModel(model string) string {
 	if normalized, ok := ResolveOrchidsModelID(model); ok {
 		return normalized

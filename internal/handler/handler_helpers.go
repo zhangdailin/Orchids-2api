@@ -243,25 +243,11 @@ func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forced
 	if modelID == "" {
 		return nil, nil
 	}
-	var (
-		resolvedModelID string
-		m               *store.Model
-	)
+	var m *store.Model
 	if forcedChannel != "" {
-		resolvedModelID, m = h.resolveModelAliasForChannel(ctx, forcedChannel, modelID)
+		_, m = h.resolveModelAliasForChannel(ctx, forcedChannel, modelID)
 	} else {
-		resolvedModelID, m = h.resolveModelAlias(ctx, modelID)
-		if strings.EqualFold(forcedChannel, "warp") {
-			if mapped := warp.ResolveModelAlias(resolvedModelID); mapped != "" {
-				resolvedModelID = mapped
-				if m == nil || !strings.EqualFold(strings.TrimSpace(m.ModelID), resolvedModelID) {
-					resolved, err := h.loadBalancer.Store.GetModelByModelID(ctx, resolvedModelID)
-					if err == nil {
-						m = resolved
-					}
-				}
-			}
-		}
+		_, m = h.resolveModelAlias(ctx, modelID)
 	}
 	if m == nil {
 		return nil, fmt.Errorf("model not found")

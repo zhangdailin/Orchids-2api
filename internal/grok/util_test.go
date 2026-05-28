@@ -53,7 +53,7 @@ func TestExtractMessageAndAttachments(t *testing.T) {
 		},
 	}
 
-	text, attachments, err := extractMessageAndAttachments(messages, false)
+	text, attachments, err := extractMessageAndAttachmentsWithTools(messages, false, nil, nil, true)
 	if err != nil {
 		t.Fatalf("extractMessageAndAttachments error: %v", err)
 	}
@@ -452,7 +452,7 @@ func BenchmarkParseRateLimitValue_CompoundHeader(b *testing.B) {
 	}
 }
 
-func TestEncodeJSONBytesMatchesEncodeJSON(t *testing.T) {
+func TestEncodeJSONBytesDoesNotEscapeHTML(t *testing.T) {
 	payload := map[string]interface{}{
 		"type": "chunk",
 		"data": map[string]interface{}{
@@ -460,34 +460,19 @@ func TestEncodeJSONBytesMatchesEncodeJSON(t *testing.T) {
 			"n":    1,
 		},
 	}
-	if got, want := string(encodeJSONBytes(payload)), encodeJSON(payload); got != want {
-		t.Fatalf("got=%q want=%q", got, want)
+	got := string(encodeJSONBytes(payload))
+	if !strings.Contains(got, "hello <world>") {
+		t.Fatalf("got=%q want unescaped html", got)
 	}
 }
 
-func TestWriteSSEBytesMatchesWriteSSE(t *testing.T) {
-	stringRec := httptest.NewRecorder()
-	writeSSE(stringRec, "demo", `{"ok":true}`)
-
+func TestWriteSSEBytesWritesEventFrame(t *testing.T) {
 	bytesRec := httptest.NewRecorder()
 	writeSSEBytes(bytesRec, "demo", []byte(`{"ok":true}`))
 
-	if bytesRec.Body.String() != stringRec.Body.String() {
-		t.Fatalf("bytes=%q want=%q", bytesRec.Body.String(), stringRec.Body.String())
-	}
-}
-
-func BenchmarkEncodeJSON_String(b *testing.B) {
-	payload := map[string]interface{}{
-		"id": "msg_1",
-		"choices": []map[string]interface{}{{
-			"index": 0,
-			"delta": map[string]interface{}{"content": "hello world"},
-		}},
-	}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = encodeJSON(payload)
+	got := bytesRec.Body.String()
+	if !strings.Contains(got, "event: demo\n") || !strings.Contains(got, `data: {"ok":true}`) {
+		t.Fatalf("unexpected sse frame: %q", got)
 	}
 }
 
@@ -502,16 +487,6 @@ func BenchmarkEncodeJSON_Bytes(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = encodeJSONBytes(payload)
-	}
-}
-
-func BenchmarkWriteSSE_String(b *testing.B) {
-	writer := httptest.NewRecorder()
-	data := `{"ok":true}`
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		writer.Body.Reset()
-		writeSSE(writer, "demo", data)
 	}
 }
 

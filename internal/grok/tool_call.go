@@ -292,11 +292,6 @@ func formatToolHistory(messages []ChatMessage) []ChatMessage {
 	return out
 }
 
-func parseToolCalls(content string, tools []ToolDef, toolChoice interface{}) (string, []map[string]interface{}) {
-	parser := newToolCallParser(tools, toolChoice)
-	return parser.parseCalls(content)
-}
-
 func (p toolCallParser) parseCalls(content string) (string, []map[string]interface{}) {
 	if strings.TrimSpace(content) == "" {
 		return content, nil

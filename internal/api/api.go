@@ -54,10 +54,6 @@ var orchidsGetAccountToken = func(acc *store.Account, cfg *config.Config) (strin
 	return orchids.NewFromAccount(acc, cfg).GetToken()
 }
 
-var orchidsGetAccountChatToken = func(acc *store.Account, cfg *config.Config) (string, error) {
-	return orchids.NewFromAccount(acc, cfg).GetChatToken()
-}
-
 var orchidsFetchCredits = orchids.FetchCreditsWithProxy
 
 var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
@@ -530,7 +526,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			if httpStatus == http.StatusUnauthorized || httpStatus == http.StatusForbidden || httpStatus == http.StatusTooManyRequests {
 				accountStatus = strconv.Itoa(httpStatus)
 			}
-			return accountStatus, httpStatus, fmt.Errorf("Failed to refresh warp account: %w", err)
+			return accountStatus, httpStatus, fmt.Errorf("failed to refresh warp account: %w", err)
 		}
 		acc.Token = jwt
 		warpClient.SyncAccountState()
@@ -549,17 +545,17 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 	if strings.EqualFold(acc.AccountType, "grok") {
 		if verifyErr := verifyGrokAccount(ctx, acc, a.config.Load()); verifyErr != nil {
 			if strings.Contains(strings.ToLower(verifyErr.Error()), "missing sso token") {
-				return "", http.StatusBadRequest, fmt.Errorf("Failed to verify grok account: %w", verifyErr)
+				return "", http.StatusBadRequest, fmt.Errorf("failed to verify grok account: %w", verifyErr)
 			}
 			status := classifyAccountStatusFromError(verifyErr.Error())
-			return status, httpStatusFromAccountStatus(status), fmt.Errorf("Failed to verify grok account: %w", verifyErr)
+			return status, httpStatusFromAccountStatus(status), fmt.Errorf("failed to verify grok account: %w", verifyErr)
 		}
 		return "", 0, nil
 	}
 
 	if strings.EqualFold(acc.AccountType, "puter") {
 		if puter.ResolveAuthToken(acc) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify puter account: missing auth token")
+			return "", http.StatusBadRequest, fmt.Errorf("failed to verify puter account: missing auth token")
 		}
 		if err := puterVerifyAccount(ctx, acc, a.config.Load()); err != nil {
 			status := classifyAccountStatusFromError(err.Error())
@@ -567,7 +563,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			if status != "" {
 				httpStatus = httpStatusFromAccountStatus(status)
 			}
-			return status, httpStatus, fmt.Errorf("Failed to verify puter account: %w", err)
+			return status, httpStatus, fmt.Errorf("failed to verify puter account: %w", err)
 		}
 		return "", 0, nil
 	}
@@ -614,7 +610,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			slog.Warn("Orchids chat auth refresh failed but quota sync succeeded; keeping account refresh successful", "account_id", acc.ID, "status", status, "error", err)
 			return "", 0, nil
 		}
-		return status, httpStatus, fmt.Errorf("Failed to refresh account: %w", err)
+		return status, httpStatus, fmt.Errorf("failed to refresh account: %w", err)
 	}
 
 	acc.Token = strings.TrimSpace(jwt)
@@ -638,7 +634,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		if status != "" {
 			httpStatus = httpStatusFromAccountStatus(status)
 		}
-		return status, httpStatus, fmt.Errorf("Failed to refresh account: %w", creditsErr)
+		return status, httpStatus, fmt.Errorf("failed to refresh account: %w", creditsErr)
 	}
 	applyOrchidsQuotaFromCredits(acc, creditsInfo)
 	return "", 0, nil

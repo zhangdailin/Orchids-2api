@@ -548,10 +548,6 @@ type AttachmentInput struct {
 	Data string
 }
 
-func extractMessageAndAttachments(messages []ChatMessage, isVideo bool) (string, []AttachmentInput, error) {
-	return extractMessageAndAttachmentsWithTools(messages, isVideo, nil, nil, true)
-}
-
 func extractMessageAndAttachmentsWithTools(messages []ChatMessage, isVideo bool, tools []ToolDef, toolChoice interface{}, parallelToolCalls bool) (string, []AttachmentInput, error) {
 	if len(tools) > 0 {
 		messages = formatToolHistory(messages)
@@ -715,10 +711,6 @@ func extractContentText(content interface{}) string {
 	default:
 		return ""
 	}
-}
-
-func writeSSE(w http.ResponseWriter, event, data string) {
-	writeSSEBytes(w, event, []byte(data))
 }
 
 func writeSSEError(w http.ResponseWriter, message, errType, code string) {
@@ -1172,10 +1164,6 @@ func parseRateLimitReset(raw string) time.Time {
 	return time.Time{}
 }
 
-func encodeJSON(v interface{}) string {
-	return string(encodeJSONBytes(v))
-}
-
 func encodeJSONBytes(v interface{}) []byte {
 	buf := bytes.Buffer{}
 	enc := json.NewEncoder(&buf)
@@ -1447,7 +1435,7 @@ func extractVideoPromptAndAttachments(messages []ChatMessage) (string, []Attachm
 			}
 		}
 	}
-	return "", nil, fmt.Errorf("Video prompt cannot be empty")
+	return "", nil, fmt.Errorf("video prompt cannot be empty")
 }
 
 func dataURIFromBytes(mime string, data []byte) string {

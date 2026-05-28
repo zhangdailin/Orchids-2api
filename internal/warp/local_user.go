@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 )
-
-const warpUserStorageFileName = "dev.warp.Warp-User"
 
 type LocalUserCredential struct {
 	RefreshToken string `json:"refresh_token"`
@@ -135,12 +132,4 @@ func ReadLocalUserCredentialFromReader(r io.Reader, maxBytes int64) (*LocalUserC
 		return nil, fmt.Errorf("uploaded warp local user is too large")
 	}
 	return ReadLocalUserCredentialFromBytes(buf.Bytes())
-}
-
-func defaultWindowsLocalUserStoragePath() (string, error) {
-	localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
-	if localAppData == "" {
-		return "", fmt.Errorf("LOCALAPPDATA is not set")
-	}
-	return filepath.Join(localAppData, "warp", "Warp", "data", warpUserStorageFileName), nil
 }

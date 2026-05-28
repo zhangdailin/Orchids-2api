@@ -55,17 +55,3 @@ func trimTrailingLineBreakBytes(line []byte) []byte {
 func urlEncode(value string) string {
 	return url.QueryEscape(value)
 }
-
-func truncateTextWithEllipsis(text string, maxLen int) string {
-	if maxLen <= 0 {
-		return ""
-	}
-	if len(text) <= maxLen {
-		return text
-	}
-	runes := []rune(text)
-	if len(runes) <= maxLen {
-		return text
-	}
-	return string(runes[:maxLen]) + "…[truncated]"
-}

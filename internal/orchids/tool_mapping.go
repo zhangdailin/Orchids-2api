@@ -1,10 +1,6 @@
 package orchids
 
-import (
-	"strings"
-
-	"github.com/goccy/go-json"
-)
+import "strings"
 
 var normalizedToolNameFallbacks = map[string]string{
 	"str_replace_editor": "Edit",
@@ -292,28 +288,6 @@ func MapOrchidsToolToAnthropic(orchidsName string) string {
 	return orchidsName
 }
 
-func transformToolInputJSON(toolName, clientName, raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return raw
-	}
-
-	var input map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &input); err != nil {
-		return raw
-	}
-
-	normalized := TransformToolInput(toolName, clientName, input)
-	if normalized == nil {
-		return raw
-	}
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return raw
-	}
-	return string(encoded)
-}
-
 func toolMapsFromInterfaces(clientTools []interface{}) []map[string]interface{} {
 	if len(clientTools) == 0 {
 		return nil
@@ -392,17 +366,6 @@ func toSnakeCase(value string) string {
 		out.WriteRune(r)
 	}
 	return out.String()
-}
-
-func collectAliasKeys(tm *ToolMapper) []string {
-	if tm == nil || len(tm.index) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(tm.index))
-	for key := range tm.index {
-		keys = append(keys, key)
-	}
-	return keys
 }
 
 func getToolAliases(tool map[string]interface{}) []string {

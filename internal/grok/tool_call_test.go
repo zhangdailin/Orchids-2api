@@ -40,12 +40,12 @@ func TestExtractMessageAndAttachmentsWithToolsFormatsHistory(t *testing.T) {
 }
 
 func TestParseToolCalls(t *testing.T) {
-	text, toolCalls := parseToolCalls("before\n<tool_call>{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\"}}</tool_call>\nafter", []ToolDef{{
+	text, toolCalls := newToolCallParser([]ToolDef{{
 		Type: "function",
 		Function: map[string]interface{}{
 			"name": "weather",
 		},
-	}}, "auto")
+	}}, "auto").parseCalls("before\n<tool_call>{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\"}}</tool_call>\nafter")
 	if len(toolCalls) != 1 {
 		t.Fatalf("toolCalls=%d want 1", len(toolCalls))
 	}
@@ -58,7 +58,7 @@ func TestParseToolCalls(t *testing.T) {
 }
 
 func TestParseToolCalls_RepairsJSONAndHonorsForcedTool(t *testing.T) {
-	text, toolCalls := parseToolCalls("before\n<tool_call>```json\n{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\",}}\n```</tool_call>\nafter", []ToolDef{{
+	parser := newToolCallParser([]ToolDef{{
 		Type: "function",
 		Function: map[string]interface{}{
 			"name": "weather",
@@ -69,6 +69,7 @@ func TestParseToolCalls_RepairsJSONAndHonorsForcedTool(t *testing.T) {
 			"name": "weather",
 		},
 	})
+	text, toolCalls := parser.parseCalls("before\n<tool_call>```json\n{\"name\":\"weather\",\"arguments\":{\"city\":\"shanghai\",}}\n```</tool_call>\nafter")
 	if len(toolCalls) != 1 {
 		t.Fatalf("toolCalls=%d want 1", len(toolCalls))
 	}
@@ -76,17 +77,7 @@ func TestParseToolCalls_RepairsJSONAndHonorsForcedTool(t *testing.T) {
 		t.Fatalf("text=%q want surrounding text preserved", text)
 	}
 
-	_, rejected := parseToolCalls("<tool_call>{\"name\":\"search\",\"arguments\":{}}</tool_call>", []ToolDef{{
-		Type: "function",
-		Function: map[string]interface{}{
-			"name": "weather",
-		},
-	}}, map[string]interface{}{
-		"type": "function",
-		"function": map[string]interface{}{
-			"name": "weather",
-		},
-	})
+	_, rejected := parser.parseCalls("<tool_call>{\"name\":\"search\",\"arguments\":{}}</tool_call>")
 	if len(rejected) != 0 {
 		t.Fatalf("forced tool choice should reject mismatched tool, got=%v", rejected)
 	}

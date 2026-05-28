@@ -213,10 +213,6 @@ func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config,
 	}
 }
 
-func discoverPuterModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	return discoverPuterModelsConcurrent(ctx, cfg, s, defaultModelRefreshConcurrency)
-}
-
 func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
 	proxyFunc := http.ProxyFromEnvironment
 	if cfg != nil {
@@ -279,10 +275,6 @@ func puterPublicChoicesFromDiscovered(items []discoveredModel) []puterPublicMode
 		out = append(out, puterPublicModelChoice{ID: id, Name: name})
 	}
 	return out
-}
-
-func verifyPuterDiscoveredModels(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel) []discoveredModel {
-	return verifyPuterDiscoveredModelsConcurrent(ctx, cfg, accounts, candidates, defaultModelRefreshConcurrency)
 }
 
 func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel, concurrency int) []discoveredModel {
@@ -425,10 +417,6 @@ func puterSeedDiscoveredModels() []discoveredModel {
 	return out
 }
 
-func discoverGrokModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	return discoverGrokModelsConcurrent(ctx, cfg, s, defaultModelRefreshConcurrency)
-}
-
 func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
 	accounts, err := enabledAccountsByType(ctx, s, "grok")
 	if err != nil {
@@ -526,14 +514,6 @@ func grokAccountTokens(accounts []*store.Account) []string {
 	return tokens
 }
 
-func firstGrokToken(accounts []*store.Account) string {
-	tokens := grokAccountTokens(accounts)
-	if len(tokens) == 0 {
-		return ""
-	}
-	return tokens[0]
-}
-
 func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredModel {
 	seen := map[string]struct{}{}
 	out := make([]discoveredModel, 0, 16)
@@ -601,10 +581,6 @@ func isAcceptedGrokCanonical(requested, canonical string) bool {
 		return true
 	}
 	return false
-}
-
-func discoverWarpModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	return discoverWarpModelsConcurrent(ctx, cfg, s, defaultModelRefreshConcurrency)
 }
 
 func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {

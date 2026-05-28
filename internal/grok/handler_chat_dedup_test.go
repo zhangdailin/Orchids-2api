@@ -961,7 +961,7 @@ func TestAppendChatCompletionSnapshotChunk_FinalIncludesMessage(t *testing.T) {
 }
 
 func TestAppendChatCompletionToolCallsChunk_FinalIncludesUsage(t *testing.T) {
-	raw := appendChatCompletionToolCallsChunk(make([]byte, 0, 512), "chatcmpl_1", 123, "grok-4", "fp-1", []map[string]interface{}{{
+	raw := appendChatCompletionToolCallsChunkWithUsage(make([]byte, 0, 512), "chatcmpl_1", 123, "grok-4", "fp-1", []map[string]interface{}{{
 		"index": 0,
 		"id":    "call_1",
 		"type":  "function",
@@ -969,7 +969,7 @@ func TestAppendChatCompletionToolCallsChunk_FinalIncludesUsage(t *testing.T) {
 			"name":      "weather",
 			"arguments": `{"city":"shanghai"}`,
 		},
-	}}, "tool_calls", true)
+	}}, "tool_calls", true, nil)
 	var got map[string]interface{}
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("unmarshal got: %v", err)

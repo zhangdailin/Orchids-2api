@@ -3,13 +3,23 @@
 package warp
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
+const warpUserStorageFileName = "dev.warp.Warp-User"
+
 func defaultLocalUserStoragePath() (string, error) {
-	return defaultWindowsLocalUserStoragePath()
+	localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+	if localAppData == "" {
+		return "", fmt.Errorf("LOCALAPPDATA is not set")
+	}
+	return filepath.Join(localAppData, "warp", "Warp", "data", warpUserStorageFileName), nil
 }
 
 func decryptLocalUserStorage(encrypted []byte) (string, error) {

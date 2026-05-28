@@ -393,12 +393,6 @@ func sampleWrappedPrompt(userText string) string {
 	return "<env>\ndate: 2026-03-15\n</env>\n\n<rules>\n- concise\n</rules>\n\n<user>\n" + userText + "\n</user>\n"
 }
 
-func sampleCodeFreeMaxPrompt(t *testing.T, noThinking bool) string {
-	t.Helper()
-	promptText, _, _ := BuildCodeFreeMaxPromptAndHistoryWithMeta(sampleProtocolMessages(), sampleSystemItems(), noThinking)
-	return promptText
-}
-
 func assertBareOrchidsRequestJSON(t *testing.T, req OrchidsRequest) {
 	t.Helper()
 

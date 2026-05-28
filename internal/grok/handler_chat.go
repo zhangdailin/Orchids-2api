@@ -99,10 +99,6 @@ func appendChatCompletionSnapshotChunkWithUsage(dst []byte, id string, created i
 	return dst
 }
 
-func appendChatCompletionToolCallsChunk(dst []byte, id string, created int64, model, fingerprint string, toolCalls []map[string]interface{}, finish string, hasFinish bool) []byte {
-	return appendChatCompletionToolCallsChunkWithUsage(dst, id, created, model, fingerprint, toolCalls, finish, hasFinish, nil)
-}
-
 func appendChatCompletionToolCallsChunkWithUsage(dst []byte, id string, created int64, model, fingerprint string, toolCalls []map[string]interface{}, finish string, hasFinish bool, usage map[string]interface{}) []byte {
 	dst = append(dst, `{"id":`...)
 	dst = strconv.AppendQuote(dst, id)
@@ -1201,8 +1197,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		sentAny = true
 	}
 
-	var emitTextChunk func(string)
-	emitTextChunk = func(content string) {
+	emitTextChunk := func(content string) {
 		if toolStreamMode {
 			return
 		}

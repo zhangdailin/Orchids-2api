@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"strconv"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -14,84 +13,6 @@ const (
 var (
 	sseMessageStopBytes = []byte(`{"type":"message_stop"}`)
 )
-
-type sseToolUseContentBlock struct {
-	Type  string          `json:"type"`
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
-}
-
-type sseTextContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-type sseThinkingContentBlock struct {
-	Type      string `json:"type"`
-	Thinking  string `json:"thinking"`
-	Signature string `json:"signature"`
-}
-
-type sseContentBlockStartToolUse struct {
-	Index        int                     `json:"index"`
-	Type         string                  `json:"type"`
-	ContentBlock sseToolUseContentBlock `json:"content_block"`
-}
-
-type sseContentBlockStartText struct {
-	Index        int                 `json:"index"`
-	Type         string              `json:"type"`
-	ContentBlock sseTextContentBlock `json:"content_block"`
-}
-
-type sseContentBlockStartThinking struct {
-	Index        int                     `json:"index"`
-	Type         string                  `json:"type"`
-	ContentBlock sseThinkingContentBlock `json:"content_block"`
-}
-
-type sseContentBlockDeltaInputJSON struct {
-	Index int `json:"index"`
-	Type  string `json:"type"`
-	Delta struct {
-		Type        string `json:"type"`
-		PartialJSON string `json:"partial_json"`
-	} `json:"delta"`
-}
-
-type sseContentBlockDeltaText struct {
-	Index int `json:"index"`
-	Type  string `json:"type"`
-	Delta struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"delta"`
-}
-
-type sseContentBlockDeltaThinking struct {
-	Index int `json:"index"`
-	Type  string `json:"type"`
-	Delta struct {
-		Type     string `json:"type"`
-		Thinking string `json:"thinking"`
-	} `json:"delta"`
-}
-
-type sseContentBlockStop struct {
-	Index int    `json:"index"`
-	Type  string `json:"type"`
-}
-
-type sseMessageDelta struct {
-	Type  string `json:"type"`
-	Delta struct {
-		StopReason string `json:"stop_reason"`
-	} `json:"delta"`
-	Usage struct {
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
-}
 
 func canAppendJSONRawString(value string) bool {
 	for i := 0; i < len(value); {
@@ -113,88 +34,6 @@ func canAppendJSONRawString(value string) bool {
 		i += size
 	}
 	return true
-}
-
-func appendJSONString(builder *strings.Builder, value string) error {
-	if canAppendJSONRawString(value) {
-		builder.Grow(len(value) + 2)
-		builder.WriteByte('"')
-		builder.WriteString(value)
-		builder.WriteByte('"')
-		return nil
-	}
-	if !utf8.ValidString(value) {
-		quoted, err := json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		_, _ = builder.Write(quoted)
-		return nil
-	}
-
-	builder.Grow(len(value) + 2)
-	builder.WriteByte('"')
-	start := 0
-	for i := 0; i < len(value); {
-		b := value[i]
-		if b < utf8.RuneSelf {
-			if b >= 0x20 && b != '\\' && b != '"' && b != '<' && b != '>' && b != '&' {
-				i++
-				continue
-			}
-			if start < i {
-				builder.WriteString(value[start:i])
-			}
-			switch b {
-			case '\\', '"':
-				builder.WriteByte('\\')
-				builder.WriteByte(b)
-			case '\b':
-				builder.WriteByte('\\')
-				builder.WriteByte('b')
-			case '\f':
-				builder.WriteByte('\\')
-				builder.WriteByte('f')
-			case '\n':
-				builder.WriteByte('\\')
-				builder.WriteByte('n')
-			case '\r':
-				builder.WriteByte('\\')
-				builder.WriteByte('r')
-			case '\t':
-				builder.WriteByte('\\')
-				builder.WriteByte('t')
-			default:
-				builder.WriteString("\\u00")
-				builder.WriteByte(jsonHexDigits[b>>4])
-				builder.WriteByte(jsonHexDigits[b&0x0f])
-			}
-			i++
-			start = i
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(value[i:])
-		if r == '\u2028' || r == '\u2029' {
-			if start < i {
-				builder.WriteString(value[start:i])
-			}
-			if r == '\u2028' {
-				builder.WriteString("\\u2028")
-			} else {
-				builder.WriteString("\\u2029")
-			}
-			i += size
-			start = i
-			continue
-		}
-		r, size = utf8.DecodeRuneInString(value[i:])
-		i += size
-	}
-	if start < len(value) {
-		builder.WriteString(value[start:])
-	}
-	builder.WriteByte('"')
-	return nil
 }
 
 func appendJSONBytes(dst []byte, value string) ([]byte, error) {
@@ -509,8 +348,4 @@ func marshalSSEMessageDelta(stopReason string, outputTokens int) (string, error)
 
 func marshalSSEMessageStopBytes() ([]byte, error) {
 	return sseMessageStopBytes, nil
-}
-
-func marshalSSEMessageStop() (string, error) {
-	return string(sseMessageStopBytes), nil
 }
