@@ -63,9 +63,11 @@ const fallbackAgentModes = {
     "grok-4.1-fast",
     "grok-4.1-expert",
     "grok-4.1-thinking",
-    "grok-imagine-1.0",
-    "grok-imagine-1.0-edit",
-    "grok-imagine-1.0-video",
+    "grok-imagine-image-lite",
+    "grok-imagine-image",
+    "grok-imagine-image-pro",
+    "grok-imagine-image-edit",
+    "grok-imagine-video",
   ],
 };
 
@@ -782,7 +784,7 @@ function renderAccounts() {
     empty.className = "empty-state empty-state-panel";
     const icon = document.createElement("span");
     icon.className = "empty-state-mark";
-    icon.textContent = "📂";
+    icon.textContent = "EMPTY";
     const text = document.createElement("p");
     text.textContent = `暂无 ${currentPlatform ? currentPlatform : ''} 账号数据`;
     empty.appendChild(icon);
@@ -950,21 +952,21 @@ function renderAccounts() {
     edit.dataset.action = "edit";
     edit.dataset.id = encodeData(acc.id);
     edit.title = "编辑";
-    edit.textContent = "✏️";
+    edit.textContent = "Edit";
 
     const refresh = document.createElement("i");
     refresh.className = "action-icon";
     refresh.dataset.action = "refresh";
     refresh.dataset.id = encodeData(acc.id);
     refresh.title = "刷新";
-    refresh.textContent = "🔄";
+    refresh.textContent = "Sync";
 
     const del = document.createElement("i");
     del.className = "action-icon";
     del.dataset.action = "delete";
     del.dataset.id = encodeData(acc.id);
     del.title = "删除";
-    del.textContent = "🗑️";
+    del.textContent = "Del";
 
     actionWrap.appendChild(edit);
     actionWrap.appendChild(refresh);
@@ -1053,9 +1055,9 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
           <span>#${escapeHtml(acc.id === null || acc.id === undefined ? "" : String(acc.id))}</span>
         </label>
         <div class="account-mobile-actions">
-          <button type="button" class="action-icon" data-action="edit" data-id="${encodeData(acc.id)}" title="编辑">✏️</button>
-          <button type="button" class="action-icon" data-action="refresh" data-id="${encodeData(acc.id)}" title="刷新">🔄</button>
-          <button type="button" class="action-icon" data-action="delete" data-id="${encodeData(acc.id)}" title="删除">🗑️</button>
+          <button type="button" class="action-icon" data-action="edit" data-id="${encodeData(acc.id)}" title="编辑">Edit</button>
+          <button type="button" class="action-icon" data-action="refresh" data-id="${encodeData(acc.id)}" title="刷新">Sync</button>
+          <button type="button" class="action-icon" data-action="delete" data-id="${encodeData(acc.id)}" title="删除">Del</button>
         </div>
       </div>
       <div class="account-mobile-token">
@@ -1471,12 +1473,19 @@ function formatTokenDisplay(acc) {
 // Format time
 function formatTime(iso) {
   const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
   const now = new Date();
   const diff = (now - d) / 1000;
   if (diff < 60) return "刚刚";
   if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
   if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
-  return d.toLocaleDateString();
+  return d.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 // Export accounts

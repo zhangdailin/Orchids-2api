@@ -96,6 +96,118 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 	}
 }
 
+func (h *Handler) serveImagineWSImages(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, req ImagesGenerationsRequest, publicBase string, nsfw bool, pro bool) {
+	if req.Stream {
+		h.streamImagineWSImageGeneration(ctx, w, sess, req, publicBase, nsfw, pro)
+		return
+	}
+	events, errs := h.streamImagineWSImages(ctx, sess, req.Prompt, resolveAspectRatio(req.Size), req.N, nsfw, pro)
+	field := imageResponseField(req.ResponseFormat)
+	data := make([]map[string]interface{}, 0, req.N)
+	for ev := range events {
+		if !ev.Final {
+			continue
+		}
+		val, err := h.imagineImageOutputValue(ctx, sess.token, ev, req.ResponseFormat)
+		if err != nil {
+			slog.Warn("grok imagine ws convert failed", "url", ev.URL, "image_id", ev.ImageID, "error", err)
+			if field == "url" {
+				val = ev.URL
+			} else {
+				val = ""
+			}
+		}
+		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
+			val = publicBase + val
+		}
+		data = append(data, map[string]interface{}{
+			field:            val,
+			"revised_prompt": nil,
+		})
+	}
+	if err := <-errs; err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if len(data) == 0 {
+		http.Error(w, "no image generated", http.StatusBadGateway)
+		return
+	}
+	out := map[string]interface{}{
+		"created": time.Now().Unix(),
+		"data":    data,
+		"usage":   buildImageUsagePayload(req.Prompt, len(data)),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (h *Handler) streamImagineWSImageGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, req ImagesGenerationsRequest, publicBase string, nsfw bool, pro bool) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, _ := w.(http.Flusher)
+	field := imageResponseField(req.ResponseFormat)
+	events, errs := h.streamImagineWSImages(ctx, sess, req.Prompt, resolveAspectRatio(req.Size), req.N, nsfw, pro)
+	completed := 0
+	for ev := range events {
+		switch ev.Type {
+		case "progress":
+			data := map[string]interface{}{
+				"type":     "image_generation.partial_image",
+				field:      "",
+				"index":    ev.Order,
+				"image_id": ev.ImageID,
+				"progress": ev.Progress,
+			}
+			writeSSEBytes(w, "image_generation.partial_image", encodeJSONBytes(data))
+		case "image":
+			if !ev.Final {
+				continue
+			}
+			val, err := h.imagineImageOutputValue(ctx, sess.token, ev, req.ResponseFormat)
+			if err != nil {
+				slog.Warn("grok imagine ws stream convert failed", "url", ev.URL, "image_id", ev.ImageID, "error", err)
+				if field == "url" {
+					val = ev.URL
+				} else {
+					val = ""
+				}
+			}
+			if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
+				val = publicBase + val
+			}
+			data := map[string]interface{}{
+				"type":           "image_generation.completed",
+				field:            val,
+				"index":          completed,
+				"image_id":       ev.ImageID,
+				"revised_prompt": nil,
+				"usage":          buildImageUsagePayload(req.Prompt, req.N),
+			}
+			completed++
+			writeSSEBytes(w, "image_generation.completed", encodeJSONBytes(data))
+		case "moderated":
+			data := map[string]interface{}{
+				"type":     "image_generation.moderated",
+				"index":    ev.Order,
+				"image_id": ev.ImageID,
+			}
+			writeSSEBytes(w, "image_generation.moderated", encodeJSONBytes(data))
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	if err := <-errs; err != nil {
+		writeSSEError(w, err.Error(), "server_error", "imagine_ws_error")
+	}
+	writeSSEBytes(w, "", []byte("[DONE]"))
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
 func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -109,8 +221,8 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	req.Model = normalizeModelID(req.Model)
 	req.Normalize()
 	req.ResponseFormat = normalizeImageResponseFormat(req.ResponseFormat)
-	if req.Model != "grok-imagine-1.0" {
-		http.Error(w, "The model `grok-imagine-1.0` is required for image generation.", http.StatusBadRequest)
+	if !isImageGenerationModel(req.Model) {
+		http.Error(w, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-pro]", http.StatusBadRequest)
 		return
 	}
 	normalizedSize, sizeErr := normalizeImageSize(req.Size)
@@ -142,8 +254,8 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	}
 
 	spec, ok := ResolveModel(req.Model)
-	if !ok || !spec.IsImage || spec.ID == "grok-imagine-1.0-edit" {
-		http.Error(w, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-1.0]", req.Model), http.StatusBadRequest)
+	if !ok || !spec.IsImage || !isImageGenerationModel(spec.ID) {
+		http.Error(w, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-pro]", req.Model), http.StatusBadRequest)
 		return
 	}
 
@@ -161,6 +273,11 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 			v = h.cfg.PublicImagineNSFW()
 		}
 		nsfw = &v
+	}
+
+	if imageModelUsesImagineWS(req.Model) {
+		h.serveImagineWSImages(ctx, w, sess, req, publicBase, *nsfw, imageModelUsesProImagineWS(req.Model))
+		return
 	}
 
 	onePayload := h.client.chatPayload(spec, req.Prompt, true, req.N)

@@ -210,9 +210,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.ImageConfig != nil && req.Model != "grok-imagine-1.0" && req.Model != "grok-imagine-1.0-edit" {
+	if req.ImageConfig != nil && !isImageGenerationModel(req.Model) && !isImageEditModel(req.Model) {
 		originalModel := req.Model
-		req.Model = "grok-imagine-1.0"
+		req.Model = "grok-imagine-image"
 		slog.Info("Auto mapped image_config request to image model", "from", originalModel, "to", req.Model)
 	}
 	if err := h.ensureModelEnabled(r.Context(), req.Model); err != nil {
@@ -272,7 +272,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			imageCfg.Size = "1024x1024"
 		}
 
-		if spec.ID == "grok-imagine-1.0-edit" {
+		if isImageEditModel(spec.ID) {
 			if len(imageURLs) == 0 {
 				http.Error(w, "image_url is required for image edits", http.StatusBadRequest)
 				return
@@ -339,7 +339,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	defer sess.Close()
 
-	if strings.TrimSpace(spec.ConsoleModel) != "" && len(attachments) == 0 && len(req.Tools) == 0 {
+	if shouldServeConsoleChat(spec, attachments) {
 		h.serveConsoleChat(r.Context(), w, &req, spec, sess)
 		return
 	}

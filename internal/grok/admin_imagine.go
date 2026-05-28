@@ -273,10 +273,11 @@ func ensureImageNSFW(payload map[string]interface{}, nsfw *bool) {
 }
 
 func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio string, n int, nsfw *bool) ([]imagineImage, int, error) {
-	if err := h.ensureModelEnabled(ctx, "grok-imagine-1.0"); err != nil {
+	const imagineModel = "grok-imagine-image"
+	if err := h.ensureModelEnabled(ctx, imagineModel); err != nil {
 		return nil, 0, err
 	}
-	spec, ok := ResolveModel("grok-imagine-1.0")
+	spec, ok := ResolveModel(imagineModel)
 	if !ok || !spec.IsImage {
 		return nil, 0, fmt.Errorf("image model not supported")
 	}
@@ -288,7 +289,7 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio 
 	size := imagineImageSizeFromAspectRatio(aspectRatio)
 	urls, err := h.callLocalImagesGenerationsWithOptions(
 		ctx,
-		"grok-imagine-1.0",
+		imagineModel,
 		strings.TrimSpace(prompt),
 		n,
 		size,

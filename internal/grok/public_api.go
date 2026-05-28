@@ -284,7 +284,7 @@ func (h *Handler) HandlePublicVideoSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := map[string]interface{}{
-		"model":    "grok-imagine-1.0-video",
+		"model":    "grok-imagine-video",
 		"stream":   true,
 		"messages": messages,
 		"video_config": map[string]interface{}{

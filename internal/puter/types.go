@@ -8,7 +8,7 @@ import (
 
 type Request struct {
 	Interface string      `json:"interface"`
-	Driver    string      `json:"driver"`
+	Service   string      `json:"service"`
 	TestMode  bool        `json:"test_mode"`
 	Method    string      `json:"method"`
 	Args      RequestArgs `json:"args"`

@@ -33,6 +33,63 @@ func TestStreamMessageDelta(t *testing.T) {
 	}
 }
 
+func TestConsoleDeltaText_OnlyAcceptsDeltaEvents(t *testing.T) {
+	if got := consoleDeltaText("response.output_text.delta", map[string]interface{}{"delta": "hi"}); got != "hi" {
+		t.Fatalf("delta event=%q want hi", got)
+	}
+	if got := consoleDeltaText("response.output_text.delta", map[string]interface{}{"delta": " again\nnext"}); got != " again\nnext" {
+		t.Fatalf("delta whitespace=%q want leading space and newline preserved", got)
+	}
+	for _, event := range []string{"response.output_text.done", "response.completed", ""} {
+		if got := consoleDeltaText(event, map[string]interface{}{"text": "full answer"}); got != "" {
+			t.Fatalf("consoleDeltaText(%q)=%q want empty", event, got)
+		}
+	}
+}
+
+func TestConsoleInputFromMessages_UsesOutputTextForAssistantHistory(t *testing.T) {
+	items, instructions := consoleInputFromMessages([]ChatMessage{
+		{Role: "system", Content: "be concise"},
+		{Role: "user", Content: "你是什么模型"},
+		{Role: "assistant", Content: "我是 Grok。"},
+		{Role: "user", Content: "我可以让你做什么"},
+	})
+	if instructions != "be concise" {
+		t.Fatalf("instructions=%q want be concise", instructions)
+	}
+	if len(items) != 3 {
+		t.Fatalf("items len=%d want 3", len(items))
+	}
+	if got := items[0].Content[0].Type; got != "input_text" {
+		t.Fatalf("first user type=%q want input_text", got)
+	}
+	if got := items[1].Role; got != "assistant" {
+		t.Fatalf("assistant role=%q want assistant", got)
+	}
+	if got := items[1].Content[0].Type; got != "output_text" {
+		t.Fatalf("assistant type=%q want output_text", got)
+	}
+	if got := items[2].Content[0].Type; got != "input_text" {
+		t.Fatalf("second user type=%q want input_text", got)
+	}
+}
+
+func TestShouldServeConsoleChat_IgnoresOpenAIToolDefinitions(t *testing.T) {
+	spec := ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3"}
+	if !shouldServeConsoleChat(spec, nil) {
+		t.Fatal("expected console chat when there are no attachments")
+	}
+	if !shouldServeConsoleChat(spec, []AttachmentInput{}) {
+		t.Fatal("expected empty attachment slice to use console chat")
+	}
+	if shouldServeConsoleChat(spec, []AttachmentInput{{Type: "image", Data: "https://example.com/a.png"}}) {
+		t.Fatal("expected attachments to stay on attachment-capable path")
+	}
+	if shouldServeConsoleChat(ModelSpec{ID: "legacy"}, nil) {
+		t.Fatal("expected missing console model to stay off console path")
+	}
+}
+
 func TestCollectChat_EmitsOpenAIParityMetadata(t *testing.T) {
 	h := &Handler{}
 	rec := httptest.NewRecorder()

@@ -24,28 +24,36 @@
           <span class="label">总账号数</span>
           <span class="value" id="totalAccounts">0</span>
         </div>
-        <div class="stat-icon total">👥</div>
+        <div class="stat-icon total" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
       </div>
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">状态正常</span>
           <span class="value metric-positive" id="enabledAccounts">0</span>
         </div>
-        <div class="stat-icon normal">✅</div>
+        <div class="stat-icon normal" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+        </div>
       </div>
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">状态异常</span>
           <span class="value metric-negative" id="disabledAccounts">0</span>
         </div>
-        <div class="stat-icon abnormal">⚠️</div>
+        <div class="stat-icon abnormal" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+        </div>
       </div>
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">已选中</span>
           <span class="value metric-accent" id="selectedCount">0</span>
         </div>
-        <div class="stat-icon selected">📋</div>
+        <div class="stat-icon selected" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        </div>
       </div>
     </section>
 
@@ -55,15 +63,14 @@
 
         <div class="toolbar-actions toolbar-actions-spread">
           <div class="inline-actions">
-            <button class="btn btn-outline" onclick="exportAccounts()">📥 导出</button>
+            <button class="btn btn-outline" onclick="exportAccounts()">导出</button>
           </div>
           <div class="toolbar-divider"></div>
           <div class="inline-actions">
-            <button class="btn btn-outline" id="batchDeleteBtn" disabled onclick="batchDeleteAccounts()">🗑️
-              批量删除</button>
-            <button class="btn btn-danger-outline" onclick="clearAbnormalAccounts()">🧹 清空异常</button>
+            <button class="btn btn-outline" id="batchDeleteBtn" disabled onclick="batchDeleteAccounts()">批量删除</button>
+            <button class="btn btn-danger-outline" onclick="clearAbnormalAccounts()">清空异常</button>
           </div>
-          <button class="btn btn-primary" onclick="openModal()">+ 添加账号</button>
+          <button class="btn btn-primary" onclick="openModal()">添加账号</button>
         </div>
       </div>
 

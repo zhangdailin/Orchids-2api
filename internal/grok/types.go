@@ -431,7 +431,7 @@ func (r *ChatCompletionsRequest) Validate() error {
 
 func (r *ImagesGenerationsRequest) Normalize() {
 	if strings.TrimSpace(r.Model) == "" {
-		r.Model = "grok-imagine-1.0"
+		r.Model = "grok-imagine-image"
 	}
 	if r.N <= 0 {
 		r.N = 1

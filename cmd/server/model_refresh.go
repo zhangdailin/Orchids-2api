@@ -12,6 +12,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/modelpolicy"
+	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
@@ -142,32 +143,127 @@ func discoverModelsForChannel(ctx context.Context, cfg *config.Config, s *store.
 		}
 		return out, "bolt_bundle", nil
 	case "puter":
-		proxyFunc := http.ProxyFromEnvironment
-		if cfg != nil {
-			proxyFunc = util.ProxyFuncFromConfig(cfg)
-		}
-		items, err := fetchPuterPublicModelChoices(ctx, proxyFunc)
-		if err != nil {
-			return nil, "", err
-		}
-		out := make([]discoveredModel, 0, len(items))
-		for i, item := range items {
-			id := strings.TrimSpace(item.ID)
-			if id == "" {
-				continue
-			}
-			name := strings.TrimSpace(item.Name)
-			if name == "" {
-				name = id
-			}
-			out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
-		}
-		return out, "puter_public_models", nil
+		return discoverPuterModels(ctx, cfg, s)
 	case "grok":
 		return discoverGrokModels(ctx, cfg, s)
 	default:
 		return nil, "", fmt.Errorf("unsupported channel: %s", channel)
 	}
+}
+
+func discoverPuterModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
+	proxyFunc := http.ProxyFromEnvironment
+	if cfg != nil {
+		proxyFunc = util.ProxyFuncFromConfig(cfg)
+	}
+	items, err := fetchPuterPublicModelChoices(ctx, proxyFunc)
+	source := "puter_public_models"
+	if err != nil || len(items) == 0 {
+		source = "puter_static_catalog_fallback"
+		items = puterPublicChoicesFromDiscovered(puterSeedDiscoveredModels())
+	}
+
+	candidates := puterChoicesToDiscovered(items)
+	if len(candidates) == 0 {
+		return nil, "", fmt.Errorf("puter has no discoverable models")
+	}
+
+	accounts, accErr := enabledAccountsByType(ctx, s, "puter")
+	if accErr != nil || len(accounts) == 0 {
+		if accErr != nil {
+			return candidates, source + "_unverified", nil
+		}
+		return candidates, source + "_unverified", nil
+	}
+
+	verified := verifyPuterDiscoveredModels(ctx, cfg, accounts, candidates)
+	if len(verified) == 0 {
+		return nil, "", fmt.Errorf("no puter models verified by test_mode")
+	}
+	return verified, source + "_test_mode", nil
+}
+
+func puterChoicesToDiscovered(items []puterPublicModelChoice) []discoveredModel {
+	out := make([]discoveredModel, 0, len(items))
+	for i, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = id
+		}
+		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
+	}
+	return out
+}
+
+func puterPublicChoicesFromDiscovered(items []discoveredModel) []puterPublicModelChoice {
+	out := make([]puterPublicModelChoice, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = id
+		}
+		out = append(out, puterPublicModelChoice{ID: id, Name: name})
+	}
+	return out
+}
+
+func verifyPuterDiscoveredModels(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel) []discoveredModel {
+	if len(accounts) == 0 || len(candidates) == 0 {
+		return nil
+	}
+	verified := make([]discoveredModel, 0, len(candidates))
+	accountIndex := 0
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.ID) == "" {
+			continue
+		}
+		ok := false
+		for attempt := 0; attempt < len(accounts); attempt++ {
+			acc := accounts[(accountIndex+attempt)%len(accounts)]
+			client := puter.NewFromAccount(acc, refreshModelRequestConfig(cfg, "puter"))
+			err := client.VerifyModel(ctx, candidate.ID)
+			client.Close()
+			if err == nil {
+				ok = true
+				accountIndex = (accountIndex + attempt + 1) % len(accounts)
+				break
+			}
+		}
+		if ok {
+			candidate.SortOrder = len(verified)
+			verified = append(verified, candidate)
+		}
+	}
+	return verified
+}
+
+func puterSeedDiscoveredModels() []discoveredModel {
+	items := puter.SeedModels(0)
+	out := make([]discoveredModel, 0, len(items))
+	for i, item := range items {
+		id := strings.TrimSpace(item.ModelID)
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			name = id
+		}
+		out = append(out, discoveredModel{
+			ID:        id,
+			Name:      name,
+			SortOrder: i,
+		})
+	}
+	return out
 }
 
 func discoverGrokModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {

@@ -42,13 +42,17 @@ func consoleInputFromMessages(messages []ChatMessage) ([]consoleInputItem, strin
 			instructions.WriteString(text)
 			continue
 		}
+		contentType := "input_text"
+		if role == "assistant" {
+			contentType = "output_text"
+		}
 		if role != "assistant" {
 			role = "user"
 		}
 		items = append(items, consoleInputItem{
 			Role: role,
 			Content: []consoleContentBlock{{
-				Type: "input_text",
+				Type: contentType,
 				Text: text,
 			}},
 		})
@@ -129,6 +133,10 @@ func (h *Handler) doConsole(ctx context.Context, token string, payload map[strin
 		return nil, err
 	}
 	return h.client.doRequestWith429Retry(ctx, consoleResponsesURL, http.MethodPost, body, h.client.consoleHeaders(token), http.StatusOK, false, true)
+}
+
+func shouldServeConsoleChat(spec ModelSpec, attachments []AttachmentInput) bool {
+	return strings.TrimSpace(spec.ConsoleModel) != "" && len(attachments) == 0
 }
 
 type ConsoleProbeResult struct {
@@ -282,6 +290,7 @@ func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	defer resp.Body.Close()
+	h.syncGrokQuota(sess.acc, resp.Header)
 	if req.Stream {
 		h.streamConsoleChat(w, req, resp.Body)
 		return
@@ -383,13 +392,25 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 }
 
 func consoleDeltaText(event string, ev map[string]interface{}) string {
+	event = strings.ToLower(strings.TrimSpace(event))
+	if !strings.Contains(event, "delta") {
+		return ""
+	}
 	for _, key := range []string{"delta", "text"} {
-		if s := strings.TrimSpace(fmt.Sprint(ev[key])); s != "" && s != "<nil>" {
+		raw, ok := ev[key]
+		if !ok || raw == nil {
+			continue
+		}
+		s, ok := raw.(string)
+		if !ok {
+			s = fmt.Sprint(raw)
+		}
+		if s != "" && s != "<nil>" {
 			return s
 		}
 	}
 	if strings.Contains(event, "output_text") {
-		return strings.TrimSpace(consoleExtractText(ev))
+		return consoleExtractText(ev)
 	}
 	if bytes.Contains([]byte(event), []byte("completed")) {
 		return ""

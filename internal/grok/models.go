@@ -33,10 +33,11 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.3", Name: "Grok 4.3", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
 	{ID: "grok-4.3-latest", Name: "Grok 4.3 Latest", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
 	{ID: "grok-latest", Name: "Grok Latest", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
-	{ID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
-	{ID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
-	{ID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_FAST", IsImage: true},
-	{ID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsVideo: true},
+	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
+	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", IsImage: true},
+	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", IsImage: true},
+	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_FAST", IsImage: true},
+	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsVideo: true},
 }
 
 var modelByID = func() map[string]ModelSpec {
@@ -67,6 +68,16 @@ func normalizeModelID(modelID string) string {
 	// Common typo compatibility: gork-* -> grok-*
 	if strings.HasPrefix(m, "gork-") {
 		m = "grok-" + strings.TrimPrefix(m, "gork-")
+	}
+	switch m {
+	case "grok-imagine-1.0":
+		return "grok-imagine-image"
+	case "grok-imagine-1.0-fast":
+		return "grok-imagine-image-lite"
+	case "grok-imagine-1.0-edit":
+		return "grok-imagine-image-edit"
+	case "grok-imagine-1.0-video":
+		return "grok-imagine-video"
 	}
 	// Version alias compatibility: grok-4-2 -> grok-4.2, grok-4-1-thinking -> grok-4.1-thinking.
 	if strings.HasPrefix(m, "grok-") {

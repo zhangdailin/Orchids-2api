@@ -78,11 +78,34 @@ func resolveAuthToken(acc *store.Account) string {
 		return ""
 	}
 	for _, value := range []string{acc.ClientCookie, acc.Token, acc.SessionCookie} {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
+		if token := extractAuthToken(value); token != "" {
+			return token
 		}
 	}
 	return ""
+}
+
+func extractAuthToken(value string) string {
+	trimmed := strings.Trim(strings.TrimSpace(value), `"'`)
+	if trimmed == "" {
+		return ""
+	}
+	if !strings.Contains(trimmed, "=") {
+		return trimmed
+	}
+	for _, part := range strings.Split(trimmed, ";") {
+		key, val, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "auth_token", "puter_auth_token", "token", "auth":
+			if token := strings.Trim(strings.TrimSpace(val), `"'`); token != "" {
+				return token
+			}
+		}
+	}
+	return trimmed
 }
 
 func (c *Client) Close() {
@@ -95,11 +118,22 @@ func (c *Client) Close() {
 }
 
 func (c *Client) VerifyAuthToken(ctx context.Context) error {
+	return c.VerifyModel(ctx, defaultModelID)
+}
+
+func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
 	if c == nil {
 		return fmt.Errorf("puter client is nil")
 	}
+	if strings.TrimSpace(c.authToken) == "" {
+		return fmt.Errorf("missing puter auth token")
+	}
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		modelID = defaultModelID
+	}
 	req := upstream.UpstreamRequest{
-		Model: defaultModelID,
+		Model: modelID,
 		Messages: []prompt.Message{
 			{Role: "user", Content: prompt.MessageContent{Text: "ping"}},
 		},
@@ -200,7 +234,7 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) *Requ
 	}
 	return &Request{
 		Interface: defaultIface,
-		Driver:    driverForModel(modelID),
+		Service:   serviceForModel(modelID),
 		TestMode:  testMode,
 		Method:    defaultMethod,
 		Args: RequestArgs{
@@ -230,7 +264,7 @@ func (c *Client) applyHeaders(req *http.Request) {
 	req.Header.Set("sec-ch-ua-platform", `"macOS"`)
 }
 
-func driverForModel(modelID string) string {
+func serviceForModel(modelID string) string {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
 	switch {
 	case strings.HasPrefix(modelID, "claude-"):

@@ -296,11 +296,11 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 	}
 	model := strings.TrimSpace(r.FormValue("model"))
 	if model == "" {
-		model = "grok-imagine-1.0-edit"
+		model = "grok-imagine-image-edit"
 	}
 	model = normalizeModelID(model)
-	if model != "grok-imagine-1.0-edit" {
-		http.Error(w, "The model `grok-imagine-1.0-edit` is required for image edits.", http.StatusBadRequest)
+	if !isImageEditModel(model) {
+		http.Error(w, "The model `grok-imagine-image-edit` is required for image edits.", http.StatusBadRequest)
 		return
 	}
 	n := parseIntLoose(r.FormValue("n"), 1)
@@ -321,8 +321,8 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 	publicBase := detectPublicBaseURL(r)
 
 	spec, ok := ResolveModel(model)
-	if !ok || !spec.IsImage || spec.ID != "grok-imagine-1.0-edit" {
-		http.Error(w, "The model `grok-imagine-1.0-edit` is required for image edits.", http.StatusBadRequest)
+	if !ok || !spec.IsImage || !isImageEditModel(spec.ID) {
+		http.Error(w, "The model `grok-imagine-image-edit` is required for image edits.", http.StatusBadRequest)
 		return
 	}
 	if err := h.ensureModelEnabled(r.Context(), model); err != nil {

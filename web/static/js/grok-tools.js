@@ -75,8 +75,11 @@
     abortController: null,
     pendingFile: null,
     sidebarOpen: false,
-    model: "grok-420",
+    model: "grok-4.3",
     models: [
+      "grok-4.3",
+      "grok-4.3-latest",
+      "grok-latest",
       "grok-3",
       "grok-3-mini",
       "grok-3-thinking",
@@ -88,7 +91,6 @@
       "grok-4.1-fast",
       "grok-4.1-expert",
       "grok-4.1-thinking",
-      "grok-420",
     ],
   };
   const chatStorageKey = "grok_tools_chat_sessions_v1";
@@ -1339,7 +1341,7 @@
       return;
     }
     const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
-    const concurrent = Math.max(1, Math.min(3, Number(document.getElementById("imagineConcurrent")?.value || 1)));
+    const concurrent = 1;
     const nsfw = String(document.getElementById("imagineNSFW")?.value || "true") === "true";
     const mode = String(document.getElementById("imagineMode")?.value || "auto").toLowerCase();
     saveGrokToolsUIState({
@@ -2548,6 +2550,14 @@
     });
   }
 
+  function preferredConsoleModel(models) {
+    const list = Array.isArray(models) ? models : [];
+    for (const model of ["grok-4.3", "grok-4.3-latest", "grok-latest"]) {
+      if (list.includes(model)) return model;
+    }
+    return list[0] || "grok-4.3";
+  }
+
   async function loadChatModels() {
     try {
       const res = await fetch("/grok/v1/models");
@@ -2562,11 +2572,7 @@
       if (models.length === 0) return;
       chatState.models = models;
       if (!models.includes(chatState.model)) {
-        chatState.model = models.includes("grok-420")
-          ? "grok-420"
-          : models.includes("grok-4")
-            ? "grok-4"
-            : models[0];
+        chatState.model = preferredConsoleModel(models);
       }
     } catch (err) {
       // ignore model fetch failures and keep fallback list
@@ -2854,11 +2860,7 @@
     loadChatSessions();
     const uiState = loadGrokToolsUIState();
     if (!chatState.models.includes(chatState.model)) {
-      chatState.model = chatState.models.includes("grok-420")
-        ? "grok-420"
-        : chatState.models.includes("grok-4")
-          ? "grok-4"
-          : (chatState.models[0] || chatState.model);
+      chatState.model = preferredConsoleModel(chatState.models);
     }
     const tempRange = document.getElementById("grokTempRange");
     const tempValue = document.getElementById("grokTempValue");

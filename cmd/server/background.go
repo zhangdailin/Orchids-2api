@@ -21,6 +21,7 @@ import (
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/orchids"
+	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
@@ -461,8 +462,20 @@ func startModelSyncLoop(ctx context.Context, cfg *config.Config, s *store.Store)
 
 			models, err := fetchPuterPublicModelChoices(context.Background(), proxyFunc)
 			if err != nil {
-				slog.Warn("Puter 模型同步: 获取模型列表失败", "error", err)
-				return
+				slog.Warn("Puter 模型同步: 获取公开模型列表失败，使用内置列表回退", "error", err)
+				seedModels := puter.SeedModels(0)
+				models = make([]puterPublicModelChoice, 0, len(seedModels))
+				for _, model := range seedModels {
+					id := strings.TrimSpace(model.ModelID)
+					if id == "" {
+						continue
+					}
+					name := strings.TrimSpace(model.Name)
+					if name == "" {
+						name = id
+					}
+					models = append(models, puterPublicModelChoice{ID: id, Name: name})
+				}
 			}
 			if len(models) == 0 {
 				slog.Debug("Puter 模型同步: 无模型返回")

@@ -111,7 +111,7 @@ func (h *Handler) callLocalImagesGenerationsWithOptions(
 	}
 	model = normalizeModelID(model)
 	if strings.TrimSpace(model) == "" {
-		model = "grok-imagine-1.0"
+		model = "grok-imagine-image"
 	}
 	normalizedSize, err := normalizeImageSize(size)
 	if err != nil {

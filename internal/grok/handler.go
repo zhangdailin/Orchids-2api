@@ -446,11 +446,16 @@ func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 		if info == nil {
 			return
 		}
-		if !ApplyQuotaInfo(&accCopy, info) {
+		latest, err := h.lb.Store.GetAccount(ctx, accCopy.ID)
+		if err != nil || latest == nil {
+			slog.Warn("grok quota account reload failed", "account_id", accCopy.ID, "error", err)
 			return
 		}
-		if err := h.lb.Store.UpdateAccount(ctx, &accCopy); err != nil {
-			slog.Warn("grok quota update failed", "account_id", accCopy.ID, "error", err)
+		if !ApplyQuotaInfo(latest, info) {
+			return
+		}
+		if err := h.lb.Store.UpdateAccount(ctx, latest); err != nil {
+			slog.Warn("grok quota update failed", "account_id", latest.ID, "error", err)
 		}
 	}()
 }

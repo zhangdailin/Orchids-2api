@@ -3576,6 +3576,352 @@
         width: 100%;
       }
     }
+
+    body {
+      background: #faf9f5 !important;
+      color: #171717;
+    }
+
+    body .main-content.grok-tools-page {
+      background: transparent !important;
+    }
+
+    .grok-tools-page,
+    .grok-tools-page .grok-function-card,
+    .grok-tools-page .grok-panel,
+    .grok-tools-page .chat-shell,
+    .grok-tools-page .chat-sidebar,
+    .grok-tools-page .composer-shell,
+    .grok-tools-page .composer-input {
+      background-color: #fff;
+      color: #171717;
+    }
+
+    .grok-tools-page .function-divider,
+    .grok-tools-page .grok-panel,
+    .grok-tools-page .grok-function-card,
+    .grok-tools-page .composer-input,
+    .grok-tools-page .chat-sidebar {
+      border-color: #ece7dd;
+    }
+
+    /* Final light-theme pass: remove the old dark Grok surfaces and neon gradients. */
+    .grok-tools-page {
+      --grok-page-bg: #faf9f5;
+      --grok-surface: #ffffff;
+      --grok-surface-soft: #f7f6f2;
+      --grok-surface-muted: #f1f0eb;
+      --grok-border: #e9e4da;
+      --grok-border-strong: #d8d2c8;
+      --grok-text: #171717;
+      --grok-muted: #68645f;
+      --grok-faint: #8b8680;
+      --text-main: #171717;
+      --text-secondary: #68645f;
+      --text-muted: #8b8680;
+      --border-color: #e9e4da;
+      --border-highlight: #d8d2c8;
+      --bg-body: #faf9f5;
+      --bg-surface: #ffffff;
+      --bg-surface-hover: #f7f6f2;
+      --bg-elevated: #ffffff;
+      --primary: #171717;
+      --primary-hover: #303030;
+      background: var(--grok-page-bg) !important;
+      background-image: none !important;
+      color: var(--grok-text) !important;
+    }
+
+    .grok-tools-page *,
+    .grok-tools-page *::before,
+    .grok-tools-page *::after {
+      background-image: none !important;
+    }
+
+    .grok-tools-page .grok-function-card,
+    .grok-tools-page .grok-panel,
+    .grok-tools-page .chat-shell,
+    .grok-tools-page .chat-main-card,
+    .grok-tools-page .chat-sidebar,
+    .grok-tools-page .composer-shell,
+    .grok-tools-page .composer-input,
+    .grok-tools-page .settings-panel,
+    .grok-tools-page .model-dropdown,
+    .grok-tools-page .sidebar-list,
+    .grok-tools-page .voice-log,
+    .grok-tools-page .visualizer,
+    .grok-tools-page .audio-root,
+    .grok-tools-page .video-card,
+    .grok-tools-page .voice-card,
+    .grok-tools-page .imagine-card,
+    .grok-tools-page .settings-card,
+    .grok-tools-page .preview-stage,
+    .grok-tools-page .video-stage,
+    .grok-tools-page .cache-list,
+    .grok-tools-page table,
+    .grok-tools-page thead,
+    .grok-tools-page tbody,
+    .grok-tools-page tr,
+    .grok-tools-page th,
+    .grok-tools-page td {
+      background: var(--grok-surface) !important;
+      background-color: var(--grok-surface) !important;
+      color: var(--grok-text) !important;
+      border-color: var(--grok-border) !important;
+      box-shadow: none;
+    }
+
+    .grok-tools-page .chat-thread,
+    .grok-tools-page .chat-empty,
+    .grok-tools-page .empty-state,
+    .grok-tools-page .grok-kv,
+    .grok-tools-page .meta-card,
+    .grok-tools-page .status-card,
+    .grok-tools-page .function-settings-block,
+    .grok-tools-page .imagine-connection-block,
+    .grok-tools-page .toggle-row,
+    .grok-tools-page .mode-switch,
+    .grok-tools-page .waterfall-empty,
+    .grok-tools-page .waterfall-grid,
+    .grok-tools-page .waterfall-item,
+    .grok-tools-page .video-item,
+    .grok-tools-page .video-item-body,
+    .grok-tools-page .video-item-placeholder,
+    .grok-tools-page .video-item-bar,
+    .grok-tools-page .voice-status-card,
+    .grok-tools-page .cache-list th {
+      background: var(--grok-surface-soft) !important;
+      background-color: var(--grok-surface-soft) !important;
+      color: var(--grok-text) !important;
+      border-color: var(--grok-border) !important;
+    }
+
+    .grok-tools-page input,
+    .grok-tools-page textarea,
+    .grok-tools-page select,
+    .grok-tools-page .form-input,
+    .grok-tools-page .composer-textarea,
+    .grok-tools-page .session-rename-input,
+    .grok-tools-page select option,
+    .grok-tools-page select optgroup {
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+      color: var(--grok-text) !important;
+      border-color: var(--grok-border) !important;
+    }
+
+    .grok-tools-page .btn-primary,
+    .grok-tools-page .send-btn,
+    .grok-tools-page .platform-tabs .tab-item.active,
+    .grok-tools-page .mode-switch .active,
+    .grok-tools-page .mode-switch button.active,
+    .grok-tools-page .session-item.active {
+      background: #171717 !important;
+      background-color: #171717 !important;
+      color: #ffffff !important;
+      border-color: #171717 !important;
+    }
+
+    .grok-tools-page .btn-outline,
+    .grok-tools-page .btn-danger-outline,
+    .grok-tools-page .icon-btn,
+    .grok-tools-page .model-chip,
+    .grok-tools-page .session-item,
+    .grok-tools-page .platform-tabs,
+    .grok-tools-page .platform-tabs .tab-item,
+    .grok-tools-page .file-badge,
+    .grok-tools-page .image-status,
+    .grok-tools-page .selected-count,
+    .grok-tools-page .image-checkbox,
+    .grok-tools-page .video-item-actions .btn {
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+      color: var(--grok-text) !important;
+      border-color: var(--grok-border) !important;
+      box-shadow: none !important;
+    }
+
+    .grok-tools-page .btn-outline:hover,
+    .grok-tools-page .icon-btn:hover,
+    .grok-tools-page .model-chip:hover,
+    .grok-tools-page .session-item:hover,
+    .grok-tools-page .platform-tabs .tab-item:hover {
+      background: var(--grok-surface-muted) !important;
+      background-color: var(--grok-surface-muted) !important;
+      color: var(--grok-text) !important;
+    }
+
+    .grok-tools-page .chat-message,
+    .grok-tools-page .message-content,
+    .grok-tools-page .message-row.assistant .chat-message,
+    .grok-tools-page .message-row.user .chat-message {
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+      color: var(--grok-text) !important;
+      border-color: var(--grok-border) !important;
+    }
+
+    .grok-tools-page .message-row.user .chat-message {
+      background: #171717 !important;
+      background-color: #171717 !important;
+      color: #ffffff !important;
+      border-color: #171717 !important;
+    }
+
+    .grok-tools-page .video-stage video,
+    .grok-tools-page .video-item video {
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+    }
+
+    .grok-tools-page .visualizer .bar,
+    .grok-tools-page .range-input::-webkit-slider-thumb,
+    .grok-tools-page .range-input::-moz-range-thumb,
+    .grok-tools-page .toggle input:checked + .toggle-track,
+    .grok-tools-page .waterfall-item.selected .image-checkbox {
+      background: #171717 !important;
+      background-color: #171717 !important;
+      color: #ffffff !important;
+    }
+
+    .grok-tools-page .range-input::-webkit-slider-runnable-track,
+    .grok-tools-page .range-input::-moz-range-track,
+    .grok-tools-page .range-input::-moz-range-progress,
+    .grok-tools-page .toggle-track,
+    .grok-tools-page progress,
+    .grok-tools-page progress::-webkit-progress-bar {
+      background: var(--grok-surface-muted) !important;
+      background-color: var(--grok-surface-muted) !important;
+    }
+
+    .grok-tools-page progress::-webkit-progress-value,
+    .grok-tools-page progress::-moz-progress-bar {
+      background: #171717 !important;
+      background-color: #171717 !important;
+    }
+
+    .grok-tools-page .function-title,
+    .grok-tools-page .card-title,
+    .grok-tools-page .empty-title,
+    .grok-tools-page .meta-value,
+    .grok-tools-page .grok-kv strong,
+    .grok-tools-page .model-label,
+    .grok-tools-page .sidebar-title,
+    .grok-tools-page .session-title {
+      color: var(--grok-text) !important;
+    }
+
+    .grok-tools-page .function-subtitle,
+    .grok-tools-page .meta-label,
+    .grok-tools-page .status-text,
+    .grok-tools-page .range-value,
+    .grok-tools-page .voice-hint,
+    .grok-tools-page .imagine-meta,
+    .grok-tools-page .waterfall-meta,
+    .grok-tools-page .session-meta,
+    .grok-tools-page .table-empty-cell {
+      color: var(--grok-muted) !important;
+    }
+
+    .grok-tools-page #grokChatSidebar,
+    .grok-tools-page #grokSessionList,
+    .grok-tools-page #grokSessionList .session-item,
+    .grok-tools-page #grokSessionList .session-title,
+    .grok-tools-page #grokSessionList .session-meta,
+    .grok-tools-page #grokSessionList .session-delete {
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+      color: var(--grok-text) !important;
+      border-color: var(--grok-border) !important;
+    }
+
+    .grok-tools-page #grokSessionList .session-item.active {
+      background: #f1f0eb !important;
+      background-color: #f1f0eb !important;
+      color: #171717 !important;
+      border-color: #d8d2c8 !important;
+    }
+
+    .grok-tools-page #grokSessionList .session-item.active .session-meta,
+    .grok-tools-page #grokSessionList .session-item.active .session-delete {
+      color: #68645f !important;
+    }
+
+    .grok-tools-page .message-bubble,
+    .grok-tools-page .message-content,
+    .grok-tools-page .message-content.rendered {
+      color: var(--grok-text) !important;
+      border-color: var(--grok-border) !important;
+    }
+
+    .grok-tools-page .message-row.assistant .message-bubble,
+    .grok-tools-page .message-row.assistant .message-content {
+      background: transparent !important;
+      background-color: transparent !important;
+      color: var(--grok-text) !important;
+    }
+
+    .grok-tools-page .message-row.user .message-bubble {
+      background: #f1f0eb !important;
+      background-color: #f1f0eb !important;
+      color: #171717 !important;
+      border: 1px solid #d8d2c8 !important;
+    }
+
+    .grok-tools-page #grokImagineSection #imagineEmpty {
+      background: #f7f6f2 !important;
+      background-color: #f7f6f2 !important;
+      color: var(--grok-text) !important;
+      border: 1px dashed var(--grok-border) !important;
+      border-radius: 16px;
+      padding: 32px 16px;
+      text-align: center;
+    }
+
+    .grok-tools-page #grokImagineSection #imagineGrid.waterfall {
+      display: grid !important;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
+      gap: 16px !important;
+      width: 100% !important;
+      min-height: 0;
+      background: transparent !important;
+      background-color: transparent !important;
+    }
+
+    .grok-tools-page #grokImagineSection #imagineGrid .waterfall-item {
+      display: flex !important;
+      flex-direction: column !important;
+      overflow: hidden !important;
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+      border: 1px solid var(--grok-border) !important;
+      border-radius: 14px !important;
+      cursor: pointer;
+    }
+
+    .grok-tools-page #grokImagineSection #imagineGrid .waterfall-item img {
+      display: block !important;
+      width: 100% !important;
+      height: auto !important;
+      min-height: 120px;
+      object-fit: cover;
+      background: #f1f0eb !important;
+      background-color: #f1f0eb !important;
+      border: 0 !important;
+    }
+
+    .grok-tools-page #grokImagineSection #imagineGrid .waterfall-meta {
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+      color: var(--grok-muted) !important;
+      border-top: 1px solid var(--grok-border) !important;
+    }
+
+    @media (max-width: 640px) {
+      .grok-tools-page #grokImagineSection #imagineGrid.waterfall {
+        grid-template-columns: 1fr !important;
+      }
+    }
   </style>
 </head>
 
@@ -3664,7 +4010,7 @@
                       <line x1="8" y1="21" x2="16" y2="21"></line>
                       <line x1="12" y1="17" x2="12" y2="21"></line>
                     </svg>
-                    <span id="grokModelLabel" class="model-label">grok-4.1-fast</span>
+                    <span id="grokModelLabel" class="model-label">grok-4.3</span>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <polyline points="6 9 12 15 18 9"></polyline>
                     </svg>
@@ -3758,8 +4104,6 @@
                   <label class="field-label">并发数量</label>
                   <select id="imagineConcurrent" class="form-input">
                     <option value="1">1 个任务</option>
-                    <option value="2">2 个任务</option>
-                    <option value="3">3 个任务</option>
                   </select>
                 </div>
               </div>

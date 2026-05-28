@@ -23,10 +23,11 @@ var publicGrokModelIDs = []string{
 	"grok-3-mini",
 	"grok-4-thinking",
 	"grok-4.1-expert",
-	"grok-imagine-1.0",
-	"grok-imagine-1.0-fast",
-	"grok-imagine-1.0-edit",
-	"grok-imagine-1.0-video",
+	"grok-imagine-image-lite",
+	"grok-imagine-image",
+	"grok-imagine-image-pro",
+	"grok-imagine-image-edit",
+	"grok-imagine-video",
 }
 
 var stableGrokTextModelAllowlist = func() map[string]struct{} {

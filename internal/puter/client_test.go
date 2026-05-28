@@ -25,8 +25,11 @@ func TestSendRequestWithPayload_EmitsModelEvents(t *testing.T) {
 		if !strings.Contains(string(body), `"auth_token":"puter-token"`) {
 			t.Fatalf("request body missing auth token: %s", string(body))
 		}
-		if !strings.Contains(string(body), `"driver":"claude"`) {
-			t.Fatalf("request body missing claude driver: %s", string(body))
+		if !strings.Contains(string(body), `"service":"claude"`) {
+			t.Fatalf("request body missing claude service: %s", string(body))
+		}
+		if strings.Contains(string(body), `"driver"`) {
+			t.Fatalf("request body should use service instead of deprecated driver: %s", string(body))
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "{\"type\":\"text\",\"text\":\"hello from puter\"}\n")
@@ -51,6 +54,34 @@ func TestSendRequestWithPayload_EmitsModelEvents(t *testing.T) {
 	want := []string{"model.text-delta", "model.finish"}
 	if strings.Join(events, ",") != strings.Join(want, ",") {
 		t.Fatalf("events=%v want %v", events, want)
+	}
+}
+
+func TestVerifyModel_UsesTestModeAndRequestedModel(t *testing.T) {
+	prevURL := puterAPIURL
+	t.Cleanup(func() { puterAPIURL = prevURL })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		text := string(body)
+		if !strings.Contains(text, `"test_mode":true`) {
+			t.Fatalf("verify request missing test_mode=true: %s", text)
+		}
+		if !strings.Contains(text, `"model":"claude-sonnet-4-5"`) {
+			t.Fatalf("verify request missing requested model: %s", text)
+		}
+		if !strings.Contains(text, `"service":"claude"`) {
+			t.Fatalf("verify request missing service: %s", text)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "{\"type\":\"text\",\"text\":\"pong\"}\n")
+	}))
+	defer srv.Close()
+	puterAPIURL = srv.URL
+
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
+	if err := client.VerifyModel(context.Background(), "claude-sonnet-4-5"); err != nil {
+		t.Fatalf("VerifyModel() error = %v", err)
 	}
 }
 
@@ -372,7 +403,7 @@ func TestSendRequestWithPayload_GeneratesToolCallIDWhenUpstreamOmitsIt(t *testin
 	}
 }
 
-func TestDriverForModel(t *testing.T) {
+func TestServiceForModel(t *testing.T) {
 	tests := []struct {
 		model string
 		want  string
@@ -389,8 +420,27 @@ func TestDriverForModel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := driverForModel(tt.model); got != tt.want {
-			t.Fatalf("driverForModel(%q)=%q want %q", tt.model, got, tt.want)
+		if got := serviceForModel(tt.model); got != tt.want {
+			t.Fatalf("serviceForModel(%q)=%q want %q", tt.model, got, tt.want)
+		}
+	}
+}
+
+func TestExtractAuthToken_AcceptsCookieOrRawToken(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "raw", raw: "puter-token", want: "puter-token"},
+		{name: "quoted", raw: `"puter-token"`, want: "puter-token"},
+		{name: "cookie-auth-token", raw: "foo=bar; auth_token=puter-token; theme=dark", want: "puter-token"},
+		{name: "cookie-puter-auth-token", raw: "puter_auth_token=puter-token", want: "puter-token"},
+	}
+
+	for _, tt := range tests {
+		if got := extractAuthToken(tt.raw); got != tt.want {
+			t.Fatalf("%s: extractAuthToken()=%q want %q", tt.name, got, tt.want)
 		}
 	}
 }

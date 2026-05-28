@@ -253,6 +253,10 @@ func (s *Store) seedModels() error {
 		"grok-4.20-multi-agent-0309",
 		"grok-code-fast",
 		"grok-code-fast-1",
+		"grok-imagine-1.0",
+		"grok-imagine-1.0-fast",
+		"grok-imagine-1.0-edit",
+		"grok-imagine-1.0-video",
 		"grok-2",
 		"grok-2.1",
 		"grok-3.1",
@@ -328,10 +332,11 @@ func buildGrokSeedModels() []Model {
 		{ID: "91", Channel: "Grok", ModelID: "grok-3-mini", Name: "Grok 3 Mini", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 4},
 		{ID: "96", Channel: "Grok", ModelID: "grok-4-thinking", Name: "Grok 4 Thinking", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 5},
 		{ID: "101", Channel: "Grok", ModelID: "grok-4.1-expert", Name: "Grok 4.1 Expert", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 6},
-		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-1.0", Name: "Grok Imagine 1.0", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 7},
-		{ID: "109", Channel: "Grok", ModelID: "grok-imagine-1.0-fast", Name: "Grok Imagine 1.0 Fast", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 8},
-		{ID: "110", Channel: "Grok", ModelID: "grok-imagine-1.0-edit", Name: "Grok Imagine 1.0 Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 9},
-		{ID: "111", Channel: "Grok", ModelID: "grok-imagine-1.0-video", Name: "Grok Imagine 1.0 Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 10},
+		{ID: "108", Channel: "Grok", ModelID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 7},
+		{ID: "109", Channel: "Grok", ModelID: "grok-imagine-image", Name: "Grok Imagine Image", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 8},
+		{ID: "110", Channel: "Grok", ModelID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 9},
+		{ID: "111", Channel: "Grok", ModelID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 10},
+		{ID: "115", Channel: "Grok", ModelID: "grok-imagine-video", Name: "Grok Imagine Video", Status: ModelStatusAvailable, IsDefault: false, SortOrder: 11},
 	}
 }
 
