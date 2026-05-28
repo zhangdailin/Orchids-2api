@@ -10,15 +10,16 @@ const (
 	warpLegacyLoginURL = warpAPIBaseURL + "/client/login"
 	// Verified on 2026-03-14 with a real Warp refresh token:
 	// this key exchanges refresh_token -> id_token successfully.
-	warpFirebaseKey  = "AIzaSyBdy3O3S9hrdayLJxJ7mriBR4qgUaUygAs"
-	warpFirebaseURL  = "https://securetoken.googleapis.com/v1/token?key=" + warpFirebaseKey
-	clientVersion    = "v0.2026.05.06.15.42.stable_03"
-	userAgent        = "Warp/" + clientVersion
-	clientID         = "warp-app"
-	clientOSCategory = "Windows"
-	clientOSName     = "Windows"
-	clientOSVersion  = "10.0.26200"
-	identifier       = "cli-agent-auto"
+	warpFirebaseKey   = "AIzaSyBdy3O3S9hrdayLJxJ7mriBR4qgUaUygAs"
+	warpFirebaseURL   = "https://securetoken.googleapis.com/v1/token?key=" + warpFirebaseKey
+	warpTokenProxyURL = warpAPIBaseURL + "/proxy/token?key=" + warpFirebaseKey
+	clientVersion     = "v0.2026.05.06.15.42.stable_03"
+	userAgent         = "Warp/" + clientVersion
+	clientID          = "warp-app"
+	clientOSCategory  = "Windows"
+	clientOSName      = "Windows"
+	clientOSVersion   = "10.0.26200"
+	identifier        = "cli-agent-auto"
 )
 
 const defaultModel = "auto"

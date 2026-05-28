@@ -111,8 +111,6 @@ func mustNewCookieJar() http.CookieJar {
 	return jar
 }
 
-
-
 func normalizeRefreshToken(refreshToken string) string {
 	refreshToken = strings.TrimSpace(strings.Trim(refreshToken, "\"'"))
 	if refreshToken == "" {
@@ -355,29 +353,10 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpFirebaseURL, bytes.NewBufferString(form.Encode()))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := httpClient.Do(req)
+	body, err := fetchWarpAuthTokens(ctx, httpClient, form)
 	if err != nil {
 		return err
-	}
-	defer resp.Body.Close()
-
-	body, err := readLimitedBody(resp, 1<<20)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return &HTTPStatusError{
-			Operation:  "refresh token",
-			StatusCode: resp.StatusCode,
-			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
-		}
 	}
 
 	var parsed refreshResponse
@@ -427,6 +406,49 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 	s.mu.Unlock()
 
 	return nil
+}
+
+func fetchWarpAuthTokens(ctx context.Context, httpClient *http.Client, form url.Values) ([]byte, error) {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	body, err := postWarpTokenForm(ctx, httpClient, warpFirebaseURL, form)
+	if err == nil {
+		return body, nil
+	}
+	proxyBody, proxyErr := postWarpTokenForm(ctx, httpClient, warpTokenProxyURL, form)
+	if proxyErr == nil {
+		return proxyBody, nil
+	}
+	return nil, fmt.Errorf("refresh token via firebase failed: %w; proxy fallback failed: %w", err, proxyErr)
+}
+
+func postWarpTokenForm(ctx context.Context, httpClient *http.Client, endpoint string, form url.Values) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewBufferString(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := readLimitedBody(resp, 1<<20)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &HTTPStatusError{
+			Operation:  "refresh token",
+			StatusCode: resp.StatusCode,
+			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
+		}
+	}
+	return body, nil
 }
 
 func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) error {

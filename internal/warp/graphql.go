@@ -62,19 +62,6 @@ const getRequestLimitInfoQuery = `query GetRequestLimitInfo($requestContext: Req
           requestLimit
           requestsUsedSinceLastRefresh
           requestLimitRefreshDuration
-          isUnlimitedAutosuggestions
-          acceptedAutosuggestionsLimit
-          acceptedAutosuggestionsSinceLastRefresh
-          isUnlimitedVoice
-          voiceRequestLimit
-          voiceRequestsUsedSinceLastRefresh
-          voiceTokenLimit
-          voiceTokensUsedSinceLastRefresh
-          isUnlimitedCodebaseIndices
-          maxCodebaseIndices
-          maxFilesPerRepo
-          embeddingGenerationBatchSize
-          requestLimitPooling
         }
         bonusGrants {
           createdAt
