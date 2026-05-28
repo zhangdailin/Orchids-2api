@@ -128,6 +128,69 @@ func TestInjectConsoleWebSearchTool_DoesNotDuplicate(t *testing.T) {
 	}
 }
 
+func TestCollectConsoleChat_EmitsCitationsAndUsageDetails(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(`{
+		"id":"resp_1",
+		"output":[
+			{"type":"web_search_call","action":{"sources":[{"url":"https://example.com/a","title":"A"}]}},
+			{"type":"message","content":[{"type":"output_text","text":"answer","annotations":[{"type":"url_citation","url":"https://example.com/b","title":"B","start_index":0,"end_index":6}]}]}
+		],
+		"usage":{"input_tokens":10,"output_tokens":7,"total_tokens":17,"output_tokens_details":{"reasoning_tokens":2}}
+	}`)
+
+	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
+		t.Fatalf("json.Unmarshal() error: %v body=%q", err, rec.Body.String())
+	}
+	choices := obj["choices"].([]interface{})
+	message := choices[0].(map[string]interface{})["message"].(map[string]interface{})
+	if got := message["content"]; got != "answer" {
+		t.Fatalf("content=%#v want answer", got)
+	}
+	annotations := message["annotations"].([]interface{})
+	if len(annotations) != 2 {
+		t.Fatalf("annotations len=%d want 2: %#v", len(annotations), annotations)
+	}
+	usage := obj["usage"].(map[string]interface{})
+	if got := usage["prompt_tokens"]; got != float64(10) {
+		t.Fatalf("prompt_tokens=%#v want 10", got)
+	}
+	details := usage["completion_tokens_details"].(map[string]interface{})
+	if got := details["reasoning_tokens"]; got != float64(2) {
+		t.Fatalf("reasoning_tokens=%#v want 2", got)
+	}
+}
+
+func TestStreamConsoleChat_EmitsFinalAnnotationsAndUpstreamUsage(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(
+		"event: response.output_text.delta\n" +
+			`data: {"type":"response.output_text.delta","delta":"hello"}` + "\n\n" +
+			"event: response.output_text.annotation.added\n" +
+			`data: {"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url":"https://example.com/a","title":"A","start_index":0,"end_index":5}}` + "\n\n" +
+			"event: response.completed\n" +
+			`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}` + "\n\n",
+	)
+
+	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
+
+	raw := rec.Body.String()
+	if !strings.Contains(raw, `"content":"hello"`) {
+		t.Fatalf("expected streamed content, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"annotations"`) || !strings.Contains(raw, `https://example.com/a`) {
+		t.Fatalf("expected final annotations, raw=%q", raw)
+	}
+	if !strings.Contains(raw, `"prompt_tokens":3`) || !strings.Contains(raw, `"completion_tokens":4`) {
+		t.Fatalf("expected upstream usage, raw=%q", raw)
+	}
+}
+
 func TestCollectChat_EmitsOpenAIParityMetadata(t *testing.T) {
 	h := &Handler{}
 	rec := httptest.NewRecorder()

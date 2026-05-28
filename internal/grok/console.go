@@ -263,6 +263,130 @@ func consoleExtractText(v interface{}) string {
 	return ""
 }
 
+func consoleExtractMessageText(v interface{}) string {
+	switch x := v.(type) {
+	case map[string]interface{}:
+		if output, ok := x["output"].([]interface{}); ok {
+			for _, item := range output {
+				m, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				t := strings.ToLower(strings.TrimSpace(fmt.Sprint(m["type"])))
+				if t != "message" && t != "response.output_message" {
+					continue
+				}
+				if s := strings.TrimSpace(consoleExtractText(m["content"])); s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(consoleExtractText(v))
+}
+
+func consoleFlatAnnotations(v interface{}) []map[string]interface{} {
+	seen := map[string]struct{}{}
+	out := make([]map[string]interface{}, 0)
+	add := func(url, title string, start, end int) {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			return
+		}
+		key := url + "\x00" + title
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, map[string]interface{}{
+			"url":         url,
+			"title":       strings.TrimSpace(title),
+			"start_index": start,
+			"end_index":   end,
+		})
+	}
+	var walk func(interface{})
+	walk = func(raw interface{}) {
+		switch x := raw.(type) {
+		case map[string]interface{}:
+			t := strings.ToLower(strings.TrimSpace(fmt.Sprint(x["type"])))
+			if t == "url_citation" || (x["url"] != nil && (x["title"] != nil || x["start_index"] != nil || x["end_index"] != nil)) {
+				add(fmt.Sprint(x["url"]), fmt.Sprint(x["title"]), intFromAny(x["start_index"]), intFromAny(x["end_index"]))
+			}
+			if t == "web_search_call" {
+				if action, _ := x["action"].(map[string]interface{}); action != nil {
+					for _, src := range interfaceSlice(action["sources"]) {
+						if m, _ := src.(map[string]interface{}); m != nil {
+							add(fmt.Sprint(m["url"]), fmt.Sprint(m["title"]), 0, 0)
+						}
+					}
+					if strings.EqualFold(strings.TrimSpace(fmt.Sprint(action["type"])), "open_page") {
+						add(fmt.Sprint(action["url"]), "", 0, 0)
+					}
+				}
+			}
+			for _, key := range []string{"annotation", "annotations", "content", "output", "item"} {
+				if child, ok := x[key]; ok {
+					walk(child)
+				}
+			}
+		case []interface{}:
+			for _, item := range x {
+				walk(item)
+			}
+		}
+	}
+	walk(v)
+	return out
+}
+
+func consoleChatAnnotations(flat []map[string]interface{}) []interface{} {
+	if len(flat) == 0 {
+		return []interface{}{}
+	}
+	out := make([]interface{}, 0, len(flat))
+	for _, ann := range flat {
+		out = append(out, map[string]interface{}{
+			"type": "url_citation",
+			"url_citation": map[string]interface{}{
+				"url":         ann["url"],
+				"title":       ann["title"],
+				"start_index": ann["start_index"],
+				"end_index":   ann["end_index"],
+			},
+		})
+	}
+	return out
+}
+
+func appendUniqueConsoleAnnotations(dst []map[string]interface{}, src []map[string]interface{}) []map[string]interface{} {
+	if len(src) == 0 {
+		return dst
+	}
+	seen := make(map[string]struct{}, len(dst)+len(src))
+	for _, ann := range dst {
+		seen[fmt.Sprint(ann["url"])+"\x00"+fmt.Sprint(ann["title"])] = struct{}{}
+	}
+	for _, ann := range src {
+		key := fmt.Sprint(ann["url"]) + "\x00" + fmt.Sprint(ann["title"])
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		dst = append(dst, ann)
+	}
+	return dst
+}
+
+func interfaceSlice(v interface{}) []interface{} {
+	switch x := v.(type) {
+	case []interface{}:
+		return x
+	default:
+		return nil
+	}
+}
+
 func consoleUsage(v map[string]interface{}) map[string]interface{} {
 	raw, ok := v["usage"].(map[string]interface{})
 	if !ok {
@@ -280,11 +404,36 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 	if total == 0 {
 		total = prompt + completion
 	}
+	reasoning := 0
+	if details, _ := raw["output_tokens_details"].(map[string]interface{}); details != nil {
+		reasoning = intFromAny(details["reasoning_tokens"])
+	}
+	if reasoning == 0 {
+		reasoning = intFromAny(raw["reasoning_tokens"])
+	}
 	return map[string]interface{}{
 		"prompt_tokens":     prompt,
 		"completion_tokens": completion,
 		"total_tokens":      total,
+		"prompt_tokens_details": map[string]interface{}{
+			"cached_tokens": 0,
+			"text_tokens":   prompt,
+			"audio_tokens":  0,
+			"image_tokens":  0,
+		},
+		"completion_tokens_details": map[string]interface{}{
+			"text_tokens":      maxInt(completion-reasoning, 0),
+			"audio_tokens":     0,
+			"reasoning_tokens": reasoning,
+		},
 	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func intFromAny(v interface{}) int {
@@ -295,6 +444,9 @@ func intFromAny(v interface{}) int {
 		return n
 	case int64:
 		return int(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
 	default:
 		return 0
 	}
@@ -327,10 +479,8 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 		http.Error(w, "console response parse error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
-	text := strings.TrimSpace(consoleExtractText(raw["output"]))
-	if text == "" {
-		text = strings.TrimSpace(consoleExtractText(raw))
-	}
+	text := consoleExtractMessageText(raw)
+	annotations := consoleChatAnnotations(consoleFlatAnnotations(raw))
 	resp := map[string]interface{}{
 		"id":                 firstNonEmpty(fmt.Sprint(raw["id"]), "chatcmpl_"+randomHex(8)),
 		"object":             "chat.completion",
@@ -344,7 +494,7 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 				"role":        "assistant",
 				"content":     text,
 				"refusal":     nil,
-				"annotations": []interface{}{},
+				"annotations": annotations,
 			},
 			"finish_reason": "stop",
 		}},
@@ -359,6 +509,45 @@ func firstUsage(a, b map[string]interface{}) map[string]interface{} {
 		return a
 	}
 	return b
+}
+
+func consoleUsageFromStreamEvent(ev map[string]interface{}) map[string]interface{} {
+	if ev == nil {
+		return nil
+	}
+	if resp, _ := ev["response"].(map[string]interface{}); resp != nil {
+		if usage := consoleUsage(resp); len(usage) > 0 {
+			return usage
+		}
+	}
+	return consoleUsage(ev)
+}
+
+func appendConsoleFinalChunk(dst []byte, id string, created int64, model, fingerprint, finish string, annotations []interface{}, usage map[string]interface{}) []byte {
+	delta := map[string]interface{}{}
+	if len(annotations) > 0 {
+		delta["annotations"] = annotations
+	}
+	chunk := map[string]interface{}{
+		"id":                 id,
+		"object":             "chat.completion.chunk",
+		"created":            created,
+		"model":              model,
+		"service_tier":       nil,
+		"system_fingerprint": fingerprint,
+		"choices": []map[string]interface{}{{
+			"index":         0,
+			"delta":         delta,
+			"logprobs":      nil,
+			"finish_reason": finish,
+		}},
+		"usage": usage,
+	}
+	raw, err := json.Marshal(chunk)
+	if err != nil {
+		return appendChatCompletionChunkWithUsage(dst, id, created, model, fingerprint, "", "", finish, true, usage)
+	}
+	return append(dst, raw...)
 }
 
 func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) {
@@ -377,6 +566,8 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var event string
 	var final strings.Builder
+	var annotations []map[string]interface{}
+	var finalUsage map[string]interface{}
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "event:") {
@@ -394,6 +585,10 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			continue
 		}
+		annotations = appendUniqueConsoleAnnotations(annotations, consoleFlatAnnotations(ev))
+		if usage := consoleUsageFromStreamEvent(ev); len(usage) > 0 {
+			finalUsage = usage
+		}
 		content := consoleDeltaText(event, ev)
 		if content == "" {
 			continue
@@ -405,8 +600,8 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 			flusher.Flush()
 		}
 	}
-	usage := buildChatUsagePayload(req, final.String(), nil)
-	raw = appendChatCompletionChunkWithUsage(nil, id, time.Now().Unix(), req.Model, fingerprint, "", "", "stop", true, usage)
+	usage := firstUsage(finalUsage, buildChatUsagePayload(req, final.String(), nil))
+	raw = appendConsoleFinalChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "stop", consoleChatAnnotations(annotations), usage)
 	writeSSEBytes(w, "", raw)
 	writeSSEBytes(w, "", []byte("[DONE]"))
 	if flusher != nil {
