@@ -129,3 +129,54 @@ func TestStoreNew_SeedsGrokImagineModels(t *testing.T) {
 		t.Fatalf("model.Status=%q want %q", model.Status, ModelStatusAvailable)
 	}
 }
+
+func TestCleanupDeprecatedData_RemovesBoltAccountsAndModels(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	ctx := context.Background()
+	acc := &Account{
+		Name:        "legacy bolt",
+		AccountType: "bolt",
+		Enabled:     true,
+	}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	model := &Model{
+		ID:      "legacy-bolt-model",
+		Channel: "Bolt",
+		ModelID: "claude-opus-4-6",
+		Name:    "Legacy Bolt Model",
+		Status:  ModelStatusAvailable,
+	}
+	if err := s.CreateModel(ctx, model); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+
+	if err := s.cleanupDeprecatedData(); err != nil {
+		t.Fatalf("cleanupDeprecatedData() error = %v", err)
+	}
+
+	if _, err := s.GetAccount(ctx, acc.ID); err == nil {
+		t.Fatalf("expected bolt account to be removed")
+	}
+	if _, err := s.GetModel(ctx, model.ID); err == nil {
+		t.Fatalf("expected bolt model to be removed")
+	}
+}
