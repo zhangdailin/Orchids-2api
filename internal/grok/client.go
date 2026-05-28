@@ -177,6 +177,48 @@ func (c *Client) headers(token string) http.Header {
 	return h
 }
 
+func (c *Client) shouldSendAuthForAssetURL(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u == nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	if host == "" {
+		return false
+	}
+	if host == "grok.com" || strings.HasSuffix(host, ".grok.com") || host == "x.ai" || strings.HasSuffix(host, ".x.ai") {
+		return true
+	}
+	for _, base := range []string{c.baseURL(), defaultAssetsBaseURL} {
+		bu, err := url.Parse(strings.TrimSpace(base))
+		if err != nil || bu == nil {
+			continue
+		}
+		if strings.EqualFold(host, strings.TrimSpace(bu.Hostname())) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Client) assetDownloadHeaders(token, link string) http.Header {
+	var headers http.Header
+	if c.shouldSendAuthForAssetURL(link) {
+		headers = c.headers(token)
+		headers.Set("Content-Type", "")
+		headers.Set("Accept-Encoding", "identity")
+		headers.Set("Referer", "https://grok.com/")
+	} else {
+		headers = http.Header{
+			"Accept":          []string{"image/avif,image/webp,image/apng,image/svg+xml,image/*,video/*,*/*;q=0.8"},
+			"Accept-Language": []string{"zh-CN,zh;q=0.9,en;q=0.8"},
+			"User-Agent":      []string{c.userAgent()},
+			"Accept-Encoding": []string{"identity"},
+		}
+	}
+	return headers
+}
+
 func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCount int) map[string]interface{} {
 	cnt := imageCount
 	if cnt <= 0 {
@@ -542,11 +584,23 @@ func (c *Client) downloadAsset(ctx context.Context, token, rawURL string) ([]byt
 		link = defaultAssetsBaseURL + link
 	}
 
-	headers := c.headers(token)
-	headers.Set("Content-Type", "")
-	headers.Set("Accept-Encoding", "identity")
-	headers.Set("Referer", "https://grok.com/")
-	resp, err := c.doRequest(ctx, link, http.MethodGet, nil, headers, http.StatusOK, true)
+	var resp *http.Response
+	var err error
+	if c.shouldSendAuthForAssetURL(link) {
+		resp, err = c.doRequest(ctx, link, http.MethodGet, nil, c.assetDownloadHeaders(token, link), http.StatusOK, true)
+	} else {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, link, nil)
+		if reqErr != nil {
+			return nil, "", reqErr
+		}
+		req.Header = c.assetDownloadHeaders(token, link)
+		resp, err = c.clientForAsset(true).Do(req)
+		if err == nil && resp.StatusCode != http.StatusOK {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
+			return nil, "", fmt.Errorf("asset download status=%d body=%s", resp.StatusCode, string(raw))
+		}
+	}
 	if err != nil {
 		return nil, "", err
 	}

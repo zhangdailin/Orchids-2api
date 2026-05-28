@@ -108,3 +108,63 @@ func TestDoRequest_DoesNotFallbackForGenericTransportError(t *testing.T) {
 		t.Fatalf("primaryCalls=%d want 1", primaryCalls)
 	}
 }
+
+func TestAssetDownloadHeaders_DoesNotSendAuthToExternalURL(t *testing.T) {
+	t.Parallel()
+
+	c := New(nil)
+	headers := c.assetDownloadHeaders("secret-token", "https://example.com/image.png")
+
+	if got := headers.Get("Cookie"); got != "" {
+		t.Fatalf("external asset Cookie=%q want empty", got)
+	}
+	if got := headers.Get("Authorization"); got != "" {
+		t.Fatalf("external asset Authorization=%q want empty", got)
+	}
+	if got := headers.Get("Accept"); !strings.Contains(got, "image/") {
+		t.Fatalf("external asset Accept=%q want media accept header", got)
+	}
+}
+
+func TestAssetDownloadHeaders_SendsAuthToGrokAssetURL(t *testing.T) {
+	t.Parallel()
+
+	c := New(nil)
+	headers := c.assetDownloadHeaders("secret-token", "https://assets.grok.com/users/u/generated/a/image.png")
+
+	if got := headers.Get("Cookie"); !strings.Contains(got, "sso=secret-token") {
+		t.Fatalf("grok asset Cookie=%q want sso token", got)
+	}
+}
+
+func TestDownloadAsset_DoesNotSendGrokHeadersToExternalURL(t *testing.T) {
+	t.Parallel()
+
+	var gotCookie, gotAuth, gotRequestID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		gotAuth = r.Header.Get("Authorization")
+		gotRequestID = r.Header.Get("x-xai-request-id")
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{1, 2, 3, 4})
+	}))
+	defer srv.Close()
+
+	c := New(nil)
+	data, mime, err := c.downloadAsset(context.Background(), "secret-token", srv.URL+"/image.png")
+	if err != nil {
+		t.Fatalf("downloadAsset() error: %v", err)
+	}
+	if len(data) == 0 || mime != "image/png" {
+		t.Fatalf("downloadAsset() data=%d mime=%q", len(data), mime)
+	}
+	if gotCookie != "" {
+		t.Fatalf("Cookie=%q want empty", gotCookie)
+	}
+	if gotAuth != "" {
+		t.Fatalf("Authorization=%q want empty", gotAuth)
+	}
+	if gotRequestID != "" {
+		t.Fatalf("x-xai-request-id=%q want empty", gotRequestID)
+	}
+}
