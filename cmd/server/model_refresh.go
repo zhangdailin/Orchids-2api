@@ -357,7 +357,6 @@ func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredM
 		"grok-4.20",
 		"grok-4.20-0309-non-reasoning",
 		"grok-4.20-0309-reasoning",
-		"grok-420",
 		"grok-3-mini",
 		"grok-4-thinking",
 		"grok-4.1-expert",

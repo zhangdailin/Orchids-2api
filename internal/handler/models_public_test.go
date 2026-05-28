@@ -59,7 +59,7 @@ func TestHandleModelByID_ReturnsVisibleModel(t *testing.T) {
 		mini.Close()
 	}()
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-420", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-4.3", nil)
 	rec := httptest.NewRecorder()
 
 	h.HandleModelByID(rec, req)

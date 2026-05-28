@@ -24,8 +24,8 @@ func TestExtractGrokModelIDsFromText(t *testing.T) {
 	if !slices.Contains(ids, "grok-5") {
 		t.Fatalf("expected grok-5 in ids: %+v", ids)
 	}
-	if !slices.Contains(ids, "grok-420") {
-		t.Fatalf("expected grok-420 in ids: %+v", ids)
+	if slices.Contains(ids, "grok-420") {
+		t.Fatalf("grok-420 should be filtered out: %+v", ids)
 	}
 }
 

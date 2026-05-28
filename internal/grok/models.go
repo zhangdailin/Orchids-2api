@@ -29,7 +29,6 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.1-expert", Name: "Grok 4.1 Expert", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_EXPERT"},
 	{ID: "grok-4.1-thinking", Name: "Grok 4.1 Thinking", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
 	{ID: "grok-4-1-thinking-1129", Name: "Grok 4.1 Thinking 1129 (Legacy/System)", UpstreamModel: "grok-4-1-thinking-1129", ModelMode: "MODEL_MODE_GROK_4_1_THINKING"},
-	{ID: "grok-420", Name: "Grok 420", UpstreamModel: "grok-420", ModelMode: "MODEL_MODE_GROK_420"},
 	{ID: "grok-4.3", Name: "Grok 4.3", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
 	{ID: "grok-4.3-latest", Name: "Grok 4.3 Latest", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
 	{ID: "grok-latest", Name: "Grok Latest", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3"},
@@ -52,6 +51,7 @@ var deprecatedModelIDSet = map[string]struct{}{
 	"grok-4.2":       {},
 	"grok-4.20":      {},
 	"grok-4.20-beta": {},
+	"grok-420":       {},
 }
 
 func IsDeprecatedModelID(modelID string) bool {

@@ -52,16 +52,12 @@ func TestResolveModelOrDynamic_AcceptsUnknownGrokTextModel(t *testing.T) {
 	}
 }
 
-func TestResolveModel_Grok420Mapping(t *testing.T) {
-	spec, ok := ResolveModel("grok-420")
-	if !ok {
-		t.Fatalf("ResolveModel(grok-420) should succeed")
+func TestResolveModel_Grok420Rejected(t *testing.T) {
+	if _, ok := ResolveModel("grok-420"); ok {
+		t.Fatalf("ResolveModel(grok-420) should fail")
 	}
-	if spec.UpstreamModel != "grok-420" {
-		t.Fatalf("spec.UpstreamModel=%q want grok-420", spec.UpstreamModel)
-	}
-	if spec.ModelMode != "MODEL_MODE_GROK_420" {
-		t.Fatalf("spec.ModelMode=%q want MODEL_MODE_GROK_420", spec.ModelMode)
+	if _, ok := ResolveModelOrDynamic("grok-420"); ok {
+		t.Fatalf("ResolveModelOrDynamic(grok-420) should fail")
 	}
 }
 
