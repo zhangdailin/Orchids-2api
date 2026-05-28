@@ -1012,21 +1012,6 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *API) HandleWarpLocalUserImport(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	credential, err := warp.ReadLocalUserCredential()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	json.NewEncoder(w).Encode(credential)
-}
-
 func (a *API) HandleWarpUserFileImport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodPost {

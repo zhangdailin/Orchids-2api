@@ -251,8 +251,8 @@ function applyTokenLabels(type) {
     label.textContent = "Warp Auth";
     input.placeholder = "每行一个 id_token.refresh_token、登录回跳 URL 或 User JSON";
     hint.textContent = accountId
-      ? "编辑时仅保存第一行；可从本机 WARP 导入，或粘贴 warp://auth/... 回跳 URL / User JSON"
-      : "支持批量添加 Warp。推荐从本机 WARP 导入 id_token.refresh_token；也可粘贴 warp://auth/... 回跳 URL / User JSON";
+      ? "编辑时仅保存第一行；可粘贴 warp://auth/... 回跳 URL / User JSON / id_token.refresh_token"
+      : "支持批量添加 Warp。可粘贴 warp://auth/... 回跳 URL / User JSON / id_token.refresh_token";
     input.required = true;
   } else if (type === 'grok') {
     label.textContent = "SSO Token";
@@ -284,27 +284,6 @@ function applyTokenLabels(type) {
   }
 }
 
-async function importLocalWarpUser() {
-  const typeEl = document.getElementById("accountType");
-  const input = document.getElementById("clientCookie");
-  if (!input || String(typeEl?.value || "").toLowerCase() !== "warp") return;
-
-  try {
-    renderAccountImportStatus("正在读取本机 WARP 安全存储...", "info");
-    const res = await fetch("/api/warp/import-local-user", { method: "POST" });
-    if (!res.ok) throw new Error((await res.text()).trim() || "导入失败");
-    const data = await res.json();
-    const token = String(data.refresh_token || "").trim();
-    if (!token) throw new Error("未找到 id_token.refresh_token");
-    input.value = token;
-    renderAccountImportStatus("已从本机 WARP 导入 id_token.refresh_token", "info", data.source_path ? [`来源: ${data.source_path}`] : []);
-    showToast("已导入本机 WARP 凭据");
-  } catch (err) {
-    renderAccountImportStatus("导入本机 WARP 凭据失败", "error", [err.message || String(err)]);
-    showToast("导入失败: " + (err.message || String(err)), "error");
-  }
-}
-
 function selectWarpUserFile() {
   const input = document.getElementById("warpUserFileInput");
   if (!input) return;
@@ -318,7 +297,7 @@ async function importWarpUserFile(file) {
   if (String(typeEl?.value || "").toLowerCase() !== "warp") return;
 
   try {
-    renderAccountImportStatus("正在上传并解密 WARP User 文件...", "info", [file.name]);
+    renderAccountImportStatus("正在上传并解析 WARP User JSON / token...", "info", [file.name]);
     const form = new FormData();
     form.append("file", file, file.name || "dev.warp.Warp-User");
     const res = await fetch("/api/warp/import-user-file", {
@@ -327,12 +306,12 @@ async function importWarpUserFile(file) {
     });
     if (!res.ok) throw new Error((await res.text()).trim() || "上传导入失败");
     const account = await res.json();
-    renderAccountImportStatus("已解密并保存 Warp 账号", "info", [`账号 #${account.id || ""}`.trim()]);
+    renderAccountImportStatus("已解析并保存 Warp 账号", "info", [`账号 #${account.id || ""}`.trim()]);
     showToast("已保存上传的 WARP 账号");
     closeModal();
     loadAccounts();
   } catch (err) {
-    renderAccountImportStatus("上传 User 文件失败", "error", [err.message || String(err)]);
+    renderAccountImportStatus("上传 User JSON / token 失败", "error", [err.message || String(err)]);
     showToast("上传导入失败: " + (err.message || String(err)), "error");
   }
 }

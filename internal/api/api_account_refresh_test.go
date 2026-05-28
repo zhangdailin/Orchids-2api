@@ -734,6 +734,51 @@ func TestHandleWarpUserFileImport_CreatesWarpAccount(t *testing.T) {
 	}
 }
 
+func TestHandleWarpUserFileImport_CreatesWarpAccountFromPlaintextJSON(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+
+	restore := warp.SetLocalUserStorageTestHooks(nil, func([]byte) (string, error) {
+		t.Fatal("decrypt hook should not be called for plaintext User JSON")
+		return "", nil
+	})
+	defer restore()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "user.json")
+	if err != nil {
+		t.Fatalf("CreateFormFile() error = %v", err)
+	}
+	if _, err := part.Write([]byte(`{"id_token":{"id_token":"runtime-jwt","refresh_token":"warp-plaintext-token"},"refresh_token":""}`)); err != nil {
+		t.Fatalf("part.Write() error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/warp/import-user-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	a.HandleWarpUserFileImport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var resp store.Account
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	stored, err := s.GetAccount(context.Background(), resp.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if stored.RefreshToken != "warp-plaintext-token" || !stored.Enabled || stored.AccountType != "warp" {
+		t.Fatalf("stored account=%#v", stored)
+	}
+}
+
 func TestHandleAccounts_PostRejectsDuplicateBoltSessionToken(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()

@@ -76,7 +76,6 @@ func registerRoutes(
 	// Admin routes under /api/* only (no dual prefix)
 	mux.HandleFunc("/api/accounts", sessionAuth(apiHandler.HandleAccounts))
 	mux.HandleFunc("/api/accounts/", sessionAuth(apiHandler.HandleAccountByID))
-	mux.HandleFunc("/api/warp/import-local-user", sessionAuth(apiHandler.HandleWarpLocalUserImport))
 	mux.HandleFunc("/api/warp/import-user-file", sessionAuth(apiHandler.HandleWarpUserFileImport))
 	mux.HandleFunc("/api/keys", sessionAuth(apiHandler.HandleKeys))
 	mux.HandleFunc("/api/keys/", sessionAuth(apiHandler.HandleKeyByID))

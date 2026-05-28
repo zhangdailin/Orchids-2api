@@ -20,8 +20,7 @@
       <div class="form-group">
         <label class="form-label" id="tokenLabel">__session</label>
         <div class="account-token-actions" id="warpLocalImportActions" hidden>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="importLocalWarpUser()">从本机 WARP 导入</button>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="selectWarpUserFile()">上传 User 文件并保存</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="selectWarpUserFile()">上传 User JSON / token 并保存</button>
           <input type="file" id="warpUserFileInput" hidden />
         </div>
         <textarea class="form-input account-token-input" id="clientCookie" rows="8" wrap="off" spellcheck="false" required placeholder="每行一个 __session"></textarea>

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 const warpUserStorageFileName = "dev.warp.Warp-User"
@@ -63,10 +64,14 @@ func ReadLocalUserCredentialFromPath(path string) (*LocalUserCredential, error) 
 	return credential, nil
 }
 
-func ReadLocalUserCredentialFromBytes(encrypted []byte) (*LocalUserCredential, error) {
-	plaintext, err := decryptLocalUserStorageFunc(encrypted)
+func ReadLocalUserCredentialFromBytes(data []byte) (*LocalUserCredential, error) {
+	if token := extractPlaintextLocalUserRefreshToken(string(data)); token != "" {
+		return &LocalUserCredential{RefreshToken: token}, nil
+	}
+
+	plaintext, err := decryptLocalUserStorageFunc(data)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt warp local user: %w", err)
+		return nil, fmt.Errorf("decrypt warp local user: %w; encrypted WARP User files can only be decrypted on the same Windows user/machine that created them, so upload decrypted User JSON or a value containing id_token.refresh_token instead", err)
 	}
 	token := normalizeRefreshToken(plaintext)
 	if token == "" {
@@ -75,6 +80,43 @@ func ReadLocalUserCredentialFromBytes(encrypted []byte) (*LocalUserCredential, e
 	return &LocalUserCredential{
 		RefreshToken: token,
 	}, nil
+}
+
+func extractPlaintextLocalUserRefreshToken(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if token := extractRefreshTokenFromJSON(raw); token != "" {
+		return token
+	}
+	if token := extractRefreshTokenFromPairs(raw); token != "" {
+		return token
+	}
+	if strings.Contains(raw, "----") {
+		return extractRefreshTokenFromPairs(raw)
+	}
+	if isLikelyRawRefreshToken(raw) {
+		return raw
+	}
+	return ""
+}
+
+func isLikelyRawRefreshToken(raw string) bool {
+	if len(raw) < 40 || !utf8.ValidString(raw) {
+		return false
+	}
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func ReadLocalUserCredentialFromReader(r io.Reader, maxBytes int64) (*LocalUserCredential, error) {
