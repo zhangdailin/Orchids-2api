@@ -1567,8 +1567,8 @@ func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 	}
 	cfg.AspectRatio = mapped
 
-	if cfg.VideoLength != 6 && cfg.VideoLength != 10 && cfg.VideoLength != 15 {
-		return nil, fmt.Errorf("video_length must be 6, 10, or 15 seconds")
+	if cfg.VideoLength != 6 && cfg.VideoLength != 10 && cfg.VideoLength != 12 && cfg.VideoLength != 16 && cfg.VideoLength != 20 {
+		return nil, fmt.Errorf("video_length must be one of [6, 10, 12, 16, 20] seconds")
 	}
 	resolution := strings.TrimSpace(cfg.ResolutionName)
 	if resolution != "480p" && resolution != "720p" {
@@ -1658,6 +1658,65 @@ func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL, 
 			[]string{"posterUrl"},
 			[]string{"poster_url"},
 		), true
+}
+
+func extractVideoAssetIDs(resp map[string]interface{}) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(v interface{}) {
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s == "" || s == "<nil>" {
+			return
+		}
+		if _, exists := seen[s]; exists {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	var walk func(interface{})
+	walk = func(v interface{}) {
+		switch x := v.(type) {
+		case map[string]interface{}:
+			for k, item := range x {
+				lk := strings.ToLower(strings.TrimSpace(k))
+				switch lk {
+				case "assetid", "asset_id":
+					add(item)
+				case "fileattachments", "file_attachments":
+					if arr, ok := item.([]interface{}); ok {
+						for _, one := range arr {
+							add(one)
+						}
+						continue
+					}
+					add(item)
+				default:
+					walk(item)
+				}
+			}
+		case []interface{}:
+			for _, item := range x {
+				walk(item)
+			}
+		}
+	}
+	walk(resp)
+	return out
+}
+
+func videoURLFromAssetID(assetID string) string {
+	assetID = strings.TrimSpace(assetID)
+	if assetID == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(assetID), "http://") || strings.HasPrefix(strings.ToLower(assetID), "https://") {
+		return assetID
+	}
+	if strings.Contains(assetID, "/") {
+		return defaultAssetsBaseURL + "/" + strings.TrimLeft(assetID, "/")
+	}
+	return defaultAssetsBaseURL + "/" + assetID + "/content"
 }
 
 func interfaceToInt(v interface{}) int {

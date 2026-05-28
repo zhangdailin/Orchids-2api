@@ -424,6 +424,28 @@ func TestCollectChat_PrependsPublicBaseForCachedVideoURL(t *testing.T) {
 	}
 }
 
+func TestCollectChat_ResolvesVideoAssetIDFallback(t *testing.T) {
+	h := &Handler{client: New(nil)}
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(
+		`{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100,"assetId":"asset-video-1"}}}}`,
+	)
+
+	h.collectChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-imagine-video", ModelSpec{ID: "grok-imagine-video", IsVideo: true}, "", "", false, nil, nil, body, nil)
+
+	var obj map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
+		t.Fatalf("json.Unmarshal() error=%v body=%q", err, rec.Body.String())
+	}
+	choices, _ := obj["choices"].([]interface{})
+	choice, _ := choices[0].(map[string]interface{})
+	message, _ := choice["message"].(map[string]interface{})
+	content, _ := message["content"].(string)
+	if !strings.Contains(content, "https://assets.grok.com/asset-video-1/content") {
+		t.Fatalf("expected asset fallback video url, content=%q", content)
+	}
+}
+
 func TestCollapseDuplicatedLongChunk(t *testing.T) {
 	dup := "Hi! How can I help you today?Hi! How can I help you today?"
 	if got := collapseDuplicatedLongChunk(dup); got != "Hi! How can I help you today?" {
@@ -687,6 +709,20 @@ func TestStreamChat_PrependsPublicBaseForCachedVideoURL(t *testing.T) {
 	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
 	if !strings.Contains(combined, "https://example.com/grok/v1/files/video/") {
 		t.Fatalf("expected public base prefixed cached video url, combined=%q raw=%q", combined, rec.Body.String())
+	}
+}
+
+func TestStreamChat_ResolvesVideoFileAttachmentFallback(t *testing.T) {
+	h := &Handler{client: New(nil)}
+	rec := httptest.NewRecorder()
+	body := strings.NewReader(
+		`{"result":{"response":{"streamingVideoGenerationResponse":{"progress":100},"modelResponse":{"fileAttachments":["asset-video-2"]}}}}`,
+	)
+
+	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "make a video"}}}, "grok-imagine-video", ModelSpec{ID: "grok-imagine-video", IsVideo: true}, "", "", false, nil, nil, body, nil)
+	combined := strings.Join(extractStreamTextContents(t, rec.Body.String()), "")
+	if !strings.Contains(combined, "https://assets.grok.com/asset-video-2/content") {
+		t.Fatalf("expected asset fallback video url, combined=%q raw=%q", combined, rec.Body.String())
 	}
 }
 

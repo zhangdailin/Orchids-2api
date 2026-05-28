@@ -35,8 +35,8 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsImage: true},
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", IsImage: true},
 	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_AUTO", IsImage: true},
-	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_FAST", IsImage: true},
-	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "grok-3", ModelMode: "MODEL_MODE_FAST", IsVideo: true},
+	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_AUTO", IsImage: true},
+	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", IsVideo: true},
 }
 
 var modelByID = func() map[string]ModelSpec {

@@ -508,6 +508,7 @@ func (h *Handler) buildChatPayload(
 			"viewportHeight":   1080,
 		},
 		"responseMetadata": map[string]interface{}{
+			"experiments": []interface{}{},
 			"modelConfigOverride": map[string]interface{}{
 				"modelMap": map[string]interface{}{
 					"videoGenModelConfig": map[string]interface{}{
@@ -1389,6 +1390,14 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 				if progress > 0 && progress < 100 {
 					emitChunk("", fmt.Sprintf("正在生成视频中，当前进度%d%%\n", progress), "", false)
 				}
+				if progress >= 100 && strings.TrimSpace(videoURL) == "" {
+					for _, assetID := range extractVideoAssetIDs(resp) {
+						if resolved := videoURLFromAssetID(assetID); resolved != "" {
+							videoURL = resolved
+							break
+						}
+					}
+				}
 				if progress >= 100 && strings.TrimSpace(videoURL) != "" {
 					finalURL := strings.TrimSpace(videoURL)
 					if name, err := h.cacheMediaURL(context.Background(), token, finalURL, "video"); err == nil && name != "" {
@@ -1619,8 +1628,16 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 			forEachImageCandidateFromValue(resp, false, false, 0, addImageCandidate)
 		}
 		if spec.IsVideo {
-			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 && strings.TrimSpace(vurl) != "" {
+			if progress, vurl, _, ok := extractVideoProgress(resp); ok && progress >= 100 {
 				videoURL = strings.TrimSpace(vurl)
+				if videoURL == "" {
+					for _, assetID := range extractVideoAssetIDs(resp) {
+						if resolved := videoURLFromAssetID(assetID); resolved != "" {
+							videoURL = resolved
+							break
+						}
+					}
+				}
 			}
 		}
 		return nil
