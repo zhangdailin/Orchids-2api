@@ -11,7 +11,7 @@ let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
 
 function modelChannels() {
-  const defaultChannels = ["Orchids", "Warp", "Bolt", "Puter", "Grok"];
+  const defaultChannels = ["Orchids", "Warp", "Puter", "Grok"];
   const seen = new Set();
   const ordered = [];
 
@@ -159,7 +159,6 @@ function modelRefreshSourceLabel(source) {
     orchids_static_catalog_fallback: "Orchids 内置列表",
     warp_static_catalog: "Warp 内置列表",
     warp_static_catalog_fallback: "Warp 内置列表",
-    bolt_bundle: "Bolt 前端 bundle",
     puter_public_models: "Puter 公开模型 API",
     puter_public_models_test_mode: "Puter 公开 API + 账号验证",
     puter_public_models_unverified: "Puter 公开 API",

@@ -136,8 +136,6 @@ func normalizeAdminModelChannel(channel string) string {
 		return "Orchids"
 	case "warp":
 		return "Warp"
-	case "bolt":
-		return "Bolt"
 	case "puter":
 		return "Puter"
 	case "grok":
@@ -206,17 +204,6 @@ func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config,
 		return out, source, nil
 	case "warp":
 		return discoverWarpModelsConcurrent(ctx, cfg, s, concurrency)
-	case "bolt":
-		items := store.BuildBoltSeedModels(ctx)
-		out := make([]discoveredModel, 0, len(items))
-		for i, item := range items {
-			out = append(out, discoveredModel{
-				ID:        strings.TrimSpace(item.ModelID),
-				Name:      strings.TrimSpace(item.Name),
-				SortOrder: i,
-			})
-		}
-		return out, "bolt_bundle", nil
 	case "puter":
 		return discoverPuterModelsConcurrent(ctx, cfg, s, concurrency)
 	case "grok":
@@ -763,7 +750,7 @@ func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Confi
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 10 {
 			cfg.RequestTimeout = 10
 		}
-	case "warp", "bolt", "puter":
+	case "warp", "puter":
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
 			cfg.RequestTimeout = 15
 		}

@@ -38,9 +38,8 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 
 	base := &store.Account{
 		ID:            6,
-		AccountType:   "bolt",
+		AccountType:   "puter",
 		SessionCookie: "session-a",
-		ProjectID:     "sb1-demo",
 		UpdatedAt:     time.Unix(100, 0),
 	}
 
@@ -71,7 +70,7 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 	}
 }
 
-func TestGetOrCreateAccountClient_RebuildsWhenBoltCredentialsChange(t *testing.T) {
+func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{RequestTimeout: 30}
@@ -90,9 +89,8 @@ func TestGetOrCreateAccountClient_RebuildsWhenBoltCredentialsChange(t *testing.T
 
 	base := &store.Account{
 		ID:            6,
-		AccountType:   "bolt",
+		AccountType:   "puter",
 		SessionCookie: "session-a",
-		ProjectID:     "sb1-demo",
 	}
 
 	first := h.getOrCreateAccountClient(base)

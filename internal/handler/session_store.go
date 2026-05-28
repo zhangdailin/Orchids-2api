@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 
@@ -15,10 +14,6 @@ type SessionStore interface {
 	SetWorkdir(ctx context.Context, key, workdir string)
 	GetConvID(ctx context.Context, key string) (string, bool)
 	SetConvID(ctx context.Context, key, convID string)
-	GetBoltProjectID(ctx context.Context, key string) (string, bool)
-	SetBoltProjectID(ctx context.Context, key, projectID string)
-	GetBoltToolNames(ctx context.Context, key string) ([]string, bool)
-	SetBoltToolNames(ctx context.Context, key string, toolNames []string)
 	DeleteSession(ctx context.Context, key string)
 	// Touch refreshes the session TTL. For Redis this issues EXPIRE; for memory it updates lastAccess.
 	Touch(ctx context.Context, key string)
@@ -77,44 +72,6 @@ func (s *RedisSessionStore) SetConvID(ctx context.Context, key, convID string) {
 	pipe.Exec(ctx)
 }
 
-func (s *RedisSessionStore) GetBoltProjectID(ctx context.Context, key string) (string, bool) {
-	val, err := s.client.HGet(ctx, s.key(key), "bolt_project_id").Result()
-	if err != nil {
-		return "", false
-	}
-	return val, true
-}
-
-func (s *RedisSessionStore) SetBoltProjectID(ctx context.Context, key, projectID string) {
-	pipe := s.client.Pipeline()
-	pipe.HSet(ctx, s.key(key), "bolt_project_id", projectID)
-	pipe.Expire(ctx, s.key(key), s.ttl)
-	pipe.Exec(ctx)
-}
-
-func (s *RedisSessionStore) GetBoltToolNames(ctx context.Context, key string) ([]string, bool) {
-	val, err := s.client.HGet(ctx, s.key(key), "bolt_tool_names").Result()
-	if err != nil {
-		return nil, false
-	}
-	var names []string
-	if err := json.Unmarshal([]byte(val), &names); err != nil || len(names) == 0 {
-		return nil, false
-	}
-	return names, true
-}
-
-func (s *RedisSessionStore) SetBoltToolNames(ctx context.Context, key string, toolNames []string) {
-	raw, err := json.Marshal(toolNames)
-	if err != nil {
-		return
-	}
-	pipe := s.client.Pipeline()
-	pipe.HSet(ctx, s.key(key), "bolt_tool_names", string(raw))
-	pipe.Expire(ctx, s.key(key), s.ttl)
-	pipe.Exec(ctx)
-}
-
 func (s *RedisSessionStore) DeleteSession(ctx context.Context, key string) {
 	s.client.Del(ctx, s.key(key))
 }
@@ -132,8 +89,6 @@ func (s *RedisSessionStore) Cleanup(_ context.Context) {
 type memorySession struct {
 	workdir    string
 	convID     string
-	boltProjID string
-	boltTools  []string
 	lastAccess time.Time
 }
 
@@ -209,43 +164,6 @@ func (s *MemorySessionStore) SetConvID(_ context.Context, key, convID string) {
 	defer s.mu.Unlock()
 	sess := s.getOrCreate(key)
 	sess.convID = convID
-	sess.lastAccess = time.Now()
-}
-
-func (s *MemorySessionStore) GetBoltProjectID(_ context.Context, key string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	sess, ok := s.sessions[key]
-	if !ok || sess.boltProjID == "" {
-		return "", false
-	}
-	return sess.boltProjID, true
-}
-
-func (s *MemorySessionStore) SetBoltProjectID(_ context.Context, key, projectID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess := s.getOrCreate(key)
-	sess.boltProjID = projectID
-	sess.lastAccess = time.Now()
-}
-
-func (s *MemorySessionStore) GetBoltToolNames(_ context.Context, key string) ([]string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	sess, ok := s.sessions[key]
-	if !ok || len(sess.boltTools) == 0 {
-		return nil, false
-	}
-	out := append([]string(nil), sess.boltTools...)
-	return out, true
-}
-
-func (s *MemorySessionStore) SetBoltToolNames(_ context.Context, key string, toolNames []string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess := s.getOrCreate(key)
-	sess.boltTools = append([]string(nil), toolNames...)
 	sess.lastAccess = time.Now()
 }
 

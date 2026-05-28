@@ -19,7 +19,6 @@ import (
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/audit"
-	"orchids-api/internal/bolt"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
@@ -783,31 +782,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		isWarpRequest = true
 	}
-	isBoltRequest := strings.EqualFold(forcedChannel, "bolt")
-	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "bolt") {
-		isBoltRequest = true
-	}
 	isPuterRequest := strings.EqualFold(forcedChannel, "puter")
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
 		isPuterRequest = true
 	}
-	freshBoltTask := false
-	if isBoltRequest {
-		freshBoltTask = shouldForceFreshBoltTask(req)
-		if freshBoltTask {
-			req.Messages = resetBoltMessagesForFreshTask(req.Messages)
-			if verboseDiagnostics {
-				slog.Debug("bolt: reset stale history for fresh top-level request")
-			}
-		}
-	}
-	isPassthroughRequest := isWarpRequest || isBoltRequest || isPuterRequest
+	isPassthroughRequest := isWarpRequest || isPuterRequest
 	if isPassthroughRequest {
 		channel := "warp"
-		switch {
-		case isBoltRequest:
-			channel = "bolt"
-		case isPuterRequest:
+		if isPuterRequest {
 			channel = "puter"
 		}
 		// Passthrough channels do not trim history/tool results.
@@ -846,16 +828,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.releaseTrackedAccount(trackedAccountID)
 	}()
 
-	boltProjectID := ""
-	if isBoltRequest && currentAccount != nil {
-		var err error
-		boltProjectID, err = h.resolveBoltProjectID(r.Context(), currentAccount, apiClient, effectiveWorkdir, freshBoltTask)
-		if err != nil {
-			apperrors.New("api_error", "Failed to initialize bolt project: "+err.Error(), http.StatusBadGateway).WriteResponse(w)
-			return
-		}
-	}
-
 	suggestionMode := isSuggestionMode(req.Messages)
 	noThinking := suggestionMode || h.config.SuppressThinking
 	gateNoTools := false
@@ -870,11 +842,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if lastUserIsToolResultFollowup(req.Messages) {
 		if isPassthroughRequest {
 			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest, "puter", isPuterRequest)
+				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "puter", isPuterRequest)
 			}
 		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
 			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", isWarpRequest, "bolt", isBoltRequest)
+				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", isWarpRequest)
 			}
 		} else {
 			gateNoTools = true
@@ -886,24 +858,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	effectiveTools := req.Tools
-	if isBoltRequest {
-		if len(effectiveTools) == 0 {
-			if restored := h.restoreBoltTools(r.Context(), conversationKey); len(restored) > 0 {
-				effectiveTools = restored
-				if verboseDiagnostics {
-					logBoltToolsRestored(conversationKey, effectiveTools)
-				}
-			} else if inferred := inferBoltToolsFromMessages(req.Messages); len(inferred) > 0 {
-				effectiveTools = inferred
-				if verboseDiagnostics {
-					logBoltToolsInferred(effectiveTools)
-				}
-				h.persistBoltTools(r.Context(), conversationKey, effectiveTools)
-			}
-		} else {
-			h.persistBoltTools(r.Context(), conversationKey, effectiveTools)
-		}
-	}
 	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
 		effectiveTools = nil
 	}
@@ -919,14 +873,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if verboseDiagnostics {
 		slog.Debug("Starting prompt build...", "conversation_id", conversationKey)
 	}
-	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isBoltRequest && !isPuterRequest
+	isOrchidsProtocol := strings.EqualFold(targetChannel, "orchids") && !isWarpRequest && !isPuterRequest
 
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		mappedModel = req.Model
-	} else if isBoltRequest {
-		mappedModel = strings.TrimSpace(req.Model)
 	} else if isPuterRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
@@ -936,15 +888,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	var promptMeta orchids.PromptBuildMeta
 	if isOrchidsProtocol {
 		builtPrompt, promptHistory, promptMeta = orchids.BuildCodeFreeMaxPromptAndHistoryWithMeta(req.Messages, req.System, noThinking)
-	} else if isBoltRequest {
-		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
-		if builtPrompt == "" {
-			builtPrompt = "bolt request"
-		}
-		promptMeta = orchids.PromptBuildMeta{
-			Profile:    "bolt",
-			NoThinking: noThinking,
-		}
 	} else if isPuterRequest {
 		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
 		if builtPrompt == "" {
@@ -1034,16 +977,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("Warp token estimation fallback to generic breakdown", "error", err)
 			breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 		}
-	} else if isBoltRequest {
-		breakdown = boltEstimateToBreakdown(bolt.EstimateInputTokens(upstream.UpstreamRequest{
-			Model:    mappedModel,
-			Workdir:  effectiveWorkdir,
-			Messages: upstreamMessages,
-			System:   req.System,
-			Tools:    effectiveTools,
-			NoTools:  gateNoTools,
-		}))
-		breakdownProfile = "bolt"
 	} else if isPuterRequest {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, promptHistory, effectiveTools)
 	} else if isOrchidsProtocol {
@@ -1115,16 +1048,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh.setPreferPriorToolResultFallback(lastUserIsToolResultFollowup(upstreamMessages))
 	allowedToolNames := []string(nil)
 	if !isOrchidsProtocol {
-		allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, isBoltRequest)
+		allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
 		sh.setAllowedToolNames(allowedToolNames)
 	}
 	if len(req.Tools) > 0 {
 		sh.setClientTools(req.Tools)
 	} else if len(effectiveTools) > 0 {
 		sh.setClientTools(effectiveTools)
-	}
-	if verboseDiagnostics && isBoltRequest && !gateNoTools && len(allowedToolNames) == 0 {
-		slog.Debug("tool_gate: bolt request has no declared tools after session restore", "conversation_id", conversationKey)
 	}
 	sh.setDisallowToolCalls(gateNoTools)
 	sh.seedSideEffectDedupFromMessages(upstreamMessages)
@@ -1196,9 +1126,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if maxRetries < 0 {
 			maxRetries = 0
 		}
-		if isBoltRequest && maxRetries > 1 {
-			maxRetries = 1
-		}
 		retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
 		retriesRemaining := maxRetries
 
@@ -1219,11 +1146,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			TraceID:       traceID,
 			ChatSessionID: chatSessionID,
 			ProjectID:     "",
-			IsFirstPrompt: freshBoltTask,
+			IsFirstPrompt: false,
 			DirectSSE:     nil,
-		}
-		if isBoltRequest && currentAccount != nil {
-			upstreamReq.ProjectID = strings.TrimSpace(boltProjectID)
 		}
 		if orchidsOwnsFinalSSE {
 			upstreamReq.DirectSSE = sh
@@ -1444,17 +1368,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					currentAccount = nextAccount
 					if currentAccount != nil {
 						trackedAccountID = h.acquireTrackedAccount(currentAccount)
-						if isBoltRequest {
-							var initErr error
-							boltProjectID, initErr = h.resolveBoltProjectID(r.Context(), currentAccount, apiClient, effectiveWorkdir, freshBoltTask)
-							if initErr != nil {
-								slog.Error("Failed to initialize bolt project after account switch", "account_id", currentAccount.ID, "error", initErr)
-								sh.InjectUpstreamError("Failed to initialize bolt project: " + initErr.Error())
-								sh.finishResponse("end_turn")
-								return
-							}
-							upstreamReq.ProjectID = strings.TrimSpace(boltProjectID)
-						}
 						if verboseDiagnostics {
 							slog.Debug("Switched to account", "account", currentAccount.Name)
 						}

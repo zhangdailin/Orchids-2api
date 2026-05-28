@@ -779,34 +779,6 @@ func TestHandleWarpUserFileImport_CreatesWarpAccountFromPlaintextJSON(t *testing
 	}
 }
 
-func TestHandleAccounts_PostRejectsDuplicateBoltSessionToken(t *testing.T) {
-	a, s, cleanup := newTestAPI(t)
-	defer cleanup()
-
-	existing := &store.Account{
-		AccountType:   "bolt",
-		SessionCookie: "bolt-session-1",
-		ProjectID:     "sb1-demo",
-		Enabled:       true,
-	}
-	if err := s.CreateAccount(context.Background(), existing); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/api/accounts", strings.NewReader(`{"account_type":"bolt","session_cookie":"bolt-session-1","project_id":"sb1-another","enabled":true}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	a.HandleAccounts(rec, req)
-
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status=%d want 409 body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "duplicate bolt token") {
-		t.Fatalf("body=%q want duplicate bolt token", rec.Body.String())
-	}
-}
-
 func TestHandleAccountByID_PutRejectsDuplicateGrokToken(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()

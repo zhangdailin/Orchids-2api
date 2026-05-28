@@ -3,7 +3,6 @@ package handler
 import (
 	"strings"
 
-	"orchids-api/internal/bolt"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/warp"
@@ -63,16 +62,6 @@ func estimateWarpInputTokenBreakdown(promptText, model string, messages []prompt
 		ToolsTokens:         estimate.ToolSchemaTokens,
 		Total:               estimate.Total,
 	}, estimate.Profile, nil
-}
-
-func boltEstimateToBreakdown(estimate bolt.InputTokenEstimate) inputTokenBreakdown {
-	return inputTokenBreakdown{
-		BasePromptTokens:    estimate.BasePromptTokens,
-		SystemContextTokens: estimate.SystemContextTokens,
-		HistoryTokens:       estimate.HistoryTokens,
-		ToolsTokens:         estimate.ToolsTokens,
-		Total:               estimate.Total,
-	}
 }
 
 func extractTaggedContent(text string, tag string) string {

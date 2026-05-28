@@ -94,7 +94,7 @@ func newRedisStore(addr, password string, db int, prefix string) (*redisStore, e
 				acc_type = string.lower(tostring(acc.account_type))
 			end
 
-			if acc_type ~= "warp" and acc_type ~= "orchids" and acc_type ~= "grok" and acc_type ~= "bolt" then
+			if acc_type ~= "warp" and acc_type ~= "orchids" and acc_type ~= "grok" then
 				acc.usage_current = (acc.usage_current or 0) + usage
 			end
 			acc.usage_total = (acc.usage_total or 0) + usage
@@ -390,7 +390,7 @@ func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage 
 				acc_type = string.lower(tostring(acc.account_type))
 			end
 
-			if acc_type ~= "warp" and acc_type ~= "orchids" and acc_type ~= "grok" and acc_type ~= "bolt" then
+			if acc_type ~= "warp" and acc_type ~= "orchids" and acc_type ~= "grok" then
 				acc.usage_current = (acc.usage_current or 0) + usage
 			end
 			acc.usage_total = (acc.usage_total or 0) + usage

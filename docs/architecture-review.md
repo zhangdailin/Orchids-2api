@@ -4,9 +4,9 @@
 
 ## 1. 当前架构结论
 
-Orchids-2api 目前已经是五通道结构：
+Orchids-2api 目前是四通道结构：
 
-- `internal/handler` 统一处理 `orchids`、`warp`、`bolt`、`puter`
+- `internal/handler` 统一处理 `orchids`、`warp`、`puter`
 - `internal/grok` 单独处理 `grok`
 - [routes.go](/D:/Code/Orchids-2api/cmd/server/routes.go) 负责统一注册公开、管理、兼容别名和 public/admin 路由
 - Redis 不只保存账号和模型，也承载了会话、去重、审计和 cache 的运行时状态

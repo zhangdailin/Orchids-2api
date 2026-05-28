@@ -29,9 +29,6 @@ function getSidebarAccountToken(acc) {
   if (type === "orchids") {
     return acc.client_cookie || acc.session_cookie || acc.token || "";
   }
-  if (type === "bolt") {
-    return acc.session_cookie || acc.client_cookie || acc.token || "";
-  }
   if (type === "puter") {
     return acc.client_cookie || acc.token || acc.session_cookie || "";
   }
@@ -85,8 +82,6 @@ function isSidebarAccountAbnormal(acc) {
     if (!getSidebarAccountToken(acc)) return true;
   } else if (type === "grok") {
     if (!getSidebarAccountToken(acc)) return true;
-  } else if (type === "bolt") {
-    if (!getSidebarAccountToken(acc) || !acc.project_id) return true;
   } else if (type === "puter") {
     if (!getSidebarAccountToken(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {

@@ -1,6 +1,6 @@
 # 部署指南
 
-本文档以当前代码实现为准，适用于 `orchids`、`warp`、`bolt`、`puter`、`grok` 五类通道。
+本文档以当前代码实现为准，适用于 `orchids`、`warp`、`puter`、`grok` 四类通道。
 
 ## 1. 前置条件
 

@@ -7,7 +7,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
-func TestIncrementAccountStats_BoltKeepsRemoteQuotaCurrent(t *testing.T) {
+func TestIncrementAccountStats_PassthroughAccountKeepsRemoteQuotaCurrent(t *testing.T) {
 	t.Parallel()
 
 	mini := miniredis.RunT(t)
@@ -27,7 +27,7 @@ func TestIncrementAccountStats_BoltKeepsRemoteQuotaCurrent(t *testing.T) {
 
 	ctx := context.Background()
 	acc := &Account{
-		AccountType:  "bolt",
+		AccountType:  "warp",
 		Enabled:      true,
 		UsageCurrent: 11_000_000,
 		UsageLimit:   11_000_000,
@@ -75,7 +75,7 @@ func TestIncrementAccountStats_ZeroUsageStillCountsRequest(t *testing.T) {
 
 	ctx := context.Background()
 	acc := &Account{
-		AccountType:  "bolt",
+		AccountType:  "warp",
 		Enabled:      true,
 		UsageCurrent: 11_000_000,
 		UsageTotal:   123,

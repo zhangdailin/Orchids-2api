@@ -12,7 +12,6 @@
         <select class="form-input" id="accountType">
           <option value="orchids">Orchids</option>
           <option value="warp">Warp</option>
-          <option value="bolt">Bolt</option>
           <option value="puter">Puter</option>
           <option value="grok">Grok</option>
         </select>
@@ -25,11 +24,6 @@
         </div>
         <textarea class="form-input account-token-input" id="clientCookie" rows="8" wrap="off" spellcheck="false" required placeholder="每行一个 __session"></textarea>
         <small id="tokenHint" class="helper-text">Orchids 当前仅支持 __session。新增时每行一个；编辑时只使用第一行</small>
-      </div>
-      <div class="form-group" id="projectIdGroup" style="display:none;">
-        <label class="form-label" for="projectId">Project ID</label>
-        <input class="form-input" id="projectId" placeholder="sb1-..." />
-        <small id="projectIdHint" class="helper-text">Bolt 账号需要填写固定的 project_id。</small>
       </div>
       <div class="form-group">
         <label class="form-label">

@@ -20,7 +20,6 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/auth"
-	"orchids-api/internal/bolt"
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
@@ -60,18 +59,6 @@ var orchidsGetAccountChatToken = func(acc *store.Account, cfg *config.Config) (s
 }
 
 var orchidsFetchCredits = orchids.FetchCreditsWithProxy
-
-var boltFetchRootData = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*bolt.RootData, error) {
-	client := bolt.NewFromAccount(acc, cfg)
-	defer client.Close()
-	return client.FetchRootData(ctx)
-}
-
-var boltFetchRateLimits = func(ctx context.Context, acc *store.Account, cfg *config.Config, organizationID int64) (*bolt.RateLimits, error) {
-	client := bolt.NewFromAccount(acc, cfg)
-	defer client.Close()
-	return client.FetchRateLimits(ctx, organizationID)
-}
 
 var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
 	client := puter.NewFromAccount(acc, cfg)
@@ -300,8 +287,6 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 		token = strings.TrimSpace(warp.ResolveRefreshToken(acc))
 	case "grok":
 		token = grok.NormalizeSSOToken(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
-	case "bolt":
-		token = strings.TrimSpace(firstNonEmptyString(acc.SessionCookie, acc.ClientCookie, acc.Token))
 	case "puter":
 		token = puter.ResolveAuthToken(acc)
 	case "orchids":
@@ -568,35 +553,6 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			}
 			status := classifyAccountStatusFromError(verifyErr.Error())
 			return status, httpStatusFromAccountStatus(status), fmt.Errorf("Failed to verify grok account: %w", verifyErr)
-		}
-		return "", 0, nil
-	}
-
-	if strings.EqualFold(acc.AccountType, "bolt") {
-		if strings.TrimSpace(acc.SessionCookie) == "" && strings.TrimSpace(acc.ClientCookie) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify bolt account: missing session token")
-		}
-		if strings.TrimSpace(acc.ProjectID) == "" {
-			return "", http.StatusBadRequest, fmt.Errorf("Failed to verify bolt account: missing project id")
-		}
-
-		rootData, err := boltFetchRootData(ctx, acc, a.config.Load())
-		if err != nil {
-			status := classifyAccountStatusFromError(err.Error())
-			httpStatus := http.StatusBadGateway
-			if status != "" {
-				httpStatus = httpStatusFromAccountStatus(status)
-			}
-			return status, httpStatus, fmt.Errorf("Failed to verify bolt account: %w", err)
-		}
-		bolt.ApplyRootData(acc, rootData)
-		if rootData != nil && rootData.User != nil {
-			rateLimits, rateErr := boltFetchRateLimits(ctx, acc, a.config.Load(), rootData.User.ActiveOrganizationID)
-			if rateErr != nil {
-				slog.Warn("Bolt quota sync fallback to root data", "account_id", acc.ID, "error", rateErr)
-			} else {
-				bolt.ApplyRateLimits(acc, rateLimits)
-			}
 		}
 		return "", 0, nil
 	}

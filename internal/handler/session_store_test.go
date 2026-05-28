@@ -53,44 +53,6 @@ func TestRedisSessionStoreConvID(t *testing.T) {
 	}
 }
 
-func TestRedisSessionStoreBoltProjectID(t *testing.T) {
-	store, _ := setupRedisSessionStore(t)
-	ctx := context.Background()
-
-	_, ok := store.GetBoltProjectID(ctx, "bolt:1")
-	if ok {
-		t.Fatal("expected miss")
-	}
-
-	store.SetBoltProjectID(ctx, "bolt:1", "sb1-demo")
-	projectID, ok := store.GetBoltProjectID(ctx, "bolt:1")
-	if !ok || projectID != "sb1-demo" {
-		t.Fatalf("expected sb1-demo, got %q (ok=%v)", projectID, ok)
-	}
-}
-
-func TestRedisSessionStoreBoltToolNames(t *testing.T) {
-	store, _ := setupRedisSessionStore(t)
-	ctx := context.Background()
-
-	_, ok := store.GetBoltToolNames(ctx, "bolt:1")
-	if ok {
-		t.Fatal("expected miss")
-	}
-
-	store.SetBoltToolNames(ctx, "bolt:1", []string{"Read", "Write", "Edit"})
-	toolNames, ok := store.GetBoltToolNames(ctx, "bolt:1")
-	if !ok {
-		t.Fatal("expected bolt tool names to be stored")
-	}
-	if got := len(toolNames); got != 3 {
-		t.Fatalf("expected 3 tool names, got %d (%#v)", got, toolNames)
-	}
-	if toolNames[0] != "Read" || toolNames[1] != "Write" || toolNames[2] != "Edit" {
-		t.Fatalf("unexpected tool names %#v", toolNames)
-	}
-}
-
 func TestRedisSessionStoreDelete(t *testing.T) {
 	store, _ := setupRedisSessionStore(t)
 	ctx := context.Background()
@@ -175,43 +137,5 @@ func TestMemorySessionStoreCleanup(t *testing.T) {
 	_, ok := store.GetWorkdir(ctx, "s1")
 	if ok {
 		t.Fatal("session should have been cleaned up")
-	}
-}
-
-func TestMemorySessionStoreBoltProjectID(t *testing.T) {
-	store := NewMemorySessionStore(30*time.Minute, 100)
-	ctx := context.Background()
-
-	_, ok := store.GetBoltProjectID(ctx, "bolt:1")
-	if ok {
-		t.Fatal("expected miss")
-	}
-
-	store.SetBoltProjectID(ctx, "bolt:1", "sb1-demo")
-	projectID, ok := store.GetBoltProjectID(ctx, "bolt:1")
-	if !ok || projectID != "sb1-demo" {
-		t.Fatalf("expected sb1-demo, got %q (ok=%v)", projectID, ok)
-	}
-}
-
-func TestMemorySessionStoreBoltToolNames(t *testing.T) {
-	store := NewMemorySessionStore(30*time.Minute, 100)
-	ctx := context.Background()
-
-	_, ok := store.GetBoltToolNames(ctx, "bolt:1")
-	if ok {
-		t.Fatal("expected miss")
-	}
-
-	store.SetBoltToolNames(ctx, "bolt:1", []string{"Read", "Write", "Edit"})
-	toolNames, ok := store.GetBoltToolNames(ctx, "bolt:1")
-	if !ok {
-		t.Fatal("expected bolt tool names to be stored")
-	}
-	if got := len(toolNames); got != 3 {
-		t.Fatalf("expected 3 tool names, got %d (%#v)", got, toolNames)
-	}
-	if toolNames[0] != "Read" || toolNames[1] != "Write" || toolNames[2] != "Edit" {
-		t.Fatalf("unexpected tool names %#v", toolNames)
 	}
 }

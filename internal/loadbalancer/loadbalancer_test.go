@@ -133,13 +133,13 @@ func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfu
 	lb := &LoadBalancer{
 		connTracker: NewMemoryConnTracker(),
 		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "Bolt1", AccountType: "bolt", Enabled: true, StatusCode: "429", LastAttempt: now},
-			{ID: 2, Name: "Bolt2", AccountType: "bolt", Enabled: true, StatusCode: "429", LastAttempt: now},
+			{ID: 1, Name: "Puter1", AccountType: "puter", Enabled: true, StatusCode: "429", LastAttempt: now},
+			{ID: 2, Name: "Puter2", AccountType: "puter", Enabled: true, StatusCode: "429", LastAttempt: now},
 		},
 		cacheExpires: now.Add(time.Minute),
 	}
 
-	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "bolt", nil)
+	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "puter", nil)
 	if err == nil {
 		t.Fatal("expected rate-limited selector error, got nil")
 	}
@@ -166,29 +166,6 @@ func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 	}
 	if !acc.QuotaResetAt.IsZero() {
 		t.Fatalf("expected quota reset timestamp to be cleared, got %v", acc.QuotaResetAt)
-	}
-}
-
-func TestIsAccountAvailable_Bolt429UsesTwelveHourCooldown(t *testing.T) {
-	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
-	acc := &store.Account{
-		ID:           1,
-		AccountType:  "bolt",
-		StatusCode:   "429",
-		LastAttempt:  time.Now().Add(-6 * time.Hour),
-		QuotaResetAt: time.Now().Add(-time.Second),
-	}
-
-	if lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected bolt 429 account to remain unavailable before 12 hour cooldown expires")
-	}
-
-	acc.LastAttempt = time.Now().Add(-(retry429Bolt + time.Minute))
-	if !lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected bolt 429 account to re-enable after 12 hour cooldown expires")
-	}
-	if acc.StatusCode != "" {
-		t.Fatalf("expected status to be cleared after bolt 429 cooldown, got %q", acc.StatusCode)
 	}
 }
 
@@ -219,12 +196,12 @@ func TestMarkAccountStatus_Repeated429RefreshesCooldownStart(t *testing.T) {
 		Store:       &store.Store{},
 		connTracker: NewMemoryConnTracker(),
 		cachedAccounts: []*store.Account{
-			{ID: 1, Name: "Bolt1", AccountType: "bolt", Enabled: true},
+			{ID: 1, Name: "Puter1", AccountType: "puter", Enabled: true},
 		},
 	}
 	acc := &store.Account{
 		ID:          1,
-		AccountType: "bolt",
+		AccountType: "puter",
 		StatusCode:  "429",
 		LastAttempt: time.Now().Add(-30 * time.Second),
 	}

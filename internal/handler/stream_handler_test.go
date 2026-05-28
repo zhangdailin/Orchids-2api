@@ -187,8 +187,8 @@ func TestInjectNoAvailableAccountError_RateLimitUsesHelpfulMessage(t *testing.T)
 	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
 
 	sh.InjectNoAvailableAccountError(
-		`bolt API error: status=429, body={"code":"rate-limited","message":"You have hit the rate limit."}`,
-		errors.New("no enabled accounts available for channel: bolt (all matching accounts are rate-limited or cooling down)"),
+		`upstream API error: status=429, body={"code":"rate-limited","message":"You have hit the rate limit."}`,
+		errors.New("no enabled accounts available for channel: puter (all matching accounts are rate-limited or cooling down)"),
 	)
 
 	builder := sh.textBlockBuilders[sh.activeTextBlockIndex]

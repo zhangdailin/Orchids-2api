@@ -489,7 +489,7 @@ func TestTaskToolCall_IsAcceptedWhenClientDeclaredAgent(t *testing.T) {
 	}
 }
 
-func TestBoltCustomMCPWebSearchToolCall_MapsToDeclaredWebSearch(t *testing.T) {
+func TestCustomMCPWebSearchToolCall_MapsToDeclaredWebSearch(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
@@ -532,7 +532,7 @@ func TestBoltCustomMCPWebSearchToolCall_MapsToDeclaredWebSearch(t *testing.T) {
 	}
 }
 
-func TestBoltCustomMCPFetchToolCall_MapsToDeclaredWebFetch(t *testing.T) {
+func TestCustomMCPFetchToolCall_MapsToDeclaredWebFetch(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
@@ -572,7 +572,7 @@ func TestBoltCustomMCPFetchToolCall_MapsToDeclaredWebFetch(t *testing.T) {
 	}
 }
 
-func TestBoltWebFetchToolCall_RewritesToDeclaredClientToolName(t *testing.T) {
+func TestWebFetchToolCall_RewritesToDeclaredClientToolName(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
@@ -1194,7 +1194,7 @@ func TestSeedSideEffectDedupFromMessages_DoesNotSuppressRepeatGitBashAcrossTurns
 					{
 						Type:      "tool_result",
 						ToolUseID: "tool_git_1",
-						Content:   "M internal/bolt/client.go\nM internal/bolt/client_test.go",
+						Content:   "M internal/handler/handler.go\nM internal/handler/handler_test.go",
 					},
 				},
 			},

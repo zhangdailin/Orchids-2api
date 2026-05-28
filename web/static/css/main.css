@@ -2192,12 +2192,6 @@ tr:hover td {
   border: 1px solid rgba(244, 114, 182, 0.3);
 }
 
-.badge-bolt {
-  background: rgba(16, 185, 129, 0.15);
-  color: #34d399;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-
 .badge-puter {
   background: rgba(59, 130, 246, 0.15);
   color: #60a5fa;
@@ -3363,7 +3357,6 @@ code {
 .badge-orchids,
 .badge-warp,
 .badge-grok,
-.badge-bolt,
 .badge-puter {
   background: #f7f7f7;
   color: #666;

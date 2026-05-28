@@ -96,18 +96,11 @@ function applyTokenLabels(type) {
   const label = document.getElementById("tokenLabel");
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
-  const projectGroup = document.getElementById("projectIdGroup");
-  const projectInput = document.getElementById("projectId");
   const warpImportActions = document.getElementById("warpLocalImportActions");
   const accountId = String(document.getElementById("accountId")?.value || "");
   if (!label || !input || !hint) return;
   if (warpImportActions) {
     warpImportActions.hidden = type !== "warp";
-  }
-  if (projectGroup && projectInput) {
-    const boltMode = type === "bolt";
-    projectGroup.style.display = boltMode ? "" : "none";
-    projectInput.required = boltMode;
   }
   if (type === 'warp') {
     label.textContent = "Warp Auth";
@@ -122,14 +115,7 @@ function applyTokenLabels(type) {
     hint.textContent = accountId
       ? "编辑时仅保存第一行 SSO Token"
       : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
-  } else if (type === 'bolt') {
-    label.textContent = "__session";
-    input.placeholder = "每行一个 Bolt __session";
-    hint.textContent = accountId
-      ? "Bolt 编辑时仅保存第一行 __session，并保留当前 project_id"
-      : "支持批量添加 Bolt。每行一个 __session，project_id 共用下方输入";
-    input.required = true;
-    } else if (type === 'puter') {
+  } else if (type === 'puter') {
       label.textContent = "Auth Token";
       input.placeholder = "每行一个 Puter auth_token";
       hint.textContent = accountId
@@ -336,13 +322,10 @@ function renderAccountImportStatus(message, type = "info", details = []) {
   node.innerHTML = `<strong>${safeMessage}</strong>${detailHTML}`;
 }
 
-function buildAccountPayload(type, baseData, credential, projectId) {
+function buildAccountPayload(type, baseData, credential) {
   const payload = { ...baseData };
   if (type === "warp") {
     payload.refresh_token = credential;
-  } else if (type === "bolt") {
-    payload.session_cookie = credential;
-    payload.project_id = projectId;
   } else {
     payload.client_cookie = credential;
   }
@@ -416,7 +399,7 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
 function renderPlatformTabs() {
   const container = document.getElementById("platformFilters");
   if (!container) return;
-  const defaultTypes = ["orchids", "warp", "bolt", "puter", "grok"];
+  const defaultTypes = ["orchids", "warp", "puter", "grok"];
   const types = new Set([...defaultTypes, ...accounts.map(normalizeAccountType)]);
   const sorted = Array.from(types).sort();
   const tabs = [...sorted];
@@ -482,10 +465,6 @@ function evaluateAccountStatus(acc) {
   } else if (type === 'grok') {
     if (!getAccountToken(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 SSO Token' };
-    }
-  } else if (type === 'bolt') {
-    if (!getAccountToken(acc) || !acc.project_id) {
-      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Bolt __session 或 project_id' };
     }
   } else if (type === 'puter') {
     if (!getAccountToken(acc)) {
@@ -1156,7 +1135,6 @@ function openModal(account = null) {
       document.getElementById("accountId").value = account.id;
       document.getElementById("accountType").value = normalizeAccountType(account);
       document.getElementById("clientCookie").value = getAccountToken(account);
-      document.getElementById("projectId").value = account.project_id || "";
       document.getElementById("enabled").checked = account.enabled;
     } else {
       title.textContent = "添加账号";
@@ -1165,7 +1143,6 @@ function openModal(account = null) {
       document.getElementById("accountType").value = "orchids";
       document.getElementById("enabled").checked = true;
       document.getElementById("clientCookie").value = "";
-      document.getElementById("projectId").value = "";
     }
   };
 
@@ -1187,7 +1164,6 @@ async function saveAccount(e) {
   const id = document.getElementById("accountId").value;
   const type = document.getElementById("accountType").value;
   const token = document.getElementById("clientCookie").value;
-  const projectId = String(document.getElementById("projectId")?.value || "").trim();
   const splitCredentials = splitBatchCredentialInput(token);
   const { unique: dedupedCredentials, duplicates: duplicateInputs } = dedupeCredentialInputs(type, splitCredentials);
   const { accepted: credentials, conflicts: existingConflicts } = filterExistingCredentialConflicts(type, dedupedCredentials, id);
@@ -1210,11 +1186,6 @@ async function saveAccount(e) {
     }
     return;
   }
-  if (type === "bolt" && !projectId) {
-    showToast("请填写 Bolt project_id", "error");
-    return;
-  }
-
   try {
     clearAccountImportStatus();
     if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
@@ -1228,7 +1199,7 @@ async function saveAccount(e) {
       );
     }
     if (id) {
-      const payload = buildAccountPayload(type, data, credentials[0], projectId);
+      const payload = buildAccountPayload(type, data, credentials[0]);
       const res = await fetch(`/api/accounts/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -1242,7 +1213,7 @@ async function saveAccount(e) {
     }
 
     if (credentials.length > 1) {
-      const payloads = credentials.map((item) => buildAccountPayload(type, data, item, projectId));
+      const payloads = credentials.map((item) => buildAccountPayload(type, data, item));
       renderAccountImportStatus(`正在批量添加账号 0/${payloads.length}`, "info");
       const { success, failed, failures } = await runAccountCreatePool(payloads, 6, (progress) => {
         renderAccountImportStatus(
@@ -1267,7 +1238,7 @@ async function saveAccount(e) {
       return;
     }
 
-    await createAccount(buildAccountPayload(type, data, credentials[0], projectId));
+    await createAccount(buildAccountPayload(type, data, credentials[0]));
     closeModal();
     loadAccounts();
     showToast("保存成功");
@@ -1352,10 +1323,6 @@ function formatTokenDisplay(acc) {
   if (type === 'warp' && getAccountToken(acc)) {
     const rt = getAccountToken(acc);
     return rt.length > 30 ? rt.substring(0, 10) + '...' + rt.substring(rt.length - 10) : rt;
-  }
-  if (type === 'bolt' && getAccountToken(acc)) {
-    const session = getAccountToken(acc);
-    return session.length > 24 ? session.substring(0, 8) + '...' + session.substring(session.length - 8) : session;
   }
   if (type === 'puter' && getAccountToken(acc)) {
     const token = getAccountToken(acc);

@@ -94,14 +94,14 @@ func TestSyncModelsForChannel_SkipsVerificationAndUsesDiscoveryList(t *testing.T
 	defer cleanup()
 
 	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Bolt")
+	clearModelsForChannel(t, ctx, s, "Warp")
 
-	result, err := syncModelsForChannel(ctx, &config.Config{}, s, "Bolt")
+	result, err := syncModelsForChannel(ctx, &config.Config{}, s, "Warp")
 	if err != nil {
 		t.Fatalf("syncModelsForChannel() error = %v", err)
 	}
 	if result.Discovered == 0 {
-		t.Fatal("expected discovered bolt models to be non-empty")
+		t.Fatal("expected discovered warp models to be non-empty")
 	}
 	if result.Verified != result.Discovered {
 		t.Fatalf("verified=%d want discovered=%d", result.Verified, result.Discovered)
@@ -116,9 +116,9 @@ func TestSyncModelsForChannelConcurrent_RecordsConcurrency(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Bolt")
+	clearModelsForChannel(t, ctx, s, "Warp")
 
-	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Bolt", 8)
+	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Warp", 8)
 	if err != nil {
 		t.Fatalf("syncModelsForChannelConcurrent() error = %v", err)
 	}
@@ -180,19 +180,6 @@ func TestDiscoverModelsForChannel_OrchidsUsesUpstreamAPI(t *testing.T) {
 	}
 	if items[0].ID != "claude-sonnet-4-6" || items[1].ID != "claude-opus-4-6" || items[2].ID != "gpt-5.4" {
 		t.Fatalf("items=%+v want claude-sonnet-4-6,claude-opus-4-6,gpt-5.4", items)
-	}
-}
-
-func TestDiscoverModelsForChannel_BoltReturnsSeedCatalog(t *testing.T) {
-	items, source, err := discoverModelsForChannel(context.Background(), nil, nil, "Bolt")
-	if err != nil {
-		t.Fatalf("discoverModelsForChannel() error = %v", err)
-	}
-	if source != "bolt_bundle" {
-		t.Fatalf("source=%q want %q", source, "bolt_bundle")
-	}
-	if len(items) == 0 {
-		t.Fatal("expected bolt seed catalog to contain models")
 	}
 }
 
@@ -326,7 +313,6 @@ func TestApplyModelRefresh_MarksModelsMissingFromDiscoveredListOffline(t *testin
 		{channel: "Puter", modelID: "puter-unavailable-model"},
 		{channel: "Orchids", modelID: "orchids-unavailable-model"},
 		{channel: "Warp", modelID: "warp-unavailable-model"},
-		{channel: "Bolt", modelID: "bolt-unavailable-model"},
 	}
 
 	for _, tc := range testCases {

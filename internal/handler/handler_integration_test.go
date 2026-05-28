@@ -164,7 +164,7 @@ func TestHandleMessages_CurrentWorkdir_LocalOpenAIStream(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/chat/completions", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/chat/completions", bytes.NewReader(body))
 	req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹 (2)`)
 	h.HandleMessages(rec, req)
 
@@ -284,196 +284,6 @@ func TestHandleMessages_Warp_StreamAndJSON(t *testing.T) {
 	got, _ := h.sessionStore.GetConvID(context.Background(), convKey)
 	if got != "conv1" {
 		t.Fatalf("expected stored upstream conversation id conv1, got %q", got)
-	}
-}
-
-func TestHandleMessages_Bolt_OpenAINonStreamJSON(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
-	h := NewWithLoadBalancer(cfg, nil)
-	h.client = &mockUpstream{events: []upstream.SSEMessage{
-		{Type: "model", Event: map[string]any{"type": "text-start"}},
-		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "hello from bolt"}},
-		{Type: "model.tool-call", Event: map[string]any{
-			"toolCallId": "call_1",
-			"toolName":   "Read",
-			"input":      `{"file_path":"/tmp/demo.txt"}`,
-		}},
-		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "tool_use"}},
-	}}
-
-	body, _ := json.Marshal(map[string]any{
-		"model":    "claude-opus-4-6",
-		"messages": []map[string]any{{"role": "user", "content": "hi"}},
-		"system":   []any{},
-		"tools": []map[string]any{{
-			"name":        "Read",
-			"description": "read a file",
-			"input_schema": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string"},
-				},
-			},
-		}},
-		"stream": false,
-	})
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/chat/completions", bytes.NewReader(body))
-	h.HandleMessages(rec, req)
-
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	ct := rec.Header().Get("Content-Type")
-	if !strings.Contains(ct, "application/json") {
-		t.Fatalf("expected json content-type, got %q", ct)
-	}
-
-	var got map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("unmarshal response: %v; body=%s", err, rec.Body.String())
-	}
-	if got["object"] != "chat.completion" {
-		t.Fatalf("expected chat.completion object, got %#v", got["object"])
-	}
-	choices, ok := got["choices"].([]any)
-	if !ok || len(choices) != 1 {
-		t.Fatalf("expected one choice, got %#v", got["choices"])
-	}
-	choice, ok := choices[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected choice object, got %#v", choices[0])
-	}
-	if choice["finish_reason"] != "tool_calls" {
-		t.Fatalf("expected tool_calls finish_reason, got %#v", choice["finish_reason"])
-	}
-	message, ok := choice["message"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected message object, got %#v", choice["message"])
-	}
-	if message["role"] != "assistant" {
-		t.Fatalf("expected assistant role, got %#v", message["role"])
-	}
-	if message["content"] != "hello from bolt" {
-		t.Fatalf("expected text content, got %#v", message["content"])
-	}
-	toolCalls, ok := message["tool_calls"].([]any)
-	if !ok || len(toolCalls) != 1 {
-		t.Fatalf("expected one tool call, got %#v", message["tool_calls"])
-	}
-	toolCall, ok := toolCalls[0].(map[string]any)
-	if !ok {
-		t.Fatalf("expected tool call object, got %#v", toolCalls[0])
-	}
-	if toolCall["type"] != "function" {
-		t.Fatalf("expected function tool type, got %#v", toolCall["type"])
-	}
-	function, ok := toolCall["function"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected function object, got %#v", toolCall["function"])
-	}
-	if function["name"] != "Read" {
-		t.Fatalf("expected Read tool name, got %#v", function["name"])
-	}
-	if function["arguments"] != `{"file_path":"/tmp/demo.txt"}` {
-		t.Fatalf("unexpected tool arguments: %#v", function["arguments"])
-	}
-	usage, ok := got["usage"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected usage object, got %#v", got["usage"])
-	}
-	if _, ok := usage["prompt_tokens"]; !ok {
-		t.Fatalf("expected prompt_tokens in usage, got %#v", usage)
-	}
-	if _, ok := usage["completion_tokens"]; !ok {
-		t.Fatalf("expected completion_tokens in usage, got %#v", usage)
-	}
-	if _, ok := usage["total_tokens"]; !ok {
-		t.Fatalf("expected total_tokens in usage, got %#v", usage)
-	}
-}
-
-func TestHandleMessages_BoltRestoresSessionToolsWhenFollowupOmitsTools(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
-	up := &mockUpstream{
-		eventBatches: [][]upstream.SSEMessage{
-			{
-				{Type: "model", Event: map[string]any{"type": "text-start"}},
-				{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "created"}},
-				{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
-			},
-			{
-				{Type: "model.tool-call", Event: map[string]any{
-					"toolCallId": "tool_read_1",
-					"toolName":   "Read",
-					"input":      `{"file_path":"calculator.py"}`,
-				}},
-				{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "tool_use"}},
-			},
-		},
-	}
-	h := NewWithLoadBalancer(cfg, nil)
-	h.client = up
-
-	firstBody, _ := json.Marshal(map[string]any{
-		"model":    "claude-opus-4-6",
-		"messages": []map[string]any{{"role": "user", "content": "帮我用python写一个计算器"}},
-		"system":   []any{},
-		"tools": []map[string]any{
-			{"name": "Read"},
-			{"name": "Write"},
-			{"name": "Edit"},
-		},
-		"metadata": map[string]any{"user_id": "bolt-user-1"},
-		"stream":   false,
-	})
-
-	firstRec := httptest.NewRecorder()
-	firstReq := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(firstBody))
-	firstReq.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹 (2)`)
-	h.HandleMessages(firstRec, firstReq)
-	if firstRec.Code != 200 {
-		t.Fatalf("expected first request 200, got %d: %s", firstRec.Code, firstRec.Body.String())
-	}
-
-	secondBody, _ := json.Marshal(map[string]any{
-		"model":    "claude-opus-4-6",
-		"messages": []map[string]any{{"role": "user", "content": "帮我添加科学计数法"}},
-		"system":   []any{},
-		"metadata": map[string]any{"user_id": "bolt-user-1"},
-		"stream":   false,
-	})
-
-	secondRec := httptest.NewRecorder()
-	secondReq := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(secondBody))
-	secondReq.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹 (2)`)
-	h.HandleMessages(secondRec, secondReq)
-	if secondRec.Code != 200 {
-		t.Fatalf("expected second request 200, got %d: %s", secondRec.Code, secondRec.Body.String())
-	}
-
-	if len(up.capturedReqs) != 2 {
-		t.Fatalf("capturedReqs len=%d want 2", len(up.capturedReqs))
-	}
-	restored := supportedToolNames(up.capturedReqs[1].Tools)
-	want := []string{"Read", "Write", "Edit"}
-	if len(restored) != len(want) {
-		t.Fatalf("restored tools len=%d want %d (%#v)", len(restored), len(want), restored)
-	}
-	for i := range want {
-		if restored[i] != want[i] {
-			t.Fatalf("restored tools[%d]=%q want %q (%#v)", i, restored[i], want[i], restored)
-		}
-	}
-	if up.capturedReqs[1].NoTools {
-		t.Fatal("expected restored bolt follow-up to keep tools enabled")
-	}
-	if !strings.Contains(secondRec.Body.String(), `"type":"tool_use"`) {
-		t.Fatalf("expected second response to include tool_use after restoring tools, got: %s", secondRec.Body.String())
-	}
-	if !strings.Contains(secondRec.Body.String(), `"name":"Read"`) {
-		t.Fatalf("expected restored tool call to pass through, got: %s", secondRec.Body.String())
 	}
 }
 
@@ -793,12 +603,12 @@ func TestHandleMessages_Puter_DirectSSE_StreamToolUseJSON(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_Puter_BoltStyleToolCall_StreamAndJSON(t *testing.T) {
+func TestHandleMessages_Puter_OpenAIToolCall_StreamAndJSON(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model.tool-call", Event: map[string]any{
-			"toolCallId": "tool_write_bolt_style_1",
+			"toolCallId": "tool_write_openai_style_1",
 			"toolName":   "Write",
 			"input":      `{"file_path":"note.txt","content":"alpha beta"}`,
 		}},
@@ -1023,7 +833,7 @@ func TestHandleMessages_TitleGeneration_LocalResponse(t *testing.T) {
 	body, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())

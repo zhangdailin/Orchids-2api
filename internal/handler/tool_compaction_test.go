@@ -275,7 +275,7 @@ func TestDeclaredToolNames_KeepCustomAndCanonicalAliases(t *testing.T) {
 	}
 }
 
-func TestPassthroughAllowedToolNames_BoltDropsUnsupportedMetaTools(t *testing.T) {
+func TestPassthroughAllowedToolNames_DropsUnsupportedMetaTools(t *testing.T) {
 	tools := []interface{}{
 		map[string]interface{}{"name": "Read"},
 		map[string]interface{}{"name": "run_command"},
@@ -297,14 +297,14 @@ func TestPassthroughAllowedToolNames_BoltDropsUnsupportedMetaTools(t *testing.T)
 	}
 }
 
-func TestPassthroughAllowedToolNames_BoltReturnsNilWhenRequestOmitsTools(t *testing.T) {
+func TestPassthroughAllowedToolNames_ReturnsNilWhenRequestOmitsTools(t *testing.T) {
 	got := passthroughAllowedToolNames(nil, true)
 	if got != nil {
 		t.Fatalf("passthroughAllowedToolNames(nil, true) = %#v want nil", got)
 	}
 }
 
-func TestValidationAllowedToolNames_BoltUsesOriginalDeclaredToolsWhenPresent(t *testing.T) {
+func TestValidationAllowedToolNames_UsesOriginalDeclaredToolsWhenPresent(t *testing.T) {
 	effective := []interface{}{
 		map[string]interface{}{"name": "Read"},
 		map[string]interface{}{"name": "Task"},
@@ -327,7 +327,7 @@ func TestValidationAllowedToolNames_BoltUsesOriginalDeclaredToolsWhenPresent(t *
 	}
 }
 
-func TestValidationAllowedToolNames_BoltTreatsExecAsBash(t *testing.T) {
+func TestValidationAllowedToolNames_TreatsExecAsBash(t *testing.T) {
 	effective := []interface{}{
 		map[string]interface{}{"name": "Read"},
 		map[string]interface{}{"name": "Bash"},

@@ -1,6 +1,6 @@
 # Orchids-2api 请求流程
 
-文件名沿用历史命名，但当前内容覆盖 `orchids`、`warp`、`bolt`、`puter`、`grok` 五类通道。
+文件名沿用历史命名，但当前内容覆盖 `orchids`、`warp`、`puter`、`grok` 四类通道。
 
 ## 1. 启动流程
 
@@ -33,14 +33,12 @@ main.go
 
 - `/orchids/v1/messages`
 - `/warp/v1/messages`
-- `/bolt/v1/messages`
 - `/puter/v1/messages`
 
 ### 2.2 OpenAI Chat Completions
 
 - `/orchids/v1/chat/completions`
 - `/warp/v1/chat/completions`
-- `/bolt/v1/chat/completions`
 - `/puter/v1/chat/completions`
 - `/grok/v1/chat/completions`
 - `/v1/chat/completions`，Grok 兼容别名
@@ -57,7 +55,7 @@ main.go
 - `/api/v1/admin/*`、`/v1/admin/*`
 - `/api/v1/public/*`、`/v1/public/*`
 
-## 3. `orchids` / `warp` / `bolt` / `puter` 处理流
+## 3. `orchids` / `warp` / `puter` 处理流
 
 这些通道统一走 [handler.go](/D:/Code/Orchids-2api/internal/handler/handler.go) 和 [stream_handler.go](/D:/Code/Orchids-2api/internal/handler/stream_handler.go)。
 
@@ -154,7 +152,6 @@ Admin Request
 
 - `orchids`：上游公开模型选择列表
 - `warp`：账号 GraphQL 发现，失败时回退种子模型
-- `bolt`：内置种子模型
 - `puter`：公开模型列表
 - `grok`：内置支持模型 + 现存模型 + 公共文档探测
 

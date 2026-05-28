@@ -4246,10 +4246,7 @@ func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
 
 func (h *streamHandler) InjectAuthError(category, errStr string) {
 	var errorMsg string
-	lower := strings.ToLower(errStr)
 	switch {
-	case strings.Contains(lower, "bolt api error") && strings.Contains(lower, "permission to send messages"):
-		errorMsg = "Bolt Project Permission Error (403): The selected Bolt account cannot send messages to this project. Update the Bolt account's project_id to a project owned by this account, or use the session cookie for the account that owns the current project."
 	case strings.Contains(errStr, "401"):
 		errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
 	case strings.Contains(errStr, "403"):
@@ -4272,14 +4269,11 @@ func (h *streamHandler) InjectUpstreamError(errStr string) {
 
 func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr error) {
 	errorMsg := "Request failed: retries exhausted and no available accounts. Please check account statuses in Admin UI or add valid accounts."
-	lowerLastErr := strings.ToLower(lastErr)
 	selectErrText := ""
 	if selectErr != nil {
 		selectErrText = strings.ToLower(selectErr.Error())
 	}
-	if strings.Contains(lowerLastErr, "bolt api error") && strings.Contains(lowerLastErr, "permission to send messages") {
-		errorMsg = "Bolt Project Permission Error (403): The selected Bolt account cannot send messages to this project. Update the Bolt account's project_id to a project owned by this account, or use the session cookie for the account that owns the current project."
-	} else if classifyUpstreamError(lastErr).Category == "rate_limit" || strings.Contains(selectErrText, "rate-limited") {
+	if classifyUpstreamError(lastErr).Category == "rate_limit" || strings.Contains(selectErrText, "rate-limited") {
 		errorMsg = "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account."
 	}
 	if selectErr != nil {

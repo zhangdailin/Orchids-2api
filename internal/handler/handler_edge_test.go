@@ -48,12 +48,6 @@ type blockingUpstreamEdge struct {
 	enterOnce sync.Once
 }
 
-type flakyPayloadUpstreamEdge struct {
-	mu    sync.Mutex
-	errs  []error
-	calls int
-}
-
 func (m *mockUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	// not used
 	return nil
@@ -118,34 +112,6 @@ func (m *blockingUpstreamEdge) SendRequestWithPayload(ctx context.Context, req u
 	for _, e := range m.events {
 		onMessage(e)
 	}
-	return nil
-}
-
-func (m *flakyPayloadUpstreamEdge) SendRequest(ctx context.Context, prompt string, chatHistory []interface{}, model string, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	return nil
-}
-
-func (m *flakyPayloadUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	m.mu.Lock()
-	idx := m.calls
-	m.calls++
-	var err error
-	if idx < len(m.errs) {
-		err = m.errs[idx]
-	}
-	m.mu.Unlock()
-
-	if err != nil {
-		return err
-	}
-	onMessage(upstream.SSEMessage{
-		Type:  "model.text-delta",
-		Event: map[string]interface{}{"delta": "ok"},
-	})
-	onMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "end_turn", "usage": map[string]interface{}{"inputTokens": 1, "outputTokens": 1}},
-	})
 	return nil
 }
 
@@ -240,140 +206,6 @@ func TestHandleMessages_OrchidsDirectErrorDoesNotRetryAfterFinalSSE(t *testing.T
 	}
 	if strings.Contains(out, "Retrying request") {
 		t.Fatalf("did not expect retry marker after direct final error, got: %s", out)
-	}
-}
-
-func TestHandleMessages_BoltSingleAccountNetworkErrorRetriesSameAccount(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	acc := &store.Account{
-		AccountType:   "bolt",
-		ProjectID:     "sb1-demo",
-		SessionCookie: "sess",
-		AgentMode:     "claude-sonnet-4-6",
-		Enabled:       true,
-		Weight:        1,
-	}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
-
-	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
-	h := NewWithLoadBalancer(cfg, lb)
-	flaky := &flakyPayloadUpstreamEdge{errs: []error{errors.New("failed to send bolt request: Post \"https://bolt.new/api/chat/v2\": EOF"), nil}}
-	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
-		return flaky
-	})
-
-	payload := map[string]any{
-		"model":    "claude-sonnet-4-6",
-		"messages": []map[string]any{{"role": "user", "content": "列出项目的目录结果"}},
-		"system": []any{
-			map[string]any{"type": "text", "text": "# Environment\nPrimary working directory: D:\\Code\\NVIDIA_NETWORK_HEALTH_CHECK_PLATFORM"},
-		},
-		"stream": false,
-		"tools": []any{
-			map[string]any{"name": "Glob"},
-		},
-	}
-	body, _ := json.Marshal(payload)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(body))
-	h.HandleMessages(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if flaky.calls != 2 {
-		t.Fatalf("expected same-account retry to make 2 upstream calls, got %d", flaky.calls)
-	}
-	if strings.Contains(rec.Body.String(), "no available accounts") {
-		t.Fatalf("did not expect no-available-account error after same-account retry, got: %s", rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "ok") {
-		t.Fatalf("expected successful retried response, got: %s", rec.Body.String())
-	}
-}
-
-func TestHandleMessages_BoltSingleAccountRateLimitRetriesSameAccountBeforeFailing(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	acc := &store.Account{
-		AccountType:   "bolt",
-		ProjectID:     "sb1-demo",
-		SessionCookie: "sess",
-		AgentMode:     "claude-sonnet-4-6",
-		Enabled:       true,
-		Weight:        1,
-	}
-	if err := s.CreateAccount(context.Background(), acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
-
-	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
-	h := NewWithLoadBalancer(cfg, lb)
-	rateLimited := &errorUpstreamEdge{err: errors.New(`bolt API error: status=429, body={"code":"rate-limited","message":"You have hit the rate limit. Please upgrade to keep chatting."}`)}
-	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
-		return rateLimited
-	})
-
-	payload := map[string]any{
-		"model":    "claude-sonnet-4-6",
-		"messages": []map[string]any{{"role": "user", "content": "列出项目的目录结果"}},
-		"system": []any{
-			map[string]any{"type": "text", "text": "# Environment\nPrimary working directory: D:\\Code\\NVIDIA_NETWORK_HEALTH_CHECK_PLATFORM"},
-		},
-		"stream": false,
-		"tools": []any{
-			map[string]any{"name": "Glob"},
-		},
-	}
-	body, _ := json.Marshal(payload)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(body))
-	h.HandleMessages(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if rateLimited.calls != 1 {
-		t.Fatalf("expected single-account rate-limit failure to avoid retrying the same account, got %d calls", rateLimited.calls)
-	}
-	if strings.Contains(rec.Body.String(), "retries exhausted") {
-		t.Fatalf("did not expect generic retry-exhausted error after single-account rate limit, got: %s", rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "currently rate-limited") || !strings.Contains(rec.Body.String(), "status=429") {
-		t.Fatalf("expected rate-limit-specific no-available-account response, got: %s", rec.Body.String())
 	}
 }
 
@@ -565,7 +397,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	b, _ := json.Marshal(payload)
 
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(b))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec1, req1)
 	if rec1.Code != 200 {
 		t.Fatalf("expected first request 200, got %d", rec1.Code)
@@ -575,7 +407,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	}
 
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/bolt/v1/messages", bytes.NewReader(b))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/orchids/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec2, req2)
 	if rec2.Code != 200 {
 		t.Fatalf("expected second request 200, got %d", rec2.Code)

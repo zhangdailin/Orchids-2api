@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"orchids-api/internal/bolt"
 	"orchids-api/internal/config"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/puter"
@@ -90,9 +89,6 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	}
 	if strings.EqualFold(acc.AccountType, "warp") {
 		return warp.NewFromAccount(acc, cfg)
-	}
-	if strings.EqualFold(acc.AccountType, "bolt") {
-		return bolt.NewFromAccount(acc, cfg)
 	}
 	if strings.EqualFold(acc.AccountType, "puter") {
 		return puter.NewFromAccount(acc, cfg)

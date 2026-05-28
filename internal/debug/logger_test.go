@@ -25,7 +25,7 @@ func TestLoggerLogInputTokenBreakdownWritesFile(t *testing.T) {
 		t.Fatal("expected enabled logger with directory")
 	}
 
-	logger.LogInputTokenBreakdown("bolt", 101, 202, 303, 404, 1010)
+	logger.LogInputTokenBreakdown("warp", 101, 202, 303, 404, 1010)
 
 	path := filepath.Join(logger.Dir(), "6_input_token_breakdown.json")
 	raw, err := os.ReadFile(path)
@@ -35,7 +35,7 @@ func TestLoggerLogInputTokenBreakdownWritesFile(t *testing.T) {
 
 	content := string(raw)
 	for _, want := range []string{
-		`"prompt_profile": "bolt"`,
+		`"prompt_profile": "warp"`,
 		`"base_prompt_tokens": 101`,
 		`"system_context_tokens": 202`,
 		`"history_tokens": 303`,

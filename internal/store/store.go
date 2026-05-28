@@ -215,7 +215,6 @@ func (s *Store) seedModels() error {
 	}
 
 	models = append(models, buildGrokSeedModels()...)
-	models = append(models, buildBoltBootstrapModels()...)
 	models = append(models, buildPuterSeedModels()...)
 
 	for _, m := range models {

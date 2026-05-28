@@ -10,7 +10,6 @@
 |---|---|---|
 | `/orchids/v1/messages` | POST | Orchids 通道 Claude Messages 代理 |
 | `/warp/v1/messages` | POST | Warp 通道 Claude Messages 代理 |
-| `/bolt/v1/messages` | POST | Bolt 通道 Claude Messages 代理 |
 | `/puter/v1/messages` | POST | Puter 通道 Claude Messages 代理 |
 | `/*/v1/messages/count_tokens` | POST | 输入 token 估算 |
 
@@ -20,7 +19,6 @@
 |---|---|---|
 | `/orchids/v1/chat/completions` | POST | Orchids OpenAI 兼容入口 |
 | `/warp/v1/chat/completions` | POST | Warp OpenAI 兼容入口 |
-| `/bolt/v1/chat/completions` | POST | Bolt OpenAI 兼容入口 |
 | `/puter/v1/chat/completions` | POST | Puter OpenAI 兼容入口 |
 | `/grok/v1/chat/completions` | POST | Grok OpenAI 兼容入口 |
 | `/v1/chat/completions` | POST | Grok 兼容别名 |
@@ -44,7 +42,6 @@
 | `/v1/models/{id}` | GET | 查询单个模型 |
 | `/orchids/v1/models` | GET | Orchids 模型列表 |
 | `/warp/v1/models` | GET | Warp 模型列表 |
-| `/bolt/v1/models` | GET | Bolt 模型列表 |
 | `/puter/v1/models` | GET | Puter 模型列表 |
 | `/grok/v1/models` | GET | Grok 模型列表 |
 | `/health` | GET | 健康检查 |

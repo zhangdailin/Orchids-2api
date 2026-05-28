@@ -1,11 +1,11 @@
 package handler
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/goccy/go-json"
 
-	"orchids-api/internal/bolt"
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/tiktoken"
 )
@@ -63,7 +63,7 @@ var incomingToolPropertyAllowlist = map[string]map[string]struct{}{
 }
 
 func supportedToolNames(tools []interface{}) []string {
-	return bolt.FilterSupportedToolNames(collectIncomingToolNames(tools))
+	return filterSupportedToolNames(collectIncomingToolNames(tools))
 }
 
 func collectIncomingToolNames(tools []interface{}) []string {
@@ -173,7 +173,10 @@ func compactIncomingTools(tools []interface{}) []interface{} {
 		}
 
 		mappedName := orchids.NormalizeToolNameFallback(name)
-		if !bolt.IsCoreTool(mappedName) {
+		if !isCoreTool(mappedName) {
+			continue
+		}
+		if _, ok := incomingToolPropertyAllowlist[strings.ToLower(strings.TrimSpace(mappedName))]; !ok {
 			continue
 		}
 
@@ -218,6 +221,51 @@ func compactIncomingTools(tools []interface{}) []interface{} {
 		}
 	}
 	return out
+}
+
+func filterSupportedToolNames(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	order := map[string]int{
+		"Read":  0,
+		"Write": 1,
+		"Edit":  2,
+		"Bash":  3,
+		"Glob":  4,
+		"Grep":  5,
+		"Task":  6,
+		"Skill": 7,
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, name := range raw {
+		mapped := orchids.NormalizeToolNameFallback(name)
+		if !isCoreTool(mapped) {
+			continue
+		}
+		if _, ok := seen[mapped]; ok {
+			continue
+		}
+		seen[mapped] = struct{}{}
+		out = append(out, mapped)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return order[out[i]] < order[out[j]]
+	})
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func isCoreTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "Read", "Write", "Edit", "Bash", "Glob", "Grep", "Task", "Skill":
+		return true
+	default:
+		return false
+	}
 }
 
 func compactIncomingToolDescription(description string) string {

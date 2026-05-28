@@ -23,7 +23,7 @@
           <h3 class="doc-title">API 地址格式</h3>
         </div>
         <div class="doc-code-block">
-          Orchids/Warp/Bolt/Puter: <span data-api-base></span>/{渠道}/v1
+          Orchids/Warp/Puter: <span data-api-base></span>/{渠道}/v1
           <br />
           Grok: <span data-api-base></span>/grok/v1
         </div>
@@ -40,10 +40,6 @@
           <span class="doc-strong doc-strong-amber">Grok 路由说明:</span>
           Grok 与其他渠道保持一致，使用 <code class="doc-inline-code doc-inline-code-amber">/grok/v1</code> 前缀。
           <br />
-          <span class="doc-strong doc-strong-amber">Bolt 账号说明:</span>
-          Bolt 账号需要同时填写 <code class="doc-inline-code doc-inline-code-amber">__session</code>
-          和 <code class="doc-inline-code doc-inline-code-amber">project_id</code>。
-          <br />
           <span class="doc-strong doc-strong-amber">Puter 账号说明:</span>
           Puter 账号当前只需要填写 <code class="doc-inline-code doc-inline-code-amber">auth_token</code>。
         </div>
@@ -52,14 +48,6 @@
       <div class="doc-callout doc-callout-green doc-callout-inline">
         <span class="doc-mark doc-mark-green">INFO</span>
         <div>
-          <span class="doc-strong doc-strong-green">Bolt 模型说明:</span>
-          目前文档和模型管理里的 Bolt 模型采用“保守收录”策略，只放入前端主模型切换器里明确出现、且我们已在 bundle 中确认的模型：
-          <code class="doc-inline-code doc-inline-code-green">claude-sonnet-4-6</code>、
-          <code class="doc-inline-code doc-inline-code-green">claude-opus-4-6</code>、
-          <code class="doc-inline-code doc-inline-code-green">claude-opus-4-5-20251101</code>。
-          <br />
-          前端配置里还会出现实验默认值或活动文案，但这些信息不等于“稳定公开可选模型”，所以不会直接并入公开模型列表。
-          <br />
           <span class="doc-strong doc-strong-green">Puter 模型说明:</span>
           Puter 当前采用参考仓库里的“无前缀主模型”清单，已包含 Claude / OpenAI / Gemini / Grok / DeepSeek / Mistral 等主模型族；
           但像 <code class="doc-inline-code doc-inline-code-green">openrouter:</code>、
@@ -102,18 +90,6 @@
               <td><code class="doc-link-code" data-api-path="/grok/v1"></code></td>
               <td><code class="doc-model-code">grok-3</code> <span class="tag badge-grok tag-mini">Grok</span></td>
               <td>
-                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
-              </td>
-            </tr>
-            <tr>
-              <td><span class="tag badge-bolt">Bolt</span></td>
-              <td><code class="doc-link-code" data-api-path="/bolt/v1"></code></td>
-              <td>
-                <code class="doc-model-code">claude-sonnet-4-6</code>
-                <span class="tag badge-bolt tag-mini">Bolt</span>
-              </td>
-              <td>
-                <span class="tag protocol-tag protocol-tag-claude">Claude</span>
                 <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
               </td>
             </tr>
