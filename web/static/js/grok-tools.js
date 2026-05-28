@@ -4373,11 +4373,13 @@
     Object.keys(sections).forEach((key) => {
       const section = sections[key];
       if (!section) return;
-      if (key !== tab) {
+      if (key !== nextTab) {
+        section.classList.add("section-hidden");
         section.style.display = "none";
         return;
       }
-      section.style.display = "block";
+      section.classList.remove("section-hidden");
+      section.style.display = "";
     });
 
     const tabs = document.querySelectorAll("#grokToolsTabs .tab-item");
