@@ -327,7 +327,11 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		if imageModelUsesAppChatOnly(req.Model) {
 			count = req.N
 		}
-		payload := h.client.chatPayload(spec, strings.TrimSpace(req.Prompt), true, count)
+		prompt := strings.TrimSpace(req.Prompt)
+		if imageModelUsesAppChatOnly(req.Model) {
+			prompt = grokAppChatImagePrompt(prompt)
+		}
+		payload := h.client.chatPayload(spec, prompt, true, count)
 		prepareAppChatImageGenerationPayload(payload, count)
 		if !imageModelUsesAppChatOnly(req.Model) {
 			ensureImageAspectRatio(payload, resolveAspectRatio(req.Size))
@@ -439,4 +443,18 @@ func imageModelUsesAppChatOnly(modelID string) bool {
 	default:
 		return false
 	}
+}
+
+func grokAppChatImagePrompt(prompt string) string {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return prompt
+	}
+	lower := strings.ToLower(prompt)
+	for _, prefix := range []string{"draw ", "draw:", "paint ", "paint:", "sketch ", "sketch:"} {
+		if strings.HasPrefix(lower, prefix) {
+			return prompt
+		}
+	}
+	return "Draw " + prompt
 }

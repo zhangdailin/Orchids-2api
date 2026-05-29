@@ -136,3 +136,12 @@ func TestPrepareAppChatImageGenerationPayload_MatchesLiteImageShape(t *testing.T
 		t.Fatalf("webSearch=%v want false", got)
 	}
 }
+
+func TestGrokAppChatImagePrompt_PrefersDrawTrigger(t *testing.T) {
+	if got := grokAppChatImagePrompt("a red apple"); got != "Draw a red apple" {
+		t.Fatalf("prompt=%q", got)
+	}
+	if got := grokAppChatImagePrompt("Draw a red apple"); got != "Draw a red apple" {
+		t.Fatalf("prompt=%q", got)
+	}
+}
