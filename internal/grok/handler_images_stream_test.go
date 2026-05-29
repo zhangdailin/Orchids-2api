@@ -145,3 +145,16 @@ func TestGrokAppChatImagePrompt_PrefersDrawTrigger(t *testing.T) {
 		t.Fatalf("prompt=%q", got)
 	}
 }
+
+func TestGrokAppChatImagePrompts_AddsSafePortraitFallbackForShortChinesePrompt(t *testing.T) {
+	got := grokAppChatImagePrompts("美女图片")
+	if len(got) != 2 {
+		t.Fatalf("len=%d want 2: %#v", len(got), got)
+	}
+	if got[0] != "Draw 美女图片" {
+		t.Fatalf("first=%q", got[0])
+	}
+	if !strings.Contains(got[1], "safe-for-work portrait photo of an adult woman") {
+		t.Fatalf("fallback=%q", got[1])
+	}
+}

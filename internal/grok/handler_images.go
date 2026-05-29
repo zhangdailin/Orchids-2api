@@ -311,8 +311,12 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	// Grok upstream may return only 2 images per call and may repeat.
 	// To reach N, request 1 image per call without rewriting the user's prompt.
 	maxAttempts := req.N * 4
+	promptVariants := grokAppChatImagePrompts(req.Prompt)
 	if imageModelUsesAppChatOnly(req.Model) {
-		maxAttempts = 1
+		maxAttempts = len(promptVariants)
+		if maxAttempts < 1 {
+			maxAttempts = 1
+		}
 	} else if maxAttempts < 4 {
 		maxAttempts = 4
 	}
@@ -332,7 +336,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		}
 		prompt := strings.TrimSpace(req.Prompt)
 		if imageModelUsesAppChatOnly(req.Model) {
-			prompt = grokAppChatImagePrompt(prompt)
+			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
 		}
 		payload := h.client.chatPayload(spec, prompt, true, count)
 		prepareAppChatImageGenerationPayload(payload, count)
@@ -394,7 +398,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 				debugShapes = nil
 				for i := 0; i < maxAttempts; i++ {
 					count := req.N
-					prompt := grokAppChatImagePrompt(strings.TrimSpace(req.Prompt))
+					prompt := promptVariants[promptVariantIndex(i, promptVariants)]
 					payload := h.client.chatPayload(spec, prompt, true, count)
 					prepareAppChatImageGenerationPayload(payload, count)
 					resp, err := h.doChatSingleAccount(ctx, sess, payload)
@@ -532,6 +536,52 @@ func imageModelUsesAppChatOnly(modelID string) bool {
 	default:
 		return false
 	}
+}
+
+func promptVariantIndex(i int, variants []string) int {
+	if len(variants) <= 1 || i <= 0 {
+		return 0
+	}
+	if i >= len(variants) {
+		return len(variants) - 1
+	}
+	return i
+}
+
+func grokAppChatImagePrompts(prompt string) []string {
+	first := grokAppChatImagePrompt(prompt)
+	if first == "" {
+		return nil
+	}
+	variants := []string{first}
+	if looksLikeShortChinesePortraitPrompt(prompt) {
+		variants = append(variants, "Draw a safe-for-work portrait photo of an adult woman, fully clothed, non-sexual, tasteful fashion style, natural lighting, high quality.")
+	}
+	return uniqueStrings(variants)
+}
+
+func looksLikeShortChinesePortraitPrompt(prompt string) bool {
+	p := strings.TrimSpace(prompt)
+	if p == "" || len([]rune(p)) > 18 {
+		return false
+	}
+	hasChinese := false
+	for _, r := range p {
+		if r >= '\u4e00' && r <= '\u9fff' {
+			hasChinese = true
+			break
+		}
+	}
+	if !hasChinese {
+		return false
+	}
+	lower := strings.ToLower(p)
+	return strings.Contains(lower, "美女") ||
+		strings.Contains(lower, "女生") ||
+		strings.Contains(lower, "女孩") ||
+		strings.Contains(lower, "女人") ||
+		strings.Contains(lower, "人像") ||
+		strings.Contains(lower, "照片")
 }
 
 func grokAppChatImagePrompt(prompt string) string {
