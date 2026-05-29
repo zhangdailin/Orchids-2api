@@ -68,6 +68,7 @@ func ClassifyAccountStatus(errStr string) string {
 		HasExplicitHTTPStatus(lower, "429") ||
 			strings.Contains(lower, "too many requests") ||
 			strings.Contains(lower, "rate limit") ||
+			strings.Contains(lower, "rate_limit") ||
 			strings.Contains(lower, "no remaining quota") ||
 			strings.Contains(lower, "quota exceeded"):
 		return "429"
@@ -121,6 +122,7 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		HasExplicitHTTPStatus(lower, "402") ||
 		strings.Contains(lower, "too many requests") ||
 		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "rate_limit") ||
 		strings.Contains(lower, "insufficient_funds") ||
 		strings.Contains(lower, "insufficient funding") ||
 		strings.Contains(lower, "no remaining quota") ||
