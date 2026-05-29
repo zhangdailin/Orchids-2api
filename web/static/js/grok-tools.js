@@ -3086,7 +3086,9 @@
 
     if (newBtn) newBtn.addEventListener("click", () => {
       newChatSession();
-      closeChatSidebar();
+      if (isMobileChatSidebar()) {
+        closeChatSidebar();
+      }
     });
     if (sendBtn) {
       sendBtn.addEventListener("click", () => {
