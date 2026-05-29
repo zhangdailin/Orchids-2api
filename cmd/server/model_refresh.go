@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -693,6 +694,7 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 					if discoverErr != nil {
 						continue
 					}
+					choices = warp.FilterUnavailableModels(ctx, s, acc.ID, choices, time.Now())
 					results <- warpAccountDiscovery{
 						index:   idx,
 						id:      acc.ID,

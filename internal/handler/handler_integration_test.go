@@ -3,15 +3,21 @@ package handler
 import (
 	"bytes"
 	"context"
-	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/warp"
 )
 
 type mockUpstream struct {
@@ -314,6 +320,61 @@ func TestHandleMessages_Warp_NonStreamIncludesActualModelFallback(t *testing.T) 
 	out := rec.Body.String()
 	if !strings.Contains(out, `"actual_model":"auto-open"`) {
 		t.Fatalf("expected actual_model in response, got: %s", out)
+	}
+}
+
+func TestHandleMessages_Warp_FallbackMarksAccountModelUnavailable(t *testing.T) {
+	s, mini := setupConnTrackerHandlerTest(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	acc := createEnabledTestAccount(t, s, "warp-1", "warp")
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel:  "Warp",
+		ModelID:  "claude-4-6-opus-high",
+		Name:     "Claude Opus",
+		Status:   store.ModelStatusAvailable,
+		Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	if err := warp.SaveAccountModelChoices(context.Background(), s, &warp.AccountModelChoices{
+		Accounts: map[string][]string{
+			strconv.FormatInt(acc.ID, 10): {"auto-open", "claude-4-6-opus-high"},
+		},
+	}); err != nil {
+		t.Fatalf("SaveAccountModelChoices() error = %v", err)
+	}
+
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, loadbalancer.NewWithCacheTTL(s, time.Second))
+	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
+		return &mockUpstream{events: []upstream.SSEMessage{
+			{Type: "model.actual_model", Event: map[string]any{"type": "actual_model", "requested_model": "claude-4-6-opus-high", "actual_model": "auto-open", "reason": "fallback_model_unavailable"}},
+			{Type: "model", Event: map[string]any{"type": "text-start"}},
+			{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "fallback-hi"}},
+			{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+		}}
+	})
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "claude-4-6-opus-high",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   false,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !warp.AccountModelTemporarilyUnavailable(context.Background(), s, acc.ID, "claude-opus-4-6", time.Now()) {
+		t.Fatal("expected fallback model to be marked temporarily unavailable")
 	}
 }
 

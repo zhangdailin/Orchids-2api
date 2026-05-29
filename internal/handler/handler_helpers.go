@@ -229,7 +229,8 @@ func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string,
 	}
 
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-		return warp.AccountSupportsModel(choices, acc.ID, requestedModel)
+		return warp.AccountSupportsModel(choices, acc.ID, requestedModel) &&
+			!warp.AccountModelTemporarilyUnavailable(ctx, h.loadBalancer.Store, acc.ID, requestedModel, time.Now())
 	})
 	if err == nil {
 		return account, nil

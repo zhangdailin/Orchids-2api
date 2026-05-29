@@ -30,6 +30,7 @@ import (
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/upstream"
 	"orchids-api/internal/util"
+	"orchids-api/internal/warp"
 	warpprompt "orchids-api/internal/warp/promptbuilder"
 )
 
@@ -1071,6 +1072,22 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.sessionStore.Touch(r.Context(), conversationKey)
 		if verboseDiagnostics {
 			slog.Debug("Warp conversationID captured", "key", conversationKey, "id", id)
+		}
+	}
+	sh.onActualModel = func(requested, actual string) {
+		if currentAccount == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+			return
+		}
+		if !strings.EqualFold(currentAccount.AccountType, "warp") {
+			return
+		}
+		requested = strings.TrimSpace(requested)
+		actual = strings.TrimSpace(actual)
+		if requested == "" || actual == "" || strings.EqualFold(requested, actual) {
+			return
+		}
+		if err := warp.MarkAccountModelUnavailable(r.Context(), h.loadBalancer.Store, currentAccount.ID, requested, time.Now()); err != nil {
+			slog.Warn("Warp model unavailable cache update failed", "account_id", currentAccount.ID, "model", requested, "actual_model", actual, "error", err)
 		}
 	}
 	defer sh.release()
