@@ -4452,8 +4452,21 @@
     </div>
   </main>
 
-  <div id="lightbox" class="image-lightbox">
-    <img id="lightboxImg" src="" alt="">
+  <div id="lightbox" class="image-lightbox" aria-hidden="true">
+    <div class="image-lightbox-dialog" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle">
+      <div class="image-lightbox-head">
+        <div id="lightboxTitle" class="image-lightbox-title">预览</div>
+        <div class="image-lightbox-actions">
+          <a id="lightboxDownload" class="btn btn-outline" href="#" download="imagine.png">下载</a>
+          <button id="lightboxPrev" class="btn btn-outline image-lightbox-nav" type="button" aria-label="上一张">‹</button>
+          <button id="lightboxNext" class="btn btn-outline image-lightbox-nav" type="button" aria-label="下一张">›</button>
+          <button class="btn btn-outline image-lightbox-close" type="button" data-lightbox-close aria-label="关闭">关闭</button>
+        </div>
+      </div>
+      <div class="image-lightbox-body">
+        <img id="lightboxImg" src="" alt="">
+      </div>
+    </div>
   </div>
 
   <div class="toast-container" id="toastContainer"></div>

@@ -752,6 +752,9 @@
       tile.className = "imagine-masonry-tile waterfall-item is-pending";
       tile.dataset.prompt = prompt;
 
+      const checkbox = document.createElement("div");
+      checkbox.className = "image-checkbox";
+
       const badge = document.createElement("div");
       badge.className = "imagine-masonry-tile-badge";
       badge.textContent = String(idx + 1);
@@ -764,6 +767,7 @@
       progress.innerHTML = '<div class="imagine-masonry-tile-progress-value">0%</div><div class="imagine-masonry-tile-progress-track"><div class="imagine-masonry-tile-progress-fill"></div></div>';
       body.appendChild(progress);
 
+      tile.appendChild(checkbox);
       tile.appendChild(badge);
       tile.appendChild(body);
       slotGrid.appendChild(tile);
@@ -1292,6 +1296,13 @@
     const toolbar = document.getElementById("selectionToolbar");
     if (toolbar) toolbar.classList.remove("hidden");
     const items = document.querySelectorAll("#imagineGrid .waterfall-item.is-ready");
+    if (items.length === 0) {
+      imagineSelectionMode = false;
+      if (toolbar) toolbar.classList.add("hidden");
+      showToast("暂无可下载图片", "info");
+      updateImagineSelectedCount();
+      return;
+    }
     items.forEach((item) => {
       item.classList.add("selection-mode");
     });
@@ -1347,8 +1358,11 @@
 
   async function downloadSelectedImages() {
     if (imagineSelectedImages.size === 0) {
-      showToast("未选择图片", "info");
-      return;
+      toggleImagineSelectAll();
+      if (imagineSelectedImages.size === 0) {
+        showToast("未选择图片", "info");
+        return;
+      }
     }
     if (typeof JSZip === "undefined") {
       showToast("JSZip 未加载", "error");
@@ -1423,14 +1437,41 @@
     const images = getImagineAllImages();
     if (index < 0 || index >= images.length) return;
     imagineLightboxIndex = index;
+    const current = images[index];
     const lightboxImg = document.getElementById("lightboxImg");
     if (lightboxImg) {
-      lightboxImg.src = images[index].src;
+      lightboxImg.src = current.src;
+      lightboxImg.alt = current.alt || "Imagine preview";
+    }
+    const title = document.getElementById("lightboxTitle");
+    if (title) title.textContent = `${index + 1} / ${images.length}`;
+    const download = document.getElementById("lightboxDownload");
+    if (download) {
+      download.href = current.src;
+      download.download = `imagine_${index + 1}.png`;
     }
     const prevBtn = document.getElementById("lightboxPrev");
     const nextBtn = document.getElementById("lightboxNext");
     if (prevBtn) prevBtn.disabled = index === 0;
     if (nextBtn) nextBtn.disabled = index === images.length - 1;
+  }
+
+  function openImagineLightbox(index) {
+    updateImagineLightbox(index);
+    const lightbox = document.getElementById("lightbox");
+    if (!lightbox || imagineLightboxIndex < 0) return;
+    lightbox.classList.add("active");
+    lightbox.setAttribute("aria-hidden", "false");
+    document.body.classList.add("modal-open");
+  }
+
+  function closeImagineLightbox() {
+    const lightbox = document.getElementById("lightbox");
+    if (!lightbox) return;
+    lightbox.classList.remove("active");
+    lightbox.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("modal-open");
+    imagineLightboxIndex = -1;
   }
 
   function showImaginePrevImage() {
@@ -4932,9 +4973,7 @@
           const images = getImagineAllImages();
           const index = images.indexOf(img);
           if (index !== -1) {
-            updateImagineLightbox(index);
-            const lightbox = document.getElementById("lightbox");
-            if (lightbox) lightbox.classList.add("active");
+            openImagineLightbox(index);
           }
         }
       });
@@ -4942,20 +4981,30 @@
     const lightbox = document.getElementById("lightbox");
     const lightboxImg = document.getElementById("lightboxImg");
     if (lightbox) {
-      lightbox.addEventListener("click", () => {
-        lightbox.classList.remove("active");
-        imagineLightboxIndex = -1;
+      lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox || event.target.closest("[data-lightbox-close]")) {
+          closeImagineLightbox();
+        }
       });
       if (lightboxImg) {
         lightboxImg.addEventListener("click", (event) => {
           event.stopPropagation();
         });
       }
+      const prevBtn = document.getElementById("lightboxPrev");
+      const nextBtn = document.getElementById("lightboxNext");
+      if (prevBtn) prevBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showImaginePrevImage();
+      });
+      if (nextBtn) nextBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showImagineNextImage();
+      });
       document.addEventListener("keydown", (event) => {
         if (!lightbox.classList.contains("active")) return;
         if (event.key === "Escape") {
-          lightbox.classList.remove("active");
-          imagineLightboxIndex = -1;
+          closeImagineLightbox();
         } else if (event.key === "ArrowLeft") {
           showImaginePrevImage();
         } else if (event.key === "ArrowRight") {
