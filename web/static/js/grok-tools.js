@@ -1164,9 +1164,13 @@
         imagineFinalMinBytes = value;
       }
       const nsfwSelect = document.getElementById("imagineNSFW");
+      const modelSelect = document.getElementById("imagineModel");
       const uiState = loadGrokToolsUIState();
       if (nsfwSelect && typeof data.nsfw === "boolean" && !uiState.imagineNSFW) {
         nsfwSelect.value = data.nsfw ? "true" : "false";
+      }
+      if (modelSelect && typeof uiState.imagineModel === "string" && uiState.imagineModel) {
+        modelSelect.value = uiState.imagineModel;
       }
     } catch (err) {
       // ignore
@@ -1209,12 +1213,14 @@
   }
 
   async function createImagineTask(prompt, aspectRatio, nsfwEnabled) {
+    const model = String(document.getElementById("imagineModel")?.value || "grok-imagine-image-lite").trim() || "grok-imagine-image-lite";
     const res = await fetch("/api/v1/admin/imagine/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt,
         aspect_ratio: aspectRatio,
+        model,
         nsfw: !!nsfwEnabled,
       }),
     });
@@ -1299,6 +1305,7 @@
             type: "start",
             prompt,
             aspect_ratio: aspectRatio,
+            model: String(document.getElementById("imagineModel")?.value || "grok-imagine-image-lite").trim() || "grok-imagine-image-lite",
           }));
         } catch (err) {
           // ignore
@@ -1341,11 +1348,13 @@
       return;
     }
     const ratio = String(document.getElementById("imagineRatio")?.value || "2:3");
+    const model = String(document.getElementById("imagineModel")?.value || "grok-imagine-image-lite").trim() || "grok-imagine-image-lite";
     const concurrent = 1;
     const nsfw = String(document.getElementById("imagineNSFW")?.value || "true") === "true";
     const mode = String(document.getElementById("imagineMode")?.value || "auto").toLowerCase();
     saveGrokToolsUIState({
       imagineRatio: ratio,
+      imagineModel: model,
       imagineConcurrent: concurrent,
     });
 
@@ -4420,6 +4429,7 @@
     }
     [
       ["imagineRatio", "imagineRatio"],
+      ["imagineModel", "imagineModel"],
       ["imagineConcurrent", "imagineConcurrent"],
       ["imagineNSFW", "imagineNSFW"],
     ].forEach(([id, key]) => {
@@ -4903,10 +4913,14 @@
     await switchGrokToolTab(String(uiState.activeToolTab || "chat"));
     syncImagineModeUI(String(uiState.imagineMode || document.getElementById("imagineMode")?.value || "auto"), false);
     const imagineRatio = document.getElementById("imagineRatio");
+    const imagineModel = document.getElementById("imagineModel");
     const imagineConcurrent = document.getElementById("imagineConcurrent");
     const imagineNSFW = document.getElementById("imagineNSFW");
     if (imagineRatio && typeof uiState.imagineRatio === "string" && uiState.imagineRatio) {
       imagineRatio.value = uiState.imagineRatio;
+    }
+    if (imagineModel && typeof uiState.imagineModel === "string" && uiState.imagineModel) {
+      imagineModel.value = uiState.imagineModel;
     }
     if (imagineConcurrent && typeof uiState.imagineConcurrent === "number" && Number.isFinite(uiState.imagineConcurrent)) {
       imagineConcurrent.value = String(uiState.imagineConcurrent);

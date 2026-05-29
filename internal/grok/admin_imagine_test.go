@@ -21,7 +21,7 @@ func TestImagineSessionLifecycle(t *testing.T) {
 	resetImagineSessionsForTest()
 	t.Cleanup(resetImagineSessionsForTest)
 
-	id := createImagineSession("test prompt", "16:9", nil)
+	id := createImagineSession("test prompt", "16:9", "", nil)
 	if id == "" {
 		t.Fatal("expected task id")
 	}
@@ -35,6 +35,9 @@ func TestImagineSessionLifecycle(t *testing.T) {
 	}
 	if session.AspectRatio != "16:9" {
 		t.Fatalf("unexpected aspect ratio: %q", session.AspectRatio)
+	}
+	if session.Model != "grok-imagine-image-lite" {
+		t.Fatalf("unexpected model: %q", session.Model)
 	}
 
 	removed := deleteImagineSessions([]string{id})
@@ -55,6 +58,7 @@ func TestHandleAdminImagineStartStop(t *testing.T) {
 	startBody := map[string]interface{}{
 		"prompt":       "a cat on mars",
 		"aspect_ratio": "1024x576",
+		"model":        "grok-imagine-image-lite",
 		"nsfw":         false,
 	}
 	raw, _ := json.Marshal(startBody)
@@ -76,12 +80,18 @@ func TestHandleAdminImagineStartStop(t *testing.T) {
 	if got, _ := startResp["aspect_ratio"].(string); got != "16:9" {
 		t.Fatalf("aspect_ratio=%q want=16:9", got)
 	}
+	if got, _ := startResp["model"].(string); got != "grok-imagine-image-lite" {
+		t.Fatalf("model=%q want=grok-imagine-image-lite", got)
+	}
 	session, ok := getImagineSession(taskID)
 	if !ok {
 		t.Fatal("expected imagine session")
 	}
 	if session.NSFW == nil || *session.NSFW != false {
 		t.Fatalf("session.NSFW=%v want=false", session.NSFW)
+	}
+	if session.Model != "grok-imagine-image-lite" {
+		t.Fatalf("session.Model=%q want=grok-imagine-image-lite", session.Model)
 	}
 
 	stopBody := map[string]interface{}{
@@ -93,6 +103,24 @@ func TestHandleAdminImagineStartStop(t *testing.T) {
 	h.HandleAdminImagineStop(stopRec, stopReq)
 	if stopRec.Code != http.StatusOK {
 		t.Fatalf("stop status=%d want=200", stopRec.Code)
+	}
+}
+
+func TestNormalizeImagineModel_DefaultsToLite(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", "grok-imagine-image-lite"},
+		{"grok-imagine-1.0-fast", "grok-imagine-image-lite"},
+		{"grok-imagine-image", "grok-imagine-image"},
+		{"grok-imagine-image-pro", "grok-imagine-image-pro"},
+		{"grok-4.20-auto", "grok-imagine-image-lite"},
+	}
+	for _, tt := range tests {
+		if got := normalizeImagineModel(tt.in); got != tt.want {
+			t.Fatalf("normalizeImagineModel(%q)=%q want %q", tt.in, got, tt.want)
+		}
 	}
 }
 

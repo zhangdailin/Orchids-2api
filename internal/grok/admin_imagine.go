@@ -30,6 +30,7 @@ var imagineUpgrader = websocket.Upgrader{
 type imagineSession struct {
 	Prompt      string
 	AspectRatio string
+	Model       string
 	NSFW        *bool
 	CreatedAt   time.Time
 }
@@ -42,6 +43,7 @@ var (
 type imagineStartRequest struct {
 	Prompt      string `json:"prompt"`
 	AspectRatio string `json:"aspect_ratio"`
+	Model       string `json:"model,omitempty"`
 	NSFW        *bool  `json:"nsfw,omitempty"`
 }
 
@@ -145,7 +147,18 @@ func parseOptionalBool(raw interface{}) *bool {
 	}
 }
 
-func createImagineSession(prompt, aspectRatio string, nsfw *bool) string {
+func normalizeImagineModel(model string) string {
+	id := normalizeModelID(strings.TrimSpace(model))
+	if id == "" {
+		return "grok-imagine-image-lite"
+	}
+	if !isImageGenerationModel(id) {
+		return "grok-imagine-image-lite"
+	}
+	return id
+}
+
+func createImagineSession(prompt, aspectRatio string, model string, nsfw *bool) string {
 	id := randomHex(16)
 	if id == "" {
 		id = fmt.Sprintf("%d", time.Now().UnixNano())
@@ -158,6 +171,7 @@ func createImagineSession(prompt, aspectRatio string, nsfw *bool) string {
 	imagineSessions[id] = imagineSession{
 		Prompt:      strings.TrimSpace(prompt),
 		AspectRatio: resolveAspectRatio(strings.TrimSpace(aspectRatio)),
+		Model:       normalizeImagineModel(model),
 		NSFW:        cloneBoolPtr(nsfw),
 		CreatedAt:   now,
 	}
@@ -272,8 +286,8 @@ func ensureImageNSFW(payload map[string]interface{}, nsfw *bool) {
 	modelMap["imageGenModelConfig"] = imageGenCfg
 }
 
-func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio string, n int, nsfw *bool) ([]imagineImage, int, error) {
-	const imagineModel = "grok-imagine-image"
+func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio, model string, n int, nsfw *bool) ([]imagineImage, int, error) {
+	imagineModel := normalizeImagineModel(model)
 	if err := h.ensureModelEnabled(ctx, imagineModel); err != nil {
 		return nil, 0, err
 	}
@@ -336,6 +350,7 @@ func (h *Handler) runImagineLoop(
 	ctx context.Context,
 	prompt string,
 	aspectRatio string,
+	model string,
 	taskID string,
 	deleteSessionOnExit bool,
 	nsfw *bool,
@@ -351,6 +366,7 @@ func (h *Handler) runImagineLoop(
 		"status":       "running",
 		"prompt":       prompt,
 		"aspect_ratio": aspectRatio,
+		"model":        normalizeImagineModel(model),
 		"run_id":       runID,
 	}) {
 		return
@@ -377,7 +393,7 @@ func (h *Handler) runImagineLoop(
 			}
 		}
 
-		images, elapsedMS, err := h.generateImagineBatch(ctx, prompt, aspectRatio, imagineBatchImageCount, nsfw)
+		images, elapsedMS, err := h.generateImagineBatch(ctx, prompt, aspectRatio, model, imagineBatchImageCount, nsfw)
 		if err != nil {
 			if !emit(map[string]interface{}{
 				"type":    "error",
@@ -409,6 +425,7 @@ func (h *Handler) runImagineLoop(
 				"created_at":   nowMillis,
 				"elapsed_ms":   elapsedMS,
 				"aspect_ratio": aspectRatio,
+				"model":        normalizeImagineModel(model),
 				"run_id":       runID,
 			}) {
 				return
@@ -433,10 +450,12 @@ func (h *Handler) HandleAdminImagineStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ratio := resolveAspectRatio(strings.TrimSpace(req.AspectRatio))
-	taskID := createImagineSession(prompt, ratio, req.NSFW)
+	model := normalizeImagineModel(req.Model)
+	taskID := createImagineSession(prompt, ratio, model, req.NSFW)
 	out := map[string]interface{}{
 		"task_id":      taskID,
 		"aspect_ratio": ratio,
+		"model":        model,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
@@ -469,6 +488,7 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 	prompt := strings.TrimSpace(r.URL.Query().Get("prompt"))
 	ratio := strings.TrimSpace(r.URL.Query().Get("aspect_ratio"))
+	model := normalizeImagineModel(r.URL.Query().Get("model"))
 	nsfw := parseOptionalBool(r.URL.Query().Get("nsfw"))
 
 	if taskID != "" {
@@ -479,6 +499,7 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 		}
 		prompt = session.Prompt
 		ratio = session.AspectRatio
+		model = normalizeImagineModel(session.Model)
 		if nsfw == nil {
 			nsfw = cloneBoolPtr(session.NSFW)
 		}
@@ -502,7 +523,7 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 		return r.Context().Err() == nil
 	}
 
-	h.runImagineLoop(r.Context(), prompt, ratio, taskID, true, nsfw, emit)
+	h.runImagineLoop(r.Context(), prompt, ratio, model, taskID, true, nsfw, emit)
 }
 
 func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
@@ -558,7 +579,7 @@ func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stopRun()
 
-	startRun := func(prompt, ratio string, nsfw *bool) {
+	startRun := func(prompt, ratio, model string, nsfw *bool) {
 		stopRun()
 		runCtx, cancelFn := context.WithCancel(ctx)
 		done := make(chan struct{})
@@ -568,7 +589,7 @@ func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
 		runMu.Unlock()
 		go func() {
 			defer close(done)
-			h.runImagineLoop(runCtx, prompt, ratio, taskID, false, nsfw, send)
+			h.runImagineLoop(runCtx, prompt, ratio, model, taskID, false, nsfw, send)
 		}()
 	}
 
@@ -582,6 +603,7 @@ func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
 		case "start":
 			prompt := strings.TrimSpace(fmt.Sprint(payload["prompt"]))
 			ratio := strings.TrimSpace(fmt.Sprint(payload["aspect_ratio"]))
+			model := normalizeImagineModel(fmt.Sprint(payload["model"]))
 			nsfw := parseOptionalBool(payload["nsfw"])
 			if taskID != "" {
 				if session, ok := getImagineSession(taskID); ok {
@@ -591,6 +613,7 @@ func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
 					if ratio == "" {
 						ratio = session.AspectRatio
 					}
+					model = normalizeImagineModel(session.Model)
 					if nsfw == nil {
 						nsfw = cloneBoolPtr(session.NSFW)
 					}
@@ -608,7 +631,7 @@ func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
 				ratio = "2:3"
 			}
 			ratio = resolveAspectRatio(ratio)
-			startRun(prompt, ratio, nsfw)
+			startRun(prompt, ratio, model, nsfw)
 		case "stop":
 			stopRun()
 		case "ping":
