@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	basicDefaultQuota float64 = 80
+	basicDefaultQuota float64 = 30
+	liteDefaultQuota  float64 = 70
 	superDefaultQuota float64 = 140
-	heavyDefaultQuota float64 = 140
+	heavyDefaultQuota float64 = 400
 )
 
 func InferQuotaLimit(acc *store.Account) float64 {
@@ -26,7 +27,28 @@ func InferQuotaLimit(acc *store.Account) float64 {
 	if strings.Contains(sub, "super") || strings.Contains(sub, "pro") {
 		return superDefaultQuota
 	}
+	if strings.Contains(sub, "lite") {
+		return liteDefaultQuota
+	}
 	return basicDefaultQuota
+}
+
+func InferSubscriptionFromRateLimitInfo(info *RateLimitInfo) string {
+	if info == nil || !info.HasLimit {
+		return ""
+	}
+	switch limit := info.Limit; {
+	case limit >= 150 || limit == 400:
+		return "heavy"
+	case limit == 50 || limit == 140:
+		return "super"
+	case limit == 25 || limit == 70 || limit == 12:
+		return "lite"
+	case limit == 30 || limit == 80 || limit == 20:
+		return "basic"
+	default:
+		return ""
+	}
 }
 
 func ApplyQuotaInfo(acc *store.Account, info *RateLimitInfo) bool {
@@ -35,6 +57,10 @@ func ApplyQuotaInfo(acc *store.Account, info *RateLimitInfo) bool {
 	}
 
 	changed := false
+	if sub := InferSubscriptionFromRateLimitInfo(info); sub != "" && acc.Subscription != sub {
+		acc.Subscription = sub
+		changed = true
+	}
 	if info.HasRemaining {
 		limit := InferQuotaLimit(acc)
 		if info.HasLimit && info.Limit > 0 {

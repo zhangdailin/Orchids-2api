@@ -7,6 +7,7 @@ import (
 
 const (
 	grokTierBasic = iota
+	grokTierLite
 	grokTierSuper
 	grokTierHeavy
 )
@@ -141,15 +142,19 @@ func GrokModelPoolCandidates(modelID string) []string {
 	case routing.preferBest && routing.tier == grokTierHeavy:
 		return []string{"heavy"}
 	case routing.preferBest && routing.tier == grokTierSuper:
-		return []string{"heavy", "super"}
+		return []string{"heavy", "super", "lite"}
+	case routing.preferBest && routing.tier == grokTierLite:
+		return []string{"heavy", "super", "lite"}
 	case routing.preferBest:
-		return []string{"heavy", "super", "basic"}
+		return []string{"heavy", "super", "lite", "basic"}
 	case routing.tier == grokTierHeavy:
 		return []string{"heavy"}
 	case routing.tier == grokTierSuper:
-		return []string{"super", "heavy"}
+		return []string{"super", "lite", "heavy"}
+	case routing.tier == grokTierLite:
+		return []string{"lite", "super", "heavy"}
 	default:
-		return []string{"basic", "super", "heavy"}
+		return []string{"basic", "lite", "super", "heavy"}
 	}
 }
 

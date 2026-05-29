@@ -58,6 +58,8 @@ func publicGrokAccountPool(acc *store.Account) string {
 		return "heavy"
 	case strings.Contains(sub, "super"), strings.Contains(sub, "pro"):
 		return "super"
+	case strings.Contains(sub, "lite"):
+		return "lite"
 	case strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok"):
 		return "basic"
 	default:

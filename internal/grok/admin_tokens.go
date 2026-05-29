@@ -69,6 +69,9 @@ func inferTokenPool(acc *store.Account) string {
 	if strings.Contains(sub, "super") || strings.Contains(sub, "pro") {
 		return "ssoSuper"
 	}
+	if strings.Contains(sub, "lite") {
+		return "ssoLite"
+	}
 	if InferQuotaLimit(acc) >= superDefaultQuota {
 		return "ssoSuper"
 	}
@@ -81,6 +84,8 @@ func normalizeGrokPoolName(pool string) string {
 		return "heavy"
 	case "ssosuper", "super", "pro":
 		return "super"
+	case "ssolite", "lite":
+		return "lite"
 	case "ssobasic", "basic", "":
 		return "basic"
 	default:
@@ -238,6 +243,8 @@ func applyTokenEntryToAccount(acc *store.Account, entry adminTokenEntry) {
 		acc.Subscription = "heavy"
 	case "super":
 		acc.Subscription = "super"
+	case "lite":
+		acc.Subscription = "lite"
 	default:
 		acc.Subscription = "basic"
 	}

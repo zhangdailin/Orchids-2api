@@ -19,6 +19,7 @@ type ModelSpec struct {
 
 const (
 	grokTierBasic = iota
+	grokTierLite
 	grokTierSuper
 	grokTierHeavy
 )
@@ -156,15 +157,19 @@ func (m ModelSpec) PoolCandidates() []string {
 	case m.PreferBest && m.Tier == grokTierHeavy:
 		return []string{"heavy"}
 	case m.PreferBest && m.Tier == grokTierSuper:
-		return []string{"heavy", "super"}
+		return []string{"heavy", "super", "lite"}
+	case m.PreferBest && m.Tier == grokTierLite:
+		return []string{"heavy", "super", "lite"}
 	case m.PreferBest:
-		return []string{"heavy", "super", "basic"}
+		return []string{"heavy", "super", "lite", "basic"}
 	case m.Tier == grokTierHeavy:
 		return []string{"heavy"}
 	case m.Tier == grokTierSuper:
-		return []string{"super", "heavy"}
+		return []string{"super", "lite", "heavy"}
+	case m.Tier == grokTierLite:
+		return []string{"lite", "super", "heavy"}
 	default:
-		return []string{"basic", "super", "heavy"}
+		return []string{"basic", "lite", "super", "heavy"}
 	}
 }
 

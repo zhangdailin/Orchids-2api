@@ -167,6 +167,7 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 
 	for _, acc := range []*store.Account{
 		{AccountType: "grok", Enabled: true, ClientCookie: "sso=basic-token", Subscription: "basic", Weight: 1},
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=lite-token", Subscription: "lite", Weight: 1},
 		{AccountType: "grok", Enabled: true, ClientCookie: "sso=super-token", Subscription: "super", Weight: 1},
 		{AccountType: "grok", Enabled: true, ClientCookie: "sso=heavy-token", Subscription: "heavy", Weight: 1},
 	} {
@@ -187,6 +188,16 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 		t.Fatalf("super token=%q want super-token", superSess.token)
 	}
 	superSess.Close()
+
+	liteSpec := ModelSpec{ID: "grok-lite-test", Tier: grokTierLite}
+	liteSess, err := h.openChatAccountSessionForModel(context.Background(), liteSpec)
+	if err != nil {
+		t.Fatalf("open lite session error=%v", err)
+	}
+	if liteSess.token != "lite-token" {
+		t.Fatalf("lite token=%q want lite-token", liteSess.token)
+	}
+	liteSess.Close()
 
 	heavySpec, ok := ResolveModel("grok-4.20-heavy")
 	if !ok {

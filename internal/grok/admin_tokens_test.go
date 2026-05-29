@@ -64,11 +64,29 @@ func TestApplyTokenEntryToAccount_QuotaIsRemaining(t *testing.T) {
 	acc := &store.Account{}
 	entry := adminTokenEntry{Token: "t-basic", Pool: "ssoBasic", Quota: 35}
 	applyTokenEntryToAccount(acc, entry)
-	if acc.UsageLimit != 80 {
-		t.Fatalf("usage_limit=%v want=80", acc.UsageLimit)
+	if acc.UsageLimit != 35 {
+		t.Fatalf("usage_limit=%v want=35", acc.UsageLimit)
 	}
 	if acc.UsageCurrent != 35 {
 		t.Fatalf("usage_current=%v want=35", acc.UsageCurrent)
+	}
+}
+
+func TestApplyTokenEntryToAccount_LitePool(t *testing.T) {
+	acc := &store.Account{}
+	entry := adminTokenEntry{Token: "t-lite", Pool: "ssoLite", Quota: 60}
+	applyTokenEntryToAccount(acc, entry)
+	if acc.Subscription != "lite" {
+		t.Fatalf("subscription=%q want lite", acc.Subscription)
+	}
+	if acc.UsageLimit != 70 {
+		t.Fatalf("usage_limit=%v want=70", acc.UsageLimit)
+	}
+	if got := inferTokenPool(acc); got != "ssoLite" {
+		t.Fatalf("inferTokenPool=%q want ssoLite", got)
+	}
+	if got := grokAccountPool(acc); got != "lite" {
+		t.Fatalf("grokAccountPool=%q want lite", got)
 	}
 }
 
