@@ -134,6 +134,12 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 
 	m, err := h.lb.Store.GetModelByModelID(ctx, id)
 	if err != nil || m == nil {
+		rawID := strings.ToLower(strings.TrimSpace(modelID))
+		if rawID != "" && rawID != id {
+			m, err = h.lb.Store.GetModelByModelID(ctx, rawID)
+		}
+	}
+	if err != nil || m == nil {
 		return fmt.Errorf("model not found")
 	}
 	if !modelpolicy.IsVisibleGrokModel(id, m.Verified) {

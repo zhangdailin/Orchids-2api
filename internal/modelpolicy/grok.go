@@ -101,6 +101,9 @@ func IsPublicGrokModelID(modelID string) bool {
 	if id == "" {
 		return false
 	}
+	if id == "grok-4.3" {
+		id = "grok-4.3-beta"
+	}
 	_, ok := publicGrokModelAllowlist[id]
 	return ok
 }
@@ -109,6 +112,9 @@ func IsStableGrokTextModelID(modelID string) bool {
 	id := strings.ToLower(strings.TrimSpace(modelID))
 	if id == "" {
 		return false
+	}
+	if id == "grok-4.3" {
+		id = "grok-4.3-beta"
 	}
 	_, ok := stableGrokTextModelAllowlist[id]
 	return ok
@@ -123,7 +129,11 @@ func PublicGrokModelIDs() []string {
 }
 
 func GrokModelPoolCandidates(modelID string) []string {
-	routing, ok := grokModelRoutingByID[strings.ToLower(strings.TrimSpace(modelID))]
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if id == "grok-4.3" {
+		id = "grok-4.3-beta"
+	}
+	routing, ok := grokModelRoutingByID[id]
 	if !ok {
 		return nil
 	}

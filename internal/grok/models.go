@@ -77,6 +77,8 @@ func normalizeModelID(modelID string) string {
 		m = "grok-" + strings.TrimPrefix(m, "gork-")
 	}
 	switch m {
+	case "grok-4.3":
+		return "grok-4.3-beta"
 	case "grok-imagine-1.0":
 		return "grok-imagine-image"
 	case "grok-imagine-1.0-fast":

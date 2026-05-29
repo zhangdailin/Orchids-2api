@@ -477,6 +477,15 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		wg.Wait()
 	}
 
+	for idx, candidate := range candidates {
+		if accepted[idx] {
+			continue
+		}
+		if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
+			accepted[idx] = true
+		}
+	}
+
 	out := make([]discoveredModel, 0, len(candidates))
 	for idx, candidate := range candidates {
 		if !accepted[idx] {

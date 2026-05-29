@@ -67,7 +67,7 @@ func publicGrokAccountPool(acc *store.Account) string {
 
 func modelAvailableForGrokPools(modelID string, pools map[string]struct{}) bool {
 	if len(pools) == 0 {
-		return false
+		return true
 	}
 	candidates := modelpolicy.GrokModelPoolCandidates(modelID)
 	if len(candidates) == 0 {
@@ -88,9 +88,6 @@ func availableGrokPools(accounts []*store.Account) map[string]struct{} {
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") && !strings.EqualFold(strings.TrimSpace(acc.AgentMode), "grok") {
-			continue
-		}
-		if strings.TrimSpace(acc.StatusCode) != "" {
 			continue
 		}
 		if pool := publicGrokAccountPool(acc); pool != "" {
@@ -121,22 +118,10 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("api_error", "Failed to fetch models: "+err.Error(), http.StatusInternalServerError).WriteResponse(w)
 		return
 	}
-	var grokPools map[string]struct{}
-	if filterChannel == "" || strings.EqualFold(filterChannel, "grok") {
-		if accounts, accErr := h.loadBalancer.Store.ListAccounts(ctx); accErr == nil {
-			grokPools = availableGrokPools(accounts)
-		} else {
-			grokPools = map[string]struct{}{}
-		}
-	}
-
 	var publicModels []PublicModelResponse
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
-			continue
-		}
-		if strings.EqualFold(mChannel, "grok") && !modelAvailableForGrokPools(m.ModelID, grokPools) {
 			continue
 		}
 
@@ -195,14 +180,6 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filterChannel := channelFromPath(path)
-	var grokPools map[string]struct{}
-	if filterChannel == "" || strings.EqualFold(filterChannel, "grok") {
-		if accounts, accErr := h.loadBalancer.Store.ListAccounts(ctx); accErr == nil {
-			grokPools = availableGrokPools(accounts)
-		} else {
-			grokPools = map[string]struct{}{}
-		}
-	}
 	var (
 		m   *store.Model
 		err error
@@ -218,10 +195,6 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 	mChannel, ok := isVisiblePublicModel(m, filterChannel)
 	if !ok {
-		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
-		return
-	}
-	if strings.EqualFold(mChannel, "grok") && !modelAvailableForGrokPools(m.ModelID, grokPools) {
 		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}

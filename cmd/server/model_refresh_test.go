@@ -13,6 +13,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/grok"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 )
@@ -302,6 +303,19 @@ func TestGrokProbeCandidatesIncludesPolicyAndExistingModels(t *testing.T) {
 	}
 	if _, ok := gotSet["grok-5"]; !ok {
 		t.Fatalf("expected candidates to include existing model grok-5, got %+v", items)
+	}
+}
+
+func TestGrokConsoleModelsRemainAcceptedAfterProbeFallback(t *testing.T) {
+	candidates := []discoveredModel{{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta"}}
+	accepted := make([]bool, len(candidates))
+	for idx, candidate := range candidates {
+		if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
+			accepted[idx] = true
+		}
+	}
+	if !accepted[0] {
+		t.Fatal("expected grok-4.3-beta to remain accepted as a console model")
 	}
 }
 

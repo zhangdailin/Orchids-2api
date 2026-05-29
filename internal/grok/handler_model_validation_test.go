@@ -92,6 +92,41 @@ func TestEnsureModelEnabled_AllowsVerifiedDynamicGrokModel(t *testing.T) {
 	}
 }
 
+func TestResolveModel_AcceptsLegacyGrok43Alias(t *testing.T) {
+	spec, ok := ResolveModel("grok-4.3")
+	if !ok {
+		t.Fatal("ResolveModel(grok-4.3) = false, want true")
+	}
+	if spec.ID != "grok-4.3-beta" {
+		t.Fatalf("spec.ID=%q want grok-4.3-beta", spec.ID)
+	}
+	if spec.ConsoleModel != "grok-4.3" {
+		t.Fatalf("ConsoleModel=%q want grok-4.3", spec.ConsoleModel)
+	}
+}
+
+func TestEnsureModelEnabled_AcceptsLegacyGrok43StoreRecord(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel:  "Grok",
+		ModelID:  "grok-4.3",
+		Name:     "Grok 4.3",
+		Status:   store.ModelStatusAvailable,
+		Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+
+	if err := h.ensureModelEnabled(context.Background(), "grok-4.3"); err != nil {
+		t.Fatalf("ensureModelEnabled(grok-4.3) error = %v", err)
+	}
+}
+
 func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
