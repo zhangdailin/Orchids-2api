@@ -335,6 +335,10 @@ func ResolveModelAlias(model string) string {
 	return ""
 }
 
+func DefaultModel() string {
+	return defaultModel
+}
+
 type encoder struct {
 	b []byte
 }

@@ -58,6 +58,14 @@ type discoveredModel struct {
 	SortOrder int
 }
 
+type warpAccountDiscovery struct {
+	index   int
+	id      int64
+	choices []warp.ModelChoice
+	source  string
+	ok      bool
+}
+
 type modelRefreshFunc func(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (*modelRefreshResult, error)
 
 var runModelRefresh modelRefreshFunc = syncModelsForChannelConcurrent
@@ -668,13 +676,6 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		})
 	}
 
-	type warpAccountDiscovery struct {
-		index   int
-		choices []warp.ModelChoice
-		source  string
-		ok      bool
-	}
-
 	workerCount := boundedModelRefreshWorkers(len(accounts), concurrency)
 	if workerCount > 0 {
 		jobs := make(chan int, len(accounts))
@@ -694,6 +695,7 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 					}
 					results <- warpAccountDiscovery{
 						index:   idx,
+						id:      acc.ID,
 						choices: choices,
 						source:  source,
 						ok:      true,
@@ -728,12 +730,40 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 				appendChoice(choice)
 			}
 		}
+		if len(out) > 0 {
+			saveWarpAccountModelChoices(ctx, s, ordered)
+		}
 	}
 
 	if len(out) > 0 {
 		return out, joinWarpDiscoverySources(sourceSet), nil
 	}
 	return warpSeedDiscoveredModels(), "warp_static_catalog_fallback", nil
+}
+
+func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoveries []warpAccountDiscovery) {
+	if s == nil {
+		return
+	}
+	accountChoices := &warp.AccountModelChoices{Accounts: make(map[string][]string)}
+	for _, result := range discoveries {
+		if !result.ok || result.id == 0 || len(result.choices) == 0 {
+			continue
+		}
+		models := make([]string, 0, len(result.choices))
+		for _, choice := range result.choices {
+			models = append(models, choice.ID)
+		}
+		accountChoices.Accounts[strconv.FormatInt(result.id, 10)] = models
+	}
+	if len(accountChoices.Accounts) == 0 {
+		return
+	}
+	if err := warp.SaveAccountModelChoices(ctx, s, accountChoices); err != nil {
+		// Model refresh should still succeed when the advisory account/model
+		// cache cannot be written.
+		return
+	}
 }
 
 func warpSeedDiscoveredModels() []discoveredModel {

@@ -756,7 +756,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	failedAccountIDs := []int64{}
 	failedAccountSet := make(map[int64]struct{})
 
-	apiClient, currentAccount, err := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
+	apiClient, currentAccount, err := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, req.Model)
 	if err != nil {
 		slog.Error("selectAccount failed", "error", err, "channel", targetChannel)
 		logger.LogEarlyExit("select_account_failed", map[string]interface{}{
@@ -1362,7 +1362,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					trackedAccountID = 0
 				}
 
-				nextClient, nextAccount, retryErr := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs)
+				nextClient, nextAccount, retryErr := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, upstreamReq.Model)
 				if retryErr == nil {
 					apiClient = nextClient
 					currentAccount = nextAccount

@@ -16,6 +16,7 @@ import (
 	"orchids-api/internal/grok"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
+	"orchids-api/internal/warp"
 )
 
 func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
@@ -474,6 +475,44 @@ func TestApplyModelRefresh_PreservesMissingWarpWorkspaceFallbackModels(t *testin
 	}
 	if _, err := s.GetModelByChannelAndModelID(ctx, "Warp", "claude-4-5-opus"); err != nil {
 		t.Fatal("expected workspace fallback refresh to preserve missing model")
+	}
+}
+
+func TestSaveWarpAccountModelChoices(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	saveWarpAccountModelChoices(ctx, s, []warpAccountDiscovery{
+		{
+			id: 1,
+			ok: true,
+			choices: []warp.ModelChoice{
+				{ID: "gpt-5.2-medium"},
+				{ID: "claude-opus-4-6"},
+			},
+		},
+		{
+			id: 2,
+			ok: false,
+			choices: []warp.ModelChoice{
+				{ID: "gemini-3-pro"},
+			},
+		},
+	})
+
+	choices, err := warp.LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		t.Fatalf("LoadAccountModelChoices() error = %v", err)
+	}
+	if choices == nil {
+		t.Fatal("expected cached choices")
+	}
+	if !warp.AccountSupportsModel(choices, 1, "claude-4.6-opus") {
+		t.Fatal("expected account 1 to support normalized Claude model")
+	}
+	if warp.AccountSupportsModel(choices, 1, "gemini-3-pro") {
+		t.Fatal("expected account 1 not to support uncached Gemini model")
 	}
 }
 
