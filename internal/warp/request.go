@@ -1,15 +1,15 @@
 package warp
 
 import (
+	"bytes"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/goccy/go-json"
-	v1 "github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"orchids-api/internal/orchids"
 	"orchids-api/internal/prompt"
@@ -49,16 +49,25 @@ func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	}
 
 	disableWarpTools := req.NoTools || len(req.Tools) == 0
-	payload, err := buildRequestBytesFromOfficialProto(
+	payload, err := buildRequestBytesFromTemplate(
 		built.Full,
 		normalizeWarpTemplateModel(req.Model),
+		isNewWarpConversation(req),
 		disableWarpTools,
 		req.Workdir,
-		req.ChatSessionID,
-		req.Tools,
 	)
 	if err != nil {
 		return "", nil, err
+	}
+
+	if !disableWarpTools {
+		mcpContext, err := buildMCPContext(req.Tools)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(mcpContext) > 0 {
+			payload = append(payload, encodeBytesField(6, mcpContext)...)
+		}
 	}
 
 	return built.Full, payload, nil
@@ -266,6 +275,35 @@ func appendVarint(buf []byte, v uint64) []byte {
 	return buf
 }
 
+func isNewWarpConversation(req upstream.UpstreamRequest) bool {
+	if strings.TrimSpace(req.ChatSessionID) != "" {
+		return false
+	}
+	if len(req.Messages) == 0 {
+		return true
+	}
+	meaningful := 0
+	for _, msg := range req.Messages {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		if role == "" || role == "system" {
+			continue
+		}
+		meaningful++
+		if role == "assistant" {
+			return false
+		}
+		if !msg.Content.IsString() {
+			for _, block := range msg.Content.GetBlocks() {
+				switch block.Type {
+				case "tool_result", "tool_use":
+					return false
+				}
+			}
+		}
+	}
+	return meaningful <= 1
+}
+
 func EstimateInputTokens(promptText, _ string, messages []prompt.Message, _ []interface{}, _ bool) (InputTokenEstimate, error) {
 	built := buildPrompt(promptText, messages, nil, nil, false, "")
 	baseTokens := tiktoken.EstimateTextTokens(built.BasePrompt)
@@ -297,6 +335,57 @@ func ResolveModelAlias(model string) string {
 	return ""
 }
 
+type encoder struct {
+	b []byte
+}
+
+func (e *encoder) bytes() []byte {
+	return e.b
+}
+
+func (e *encoder) writeVarint(x uint64) {
+	for x >= 0x80 {
+		e.b = append(e.b, byte(x)|0x80)
+		x >>= 7
+	}
+	e.b = append(e.b, byte(x))
+}
+
+func (e *encoder) writeKey(field int, wire int) {
+	e.writeVarint(uint64(field<<3 | wire))
+}
+
+func (e *encoder) writeString(field int, value string) {
+	e.writeKey(field, 2)
+	e.writeVarint(uint64(len(value)))
+	e.b = append(e.b, value...)
+}
+
+func (e *encoder) writeBytes(field int, value []byte) {
+	e.writeKey(field, 2)
+	e.writeVarint(uint64(len(value)))
+	e.b = append(e.b, value...)
+}
+
+func (e *encoder) writeMessage(field int, msg []byte) {
+	e.writeKey(field, 2)
+	e.writeVarint(uint64(len(msg)))
+	e.b = append(e.b, msg...)
+}
+
+var realRequestTemplate = mustDecodeHex("0a00125a0a430a1e0a0d2f55736572732f6c6f66796572120d2f55736572732f6c6f6679657212070a054d61634f531a0a0a037a73681203352e39220c08eeb8d3cb0610908ef0bd0232130a110a0f0a09e4bda0e5a5bde591801a0020011a660a210a0f636c617564652d342d352d6f707573220e636c692d6167656e742d6175746f1001180120013001380140014a1306070c08090f0e000b100a141113120203010d500158016001680170017801800101880101a80101b201070a1406070c0201b801012264121e0a0a656e747279706f696e7412101a0e555345525f494e4954494154454412200a1a69735f6175746f5f726573756d655f61667465725f6572726f721202200012200a1a69735f6175746f64657465637465645f757365725f717565727912022001")
+
+var supportedToolsPattern = mustDecodeHex("4a1306070c08090f0e000b100a141113120203010d")
+var clientSupportedToolsPattern = mustDecodeHex("b201070a1406070c0201")
+
+func mustDecodeHex(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		panic(fmt.Sprintf("warp: invalid hex template: %v", err))
+	}
+	return b
+}
+
 func normalizeWarpTemplateModel(model string) string {
 	canonical := canonicalModelID(model)
 	if canonical == "" {
@@ -305,194 +394,268 @@ func normalizeWarpTemplateModel(model string) string {
 	return canonical
 }
 
-func buildRequestBytesFromOfficialProto(userText, model string, disableWarpTools bool, workdir, conversationID string, tools []interface{}) ([]byte, error) {
-	req, err := buildOfficialWarpRequest(userText, model, disableWarpTools, workdir, conversationID, tools)
-	if err != nil {
-		return nil, err
+func buildRequestBytesFromTemplate(userText, model string, isNew bool, disableWarpTools bool, workdir string) ([]byte, error) {
+	template := append([]byte(nil), realRequestTemplate...)
+
+	newQueryBytes := []byte(userText)
+	userQueryContent := []byte{0x0a}
+	userQueryContent = append(userQueryContent, appendVarint(nil, uint64(len(newQueryBytes)))...)
+	userQueryContent = append(userQueryContent, newQueryBytes...)
+	userQueryContent = append(userQueryContent, 0x1a, 0x00, 0x20)
+	if isNew {
+		userQueryContent = append(userQueryContent, 0x01)
+	} else {
+		userQueryContent = append(userQueryContent, 0x00)
 	}
-	return proto.Marshal(req)
+
+	userQueryTotalLen := len(userQueryContent)
+	userInputContent := append([]byte{0x0a}, appendVarint(nil, uint64(userQueryTotalLen))...)
+	userInputContent = append(userInputContent, userQueryContent...)
+
+	inputsContent := append([]byte{0x0a}, appendVarint(nil, uint64(len(userInputContent)))...)
+	inputsContent = append(inputsContent, userInputContent...)
+
+	userInputsContent := append([]byte{0x32}, appendVarint(nil, uint64(len(inputsContent)))...)
+	userInputsContent = append(userInputsContent, inputsContent...)
+
+	contextEnc := encoder{}
+	contextEnc.writeMessage(1, buildInputContext(workdir))
+	contextPart := contextEnc.bytes()
+	newInputContent := append(append([]byte(nil), contextPart...), userInputsContent...)
+	newInputMsg := append([]byte{0x12}, appendVarint(nil, uint64(len(newInputContent)))...)
+	newInputMsg = append(newInputMsg, newInputContent...)
+
+	settingsStart := 2 + 2 + 90
+	if settingsStart > len(template) {
+		return nil, fmt.Errorf("warp template: invalid settings offset")
+	}
+	rest := template[settingsStart:]
+
+	result := append([]byte{0x0a, 0x00}, newInputMsg...)
+	result = append(result, rest...)
+	result = patchTemplateModel(result, model)
+
+	if disableWarpTools {
+		result = removeSupportedTools(result)
+	}
+	return result, nil
 }
 
-func buildOfficialWarpRequest(userText, model string, disableWarpTools bool, workdir, conversationID string, tools []interface{}) (*v1.Request, error) {
-	targetModel := strings.TrimSpace(model)
-	if targetModel == "" {
-		targetModel = defaultModel
+func patchTemplateModel(data []byte, model string) []byte {
+	target := strings.TrimSpace(model)
+	if target == "" {
+		target = defaultModel
+	}
+	modelBytes := []byte(target)
+	if len(modelBytes) == 0 || len(modelBytes) > 0x7f {
+		return data
 	}
 
-	userQuery := v1.Request_Input_UserQuery_builder{
-		Query:         stringPtr(userText),
-		Mode:          (&v1.UserQueryMode_builder{}).Build(),
-		IntendedAgent: agentTypePtr(v1.AgentType_AGENT_TYPE_PRIMARY),
-	}.Build()
+	idBytes := []byte(identifier)
+	idPos := findBytes(data, idBytes)
+	if idPos < 2 || data[idPos-2] != 0x22 {
+		return data
+	}
+	idLen := int(data[idPos-1])
+	if idLen != len(idBytes) {
+		return data
+	}
 
-	input := v1.Request_Input_builder{
-		Context: buildOfficialInputContext(workdir),
-		UserInputs: v1.Request_Input_UserInputs_builder{
-			Inputs: []*v1.Request_Input_UserInputs_UserInput{
-				v1.Request_Input_UserInputs_UserInput_builder{
-					UserQuery: userQuery,
-				}.Build(),
-			},
-		}.Build(),
-	}.Build()
-
-	settings := buildOfficialSettings(targetModel, disableWarpTools)
-	metadata := buildOfficialMetadata(conversationID)
-
-	var mcpContext *v1.Request_MCPContext
-	if !disableWarpTools {
-		var err error
-		mcpContext, err = buildMCPContext(tools)
-		if err != nil {
-			return nil, err
+	modelTagPos := -1
+	oldModelLen := 0
+	for i := idPos - 3; i >= 0 && i >= idPos-96; i-- {
+		if data[i] != 0x0a || i+1 >= len(data) {
+			continue
+		}
+		l := int(data[i+1])
+		if i+2+l == idPos-2 {
+			modelTagPos = i
+			oldModelLen = l
+			break
 		}
 	}
+	if modelTagPos < 0 {
+		return data
+	}
 
-	return v1.Request_builder{
-		TaskContext: (&v1.Request_TaskContext_builder{}).Build(),
-		Input:       input,
-		Settings:    settings,
-		Metadata:    metadata,
-		McpContext:  mcpContext,
-	}.Build(), nil
+	entryTagPos := modelTagPos - 2
+	if entryTagPos < 0 || data[entryTagPos] != 0x0a {
+		return data
+	}
+	settingsTagPos := entryTagPos - 2
+	if settingsTagPos < 0 || data[settingsTagPos] != 0x1a {
+		return data
+	}
+
+	oldEntryLen := int(data[entryTagPos+1])
+	expectedEntryLen := idPos + idLen - modelTagPos
+	if oldEntryLen != expectedEntryLen {
+		return data
+	}
+
+	oldSettingsLen := int(data[settingsTagPos+1])
+	delta := len(modelBytes) - oldModelLen
+	newEntryLen := oldEntryLen + delta
+	newSettingsLen := oldSettingsLen + delta
+	if newEntryLen < 0 || newEntryLen > 0x7f || newSettingsLen < 0 || newSettingsLen > 0x7f {
+		return data
+	}
+
+	modelStart := modelTagPos + 2
+	modelEnd := modelStart + oldModelLen
+	if modelEnd > len(data) {
+		return data
+	}
+
+	out := make([]byte, 0, len(data)+delta)
+	out = append(out, data[:modelStart]...)
+	out = append(out, modelBytes...)
+	out = append(out, data[modelEnd:]...)
+
+	out[modelTagPos+1] = byte(len(modelBytes))
+	out[entryTagPos+1] = byte(newEntryLen)
+	out[settingsTagPos+1] = byte(newSettingsLen)
+	return out
 }
 
-func buildOfficialInputContext(workdir string) *v1.InputContext {
+func removeSupportedTools(data []byte) []byte {
+	result := append([]byte(nil), data...)
+	totalRemoved := 0
+
+	settingsTagPos := -1
+	for i := 0; i < len(data)-1; i++ {
+		if data[i] == 0x1a && i > 50 {
+			if i+3 < len(data) && data[i+2] == 0x0a && data[i+3] == 0x21 {
+				settingsTagPos = i
+				break
+			}
+		}
+	}
+	if settingsTagPos == -1 {
+		return result
+	}
+
+	origSettingsLen, varintLen := decodeVarintAt(data, settingsTagPos+1)
+	if varintLen == 0 {
+		return result
+	}
+
+	if pos := findBytes(result, supportedToolsPattern); pos != -1 {
+		result = append(result[:pos], result[pos+len(supportedToolsPattern):]...)
+		totalRemoved += len(supportedToolsPattern)
+	}
+	if pos := findBytes(result, clientSupportedToolsPattern); pos != -1 {
+		result = append(result[:pos], result[pos+len(clientSupportedToolsPattern):]...)
+		totalRemoved += len(clientSupportedToolsPattern)
+	}
+
+	if totalRemoved > 0 {
+		newLen := origSettingsLen - totalRemoved
+		if newLen < 0 {
+			newLen = 0
+		}
+		newVarint := appendVarint(nil, uint64(newLen))
+		insertPos := settingsTagPos + 1
+		oldEnd := insertPos + varintLen
+		if oldEnd > len(result) {
+			oldEnd = len(result)
+		}
+		tail := append([]byte(nil), result[oldEnd:]...)
+		result = append(result[:insertPos], newVarint...)
+		result = append(result, tail...)
+	}
+	return result
+}
+
+func decodeVarintAt(data []byte, offset int) (int, int) {
+	var x uint64
+	var s uint
+	for i := offset; i < len(data); i++ {
+		b := data[i]
+		x |= uint64(b&0x7f) << s
+		s += 7
+		if b < 0x80 {
+			return int(x), i - offset + 1
+		}
+		if s > 63 {
+			return 0, 0
+		}
+	}
+	return 0, 0
+}
+
+func findBytes(haystack, needle []byte) int {
+	if len(needle) == 0 {
+		return -1
+	}
+	return bytes.Index(haystack, needle)
+}
+
+func encodeBytesField(field int, value []byte) []byte {
+	e := encoder{}
+	e.writeBytes(field, value)
+	return e.bytes()
+}
+
+func buildInputContext(workdir string) []byte {
 	pwd := strings.TrimSpace(workdir)
-	return v1.InputContext_builder{
-		Directory: v1.InputContext_Directory_builder{
-			Pwd:  stringPtr(pwd),
-			Home: stringPtr(""),
-		}.Build(),
-		OperatingSystem: v1.InputContext_OperatingSystem_builder{
-			Platform:     stringPtr("MacOS"),
-			Distribution: stringPtr(""),
-		}.Build(),
-		Shell: v1.InputContext_Shell_builder{
-			Name:    stringPtr("zsh"),
-			Version: stringPtr("5.9"),
-		}.Build(),
-		CurrentTime: timestamppb.New(time.Now()),
-	}.Build()
+	home := ""
+	shellName := "zsh"
+	shellVersion := "5.9"
+
+	dir := encoder{}
+	dir.writeString(1, pwd)
+	dir.writeString(2, home)
+
+	osCtx := encoder{}
+	osCtx.writeString(1, "MacOS")
+	osCtx.writeString(2, "")
+
+	shell := encoder{}
+	shell.writeString(1, shellName)
+	shell.writeString(2, shellVersion)
+
+	ts := encoder{}
+	now := time.Now()
+	ts.writeKey(1, 0)
+	ts.writeVarint(uint64(now.Unix()))
+	ts.writeKey(2, 0)
+	ts.writeVarint(uint64(now.Nanosecond()))
+
+	ctx := encoder{}
+	ctx.writeMessage(1, dir.bytes())
+	ctx.writeMessage(2, osCtx.bytes())
+	ctx.writeMessage(3, shell.bytes())
+	ctx.writeMessage(4, ts.bytes())
+	return ctx.bytes()
 }
 
-func buildOfficialSettings(model string, disableWarpTools bool) *v1.Request_Settings {
-	settings := v1.Request_Settings_builder{
-		ModelConfig: v1.Request_Settings_ModelConfig_builder{
-			Base:     stringPtr(model),
-			CliAgent: stringPtr(identifier),
-		}.Build(),
-		RulesEnabled:                       boolPtr(true),
-		WebContextRetrievalEnabled:         boolPtr(true),
-		SupportsParallelToolCalls:          boolPtr(true),
-		PlanningEnabled:                    boolPtr(true),
-		WarpDriveContextEnabled:            boolPtr(true),
-		SupportsCreateFiles:                boolPtr(true),
-		SupportsLongRunningCommands:        boolPtr(true),
-		ShouldPreserveFileContentInHistory: boolPtr(true),
-		SupportsTodosUi:                    boolPtr(true),
-		SupportsLinkedCodeBlocks:           boolPtr(true),
-		SupportsStartedChildTaskMessage:    boolPtr(true),
-		SupportsSuggestPrompt:              boolPtr(true),
-		SupportsReadImageFiles:             boolPtr(true),
-		SupportsReasoningMessage:           boolPtr(true),
-		WebSearchEnabled:                   boolPtr(true),
-		SupportsV4AFileDiffs:               boolPtr(true),
-	}
-	if !disableWarpTools {
-		settings.SupportedTools = officialSupportedTools()
-		settings.SupportedCliAgentTools = officialSupportedCliAgentTools()
-	}
-	return settings.Build()
-}
-
-func buildOfficialMetadata(conversationID string) *v1.Request_Metadata {
-	metadata := v1.Request_Metadata_builder{
-		Logging: map[string]*structpb.Value{
-			"entrypoint":                 structpb.NewStringValue("USER_INITIATED"),
-			"is_auto_resume_after_error": structpb.NewBoolValue(false),
-			"is_autodetected_user_query": structpb.NewBoolValue(true),
-		},
-	}
-	if trimmed := strings.TrimSpace(conversationID); trimmed != "" {
-		metadata.ConversationId = stringPtr(trimmed)
-	}
-	return metadata.Build()
-}
-
-func officialSupportedTools() []v1.ToolType {
-	return []v1.ToolType{
-		v1.ToolType_GREP,
-		v1.ToolType_FILE_GLOB,
-		v1.ToolType_FILE_GLOB_V2,
-		v1.ToolType_READ_MCP_RESOURCE,
-		v1.ToolType_CALL_MCP_TOOL,
-		v1.ToolType_INIT_PROJECT,
-		v1.ToolType_OPEN_CODE_REVIEW,
-		v1.ToolType_RUN_SHELL_COMMAND,
-		v1.ToolType_SUGGEST_NEW_CONVERSATION,
-		v1.ToolType_SUBAGENT,
-		v1.ToolType_WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
-		v1.ToolType_READ_SHELL_COMMAND_OUTPUT,
-		v1.ToolType_READ_DOCUMENTS,
-		v1.ToolType_EDIT_DOCUMENTS,
-		v1.ToolType_CREATE_DOCUMENTS,
-		v1.ToolType_READ_FILES,
-		v1.ToolType_APPLY_FILE_DIFFS,
-		v1.ToolType_SEARCH_CODEBASE,
-		v1.ToolType_SUGGEST_PROMPT,
-	}
-}
-
-func officialSupportedCliAgentTools() []v1.ToolType {
-	return []v1.ToolType{
-		v1.ToolType_GREP,
-		v1.ToolType_FILE_GLOB,
-		v1.ToolType_FILE_GLOB_V2,
-		v1.ToolType_READ_FILES,
-		v1.ToolType_SEARCH_CODEBASE,
-	}
-}
-
-func buildMCPContext(tools []interface{}) (*v1.Request_MCPContext, error) {
+func buildMCPContext(tools []interface{}) ([]byte, error) {
 	converted := convertTools(tools)
 	if len(converted) == 0 {
 		return nil, nil
 	}
 
-	mcpTools := make([]*v1.Request_MCPContext_MCPTool, 0, len(converted))
+	ctx := encoder{}
 	for _, tool := range converted {
-		var st *structpb.Struct
+		toolMsg := encoder{}
+		toolMsg.writeString(1, tool.Name)
+		toolMsg.writeString(2, tool.Description)
 		if len(tool.Schema) > 0 {
-			var err error
-			st, err = structpb.NewStruct(tool.Schema)
+			st, err := structpb.NewStruct(tool.Schema)
 			if err != nil {
 				return nil, err
 			}
+			encoded, err := proto.Marshal(st)
+			if err != nil {
+				return nil, err
+			}
+			toolMsg.writeMessage(3, encoded)
 		}
-		mcpTools = append(mcpTools, v1.Request_MCPContext_MCPTool_builder{
-			Name:        stringPtr(tool.Name),
-			Description: stringPtr(tool.Description),
-			InputSchema: st,
-		}.Build())
+		ctx.writeMessage(2, toolMsg.bytes())
 	}
-
-	server := v1.Request_MCPContext_MCPServer_builder{
-		Name:        stringPtr("client"),
-		Description: stringPtr("Client provided tools"),
-		Id:          stringPtr("orchids-client-tools"),
-		Tools:       mcpTools,
-	}.Build()
-	return v1.Request_MCPContext_builder{
-		Servers: []*v1.Request_MCPContext_MCPServer{server},
-	}.Build(), nil
+	return ctx.bytes(), nil
 }
-
-func stringPtr(s string) *string { return &s }
-
-func boolPtr(v bool) *bool { return &v }
-
-func agentTypePtr(v v1.AgentType) *v1.AgentType { return &v }
 
 type toolDef struct {
 	Name        string

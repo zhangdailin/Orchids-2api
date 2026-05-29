@@ -39,9 +39,9 @@ The useful files are under `apis/multi_agent/v1`:
 - `response.proto`
 - `task.proto`
 
-The generated Go code is imported from the submodule
-`github.com/warpdotdev/warp-proto-apis/apis/multi_agent`, pinned to the same
-commit as the public Warp repository.
+The generated Go code in that repository is not published as an importable Go
+module. Importing it directly would require vendoring/generated code or adding a
+local generation step.
 
 ## Borrowed Behaviors
 
@@ -52,9 +52,8 @@ commit as the public Warp repository.
 
 ## Current Request Shape
 
-Requests are now built with the pinned official generated Go protobuf types
-instead of a hand-written byte template. The generated request keeps the same
-core capability shape that was decoded from the old template:
+Decoded with the pinned `request.proto`, `realRequestTemplate` is a valid
+`warp.multi_agent.v1.Request` with:
 
 - `settings.model_config.base = "claude-4-5-opus"`
 - `settings.model_config.cli_agent = "cli-agent-auto"`
@@ -67,19 +66,19 @@ core capability shape that was decoded from the old template:
 - `settings.supported_cli_agent_tools` includes long-running shell output,
   grep, glob, read files, and search codebase.
 
-The request builder still only populates `model_config.base` and
-`model_config.cli_agent`. It does not currently populate the newer `coding`,
-`computer_use_agent`, `base_model_context_window_limit`,
-`custom_model_providers`, `supports_bundled_skills`,
-`supports_research_agent`, or `supports_orchestration_v2` fields.
+The request builder patches only the `model_config.base` value in this template.
+It does not currently populate the newer `coding`, `computer_use_agent`,
+`base_model_context_window_limit`, `custom_model_providers`,
+`supports_bundled_skills`, `supports_research_agent`, or
+`supports_orchestration_v2` fields.
 
 ## Known Differences
 
 - Official `Request.Settings.ModelConfig` is role-specific. We send one patched
   base model and retain the template's `cli_agent = "cli-agent-auto"`.
 - Official `MCPContext.resources` and `MCPContext.tools` are deprecated in favor
-  of grouped `MCPContext.servers`. We now send client-provided tools through a
-  grouped `servers` entry.
+  of grouped `MCPContext.servers`. We still send top-level tools for
+  compatibility.
 - Official `ResponseEvent.StreamFinished.should_refresh_model_config` tells the
   client when its model config is stale. We now parse and log this signal, but
   do not yet trigger an automatic model refresh.
@@ -91,10 +90,11 @@ The request builder still only populates `model_config.base` and
 
 ## Recommended Next Step
 
-Add a model-refresh service path that can consume
+Replace `realRequestTemplate` and hand-written protobuf patching with generated
+protobuf types from `warp-proto-apis`. That is the largest stability win, but it
+should be done as a separate change because it introduces generated source or a
+new code-generation workflow.
+
+After that, add a model-refresh service path that can consume
 `should_refresh_model_config` by calling the existing Warp GraphQL model
 discovery queries and updating the local model store atomically.
-
-Then evaluate whether to populate official role-specific model config fields
-(`coding`, `computer_use_agent`, and context-window limits) from the refreshed
-model config rather than mirroring only the old template.

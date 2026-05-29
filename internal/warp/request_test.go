@@ -4,9 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	v1 "github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go"
-	"google.golang.org/protobuf/proto"
-
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/upstream"
 )
@@ -64,109 +61,6 @@ func TestBuildRequestBytes_UsesCodeFreeMaxStylePrompt(t *testing.T) {
 	}
 	if !strings.Contains(promptText, "When executing commands, show the command and explain the output.") {
 		t.Fatalf("prompt missing CodeFreeMax output guidance: %q", promptText)
-	}
-
-	var decoded v1.Request
-	if err := proto.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("payload should decode as official Warp Request: %v", err)
-	}
-	inputs := decoded.GetInput().GetUserInputs().GetInputs()
-	if len(inputs) != 1 {
-		t.Fatalf("inputs len=%d want=1", len(inputs))
-	}
-	if got := inputs[0].GetUserQuery().GetQuery(); got != promptText {
-		t.Fatalf("decoded query mismatch\n got: %q\nwant: %q", got, promptText)
-	}
-	modelConfig := decoded.GetSettings().GetModelConfig()
-	if got := modelConfig.GetBase(); got != "claude-4-5-sonnet" {
-		t.Fatalf("model_config.base=%q want claude-4-5-sonnet", got)
-	}
-	if got := modelConfig.GetCliAgent(); got != identifier {
-		t.Fatalf("model_config.cli_agent=%q want %q", got, identifier)
-	}
-	logging := decoded.GetMetadata().GetLogging()
-	if got := logging["entrypoint"].GetStringValue(); got != "USER_INITIATED" {
-		t.Fatalf("logging.entrypoint=%q want USER_INITIATED", got)
-	}
-	if got := logging["is_auto_resume_after_error"].GetBoolValue(); got {
-		t.Fatalf("logging.is_auto_resume_after_error=%v want false", got)
-	}
-	if got := logging["is_autodetected_user_query"].GetBoolValue(); !got {
-		t.Fatalf("logging.is_autodetected_user_query=%v want true", got)
-	}
-}
-
-func TestBuildRequestBytes_UsesOfficialConversationID(t *testing.T) {
-	req := upstream.UpstreamRequest{
-		Prompt:        "continue",
-		Model:         "claude-4-5-opus",
-		ChatSessionID: "conv_123",
-	}
-
-	_, payload, err := buildRequestBytes(req)
-	if err != nil {
-		t.Fatalf("buildRequestBytes error: %v", err)
-	}
-
-	var decoded v1.Request
-	if err := proto.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("payload should decode as official Warp Request: %v", err)
-	}
-	if got := decoded.GetMetadata().GetConversationId(); got != "conv_123" {
-		t.Fatalf("conversation_id=%q want conv_123", got)
-	}
-}
-
-func TestBuildRequestBytes_UsesGroupedMCPServers(t *testing.T) {
-	req := upstream.UpstreamRequest{
-		Prompt: "search symbols",
-		Model:  "claude-4-5-opus",
-		Tools: []interface{}{
-			map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name":        "workspace_search",
-					"description": "search project symbols",
-					"parameters": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"query": map[string]interface{}{"type": "string"},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	_, payload, err := buildRequestBytes(req)
-	if err != nil {
-		t.Fatalf("buildRequestBytes error: %v", err)
-	}
-
-	var decoded v1.Request
-	if err := proto.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("payload should decode as official Warp Request: %v", err)
-	}
-
-	if got := len(decoded.GetMcpContext().GetTools()); got != 0 {
-		t.Fatalf("deprecated mcp_context.tools len=%d want 0", got)
-	}
-	servers := decoded.GetMcpContext().GetServers()
-	if len(servers) != 1 {
-		t.Fatalf("mcp_context.servers len=%d want 1", len(servers))
-	}
-	if got := servers[0].GetId(); got != "orchids-client-tools" {
-		t.Fatalf("mcp server id=%q want orchids-client-tools", got)
-	}
-	tools := servers[0].GetTools()
-	if len(tools) != 1 {
-		t.Fatalf("mcp server tools len=%d want 1", len(tools))
-	}
-	if got := tools[0].GetName(); got != "workspace_search" {
-		t.Fatalf("mcp tool name=%q want workspace_search", got)
-	}
-	if tools[0].GetInputSchema().GetFields()["properties"] == nil {
-		t.Fatalf("mcp tool schema lost properties: %#v", tools[0].GetInputSchema())
 	}
 }
 

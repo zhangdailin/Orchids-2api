@@ -26,7 +26,6 @@ require (
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
-	github.com/warpdotdev/warp-proto-apis/apis/multi_agent v0.0.0-20260521145647-c67de64fc494 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
