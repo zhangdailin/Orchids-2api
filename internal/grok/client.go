@@ -449,10 +449,7 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpec) (*RateLimitInfo, error) {
 	payload := map[string]interface{}{
 		"requestKind": "DEFAULT",
-		"modelName":   strings.TrimSpace(spec.UpstreamModel),
-	}
-	if strings.TrimSpace(spec.UpstreamModel) == "" {
-		payload["modelName"] = "grok-4.20-0309"
+		"modelName":   rateLimitModelName(spec),
 	}
 
 	raw, err := json.Marshal(payload)
@@ -475,6 +472,28 @@ func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpe
 		return info, nil
 	}
 	return parseRateLimitInfo(resp.Header), nil
+}
+
+func rateLimitModelName(spec ModelSpec) string {
+	mode := strings.TrimSpace(spec.ModelMode)
+	switch mode {
+	case "MODEL_MODE_FAST":
+		return "fast"
+	case "MODEL_MODE_AUTO":
+		return "auto"
+	case "MODEL_MODE_EXPERT":
+		return "expert"
+	case "MODEL_MODE_HEAVY":
+		return "heavy"
+	}
+	if mode != "" {
+		return mode
+	}
+	upstream := strings.TrimSpace(spec.UpstreamModel)
+	if upstream != "" {
+		return upstream
+	}
+	return "fast"
 }
 
 func isGrokModelNotFoundError(err error) bool {

@@ -209,6 +209,26 @@ func TestApplyQuotaInfo_InfersLiteSubscription(t *testing.T) {
 	}
 }
 
+func TestApplyQuotaInfo_InfersBasicFromFreeAutoWindow(t *testing.T) {
+	acc := &store.Account{}
+	changed := ApplyQuotaInfo(acc, &RateLimitInfo{
+		Limit:        7,
+		HasLimit:     true,
+		Remaining:    7,
+		HasRemaining: true,
+		Unit:         "requests",
+	})
+	if !changed {
+		t.Fatal("ApplyQuotaInfo changed=false, want true")
+	}
+	if acc.Subscription != "basic" {
+		t.Fatalf("subscription=%q want basic", acc.Subscription)
+	}
+	if acc.UsageLimit != 7 || acc.UsageCurrent != 7 {
+		t.Fatalf("unexpected quota: limit=%v current=%v", acc.UsageLimit, acc.UsageCurrent)
+	}
+}
+
 func TestParseRateLimitPayload_SkipsNonNumericMatchedField(t *testing.T) {
 	payload := map[string]interface{}{
 		"quota": map[string]interface{}{

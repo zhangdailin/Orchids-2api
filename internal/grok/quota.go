@@ -44,7 +44,7 @@ func InferSubscriptionFromRateLimitInfo(info *RateLimitInfo) string {
 		return "super"
 	case limit == 25 || limit == 70 || limit == 12:
 		return "lite"
-	case limit == 30 || limit == 80 || limit == 20:
+	case limit == 30 || limit == 20 || limit == 8 || limit == 7:
 		return "basic"
 	default:
 		return ""
