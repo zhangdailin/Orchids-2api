@@ -326,10 +326,16 @@ func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, 
 			}
 		}
 		if acc == nil {
-			if lastErr != nil {
+			fallbackAcc, fallbackErr := h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, "grok", h.connTracker)
+			if fallbackErr == nil && fallbackAcc != nil {
+				acc = fallbackAcc
+			} else if lastErr != nil {
 				return nil, lastErr
+			} else if fallbackErr != nil {
+				return nil, fallbackErr
+			} else {
+				return nil, fmt.Errorf("no enabled accounts available for channel: grok")
 			}
-			return nil, fmt.Errorf("no enabled accounts available for channel: grok")
 		}
 	}
 	raw := strings.TrimSpace(acc.ClientCookie)

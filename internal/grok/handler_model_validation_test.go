@@ -215,6 +215,36 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	fastSess.Close()
 }
 
+func TestOpenChatAccountSessionForModel_FallsBackWhenPoolMetadataMissing(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	if err := s.CreateAccount(context.Background(), &store.Account{
+		AccountType:  "grok",
+		Enabled:      true,
+		ClientCookie: "sso=unknown-tier-token",
+		Weight:       1,
+	}); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	spec, ok := ResolveModel("grok-4.3")
+	if !ok {
+		t.Fatal("missing grok-4.3 spec")
+	}
+	sess, err := h.openChatAccountSessionForModel(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("open session error=%v", err)
+	}
+	defer sess.Close()
+	if sess.token != "unknown-tier-token" {
+		t.Fatalf("token=%q want unknown-tier-token", sess.token)
+	}
+}
+
 func TestTryAutoRegisterModel_VerifiesBeforeCreate(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != defaultRateLimitsPath {
