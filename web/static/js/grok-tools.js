@@ -3803,6 +3803,26 @@
     }
   }
 
+  function videoSizeForRatio(value) {
+    switch (String(value || "").trim()) {
+      case "16:9":
+      case "3:2":
+      case "1792x1024":
+      case "1280x720":
+        return "1792x1024";
+      case "9:16":
+      case "2:3":
+      case "1024x1792":
+      case "720x1280":
+        return "1024x1792";
+      case "1:1":
+      case "1024x1024":
+        return "1024x1024";
+      default:
+        return "720x1280";
+    }
+  }
+
   function initVideoPreviewSlot() {
     const stage = document.getElementById("videoStage");
     if (!stage) return;
@@ -4184,10 +4204,10 @@
     const payload = {
       model: "grok-imagine-video",
       prompt,
-      size: String(document.getElementById("videoRatio")?.value || "3:2"),
+      size: videoSizeForRatio(document.getElementById("videoRatio")?.value || "3:2"),
       seconds: Number(document.getElementById("videoLength")?.value || 6),
       resolution_name: String(document.getElementById("videoResolution")?.value || "480p"),
-      preset: String(document.getElementById("videoPreset")?.value || "normal"),
+      preset: String(document.getElementById("videoPreset")?.value || "custom"),
       input_references: [],
     };
     const imageRef = videoState.fileDataURL || String(document.getElementById("videoImageUrl")?.value || "").trim();
