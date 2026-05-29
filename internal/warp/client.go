@@ -144,6 +144,15 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if fallbackErr != nil {
 		return err
 	}
+	onMessage(upstream.SSEMessage{
+		Type: "model.actual_model",
+		Event: map[string]interface{}{
+			"type":            "actual_model",
+			"requested_model": canonicalModelID(req.Model),
+			"actual_model":    defaultModel,
+			"reason":          "fallback_model_unavailable",
+		},
+	})
 	return c.streamWithRetry(ctx, fallbackPayload, fallbackReq, onMessage, logger, defaultRefresh)
 }
 

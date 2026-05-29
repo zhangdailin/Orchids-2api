@@ -296,6 +296,8 @@ type streamHandler struct {
 	introDedup                    map[string]struct{}
 	suppressEmptyOutputFallback   bool
 	preferPriorToolResultFallback bool
+	requestedModel                string
+	actualModel                   string
 
 	// Throttling
 	lastScanTime time.Time
@@ -3578,6 +3580,18 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	}
 
 	switch eventKey {
+	case "model.actual_model":
+		requested, _ := msg.Event["requested_model"].(string)
+		actual, _ := msg.Event["actual_model"].(string)
+		reason, _ := msg.Event["reason"].(string)
+		slog.Warn("Upstream model fallback", "requested_model", requested, "actual_model", actual, "reason", reason)
+		if actual != "" {
+			h.mu.Lock()
+			h.actualModel = actual
+			h.requestedModel = requested
+			h.mu.Unlock()
+		}
+
 	case "model.conversation_id":
 		if msg.Event != nil {
 			if id, ok := msg.Event["id"].(string); ok && id != "" && h.onConversationID != nil {

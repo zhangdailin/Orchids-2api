@@ -287,6 +287,36 @@ func TestHandleMessages_Warp_StreamAndJSON(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_Warp_NonStreamIncludesActualModelFallback(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	h := NewWithLoadBalancer(cfg, nil)
+	h.client = &mockUpstream{events: []upstream.SSEMessage{
+		{Type: "model.actual_model", Event: map[string]any{"type": "actual_model", "requested_model": "claude-4-6-opus-high", "actual_model": "auto-open", "reason": "fallback_model_unavailable"}},
+		{Type: "model", Event: map[string]any{"type": "text-start"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "fallback-hi"}},
+		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
+	}}
+
+	body, _ := json.Marshal(map[string]any{
+		"model":    "claude-4-6-opus-high",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   false,
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	if !strings.Contains(out, `"actual_model":"auto-open"`) {
+		t.Fatalf("expected actual_model in response, got: %s", out)
+	}
+}
+
 func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	h := NewWithLoadBalancer(cfg, nil)

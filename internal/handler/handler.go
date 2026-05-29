@@ -307,7 +307,9 @@ func upstreamMessageHandler(sh *streamHandler, orchidsOwnsFinalSSE bool) func(up
 	if orchidsOwnsFinalSSE {
 		return nil
 	}
-	return sh.handleMessage
+	return func(msg upstream.SSEMessage) {
+		sh.handleMessage(msg)
+	}
 }
 
 func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest) string {
@@ -1453,7 +1455,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if responseFormat == adapter.FormatOpenAI {
 			response = buildOpenAINonStreamResponse(sh, req.Model, stopReason)
 		} else {
-			response = map[string]interface{}{
+			anthropicResponse := map[string]interface{}{
 				"id":            sh.msgID,
 				"type":          "message",
 				"role":          "assistant",
@@ -1466,6 +1468,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					"output_tokens": sh.outputTokens,
 				},
 			}
+			if sh.actualModel != "" && sh.actualModel != req.Model {
+				anthropicResponse["actual_model"] = sh.actualModel
+			}
+			response = anthropicResponse
 		}
 
 		if err := json.NewEncoder(w).Encode(response); err != nil {

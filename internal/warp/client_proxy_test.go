@@ -11,6 +11,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
+	"orchids-api/internal/upstream"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -179,6 +180,57 @@ func TestShouldRetryWarpWithFallbackModel(t *testing.T) {
 	}
 	if shouldRetryWarpWithFallbackModel(&HTTPStatusError{StatusCode: http.StatusTooManyRequests, Body: err.Body}, "claude-4-5-opus") {
 		t.Fatal("expected non-400 error to avoid fallback retry")
+	}
+}
+
+func TestSendRequestWithPayload_EmitsActualModelOnFallback(t *testing.T) {
+	requestCount := 0
+	client := &Client{
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requestCount++
+				if requestCount == 1 {
+					return &http.Response{
+						StatusCode: http.StatusBadRequest,
+						Body:       io.NopCloser(bytes.NewBufferString(`{"error":"Invalid request: the requested base model (claude-4-6-opus-high) is not allowed for your account"}`)),
+						Header:     make(http.Header),
+						Request:    req,
+					}, nil
+				}
+				finish := wrapFrame(appendBytesField(3, appendBytesField(8, appendVarintField(2, 1))))
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(bytes.NewReader(finish)),
+					Request:    req,
+				}, nil
+			}),
+		},
+		session: &session{
+			jwt:       "test-jwt",
+			expiresAt: time.Now().Add(time.Hour),
+			loggedIn:  true,
+			lastLogin: time.Now(),
+		},
+	}
+
+	var events []string
+	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model:  "claude-4-6-opus-high",
+		Prompt: "hi",
+	}, func(msg upstream.SSEMessage) {
+		if msg.Type == "model.actual_model" {
+			events = append(events, msg.Event["actual_model"].(string))
+		}
+	}, nil)
+	if err != nil {
+		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}
+	if requestCount != 2 {
+		t.Fatalf("requestCount=%d want 2", requestCount)
+	}
+	if len(events) != 1 || events[0] != defaultModel {
+		t.Fatalf("actual model events=%v want [%s]", events, defaultModel)
 	}
 }
 
