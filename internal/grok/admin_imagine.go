@@ -148,7 +148,14 @@ func parseOptionalBool(raw interface{}) *bool {
 }
 
 func normalizeImagineModel(model string) string {
-	id := normalizeModelID(strings.TrimSpace(model))
+	raw := strings.ToLower(strings.TrimSpace(model))
+	switch raw {
+	case "speed", "fast", "lite":
+		return "grok-imagine-image-lite"
+	case "quality", "pro":
+		return "grok-imagine-image-pro"
+	}
+	id := normalizeModelID(raw)
 	if id == "" {
 		return "grok-imagine-image-lite"
 	}

@@ -4785,6 +4785,11 @@
   async function ensureGrokTabReady(tab) {
     const nextTab = String(tab || "").toLowerCase();
     if (nextTab === "imagine" && !grokLazyState.imagineReady) {
+      if (window.GrokImagine && typeof window.GrokImagine.ensureReady === "function") {
+        await window.GrokImagine.ensureReady();
+        grokLazyState.imagineReady = true;
+        return;
+      }
       await loadImagineConfig();
       grokLazyState.imagineReady = true;
       return;
@@ -4837,6 +4842,7 @@
   window.switchGrokToolTab = switchGrokToolTab;
 
   function bindEvents() {
+    if (!window.GrokImagine) {
     document.querySelectorAll("[data-imagine-mode]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const mode = String(btn.dataset.imagineMode || "auto").toLowerCase();
@@ -4975,6 +4981,7 @@
           return;
         }
       });
+    }
     }
 
     const videoStartBtn = document.getElementById("videoStartBtn");
@@ -5307,6 +5314,9 @@
     await initChat();
     bindEvents();
     window.addEventListener("beforeunload", () => {
+      if (window.GrokImagine && typeof window.GrokImagine.stop === "function") {
+        window.GrokImagine.stop({ silent: true });
+      }
       if (Array.isArray(imagineState.taskIDs) && imagineState.taskIDs.length > 0) {
         closeImagineConnections(true);
         try {
@@ -5337,6 +5347,9 @@
     });
     const uiState = loadGrokToolsUIState();
     await switchGrokToolTab(String(uiState.activeToolTab || "chat"));
+    if (window.GrokImagine && typeof window.GrokImagine.init === "function") {
+      window.GrokImagine.init({ uiState, saveState: saveGrokToolsUIState, showToast });
+    } else {
     syncImagineModeUI(String(uiState.imagineMode || document.getElementById("imagineMode")?.value || "auto"), false);
     const imagineRatio = document.getElementById("imagineRatio");
     const imagineModel = document.getElementById("imagineModel");
@@ -5363,6 +5376,7 @@
     updateImagineActiveCount();
     syncImagineRatioUI();
     resizeImaginePrompt();
+    }
     const videoRatio = document.getElementById("videoRatio");
     const videoLength = document.getElementById("videoLength");
     const videoResolution = document.getElementById("videoResolution");
