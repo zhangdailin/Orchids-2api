@@ -395,6 +395,7 @@ func (h *Handler) runImagineLoop(
 
 		images, elapsedMS, err := h.generateImagineBatch(ctx, prompt, aspectRatio, model, imagineBatchImageCount, nsfw)
 		if err != nil {
+			delay := imagineErrorRetryDelay(err)
 			if !emit(map[string]interface{}{
 				"type":    "error",
 				"message": err.Error(),
@@ -402,7 +403,7 @@ func (h *Handler) runImagineLoop(
 			}) {
 				return
 			}
-			if !sleepWithContext(ctx, 1500*time.Millisecond) {
+			if !sleepWithContext(ctx, delay) {
 				return
 			}
 			continue
@@ -432,6 +433,20 @@ func (h *Handler) runImagineLoop(
 			}
 		}
 	}
+}
+
+func imagineErrorRetryDelay(err error) time.Duration {
+	if err == nil {
+		return 1500 * time.Millisecond
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "429") ||
+		strings.Contains(msg, "rate-limited") ||
+		strings.Contains(msg, "cooling down") ||
+		strings.Contains(msg, "no enabled accounts available for channel: grok") {
+		return time.Minute
+	}
+	return 1500 * time.Millisecond
 }
 
 func (h *Handler) HandleAdminImagineStart(w http.ResponseWriter, r *http.Request) {

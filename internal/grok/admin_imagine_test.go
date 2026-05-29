@@ -3,18 +3,29 @@ package grok
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func resetImagineSessionsForTest() {
 	imagineSessionsMu.Lock()
 	imagineSessions = map[string]imagineSession{}
 	imagineSessionsMu.Unlock()
+}
+
+func TestImagineErrorRetryDelay_UsesLongDelayForRateLimit(t *testing.T) {
+	if got := imagineErrorRetryDelay(errors.New("grok upstream status=429 body=too many requests")); got != time.Minute {
+		t.Fatalf("delay=%v want 1m", got)
+	}
+	if got := imagineErrorRetryDelay(errors.New("no image generated")); got != 1500*time.Millisecond {
+		t.Fatalf("delay=%v want short retry", got)
+	}
 }
 
 func TestImagineSessionLifecycle(t *testing.T) {

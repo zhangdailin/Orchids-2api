@@ -406,6 +406,22 @@ func (h *Handler) doChatWithAutoSwitch(ctx context.Context, sess *chatAccountSes
 	return nil, lastErr
 }
 
+func (h *Handler) doChatSingleAccount(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
+	if sess == nil || strings.TrimSpace(sess.token) == "" {
+		return nil, fmt.Errorf("empty chat session")
+	}
+	client := h.currentClient()
+	if client == nil {
+		return nil, fmt.Errorf("grok client not configured")
+	}
+	resp, err := client.doChat(ctx, sess.token, payload)
+	if err != nil {
+		h.markAccountStatus(ctx, sess.acc, err)
+		return nil, err
+	}
+	return resp, nil
+}
+
 // doChatWithAutoSwitchRebuild retries once with a switched account and rebuilds payload for the new token.
 func (h *Handler) doChatWithAutoSwitchRebuild(
 	ctx context.Context,
