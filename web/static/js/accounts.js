@@ -92,6 +92,44 @@ function getAccountToken(acc) {
   return getSidebarAccountToken(acc);
 }
 
+function normalizeAccountSubscription(acc) {
+  const raw = String(acc?.subscription || "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.includes("heavy")) return "heavy";
+  if (raw.includes("super") || raw.includes("pro")) return "super";
+  if (raw.includes("lite")) return "lite";
+  if (raw.includes("basic") || raw.includes("free")) return "basic";
+  return raw;
+}
+
+function subscriptionBadge(acc) {
+  const type = normalizeAccountType(acc);
+  const level = normalizeAccountSubscription(acc);
+  if (!level) {
+    return { text: "-", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "暂无订阅等级" };
+  }
+  if (type !== "grok") {
+    return { text: level, bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: `订阅等级: ${level}` };
+  }
+  switch (level) {
+    case "heavy":
+      return { text: "heavy", bg: "rgba(251, 191, 36, 0.16)", color: "#fbbf24", tip: "Grok Heavy 账号池" };
+    case "super":
+      return { text: "super", bg: "rgba(56, 189, 248, 0.16)", color: "#38bdf8", tip: "Grok Super 账号池" };
+    case "lite":
+      return { text: "lite", bg: "rgba(167, 139, 250, 0.16)", color: "#c4b5fd", tip: "Grok Lite 账号池" };
+    case "basic":
+      return { text: "basic", bg: "rgba(52, 211, 153, 0.14)", color: "#34d399", tip: "Grok Basic 账号池" };
+    default:
+      return { text: level, bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: `Grok 账号池: ${level}` };
+  }
+}
+
+function buildSubscriptionMarkup(acc) {
+  const badge = subscriptionBadge(acc);
+  return `<span class="tag account-tier-tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>`;
+}
+
 function applyTokenLabels(type) {
   const label = document.getElementById("tokenLabel");
   const input = document.getElementById("clientCookie");
@@ -704,6 +742,7 @@ function renderAccounts() {
     { label: "", style: "width: 40px;" },
     { label: "ID", style: "width: 60px;" },
     { label: "Token" },
+    { label: "等级", style: "width: 90px;" },
     { label: "配额", style: "width: 140px;" },
     { label: "状态" },
     { label: "调用" },
@@ -761,6 +800,10 @@ function renderAccounts() {
     tokenSpan.textContent = tokenDisplay;
     tdToken.appendChild(tokenSpan);
     tr.appendChild(tdToken);
+
+    const tdTier = document.createElement("td");
+    tdTier.innerHTML = buildSubscriptionMarkup(acc);
+    tr.appendChild(tdTier);
 
     const tdQuota = document.createElement("td");
     tdQuota.style.fontSize = "0.85rem";
@@ -951,6 +994,10 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
         <div class="account-mobile-item">
           <span class="account-mobile-label">状态</span>
           <div class="account-mobile-inline">${buildStatusMarkup(acc, badge)}</div>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">等级</span>
+          <div class="account-mobile-inline">${buildSubscriptionMarkup(acc)}</div>
         </div>
         <div class="account-mobile-item">
           <span class="account-mobile-label">配额</span>
