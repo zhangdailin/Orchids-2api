@@ -1452,64 +1452,6 @@
     }
   }
 
-  function getImagineAllImages() {
-    return Array.from(document.querySelectorAll("#imagineGrid .waterfall-item.is-ready img"));
-  }
-
-  function updateImagineLightbox(index) {
-    const images = getImagineAllImages();
-    if (index < 0 || index >= images.length) return;
-    imagineLightboxIndex = index;
-    const current = images[index];
-    const lightboxImg = document.getElementById("lightboxImg");
-    if (lightboxImg) {
-      lightboxImg.src = current.src;
-      lightboxImg.alt = current.alt || "Imagine preview";
-    }
-    const title = document.getElementById("lightboxTitle");
-    if (title) title.textContent = `${index + 1} / ${images.length}`;
-    const download = document.getElementById("lightboxDownload");
-    if (download) {
-      download.href = current.src;
-      download.download = `imagine_${index + 1}.png`;
-    }
-    const prevBtn = document.getElementById("lightboxPrev");
-    const nextBtn = document.getElementById("lightboxNext");
-    if (prevBtn) prevBtn.disabled = index === 0;
-    if (nextBtn) nextBtn.disabled = index === images.length - 1;
-  }
-
-  function openImagineLightbox(index) {
-    updateImagineLightbox(index);
-    const lightbox = document.getElementById("lightbox");
-    if (!lightbox || imagineLightboxIndex < 0) return;
-    lightbox.classList.add("active");
-    lightbox.setAttribute("aria-hidden", "false");
-    document.body.classList.add("modal-open");
-  }
-
-  function closeImagineLightbox() {
-    const lightbox = document.getElementById("lightbox");
-    if (!lightbox) return;
-    lightbox.classList.remove("active");
-    lightbox.setAttribute("aria-hidden", "true");
-    document.body.classList.remove("modal-open");
-    imagineLightboxIndex = -1;
-  }
-
-  function showImaginePrevImage() {
-    if (imagineLightboxIndex > 0) {
-      updateImagineLightbox(imagineLightboxIndex - 1);
-    }
-  }
-
-  function showImagineNextImage() {
-    const images = getImagineAllImages();
-    if (imagineLightboxIndex < images.length - 1) {
-      updateImagineLightbox(imagineLightboxIndex + 1);
-    }
-  }
-
   async function loadImagineConfig() {
     try {
       const res = await fetch("/v1/public/imagine/config", { cache: "no-store" });
@@ -5011,48 +4953,6 @@
         if (imagineSelectionMode) {
           toggleImagineItemSelection(item);
           return;
-        }
-        const img = event.target.closest(".waterfall-item img");
-        if (img) {
-          const images = getImagineAllImages();
-          const index = images.indexOf(img);
-          if (index !== -1) {
-            openImagineLightbox(index);
-          }
-        }
-      });
-    }
-    const lightbox = document.getElementById("lightbox");
-    const lightboxImg = document.getElementById("lightboxImg");
-    if (lightbox) {
-      lightbox.addEventListener("click", (event) => {
-        if (event.target === lightbox || event.target.closest("[data-lightbox-close]")) {
-          closeImagineLightbox();
-        }
-      });
-      if (lightboxImg) {
-        lightboxImg.addEventListener("click", (event) => {
-          event.stopPropagation();
-        });
-      }
-      const prevBtn = document.getElementById("lightboxPrev");
-      const nextBtn = document.getElementById("lightboxNext");
-      if (prevBtn) prevBtn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        showImaginePrevImage();
-      });
-      if (nextBtn) nextBtn.addEventListener("click", (event) => {
-        event.stopPropagation();
-        showImagineNextImage();
-      });
-      document.addEventListener("keydown", (event) => {
-        if (!lightbox.classList.contains("active")) return;
-        if (event.key === "Escape") {
-          closeImagineLightbox();
-        } else if (event.key === "ArrowLeft") {
-          showImaginePrevImage();
-        } else if (event.key === "ArrowRight") {
-          showImagineNextImage();
         }
       });
     }

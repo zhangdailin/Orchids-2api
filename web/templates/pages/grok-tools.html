@@ -2126,28 +2126,6 @@
       color: #b45309;
     }
 
-    .grok-tools-page .image-lightbox {
-      position: fixed;
-      inset: 0;
-      background: rgba(15, 15, 15, 0.8);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      z-index: 100;
-      padding: 24px;
-    }
-
-    .grok-tools-page .image-lightbox.active {
-      display: flex;
-    }
-
-    .grok-tools-page .image-lightbox img {
-      max-width: min(90vw, 1080px);
-      max-height: 80vh;
-      border-radius: 16px;
-      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
-    }
-
     .grok-tools-page #grokImagineSection .imagine-meta {
       display: flex;
       align-items: center;
@@ -4451,22 +4429,6 @@
       </section>
     </div>
   </main>
-
-  <div id="lightbox" class="image-lightbox" aria-hidden="true">
-    <div class="image-lightbox-dialog" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle">
-      <div class="image-lightbox-head">
-        <div id="lightboxTitle" class="image-lightbox-title">预览</div>
-        <div class="image-lightbox-actions">
-          <button id="lightboxPrev" class="btn btn-outline image-lightbox-nav" type="button" aria-label="上一张">‹</button>
-          <button id="lightboxNext" class="btn btn-outline image-lightbox-nav" type="button" aria-label="下一张">›</button>
-          <button class="btn btn-outline image-lightbox-close" type="button" data-lightbox-close aria-label="关闭">关闭</button>
-        </div>
-      </div>
-      <div class="image-lightbox-body">
-        <img id="lightboxImg" src="" alt="">
-      </div>
-    </div>
-  </div>
 
   <div class="toast-container" id="toastContainer"></div>
 
