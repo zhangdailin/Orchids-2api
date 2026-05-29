@@ -54,6 +54,7 @@
     lastProgress: 0,
     currentPreviewItem: null,
     previewCount: 0,
+    pollTimer: null,
   };
 
   const voiceState = {
@@ -3750,6 +3751,17 @@
     if (duration) duration.textContent = "-";
   }
 
+  function normalizeVideoURL(raw) {
+    let url = String(raw || "").trim();
+    if (!url) return "";
+    url = url.replace(/^["'`(<\[]+/, "").replace(/["'`)>\\],.;:]+$/g, "");
+    try {
+      return new URL(url, window.location.origin).toString();
+    } catch (err) {
+      return url;
+    }
+  }
+
   function initVideoPreviewSlot() {
     const stage = document.getElementById("videoStage");
     if (!stage) return;
@@ -3814,7 +3826,7 @@
     const openBtn = item.querySelector(".video-open");
     const downloadBtn = item.querySelector(".video-download");
     const link = item.querySelector(".video-item-link");
-    const safeUrl = url || "";
+    const safeUrl = normalizeVideoURL(url);
     item.dataset.url = safeUrl;
     if (link) {
       link.textContent = safeUrl;
@@ -3851,12 +3863,12 @@
       const last = mdMatches[mdMatches.length - 1];
       const urlMatch = last.match(/\[video\]\(([^)]+)\)/);
       if (urlMatch) {
-        return { url: urlMatch[1] };
+        return { url: normalizeVideoURL(urlMatch[1]) };
       }
     }
-    const urlMatches = buffer.match(/(?:https?:\/\/|\/grok\/v1\/files\/video\/|\/v1\/files\/video\/)[^\s<)]+/g);
+    const urlMatches = buffer.match(/(?:https?:\/\/|\/grok\/v1\/files\/video\/|\/v1\/files\/video\/|\/grok\/v1\/videos\/|\/v1\/videos\/)[^\s<)]+/g);
     if (urlMatches && urlMatches.length) {
-      return { url: urlMatches[urlMatches.length - 1] };
+      return { url: normalizeVideoURL(urlMatches[urlMatches.length - 1]) };
     }
     return null;
   }
@@ -3887,7 +3899,7 @@
     if (!container) return;
     const body = container.querySelector(".video-item-body");
     if (!body) return;
-    const safeUrl = url || "";
+    const safeUrl = normalizeVideoURL(url);
     body.innerHTML = `
       <video controls preload="metadata">
         <source src="${safeUrl}" type="video/mp4">
@@ -3972,7 +3984,7 @@
   }
 
   async function createVideoTask(payload) {
-    const res = await fetch("/api/v1/admin/video/start", {
+    const res = await fetch("/grok/v1/videos", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -3982,7 +3994,7 @@
       throw new Error(await res.text());
     }
     const data = await res.json();
-    return String(data.task_id || "").trim();
+    return String(data.id || data.task_id || "").trim();
   }
 
   async function stopVideoTask() {
@@ -4005,9 +4017,17 @@
     videoState.stream = null;
   }
 
+  function stopVideoPoll() {
+    if (videoState.pollTimer) {
+      clearTimeout(videoState.pollTimer);
+      videoState.pollTimer = null;
+    }
+  }
+
   function finishVideoRun(hasError) {
     if (!videoState.running) return;
     closeVideoStream();
+    stopVideoPoll();
     videoState.running = false;
     setVideoButtons(false);
     stopVideoElapsedTimer();
@@ -4021,6 +4041,50 @@
       const seconds = Math.max(0, Math.round((Date.now() - videoState.startAt) / 1000));
       duration.textContent = `${seconds}s`;
     }
+  }
+
+  async function fetchVideoJob(taskID) {
+    const res = await fetch(`/grok/v1/videos/${encodeURIComponent(taskID)}?t=${Date.now()}`, { cache: "no-store" });
+    if (handleUnauthorized(res)) return null;
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    return await res.json();
+  }
+
+  function videoContentURL(taskID) {
+    return normalizeVideoURL(`/grok/v1/videos/${encodeURIComponent(taskID)}/content`);
+  }
+
+  function pollVideoTask(taskID) {
+    stopVideoPoll();
+    videoState.pollTimer = window.setTimeout(async () => {
+      if (!videoState.running || videoState.taskID !== taskID) return;
+      try {
+        const job = await fetchVideoJob(taskID);
+        if (!job) return;
+        const progress = Number(job.progress || 0);
+        setVideoIndeterminate(false);
+        setVideoProgress(progress);
+        if (job.status === "completed") {
+          renderVideoFromUrl(job.content_url || videoContentURL(taskID));
+          finishVideoRun(false);
+          return;
+        }
+        if (job.status === "failed") {
+          const message = job.error?.message || "视频生成失败";
+          setVideoStatus(String(message), "error");
+          finishVideoRun(true);
+          return;
+        }
+        setVideoStatus(t("common.generating"), "ok");
+        pollVideoTask(taskID);
+      } catch (err) {
+        if (!videoState.running) return;
+        setVideoStatus(err.message || t("common.connectionError"), "error");
+        finishVideoRun(true);
+      }
+    }, 1500);
   }
 
   function openVideoSSE(taskID) {
@@ -4077,14 +4141,17 @@
     }
     const effort = String(document.getElementById("videoEffort")?.value || "").trim();
     const payload = {
+      model: "grok-imagine-video",
       prompt,
-      aspect_ratio: String(document.getElementById("videoRatio")?.value || "3:2"),
-      video_length: Number(document.getElementById("videoLength")?.value || 6),
+      size: String(document.getElementById("videoRatio")?.value || "3:2"),
+      seconds: Number(document.getElementById("videoLength")?.value || 6),
       resolution_name: String(document.getElementById("videoResolution")?.value || "480p"),
       preset: String(document.getElementById("videoPreset")?.value || "normal"),
-      image_url: videoState.fileDataURL || String(document.getElementById("videoImageUrl")?.value || "").trim(),
-      reasoning_effort: effort || "low",
+      input_references: [],
     };
+    const imageRef = videoState.fileDataURL || String(document.getElementById("videoImageUrl")?.value || "").trim();
+    if (imageRef) payload.input_references = [imageRef];
+    if (effort) payload.reasoning_effort = effort;
     updateVideoMeta();
     resetVideoOutput(true);
     initVideoPreviewSlot();
@@ -4103,7 +4170,7 @@
       startVideoElapsedTimer();
       setVideoStatus(t("common.generating"), "ok");
       setVideoIndeterminate(true);
-      openVideoSSE(taskID);
+      pollVideoTask(taskID);
     } catch (err) {
       videoState.running = false;
       setVideoButtons(false);
@@ -4115,6 +4182,7 @@
   async function stopVideo() {
     videoState.running = false;
     closeVideoStream();
+    stopVideoPoll();
     stopVideoElapsedTimer();
     setVideoButtons(false);
     setVideoStatus(t("common.notConnected"));

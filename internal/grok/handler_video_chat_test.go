@@ -128,6 +128,50 @@ func TestHandleVideosRetrieveAndContent(t *testing.T) {
 	}
 }
 
+func TestHandleVideosRetrieveIncludesStableContentURL(t *testing.T) {
+	oldBase := cacheBaseDir
+	cacheBaseDir = t.TempDir()
+	t.Cleanup(func() { cacheBaseDir = oldBase })
+
+	h := &Handler{}
+	name, err := h.cacheMediaBytes("unit-video", "video", bytes.Repeat([]byte{1, 2, 3, 4}, 1024), "video/mp4")
+	if err != nil {
+		t.Fatalf("cacheMediaBytes error=%v", err)
+	}
+	job := &videoJob{
+		ID:          "video_stable",
+		Model:       "grok-imagine-video",
+		Prompt:      "hello",
+		Seconds:     6,
+		Size:        "720x1280",
+		Quality:     "standard",
+		CreatedAt:   time.Now().Unix(),
+		Status:      "completed",
+		Progress:    100,
+		CompletedAt: 456,
+		VideoURL:    "https://assets.grok.com/video/content",
+		ContentPath: "data/tmp/video/" + name,
+	}
+	putVideoJob(job)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/videos/video_stable", nil)
+	h.HandleVideosRetrieve(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("retrieve status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("json decode error=%v", err)
+	}
+	if got := out["content_url"]; got != "/grok/v1/videos/video_stable/content" {
+		t.Fatalf("content_url=%#v", got)
+	}
+	if got := out["video_url"]; got != "https://assets.grok.com/video/content" {
+		t.Fatalf("video_url=%#v", got)
+	}
+}
+
 func TestValidateVideoConfig_AcceptsSecondsSizeShape(t *testing.T) {
 	cfg, err := validateVideoConfig(&VideoConfig{VideoLength: 12, Size: "1280x720"})
 	if err != nil {

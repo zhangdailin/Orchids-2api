@@ -66,6 +66,12 @@ func (j *videoJob) toMap() map[string]interface{} {
 	if j.CompletedAt > 0 {
 		out["completed_at"] = j.CompletedAt
 	}
+	if strings.TrimSpace(j.VideoURL) != "" {
+		out["video_url"] = j.VideoURL
+	}
+	if j.Status == "completed" && strings.TrimSpace(j.ID) != "" && strings.TrimSpace(j.ContentPath) != "" {
+		out["content_url"] = "/grok/v1/videos/" + j.ID + "/content"
+	}
 	if j.Error != nil {
 		out["error"] = j.Error
 	}
