@@ -135,9 +135,22 @@ func TestChooseRefreshedDefaultModel_PrefersExistingDefault(t *testing.T) {
 	}
 	ordered := []discoveredModel{{ID: "b"}, {ID: "a"}}
 
-	got := chooseRefreshedDefaultModel(existing, ordered)
+	got := chooseRefreshedDefaultModel("Puter", existing, ordered)
 	if got != "a" {
 		t.Fatalf("default=%q want %q", got, "a")
+	}
+}
+
+func TestChooseRefreshedDefaultModel_WarpPrefersAutoOpen(t *testing.T) {
+	existing := map[string]*store.Model{
+		"claude-4-5-opus": {ModelID: "claude-4-5-opus", IsDefault: true},
+		"auto-open":       {ModelID: "auto-open", IsDefault: false},
+	}
+	ordered := []discoveredModel{{ID: "claude-4-5-opus"}, {ID: "auto-open"}}
+
+	got := chooseRefreshedDefaultModel("Warp", existing, ordered)
+	if got != "auto-open" {
+		t.Fatalf("default=%q want auto-open", got)
 	}
 }
 
@@ -335,14 +348,13 @@ func TestGrokConsoleModelsRemainAcceptedAfterProbeFallback(t *testing.T) {
 	}
 }
 
-func TestApplyModelRefresh_PreservesModelsMissingFromDiscoveredList(t *testing.T) {
+func TestApplyModelRefresh_PreservesModelsMissingFromUnreliableDiscoveredList(t *testing.T) {
 	testCases := []struct {
 		channel string
 		modelID string
 	}{
 		{channel: "Puter", modelID: "puter-unavailable-model"},
 		{channel: "Orchids", modelID: "orchids-unavailable-model"},
-		{channel: "Warp", modelID: "warp-unavailable-model"},
 	}
 
 	for _, tc := range testCases {
@@ -396,6 +408,43 @@ func TestApplyModelRefresh_PreservesModelsMissingFromDiscoveredList(t *testing.T
 				t.Fatal("IsDefault=false want true")
 			}
 		})
+	}
+}
+
+func TestApplyModelRefresh_DeletesMissingWarpGraphQLModels(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	clearModelsForChannel(t, ctx, s, "Warp")
+	for _, record := range []*store.Model{
+		{Channel: "Warp", ModelID: "claude-4-5-opus", Name: "Old Opus", Status: store.ModelStatusAvailable, Verified: true, IsDefault: true, SortOrder: 0},
+		{Channel: "Warp", ModelID: "auto-open", Name: "Auto Open", Status: store.ModelStatusAvailable, Verified: true, SortOrder: 1},
+	} {
+		if err := s.CreateModel(ctx, record); err != nil {
+			t.Fatalf("CreateModel() error = %v", err)
+		}
+	}
+
+	result, err := applyModelRefresh(ctx, s, "Warp", "warp_graphql_agent_mode_llms", []discoveredModel{
+		{ID: "auto-open", Name: "Auto Open", SortOrder: 0},
+		{ID: "gpt-5-2-low", Name: "GPT-5.2 Low", SortOrder: 1},
+	})
+	if err != nil {
+		t.Fatalf("applyModelRefresh() error = %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("Deleted=%d want 1", result.Deleted)
+	}
+	if _, err := s.GetModelByChannelAndModelID(ctx, "Warp", "claude-4-5-opus"); err == nil {
+		t.Fatal("expected old model to be deleted")
+	}
+	model, err := s.GetModelByChannelAndModelID(ctx, "Warp", "auto-open")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID(auto-open) error = %v", err)
+	}
+	if !model.IsDefault {
+		t.Fatal("auto-open IsDefault=false want true")
 	}
 }
 

@@ -95,7 +95,7 @@ func TestFetchWorkspaceAvailableLLMChoices_ReturnsChoices(t *testing.T) {
 		t.Fatalf("fetchWorkspaceAvailableLLMChoices() error: %v", err)
 	}
 	gotIDs := []string{choices[0].ID, choices[1].ID}
-	wantIDs := []string{"auto", "gpt-5-1-codex-medium"}
+	wantIDs := []string{"auto-open", "gpt-5-1-codex-medium"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("choice ids=%+v want %+v", gotIDs, wantIDs)
 	}
@@ -118,7 +118,7 @@ func TestMergeWarpModelChoices_DedupesAndMovesDefaultFirst(t *testing.T) {
 	for _, choice := range merged {
 		gotIDs = append(gotIDs, choice.ID)
 	}
-	wantIDs := []string{"gpt-5-1-medium", "claude-4-6-sonnet-high", "auto"}
+	wantIDs := []string{"gpt-5-1-medium", "claude-4-6-sonnet-high", "auto-open"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("merged ids=%+v want %+v", gotIDs, wantIDs)
 	}

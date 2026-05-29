@@ -133,7 +133,18 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		}
 		return c.session.ensureLogin(ctx, c.httpClient)
 	}
-	return c.streamWithRetry(ctx, payload, req, onMessage, logger, defaultRefresh)
+	err = c.streamWithRetry(ctx, payload, req, onMessage, logger, defaultRefresh)
+	if err == nil || !shouldRetryWarpWithFallbackModel(err, req.Model) {
+		return err
+	}
+
+	fallbackReq := req
+	fallbackReq.Model = defaultModel
+	_, fallbackPayload, fallbackErr := buildRequestBytes(fallbackReq)
+	if fallbackErr != nil {
+		return err
+	}
+	return c.streamWithRetry(ctx, fallbackPayload, fallbackReq, onMessage, logger, defaultRefresh)
 }
 
 func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *debug.Logger) (*http.Response, error) {
@@ -190,6 +201,19 @@ func (c *Client) streamWithRetry(ctx context.Context, payload []byte, req upstre
 		}
 	}
 	return c.handleStreamResponse(ctx, req, resp, onMessage, logger)
+}
+
+func shouldRetryWarpWithFallbackModel(err error, requestedModel string) bool {
+	if canonicalModelID(requestedModel) == defaultModel {
+		return false
+	}
+	statusErr, ok := err.(*HTTPStatusError)
+	if !ok || statusErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	body := strings.ToLower(statusErr.Body)
+	return strings.Contains(body, "requested base model") &&
+		(strings.Contains(body, "not allowed") || strings.Contains(body, "no model available"))
 }
 
 func (c *Client) handleStreamResponse(ctx context.Context, req upstream.UpstreamRequest, resp *http.Response, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {

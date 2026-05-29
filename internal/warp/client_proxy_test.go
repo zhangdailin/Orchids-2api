@@ -166,6 +166,22 @@ func TestDoStreamRequest_SendsLegacyWarpHeaders(t *testing.T) {
 	}
 }
 
+func TestShouldRetryWarpWithFallbackModel(t *testing.T) {
+	err := &HTTPStatusError{
+		StatusCode: http.StatusBadRequest,
+		Body:       `{"error":"Invalid request: the requested base model (claude-4-5-opus) is not allowed for your account"}`,
+	}
+	if !shouldRetryWarpWithFallbackModel(err, "claude-4-5-opus") {
+		t.Fatal("expected model-not-allowed error to retry with fallback")
+	}
+	if shouldRetryWarpWithFallbackModel(err, defaultModel) {
+		t.Fatal("expected fallback model to avoid retry loop")
+	}
+	if shouldRetryWarpWithFallbackModel(&HTTPStatusError{StatusCode: http.StatusTooManyRequests, Body: err.Body}, "claude-4-5-opus") {
+		t.Fatal("expected non-400 error to avoid fallback retry")
+	}
+}
+
 func TestForceRefreshAccount_IgnoresSeededJWT(t *testing.T) {
 	client := &Client{
 		authClient: &http.Client{

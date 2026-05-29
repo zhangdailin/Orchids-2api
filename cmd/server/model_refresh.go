@@ -833,7 +833,7 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 		existingByID[model.ModelID] = model
 	}
 
-	defaultModelID := chooseRefreshedDefaultModel(existingByID, candidates)
+	defaultModelID := chooseRefreshedDefaultModel(channel, existingByID, candidates)
 	result.DefaultModelID = defaultModelID
 
 	for _, model := range candidates {
@@ -856,6 +856,32 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			continue
 		}
 	}
+	if shouldForceWarpDefault(channel, defaultModelID) {
+		if existing := existingByID[defaultModelID]; existing != nil && !existing.IsDefault {
+			updated := *existing
+			updated.IsDefault = true
+			if err := s.UpdateModel(ctx, &updated); err != nil {
+				return nil, err
+			}
+			result.Updated++
+		}
+	}
+
+	if shouldDeleteMissingModelsOnRefresh(channel, source) {
+		for modelID, existing := range existingByID {
+			if _, ok := fetchedSet[modelID]; ok {
+				continue
+			}
+			if existing == nil || existing.ID == "" {
+				continue
+			}
+			if err := s.DeleteModel(ctx, existing.ID); err != nil {
+				return nil, err
+			}
+			result.Deleted++
+			result.DeletedModelIDs = append(result.DeletedModelIDs, modelID)
+		}
+	}
 
 	sort.Strings(result.AddedModelIDs)
 	sort.Strings(result.DeletedModelIDs)
@@ -863,7 +889,15 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 	return result, nil
 }
 
-func chooseRefreshedDefaultModel(existing map[string]*store.Model, ordered []discoveredModel) string {
+func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
+	return strings.EqualFold(strings.TrimSpace(channel), "warp") &&
+		strings.HasPrefix(strings.TrimSpace(source), "warp_graphql")
+}
+
+func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Model, ordered []discoveredModel) string {
+	if strings.EqualFold(strings.TrimSpace(channel), "warp") && discoveredModelsContain(ordered, warpDefaultModelID()) {
+		return warpDefaultModelID()
+	}
 	for _, model := range ordered {
 		if current := existing[model.ID]; current != nil && current.IsDefault {
 			return model.ID
@@ -873,6 +907,23 @@ func chooseRefreshedDefaultModel(existing map[string]*store.Model, ordered []dis
 		return model.ID
 	}
 	return ""
+}
+
+func warpDefaultModelID() string {
+	return "auto-open"
+}
+
+func shouldForceWarpDefault(channel, modelID string) bool {
+	return strings.EqualFold(strings.TrimSpace(channel), "warp") && modelID == warpDefaultModelID()
+}
+
+func discoveredModelsContain(models []discoveredModel, id string) bool {
+	for _, model := range models {
+		if model.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmpty(values ...string) string {

@@ -84,7 +84,7 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 		t.Fatalf("orchids model channel = %q, want Orchids", orchidsModel.Channel)
 	}
 
-	warpModel, err := s.GetModelByChannelAndModelID(ctx, "warp", "claude-4-5-opus")
+	warpModel, err := s.GetModelByChannelAndModelID(ctx, "warp", "auto-open")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID(warp) error = %v", err)
 	}

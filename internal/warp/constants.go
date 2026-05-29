@@ -22,9 +22,13 @@ const (
 	identifier        = "cli-agent-auto"
 )
 
-const defaultModel = "auto"
+const defaultModel = "auto-open"
 
 var canonicalModelAliases = map[string]string{
+	"auto":                       "auto-open",
+	"auto-open":                  "auto-open",
+	"auto-efficient":             "auto-open",
+	"auto-genius":                "auto-open",
 	"claude-4-sonnet":            "claude-4-sonnet",
 	"claude-sonnet-4":            "claude-4-sonnet",
 	"claude-4-5-sonnet":          "claude-4-5-sonnet",
@@ -83,6 +87,12 @@ var canonicalModelAliases = map[string]string{
 	"gpt-5.1-codex-max-high":     "gpt-5-1-codex-max-high",
 	"gpt-5-1-codex-max-xhigh":    "gpt-5-1-codex-max-xhigh",
 	"gpt-5.1-codex-max-xhigh":    "gpt-5-1-codex-max-xhigh",
+	"gpt-5-2-low":                "gpt-5-2-low",
+	"gpt-5.2-low":                "gpt-5-2-low",
+	"gpt-5-2-medium":             "gpt-5-2-medium",
+	"gpt-5.2-medium":             "gpt-5-2-medium",
+	"gpt-5-2-high":               "gpt-5-2-high",
+	"gpt-5.2-high":               "gpt-5-2-high",
 	"gpt-5-2-codex-low":          "gpt-5-2-codex-low",
 	"gpt-5.2-codex-low":          "gpt-5-2-codex-low",
 	"o1":                         "o1",
