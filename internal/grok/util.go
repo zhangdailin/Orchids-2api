@@ -1818,6 +1818,126 @@ func extractImageProgress(resp map[string]interface{}) (index int, progress int,
 		), true
 }
 
+func imageChunkValuesFromAttachment(attachment map[string]interface{}) []map[string]interface{} {
+	if attachment == nil {
+		return nil
+	}
+	var values []map[string]interface{}
+	appendChunkContainers := func(v interface{}) {
+		m, ok := parseGrokJSONData(v).(map[string]interface{})
+		if !ok || len(m) == 0 {
+			return
+		}
+		for _, key := range []string{"image_chunk", "imageChunk", "image", "media"} {
+			if chunk, ok := m[key].(map[string]interface{}); ok && len(chunk) > 0 {
+				values = append(values, chunk)
+			}
+		}
+		values = append(values, m)
+	}
+	appendChunkContainers(attachment["jsonData"])
+	appendChunkContainers(attachment["json"])
+	appendChunkContainers(attachment["data"])
+	appendChunkContainers(attachment["metadata"])
+	return values
+}
+
+func appChatImageChunkValues(resp map[string]interface{}) []map[string]interface{} {
+	if resp == nil {
+		return nil
+	}
+	var values []map[string]interface{}
+	appendIfMap := func(v interface{}) {
+		if m, ok := v.(map[string]interface{}); ok && len(m) > 0 {
+			values = append(values, m)
+		}
+	}
+	response := resp
+	if nested := mapAtAnyPath(resp, []string{"result", "response"}); nested != nil {
+		response = nested
+	}
+	if mr := extractUpstreamModelResponse(response); mr != nil {
+		response = mr
+	}
+	for _, key := range []string{"streamingImageGenerationResponse", "imageGenerationResponse", "image_chunk", "imageChunk"} {
+		appendIfMap(response[key])
+	}
+	if attachment, ok := response["cardAttachment"].(map[string]interface{}); ok {
+		values = append(values, imageChunkValuesFromAttachment(attachment)...)
+	}
+	if metadata, ok := response["finalMetadata"].(map[string]interface{}); ok {
+		for _, key := range []string{"image_chunk", "imageChunk", "streamingImageGenerationResponse", "imageGenerationResponse"} {
+			appendIfMap(metadata[key])
+		}
+	}
+	return values
+}
+
+func isModeratedImageChunk(chunk map[string]interface{}) bool {
+	if chunk == nil {
+		return false
+	}
+	for _, key := range []string{"moderated", "isModerated", "blocked", "isBlocked", "contentFiltered"} {
+		if v, ok := chunk[key].(bool); ok && v {
+			return true
+		}
+	}
+	status := strings.ToLower(strings.TrimSpace(fmt.Sprint(chunk["status"])))
+	return status == "blocked" || status == "moderated"
+}
+
+func extractAppChatImageURLs(resp map[string]interface{}) []string {
+	var urls []string
+	seen := map[string]struct{}{}
+	addURL := func(u string) {
+		u = strings.TrimSpace(normalizeGrokAssetURL(u))
+		if u == "" {
+			return
+		}
+		if _, ok := seen[u]; ok {
+			return
+		}
+		seen[u] = struct{}{}
+		urls = append(urls, u)
+	}
+	for _, chunk := range appChatImageChunkValues(resp) {
+		progress := interfaceToInt(chunk["progress"])
+		if progress == 0 {
+			progress = interfaceToInt(chunk["percentage"])
+		}
+		if progress > 0 && progress < 100 {
+			continue
+		}
+		if isModeratedImageChunk(chunk) {
+			continue
+		}
+		for _, key := range []string{"imageUrl", "url", "mediaUrl", "generatedImageUrl", "assetUrl"} {
+			if raw := strings.TrimSpace(fmt.Sprint(chunk[key])); raw != "" && raw != "<nil>" {
+				addURL(raw)
+			}
+		}
+		firstChunkString := func(keys ...string) string {
+			for _, key := range keys {
+				raw := strings.TrimSpace(fmt.Sprint(chunk[key]))
+				if raw != "" && raw != "<nil>" {
+					return raw
+				}
+			}
+			return ""
+		}
+		assetID := firstChunkString("assetId", "asset_id", "fileId", "file_id")
+		userID := firstChunkString("userId", "user_id")
+		if assetID != "" && assetID != "<nil>" {
+			if userID != "" && userID != "<nil>" {
+				addURL("users/" + strings.Trim(userID, "/") + "/" + strings.Trim(assetID, "/") + "/content")
+			} else if strings.Contains(assetID, "/") {
+				addURL(assetID)
+			}
+		}
+	}
+	return urls
+}
+
 func extractVideoProgress(resp map[string]interface{}) (progress int, videoURL, thumbnailURL string, ok bool) {
 	raw := mapAtAnyPath(resp,
 		[]string{"streamingVideoGenerationResponse"},

@@ -110,6 +110,37 @@ func TestAppendImageResultURLs_AcceptsUserResponseCardAttachmentsJSON(t *testing
 	}
 }
 
+func TestExtractAppChatImageURLs_AcceptsImageChunkOnly(t *testing.T) {
+	resp := map[string]interface{}{
+		"userResponse": map[string]interface{}{
+			"cardAttachment": map[string]interface{}{
+				"jsonData": `{"image_chunk":{"imageUrl":"/generated/apple.png","progress":100}}`,
+			},
+			"fileAttachments": []interface{}{"not-image-generation"},
+		},
+	}
+
+	got := extractAppChatImageURLs(resp)
+	if len(got) != 1 {
+		t.Fatalf("len=%d want 1: %#v", len(got), got)
+	}
+	if got[0] != "https://assets.grok.com/generated/apple.png" {
+		t.Fatalf("url=%q want generated apple", got[0])
+	}
+}
+
+func TestExtractAppChatImageURLs_IgnoresPlainFileAttachments(t *testing.T) {
+	resp := map[string]interface{}{
+		"userResponse": map[string]interface{}{
+			"fileAttachments": []interface{}{"svg-from-text-response"},
+		},
+	}
+
+	if got := extractAppChatImageURLs(resp); len(got) != 0 {
+		t.Fatalf("got=%#v want no image urls", got)
+	}
+}
+
 func TestPrepareAppChatImageGenerationPayload_MatchesLiteImageShape(t *testing.T) {
 	payload := map[string]interface{}{
 		"responseMetadata": map[string]interface{}{
@@ -125,6 +156,9 @@ func TestPrepareAppChatImageGenerationPayload_MatchesLiteImageShape(t *testing.T
 	}
 	if got, _ := payload["imageGenerationCount"].(int); got != 1 {
 		t.Fatalf("imageGenerationCount=%d want 1", got)
+	}
+	if got, _ := payload["disableMemory"].(bool); !got {
+		t.Fatalf("disableMemory=%v want true", got)
 	}
 	for _, key := range []string{"modelName", "modelMode", "isReasoning"} {
 		if _, ok := payload[key]; ok {

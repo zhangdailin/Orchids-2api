@@ -384,13 +384,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 			if len(debugShapes) < 20 {
 				debugShapes = append(debugShapes, imageDebugShape(line))
 			}
-			if mr := extractUpstreamModelResponse(line); mr != nil {
-				debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 50)...)
-				debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 100)...)
-			}
-			urls = appendImageResultURLs(urls, line)
-			debugHTTP = append(debugHTTP, collectHTTPStrings(line, 50)...)
-			debugAsset = append(debugAsset, collectAssetLikeStrings(line, 100)...)
+			urls = append(urls, extractAppChatImageURLs(line)...)
 			return nil
 		})
 		resp.Body.Close()
@@ -401,9 +395,6 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		urls = normalizeGeneratedImageURLs(urls, 0)
 	}
 	urls = normalizeGeneratedImageURLs(urls, req.N)
-	if len(urls) == 0 {
-		urls = appendImageCandidates(urls, uniqueStrings(debugHTTP), uniqueStrings(debugAsset), req.N)
-	}
 	if len(urls) == 0 && imageModelUsesAppChatOnly(req.Model) && !retriedWithoutBasic && strings.EqualFold(grokAccountPool(sess.acc), "basic") {
 		retriedWithoutBasic = true
 		excludeBasic := h.grokAccountIDsForPool(ctx, "basic")
@@ -441,13 +432,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 						if len(debugShapes) < 20 {
 							debugShapes = append(debugShapes, imageDebugShape(line))
 						}
-						if mr := extractUpstreamModelResponse(line); mr != nil {
-							debugHTTP = append(debugHTTP, collectHTTPStrings(mr, 50)...)
-							debugAsset = append(debugAsset, collectAssetLikeStrings(mr, 100)...)
-						}
-						urls = appendImageResultURLs(urls, line)
-						debugHTTP = append(debugHTTP, collectHTTPStrings(line, 50)...)
-						debugAsset = append(debugAsset, collectAssetLikeStrings(line, 100)...)
+						urls = append(urls, extractAppChatImageURLs(line)...)
 						return nil
 					})
 					resp.Body.Close()
@@ -459,9 +444,6 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 					if len(urls) > 0 {
 						break
 					}
-				}
-				if len(urls) == 0 {
-					urls = appendImageCandidates(urls, uniqueStrings(debugHTTP), uniqueStrings(debugAsset), req.N)
 				}
 			}
 		}
@@ -543,6 +525,7 @@ func prepareAppChatImageGenerationPayload(payload map[string]interface{}, count 
 	payload["enableImageStreaming"] = true
 	payload["imageGenerationCount"] = count
 	payload["responseMetadata"] = map[string]interface{}{}
+	payload["disableMemory"] = true
 	delete(payload, "modelName")
 	delete(payload, "modelMode")
 	delete(payload, "isReasoning")
