@@ -336,8 +336,9 @@ func isLikelyImageURL(u string) bool {
 		if strings.HasSuffix(cut, ".jpg") || strings.HasSuffix(cut, ".jpeg") || strings.HasSuffix(cut, ".png") || strings.HasSuffix(cut, ".webp") || strings.HasSuffix(cut, ".gif") {
 			return true
 		}
-		// assets.grok.com generated image paths
-		if strings.Contains(lu, "assets.grok.com/") && (strings.Contains(lu, "/generated/") || strings.Contains(lu, "/image")) {
+		// assets.grok.com generated image paths. Some Grok streams only expose an
+		// asset id, which is served through /content instead of a file extension.
+		if strings.Contains(lu, "assets.grok.com/") && (strings.Contains(lu, "/generated/") || strings.Contains(lu, "/image") || strings.HasSuffix(lu, "/content")) {
 			return true
 		}
 		return false

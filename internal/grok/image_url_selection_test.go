@@ -64,6 +64,22 @@ func TestAppendImageCandidatesExtractsJSONArrayText(t *testing.T) {
 	}
 }
 
+func TestAppendImageResultURLsAcceptsAssetIDContentURL(t *testing.T) {
+	resp := map[string]interface{}{
+		"userResponse": map[string]interface{}{
+			"fileAttachments": []interface{}{"asset-123"},
+		},
+	}
+
+	got := normalizeGeneratedImageURLs(appendImageResultURLs(nil, resp), 1)
+	if len(got) != 1 {
+		t.Fatalf("len=%d want=1 got=%#v", len(got), got)
+	}
+	if got[0] != "https://assets.grok.com/asset-123/content" {
+		t.Fatalf("got=%q want content asset url", got[0])
+	}
+}
+
 func TestNormalizeGeneratedImageURLsRejectsEmptyExtensionPlaceholder(t *testing.T) {
 	got := normalizeGeneratedImageURLs([]string{"https://assets.grok.com/.png"}, 1)
 	if len(got) != 0 {
