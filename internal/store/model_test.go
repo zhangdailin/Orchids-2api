@@ -169,6 +169,61 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	}
 }
 
+func TestStoreNew_EnsuresRequiredGrokChatModelsWithExistingModelList(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	opts := Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	}
+	s, err := New(opts)
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+
+	ctx := context.Background()
+	for _, id := range []string{"grok-4.3", "grok-build-0.1"} {
+		model, err := s.GetModelByChannelAndModelID(ctx, "grok", id)
+		if err != nil {
+			t.Fatalf("GetModelByChannelAndModelID(%s) error = %v", id, err)
+		}
+		if err := s.DeleteModel(ctx, model.ID); err != nil {
+			t.Fatalf("DeleteModel(%s) error = %v", id, err)
+		}
+	}
+	if err := s.CreateModel(ctx, &Model{
+		Channel:  "Grok",
+		ModelID:  "grok-user-custom",
+		Name:     "User Custom",
+		Status:   ModelStatusAvailable,
+		Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	_ = s.Close()
+
+	s, err = New(opts)
+	if err != nil {
+		t.Fatalf("store.New() second error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	for _, id := range []string{"grok-4.3", "grok-build-0.1"} {
+		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err != nil {
+			t.Fatalf("expected %s to be ensured after restart: %v", id, err)
+		}
+	}
+	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-user-custom"); err != nil {
+		t.Fatalf("expected user custom model to remain: %v", err)
+	}
+}
+
 func TestCleanupDeprecatedData_RemovesBoltAccountsAndModels(t *testing.T) {
 	t.Parallel()
 
