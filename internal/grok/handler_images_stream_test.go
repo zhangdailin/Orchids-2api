@@ -171,6 +171,39 @@ func TestPrepareAppChatImageGenerationPayload_MatchesLiteImageShape(t *testing.T
 	}
 }
 
+func TestEnsureImageConfig_UsesTopLevelModelOverride(t *testing.T) {
+	payload := map[string]interface{}{}
+	nsfw := true
+
+	ensureImageAspectRatio(payload, "grok-imagine-image-lite", "3:2")
+	ensureImageNSFW(payload, "grok-imagine-image-lite", &nsfw)
+
+	override, ok := payload["modelConfigOverride"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("modelConfigOverride missing: %#v", payload)
+	}
+	modelMap, ok := override["modelMap"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("modelMap missing: %#v", override)
+	}
+	if got := modelMap["imageGenModel"]; got != "grok-imagine-image-lite" {
+		t.Fatalf("imageGenModel=%v want grok-imagine-image-lite", got)
+	}
+	cfg, ok := modelMap["imageGenModelConfig"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("imageGenModelConfig missing: %#v", modelMap)
+	}
+	if got := cfg["aspectRatio"]; got != "3:2" {
+		t.Fatalf("aspectRatio=%v want 3:2", got)
+	}
+	if got := cfg["enableNsfw"]; got != true {
+		t.Fatalf("enableNsfw=%v want true", got)
+	}
+	if _, ok := payload["responseMetadata"]; ok {
+		t.Fatalf("responseMetadata should not be created for image config: %#v", payload["responseMetadata"])
+	}
+}
+
 func TestGrokAppChatImagePrompt_PrefersDrawTrigger(t *testing.T) {
 	if got := grokAppChatImagePrompt("a red apple"); got != "Draw a red apple" {
 		t.Fatalf("prompt=%q", got)

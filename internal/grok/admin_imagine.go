@@ -232,7 +232,32 @@ func deleteImagineSessions(taskIDs []string) int {
 	return removed
 }
 
-func ensureImageAspectRatio(payload map[string]interface{}, ratio string) {
+func ensureImageModelConfig(payload map[string]interface{}, modelID string) map[string]interface{} {
+	if payload == nil {
+		return nil
+	}
+	modelConfigOverride, _ := payload["modelConfigOverride"].(map[string]interface{})
+	if modelConfigOverride == nil {
+		modelConfigOverride = map[string]interface{}{}
+		payload["modelConfigOverride"] = modelConfigOverride
+	}
+	modelMap, _ := modelConfigOverride["modelMap"].(map[string]interface{})
+	if modelMap == nil {
+		modelMap = map[string]interface{}{}
+		modelConfigOverride["modelMap"] = modelMap
+	}
+	if model := strings.TrimSpace(modelID); model != "" {
+		modelMap["imageGenModel"] = model
+	}
+	imageGenCfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
+	if imageGenCfg == nil {
+		imageGenCfg = map[string]interface{}{}
+		modelMap["imageGenModelConfig"] = imageGenCfg
+	}
+	return imageGenCfg
+}
+
+func ensureImageAspectRatio(payload map[string]interface{}, modelID, ratio string) {
 	if payload == nil {
 		return
 	}
@@ -241,56 +266,24 @@ func ensureImageAspectRatio(payload map[string]interface{}, ratio string) {
 	}
 	ratio = resolveAspectRatio(ratio)
 
-	responseMetadata, _ := payload["responseMetadata"].(map[string]interface{})
-	if responseMetadata == nil {
-		responseMetadata = map[string]interface{}{}
-		payload["responseMetadata"] = responseMetadata
-	}
-	modelConfigOverride, _ := responseMetadata["modelConfigOverride"].(map[string]interface{})
-	if modelConfigOverride == nil {
-		modelConfigOverride = map[string]interface{}{}
-		responseMetadata["modelConfigOverride"] = modelConfigOverride
-	}
-	modelMap, _ := modelConfigOverride["modelMap"].(map[string]interface{})
-	if modelMap == nil {
-		modelMap = map[string]interface{}{}
-		modelConfigOverride["modelMap"] = modelMap
-	}
-	imageGenCfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
+	imageGenCfg := ensureImageModelConfig(payload, modelID)
 	if imageGenCfg == nil {
-		imageGenCfg = map[string]interface{}{}
+		return
 	}
 	imageGenCfg["aspectRatio"] = ratio
-	modelMap["imageGenModelConfig"] = imageGenCfg
 }
 
-func ensureImageNSFW(payload map[string]interface{}, nsfw *bool) {
+func ensureImageNSFW(payload map[string]interface{}, modelID string, nsfw *bool) {
 	if payload == nil || nsfw == nil {
 		return
 	}
-	responseMetadata, _ := payload["responseMetadata"].(map[string]interface{})
-	if responseMetadata == nil {
-		responseMetadata = map[string]interface{}{}
-		payload["responseMetadata"] = responseMetadata
-	}
-	modelConfigOverride, _ := responseMetadata["modelConfigOverride"].(map[string]interface{})
-	if modelConfigOverride == nil {
-		modelConfigOverride = map[string]interface{}{}
-		responseMetadata["modelConfigOverride"] = modelConfigOverride
-	}
-	modelMap, _ := modelConfigOverride["modelMap"].(map[string]interface{})
-	if modelMap == nil {
-		modelMap = map[string]interface{}{}
-		modelConfigOverride["modelMap"] = modelMap
-	}
-	imageGenCfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
+	imageGenCfg := ensureImageModelConfig(payload, modelID)
 	if imageGenCfg == nil {
-		imageGenCfg = map[string]interface{}{}
+		return
 	}
 	// Keep both key styles for compatibility with different upstream parsers.
 	imageGenCfg["enableNsfw"] = *nsfw
 	imageGenCfg["enable_nsfw"] = *nsfw
-	modelMap["imageGenModelConfig"] = imageGenCfg
 }
 
 func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio, model string, n int, nsfw *bool) ([]imagineImage, int, error) {

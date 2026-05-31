@@ -311,8 +311,8 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 
 	onePayload := h.client.chatPayload(spec, req.Prompt, true, req.N)
 	prepareAppChatImageGenerationPayload(onePayload, req.N)
-	ensureImageAspectRatio(onePayload, resolveAspectRatio(req.Size))
-	ensureImageNSFW(onePayload, nsfw)
+	ensureImageAspectRatio(onePayload, spec.UpstreamModel, resolveAspectRatio(req.Size))
+	ensureImageNSFW(onePayload, spec.UpstreamModel, nsfw)
 	if req.Stream {
 		resp, err := h.doChatSingleAccount(ctx, sess, onePayload)
 		if err != nil {
@@ -354,8 +354,8 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		}
 		payload := h.client.chatPayload(spec, prompt, true, count)
 		prepareAppChatImageGenerationPayload(payload, count)
-		ensureImageAspectRatio(payload, resolveAspectRatio(req.Size))
-		ensureImageNSFW(payload, nsfw)
+		ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
+		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
 		resp, err := h.doChatSingleAccount(ctx, sess, payload)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
