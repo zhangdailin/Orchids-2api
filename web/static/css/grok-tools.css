@@ -902,3 +902,431 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Focused polish for the Grok workspace. Keep this page calmer and denser than the
+   general admin views without changing shared primitives. */
+.grok-tools-page {
+  --grok-card-border: #e8e3da;
+  --grok-soft-bg: #f7f5ef;
+  --grok-muted-bg: #f3efe7;
+  --grok-line: #ece7dd;
+  gap: 14px;
+}
+
+.grok-tools-page .header-section {
+  margin-bottom: 2px;
+  padding: 0 2px;
+}
+
+.grok-tools-page .header-section h1 {
+  font-size: 1.32rem;
+}
+
+.grok-tools-page .header-section p {
+  max-width: 660px;
+}
+
+.grok-tools-workspace {
+  gap: 12px;
+}
+
+.grok-tools-toolbar {
+  position: sticky;
+  top: 54px;
+  z-index: 20;
+  width: max-content;
+  max-width: 100%;
+  padding: 5px;
+  margin: -2px 0 2px;
+  border: 1px solid var(--grok-line);
+  border-radius: 999px;
+  background: rgba(250, 249, 245, 0.86);
+  box-shadow: 0 8px 24px rgba(31, 28, 22, 0.05);
+  backdrop-filter: blur(14px);
+}
+
+.grok-tabs {
+  gap: 3px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.grok-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.grok-tabs .tab-item {
+  min-width: auto;
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #736b60;
+  font-size: 0.8rem;
+}
+
+.grok-tabs .tab-item:hover {
+  background: #f0ebe1;
+  color: #292621;
+}
+
+.grok-tabs .tab-item.active {
+  background: #171717;
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(23, 23, 23, 0.12);
+}
+
+.grok-section,
+.grok-panel,
+.chat-sidebar,
+.chat-thread,
+.composer-input,
+.imagine-masonry-input-shell,
+.video-empty,
+.preview-stage,
+.video-stage,
+.audio-root,
+.visualizer,
+.voice-log,
+.raw-log,
+.cache-list {
+  border-color: var(--grok-card-border);
+}
+
+.grok-section.content-card {
+  border: 1px solid var(--grok-card-border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.function-header-row,
+.chat-title,
+.chat-sidebar .sidebar-header,
+.status-header,
+.status-header-row,
+.voice-log-header,
+.video-preview-header {
+  gap: 10px;
+}
+
+.function-header-row,
+.chat-title {
+  padding: 2px 2px 0;
+}
+
+.function-title,
+.chat-title-text {
+  font-size: 1rem;
+  line-height: 1.2;
+}
+
+.function-subtitle,
+.chat-subtitle {
+  margin-top: 3px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.function-divider {
+  background: var(--grok-line);
+}
+
+.grok-panel {
+  border-radius: 10px;
+}
+
+.grok-panel,
+.chat-sidebar {
+  background: #fff;
+}
+
+.icon-btn,
+.send-btn,
+.sidebar-expand-btn,
+.action-btn {
+  border-radius: 9px;
+  background: var(--grok-soft-bg);
+}
+
+.icon-btn:hover,
+.send-btn:hover,
+.sidebar-expand-btn:hover,
+.action-btn:hover {
+  background: var(--grok-muted-bg);
+}
+
+.chat-layout {
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.chat-sidebar {
+  top: 72px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fbfaf7;
+}
+
+.sidebar-list {
+  gap: 6px;
+}
+
+.session-item {
+  padding: 9px 10px;
+  border-color: transparent;
+  border-radius: 9px;
+  background: transparent;
+}
+
+.session-item:hover {
+  background: #f2eee6;
+}
+
+.session-item.active {
+  border-color: #e4ded4;
+  background: #fff;
+  box-shadow: inset 3px 0 0 #171717;
+}
+
+.chat-shell {
+  gap: 10px;
+  min-height: calc(100vh - 220px);
+}
+
+.chat-thread {
+  min-height: 390px;
+  padding: 18px;
+  border-radius: 10px;
+  background: #fbfaf7;
+}
+
+.message-row {
+  margin: 10px 0;
+}
+
+.message-bubble {
+  max-width: min(86%, 780px);
+}
+
+.message-row.user .message-bubble {
+  border-color: #ded8cf;
+  background: #fff;
+}
+
+.composer-shell,
+.imagine-masonry-composer {
+  bottom: 18px;
+}
+
+.composer-input,
+.imagine-masonry-input-shell {
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 14px 38px rgba(31, 28, 22, 0.09);
+  backdrop-filter: blur(16px);
+}
+
+.model-chip,
+.file-badge {
+  border-color: #e4ded4;
+  background: #fbfaf7;
+}
+
+.status-text,
+.image-status,
+.selected-count {
+  min-height: 22px;
+  padding: 3px 8px;
+  border: 1px solid #e9e3da;
+  background: #f7f3ec;
+  color: #6f665c;
+  font-size: 0.72rem;
+}
+
+.imagine-masonry-shell {
+  gap: 12px;
+  min-height: calc(100vh - 250px);
+}
+
+.imagine-masonry-feed,
+.waterfall {
+  gap: 14px;
+}
+
+.imagine-masonry-empty {
+  min-height: 320px;
+}
+
+.imagine-masonry-empty-card {
+  width: min(420px, 100%);
+  padding: 28px 24px;
+  border-color: #dfd7ca;
+  border-radius: 12px;
+  background: #fbfaf7;
+}
+
+.empty-title {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.imagine-masonry-batch {
+  gap: 10px;
+}
+
+.imagine-masonry-batch-head {
+  padding: 0 2px;
+}
+
+.imagine-masonry-grid,
+#imagineGrid .imagine-masonry-grid {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.waterfall-item,
+.imagine-masonry-tile {
+  border-color: #e7e0d5;
+  border-radius: 10px;
+  background: #f5f1ea;
+  box-shadow: 0 1px 0 rgba(31, 28, 22, 0.03);
+}
+
+.waterfall-item img,
+.imagine-masonry-tile img {
+  transition: transform 0.18s ease;
+}
+
+.waterfall-item:hover img,
+.imagine-masonry-tile:hover img {
+  transform: scale(1.015);
+}
+
+.waterfall-meta,
+.imagine-masonry-tile-label {
+  background: #fff;
+  border-top: 1px solid #eee8df;
+}
+
+.imagine-masonry-input-shell {
+  gap: 8px;
+  padding: 10px;
+}
+
+.imagine-masonry-textarea {
+  min-height: 66px;
+  padding: 10px 12px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: #fbfaf7;
+}
+
+.imagine-masonry-toolbar {
+  gap: 10px;
+}
+
+.imagine-masonry-toggle {
+  gap: 2px;
+  padding: 3px;
+  border-color: #e7e0d5;
+  background: #f5f1ea;
+}
+
+.imagine-masonry-toggle-btn,
+.mode-btn {
+  min-height: 27px;
+  padding: 0 11px;
+  color: #6f665c;
+  font-size: 0.76rem;
+}
+
+.imagine-masonry-toggle-btn.is-active,
+.mode-btn.active {
+  background: #171717;
+  color: #fff;
+}
+
+.imagine-masonry-ratio .form-input {
+  min-height: 34px;
+  padding: 7px 10px;
+  border-color: #e7e0d5;
+  background: #fbfaf7;
+}
+
+.imagine-masonry-send {
+  min-width: 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+}
+
+.selection-toolbar {
+  padding: 10px;
+  border: 1px solid var(--grok-card-border);
+  border-radius: 12px;
+  background: #fbfaf7;
+}
+
+.function-top-grid,
+.video-top-grid,
+.voice-grid {
+  gap: 12px;
+}
+
+.grok-kv,
+.meta-item,
+.toggle-row,
+.video-empty,
+.preview-stage,
+.video-stage,
+.audio-root,
+.visualizer,
+.voice-log,
+.raw-log,
+.cache-list {
+  border-radius: 10px;
+  background: #fbfaf7;
+}
+
+.cache-list table {
+  background: #fff;
+}
+
+@media (max-width: 1080px) {
+  .grok-tools-toolbar {
+    top: 0;
+    width: 100%;
+    border-radius: 12px;
+  }
+
+  .chat-sidebar {
+    top: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .grok-tools-page .header-section {
+    flex-direction: column;
+  }
+
+  .grok-tabs {
+    width: 100%;
+  }
+
+  .grok-tabs .tab-item {
+    flex: 0 0 auto;
+  }
+
+  .composer-input,
+  .imagine-masonry-toolbar {
+    gap: 8px;
+  }
+
+  .imagine-masonry-controls,
+  .imagine-masonry-actions {
+    justify-content: space-between;
+  }
+}
