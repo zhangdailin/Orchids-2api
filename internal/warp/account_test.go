@@ -101,3 +101,67 @@ func TestApplyRequestLimitInfoToAccount_OverwritesStaleWarpTier(t *testing.T) {
 		t.Fatal("QuotaResetAt was not parsed")
 	}
 }
+
+func TestAccountQuotaExhausted(t *testing.T) {
+	tests := []struct {
+		name string
+		acc  *store.Account
+		want bool
+	}{
+		{
+			name: "paid account with no monthly or bonus remaining",
+			acc: &store.Account{
+				AccountType:          "warp",
+				WarpMonthlyLimit:     1500,
+				WarpMonthlyRemaining: 0,
+				WarpBonusRemaining:   0,
+				UsageLimit:           1500,
+				UsageCurrent:         1500,
+			},
+			want: true,
+		},
+		{
+			name: "bonus keeps paid pool alive",
+			acc: &store.Account{
+				AccountType:          "warp",
+				WarpMonthlyLimit:     1500,
+				WarpMonthlyRemaining: 0,
+				WarpBonusRemaining:   1,
+			},
+			want: false,
+		},
+		{
+			name: "warp quota beats stale generic usage",
+			acc: &store.Account{
+				AccountType:          "warp",
+				WarpMonthlyLimit:     1500,
+				WarpMonthlyRemaining: 0,
+				WarpBonusRemaining:   0,
+				UsageLimit:           1500,
+				UsageCurrent:         100,
+			},
+			want: true,
+		},
+		{
+			name: "generic usage fallback",
+			acc: &store.Account{
+				AccountType:  "warp",
+				UsageLimit:   1500,
+				UsageCurrent: 1500,
+			},
+			want: true,
+		},
+		{
+			name: "unknown quota is not treated as exhausted",
+			acc:  &store.Account{AccountType: "warp"},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AccountQuotaExhausted(tt.acc); got != tt.want {
+				t.Fatalf("AccountQuotaExhausted()=%v want %v", got, tt.want)
+			}
+		})
+	}
+}

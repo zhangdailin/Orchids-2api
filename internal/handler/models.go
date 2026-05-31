@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -69,7 +68,7 @@ func (h *Handler) visibleWarpModelSet(ctx context.Context) map[string]struct{} {
 		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
 			continue
 		}
-		for _, modelID := range choices.Accounts[strconv.FormatInt(acc.ID, 10)] {
+		for _, modelID := range warp.EffectiveAccountModelIDs(acc, choices) {
 			if modelID = strings.TrimSpace(modelID); modelID != "" {
 				out[modelID] = struct{}{}
 			}
@@ -86,11 +85,15 @@ func (h *Handler) warpModelVisible(ctx context.Context, modelID string) bool {
 	if visible == nil {
 		return true
 	}
-	modelID = warp.ResolveModelAlias(modelID)
-	if modelID == "" {
+	rawModelID := modelID
+	resolvedModelID := warp.ResolveModelAlias(rawModelID)
+	if resolvedModelID == "" {
+		resolvedModelID = warp.NormalizeModelID(rawModelID)
+	}
+	if resolvedModelID == "" {
 		return true
 	}
-	_, ok := visible[modelID]
+	_, ok := visible[resolvedModelID]
 	return ok
 }
 
@@ -128,7 +131,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		if strings.EqualFold(mChannel, "warp") && warpVisible != nil {
 			modelID := warp.ResolveModelAlias(m.ModelID)
 			if modelID == "" {
-				modelID = strings.TrimSpace(m.ModelID)
+				modelID = warp.NormalizeModelID(m.ModelID)
 			}
 			if _, ok := warpVisible[modelID]; !ok {
 				continue

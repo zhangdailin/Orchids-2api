@@ -123,3 +123,16 @@ func ApplyRequestLimitInfoToAccount(acc *store.Account, info *RequestLimitInfo, 
 		}
 	}
 }
+
+func AccountQuotaExhausted(acc *store.Account) bool {
+	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
+		return false
+	}
+	if acc.WarpMonthlyLimit > 0 {
+		return acc.WarpMonthlyRemaining+acc.WarpBonusRemaining <= 0
+	}
+	if acc.UsageLimit > 0 {
+		return acc.UsageLimit-acc.UsageCurrent <= 0
+	}
+	return false
+}

@@ -227,25 +227,45 @@ func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string,
 	if err != nil || choices == nil {
 		return h.selectWarpAccountAvoidingUnavailable(ctx, targetChannel, failedAccountIDs, requestedModel)
 	}
-	if !warp.ChoicesSupportModel(choices, requestedModel) {
+	if !h.warpEffectiveChoicesSupportModel(ctx, choices, requestedModel) {
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s (model %s is not available in the current Warp account pool)", targetChannel, requestedModel)
 	}
 
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-		return warp.AccountSupportsModel(choices, acc.ID, requestedModel) &&
+		return warp.AccountSupportsModelForAccount(choices, acc, requestedModel) &&
 			!warp.AccountModelTemporarilyUnavailable(ctx, h.loadBalancer.Store, acc.ID, requestedModel, time.Now())
 	})
 	if err == nil {
 		return account, nil
 	}
 
-	slog.Warn("Warp model-aware account selection found no matching account; falling back to unavailable-aware channel selection", "model", requestedModel, "error", err)
-	return h.selectWarpAccountAvoidingUnavailable(ctx, targetChannel, failedAccountIDs, requestedModel)
+	return nil, err
+}
+
+func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices *warp.AccountModelChoices, modelID string) bool {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil || choices == nil || len(choices.Accounts) == 0 {
+		return true
+	}
+	visible := h.visibleWarpModelSet(ctx)
+	if visible == nil {
+		return warp.ChoicesSupportModel(choices, modelID)
+	}
+	rawModelID := modelID
+	resolvedModelID := warp.ResolveModelAlias(rawModelID)
+	if resolvedModelID == "" {
+		resolvedModelID = warp.NormalizeModelID(rawModelID)
+	}
+	if resolvedModelID == "" {
+		return true
+	}
+	_, ok := visible[resolvedModelID]
+	return ok
 }
 
 func (h *Handler) selectWarpAccountAvoidingUnavailable(ctx context.Context, targetChannel string, failedAccountIDs []int64, requestedModel string) (*store.Account, error) {
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-		return !warp.AccountModelTemporarilyUnavailable(ctx, h.loadBalancer.Store, acc.ID, requestedModel, time.Now())
+		return warp.AccountSupportsModelForAccount(nil, acc, requestedModel) &&
+			!warp.AccountModelTemporarilyUnavailable(ctx, h.loadBalancer.Store, acc.ID, requestedModel, time.Now())
 	})
 	if err == nil {
 		return account, nil

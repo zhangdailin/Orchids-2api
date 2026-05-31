@@ -25,6 +25,10 @@ type AccountModelUnavailable struct {
 	Accounts map[string]map[string]string `json:"accounts"`
 }
 
+func FreeOnlyModelIDs() []string {
+	return []string{defaultModel}
+}
+
 func LoadAccountModelChoices(ctx context.Context, s *store.Store) (*AccountModelChoices, error) {
 	if s == nil {
 		return nil, nil
@@ -97,6 +101,16 @@ func SaveAccountModelChoicesForAccount(ctx context.Context, s *store.Store, acco
 	return SaveAccountModelChoices(ctx, s, existing)
 }
 
+func EffectiveAccountModelIDs(acc *store.Account, choices *AccountModelChoices) []string {
+	if AccountQuotaExhausted(acc) {
+		return FreeOnlyModelIDs()
+	}
+	if choices == nil || acc == nil || acc.ID == 0 {
+		return nil
+	}
+	return choices.Accounts[strconv.FormatInt(acc.ID, 10)]
+}
+
 func AccountSupportsModel(choices *AccountModelChoices, accountID int64, modelID string) bool {
 	if choices == nil || len(choices.Accounts) == 0 || accountID == 0 {
 		return true
@@ -106,6 +120,32 @@ func AccountSupportsModel(choices *AccountModelChoices, accountID int64, modelID
 		return true
 	}
 	models := choices.Accounts[strconv.FormatInt(accountID, 10)]
+	if len(models) == 0 {
+		return true
+	}
+	for _, model := range models {
+		if model == modelID {
+			return true
+		}
+	}
+	return false
+}
+
+func AccountSupportsModelForAccount(choices *AccountModelChoices, acc *store.Account, modelID string) bool {
+	if acc == nil || acc.ID == 0 {
+		return true
+	}
+	modelID = canonicalModelID(modelID)
+	if modelID == "" {
+		return true
+	}
+	if AccountQuotaExhausted(acc) {
+		return modelID == defaultModel
+	}
+	if choices == nil || len(choices.Accounts) == 0 {
+		return true
+	}
+	models := EffectiveAccountModelIDs(acc, choices)
 	if len(models) == 0 {
 		return true
 	}

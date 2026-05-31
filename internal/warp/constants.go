@@ -136,3 +136,7 @@ func canonicalModelID(model string) string {
 	}
 	return key
 }
+
+func NormalizeModelID(model string) string {
+	return canonicalModelID(model)
+}

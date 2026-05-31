@@ -66,6 +66,22 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 	if AccountSupportsModel(choices, 1, DefaultModel()) {
 		t.Fatal("expected default model to require explicit account support when choices are cached")
 	}
+	exhausted := &store.Account{
+		ID:                   1,
+		AccountType:          "warp",
+		WarpMonthlyLimit:     1500,
+		WarpMonthlyRemaining: 0,
+		WarpBonusRemaining:   0,
+	}
+	if !AccountSupportsModelForAccount(choices, exhausted, DefaultModel()) {
+		t.Fatal("expected exhausted account to support free-only default model")
+	}
+	if AccountSupportsModelForAccount(choices, exhausted, "gpt-5.2-medium") {
+		t.Fatal("expected exhausted account to reject paid model despite cached paid pool")
+	}
+	if AccountSupportsModelForAccount(nil, exhausted, "gpt-5.2-medium") {
+		t.Fatal("expected exhausted account to reject paid model even when model choices cache is unavailable")
+	}
 }
 
 func TestAccountModelUnavailable_TTLAndFilter(t *testing.T) {

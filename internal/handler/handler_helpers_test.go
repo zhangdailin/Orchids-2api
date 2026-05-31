@@ -190,3 +190,45 @@ func TestSelectAccountRecord_WarpRejectsModelOutsideCurrentPool(t *testing.T) {
 		t.Fatalf("selectAccountRecord() error = %q", err.Error())
 	}
 }
+
+func TestSelectAccountRecord_WarpExhaustedPaidAccountIsFreeOnly(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+	if err := s.CreateAccount(ctx, &store.Account{
+		AccountType:          "warp",
+		RefreshToken:         "warp-paid-token",
+		Subscription:         "build/business",
+		UsageLimit:           1500,
+		UsageCurrent:         100,
+		WarpMonthlyLimit:     1500,
+		WarpMonthlyRemaining: 0,
+		WarpBonusRemaining:   0,
+		Enabled:              true,
+	}); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	if err := warp.SaveAccountModelChoicesForAccount(ctx, s, 1, []string{"auto-open", "gpt-5-2-medium"}); err != nil {
+		t.Fatalf("SaveAccountModelChoicesForAccount() error = %v", err)
+	}
+
+	_, err := h.selectAccountRecord(ctx, "warp", nil, "gpt-5-2-medium")
+	if err == nil {
+		t.Fatal("selectAccountRecord() error = nil, want unavailable model error")
+	}
+	if !strings.Contains(err.Error(), "not available in the current Warp account pool") {
+		t.Fatalf("selectAccountRecord() error = %q", err.Error())
+	}
+
+	account, err := h.selectAccountRecord(ctx, "warp", nil, "auto-open")
+	if err != nil {
+		t.Fatalf("selectAccountRecord(default) error = %v", err)
+	}
+	if account == nil || account.ID != 1 {
+		t.Fatalf("selectAccountRecord(default) account=%v want id=1", account)
+	}
+}
