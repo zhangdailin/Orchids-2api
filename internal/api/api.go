@@ -62,14 +62,16 @@ var puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *conf
 	return client.VerifyAuthToken(ctx)
 }
 
+const defaultGrokVerifyModelID = "grok-4.20-0309"
+
 func normalizeGrokVerifyModelID(raw string) string {
 	model := strings.TrimSpace(raw)
 	if model == "" {
-		return "grok-4.20-0309"
+		return defaultGrokVerifyModelID
 	}
 	lower := strings.ToLower(model)
 	if lower == "grok" || !strings.HasPrefix(lower, "grok-") {
-		return "grok-4.20-0309"
+		return defaultGrokVerifyModelID
 	}
 	return model
 }
@@ -93,19 +95,16 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	acc.ClientCookie = token
 
 	client := grok.New(cfg)
-	modelID := normalizeGrokVerifyModelID(acc.AgentMode)
-	if modelID != "" && modelID != acc.AgentMode {
+	if modelID := normalizeGrokVerifyModelID(acc.AgentMode); modelID != "" && modelID != acc.AgentMode {
 		acc.AgentMode = modelID
 	}
 
 	verifyCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	info, verifyErr := client.VerifyToken(verifyCtx, token, modelID)
+	info, verifyErr := client.VerifyToken(verifyCtx, token, "")
 	cancel()
-	if verifyErr != nil && isGrokModelNotFound(verifyErr) && modelID != "grok-4.20-0309-non-reasoning" {
-		modelID = "grok-4.20-0309-non-reasoning"
-		acc.AgentMode = modelID
+	if verifyErr != nil && isGrokModelNotFound(verifyErr) {
 		verifyCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
-		info, verifyErr = client.VerifyToken(verifyCtx, token, modelID)
+		info, verifyErr = client.VerifyToken(verifyCtx, token, "grok-4.20-0309-non-reasoning")
 		cancel()
 	}
 	if verifyErr != nil {

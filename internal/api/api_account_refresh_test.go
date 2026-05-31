@@ -60,6 +60,57 @@ func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
 	}
 }
 
+func TestRefreshAccountState_GrokQuotaIgnoresStaleAgentMode(t *testing.T) {
+	t.Parallel()
+
+	var requestedModels []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rest/rate-limits" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		model, _ := payload["modelName"].(string)
+		requestedModels = append(requestedModels, model)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"remainingQueries": 7,
+			"totalQueries":     7,
+		})
+	}))
+	defer srv.Close()
+
+	a := New(nil, "", "", &config.Config{GrokAPIBaseURL: srv.URL})
+	acc := &store.Account{
+		ID:           23,
+		AccountType:  "grok",
+		ClientCookie: "token-abc",
+		AgentMode:    "grok-3",
+		Subscription: "basic",
+		UsageCurrent: 30,
+		UsageLimit:   30,
+	}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err != nil {
+		t.Fatalf("refreshAccountState() error: %v", err)
+	}
+	if status != "" || httpStatus != 0 {
+		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
+	}
+	if len(requestedModels) != 1 || requestedModels[0] != "auto" {
+		t.Fatalf("requestedModels=%v want [auto]", requestedModels)
+	}
+	if acc.AgentMode != "grok-3" {
+		t.Fatalf("AgentMode=%q want grok-3", acc.AgentMode)
+	}
+	if acc.UsageCurrent != 7 || acc.UsageLimit != 7 {
+		t.Fatalf("unexpected quota current=%v limit=%v", acc.UsageCurrent, acc.UsageLimit)
+	}
+}
+
 func TestBuildQuotaResponseFields_WarpSplitQuota(t *testing.T) {
 	t.Parallel()
 
