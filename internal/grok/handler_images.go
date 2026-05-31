@@ -330,10 +330,12 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	var debugAsset []string
 	var debugShapes []string
 	var debugNoImage []string
+	var debugVariants []string
 
 	// Grok upstream may return only 2 images per call and may repeat.
 	// To reach N, request 1 image per call without rewriting the user's prompt.
-	maxAttempts := req.N * 4
+	payloadVariants := appChatImagePayloadVariants()
+	maxAttempts := req.N * len(payloadVariants) * 2
 	promptVariants := grokAppChatImagePrompts(req.Prompt)
 	if maxAttempts < 4 {
 		maxAttempts = 4
@@ -351,12 +353,15 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		count := req.N
 		prompt := strings.TrimSpace(req.Prompt)
 		if len(promptVariants) > 0 {
-			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
+			prompt = promptVariants[promptVariantIndex(i/len(payloadVariants), promptVariants)]
 		}
+		variant := payloadVariants[i%len(payloadVariants)]
+		debugVariants = append(debugVariants, variant)
 		payload := h.client.chatPayload(spec, prompt, true, count)
 		prepareAppChatImageGenerationPayload(payload, count)
 		ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
 		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
+		applyAppChatImagePayloadVariant(payload, spec, variant)
 		resp, err := h.doChatSingleAccount(ctx, sess, payload)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -385,6 +390,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		slog.Warn("grok image generation returned no images",
 			"model", req.Model,
 			"attempts", maxAttempts,
+			"variants", uniqueStrings(debugVariants),
 			"event_shapes", uniqueStrings(debugShapes),
 			"diagnostics", uniqueStrings(debugNoImage),
 			"http_candidates", len(uniqueStrings(debugHTTP)),
@@ -450,6 +456,48 @@ func prepareAppChatImageGenerationPayload(payload map[string]interface{}, count 
 	toolOverrides["xMediaSearch"] = false
 	toolOverrides["trendsSearch"] = false
 	toolOverrides["xPostAnalyze"] = false
+}
+
+func appChatImagePayloadVariants() []string {
+	return []string{
+		"webchat2api",
+		"tool_image_gen",
+		"legacy_model_fields",
+		"response_metadata_override",
+	}
+}
+
+func applyAppChatImagePayloadVariant(payload map[string]interface{}, spec ModelSpec, variant string) {
+	if payload == nil {
+		return
+	}
+	toolOverrides, _ := payload["toolOverrides"].(map[string]interface{})
+	switch variant {
+	case "tool_image_gen":
+		if toolOverrides != nil {
+			toolOverrides["imageGen"] = true
+		}
+	case "legacy_model_fields":
+		if toolOverrides != nil {
+			toolOverrides["imageGen"] = true
+		}
+		if model := strings.TrimSpace(spec.UpstreamModel); model != "" {
+			payload["modelName"] = model
+		}
+		if mode := strings.TrimSpace(spec.ModelMode); mode != "" {
+			payload["modelMode"] = mode
+		}
+	case "response_metadata_override":
+		if toolOverrides != nil {
+			toolOverrides["imageGen"] = true
+		}
+		if override, ok := payload["modelConfigOverride"].(map[string]interface{}); ok && len(override) > 0 {
+			payload["responseMetadata"] = map[string]interface{}{
+				"modelConfigOverride": override,
+			}
+			delete(payload, "modelConfigOverride")
+		}
+	}
 }
 
 func promptVariantIndex(i int, variants []string) int {
