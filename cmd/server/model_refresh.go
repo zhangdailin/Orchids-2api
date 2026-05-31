@@ -797,8 +797,8 @@ func warpFreeOnlyProbeCandidates(discovered []warp.ModelChoice) []warp.ModelChoi
 			continue
 		}
 		choice, ok := byID[id]
-		if !ok && id == warp.DefaultModel() {
-			choice = warp.ModelChoice{ID: id, Name: "Warp Auto Open"}
+		if !ok {
+			choice = warp.ModelChoice{ID: id, Name: warpProbeModelName(id)}
 			ok = true
 		}
 		if !ok {
@@ -811,6 +811,27 @@ func warpFreeOnlyProbeCandidates(discovered []warp.ModelChoice) []warp.ModelChoi
 		out = append(out, choice)
 	}
 	return out
+}
+
+func warpProbeModelName(id string) string {
+	switch id {
+	case warp.DefaultModel():
+		return "Warp Auto Open"
+	case "claude-4-5-haiku":
+		return "Claude 4.5 Haiku"
+	case "claude-4-5-sonnet":
+		return "Claude 4.5 Sonnet"
+	case "claude-4-5-opus":
+		return "Claude 4.5 Opus"
+	case "gpt-5-2-low":
+		return "GPT-5.2 Low"
+	case "gpt-5-1-low":
+		return "GPT-5.1 Low"
+	case "gemini-3-5-flash":
+		return "Gemini 3.5 Flash"
+	default:
+		return id
+	}
 }
 
 func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoveries []warpAccountDiscovery) {

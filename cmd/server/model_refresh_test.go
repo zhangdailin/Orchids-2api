@@ -536,9 +536,6 @@ func TestProbeWarpFreeOnlyModelChoices_UsesSmallPreferredSet(t *testing.T) {
 		{ID: "auto-open"},
 		{ID: "gpt-5-2-low"},
 		{ID: "gpt-5-2-medium"},
-		{ID: "claude-4-5-haiku"},
-		{ID: "claude-4-5-sonnet"},
-		{ID: "claude-4-5-opus"},
 	})
 
 	if source != "free_probe" {
@@ -550,6 +547,9 @@ func TestProbeWarpFreeOnlyModelChoices_UsesSmallPreferredSet(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "auto-open,claude-4-5-sonnet,gpt-5-2-low" {
 		t.Fatalf("choices=%v want auto-open,claude-4-5-sonnet,gpt-5-2-low", got)
+	}
+	if !strings.Contains(strings.Join(seen, ","), "claude-4-5-opus") {
+		t.Fatalf("expected forced probe for opus even when absent from GraphQL choices, seen=%v", seen)
 	}
 	if strings.Contains(strings.Join(seen, ","), "gpt-5-2-medium") {
 		t.Fatalf("probe set should skip medium paid candidate, seen=%v", seen)
