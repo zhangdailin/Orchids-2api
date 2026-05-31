@@ -160,7 +160,7 @@ func consoleModelForID(id string) string {
 func (m ModelSpec) PoolCandidates() []string {
 	switch {
 	case m.IsImage && normalizeModelID(m.ID) == "grok-imagine-image-lite":
-		return []string{"lite", "basic", "super", "heavy"}
+		return []string{"basic", "lite", "super", "heavy"}
 	case m.PreferBest && m.Tier == grokTierHeavy:
 		return []string{"heavy"}
 	case m.PreferBest && m.Tier == grokTierSuper:

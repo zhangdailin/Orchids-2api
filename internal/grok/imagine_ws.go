@@ -12,7 +12,6 @@ import (
 	"github.com/goccy/go-json"
 	"github.com/gorilla/websocket"
 
-	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 )
 
@@ -46,29 +45,6 @@ type imagineWSSlot struct {
 	lastBlob string
 	done     bool
 	progress int
-}
-
-func imageModelUsesImagineWS(modelID string) bool {
-	switch normalizeModelID(modelID) {
-	case "grok-imagine-image", "grok-imagine-image-pro":
-		return true
-	default:
-		return false
-	}
-}
-
-func imageModelUsesImagineWSForAccount(modelID string, acc *store.Account) bool {
-	if !isImageGenerationModel(modelID) {
-		return false
-	}
-	if strings.EqualFold(grokAccountPool(acc), "basic") {
-		return false
-	}
-	return true
-}
-
-func imageModelUsesProImagineWS(modelID string) bool {
-	return normalizeModelID(modelID) == "grok-imagine-image-pro"
 }
 
 func isImageGenerationModel(modelID string) bool {

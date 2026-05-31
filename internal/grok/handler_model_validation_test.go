@@ -229,7 +229,7 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	fastSess.Close()
 }
 
-func TestOpenChatAccountSessionForImageLitePrefersLitePool(t *testing.T) {
+func TestOpenChatAccountSessionForImageLitePrefersBasicPool(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -253,18 +253,19 @@ func TestOpenChatAccountSessionForImageLitePrefersLitePool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open image lite session error=%v", err)
 	}
-	if sess.token != "lite-token" {
-		t.Fatalf("token=%q want lite-token", sess.token)
+	if sess.token != "basic-token" {
+		t.Fatalf("token=%q want basic-token", sess.token)
 	}
+	basicID := sess.acc.ID
 	sess.Close()
 
-	next, err := h.openChatAccountSessionForModelExcluding(context.Background(), h.grokAccountIDsForPool(context.Background(), "lite"), spec)
+	next, err := h.openChatAccountSessionForModelExcluding(context.Background(), []int64{basicID}, spec)
 	if err != nil {
-		t.Fatalf("open non-lite image lite session error=%v", err)
+		t.Fatalf("open non-basic image lite session error=%v", err)
 	}
 	defer next.Close()
-	if next.token != "basic-token" {
-		t.Fatalf("fallback token=%q want basic-token", next.token)
+	if next.token != "lite-token" {
+		t.Fatalf("fallback token=%q want lite-token", next.token)
 	}
 }
 
