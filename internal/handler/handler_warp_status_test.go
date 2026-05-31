@@ -57,7 +57,7 @@ func TestHandleMessages_Warp403MarksAccountBlocked(t *testing.T) {
 	})
 
 	payload := map[string]any{
-		"model":    "auto",
+		"model":    "auto-open",
 		"messages": []map[string]any{{"role": "user", "content": "hi"}},
 		"system":   []any{},
 		"stream":   false,

@@ -325,14 +325,7 @@ func EstimateInputTokens(promptText, _ string, messages []prompt.Message, _ []in
 }
 
 func ResolveModelAlias(model string) string {
-	canonical := canonicalModelID(model)
-	if canonical == "" {
-		return ""
-	}
-	if _, ok := canonicalModelAliases[canonical]; ok {
-		return canonical
-	}
-	return ""
+	return canonicalModelID(model)
 }
 
 func DefaultModel() string {

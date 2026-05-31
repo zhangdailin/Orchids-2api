@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -17,108 +16,35 @@ import (
 	"orchids-api/internal/warp"
 )
 
-var modelVersionHyphenAlias = regexp.MustCompile(`-(\d{1,2})-(\d{1,2})`)
-var modelVersionDotAlias = regexp.MustCompile(`-(\d{1,2})\.(\d{1,2})`)
-
-func resolveModelAliasCandidates(modelID string) []string {
+func normalizeRequestedModelID(modelID string) string {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	if modelID == "" {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	add := func(v string, out *[]string) {
-		v = strings.ToLower(strings.TrimSpace(v))
-		if v == "" {
-			return
-		}
-		if _, ok := seen[v]; ok {
-			return
-		}
-		seen[v] = struct{}{}
-		*out = append(*out, v)
-	}
-
-	out := make([]string, 0, 3)
-	add(modelID, &out)
-	add(modelVersionHyphenAlias.ReplaceAllString(modelID, "-$1.$2"), &out)
-	add(modelVersionDotAlias.ReplaceAllString(modelID, "-$1-$2"), &out)
-	return out
+	return modelID
 }
 
 func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string, *store.Model) {
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return modelID, nil
 	}
-	candidates := resolveModelAliasCandidates(modelID)
-	if len(candidates) == 0 {
+	candidate := normalizeRequestedModelID(modelID)
+	if candidate == "" {
 		return modelID, nil
 	}
-	var fallbackID string
-	var fallbackModel *store.Model
-	for _, cand := range candidates {
-		if m, err := h.loadBalancer.Store.GetModelByModelID(ctx, cand); err == nil && m != nil {
-			if m.Status.Enabled() {
-				return cand, m
-			}
-			if fallbackModel == nil {
-				fallbackID = cand
-				fallbackModel = m
-			}
-		}
-	}
-	if fallbackModel != nil {
-		return fallbackID, fallbackModel
+	if m, err := h.loadBalancer.Store.GetModelByModelID(ctx, candidate); err == nil && m != nil {
+		return candidate, m
 	}
 	return modelID, nil
-}
-
-func uniqueModelCandidates(values ...string) []string {
-	seen := make(map[string]struct{}, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.ToLower(strings.TrimSpace(value))
-		if value == "" {
-			continue
-		}
-		if _, ok := seen[value]; ok {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	return out
 }
 
 func (h *Handler) resolveModelAliasForChannel(ctx context.Context, channel, modelID string) (string, *store.Model) {
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return modelID, nil
 	}
-
-	candidates := resolveModelAliasCandidates(modelID)
-	if strings.EqualFold(channel, "warp") {
-		if mapped := warp.ResolveModelAlias(modelID); mapped != "" {
-			candidates = append(resolveModelAliasCandidates(mapped), candidates...)
-		}
+	candidate := normalizeRequestedModelID(modelID)
+	if candidate == "" {
+		return modelID, nil
 	}
-	candidates = uniqueModelCandidates(candidates...)
-
-	var fallbackID string
-	var fallbackModel *store.Model
-	for _, cand := range candidates {
-		m, err := h.loadBalancer.Store.GetModelByChannelAndModelID(ctx, channel, cand)
-		if err != nil || m == nil {
-			continue
-		}
-		if m.Status.Enabled() {
-			return cand, m
-		}
-		if fallbackModel == nil {
-			fallbackID = cand
-			fallbackModel = m
-		}
-	}
-	if fallbackModel != nil {
-		return fallbackID, fallbackModel
+	if m, err := h.loadBalancer.Store.GetModelByChannelAndModelID(ctx, channel, candidate); err == nil && m != nil {
+		return candidate, m
 	}
 	return modelID, nil
 }
@@ -215,25 +141,21 @@ func (h *Handler) selectAccountRecord(ctx context.Context, targetChannel string,
 		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 	}
 
-	requestedModel := warp.ResolveModelAlias(modelID)
-	if requestedModel == "" {
-		requestedModel = strings.TrimSpace(modelID)
-	}
+	requestedModel := normalizeRequestedModelID(modelID)
 	if requestedModel == "" || requestedModel == warp.DefaultModel() {
 		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 	}
 
 	choices, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
 	if err != nil || choices == nil {
-		return h.selectWarpAccountAvoidingUnavailable(ctx, targetChannel, failedAccountIDs, requestedModel)
+		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 	}
 	if !h.warpEffectiveChoicesSupportModel(ctx, choices, requestedModel) {
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s (model %s is not available in the current Warp account pool)", targetChannel, requestedModel)
 	}
 
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-		return warp.AccountSupportsModelForAccount(choices, acc, requestedModel) &&
-			!warp.AccountModelTemporarilyUnavailable(ctx, h.loadBalancer.Store, acc.ID, requestedModel, time.Now())
+		return warp.AccountSupportsModelForAccount(choices, acc, requestedModel)
 	})
 	if err == nil {
 		return account, nil
@@ -250,28 +172,12 @@ func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices 
 	if visible == nil {
 		return warp.ChoicesSupportModel(choices, modelID)
 	}
-	rawModelID := modelID
-	resolvedModelID := warp.ResolveModelAlias(rawModelID)
-	if resolvedModelID == "" {
-		resolvedModelID = warp.NormalizeModelID(rawModelID)
-	}
+	resolvedModelID := normalizeRequestedModelID(modelID)
 	if resolvedModelID == "" {
 		return true
 	}
 	_, ok := visible[resolvedModelID]
 	return ok
-}
-
-func (h *Handler) selectWarpAccountAvoidingUnavailable(ctx context.Context, targetChannel string, failedAccountIDs []int64, requestedModel string) (*store.Account, error) {
-	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-		return warp.AccountSupportsModelForAccount(nil, acc, requestedModel) &&
-			!warp.AccountModelTemporarilyUnavailable(ctx, h.loadBalancer.Store, acc.ID, requestedModel, time.Now())
-	})
-	if err == nil {
-		return account, nil
-	}
-	slog.Warn("Warp unavailable-aware account selection found no matching account; falling back to channel selection", "model", requestedModel, "error", err)
-	return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 }
 
 func firstString(values ...string) string {

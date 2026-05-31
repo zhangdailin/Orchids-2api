@@ -508,8 +508,8 @@ func TestSaveWarpAccountModelChoices(t *testing.T) {
 	if choices == nil {
 		t.Fatal("expected cached choices")
 	}
-	if !warp.AccountSupportsModel(choices, 1, "claude-4.6-opus") {
-		t.Fatal("expected account 1 to support normalized Claude model")
+	if !warp.AccountSupportsModel(choices, 1, "claude-opus-4-6") {
+		t.Fatal("expected account 1 to support exact Claude model")
 	}
 	if warp.AccountSupportsModel(choices, 1, "gemini-3-pro") {
 		t.Fatal("expected account 1 not to support uncached Gemini model")

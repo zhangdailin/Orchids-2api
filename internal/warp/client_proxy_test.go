@@ -167,41 +167,16 @@ func TestDoStreamRequest_SendsLegacyWarpHeaders(t *testing.T) {
 	}
 }
 
-func TestShouldRetryWarpWithFallbackModel(t *testing.T) {
-	err := &HTTPStatusError{
-		StatusCode: http.StatusBadRequest,
-		Body:       `{"error":"Invalid request: the requested base model (claude-4-5-opus) is not allowed for your account"}`,
-	}
-	if !shouldRetryWarpWithFallbackModel(err, "claude-4-5-opus") {
-		t.Fatal("expected model-not-allowed error to retry with fallback")
-	}
-	if shouldRetryWarpWithFallbackModel(err, defaultModel) {
-		t.Fatal("expected fallback model to avoid retry loop")
-	}
-	if shouldRetryWarpWithFallbackModel(&HTTPStatusError{StatusCode: http.StatusTooManyRequests, Body: err.Body}, "claude-4-5-opus") {
-		t.Fatal("expected non-400 error to avoid fallback retry")
-	}
-}
-
-func TestSendRequestWithPayload_EmitsActualModelOnFallback(t *testing.T) {
+func TestSendRequestWithPayload_ReturnsModelAvailabilityError(t *testing.T) {
 	requestCount := 0
 	client := &Client{
 		httpClient: &http.Client{
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				requestCount++
-				if requestCount == 1 {
-					return &http.Response{
-						StatusCode: http.StatusBadRequest,
-						Body:       io.NopCloser(bytes.NewBufferString(`{"error":"Invalid request: the requested base model (claude-4-6-opus-high) is not allowed for your account"}`)),
-						Header:     make(http.Header),
-						Request:    req,
-					}, nil
-				}
-				finish := wrapFrame(appendBytesField(3, appendBytesField(8, appendVarintField(2, 1))))
 				return &http.Response{
-					StatusCode: http.StatusOK,
+					StatusCode: http.StatusBadRequest,
+					Body:       io.NopCloser(bytes.NewBufferString(`{"error":"Invalid request: the requested base model (claude-4-6-opus-high) is not allowed for your account"}`)),
 					Header:     make(http.Header),
-					Body:       io.NopCloser(bytes.NewReader(finish)),
 					Request:    req,
 				}, nil
 			}),
@@ -214,23 +189,15 @@ func TestSendRequestWithPayload_EmitsActualModelOnFallback(t *testing.T) {
 		},
 	}
 
-	var events []string
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
 		Model:  "claude-4-6-opus-high",
 		Prompt: "hi",
-	}, func(msg upstream.SSEMessage) {
-		if msg.Type == "model.actual_model" {
-			events = append(events, msg.Event["actual_model"].(string))
-		}
-	}, nil)
-	if err != nil {
-		t.Fatalf("SendRequestWithPayload() error = %v", err)
+	}, func(upstream.SSEMessage) {}, nil)
+	if err == nil {
+		t.Fatalf("SendRequestWithPayload() error = nil, want model availability error")
 	}
-	if requestCount != 2 {
-		t.Fatalf("requestCount=%d want 2", requestCount)
-	}
-	if len(events) != 1 || events[0] != defaultModel {
-		t.Fatalf("actual model events=%v want [%s]", events, defaultModel)
+	if requestCount != 1 {
+		t.Fatalf("requestCount=%d want 1", requestCount)
 	}
 }
 

@@ -73,43 +73,6 @@ func ResolveModel(modelID string) (ModelSpec, bool) {
 	return m, ok
 }
 
-func resolveDynamicTextModel(modelID string) (ModelSpec, bool) {
-	id := normalizeModelID(modelID)
-	if id == "" {
-		return ModelSpec{}, false
-	}
-	if IsDeprecatedModelID(id) {
-		return ModelSpec{}, false
-	}
-	// Keep image/video models explicit; only auto-resolve text models.
-	if strings.HasPrefix(id, "grok-imagine-") {
-		return ModelSpec{}, false
-	}
-	if !strings.HasPrefix(id, "grok-") {
-		return ModelSpec{}, false
-	}
-	return ModelSpec{
-		ID:            id,
-		Name:          id,
-		UpstreamModel: id,
-		ConsoleModel:  consoleModelForID(id),
-	}, true
-}
-
-func consoleModelForID(id string) string {
-	switch id {
-	case "grok-4.3":
-		return "grok-4.3"
-	case "grok-build-0.1":
-		return "grok-build-0.1"
-	default:
-		if strings.HasPrefix(id, "grok-") {
-			return id
-		}
-		return ""
-	}
-}
-
 func (m ModelSpec) PoolCandidates() []string {
 	switch {
 	case m.IsImage && normalizeModelID(m.ID) == "grok-imagine-image-lite":
@@ -133,11 +96,6 @@ func (m ModelSpec) PoolCandidates() []string {
 	}
 }
 
-// ResolveModelOrDynamic first resolves built-in model specs, then falls back to
-// dynamic text-model passthrough for newly introduced grok-* models.
 func ResolveModelOrDynamic(modelID string) (ModelSpec, bool) {
-	if spec, ok := ResolveModel(modelID); ok {
-		return spec, true
-	}
-	return resolveDynamicTextModel(modelID)
+	return ResolveModel(modelID)
 }

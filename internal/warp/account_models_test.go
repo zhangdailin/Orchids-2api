@@ -3,7 +3,6 @@ package warp
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/alicebob/miniredis/v2"
 
@@ -39,7 +38,7 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 		t.Fatalf("LoadAccountModelChoices() error = %v", err)
 	}
 	got := choices.Accounts["1"]
-	want := []string{"claude-4-6-opus-high", "gpt-5-2-medium"}
+	want := []string{"claude-opus-4-6", "gpt-5-2-medium", "gpt-5.2-medium"}
 	if len(got) != len(want) {
 		t.Fatalf("models=%v want %v", got, want)
 	}
@@ -48,8 +47,8 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 			t.Fatalf("models=%v want %v", got, want)
 		}
 	}
-	if !AccountSupportsModel(choices, 1, "claude-4.6-opus") {
-		t.Fatal("expected account to support normalized claude alias")
+	if AccountSupportsModel(choices, 1, "claude-4.6-opus") {
+		t.Fatal("expected account to reject missing claude alias")
 	}
 	if AccountSupportsModel(choices, 1, "gemini-3-pro") {
 		t.Fatal("expected account not to support missing model")
@@ -99,55 +98,7 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 		Accounts: map[string][]string{"1": {DefaultModel(), "gpt-5-2-low"}},
 		Sources:  map[string]string{"1": "free_probe"},
 	}
-	if !AccountSupportsModelForAccount(probedChoices, free, "gpt-5.2-low") {
+	if !AccountSupportsModelForAccount(probedChoices, free, "gpt-5-2-low") {
 		t.Fatal("expected free account to support model confirmed by free probe")
-	}
-}
-
-func TestAccountModelUnavailable_TTLAndFilter(t *testing.T) {
-	mini := miniredis.RunT(t)
-	defer mini.Close()
-
-	s, err := store.New(store.Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisPrefix: "warp_account_model_unavailable_test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	defer s.Close()
-
-	ctx := context.Background()
-	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
-	if err := MarkAccountModelUnavailable(ctx, s, 7, "claude-opus-4-6", now); err != nil {
-		t.Fatalf("MarkAccountModelUnavailable() error = %v", err)
-	}
-
-	if !AccountModelTemporarilyUnavailable(ctx, s, 7, "claude-4.6-opus", now.Add(time.Hour)) {
-		t.Fatal("expected model to be temporarily unavailable")
-	}
-
-	choices := []ModelChoice{
-		{ID: "auto-open", Name: "Auto Open"},
-		{ID: "claude-opus-4-6", Name: "Claude Opus"},
-		{ID: "gpt-5.2-medium", Name: "GPT"},
-	}
-	filtered := FilterUnavailableModels(ctx, s, 7, choices, now.Add(time.Hour))
-	gotIDs := make([]string, 0, len(filtered))
-	for _, choice := range filtered {
-		gotIDs = append(gotIDs, choice.ID)
-	}
-	want := []string{"auto-open", "gpt-5.2-medium"}
-	if len(gotIDs) != len(want) {
-		t.Fatalf("filtered ids=%v want %v", gotIDs, want)
-	}
-	for i := range want {
-		if gotIDs[i] != want[i] {
-			t.Fatalf("filtered ids=%v want %v", gotIDs, want)
-		}
-	}
-	if AccountModelTemporarilyUnavailable(ctx, s, 7, "claude-4.6-opus", now.Add(7*time.Hour)) {
-		t.Fatal("expected model unavailable cache to expire")
 	}
 }

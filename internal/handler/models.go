@@ -85,11 +85,7 @@ func (h *Handler) warpModelVisible(ctx context.Context, modelID string) bool {
 	if visible == nil {
 		return true
 	}
-	rawModelID := modelID
-	resolvedModelID := warp.ResolveModelAlias(rawModelID)
-	if resolvedModelID == "" {
-		resolvedModelID = warp.NormalizeModelID(rawModelID)
-	}
+	resolvedModelID := normalizeRequestedModelID(modelID)
 	if resolvedModelID == "" {
 		return true
 	}
@@ -129,10 +125,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if strings.EqualFold(mChannel, "warp") && warpVisible != nil {
-			modelID := warp.ResolveModelAlias(m.ModelID)
-			if modelID == "" {
-				modelID = warp.NormalizeModelID(m.ModelID)
-			}
+			modelID := normalizeRequestedModelID(m.ModelID)
 			if _, ok := warpVisible[modelID]; !ok {
 				continue
 			}

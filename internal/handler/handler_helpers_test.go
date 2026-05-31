@@ -56,7 +56,7 @@ func setupModelValidationHandler(t *testing.T) (*Handler, *store.Store, *minired
 	return h, s, mini
 }
 
-func TestValidateModelAvailability_PrefersEnabledAliasOverOfflineExactMatch(t *testing.T) {
+func TestValidateModelAvailability_RejectsOfflineExactMatchEvenWhenAliasExists(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -88,18 +88,15 @@ func TestValidateModelAvailability_PrefersEnabledAliasOverOfflineExactMatch(t *t
 	}
 
 	got, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "orchids")
-	if err != nil {
-		t.Fatalf("validateModelAvailability() error = %v", err)
+	if err == nil {
+		t.Fatalf("validateModelAvailability() error = nil, got model=%v", got)
 	}
-	if got == nil {
-		t.Fatal("validateModelAvailability() returned nil model")
-	}
-	if got.ModelID != "claude-opus-4.6" {
-		t.Fatalf("validateModelAvailability() model = %q, want %q", got.ModelID, "claude-opus-4.6")
+	if err.Error() != "model not available" {
+		t.Fatalf("validateModelAvailability() error = %q, want %q", err.Error(), "model not available")
 	}
 }
 
-func TestValidateModelAvailability_FallsBackToOfflineWhenNoEnabledAliasExists(t *testing.T) {
+func TestValidateModelAvailability_ReturnsOfflineExactMatch(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() {
 		_ = s.Close()

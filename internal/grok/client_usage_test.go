@@ -11,7 +11,7 @@ import (
 	"orchids-api/internal/config"
 )
 
-func TestGetUsage_DefaultModelFallbackToGrok420Fast(t *testing.T) {
+func TestGetUsage_DefaultModelDoesNotFallback(t *testing.T) {
 	t.Parallel()
 
 	var requestedModels []string
@@ -29,34 +29,19 @@ func TestGetUsage_DefaultModelFallbackToGrok420Fast(t *testing.T) {
 		model, _ := payload["modelName"].(string)
 		requestedModels = append(requestedModels, model)
 
-		if len(requestedModels) == 1 {
-			http.Error(w, `{"error":{"message":"Model is not found"}}`, http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"maxQueries":120,"remainingQueries":33}`))
+		http.Error(w, `{"error":{"message":"Model is not found"}}`, http.StatusBadRequest)
 	}))
 	defer srv.Close()
 
 	c := New(&config.Config{GrokAPIBaseURL: srv.URL})
-	info, err := c.GetUsage(context.Background(), "sso=token-abc; Path=/; HttpOnly", "")
-	if err != nil {
-		t.Fatalf("GetUsage() error: %v", err)
+	if _, err := c.GetUsage(context.Background(), "sso=token-abc; Path=/; HttpOnly", ""); err == nil {
+		t.Fatalf("expected error for default model rejection")
 	}
-	if info == nil {
-		t.Fatalf("GetUsage() returned nil info")
+	if len(requestedModels) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(requestedModels))
 	}
-	if info.Limit != 120 || info.Remaining != 33 {
-		t.Fatalf("unexpected info: limit=%d remaining=%d", info.Limit, info.Remaining)
-	}
-	if !info.HasLimit || !info.HasRemaining || info.Unit != "requests" {
-		t.Fatalf("unexpected usage metadata: %#v", info)
-	}
-	if len(requestedModels) != 2 {
-		t.Fatalf("expected 2 requests, got %d", len(requestedModels))
-	}
-	if requestedModels[1] != "fast" {
-		t.Fatalf("expected fallback rate-limit model fast, got %q", requestedModels[1])
+	if requestedModels[0] != "auto" {
+		t.Fatalf("expected default model to use auto rate-limit mode, got %q", requestedModels[0])
 	}
 }
 

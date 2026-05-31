@@ -212,16 +212,8 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		slog.Info("Auto mapped image_config request to image model", "from", originalModel, "to", req.Model)
 	}
 	if err := h.ensureModelEnabled(r.Context(), req.Model); err != nil {
-		msg := strings.TrimSpace(err.Error())
-		if strings.EqualFold(msg, "model not found") && h.tryAutoRegisterModel(r.Context(), req.Model) {
-			if retryErr := h.ensureModelEnabled(r.Context(), req.Model); retryErr != nil {
-				http.Error(w, modelValidationMessage(req.Model, retryErr), http.StatusBadRequest)
-				return
-			}
-		} else {
-			http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
-			return
-		}
+		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
+		return
 	}
 
 	spec, ok := ResolveModelOrDynamic(req.Model)

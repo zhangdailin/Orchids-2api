@@ -53,11 +53,11 @@ func TestFetchUserAgentModeLLMChoices_NormalizesIDsAndDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchUserAgentModeLLMChoices() error: %v", err)
 	}
-	if defaultID != "gpt-5-1-medium" {
-		t.Fatalf("defaultID=%q want gpt-5-1-medium", defaultID)
+	if defaultID != "gpt-5.1-medium" {
+		t.Fatalf("defaultID=%q want gpt-5.1-medium", defaultID)
 	}
 	gotIDs := []string{choices[0].ID, choices[1].ID}
-	wantIDs := []string{"claude-4-6-sonnet-high", "gpt-5-1-medium"}
+	wantIDs := []string{"claude-4.6-sonnet", "gpt-5.1-medium"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("choice ids=%+v want %+v", gotIDs, wantIDs)
 	}
@@ -96,7 +96,7 @@ func TestFetchWorkspaceAvailableLLMChoices_ReturnsChoices(t *testing.T) {
 		t.Fatalf("fetchWorkspaceAvailableLLMChoices() error: %v", err)
 	}
 	gotIDs := []string{choices[0].ID, choices[1].ID}
-	wantIDs := []string{"auto-open", "gpt-5-1-codex-medium"}
+	wantIDs := []string{"auto", "gpt-5.1-codex-medium"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("choice ids=%+v want %+v", gotIDs, wantIDs)
 	}
@@ -167,7 +167,7 @@ func TestFetchDiscoveredModelChoices_PrefersAgentModeOverWorkspaceCatalog(t *tes
 		t.Fatalf("source=%q want agent_mode_llms", source)
 	}
 	gotIDs := []string{choices[0].ID, choices[1].ID}
-	wantIDs := []string{"auto-open", "gpt-5-2-medium"}
+	wantIDs := []string{"auto", "gpt-5.2-medium"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("choice ids=%+v want %+v", gotIDs, wantIDs)
 	}
@@ -190,7 +190,7 @@ func TestMergeWarpModelChoices_DedupesAndMovesDefaultFirst(t *testing.T) {
 	for _, choice := range merged {
 		gotIDs = append(gotIDs, choice.ID)
 	}
-	wantIDs := []string{"gpt-5-1-medium", "claude-4-6-sonnet-high", "auto-open"}
+	wantIDs := []string{"gpt-5.1-medium", "claude-4.6-sonnet", "gpt-5-1-medium", "auto"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("merged ids=%+v want %+v", gotIDs, wantIDs)
 	}

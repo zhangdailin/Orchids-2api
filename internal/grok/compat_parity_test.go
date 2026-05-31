@@ -34,16 +34,6 @@ func TestResolveModelOrDynamic_Grok42Rejected(t *testing.T) {
 	}
 }
 
-func TestResolveModelOrDynamic_AcceptsUnknownGrokTextModel(t *testing.T) {
-	spec, ok := ResolveModelOrDynamic("grok-5")
-	if !ok {
-		t.Fatalf("ResolveModelOrDynamic(grok-5) should succeed")
-	}
-	if spec.ID != "grok-5" || spec.UpstreamModel != "grok-5" {
-		t.Fatalf("unexpected spec: %+v", spec)
-	}
-}
-
 func TestResolveModel_Grok420Rejected(t *testing.T) {
 	if _, ok := ResolveModel("grok-420"); ok {
 		t.Fatalf("ResolveModel(grok-420) should fail")

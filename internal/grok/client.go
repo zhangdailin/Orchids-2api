@@ -430,31 +430,7 @@ func (c *Client) doChat(ctx context.Context, token string, payload map[string]in
 }
 
 func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
-	info, err := c.GetUsage(ctx, token, modelID)
-	if err == nil {
-		return info, nil
-	}
-
-	model := strings.TrimSpace(modelID)
-	if model == "" {
-		model = "grok-4.20-0309"
-	}
-	spec, ok := ResolveModelOrDynamic(model)
-	if !ok {
-		spec, ok = ResolveModel("grok-4.20-0309")
-		if !ok {
-			return nil, fmt.Errorf("grok default model not available")
-		}
-	}
-	payload := c.chatPayload(spec, "ping", true, 0)
-	resp, chatErr := c.doChat(ctx, token, payload)
-	if chatErr != nil {
-		slog.Warn("VerifyToken fallback failed", "usage_error", err, "chat_error", chatErr)
-		return nil, chatErr
-	}
-	defer resp.Body.Close()
-	slog.Debug("GetUsage failed in VerifyToken, fallback chat succeeded", "error", err)
-	return parseRateLimitInfo(resp.Header), nil
+	return c.GetUsage(ctx, token, modelID)
 }
 
 func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
@@ -464,41 +440,14 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 	}
 
 	model := strings.TrimSpace(modelID)
-	explicitModel := model != ""
 	if model == "" {
 		model = "grok-4.20-0309"
 	}
 	spec, ok := ResolveModelOrDynamic(model)
 	if !ok {
-		spec, ok = ResolveModel("grok-4.20-0309")
-		if !ok {
-			return nil, fmt.Errorf("grok default model not available")
-		}
+		return nil, fmt.Errorf("model not found")
 	}
-
-	info, err := c.getUsageBySpec(ctx, token, spec)
-	if err == nil {
-		return info, nil
-	}
-
-	// Keep explicit model deterministic. For implicit defaults, degrade to fast 4.20
-	// if upstream rejects the default model to preserve quota availability.
-	if explicitModel {
-		return nil, err
-	}
-	status := parseUpstreamStatus(err)
-	if status != http.StatusBadRequest && status != http.StatusNotFound && !isGrokModelNotFoundError(err) {
-		return nil, err
-	}
-	fallback, ok := ResolveModel("grok-4.20-0309-non-reasoning")
-	if !ok {
-		return nil, err
-	}
-	info, fallbackErr := c.getUsageBySpec(ctx, token, fallback)
-	if fallbackErr == nil {
-		return info, nil
-	}
-	return nil, fmt.Errorf("grok usage fallback failed (default_err=%v, fallback_err=%w)", err, fallbackErr)
+	return c.getUsageBySpec(ctx, token, spec)
 }
 
 func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpec) (*RateLimitInfo, error) {

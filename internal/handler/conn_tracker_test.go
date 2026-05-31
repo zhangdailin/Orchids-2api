@@ -193,50 +193,7 @@ func TestSelectAccount_WarpUsesAccountModelChoices(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, err := h.selectAccount(context.Background(), "warp", true, nil, "claude-opus-4-6")
-	if err != nil {
-		t.Fatalf("selectAccount() error = %v", err)
-	}
-	if selected == nil {
-		t.Fatal("selectAccount() returned nil account")
-	}
-	if selected.ID != acc2.ID {
-		t.Fatalf("selectAccount() picked account %d, want %d", selected.ID, acc2.ID)
-	}
-}
-
-func TestSelectAccount_WarpSkipsTemporarilyUnavailableModel(t *testing.T) {
-	s, mini := setupConnTrackerHandlerTest(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	acc1 := createEnabledTestAccount(t, s, "warp-1", "warp")
-	acc2 := createEnabledTestAccount(t, s, "warp-2", "warp")
-	if err := warp.SaveAccountModelChoices(context.Background(), s, &warp.AccountModelChoices{
-		Accounts: map[string][]string{
-			strconv.FormatInt(acc1.ID, 10): {"auto-open", "claude-4-6-opus-high"},
-			strconv.FormatInt(acc2.ID, 10): {"auto-open", "claude-4-6-opus-high"},
-		},
-	}); err != nil {
-		t.Fatalf("SaveAccountModelChoices() error = %v", err)
-	}
-	if err := warp.MarkAccountModelUnavailable(context.Background(), s, acc1.ID, "claude-opus-4-6", time.Now()); err != nil {
-		t.Fatalf("MarkAccountModelUnavailable() error = %v", err)
-	}
-
-	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
-	h := NewWithLoadBalancer(&config.Config{}, lb)
-	h.connTracker = newSpyConnTracker(map[int64]int64{
-		acc1.ID: 0,
-		acc2.ID: 1,
-	})
-	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
-		return &trackerTestUpstream{}
-	})
-
-	_, selected, err := h.selectAccount(context.Background(), "warp", true, nil, "claude-opus-4-6")
+	_, selected, err := h.selectAccount(context.Background(), "warp", true, nil, "claude-4-6-opus-high")
 	if err != nil {
 		t.Fatalf("selectAccount() error = %v", err)
 	}
