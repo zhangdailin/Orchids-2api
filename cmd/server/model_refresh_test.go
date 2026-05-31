@@ -526,7 +526,7 @@ func TestProbeWarpFreeOnlyModelChoices_UsesSmallPreferredSet(t *testing.T) {
 	var seen []string
 	probeWarpModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
 		seen = append(seen, modelID)
-		if modelID == "auto-open" || modelID == "gpt-5-2-low" {
+		if modelID == "auto-open" || modelID == "claude-4-5-sonnet" || modelID == "gpt-5-2-low" {
 			return nil
 		}
 		return errors.New("model not allowed")
@@ -537,6 +537,8 @@ func TestProbeWarpFreeOnlyModelChoices_UsesSmallPreferredSet(t *testing.T) {
 		{ID: "gpt-5-2-low"},
 		{ID: "gpt-5-2-medium"},
 		{ID: "claude-4-5-haiku"},
+		{ID: "claude-4-5-sonnet"},
+		{ID: "claude-4-5-opus"},
 	})
 
 	if source != "free_probe" {
@@ -546,8 +548,8 @@ func TestProbeWarpFreeOnlyModelChoices_UsesSmallPreferredSet(t *testing.T) {
 	for _, choice := range choices {
 		got = append(got, choice.ID)
 	}
-	if strings.Join(got, ",") != "auto-open,gpt-5-2-low" {
-		t.Fatalf("choices=%v want auto-open,gpt-5-2-low", got)
+	if strings.Join(got, ",") != "auto-open,claude-4-5-sonnet,gpt-5-2-low" {
+		t.Fatalf("choices=%v want auto-open,claude-4-5-sonnet,gpt-5-2-low", got)
 	}
 	if strings.Contains(strings.Join(seen, ","), "gpt-5-2-medium") {
 		t.Fatalf("probe set should skip medium paid candidate, seen=%v", seen)

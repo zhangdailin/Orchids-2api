@@ -770,9 +770,11 @@ func probeWarpFreeOnlyModelChoices(ctx context.Context, cfg *config.Config, acc 
 func warpFreeOnlyProbeCandidates(discovered []warp.ModelChoice) []warp.ModelChoice {
 	preferred := []string{
 		warp.DefaultModel(),
+		"claude-4-5-haiku",
+		"claude-4-5-sonnet",
+		"claude-4-5-opus",
 		"gpt-5-2-low",
 		"gpt-5-1-low",
-		"claude-4-5-haiku",
 		"gemini-3-5-flash",
 	}
 	byID := make(map[string]warp.ModelChoice, len(discovered)+len(preferred))
