@@ -1,7 +1,12 @@
 package handler
 
 import (
+	"context"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+
+	"orchids-api/internal/store"
 )
 
 func TestClassifyAccountStatus(t *testing.T) {
@@ -94,5 +99,59 @@ func TestClassifyAccountStatus(t *testing.T) {
 				t.Errorf("classifyAccountStatus(%q) = %q, want %q", tt.errStr, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestIsWarpQuotaExhaustedError(t *testing.T) {
+	if !isWarpQuotaExhaustedError(`warp stream request failed: HTTP 429: {"error":"No AI credits remaining"}`) {
+		t.Fatal("expected No AI credits remaining to be treated as Warp quota exhausted")
+	}
+	if isWarpQuotaExhaustedError("warp stream request failed: HTTP 429 Too Many Requests") {
+		t.Fatal("expected generic 429 to remain rate limit, not quota exhausted")
+	}
+}
+
+func TestMarkWarpQuotaExhausted(t *testing.T) {
+	mini := miniredis.RunT(t)
+	defer mini.Close()
+
+	s, err := store.New(store.Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisPrefix: "warp_quota_status_test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	acc := &store.Account{
+		AccountType:          "warp",
+		Enabled:              true,
+		UsageLimit:           60,
+		UsageCurrent:         2,
+		WarpMonthlyLimit:     60,
+		WarpMonthlyRemaining: 58,
+		WarpBonusRemaining:   0,
+	}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	markWarpQuotaExhausted(ctx, s, acc)
+
+	got, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if got.StatusCode != "429" {
+		t.Fatalf("StatusCode=%q want 429", got.StatusCode)
+	}
+	if got.WarpMonthlyRemaining != 0 || got.WarpBonusRemaining != 0 {
+		t.Fatalf("remaining=%v bonus=%v want 0,0", got.WarpMonthlyRemaining, got.WarpBonusRemaining)
+	}
+	if got.UsageCurrent != got.WarpMonthlyLimit {
+		t.Fatalf("UsageCurrent=%v want WarpMonthlyLimit=%v", got.UsageCurrent, got.WarpMonthlyLimit)
 	}
 }

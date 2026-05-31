@@ -533,15 +533,17 @@ function evaluateAccountStatus(acc) {
     return { normal: false, text: '禁用', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '账号已禁用' };
   }
   const statusCode = normalizeSidebarStatusCode(acc.status_code);
-  if (isPuterQuotaOnlyStatus(acc)) {
+  if (isQuotaOnlyStatus(acc)) {
     const quota = getQuotaStats(acc);
     const limitText = quota && quota.limit > 0 ? quota.limit.toLocaleString() : '未知';
+    const type = normalizeAccountType(acc);
+    const providerName = type === 'warp' ? 'Warp' : 'Puter';
     return {
       normal: true,
       text: '额度不足',
       color: '#f59e0b',
       bg: 'rgba(245, 158, 11, 0.16)',
-      tip: 'Puter 月度额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + limitText + ')',
+      tip: providerName + ' 额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + limitText + ')',
       quotaOnly: true,
     };
   }
@@ -579,13 +581,14 @@ function evaluateAccountStatus(acc) {
 
   const quota = getQuotaStats(acc);
   if (quota && quota.limit > 0 && quota.remaining <= 0) {
-    if (normalizeAccountType(acc) === 'puter') {
+    if (normalizeAccountType(acc) === 'puter' || normalizeAccountType(acc) === 'warp') {
+      const providerName = normalizeAccountType(acc) === 'warp' ? 'Warp' : 'Puter';
       return {
         normal: true,
         text: '额度不足',
         color: '#f59e0b',
         bg: 'rgba(245, 158, 11, 0.16)',
-        tip: 'Puter 月度额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + quota.limit.toLocaleString() + ')',
+        tip: providerName + ' 额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + quota.limit.toLocaleString() + ')',
         quotaOnly: true,
       };
     }

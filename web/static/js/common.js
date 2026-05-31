@@ -67,17 +67,31 @@ function getSidebarQuotaStats(acc) {
   return { supported: true, limit, remaining };
 }
 
-function isPuterQuotaOnlyStatus(acc) {
-  if (!acc || normalizeSidebarAccountType(acc) !== "puter") return false;
+function isQuotaOnlyStatus(acc) {
+  if (!acc) return false;
+  const type = normalizeSidebarAccountType(acc);
+  if (type !== "puter" && type !== "warp") return false;
   const quota = getSidebarQuotaStats(acc);
   const statusCode = normalizeSidebarStatusCode(acc.status_code);
-  return statusCode === "402" || Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
+  if (statusCode === "402") return true;
+  if (type === "puter") {
+    return Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
+  }
+  return statusCode === "429" && Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
+}
+
+function isPuterQuotaOnlyStatus(acc) {
+  return Boolean(acc && normalizeSidebarAccountType(acc) === "puter" && isQuotaOnlyStatus(acc));
+}
+
+function isWarpQuotaOnlyStatus(acc) {
+  return Boolean(acc && normalizeSidebarAccountType(acc) === "warp" && isQuotaOnlyStatus(acc));
 }
 
 function isSidebarAccountAbnormal(acc) {
   if (!acc || !acc.enabled) return true;
 
-  if (isPuterQuotaOnlyStatus(acc)) {
+  if (isQuotaOnlyStatus(acc)) {
     return false;
   }
 
@@ -97,7 +111,7 @@ function isSidebarAccountAbnormal(acc) {
   }
 
   const quota = getSidebarQuotaStats(acc);
-  if (quota && quota.limit > 0 && quota.remaining <= 0 && !isPuterQuotaOnlyStatus(acc)) {
+  if (quota && quota.limit > 0 && quota.remaining <= 0 && !isQuotaOnlyStatus(acc)) {
     return true;
   }
 

@@ -1321,7 +1321,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						if verboseDiagnostics {
 							slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", status, "category", errClass.Category)
 						}
-						markAccountStatus(r.Context(), h.loadBalancer.Store, currentAccount, status)
+						if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
+							markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
+						} else {
+							markAccountStatus(r.Context(), h.loadBalancer.Store, currentAccount, status)
+						}
 					}
 				}
 			}
