@@ -622,7 +622,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		if usageErr == nil {
 			applyPuterMonthlyUsage(acc, usage)
 			if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
-				return "402", http.StatusPaymentRequired, fmt.Errorf("failed to verify puter account: no remaining monthly usage")
+				return "402", 0, nil
 			}
 			return "", 0, nil
 		}
@@ -633,6 +633,9 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		slog.Warn("Puter usage sync failed; falling back to verification ping", "account_id", acc.ID, "error", usageErr)
 		if err := puterVerifyAccount(ctx, acc, a.config.Load()); err != nil {
 			status := classifyAccountStatusFromError(err.Error())
+			if status == "402" {
+				return status, 0, nil
+			}
 			httpStatus := http.StatusBadGateway
 			if status != "" {
 				httpStatus = httpStatusFromAccountStatus(status)
@@ -998,8 +1001,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 						acc.LastAttempt = time.Now()
 					}
 				} else {
-					acc.StatusCode = ""
-					acc.LastAttempt = time.Time{}
+					applySuccessfulAccountRefreshStatus(&acc, accountStatus)
 				}
 				if updateErr := a.store.UpdateAccount(r.Context(), &acc); updateErr != nil {
 					slog.Warn("Failed to persist initial account sync", "account_id", acc.ID, "type", acc.AccountType, "error", updateErr)
@@ -1193,8 +1195,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// 刷新/验证成功后清理账号状态
-			acc.StatusCode = ""
-			acc.LastAttempt = time.Time{}
+			applySuccessfulAccountRefreshStatus(acc, accountStatus)
 			checkOK = true
 
 			if err := a.store.UpdateAccount(r.Context(), acc); err != nil {
@@ -1876,14 +1877,26 @@ func (a *API) syncAccountAfterCreate(acc store.Account) {
 				account.LastAttempt = time.Now()
 			}
 		} else {
-			account.StatusCode = ""
-			account.LastAttempt = time.Time{}
+			applySuccessfulAccountRefreshStatus(&account, accountStatus)
 		}
 
 		if updateErr := a.store.UpdateAccount(context.Background(), &account); updateErr != nil {
 			slog.Warn("Failed to persist initial account sync", "account_id", account.ID, "type", account.AccountType, "error", updateErr)
 		}
 	}(acc)
+}
+
+func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
+	if acc == nil {
+		return
+	}
+	if strings.TrimSpace(status) == "" {
+		acc.StatusCode = ""
+		acc.LastAttempt = time.Time{}
+		return
+	}
+	acc.StatusCode = strings.TrimSpace(status)
+	acc.LastAttempt = time.Now()
 }
 
 func applyAccountStatusFromError(acc *store.Account, err error) {

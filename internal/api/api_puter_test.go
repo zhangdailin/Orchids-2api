@@ -100,7 +100,7 @@ func TestRefreshAccountState_PuterSyncsMonthlyUsage(t *testing.T) {
 	}
 }
 
-func TestRefreshAccountState_PuterMonthlyUsageExhaustedReturns402(t *testing.T) {
+func TestRefreshAccountState_PuterMonthlyUsageExhaustedCompletesWith402Status(t *testing.T) {
 	prevVerify := puterVerifyAccount
 	prevUsage := puterFetchMonthlyUsage
 	t.Cleanup(func() {
@@ -125,14 +125,14 @@ func TestRefreshAccountState_PuterMonthlyUsageExhaustedReturns402(t *testing.T) 
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err == nil {
-		t.Fatal("expected exhausted usage error")
+	if err != nil {
+		t.Fatalf("refreshAccountState() error = %v", err)
 	}
 	if status != "402" {
 		t.Fatalf("status=%q want 402", status)
 	}
-	if httpStatus != http.StatusPaymentRequired {
-		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusPaymentRequired)
+	if httpStatus != 0 {
+		t.Fatalf("httpStatus=%d want 0", httpStatus)
 	}
 	if acc.UsageCurrent != 0 || acc.UsageLimit != 25000000 {
 		t.Fatalf("unexpected usage current=%v limit=%v", acc.UsageCurrent, acc.UsageLimit)
@@ -169,7 +169,7 @@ func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
 	}
 }
 
-func TestRefreshAccountState_PuterInsufficientFundsReturns402(t *testing.T) {
+func TestRefreshAccountState_PuterInsufficientFundsCompletesWith402Status(t *testing.T) {
 	prevVerify := puterVerifyAccount
 	prevUsage := puterFetchMonthlyUsage
 	t.Cleanup(func() {
@@ -188,13 +188,13 @@ func TestRefreshAccountState_PuterInsufficientFundsReturns402(t *testing.T) {
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err == nil {
-		t.Fatal("expected error")
+	if err != nil {
+		t.Fatalf("refreshAccountState() error = %v", err)
 	}
 	if status != "402" {
 		t.Fatalf("status=%q want 402", status)
 	}
-	if httpStatus != http.StatusPaymentRequired {
-		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusPaymentRequired)
+	if httpStatus != 0 {
+		t.Fatalf("httpStatus=%d want 0", httpStatus)
 	}
 }

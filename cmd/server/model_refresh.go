@@ -252,7 +252,11 @@ func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *s
 		return candidates, source + "_unverified", nil
 	}
 
-	verified := verifyPuterDiscoveredModelsConcurrent(ctx, cfg, accounts, candidates, concurrency)
+	summary := verifyPuterDiscoveredModelsConcurrent(ctx, cfg, accounts, candidates, concurrency)
+	verified := summary.Verified
+	if len(verified) == 0 && summary.SawInsufficientFunds {
+		return candidates, source + "_quota_limited", nil
+	}
 	if len(verified) == 0 {
 		return nil, "", fmt.Errorf("no puter models verified by test_mode")
 	}
@@ -291,9 +295,14 @@ func puterPublicChoicesFromDiscovered(items []discoveredModel) []puterPublicMode
 	return out
 }
 
-func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel, concurrency int) []discoveredModel {
+type puterModelVerificationSummary struct {
+	Verified             []discoveredModel
+	SawInsufficientFunds bool
+}
+
+func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel, concurrency int) puterModelVerificationSummary {
 	if len(accounts) == 0 || len(candidates) == 0 {
-		return nil
+		return puterModelVerificationSummary{}
 	}
 	workerCount := boundedModelRefreshWorkers(len(candidates), concurrency)
 	if workerCount <= 1 {
@@ -325,11 +334,14 @@ func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Conf
 						results[idx] = puterModelProbeAccepted
 						break
 					}
+					if isPuterInsufficientFundsError(err) {
+						results[idx] = results[idx].withInsufficientFunds()
+					}
 					if !isPuterModelDefinitiveReject(err) {
 						allDefinitiveRejects = false
 					}
 				}
-				if results[idx] != puterModelProbeAccepted && allDefinitiveRejects {
+				if results[idx] != puterModelProbeAccepted && results[idx] != puterModelProbeQuotaLimited && allDefinitiveRejects {
 					results[idx] = puterModelProbeRejected
 				}
 			}
@@ -342,18 +354,23 @@ func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Conf
 	wg.Wait()
 
 	verified := make([]discoveredModel, 0, len(candidates))
+	sawInsufficientFunds := false
 	for idx, candidate := range candidates {
+		if results[idx] == puterModelProbeQuotaLimited {
+			sawInsufficientFunds = true
+		}
 		if results[idx] != puterModelProbeAccepted {
 			continue
 		}
 		candidate.SortOrder = len(verified)
 		verified = append(verified, candidate)
 	}
-	return verified
+	return puterModelVerificationSummary{Verified: verified, SawInsufficientFunds: sawInsufficientFunds}
 }
 
-func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel) []discoveredModel {
+func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel) puterModelVerificationSummary {
 	verified := make([]discoveredModel, 0, len(candidates))
+	sawInsufficientFunds := false
 	accountIndex := 0
 	for _, candidate := range candidates {
 		if strings.TrimSpace(candidate.ID) == "" {
@@ -371,13 +388,16 @@ func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, 
 				accountIndex = (accountIndex + attempt + 1) % len(accounts)
 				break
 			}
+			if isPuterInsufficientFundsError(err) {
+				sawInsufficientFunds = true
+			}
 		}
 		if ok {
 			candidate.SortOrder = len(verified)
 			verified = append(verified, candidate)
 		}
 	}
-	return verified
+	return puterModelVerificationSummary{Verified: verified, SawInsufficientFunds: sawInsufficientFunds}
 }
 
 type puterModelProbeResult uint8
@@ -386,7 +406,27 @@ const (
 	puterModelProbeUnknown puterModelProbeResult = iota
 	puterModelProbeAccepted
 	puterModelProbeRejected
+	puterModelProbeQuotaLimited
 )
+
+func (r puterModelProbeResult) withInsufficientFunds() puterModelProbeResult {
+	if r == puterModelProbeAccepted {
+		return r
+	}
+	return puterModelProbeQuotaLimited
+}
+
+func isPuterInsufficientFundsError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(text, "insufficient_funds") ||
+		strings.Contains(text, "available funding is insufficient") ||
+		strings.Contains(text, "insufficient funding") ||
+		strings.Contains(text, "status=402") ||
+		strings.Contains(text, "status 402")
+}
 
 func isPuterModelDefinitiveReject(err error) bool {
 	if err == nil {

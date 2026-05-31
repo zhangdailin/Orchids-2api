@@ -228,8 +228,8 @@ func TestVerifyPuterDiscoveredModelsConcurrent_RequiresAcceptedProbe(t *testing.
 		8,
 	)
 
-	gotIDs := make([]string, 0, len(got))
-	for _, item := range got {
+	gotIDs := make([]string, 0, len(got.Verified))
+	for _, item := range got.Verified {
 		gotIDs = append(gotIDs, item.ID)
 	}
 	if strings.Join(gotIDs, ",") != "stable" {
@@ -237,6 +237,30 @@ func TestVerifyPuterDiscoveredModelsConcurrent_RequiresAcceptedProbe(t *testing.
 	}
 	if seen["missing"] != 2 {
 		t.Fatalf("missing probes=%d want 2", seen["missing"])
+	}
+}
+
+func TestVerifyPuterDiscoveredModelsConcurrent_TracksInsufficientFunds(t *testing.T) {
+	prevVerify := verifyPuterModelForRefresh
+	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
+
+	verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
+		return errors.New("puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")
+	}
+
+	got := verifyPuterDiscoveredModelsConcurrent(
+		context.Background(),
+		&config.Config{},
+		[]*store.Account{{ID: 1, AccountType: "puter"}, {ID: 2, AccountType: "puter"}},
+		[]discoveredModel{{ID: "claude-sonnet-4"}, {ID: "gpt-5"}},
+		8,
+	)
+
+	if len(got.Verified) != 0 {
+		t.Fatalf("verified=%+v want empty", got.Verified)
+	}
+	if !got.SawInsufficientFunds {
+		t.Fatal("expected insufficient funds to be tracked")
 	}
 }
 
@@ -259,12 +283,15 @@ func TestVerifyPuterDiscoveredModelsSerial_RequiresAcceptedProbe(t *testing.T) {
 		1,
 	)
 
-	gotIDs := make([]string, 0, len(got))
-	for _, item := range got {
+	gotIDs := make([]string, 0, len(got.Verified))
+	for _, item := range got.Verified {
 		gotIDs = append(gotIDs, item.ID)
 	}
 	if strings.Join(gotIDs, ",") != "" {
 		t.Fatalf("verified IDs=%v want []", gotIDs)
+	}
+	if got.SawInsufficientFunds {
+		t.Fatal("did not expect insufficient funds for EOF/model missing errors")
 	}
 }
 
