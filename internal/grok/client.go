@@ -253,7 +253,7 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		"toolOverrides": map[string]interface{}{
 			"imageGen":     false,
 			"webSearch":    imageCount <= 0,
-			"xSearch":      false,
+			"xSearch":      imageCount <= 0,
 			"xMediaSearch": false,
 			"trendsSearch": false,
 			"xPostAnalyze": false,

@@ -180,7 +180,7 @@ func (h *Handler) consolePayload(spec ModelSpec, req *ChatCompletionsRequest) (m
 			payload["reasoning"] = map[string]interface{}{"effort": effort}
 		}
 	}
-	tools := injectConsoleWebSearchTool(consoleToolsFromOpenAI(req.Tools))
+	tools := injectConsoleSearchTools(consoleToolsFromOpenAI(req.Tools))
 	if len(tools) > 0 {
 		payload["tools"] = tools
 		if choice := consoleToolChoiceFromOpenAI(req.ToolChoice); choice != nil {
@@ -245,9 +245,10 @@ func consoleToolChoiceFromOpenAI(choice interface{}) interface{} {
 	}
 }
 
-func injectConsoleWebSearchTool(tools []map[string]interface{}) []map[string]interface{} {
-	out := make([]map[string]interface{}, 0, len(tools)+1)
+func injectConsoleSearchTools(tools []map[string]interface{}) []map[string]interface{} {
+	out := make([]map[string]interface{}, 0, len(tools)+2)
 	hasWebSearch := false
+	hasXSearch := false
 	for _, tool := range tools {
 		if tool == nil {
 			continue
@@ -256,13 +257,19 @@ func injectConsoleWebSearchTool(tools []map[string]interface{}) []map[string]int
 		for k, v := range tool {
 			copied[k] = v
 		}
-		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(copied["type"])), "web_search") {
+		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(copied["type"]))) {
+		case "web_search":
 			hasWebSearch = true
+		case "x_search":
+			hasXSearch = true
 		}
 		out = append(out, copied)
 	}
 	if !hasWebSearch {
 		out = append(out, map[string]interface{}{"type": "web_search"})
+	}
+	if !hasXSearch {
+		out = append(out, map[string]interface{}{"type": "x_search"})
 	}
 	return out
 }

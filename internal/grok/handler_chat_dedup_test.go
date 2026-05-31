@@ -140,11 +140,14 @@ func TestConsolePayload_DefaultsWebSearchTool(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools type=%T want []map[string]interface{}", payload["tools"])
 	}
-	if len(tools) != 1 {
-		t.Fatalf("tools len=%d want 1: %#v", len(tools), tools)
+	if len(tools) != 2 {
+		t.Fatalf("tools len=%d want web_search + x_search: %#v", len(tools), tools)
 	}
 	if got := tools[0]["type"]; got != "web_search" {
 		t.Fatalf("tool type=%#v want web_search", got)
+	}
+	if got := tools[1]["type"]; got != "x_search" {
+		t.Fatalf("tool type=%#v want x_search", got)
 	}
 }
 
@@ -178,8 +181,8 @@ func TestConsolePayload_ConvertsOpenAIFunctionTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools type=%T want []map[string]interface{}", payload["tools"])
 	}
-	if len(tools) != 2 {
-		t.Fatalf("tools len=%d want function + web_search: %#v", len(tools), tools)
+	if len(tools) != 3 {
+		t.Fatalf("tools len=%d want function + web_search + x_search: %#v", len(tools), tools)
 	}
 	if got := tools[0]["type"]; got != "function" {
 		t.Fatalf("first tool type=%#v want function", got)
@@ -199,15 +202,19 @@ func TestConsolePayload_ConvertsOpenAIFunctionTools(t *testing.T) {
 	}
 }
 
-func TestInjectConsoleWebSearchTool_DoesNotDuplicate(t *testing.T) {
-	tools := injectConsoleWebSearchTool([]map[string]interface{}{
+func TestInjectConsoleSearchTools_DoesNotDuplicate(t *testing.T) {
+	tools := injectConsoleSearchTools([]map[string]interface{}{
 		{"type": "web_search", "search_context_size": "high"},
+		{"type": "x_search", "search_context_size": "low"},
 	})
-	if len(tools) != 1 {
-		t.Fatalf("tools len=%d want 1: %#v", len(tools), tools)
+	if len(tools) != 2 {
+		t.Fatalf("tools len=%d want 2: %#v", len(tools), tools)
 	}
 	if got := tools[0]["search_context_size"]; got != "high" {
 		t.Fatalf("preserved option=%#v want high", got)
+	}
+	if got := tools[1]["search_context_size"]; got != "low" {
+		t.Fatalf("preserved option=%#v want low", got)
 	}
 }
 
