@@ -40,7 +40,8 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.20-auto", Name: "Grok 4.20 Auto", UpstreamModel: "grok-4.20-auto", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, PreferBest: true},
 	{ID: "grok-4.20-expert", Name: "Grok 4.20 Expert", UpstreamModel: "grok-4.20-expert", ModelMode: "MODEL_MODE_EXPERT", Tier: grokTierSuper, PreferBest: true},
 	{ID: "grok-4.20-heavy", Name: "Grok 4.20 Heavy", UpstreamModel: "grok-4.20-heavy", ModelMode: "MODEL_MODE_HEAVY", Tier: grokTierHeavy, PreferBest: true},
-	{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta", UpstreamModel: "grok-4.3-beta", ModelMode: "grok-420-computer-use-sa", ConsoleModel: "grok-4.3", Tier: grokTierSuper},
+	{ID: "grok-4.3", Name: "Grok 4.3", UpstreamModel: "grok-4.3", ConsoleModel: "grok-4.3", Tier: grokTierSuper},
+	{ID: "grok-build-0.1", Name: "Grok Build 0.1", UpstreamModel: "grok-build-0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierSuper},
 	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", Tier: grokTierBasic, IsImage: true},
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-imagine-image-pro", ModelMode: "MODEL_MODE_AUTO", Tier: grokTierSuper, IsImage: true},
@@ -59,6 +60,7 @@ var modelByID = func() map[string]ModelSpec {
 var deprecatedModelIDSet = map[string]struct{}{
 	"grok-4.2":       {},
 	"grok-4.20-beta": {},
+	"grok-4.3-beta":  {},
 	"grok-420":       {},
 }
 
@@ -78,8 +80,6 @@ func normalizeModelID(modelID string) string {
 		m = "grok-" + strings.TrimPrefix(m, "gork-")
 	}
 	switch m {
-	case "grok-4.3":
-		return "grok-4.3-beta"
 	case "grok-imagine-1.0":
 		return "grok-imagine-image"
 	case "grok-imagine-1.0-fast":
@@ -145,9 +145,14 @@ func resolveDynamicTextModel(modelID string) (ModelSpec, bool) {
 
 func consoleModelForID(id string) string {
 	switch id {
-	case "grok-4.3-beta":
+	case "grok-4.3":
 		return "grok-4.3"
+	case "grok-build-0.1":
+		return "grok-build-0.1"
 	default:
+		if strings.HasPrefix(id, "grok-") {
+			return id
+		}
 		return ""
 	}
 }

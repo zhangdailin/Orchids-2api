@@ -108,11 +108,6 @@ func TestRateLimitModelName_UsesModeAcceptedByUpstream(t *testing.T) {
 			want: "auto",
 		},
 		{
-			name: "grok 4.3 custom mode",
-			spec: ModelSpec{UpstreamModel: "grok-4.3-beta", ModelMode: "grok-420-computer-use-sa"},
-			want: "grok-420-computer-use-sa",
-		},
-		{
 			name: "fallback upstream",
 			spec: ModelSpec{UpstreamModel: "custom-model"},
 			want: "custom-model",
@@ -165,9 +160,9 @@ func TestChatPayload_UsesCurrentAppChatModelFields(t *testing.T) {
 }
 
 func TestAppChatModeID_UsesCustomModeID(t *testing.T) {
-	spec := ModelSpec{ID: "grok-4.3-beta", UpstreamModel: "grok-4.3-beta", ModelMode: "grok-420-computer-use-sa", Tier: grokTierSuper}
+	spec := ModelSpec{ID: "grok-custom-app-chat", UpstreamModel: "grok-custom-app-chat", ModelMode: "grok-custom-mode", Tier: grokTierSuper}
 
-	if got := appChatModeID(spec); got != "grok-420-computer-use-sa" {
+	if got := appChatModeID(spec); got != "grok-custom-mode" {
 		t.Fatalf("appChatModeID()=%q want custom mode", got)
 	}
 	if got := appChatModelTier(spec); got != "super" {

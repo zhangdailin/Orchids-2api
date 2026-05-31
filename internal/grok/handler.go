@@ -121,6 +121,9 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 
 func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error {
 	id := normalizeModelID(modelID)
+	if IsDeprecatedModelID(id) {
+		return fmt.Errorf("model not found")
+	}
 	if h.isModelValidationCached(id) {
 		return nil
 	}
@@ -138,9 +141,6 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 		if rawID != "" && rawID != id {
 			m, err = h.lb.Store.GetModelByModelID(ctx, rawID)
 		}
-	}
-	if (err != nil || m == nil || !m.Status.Enabled()) && id == "grok-4.3-beta" {
-		m, err = h.lb.Store.GetModelByModelID(ctx, "grok-4.3")
 	}
 	if err != nil || m == nil {
 		return fmt.Errorf("model not found")

@@ -607,7 +607,8 @@ func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredM
 		"grok-4.20-auto",
 		"grok-4.20-expert",
 		"grok-4.20-heavy",
-		"grok-4.3-beta",
+		"grok-4.3",
+		"grok-build-0.1",
 	} {
 		name := id
 		if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {

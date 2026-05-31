@@ -69,7 +69,7 @@ func TestHandleModelByID_ReturnsVisibleModel(t *testing.T) {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-4.3-beta", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-4.3", nil)
 	rec := httptest.NewRecorder()
 
 	h.HandleModelByID(rec, req)
@@ -173,8 +173,11 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenAccountsHaveStatusCode(t *testin
 		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "grok-4.3-beta") {
+	if !strings.Contains(body, "grok-4.3") {
 		t.Fatalf("expected grok models to remain visible despite account status, body=%s", body)
+	}
+	if strings.Contains(body, "grok-4.3-beta") {
+		t.Fatalf("expected removed beta model to stay hidden, body=%s", body)
 	}
 }
 

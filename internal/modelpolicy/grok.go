@@ -20,7 +20,8 @@ var publicGrokModelIDs = []string{
 	"grok-4.20-auto",
 	"grok-4.20-expert",
 	"grok-4.20-heavy",
-	"grok-4.3-beta",
+	"grok-4.3",
+	"grok-build-0.1",
 	"grok-imagine-image-lite",
 	"grok-imagine-image",
 	"grok-imagine-image-pro",
@@ -36,13 +37,23 @@ var publicGrokModelAllowlist = func() map[string]struct{} {
 	return out
 }()
 
-func IsPublicGrokModelID(modelID string) bool {
+var deprecatedGrokModelIDs = map[string]struct{}{
+	"grok-4.3-beta": {},
+}
+
+func IsDeprecatedGrokModelID(modelID string) bool {
 	id := strings.ToLower(strings.TrimSpace(modelID))
 	if id == "" {
 		return false
 	}
-	if id == "grok-4.3" {
-		id = "grok-4.3-beta"
+	_, ok := deprecatedGrokModelIDs[id]
+	return ok
+}
+
+func IsPublicGrokModelID(modelID string) bool {
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if id == "" {
+		return false
 	}
 	_, ok := publicGrokModelAllowlist[id]
 	return ok
@@ -53,5 +64,8 @@ func PublicGrokModelIDs() []string {
 }
 
 func IsVisibleGrokModel(modelID string, verified bool) bool {
+	if IsDeprecatedGrokModelID(modelID) {
+		return false
+	}
 	return IsPublicGrokModelID(modelID) || verified
 }

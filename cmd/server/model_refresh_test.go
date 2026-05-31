@@ -275,7 +275,7 @@ func TestGrokCanonicalAcceptanceRejectsFallbackModels(t *testing.T) {
 		want      bool
 	}{
 		{requested: "grok-4.20-0309", canonical: "grok-4.20-0309", want: true},
-		{requested: "grok-4.3-beta", canonical: "grok-4.3-beta", want: true},
+		{requested: "grok-4.3", canonical: "grok-4.3", want: true},
 		{requested: "grok-4.3-latest", canonical: "grok-4.3", want: false},
 		{requested: "grok-latest", canonical: "grok-4.3", want: false},
 		{requested: "grok-3-mini", canonical: "grok-4.20-0309", want: false},
@@ -323,21 +323,21 @@ func TestGrokProbeCandidatesIncludesPolicyAndExistingModels(t *testing.T) {
 func TestCanonicalizeDiscoveredModels_NormalizesLegacyGrok43(t *testing.T) {
 	got := canonicalizeDiscoveredModels([]discoveredModel{
 		{ID: "grok-4.3", Name: "Grok 4.3"},
-		{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta"},
+		{ID: "grok-4.3", Name: "Grok 4.3"},
 	}, canonicalGrokRefreshModelID)
 	if len(got) != 1 {
 		t.Fatalf("len(got)=%d want 1: %+v", len(got), got)
 	}
-	if got[0].ID != "grok-4.3-beta" {
-		t.Fatalf("ID=%q want grok-4.3-beta", got[0].ID)
+	if got[0].ID != "grok-4.3" {
+		t.Fatalf("ID=%q want grok-4.3", got[0].ID)
 	}
-	if got[0].Name != "Grok 4.3 Beta" {
-		t.Fatalf("Name=%q want Grok 4.3 Beta", got[0].Name)
+	if got[0].Name != "Grok 4.3" {
+		t.Fatalf("Name=%q want Grok 4.3", got[0].Name)
 	}
 }
 
 func TestGrokConsoleModelsRemainAcceptedAfterProbeFallback(t *testing.T) {
-	candidates := []discoveredModel{{ID: "grok-4.3-beta", Name: "Grok 4.3 Beta"}}
+	candidates := []discoveredModel{{ID: "grok-4.3", Name: "Grok 4.3"}}
 	accepted := make([]bool, len(candidates))
 	for idx, candidate := range candidates {
 		if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
@@ -345,7 +345,7 @@ func TestGrokConsoleModelsRemainAcceptedAfterProbeFallback(t *testing.T) {
 		}
 	}
 	if !accepted[0] {
-		t.Fatal("expected grok-4.3-beta to remain accepted as a console model")
+		t.Fatal("expected grok-4.3 to remain accepted as a console model")
 	}
 }
 

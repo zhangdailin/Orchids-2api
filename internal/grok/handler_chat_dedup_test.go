@@ -107,7 +107,7 @@ func TestConsoleInputFromMessages_ConvertsToolHistory(t *testing.T) {
 }
 
 func TestShouldServeConsoleChat_IgnoresOpenAIToolDefinitions(t *testing.T) {
-	spec := ModelSpec{ID: "grok-4.3-beta", ConsoleModel: "grok-4.3"}
+	spec := ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3"}
 	if !shouldServeConsoleChat(spec, nil) {
 		t.Fatal("expected console chat when there are no attachments")
 	}
@@ -125,14 +125,14 @@ func TestShouldServeConsoleChat_IgnoresOpenAIToolDefinitions(t *testing.T) {
 func TestConsolePayload_DefaultsWebSearchTool(t *testing.T) {
 	h := &Handler{}
 	req := &ChatCompletionsRequest{
-		Model: "grok-4.3-beta",
+		Model: "grok-4.3",
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: "今天有什么 AI 新闻",
 		}},
 	}
 
-	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3-beta", ConsoleModel: "grok-4.3"}, req)
+	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3"}, req)
 	if err != nil {
 		t.Fatalf("consolePayload() error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestConsolePayload_DefaultsWebSearchTool(t *testing.T) {
 func TestConsolePayload_ConvertsOpenAIFunctionTools(t *testing.T) {
 	h := &Handler{}
 	req := &ChatCompletionsRequest{
-		Model: "grok-4.3-beta",
+		Model: "grok-4.3",
 		Messages: []ChatMessage{{
 			Role:    "user",
 			Content: "上海天气",
@@ -170,7 +170,7 @@ func TestConsolePayload_ConvertsOpenAIFunctionTools(t *testing.T) {
 		},
 	}
 
-	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3-beta", ConsoleModel: "grok-4.3"}, req)
+	payload, err := h.consolePayload(ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3"}, req)
 	if err != nil {
 		t.Fatalf("consolePayload() error: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestCollectConsoleChat_EmitsCitationsAndUsageDetails(t *testing.T) {
 		"usage":{"input_tokens":10,"output_tokens":7,"total_tokens":17,"output_tokens_details":{"reasoning_tokens":2}}
 	}`)
 
-	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3-beta"}, body)
+	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
@@ -259,7 +259,7 @@ func TestCollectConsoleChat_EmitsFunctionToolCalls(t *testing.T) {
 		"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
 	}`)
 
-	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3-beta"}, body)
+	h.collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
 
 	var obj map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &obj); err != nil {
@@ -297,7 +297,7 @@ func TestStreamConsoleChat_EmitsFinalAnnotationsAndUpstreamUsage(t *testing.T) {
 			`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}` + "\n\n",
 	)
 
-	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3-beta"}, body)
+	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
 
 	raw := rec.Body.String()
 	if !strings.Contains(raw, `"content":"hello"`) {
@@ -325,7 +325,7 @@ func TestStreamConsoleChat_EmitsFunctionToolCalls(t *testing.T) {
 			`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}` + "\n\n",
 	)
 
-	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3-beta"}, body)
+	h.streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.3"}, body)
 
 	raw := rec.Body.String()
 	if !strings.Contains(raw, `"tool_calls"`) {

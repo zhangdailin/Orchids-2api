@@ -75,9 +75,9 @@ func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
 		{modelID: "grok-4.20-auto", wantUpstream: "grok-4.20-auto", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-4.20-expert", wantUpstream: "grok-4.20-expert", wantModelMode: "MODEL_MODE_EXPERT"},
 		{modelID: "grok-4.20-heavy", wantUpstream: "grok-4.20-heavy", wantModelMode: "MODEL_MODE_HEAVY"},
-		{modelID: "grok-4.3-beta", wantUpstream: "grok-4.3-beta", wantModelMode: "grok-420-computer-use-sa"},
+		{modelID: "grok-4.3", wantUpstream: "grok-4.3", wantModelMode: ""},
+		{modelID: "grok-build-0.1", wantUpstream: "grok-build-0.1", wantModelMode: ""},
 	}
-
 	for _, tc := range cases {
 		spec, ok := ResolveModel(tc.modelID)
 		if !ok {
@@ -126,13 +126,22 @@ func TestResolveModel_Grok420BetaRejected(t *testing.T) {
 }
 
 func TestResolveModel_Grok420CurrentBaselineAccepted(t *testing.T) {
-	for _, id := range []string{"grok-4.20-0309", "grok-4.20-fast", "grok-4.3-beta"} {
+	for _, id := range []string{"grok-4.20-0309", "grok-4.20-fast", "grok-4.3", "grok-build-0.1"} {
 		if _, ok := ResolveModel(id); !ok {
 			t.Fatalf("ResolveModel(%s) should succeed", id)
 		}
 		if IsDeprecatedModelID(id) {
 			t.Fatalf("%s should not be deprecated", id)
 		}
+	}
+}
+
+func TestResolveModel_Grok43BetaRejected(t *testing.T) {
+	if _, ok := ResolveModel("grok-4.3-beta"); ok {
+		t.Fatalf("ResolveModel(grok-4.3-beta) should fail")
+	}
+	if _, ok := ResolveModelOrDynamic("grok-4.3-beta"); ok {
+		t.Fatalf("ResolveModelOrDynamic(grok-4.3-beta) should fail")
 	}
 }
 
