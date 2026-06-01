@@ -911,50 +911,54 @@
 /* Focused polish for the Grok workspace. Keep this page calmer and denser than the
    general admin views without changing shared primitives. */
 .grok-tools-page {
-  --grok-card-border: #e8e3da;
-  --grok-soft-bg: #f7f5ef;
-  --grok-muted-bg: #f3efe7;
-  --grok-line: #ece7dd;
-  gap: 14px;
+  --grok-card-border: var(--border-color);
+  --grok-soft-bg: rgba(255, 255, 255, 0.045);
+  --grok-muted-bg: rgba(255, 255, 255, 0.075);
+  --grok-line: var(--border-color);
+  gap: 16px;
 }
 
 .grok-tools-page .header-section {
-  margin-bottom: 2px;
-  padding: 0 2px;
+  margin-bottom: 0;
+  padding: 0;
 }
 
 .grok-tools-page .header-section h1 {
-  font-size: 1.32rem;
+  font-size: 1.42rem;
 }
 
 .grok-tools-page .header-section p {
-  max-width: 660px;
+  max-width: 760px;
 }
 
 .grok-tools-workspace {
-  gap: 12px;
+  gap: 14px;
 }
 
 .grok-tools-toolbar {
   position: sticky;
   top: 54px;
   z-index: 20;
-  width: max-content;
+  width: 100%;
   max-width: 100%;
-  padding: 5px;
-  margin: -2px 0 2px;
+  padding: 10px;
+  margin: 0;
   border: 1px solid var(--grok-line);
-  border-radius: 999px;
-  background: rgba(250, 249, 245, 0.86);
-  box-shadow: 0 8px 24px rgba(31, 28, 22, 0.05);
-  backdrop-filter: blur(14px);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
 }
 
 .grok-tabs {
-  gap: 3px;
+  width: 100%;
+  gap: 4px;
   flex-wrap: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
 }
 
 .grok-tabs::-webkit-scrollbar {
@@ -962,25 +966,26 @@
 }
 
 .grok-tabs .tab-item {
-  min-width: auto;
-  height: 30px;
-  padding: 0 14px;
+  min-width: 92px;
+  height: 34px;
+  padding: 0 16px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 8px;
   background: transparent;
-  color: #736b60;
-  font-size: 0.8rem;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  font-weight: 700;
 }
 
 .grok-tabs .tab-item:hover {
-  background: #f0ebe1;
-  color: #292621;
+  background: var(--grok-muted-bg);
+  color: var(--text-main);
 }
 
 .grok-tabs .tab-item.active {
-  background: #171717;
-  color: #fff;
-  box-shadow: 0 6px 16px rgba(23, 23, 23, 0.12);
+  background: var(--primary-light);
+  color: var(--primary);
+  box-shadow: none;
 }
 
 .grok-section,
@@ -1003,7 +1008,8 @@
 .grok-section.content-card {
   border: 1px solid var(--grok-card-border);
   border-radius: 12px;
-  background: #fff;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .function-header-row,
@@ -1018,7 +1024,7 @@
 
 .function-header-row,
 .chat-title {
-  padding: 2px 2px 0;
+  padding: 4px 4px 0;
 }
 
 .function-title,
@@ -1044,14 +1050,14 @@
 
 .grok-panel,
 .chat-sidebar {
-  background: #fff;
+  background: var(--bg-surface);
 }
 
 .icon-btn,
 .send-btn,
 .sidebar-expand-btn,
 .action-btn {
-  border-radius: 9px;
+  border-radius: 8px;
   background: var(--grok-soft-bg);
 }
 
@@ -1071,7 +1077,7 @@
   top: 72px;
   padding: 12px;
   border-radius: 10px;
-  background: #fbfaf7;
+  background: var(--bg-elevated);
 }
 
 .sidebar-list {
@@ -1086,13 +1092,13 @@
 }
 
 .session-item:hover {
-  background: #f2eee6;
+  background: var(--grok-muted-bg);
 }
 
 .session-item.active {
-  border-color: #e4ded4;
-  background: #fff;
-  box-shadow: inset 3px 0 0 #171717;
+  border-color: var(--border-highlight);
+  background: var(--bg-surface);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 
 .chat-shell {
@@ -1104,7 +1110,7 @@
   min-height: 390px;
   padding: 18px;
   border-radius: 10px;
-  background: #fbfaf7;
+  background: var(--bg-surface-hover);
 }
 
 .message-row {
@@ -1116,8 +1122,8 @@
 }
 
 .message-row.user .message-bubble {
-  border-color: #ded8cf;
-  background: #fff;
+  border-color: var(--border-color);
+  background: var(--bg-elevated);
 }
 
 .composer-shell,
@@ -1128,15 +1134,15 @@
 .composer-input,
 .imagine-masonry-input-shell {
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 14px 38px rgba(31, 28, 22, 0.09);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  box-shadow: var(--shadow-md);
   backdrop-filter: blur(16px);
 }
 
 .model-chip,
 .file-badge {
-  border-color: #e4ded4;
-  background: #fbfaf7;
+  border-color: var(--border-color);
+  background: var(--bg-surface-hover);
 }
 
 .status-text,
@@ -1144,15 +1150,15 @@
 .selected-count {
   min-height: 22px;
   padding: 3px 8px;
-  border: 1px solid #e9e3da;
-  background: #f7f3ec;
-  color: #6f665c;
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface-hover);
+  color: var(--text-secondary);
   font-size: 0.72rem;
 }
 
 .imagine-masonry-shell {
   gap: 12px;
-  min-height: calc(100vh - 250px);
+  min-height: calc(100vh - 265px);
 }
 
 .imagine-masonry-feed,
@@ -1167,9 +1173,9 @@
 .imagine-masonry-empty-card {
   width: min(420px, 100%);
   padding: 28px 24px;
-  border-color: #dfd7ca;
+  border-color: var(--border-highlight);
   border-radius: 12px;
-  background: #fbfaf7;
+  background: var(--bg-surface-hover);
 }
 
 .empty-title {
@@ -1193,10 +1199,10 @@
 
 .waterfall-item,
 .imagine-masonry-tile {
-  border-color: #e7e0d5;
+  border-color: var(--border-color);
   border-radius: 10px;
-  background: #f5f1ea;
-  box-shadow: 0 1px 0 rgba(31, 28, 22, 0.03);
+  background: var(--bg-surface-hover);
+  box-shadow: none;
 }
 
 .waterfall-item img,
@@ -1211,8 +1217,8 @@
 
 .waterfall-meta,
 .imagine-masonry-tile-label {
-  background: #fff;
-  border-top: 1px solid #eee8df;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-color);
 }
 
 .imagine-masonry-input-shell {
@@ -1223,9 +1229,9 @@
 .imagine-masonry-textarea {
   min-height: 66px;
   padding: 10px 12px;
-  border-color: transparent;
+  border-color: var(--border-color);
   border-radius: 10px;
-  background: #fbfaf7;
+  background: var(--bg-surface);
 }
 
 .imagine-masonry-toolbar {
@@ -1235,29 +1241,29 @@
 .imagine-masonry-toggle {
   gap: 2px;
   padding: 3px;
-  border-color: #e7e0d5;
-  background: #f5f1ea;
+  border-color: var(--border-color);
+  background: var(--bg-surface-hover);
 }
 
 .imagine-masonry-toggle-btn,
 .mode-btn {
   min-height: 27px;
   padding: 0 11px;
-  color: #6f665c;
+  color: var(--text-secondary);
   font-size: 0.76rem;
 }
 
 .imagine-masonry-toggle-btn.is-active,
 .mode-btn.active {
-  background: #171717;
+  background: var(--primary);
   color: #fff;
 }
 
 .imagine-masonry-ratio .form-input {
   min-height: 34px;
   padding: 7px 10px;
-  border-color: #e7e0d5;
-  background: #fbfaf7;
+  border-color: var(--border-color);
+  background: var(--bg-surface);
 }
 
 .imagine-masonry-send {
@@ -1272,7 +1278,7 @@
   padding: 10px;
   border: 1px solid var(--grok-card-border);
   border-radius: 12px;
-  background: #fbfaf7;
+  background: var(--bg-surface);
 }
 
 .function-top-grid,
@@ -1293,11 +1299,11 @@
 .raw-log,
 .cache-list {
   border-radius: 10px;
-  background: #fbfaf7;
+  background: var(--bg-surface-hover);
 }
 
 .cache-list table {
-  background: #fff;
+  background: var(--bg-surface);
 }
 
 @media (max-width: 1080px) {

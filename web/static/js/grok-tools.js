@@ -4752,7 +4752,7 @@
   }
 
   async function ensureGrokTabReady(tab) {
-    const nextTab = String(tab || "").toLowerCase();
+    const nextTab = String(tab || "imagine").toLowerCase();
     if (nextTab === "imagine" && !grokLazyState.imagineReady) {
       if (window.GrokImagine && typeof window.GrokImagine.ensureReady === "function") {
         await window.GrokImagine.ensureReady();
@@ -4802,10 +4802,10 @@
 
     const tabs = document.querySelectorAll("#grokToolsTabs .tab-item");
     tabs.forEach((btn) => {
-      const active = String(btn.dataset.tab || "").toLowerCase() === String(tab || "").toLowerCase();
+      const active = String(btn.dataset.tab || "").toLowerCase() === nextTab;
       btn.classList.toggle("active", active);
     });
-    saveGrokToolsUIState({ activeToolTab: String(tab || "chat") });
+    saveGrokToolsUIState({ activeToolTab: nextTab });
   }
 
   window.switchGrokToolTab = switchGrokToolTab;
@@ -5324,7 +5324,7 @@
       closeCacheBatchStream();
     });
     const uiState = loadGrokToolsUIState();
-    await switchGrokToolTab(String(uiState.activeToolTab || "chat"));
+    await switchGrokToolTab(String(uiState.activeToolTab || "imagine"));
     if (window.GrokImagine && typeof window.GrokImagine.init === "function") {
       window.GrokImagine.init({ uiState, saveState: saveGrokToolsUIState, showToast });
     } else {
