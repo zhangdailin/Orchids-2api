@@ -91,6 +91,37 @@ func TestEnsureModelEnabled_AllowsVerifiedDynamicGrokModel(t *testing.T) {
 	}
 }
 
+func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel:  "Puter",
+		ModelID:  "grok-shared-id",
+		Name:     "Puter shared",
+		Status:   store.ModelStatusAvailable,
+		Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel(puter) error = %v", err)
+	}
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel:  "Grok",
+		ModelID:  "grok-shared-id",
+		Name:     "Grok shared",
+		Status:   store.ModelStatusAvailable,
+		Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel(grok) error = %v", err)
+	}
+
+	if err := h.ensureModelEnabled(context.Background(), "grok-shared-id"); err != nil {
+		t.Fatalf("ensureModelEnabled() error = %v", err)
+	}
+}
+
 func TestResolveModel_AcceptsOfficialGrok43(t *testing.T) {
 	spec, ok := ResolveModel("grok-4.3")
 	if !ok {

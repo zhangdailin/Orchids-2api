@@ -135,11 +135,11 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 		return nil
 	}
 
-	m, err := h.lb.Store.GetModelByModelID(ctx, id)
+	m, err := h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", id)
 	if err != nil || m == nil {
 		rawID := strings.ToLower(strings.TrimSpace(modelID))
 		if rawID != "" && rawID != id {
-			m, err = h.lb.Store.GetModelByModelID(ctx, rawID)
+			m, err = h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", rawID)
 		}
 	}
 	if err != nil || m == nil {
