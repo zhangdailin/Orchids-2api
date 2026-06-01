@@ -483,8 +483,8 @@ func prepareAppChatImageGenerationPayload(payload map[string]interface{}, count 
 
 func appChatImagePayloadVariants() []string {
 	return []string{
-		"webchat2api",
 		"tool_image_gen",
+		"webchat2api",
 		"response_metadata_override",
 	}
 }
@@ -495,6 +495,10 @@ func applyAppChatImagePayloadVariant(payload map[string]interface{}, spec ModelS
 	}
 	toolOverrides, _ := payload["toolOverrides"].(map[string]interface{})
 	switch variant {
+	case "webchat2api":
+		if toolOverrides != nil {
+			toolOverrides["imageGen"] = true
+		}
 	case "tool_image_gen":
 		if toolOverrides != nil {
 			toolOverrides["imageGen"] = true

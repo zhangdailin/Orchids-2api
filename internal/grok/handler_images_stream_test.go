@@ -242,6 +242,27 @@ func TestPrepareAppChatImageGenerationPayload_MatchesLiteImageShape(t *testing.T
 	}
 }
 
+func TestAppChatImagePayloadVariants_EnableImageGenBeforeFallback(t *testing.T) {
+	variants := appChatImagePayloadVariants()
+	if len(variants) == 0 || variants[0] != "tool_image_gen" {
+		t.Fatalf("variants=%v want tool_image_gen first", variants)
+	}
+
+	for _, variant := range []string{"webchat2api", "tool_image_gen", "response_metadata_override"} {
+		payload := map[string]interface{}{
+			"toolOverrides": map[string]interface{}{"imageGen": false},
+			"modelConfigOverride": map[string]interface{}{
+				"modelMap": map[string]interface{}{},
+			},
+		}
+		applyAppChatImagePayloadVariant(payload, ModelSpec{ID: "grok-imagine-image-lite"}, variant)
+		toolOverrides := payload["toolOverrides"].(map[string]interface{})
+		if got, _ := toolOverrides["imageGen"].(bool); !got {
+			t.Fatalf("%s imageGen=%v want true", variant, got)
+		}
+	}
+}
+
 func TestEnsureImageConfig_UsesTopLevelModelOverride(t *testing.T) {
 	payload := map[string]interface{}{}
 	nsfw := true
