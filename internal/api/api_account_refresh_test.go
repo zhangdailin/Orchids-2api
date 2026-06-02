@@ -887,6 +887,32 @@ func TestHandleAccountByID_PutRejectsDuplicateGrokToken(t *testing.T) {
 	}
 }
 
+func TestNormalizeGrokTokenInput_PreservesFullCookie(t *testing.T) {
+	acc := &store.Account{
+		AccountType:   "grok",
+		ClientCookie:  "foo=1; sso=grok-token-a; x-userid=user-1; cf_clearance=cf-1; __cf_bm=bm-1; Path=/; HttpOnly",
+		RefreshToken:  "stale-refresh",
+		SessionCookie: "stale-session",
+		SessionID:     "stale-session-id",
+		ClientUat:     "stale-uat",
+		ProjectID:     "stale-project",
+	}
+
+	normalizeGrokTokenInput(acc)
+
+	for _, want := range []string{"sso=grok-token-a", "x-userid=user-1", "cf_clearance=cf-1", "__cf_bm=bm-1"} {
+		if !strings.Contains(acc.ClientCookie, want) {
+			t.Fatalf("ClientCookie=%q missing %q", acc.ClientCookie, want)
+		}
+	}
+	if acc.RefreshToken != "" || acc.SessionCookie != "" || acc.SessionID != "" || acc.ClientUat != "" || acc.ProjectID != "" {
+		t.Fatalf("unrelated fields should be cleared: %#v", acc)
+	}
+	if key := normalizedAccountCredentialKey(acc); key != "grok:grok-token-a" {
+		t.Fatalf("credential key=%q want grok:grok-token-a", key)
+	}
+}
+
 func TestHandleAccountByID_PutAllowsSameAccountCredential(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()

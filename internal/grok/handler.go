@@ -112,11 +112,10 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 	if raw == "" {
 		raw = strings.TrimSpace(acc.RefreshToken)
 	}
-	token := NormalizeSSOToken(raw)
-	if token == "" {
+	if NormalizeSSOToken(raw) == "" {
 		return nil, "", fmt.Errorf("grok account token is empty")
 	}
-	return acc, token, nil
+	return acc, raw, nil
 }
 
 func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error {
@@ -256,13 +255,12 @@ func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, 
 	if raw == "" {
 		raw = strings.TrimSpace(acc.RefreshToken)
 	}
-	token := NormalizeSSOToken(raw)
-	if token == "" {
+	if NormalizeSSOToken(raw) == "" {
 		return nil, fmt.Errorf("grok account token is empty")
 	}
 	return &chatAccountSession{
 		acc:            acc,
-		token:          token,
+		token:          raw,
 		poolCandidates: candidates,
 		release:        h.trackAccount(acc),
 	}, nil

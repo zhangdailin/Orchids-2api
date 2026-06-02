@@ -32,10 +32,16 @@ func TestEnableNSFWDetailed_EmptyToken(t *testing.T) {
 
 func TestHeaders_NormalizeSSOToken(t *testing.T) {
 	c := New(nil)
-	h := c.headers("sso=token-abc; Path=/; HttpOnly")
+	h := c.headers("sso=token-abc; Path=/; HttpOnly; x-userid=user-1")
 	cookie := h.Get("Cookie")
 	if !strings.Contains(cookie, "sso=token-abc; sso-rw=token-abc") {
 		t.Fatalf("unexpected cookie=%q", cookie)
+	}
+	if !strings.Contains(cookie, "x-userid=user-1") {
+		t.Fatalf("app-chat cookie fields should be preserved, cookie=%q", cookie)
+	}
+	if strings.Contains(cookie, "Path=/") || strings.Contains(cookie, "HttpOnly") {
+		t.Fatalf("set-cookie attributes should be stripped, cookie=%q", cookie)
 	}
 	if strings.Contains(cookie, "sso=sso=") {
 		t.Fatalf("token should be normalized, cookie=%q", cookie)

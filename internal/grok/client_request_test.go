@@ -42,6 +42,27 @@ func TestBuildGrokCookie(t *testing.T) {
 	}
 }
 
+func TestBuildGrokCookie_PreservesAppChatCookieFields(t *testing.T) {
+	got := buildGrokCookie("foo=1; sso=tok; sso-rw=old; x-userid=user-1; Path=/; HttpOnly; __cf_bm=old-bm", "cf-clear", "bm")
+	for _, want := range []string{
+		"sso=tok",
+		"sso-rw=tok",
+		"foo=1",
+		"x-userid=user-1",
+		"cf_clearance=cf-clear",
+		"__cf_bm=bm",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cookie=%q missing %q", got, want)
+		}
+	}
+	for _, notWant := range []string{"Path=/", "HttpOnly", "sso-rw=old", "__cf_bm=old-bm"} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("cookie=%q should not contain %q", got, notWant)
+		}
+	}
+}
+
 func TestDoRequest_DoesNotMutateInputHeaders(t *testing.T) {
 	t.Parallel()
 

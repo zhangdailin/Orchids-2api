@@ -247,8 +247,8 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	if err != nil {
 		t.Fatalf("open super session error=%v", err)
 	}
-	if superSess.token != "super-token" {
-		t.Fatalf("super token=%q want super-token", superSess.token)
+	if NormalizeSSOToken(superSess.token) != "super-token" {
+		t.Fatalf("super token=%q want sso super-token", superSess.token)
 	}
 	superSess.Close()
 
@@ -257,8 +257,8 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	if err != nil {
 		t.Fatalf("open lite session error=%v", err)
 	}
-	if liteSess.token != "lite-token" {
-		t.Fatalf("lite token=%q want lite-token", liteSess.token)
+	if NormalizeSSOToken(liteSess.token) != "lite-token" {
+		t.Fatalf("lite token=%q want sso lite-token", liteSess.token)
 	}
 	liteSess.Close()
 
@@ -270,8 +270,8 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	if err != nil {
 		t.Fatalf("open heavy session error=%v", err)
 	}
-	if heavySess.token != "heavy-token" {
-		t.Fatalf("heavy token=%q want heavy-token", heavySess.token)
+	if NormalizeSSOToken(heavySess.token) != "heavy-token" {
+		t.Fatalf("heavy token=%q want sso heavy-token", heavySess.token)
 	}
 	heavySess.Close()
 
@@ -283,8 +283,8 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	if err != nil {
 		t.Fatalf("open fast session error=%v", err)
 	}
-	if fastSess.token != "heavy-token" {
-		t.Fatalf("prefer-best fast token=%q want heavy-token", fastSess.token)
+	if NormalizeSSOToken(fastSess.token) != "heavy-token" {
+		t.Fatalf("prefer-best fast token=%q want sso heavy-token", fastSess.token)
 	}
 	fastSess.Close()
 }
@@ -313,8 +313,8 @@ func TestOpenChatAccountSessionForImageLitePrefersBasicPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open image lite session error=%v", err)
 	}
-	if sess.token != "basic-token" {
-		t.Fatalf("token=%q want basic-token", sess.token)
+	if NormalizeSSOToken(sess.token) != "basic-token" {
+		t.Fatalf("token=%q want sso basic-token", sess.token)
 	}
 	basicID := sess.acc.ID
 	sess.Close()
@@ -324,8 +324,8 @@ func TestOpenChatAccountSessionForImageLitePrefersBasicPool(t *testing.T) {
 		t.Fatalf("open non-basic image lite session error=%v", err)
 	}
 	defer next.Close()
-	if next.token != "lite-token" {
-		t.Fatalf("fallback token=%q want lite-token", next.token)
+	if NormalizeSSOToken(next.token) != "lite-token" {
+		t.Fatalf("fallback token=%q want sso lite-token", next.token)
 	}
 }
 
@@ -354,8 +354,8 @@ func TestOpenChatAccountSessionForImageLiteSkipsCoolingLitePool(t *testing.T) {
 		t.Fatalf("open image lite session error=%v", err)
 	}
 	defer sess.Close()
-	if sess.token != "basic-token" {
-		t.Fatalf("token=%q want basic-token", sess.token)
+	if NormalizeSSOToken(sess.token) != "basic-token" {
+		t.Fatalf("token=%q want sso basic-token", sess.token)
 	}
 }
 
@@ -384,8 +384,8 @@ func TestOpenChatAccountSessionForModel_FallsBackWhenPoolMetadataMissing(t *test
 		t.Fatalf("open session error=%v", err)
 	}
 	defer sess.Close()
-	if sess.token != "unknown-tier-token" {
-		t.Fatalf("token=%q want unknown-tier-token", sess.token)
+	if NormalizeSSOToken(sess.token) != "unknown-tier-token" {
+		t.Fatalf("token=%q want sso unknown-tier-token", sess.token)
 	}
 }
 

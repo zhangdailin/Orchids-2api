@@ -94,11 +94,11 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	if acc == nil {
 		return fmt.Errorf("missing grok account")
 	}
-	token := grok.NormalizeSSOToken(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
-	if token == "" {
+	credential := strings.TrimSpace(firstNonEmptyString(acc.ClientCookie, acc.RefreshToken, acc.Token))
+	if grok.NormalizeSSOToken(credential) == "" {
 		return fmt.Errorf("missing sso token")
 	}
-	acc.ClientCookie = token
+	acc.ClientCookie = credential
 
 	client := grok.New(cfg)
 	if modelID := normalizeGrokVerifyModelID(acc.AgentMode); modelID != "" && modelID != acc.AgentMode {
@@ -106,11 +106,11 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	}
 
 	verifyCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	info, verifyErr := client.VerifyToken(verifyCtx, token, "")
+	info, verifyErr := client.VerifyToken(verifyCtx, credential, "")
 	cancel()
 	if verifyErr != nil && isGrokModelNotFound(verifyErr) {
 		verifyCtx, cancel = context.WithTimeout(ctx, 20*time.Second)
-		info, verifyErr = client.VerifyToken(verifyCtx, token, "grok-4.20-0309-non-reasoning")
+		info, verifyErr = client.VerifyToken(verifyCtx, credential, "grok-4.20-0309-non-reasoning")
 		cancel()
 	}
 	if verifyErr != nil {
@@ -178,8 +178,12 @@ func normalizeGrokTokenInput(acc *store.Account) {
 	if raw == "" {
 		raw = strings.TrimSpace(acc.RefreshToken)
 	}
-	acc.ClientCookie = grok.NormalizeSSOToken(raw)
-	// Grok only needs SSO token; clear unrelated fields.
+	if grok.NormalizeSSOToken(raw) == "" {
+		acc.ClientCookie = ""
+	} else {
+		acc.ClientCookie = raw
+	}
+	// Grok app-chat can benefit from the full browser cookie stored in ClientCookie.
 	acc.RefreshToken = ""
 	acc.SessionCookie = ""
 	acc.SessionID = ""

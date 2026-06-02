@@ -136,27 +136,110 @@ func cloneHeaderShallow(src http.Header, extraCapacity int) http.Header {
 	return dst
 }
 
-func buildGrokCookie(token, cfClearance, cfBM string) string {
-	var b strings.Builder
-	b.Grow(len(token)*2 + len(cfClearance) + len(cfBM) + 32)
-	b.WriteString("sso=")
-	b.WriteString(token)
-	b.WriteString("; sso-rw=")
-	b.WriteString(token)
-	if cfClearance != "" {
-		b.WriteString("; cf_clearance=")
-		b.WriteString(cfClearance)
+type grokCookieItem struct {
+	name  string
+	value string
+}
+
+func grokCookieItems(raw string) []grokCookieItem {
+	parts := strings.Split(strings.TrimSpace(raw), ";")
+	out := make([]grokCookieItem, 0, len(parts))
+	for _, part := range parts {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		name = strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
+		value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+		if name == "" {
+			continue
+		}
+		out = append(out, grokCookieItem{name: name, value: value})
 	}
-	if cfBM != "" {
-		b.WriteString("; __cf_bm=")
-		b.WriteString(cfBM)
+	return out
+}
+
+func isSetCookieAttribute(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "path", "domain", "expires", "max-age", "secure", "httponly", "samesite", "partitioned", "priority":
+		return true
+	default:
+		return false
+	}
+}
+
+func setGrokCookieItem(items *[]grokCookieItem, name, value string) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	value = strings.TrimSpace(value)
+	if name == "" || value == "" {
+		return
+	}
+	for i := range *items {
+		if (*items)[i].name == name {
+			(*items)[i].value = value
+			return
+		}
+	}
+	*items = append(*items, grokCookieItem{name: name, value: value})
+}
+
+func joinGrokCookieItems(items []grokCookieItem) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, item := range items {
+		if strings.TrimSpace(item.name) == "" || strings.TrimSpace(item.value) == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(item.name)
+		b.WriteString("=")
+		b.WriteString(item.value)
 	}
 	return b.String()
 }
 
-func (c *Client) headers(token string) http.Header {
-	token = NormalizeSSOToken(token)
+func buildGrokCookie(token, cfClearance, cfBM string) string {
+	raw := strings.TrimSpace(token)
+	parsed := grokCookieItems(raw)
+	sso := ""
+	for _, item := range parsed {
+		if item.name == "sso" {
+			sso = item.value
+			break
+		}
+	}
+	if sso == "" && raw != "" && !strings.Contains(raw, "=") {
+		sso = strings.Join(strings.Fields(raw), " ")
+	}
 
+	items := make([]grokCookieItem, 0, len(parsed)+4)
+	if sso != "" {
+		setGrokCookieItem(&items, "sso", sso)
+		setGrokCookieItem(&items, "sso-rw", sso)
+		for _, item := range parsed {
+			if item.name == "sso" || item.name == "sso-rw" || isSetCookieAttribute(item.name) {
+				continue
+			}
+			setGrokCookieItem(&items, item.name, item.value)
+		}
+	} else {
+		for _, item := range parsed {
+			if isSetCookieAttribute(item.name) {
+				continue
+			}
+			setGrokCookieItem(&items, item.name, item.value)
+		}
+	}
+	setGrokCookieItem(&items, "cf_clearance", cfClearance)
+	setGrokCookieItem(&items, "__cf_bm", cfBM)
+	return joinGrokCookieItems(items)
+}
+
+func (c *Client) headers(token string) http.Header {
 	// 从预分配的模板浅克隆请求头；固定值切片复用，动态字段再覆盖。
 	h := cloneHeaderShallow(baseHeaders, 4)
 
@@ -172,7 +255,9 @@ func (c *Client) headers(token string) http.Header {
 		cfClearance = strings.TrimSpace(c.cfg.GrokCFClearance)
 		cfBM = strings.TrimSpace(c.cfg.GrokCFBM)
 	}
-	h.Set("Cookie", buildGrokCookie(token, cfClearance, cfBM))
+	if cookie := buildGrokCookie(token, cfClearance, cfBM); cookie != "" {
+		h.Set("Cookie", cookie)
+	}
 
 	return h
 }
@@ -434,8 +519,8 @@ func (c *Client) VerifyToken(ctx context.Context, token, modelID string) (*RateL
 }
 
 func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimitInfo, error) {
-	token = NormalizeSSOToken(token)
-	if strings.TrimSpace(token) == "" {
+	token = strings.TrimSpace(token)
+	if NormalizeSSOToken(token) == "" {
 		return nil, fmt.Errorf("empty token")
 	}
 
@@ -692,8 +777,8 @@ func (c *Client) getVoiceToken(ctx context.Context, token, voice, personality st
 }
 
 func (c *Client) listAssets(ctx context.Context, token string) ([]string, error) {
-	token = NormalizeSSOToken(token)
-	if strings.TrimSpace(token) == "" {
+	token = strings.TrimSpace(token)
+	if NormalizeSSOToken(token) == "" {
 		return nil, fmt.Errorf("empty token")
 	}
 
@@ -769,9 +854,9 @@ func (c *Client) countAssets(ctx context.Context, token string) (int, error) {
 }
 
 func (c *Client) deleteAsset(ctx context.Context, token string, assetID string) error {
-	token = NormalizeSSOToken(token)
+	token = strings.TrimSpace(token)
 	assetID = strings.TrimSpace(assetID)
-	if token == "" {
+	if NormalizeSSOToken(token) == "" {
 		return fmt.Errorf("empty token")
 	}
 	if assetID == "" {
