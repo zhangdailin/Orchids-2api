@@ -292,12 +292,32 @@ func (h *Handler) doChatSingleAccount(ctx context.Context, sess *chatAccountSess
 	return resp, nil
 }
 
+type grokAccountStatusPolicy func(error) bool
+
+func markAllGrokAccountStatuses(err error) bool {
+	return err != nil
+}
+
+func skipAntiBotGrokAccountStatus(err error) bool {
+	return !isGrokAntiBotError(err)
+}
+
 // doChatWithAutoSwitchRebuild retries once with a switched account and rebuilds payload for the new token.
 func (h *Handler) doChatWithAutoSwitchRebuild(
 	ctx context.Context,
 	sess *chatAccountSession,
 	payload *map[string]interface{},
 	rebuild func(token string) (map[string]interface{}, error),
+) (*http.Response, error) {
+	return h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, payload, rebuild, markAllGrokAccountStatuses)
+}
+
+func (h *Handler) doChatWithAutoSwitchRebuildWithStatusPolicy(
+	ctx context.Context,
+	sess *chatAccountSession,
+	payload *map[string]interface{},
+	rebuild func(token string) (map[string]interface{}, error),
+	shouldMarkStatus grokAccountStatusPolicy,
 ) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
@@ -327,7 +347,9 @@ func (h *Handler) doChatWithAutoSwitchRebuild(
 			return resp, nil
 		}
 		lastErr = err
-		h.markAccountStatus(ctx, sess.acc, err)
+		if shouldMarkStatus == nil || shouldMarkStatus(err) {
+			h.markAccountStatus(ctx, sess.acc, err)
+		}
 		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
 			return nil, err
 		}
@@ -351,6 +373,16 @@ func (h *Handler) doChatWithAutoSwitchRebuild(
 		}
 	}
 	return nil, lastErr
+}
+
+func isGrokAntiBotError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "anti-bot") ||
+		strings.Contains(lower, "antibot") ||
+		strings.Contains(lower, "request rejected by anti-bot rules")
 }
 
 func shouldSwitchGrokAccount(err error) bool {

@@ -163,7 +163,7 @@ func (c *Client) headers(token string) http.Header {
 	// 添加动态请求头
 	h.Set("User-Agent", c.userAgent())
 	h.Set("x-statsig-id", buildStatsigID())
-	h.Set("x-xai-request-id", randomHex(16))
+	h.Set("x-xai-request-id", randomUUID())
 
 	// 构建 Cookie
 	cfClearance := ""
@@ -375,7 +375,7 @@ func (c *Client) doRequestWith429Retry(ctx context.Context, reqURL string, metho
 			return nil, err
 		}
 		reqHeaders := cloneHeaderShallow(headers, 1)
-		reqHeaders.Set("x-xai-request-id", randomHex(16))
+		reqHeaders.Set("x-xai-request-id", randomUUID())
 		req.Header = reqHeaders
 
 		resp, err := c.clientForAsset(asset).Do(req)

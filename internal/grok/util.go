@@ -168,13 +168,24 @@ func randomHex(n int) string {
 	return hex.EncodeToString(buf)
 }
 
-func buildStatsigID() string {
-	// Base64 encode a fake JS error string similar to AIClient-2-API StatsigGenerator
-	msg := fmt.Sprintf("e:TypeError: Cannot read properties of null (reading 'children['%s']')", randomHex(5))
-	if time.Now().UnixNano()%2 == 0 {
-		msg = fmt.Sprintf("e:TypeError: Cannot read properties of undefined (reading '%s')", randomHex(10))
+func randomUUID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return ""
 	}
-	return base64.StdEncoding.EncodeToString([]byte(msg))
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		buf[0:4],
+		buf[4:6],
+		buf[6:8],
+		buf[8:10],
+		buf[10:16],
+	)
+}
+
+func buildStatsigID() string {
+	return "0196a8f6-0501-79f8-8d74-a2f2c0f5f5f5"
 }
 
 func parseUpstreamLines(body io.Reader, onLine func(map[string]interface{}) error) error {
