@@ -155,6 +155,15 @@ function buildSubscriptionMarkup(acc) {
   return `<span class="tag account-tier-tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>`;
 }
 
+function shouldShowNSFWBadge(acc) {
+  return normalizeAccountType(acc) === "grok" && !!acc?.nsfw_enabled;
+}
+
+function buildNSFWBadgeMarkup(acc) {
+  if (!shouldShowNSFWBadge(acc)) return "";
+  return `<span class="tag account-nsfw-tag" title="Grok NSFW 已开启" style="background:rgba(244, 114, 182, 0.14);color:#f472b6;border:none;">NSFW</span>`;
+}
+
 function applyTokenLabels(type) {
   const label = document.getElementById("tokenLabel");
   const input = document.getElementById("clientCookie");
@@ -918,6 +927,16 @@ function renderAccounts() {
     statusSpan.textContent = badge.text;
     statusWrap.appendChild(statusSpan);
 
+    if (shouldShowNSFWBadge(acc)) {
+      const nsfwSpan = document.createElement("span");
+      nsfwSpan.className = "tag account-nsfw-tag";
+      nsfwSpan.title = "Grok NSFW 已开启";
+      nsfwSpan.style.background = "rgba(244, 114, 182, 0.14)";
+      nsfwSpan.style.color = "#f472b6";
+      nsfwSpan.style.border = "none";
+      nsfwSpan.textContent = "NSFW";
+      statusWrap.appendChild(nsfwSpan);
+    }
 
     tdStatus.appendChild(statusWrap);
     tr.appendChild(tdStatus);
@@ -1026,7 +1045,7 @@ function buildQuotaMarkup(acc) {
 }
 
 function buildStatusMarkup(acc, badge) {
-  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>`;
+  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildNSFWBadgeMarkup(acc)}`;
 }
 
 function renderAccountsMobile(container, pageItems, total, totalPages) {
