@@ -417,8 +417,12 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 		}
 		payload := h.client.chatPayload(spec, prompt, true, count)
 		prepareAppChatImageGenerationPayload(payload, count)
-		ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
-		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
+		if strings.TrimSpace(req.Model) == "" {
+			ensureAppChatImageAspectRatio(payload, resolveAspectRatio(req.Size))
+		} else {
+			ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
+			ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
+		}
 		var resp *http.Response
 		var err error
 		if allowSwitch {

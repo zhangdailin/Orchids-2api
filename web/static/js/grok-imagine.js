@@ -3,7 +3,7 @@
   const PARALLELISM = 1;
   const STORAGE_KEY = "grok_tools_ui_v1";
   const QUALITY_MODELS = {
-    basic: "grok-imagine-image-lite",
+    basic: "",
     lite: "grok-imagine-image-lite",
     quality: "grok-imagine-image-pro",
   };
@@ -319,17 +319,18 @@
   }
 
   async function createTask(prompt, ratio, model, route, nsfw, signal) {
+    const body = {
+      prompt,
+      aspect_ratio: ratio,
+      route,
+      nsfw,
+    };
+    if (String(model || "").trim()) body.model = model;
     const res = await fetch("/api/v1/admin/imagine/start", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders() },
       signal,
-      body: JSON.stringify({
-        prompt,
-        aspect_ratio: ratio,
-        model,
-        route,
-        nsfw,
-      }),
+      body: JSON.stringify(body),
     });
     if (res.status === 401) {
       window.location.href = "/admin/login.html?next=" + encodeURIComponent("/admin/?tab=grok-tools");

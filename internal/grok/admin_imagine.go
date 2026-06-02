@@ -173,6 +173,13 @@ func normalizeImagineModel(model string) string {
 	return id
 }
 
+func normalizeImagineSessionModel(model, route string) string {
+	if normalizeImagineRoute(route) == "app_chat" {
+		return ""
+	}
+	return normalizeImagineModel(model)
+}
+
 func normalizeImagineRoute(route string) string {
 	switch strings.ToLower(strings.TrimSpace(route)) {
 	case "app_chat", "app-chat", "basic", "chat":
@@ -195,8 +202,8 @@ func createImagineSession(prompt, aspectRatio string, model string, route string
 	imagineSessions[id] = imagineSession{
 		Prompt:      strings.TrimSpace(prompt),
 		AspectRatio: resolveAspectRatio(strings.TrimSpace(aspectRatio)),
-		Model:       normalizeImagineModel(model),
 		Route:       normalizeImagineRoute(route),
+		Model:       normalizeImagineSessionModel(model, route),
 		NSFW:        cloneBoolPtr(nsfw),
 		CreatedAt:   now,
 	}
@@ -291,6 +298,34 @@ func ensureImageAspectRatio(payload map[string]interface{}, modelID, ratio strin
 	imageGenCfg["aspectRatio"] = ratio
 }
 
+func ensureAppChatImageAspectRatio(payload map[string]interface{}, ratio string) {
+	if payload == nil {
+		return
+	}
+	if strings.TrimSpace(ratio) == "" {
+		ratio = "2:3"
+	}
+	ratio = resolveAspectRatio(ratio)
+
+	modelConfigOverride, _ := payload["modelConfigOverride"].(map[string]interface{})
+	if modelConfigOverride == nil {
+		modelConfigOverride = map[string]interface{}{}
+		payload["modelConfigOverride"] = modelConfigOverride
+	}
+	modelMap, _ := modelConfigOverride["modelMap"].(map[string]interface{})
+	if modelMap == nil {
+		modelMap = map[string]interface{}{}
+		modelConfigOverride["modelMap"] = modelMap
+	}
+	imageGenCfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
+	if imageGenCfg == nil {
+		imageGenCfg = map[string]interface{}{}
+		modelMap["imageGenModelConfig"] = imageGenCfg
+	}
+	delete(modelMap, "imageGenModel")
+	imageGenCfg["aspectRatio"] = ratio
+}
+
 func ensureImageNSFW(payload map[string]interface{}, modelID string, nsfw *bool) {
 	if payload == nil {
 		return
@@ -307,15 +342,28 @@ func supportsAppChatImageNSFW(modelID string) bool {
 	return normalizeModelID(modelID) != "grok-imagine-image-lite"
 }
 
-func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio, model string, route string, n int, nsfw *bool) ([]imagineImage, int, error) {
-	imagineModel := normalizeImagineModel(model)
-	imagineRoute := normalizeImagineRoute(route)
-	if err := h.ensureModelEnabled(ctx, imagineModel); err != nil {
-		return nil, 0, err
+func basicAppChatImagineSpec() ModelSpec {
+	if spec, ok := ResolveModel("grok-4.20-fast"); ok {
+		spec.IsImage = false
+		spec.PreferBest = false
+		return spec
 	}
-	spec, ok := ResolveModel(imagineModel)
-	if !ok || !spec.IsImage {
-		return nil, 0, fmt.Errorf("image model not supported")
+	return ModelSpec{ID: "grok-4.20-fast", UpstreamModel: "grok-4.20-fast", ModelMode: "MODEL_MODE_FAST", Tier: grokTierBasic}
+}
+
+func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio, model string, route string, n int, nsfw *bool) ([]imagineImage, int, error) {
+	imagineRoute := normalizeImagineRoute(route)
+	imagineModel := normalizeImagineSessionModel(model, imagineRoute)
+	spec := basicAppChatImagineSpec()
+	if imagineRoute != "app_chat" {
+		if err := h.ensureModelEnabled(ctx, imagineModel); err != nil {
+			return nil, 0, err
+		}
+		var ok bool
+		spec, ok = ResolveModel(imagineModel)
+		if !ok || !spec.IsImage {
+			return nil, 0, fmt.Errorf("image model not supported")
+		}
 	}
 	if n < 1 {
 		n = 1
@@ -355,7 +403,7 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 		}
 
 		if imagineRoute == "app_chat" {
-			images, elapsedMS, appChatErr := h.generateAppChatImagineBatch(ctx, sess, spec, prompt, aspectRatio, imagineModel, n, nsfw)
+			images, elapsedMS, appChatErr := h.generateAppChatImagineBatch(ctx, sess, spec, prompt, aspectRatio, n, nsfw)
 			sess.Close()
 			if appChatErr != nil {
 				lastErr = appChatErr
@@ -407,10 +455,10 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 	return nil, 0, fmt.Errorf("no image generated")
 }
 
-func (h *Handler) generateAppChatImagineBatch(ctx context.Context, sess *chatAccountSession, spec ModelSpec, prompt, aspectRatio, model string, n int, nsfw *bool) ([]imagineImage, int, error) {
+func (h *Handler) generateAppChatImagineBatch(ctx context.Context, sess *chatAccountSession, spec ModelSpec, prompt, aspectRatio string, n int, nsfw *bool) ([]imagineImage, int, error) {
 	startedAt := time.Now()
 	req := ImagesGenerationsRequest{
-		Model:          model,
+		Model:          "",
 		Prompt:         strings.TrimSpace(prompt),
 		N:              n,
 		Size:           imagineImageSizeFromAspectRatio(aspectRatio),
@@ -475,8 +523,8 @@ func (h *Handler) runImagineLoop(
 		"status":       "running",
 		"prompt":       prompt,
 		"aspect_ratio": aspectRatio,
-		"model":        normalizeImagineModel(model),
 		"route":        normalizeImagineRoute(route),
+		"model":        normalizeImagineSessionModel(model, route),
 		"run_id":       runID,
 	}) {
 		return
@@ -533,8 +581,8 @@ func (h *Handler) runImagineLoop(
 				"created_at":   nowMillis,
 				"elapsed_ms":   elapsedMS,
 				"aspect_ratio": aspectRatio,
-				"model":        normalizeImagineModel(model),
 				"route":        normalizeImagineRoute(route),
+				"model":        normalizeImagineSessionModel(model, route),
 				"run_id":       runID,
 			}) {
 				return
@@ -574,8 +622,8 @@ func (h *Handler) HandleAdminImagineStart(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ratio := resolveAspectRatio(strings.TrimSpace(req.AspectRatio))
-	model := normalizeImagineModel(req.Model)
 	route := normalizeImagineRoute(req.Route)
+	model := normalizeImagineSessionModel(req.Model, route)
 	taskID := createImagineSession(prompt, ratio, model, route, req.NSFW)
 	out := map[string]interface{}{
 		"task_id":      taskID,
@@ -614,8 +662,8 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 	prompt := strings.TrimSpace(r.URL.Query().Get("prompt"))
 	ratio := strings.TrimSpace(r.URL.Query().Get("aspect_ratio"))
-	model := normalizeImagineModel(r.URL.Query().Get("model"))
 	route := normalizeImagineRoute(r.URL.Query().Get("route"))
+	model := normalizeImagineSessionModel(r.URL.Query().Get("model"), route)
 	nsfw := parseOptionalBool(r.URL.Query().Get("nsfw"))
 
 	if taskID != "" {
@@ -626,8 +674,8 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 		}
 		prompt = session.Prompt
 		ratio = session.AspectRatio
-		model = normalizeImagineModel(session.Model)
 		route = normalizeImagineRoute(session.Route)
+		model = normalizeImagineSessionModel(session.Model, route)
 		if nsfw == nil {
 			nsfw = cloneBoolPtr(session.NSFW)
 		}
@@ -731,8 +779,8 @@ func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
 		case "start":
 			prompt := strings.TrimSpace(fmt.Sprint(payload["prompt"]))
 			ratio := strings.TrimSpace(fmt.Sprint(payload["aspect_ratio"]))
-			model := normalizeImagineModel(fmt.Sprint(payload["model"]))
 			route := normalizeImagineRoute(fmt.Sprint(payload["route"]))
+			model := normalizeImagineSessionModel(fmt.Sprint(payload["model"]), route)
 			nsfw := parseOptionalBool(payload["nsfw"])
 			if taskID != "" {
 				if session, ok := getImagineSession(taskID); ok {
@@ -742,8 +790,8 @@ func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
 					if ratio == "" {
 						ratio = session.AspectRatio
 					}
-					model = normalizeImagineModel(session.Model)
 					route = normalizeImagineRoute(session.Route)
+					model = normalizeImagineSessionModel(session.Model, route)
 					if nsfw == nil {
 						nsfw = cloneBoolPtr(session.NSFW)
 					}

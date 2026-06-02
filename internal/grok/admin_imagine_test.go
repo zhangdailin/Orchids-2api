@@ -77,7 +77,6 @@ func TestHandleAdminImagineStartStop(t *testing.T) {
 	startBody := map[string]interface{}{
 		"prompt":       "a cat on mars",
 		"aspect_ratio": "1024x576",
-		"model":        "grok-imagine-image-lite",
 		"route":        "app_chat",
 		"nsfw":         false,
 	}
@@ -100,8 +99,8 @@ func TestHandleAdminImagineStartStop(t *testing.T) {
 	if got, _ := startResp["aspect_ratio"].(string); got != "16:9" {
 		t.Fatalf("aspect_ratio=%q want=16:9", got)
 	}
-	if got, _ := startResp["model"].(string); got != "grok-imagine-image-lite" {
-		t.Fatalf("model=%q want=grok-imagine-image-lite", got)
+	if got, _ := startResp["model"].(string); got != "" {
+		t.Fatalf("model=%q want empty for app_chat", got)
 	}
 	if got, _ := startResp["route"].(string); got != "app_chat" {
 		t.Fatalf("route=%q want=app_chat", got)
@@ -113,8 +112,8 @@ func TestHandleAdminImagineStartStop(t *testing.T) {
 	if session.NSFW == nil || *session.NSFW != false {
 		t.Fatalf("session.NSFW=%v want=false", session.NSFW)
 	}
-	if session.Model != "grok-imagine-image-lite" {
-		t.Fatalf("session.Model=%q want=grok-imagine-image-lite", session.Model)
+	if session.Model != "" {
+		t.Fatalf("session.Model=%q want empty for app_chat", session.Model)
 	}
 	if session.Route != "app_chat" {
 		t.Fatalf("session.Route=%q want=app_chat", session.Route)
@@ -197,10 +196,14 @@ func TestGenerateAppChatImagineBatch_ReturnsLocalCachedURL(t *testing.T) {
 	cacheBaseDir = t.TempDir()
 	t.Cleanup(func() { cacheBaseDir = oldBase })
 
+	var upstreamPayload map[string]interface{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != defaultChatPath {
 			http.NotFound(w, r)
 			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&upstreamPayload); err != nil {
+			t.Fatalf("decode upstream payload: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"result":{"response":{"modelResponse":{"imageGenerationResponse":{"progress":100,"imageUrl":"https://assets.grok.com/users/u/generated/a/image.png"}}}}}` + "\n"))
@@ -220,12 +223,9 @@ func TestGenerateAppChatImagineBatch_ReturnsLocalCachedURL(t *testing.T) {
 		acc:   &store.Account{ID: 1, Subscription: "basic"},
 		token: "basic-token",
 	}
-	spec, ok := ResolveModel("grok-imagine-image-lite")
-	if !ok {
-		t.Fatal("missing grok-imagine-image-lite spec")
-	}
+	spec := basicAppChatImagineSpec()
 
-	images, _, err := h.generateAppChatImagineBatch(context.Background(), sess, spec, "apple", "2:3", "grok-imagine-image-lite", 1, nil)
+	images, _, err := h.generateAppChatImagineBatch(context.Background(), sess, spec, "apple", "2:3", 1, nil)
 	if err != nil {
 		t.Fatalf("generateAppChatImagineBatch error: %v", err)
 	}
@@ -244,5 +244,20 @@ func TestGenerateAppChatImagineBatch_ReturnsLocalCachedURL(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(cacheBaseDir, "image", fileName)); err != nil {
 		t.Fatalf("cached image missing: %v", err)
+	}
+	if _, ok := upstreamPayload["modelName"]; ok {
+		t.Fatalf("basic app-chat payload should not include modelName: %#v", upstreamPayload)
+	}
+	if _, ok := upstreamPayload["modelMode"]; ok {
+		t.Fatalf("basic app-chat payload should not include modelMode: %#v", upstreamPayload)
+	}
+	override, _ := upstreamPayload["modelConfigOverride"].(map[string]interface{})
+	modelMap, _ := override["modelMap"].(map[string]interface{})
+	if got := modelMap["imageGenModel"]; got != nil {
+		t.Fatalf("basic app-chat payload imageGenModel=%#v want nil", got)
+	}
+	cfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
+	if got := cfg["aspectRatio"]; got != "2:3" {
+		t.Fatalf("aspectRatio=%#v want 2:3", got)
 	}
 }
