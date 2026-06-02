@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -567,6 +568,7 @@ func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, r
 	}
 	resp, err := h.doConsoleWithAutoSwitch(ctx, sess, payload)
 	if err != nil {
+		slog.Error("console chat upstream failed", "url", consoleResponsesURL, "status", parseUpstreamStatus(err), "error", err)
 		if logger != nil {
 			logger.LogUpstreamHTTPError(consoleResponsesURL, parseUpstreamStatus(err), "", err)
 		}
