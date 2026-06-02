@@ -257,52 +257,19 @@ func deleteImagineSessions(taskIDs []string) int {
 	return removed
 }
 
-func ensureImageModelConfig(payload map[string]interface{}, modelID string) map[string]interface{} {
-	if payload == nil {
-		return nil
-	}
-	modelConfigOverride, _ := payload["modelConfigOverride"].(map[string]interface{})
-	if modelConfigOverride == nil {
-		modelConfigOverride = map[string]interface{}{}
-		payload["modelConfigOverride"] = modelConfigOverride
-	}
-	modelMap, _ := modelConfigOverride["modelMap"].(map[string]interface{})
-	if modelMap == nil {
-		modelMap = map[string]interface{}{}
-		modelConfigOverride["modelMap"] = modelMap
-	}
-	if model := strings.TrimSpace(modelID); model != "" {
-		modelMap["imageGenModel"] = model
-	}
-	imageGenCfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
-	if imageGenCfg == nil {
-		imageGenCfg = map[string]interface{}{}
-		modelMap["imageGenModelConfig"] = imageGenCfg
-	}
-	return imageGenCfg
-}
-
-func ensureImageAspectRatio(payload map[string]interface{}, modelID, ratio string) {
-	if payload == nil {
-		return
-	}
-	if strings.TrimSpace(ratio) == "" {
-		ratio = "2:3"
-	}
-	ratio = resolveAspectRatio(ratio)
-
-	imageGenCfg := ensureImageModelConfig(payload, modelID)
-	if imageGenCfg == nil {
-		return
-	}
-	imageGenCfg["aspectRatio"] = ratio
-}
-
 func ensureImageNSFW(payload map[string]interface{}, modelID string, nsfw *bool) {
 	if payload == nil {
 		return
 	}
-	imageGenCfg := ensureImageModelConfig(payload, modelID)
+	modelConfigOverride, _ := payload["modelConfigOverride"].(map[string]interface{})
+	if modelConfigOverride == nil {
+		return
+	}
+	modelMap, _ := modelConfigOverride["modelMap"].(map[string]interface{})
+	if modelMap == nil {
+		return
+	}
+	imageGenCfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
 	if imageGenCfg == nil {
 		return
 	}

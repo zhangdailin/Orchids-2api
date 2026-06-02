@@ -367,11 +367,9 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 }
 
 func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, publicBase string, nsfw *bool) {
-	onePayload := h.client.chatPayload(spec, req.Prompt, true, req.N)
-	prepareAppChatImageGenerationPayload(onePayload, req.N)
-	ensureImageAspectRatio(onePayload, spec.UpstreamModel, resolveAspectRatio(req.Size))
+	onePayload := h.client.appChatImagePayload(spec, req.Prompt, req.Size, req.N)
 	ensureImageNSFW(onePayload, spec.UpstreamModel, nsfw)
-	resp, err := h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, &onePayload, nil, skipAppChatImageGrokAccountStatus)
+	resp, err := h.doAppChatCreateAndRespondWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, &onePayload, nil, skipAppChatImageGrokAccountStatus)
 	if err != nil {
 		slog.Warn("grok app-chat image stream upstream failed",
 			"model", req.Model,
@@ -415,16 +413,14 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 		if len(promptVariants) > 0 {
 			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
 		}
-		payload := h.client.chatPayload(spec, prompt, true, count)
-		prepareAppChatImageGenerationPayload(payload, count)
-		ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
+		payload := h.client.appChatImagePayload(spec, prompt, req.Size, count)
 		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
 		var resp *http.Response
 		var err error
 		if allowSwitch {
-			resp, err = h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, &payload, nil, skipAppChatImageGrokAccountStatus)
+			resp, err = h.doAppChatCreateAndRespondWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, &payload, nil, skipAppChatImageGrokAccountStatus)
 		} else {
-			resp, err = h.doChatSingleAccountWithStatusPolicy(ctx, sess, payload, skipAppChatImageGrokAccountStatus)
+			resp, err = h.doAppChatCreateAndRespondSingleAccountWithStatusPolicy(ctx, sess, payload, skipAppChatImageGrokAccountStatus)
 		}
 		if err != nil {
 			slog.Warn("grok app-chat image upstream failed",
@@ -464,34 +460,6 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 		return nil, fmt.Errorf("no image generated")
 	}
 	return urls, nil
-}
-
-func prepareAppChatImageGenerationPayload(payload map[string]interface{}, count int) {
-	if payload == nil {
-		return
-	}
-	if count < 1 {
-		count = 1
-	}
-	payload["enableImageGeneration"] = true
-	payload["enableImageStreaming"] = true
-	payload["imageGenerationCount"] = count
-	payload["responseMetadata"] = map[string]interface{}{}
-	payload["disableMemory"] = true
-	delete(payload, "modelName")
-	delete(payload, "modelMode")
-	delete(payload, "isReasoning")
-	toolOverrides, _ := payload["toolOverrides"].(map[string]interface{})
-	if toolOverrides == nil {
-		toolOverrides = map[string]interface{}{}
-		payload["toolOverrides"] = toolOverrides
-	}
-	toolOverrides["imageGen"] = false
-	toolOverrides["webSearch"] = false
-	toolOverrides["xSearch"] = false
-	toolOverrides["xMediaSearch"] = false
-	toolOverrides["trendsSearch"] = false
-	toolOverrides["xPostAnalyze"] = false
 }
 
 func promptVariantIndex(i int, variants []string) int {

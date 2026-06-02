@@ -63,6 +63,36 @@ func TestBuildGrokCookie_PreservesAppChatCookieFields(t *testing.T) {
 	}
 }
 
+func TestAppChatHeaders_MatchBrowserProfile(t *testing.T) {
+	c := New(nil)
+	headers := c.appChatHeaders("plain-token")
+
+	if got := headers.Get("Accept"); got != "*/*" {
+		t.Fatalf("Accept=%q", got)
+	}
+	if got := headers.Get("Accept-Encoding"); got != "gzip, deflate, br, zstd" {
+		t.Fatalf("Accept-Encoding=%q", got)
+	}
+	if got := headers.Get("Accept-Language"); got != "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7" {
+		t.Fatalf("Accept-Language=%q", got)
+	}
+	if got := headers.Get("User-Agent"); got != defaultAppChatUA {
+		t.Fatalf("User-Agent=%q", got)
+	}
+	if got := headers.Get("Sec-Ch-Ua"); got != defaultAppChatSecCHUA {
+		t.Fatalf("Sec-Ch-Ua=%q", got)
+	}
+	if got := headers.Get("Sec-Ch-Ua-Platform"); got != `"Windows"` {
+		t.Fatalf("Sec-Ch-Ua-Platform=%q", got)
+	}
+	if got := headers.Get("x-statsig-id"); got != defaultAppChatStatsigID {
+		t.Fatalf("x-statsig-id=%q", got)
+	}
+	if got := headers.Get("Cookie"); got != "sso=plain-token; sso-rw=plain-token" {
+		t.Fatalf("Cookie=%q", got)
+	}
+}
+
 func TestDoRequest_DoesNotMutateInputHeaders(t *testing.T) {
 	t.Parallel()
 

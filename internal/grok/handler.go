@@ -296,6 +296,24 @@ func (h *Handler) doChatSingleAccountWithStatusPolicy(ctx context.Context, sess 
 	return resp, nil
 }
 
+func (h *Handler) doAppChatCreateAndRespondSingleAccountWithStatusPolicy(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, shouldMarkStatus grokAccountStatusPolicy) (*http.Response, error) {
+	if sess == nil || strings.TrimSpace(sess.token) == "" {
+		return nil, fmt.Errorf("empty chat session")
+	}
+	client := h.currentClient()
+	if client == nil {
+		return nil, fmt.Errorf("grok client not configured")
+	}
+	resp, err := client.doAppChatCreateAndRespond(ctx, sess.token, payload)
+	if err != nil {
+		if shouldMarkStatus == nil || shouldMarkStatus(err) {
+			h.markAccountStatus(ctx, sess.acc, err)
+		}
+		return nil, err
+	}
+	return resp, nil
+}
+
 type grokAccountStatusPolicy func(error) bool
 
 func markAllGrokAccountStatuses(err error) bool {
@@ -359,6 +377,69 @@ func (h *Handler) doChatWithAutoSwitchRebuildWithStatusPolicy(
 			used = append(used, sess.acc.ID)
 		}
 		resp, err := client.doChat(ctx, sess.token, *payload)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if shouldMarkStatus == nil || shouldMarkStatus(err) {
+			h.markAccountStatus(ctx, sess.acc, err)
+		}
+		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
+			return nil, err
+		}
+
+		sess.Close()
+		next, err2 := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
+		if err2 != nil {
+			return nil, err
+		}
+		sess.acc = next.acc
+		sess.token = next.token
+		sess.poolCandidates = next.poolCandidates
+		sess.release = next.release
+
+		if rebuild != nil {
+			newPayload, rbErr := rebuild(sess.token)
+			if rbErr != nil {
+				return nil, rbErr
+			}
+			*payload = newPayload
+		}
+	}
+	return nil, lastErr
+}
+
+func (h *Handler) doAppChatCreateAndRespondWithAutoSwitchRebuildWithStatusPolicy(
+	ctx context.Context,
+	sess *chatAccountSession,
+	payload *map[string]interface{},
+	rebuild func(token string) (map[string]interface{}, error),
+	shouldMarkStatus grokAccountStatusPolicy,
+) (*http.Response, error) {
+	if sess == nil || strings.TrimSpace(sess.token) == "" {
+		return nil, fmt.Errorf("empty chat session")
+	}
+	if payload == nil {
+		return nil, fmt.Errorf("empty payload")
+	}
+	client := h.currentClient()
+	if client == nil {
+		return nil, fmt.Errorf("grok client not configured")
+	}
+	maxAttempts := 2
+	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
+		maxAttempts = h.cfg.AccountSwitchCount
+	}
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	used := make([]int64, 0, maxAttempts)
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if sess.acc != nil && sess.acc.ID != 0 {
+			used = append(used, sess.acc.ID)
+		}
+		resp, err := client.doAppChatCreateAndRespond(ctx, sess.token, *payload)
 		if err == nil {
 			return resp, nil
 		}

@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -212,93 +211,89 @@ func TestExtractAppChatImageURLs_IgnoresPlainFileAttachments(t *testing.T) {
 	}
 }
 
-func TestPrepareAppChatImageGenerationPayload_MatchesLiteImageShape(t *testing.T) {
-	payload := map[string]interface{}{
-		"responseMetadata": map[string]interface{}{
-			"requestModelDetails": map[string]interface{}{"modelId": "grok-imagine-image-lite"},
-		},
-		"toolOverrides": map[string]interface{}{"webSearch": true},
+func TestAppChatImagePayload_MatchesGrokImagineAgentShape(t *testing.T) {
+	c := New(nil)
+	spec := ModelSpec{
+		ID:            "grok-imagine-image-lite",
+		UpstreamModel: "grok-imagine-image-lite",
+		ModelMode:     "MODEL_MODE_FAST",
+		Tier:          grokTierBasic,
+		IsImage:       true,
 	}
 
-	prepareAppChatImageGenerationPayload(payload, 1)
+	payload := c.appChatImagePayload(spec, "apple", "1024x1792", 1)
 
-	if !reflect.DeepEqual(payload["responseMetadata"], map[string]interface{}{}) {
-		t.Fatalf("responseMetadata=%#v want empty object", payload["responseMetadata"])
-	}
-	if got, _ := payload["imageGenerationCount"].(int); got != 1 {
-		t.Fatalf("imageGenerationCount=%d want 1", got)
-	}
-	if got, _ := payload["disableMemory"].(bool); !got {
-		t.Fatalf("disableMemory=%v want true", got)
-	}
-	for _, key := range []string{"modelName", "modelMode", "isReasoning"} {
+	for _, key := range []string{
+		"modelName",
+		"modelMode",
+		"modelTier",
+		"preferBest",
+		"isReasoning",
+		"responseMetadata",
+		"modelConfigOverride",
+		"searchAllConnectors",
+		"toolOverrides",
+		"temporary",
+		"imageGenerationCount",
+		"deviceEnvInfo",
+		"returnImageBytes",
+		"returnRawGrokInXaiRequest",
+		"forceConcise",
+		"forceSideBySide",
+	} {
 		if _, ok := payload[key]; ok {
-			t.Fatalf("%s should be removed for app-chat image payload", key)
+			t.Fatalf("%s should not be present: %#v", key, payload)
 		}
 	}
-	toolOverrides := payload["toolOverrides"].(map[string]interface{})
-	if got, _ := toolOverrides["webSearch"].(bool); got {
-		t.Fatalf("webSearch=%v want false", got)
+	if got, _ := payload["modeId"].(string); got != "fast" {
+		t.Fatalf("modeId=%q want fast", got)
 	}
-	if got, _ := toolOverrides["imageGen"].(bool); got {
-		t.Fatalf("imageGen=%v want false to match app-chat browser payload", got)
+	if got, _ := payload["message"].(string); got != "apple" {
+		t.Fatalf("message=%q want apple", got)
 	}
-}
-
-func TestEnsureImageConfig_UsesTopLevelModelOverride(t *testing.T) {
-	payload := map[string]interface{}{}
-	nsfw := true
-
-	ensureImageAspectRatio(payload, "grok-imagine-image", "3:2")
-	ensureImageNSFW(payload, "grok-imagine-image", &nsfw)
-
-	override, ok := payload["modelConfigOverride"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("modelConfigOverride missing: %#v", payload)
+	if got, _ := payload["parentResponseId"].(string); got != "" {
+		t.Fatalf("parentResponseId=%q want empty", got)
 	}
-	modelMap, ok := override["modelMap"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("modelMap missing: %#v", override)
+	if got, _ := payload["enableImageGeneration"].(bool); !got {
+		t.Fatalf("enableImageGeneration=%v want true", got)
 	}
-	if got := modelMap["imageGenModel"]; got != "grok-imagine-image" {
-		t.Fatalf("imageGenModel=%v want grok-imagine-image", got)
+	if got, _ := payload["enableImageStreaming"].(bool); !got {
+		t.Fatalf("enableImageStreaming=%v want true", got)
 	}
-	cfg, ok := modelMap["imageGenModelConfig"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("imageGenModelConfig missing: %#v", modelMap)
+	if got, _ := payload["sendFinalMetadata"].(bool); !got {
+		t.Fatalf("sendFinalMetadata=%v want true", got)
 	}
-	if got := cfg["aspectRatio"]; got != "3:2" {
-		t.Fatalf("aspectRatio=%v want 3:2", got)
+	if got, _ := payload["disableMemory"].(bool); got {
+		t.Fatalf("disableMemory=%v want false", got)
 	}
-	if _, ok := cfg["enableNsfw"]; ok {
-		t.Fatalf("image payload should not include enableNsfw: %#v", cfg)
+	if got, _ := payload["disableSearch"].(bool); got {
+		t.Fatalf("disableSearch=%v want false", got)
 	}
-	if _, ok := cfg["enable_nsfw"]; ok {
-		t.Fatalf("image payload should not include enable_nsfw: %#v", cfg)
+	if got, _ := payload["disableTextFollowUps"].(bool); !got {
+		t.Fatalf("disableTextFollowUps=%v want true", got)
 	}
-	if _, ok := payload["responseMetadata"]; ok {
-		t.Fatalf("responseMetadata should not be created for image config: %#v", payload["responseMetadata"])
+	if got, _ := payload["enableSideBySide"].(bool); got {
+		t.Fatalf("enableSideBySide=%v want false", got)
+	}
+	if got, _ := payload["skipCancelCurrentInflightRequests"].(bool); got {
+		t.Fatalf("skipCancelCurrentInflightRequests=%v want false", got)
+	}
+	if got, ok := payload["imageAttachments"].([]string); !ok || len(got) != 0 {
+		t.Fatalf("imageAttachments=%#v want empty string slice", payload["imageAttachments"])
+	}
+	if got, ok := payload["fileAttachments"].([]string); !ok || len(got) != 0 {
+		t.Fatalf("fileAttachments=%#v want empty string slice", payload["fileAttachments"])
 	}
 }
 
-func TestEnsureImageNSFW_OmitsUnsupportedLiteConfig(t *testing.T) {
+func TestEnsureImageNSFW_DoesNotCreateModelOverride(t *testing.T) {
 	payload := map[string]interface{}{}
 	nsfw := true
 
-	ensureImageAspectRatio(payload, "grok-imagine-image-lite", "2:3")
 	ensureImageNSFW(payload, "grok-imagine-image-lite", &nsfw)
 
-	override := payload["modelConfigOverride"].(map[string]interface{})
-	modelMap := override["modelMap"].(map[string]interface{})
-	cfg := modelMap["imageGenModelConfig"].(map[string]interface{})
-	if _, ok := cfg["enableNsfw"]; ok {
-		t.Fatalf("lite app-chat payload should not include enableNsfw: %#v", cfg)
-	}
-	if _, ok := cfg["enable_nsfw"]; ok {
-		t.Fatalf("lite app-chat payload should not include enable_nsfw: %#v", cfg)
-	}
-	if got := cfg["aspectRatio"]; got != "2:3" {
-		t.Fatalf("aspectRatio=%v want 2:3", got)
+	if _, ok := payload["modelConfigOverride"]; ok {
+		t.Fatalf("modelConfigOverride should not be created by NSFW cleanup: %#v", payload["modelConfigOverride"])
 	}
 }
 

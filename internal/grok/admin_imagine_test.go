@@ -197,16 +197,46 @@ func TestGenerateAppChatImagineBatch_ReturnsLocalCachedURL(t *testing.T) {
 	t.Cleanup(func() { cacheBaseDir = oldBase })
 
 	var upstreamPayload map[string]interface{}
+	var upstreamPaths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != defaultChatPath {
+		upstreamPaths = append(upstreamPaths, r.URL.Path)
+		switch r.URL.Path {
+		case defaultCanvasCreatePath:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"document":{"id":"canvas-basic-1"}}`))
+			return
+		case defaultConversationPath:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conversation":{"conversationId":"conv-basic-1"}}`))
+			return
+		case defaultMediaConvoPath:
+			var linkPayload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&linkPayload); err != nil {
+				t.Fatalf("decode link payload: %v", err)
+			}
+			if got, _ := linkPayload["conversationId"].(string); got != "conv-basic-1" {
+				t.Fatalf("linked conversationId=%q", got)
+			}
+			if got, _ := linkPayload["canvasId"].(string); got != "canvas-basic-1" {
+				t.Fatalf("linked canvasId=%q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conversation":{"conversationId":"conv-basic-1","canvasId":"canvas-basic-1"}}`))
+			return
+		case defaultConversationPath + "/conv-basic-1/responses":
+			if !strings.HasSuffix(r.Header.Get("Referer"), "/imagine/agent/canvas-basic-1") {
+				t.Fatalf("response referer=%q", r.Header.Get("Referer"))
+			}
+			if err := json.NewDecoder(r.Body).Decode(&upstreamPayload); err != nil {
+				t.Fatalf("decode upstream payload: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"result":{"response":{"modelResponse":{"imageGenerationResponse":{"progress":100,"imageUrl":"https://assets.grok.com/users/u/generated/a/image.png"}}}}}` + "\n"))
+			return
+		default:
 			http.NotFound(w, r)
 			return
 		}
-		if err := json.NewDecoder(r.Body).Decode(&upstreamPayload); err != nil {
-			t.Fatalf("decode upstream payload: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"result":{"response":{"modelResponse":{"imageGenerationResponse":{"progress":100,"imageUrl":"https://assets.grok.com/users/u/generated/a/image.png"}}}}}` + "\n"))
 	}))
 	defer upstream.Close()
 
@@ -245,19 +275,47 @@ func TestGenerateAppChatImagineBatch_ReturnsLocalCachedURL(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cacheBaseDir, "image", fileName)); err != nil {
 		t.Fatalf("cached image missing: %v", err)
 	}
+	if len(upstreamPaths) != 4 {
+		t.Fatalf("upstream paths=%#v want canvas, conversation, link, response", upstreamPaths)
+	}
+	wantPaths := []string{
+		defaultCanvasCreatePath,
+		defaultConversationPath,
+		defaultMediaConvoPath,
+		defaultConversationPath + "/conv-basic-1/responses",
+	}
+	for i := range wantPaths {
+		if upstreamPaths[i] != wantPaths[i] {
+			t.Fatalf("upstream paths=%#v want %#v", upstreamPaths, wantPaths)
+		}
+	}
+	if len(upstreamPaths) != len(wantPaths) {
+		t.Fatalf("upstream paths=%#v", upstreamPaths)
+	}
 	if _, ok := upstreamPayload["modelName"]; ok {
 		t.Fatalf("basic app-chat payload should not include modelName: %#v", upstreamPayload)
 	}
 	if _, ok := upstreamPayload["modelMode"]; ok {
 		t.Fatalf("basic app-chat payload should not include modelMode: %#v", upstreamPayload)
 	}
-	override, _ := upstreamPayload["modelConfigOverride"].(map[string]interface{})
-	modelMap, _ := override["modelMap"].(map[string]interface{})
-	if got := modelMap["imageGenModel"]; got != "grok-imagine-image-lite" {
-		t.Fatalf("basic app-chat payload imageGenModel=%#v want grok-imagine-image-lite", got)
+	for _, key := range []string{"modelTier", "modelConfigOverride", "searchAllConnectors", "toolOverrides", "responseMetadata", "imageGenerationCount"} {
+		if _, ok := upstreamPayload[key]; ok {
+			t.Fatalf("basic app-chat payload should not include %s: %#v", key, upstreamPayload)
+		}
 	}
-	cfg, _ := modelMap["imageGenModelConfig"].(map[string]interface{})
-	if got := cfg["aspectRatio"]; got != "2:3" {
-		t.Fatalf("aspectRatio=%#v want 2:3", got)
+	if got, _ := upstreamPayload["modeId"].(string); got != "fast" {
+		t.Fatalf("modeId=%q want fast", got)
+	}
+	if got, _ := upstreamPayload["parentResponseId"].(string); got != "" {
+		t.Fatalf("parentResponseId=%q want empty", got)
+	}
+	if got, _ := upstreamPayload["enableImageGeneration"].(bool); !got {
+		t.Fatalf("enableImageGeneration=%v want true", got)
+	}
+	if got, _ := upstreamPayload["disableTextFollowUps"].(bool); !got {
+		t.Fatalf("disableTextFollowUps=%v want true", got)
+	}
+	if got, _ := upstreamPayload["enableSideBySide"].(bool); got {
+		t.Fatalf("enableSideBySide=%v want false", got)
 	}
 }
