@@ -38,8 +38,8 @@ func TestHandlePublicImagineConfig(t *testing.T) {
 	if got, _ := out["medium_min_bytes"].(float64); int(got) != 30000 {
 		t.Fatalf("medium_min_bytes=%v want=30000", out["medium_min_bytes"])
 	}
-	if got, _ := out["nsfw"].(bool); got != true {
-		t.Fatalf("nsfw=%v want=true", out["nsfw"])
+	if got, _ := out["nsfw"].(bool); got != false {
+		t.Fatalf("nsfw=%v want=false", out["nsfw"])
 	}
 }
 

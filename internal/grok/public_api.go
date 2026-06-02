@@ -157,7 +157,7 @@ func (h *Handler) HandlePublicImagineConfig(w http.ResponseWriter, r *http.Reque
 	}
 	finalMinBytes := 100000
 	mediumMinBytes := 30000
-	nsfw := true
+	nsfw := false
 	if h != nil && h.cfg != nil {
 		finalMinBytes = h.cfg.PublicImagineFinalMinBytes()
 		mediumMinBytes = h.cfg.PublicImagineMediumMinBytes()

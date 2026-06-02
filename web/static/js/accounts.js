@@ -918,16 +918,6 @@ function renderAccounts() {
     statusSpan.textContent = badge.text;
     statusWrap.appendChild(statusSpan);
 
-    if (normalizeAccountType(acc) === "grok" && acc.nsfw_enabled === true) {
-      const nsfwSpan = document.createElement("span");
-      nsfwSpan.className = "tag";
-      nsfwSpan.title = "已开启 NSFW";
-      nsfwSpan.style.background = "rgba(239, 68, 68, 0.16)";
-      nsfwSpan.style.color = "#fda4af";
-      nsfwSpan.style.border = "none";
-      nsfwSpan.textContent = "NSFW";
-      statusWrap.appendChild(nsfwSpan);
-    }
 
     tdStatus.appendChild(statusWrap);
     tr.appendChild(tdStatus);
@@ -1036,10 +1026,7 @@ function buildQuotaMarkup(acc) {
 }
 
 function buildStatusMarkup(acc, badge) {
-  const nsfwTag = normalizeAccountType(acc) === "grok" && acc.nsfw_enabled === true
-    ? `<span class="tag" style="background:rgba(239, 68, 68, 0.16);color:#fda4af;border:none;">NSFW</span>`
-    : "";
-  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${nsfwTag}`;
+  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>`;
 }
 
 function renderAccountsMobile(container, pageItems, total, totalPages) {

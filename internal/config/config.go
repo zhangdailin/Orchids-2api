@@ -229,7 +229,7 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.OrchidsMaxHistoryMessages = 20
 	vTrue := true
 	cfg.Stream = &vTrue
-	cfg.ImageNSFW = &vTrue
+	cfg.ImageNSFW = &v
 	cfg.PublicEnabled = &vTrue
 	cfg.ImageFinalMinBytes = 100000
 	cfg.ImageMediumMinBytes = 30000
@@ -283,7 +283,7 @@ func (c *Config) GrokChatCustomInstruction() string {
 
 func (c *Config) PublicImagineNSFW() bool {
 	if c == nil || c.ImageNSFW == nil {
-		return true
+		return false
 	}
 	return *c.ImageNSFW
 }

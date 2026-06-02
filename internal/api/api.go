@@ -1272,8 +1272,8 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		if acc.Email == "" {
 			acc.Email = existing.Email
 		}
-		if !acc.NSFWEnabled && existing.NSFWEnabled {
-			acc.NSFWEnabled = true
+		if strings.EqualFold(acc.AccountType, "grok") {
+			acc.NSFWEnabled = false
 		}
 		if strings.EqualFold(acc.AccountType, "orchids") {
 			if err := hydrateOrchidsAccountInfo(&acc, a.config.Load(), orchidsCredentialInput); err != nil {

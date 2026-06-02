@@ -11,8 +11,8 @@ func TestConfigDefaults(t *testing.T) {
 	if got := cfg.ChatDefaultStream(); got != true {
 		t.Fatalf("ChatDefaultStream()=%v want=true", got)
 	}
-	if got := cfg.PublicImagineNSFW(); got != true {
-		t.Fatalf("PublicImagineNSFW()=%v want=true", got)
+	if got := cfg.PublicImagineNSFW(); got != false {
+		t.Fatalf("PublicImagineNSFW()=%v want=false", got)
 	}
 	if got := cfg.PublicImagineFinalMinBytes(); got != 100000 {
 		t.Fatalf("PublicImagineFinalMinBytes()=%d want=100000", got)
