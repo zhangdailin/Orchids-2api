@@ -303,7 +303,16 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	sess, err := h.openChatAccountSessionForModel(ctx, spec)
+	var sess *chatAccountSession
+	var err error
+	if spec.ID == "grok-imagine-image-lite" {
+		sess, err = h.openAppChatImageAccountSessionForModelExcluding(ctx, nil, spec)
+		if err != nil && strings.Contains(err.Error(), "no enabled accounts available") {
+			err = fmt.Errorf("no app-chat browser-cookie grok account available; import a full grok.com browser cookie with sso, sso-rw and x-userid/grok_device_id")
+		}
+	} else {
+		sess, err = h.openChatAccountSessionForModel(ctx, spec)
+	}
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return

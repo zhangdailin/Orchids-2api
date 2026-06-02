@@ -329,6 +329,36 @@ func TestOpenChatAccountSessionForImageLitePrefersBasicPool(t *testing.T) {
 	}
 }
 
+func TestOpenAppChatImageAccountSessionRequiresFullBrowserCookie(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	for _, acc := range []*store.Account{
+		{AccountType: "grok", Enabled: true, ClientCookie: "basic-bare-token", Subscription: "basic", Weight: 1},
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=basic-full-token; sso-rw=basic-full-token; x-userid=user-1; cf_clearance=cf-1; __cf_bm=bm-1", Subscription: "basic", Weight: 1},
+	} {
+		if err := s.CreateAccount(context.Background(), acc); err != nil {
+			t.Fatalf("CreateAccount() error = %v", err)
+		}
+	}
+
+	spec, ok := ResolveModel("grok-imagine-image-lite")
+	if !ok {
+		t.Fatal("missing grok-imagine-image-lite spec")
+	}
+	sess, err := h.openAppChatImageAccountSessionForModelExcluding(context.Background(), nil, spec)
+	if err != nil {
+		t.Fatalf("open app-chat image session error=%v", err)
+	}
+	defer sess.Close()
+	if NormalizeSSOToken(sess.token) != "basic-full-token" {
+		t.Fatalf("token=%q want sso basic-full-token", sess.token)
+	}
+}
+
 func TestOpenChatAccountSessionForImageLiteSkipsCoolingLitePool(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {

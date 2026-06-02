@@ -328,8 +328,17 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 		if imagineRoute == "ws" && imagineModel == "grok-imagine-image-lite" {
 			sessionSpec.Tier = grokTierLite
 		}
-		sess, err := h.openChatAccountSessionForModelExcluding(ctx, used, sessionSpec)
+		var sess *chatAccountSession
+		var err error
+		if imagineRoute == "app_chat" {
+			sess, err = h.openAppChatImageAccountSessionForModelExcluding(ctx, used, sessionSpec)
+		} else {
+			sess, err = h.openChatAccountSessionForModelExcluding(ctx, used, sessionSpec)
+		}
 		if err != nil {
+			if imagineRoute == "app_chat" && strings.Contains(err.Error(), "no enabled accounts available") {
+				err = fmt.Errorf("no app-chat browser-cookie grok account available; import a full grok.com browser cookie with sso, sso-rw and x-userid/grok_device_id")
+			}
 			if lastErr != nil {
 				return nil, 0, fmt.Errorf("account switch failed: %v (original: %v)", err, lastErr)
 			}

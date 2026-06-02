@@ -132,26 +132,25 @@ func TestChatPayload_UsesCurrentAppChatModelFields(t *testing.T) {
 	if _, ok := payload["collectionIds"].([]string); !ok {
 		t.Fatalf("collectionIds missing")
 	}
-	if _, ok := payload["connectors"].([]string); !ok {
-		t.Fatalf("connectors missing")
+	if _, ok := payload["disabledConnectorIds"].([]string); !ok {
+		t.Fatalf("disabledConnectorIds missing")
 	}
 	toolOverrides, ok := payload["toolOverrides"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("toolOverrides missing")
+		t.Fatalf("toolOverrides missing for image generation")
 	}
-	if got, _ := toolOverrides["webSearch"].(bool); got {
-		t.Fatalf("webSearch=%v want false for image generation", got)
-	}
-	if got, _ := toolOverrides["xSearch"].(bool); got {
-		t.Fatalf("xSearch=%v want false for image generation", got)
+	if got, _ := toolOverrides["imageGen"].(bool); !got {
+		t.Fatalf("imageGen=%v want true for image generation", got)
 	}
 	textPayload := c.chatPayload(ModelSpec{ID: "grok-4.20-fast", UpstreamModel: "grok-4.20-fast"}, "hello", true, 0)
-	textOverrides := textPayload["toolOverrides"].(map[string]interface{})
-	if got, _ := textOverrides["webSearch"].(bool); !got {
-		t.Fatalf("webSearch=%v want true for text chat", got)
+	if _, ok := textPayload["toolOverrides"]; ok {
+		t.Fatalf("toolOverrides should be omitted for default text chat: %#v", textPayload["toolOverrides"])
 	}
-	if got, _ := textOverrides["xSearch"].(bool); !got {
-		t.Fatalf("xSearch=%v want true for text chat", got)
+	if got, _ := textPayload["disableSearch"].(bool); got {
+		t.Fatalf("disableSearch=%v want false for text chat", got)
+	}
+	if got, _ := textPayload["linkQuery"].(bool); got {
+		t.Fatalf("linkQuery=%v want false", got)
 	}
 }
 

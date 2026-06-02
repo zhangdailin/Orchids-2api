@@ -40,9 +40,9 @@ const (
 	defaultAcceptTOSURL     = "https://accounts.x.ai/auth_mgmt.AuthManagement/SetTosAcceptedVersion"
 	defaultSetBirthPath     = "/rest/auth/set-birth-date"
 	defaultNSFWMgmtPath     = "/auth_mgmt.AuthManagement/UpdateUserFeatureControls"
-	defaultUA               = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-	defaultAppChatUA        = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-	defaultAppChatSecCHUA   = `"Chromium";v="136", "Google Chrome";v="136", "Not.A/Brand";v="99"`
+	defaultUA               = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+	defaultAppChatUA        = defaultUA
+	defaultAppChatSecCHUA   = `"Chromium";v="148", "Google Chrome";v="148", "Not/A)Brand";v="99"`
 	defaultAppChatStatsigID = "0196a8f6-0501-79f8-8d74-a2f2c0f5f5f5"
 )
 
@@ -143,10 +143,7 @@ var baseHeaders = http.Header{
 	"Pragma":             []string{"no-cache"},
 	"Referer":            []string{"https://grok.com/"},
 	"Priority":           []string{"u=1, i"},
-	"Sec-Ch-Ua-Arch":     []string{`"arm"`},
-	"Sec-Ch-Ua-Bitness":  []string{`"64"`},
-	"Sec-Ch-Ua":          []string{`"Google Chrome";v="136", "Chromium";v="136", "Not(A:Brand";v="24"`},
-	"Sec-Ch-Ua-Model":    []string{`""`},
+	"Sec-Ch-Ua":          []string{defaultAppChatSecCHUA},
 	"Sec-Ch-Ua-Mobile":   []string{"?0"},
 	"Sec-Ch-Ua-Platform": []string{`"macOS"`},
 	"Sec-Fetch-Dest":     []string{"empty"},
@@ -166,7 +163,7 @@ var appChatHeaders = http.Header{
 	"Referer":            []string{"https://grok.com/"},
 	"Sec-Ch-Ua":          []string{defaultAppChatSecCHUA},
 	"Sec-Ch-Ua-Mobile":   []string{"?0"},
-	"Sec-Ch-Ua-Platform": []string{`"Windows"`},
+	"Sec-Ch-Ua-Platform": []string{`"macOS"`},
 	"Sec-Fetch-Dest":     []string{"empty"},
 	"Sec-Fetch-Mode":     []string{"cors"},
 	"Sec-Fetch-Site":     []string{"same-origin"},
@@ -289,6 +286,29 @@ func buildGrokCookie(token, cfClearance, cfBM string) string {
 	return joinGrokCookieItems(items)
 }
 
+func isGrokFullBrowserCookie(raw string) bool {
+	items := grokCookieItems(raw)
+	if len(items) == 0 {
+		return false
+	}
+	has := make(map[string]bool, len(items))
+	for _, item := range items {
+		has[item.name] = true
+	}
+	return has["sso"] && has["sso-rw"] && (has["x-userid"] || has["grok_device_id"])
+}
+
+func appChatDeviceEnvInfo() map[string]interface{} {
+	return map[string]interface{}{
+		"darkModeEnabled":  true,
+		"devicePixelRatio": 1.75,
+		"screenWidth":      2560,
+		"screenHeight":     1440,
+		"viewportWidth":    899,
+		"viewportHeight":   726,
+	}
+}
+
 func (c *Client) headers(token string) http.Header {
 	// 从预分配的模板浅克隆请求头；固定值切片复用，动态字段再覆盖。
 	h := cloneHeaderShallow(baseHeaders, 4)
@@ -384,7 +404,7 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 	}
 	payload := map[string]interface{}{
 		"collectionIds":               []string{},
-		"connectors":                  []string{},
+		"disabledConnectorIds":        []string{},
 		"temporary":                   temporary,
 		"modelName":                   spec.UpstreamModel,
 		"message":                     text,
@@ -398,21 +418,13 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		"forceConcise":                false,
 		"forceSideBySide":             false,
 		"isAsyncChat":                 false,
+		"linkQuery":                   false,
 		"isReasoning":                 false,
 		"disableSelfHarmShortCircuit": false,
 		"disableTextFollowUps":        false,
 		"returnRawGrokInXaiRequest":   false,
-		"searchAllConnectors":         false,
-		"toolOverrides": map[string]interface{}{
-			"imageGen":     false,
-			"webSearch":    imageCount <= 0,
-			"xSearch":      imageCount <= 0,
-			"xMediaSearch": false,
-			"trendsSearch": false,
-			"xPostAnalyze": false,
-		},
-		"enableSideBySide":  true,
-		"sendFinalMetadata": true,
+		"enableSideBySide":            true,
+		"sendFinalMetadata":           true,
 		"responseMetadata": map[string]interface{}{
 			"modelConfigOverride": map[string]interface{}{
 				"modelMap": map[string]interface{}{},
@@ -422,14 +434,10 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 			},
 		},
 		"disableMemory": noMemory,
-		"deviceEnvInfo": map[string]interface{}{
-			"darkModeEnabled":  false,
-			"devicePixelRatio": 2,
-			"screenWidth":      2056,
-			"screenHeight":     1329,
-			"viewportWidth":    2056,
-			"viewportHeight":   1083,
-		},
+		"deviceEnvInfo": appChatDeviceEnvInfo(),
+	}
+	if imageCount > 0 {
+		payload["toolOverrides"] = map[string]interface{}{"imageGen": true}
 	}
 	if strings.TrimSpace(spec.ModelMode) != "" {
 		payload["modelMode"] = spec.ModelMode
@@ -1549,7 +1557,7 @@ func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*ht
 		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
 	}
 
-	return util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc)
+	return util.GetSharedBrowserHTTPClient(proxyKey, timeout, proxyFunc)
 }
 
 func parseRetryAfter(raw string) time.Duration {

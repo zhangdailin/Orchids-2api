@@ -82,7 +82,7 @@ func TestAppChatHeaders_MatchBrowserProfile(t *testing.T) {
 	if got := headers.Get("Sec-Ch-Ua"); got != defaultAppChatSecCHUA {
 		t.Fatalf("Sec-Ch-Ua=%q", got)
 	}
-	if got := headers.Get("Sec-Ch-Ua-Platform"); got != `"Windows"` {
+	if got := headers.Get("Sec-Ch-Ua-Platform"); got != `"macOS"` {
 		t.Fatalf("Sec-Ch-Ua-Platform=%q", got)
 	}
 	if got := headers.Get("x-statsig-id"); got != defaultAppChatStatsigID {

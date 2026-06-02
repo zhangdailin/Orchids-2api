@@ -62,14 +62,7 @@ func (h *Handler) buildImageEditPayload(spec ModelSpec, prompt string, imageURLs
 		},
 		"disableMemory":   disableMemory,
 		"forceSideBySide": false,
-		"deviceEnvInfo": map[string]interface{}{
-			"darkModeEnabled":  false,
-			"devicePixelRatio": 2,
-			"screenWidth":      2056,
-			"screenHeight":     1329,
-			"viewportWidth":    2056,
-			"viewportHeight":   1083,
-		},
+		"deviceEnvInfo": appChatDeviceEnvInfo(),
 	}
 	if customPersonality != "" {
 		payload["customPersonality"] = customPersonality

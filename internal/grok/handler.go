@@ -210,7 +210,17 @@ func (h *Handler) openChatAccountSessionForModelExcluding(ctx context.Context, e
 	return h.openChatAccountSessionExcludingWithPools(ctx, excludeIDs, spec.PoolCandidates())
 }
 
+func (h *Handler) openAppChatImageAccountSessionForModelExcluding(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
+	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, spec.PoolCandidates(), func(acc *store.Account) bool {
+		return acc != nil && isGrokFullBrowserCookie(acc.ClientCookie)
+	})
+}
+
 func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, excludeIDs []int64, poolCandidates []string) (*chatAccountSession, error) {
+	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, poolCandidates, nil)
+}
+
+func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.Context, excludeIDs []int64, poolCandidates []string, extraFilter func(*store.Account) bool) (*chatAccountSession, error) {
 	if h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
@@ -221,7 +231,7 @@ func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, 
 	)
 	candidates := normalizeGrokPoolCandidates(poolCandidates)
 	if len(candidates) == 0 {
-		acc, err = h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, "grok", h.connTracker)
+		acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, extraFilter)
 		if err != nil {
 			return nil, err
 		}
@@ -229,7 +239,7 @@ func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, 
 		for _, pool := range candidates {
 			wantPool := pool
 			acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
-				return strings.EqualFold(grokAccountPool(acc), wantPool)
+				return strings.EqualFold(grokAccountPool(acc), wantPool) && (extraFilter == nil || extraFilter(acc))
 			})
 			if err == nil && acc != nil {
 				break
@@ -239,7 +249,7 @@ func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, 
 			}
 		}
 		if acc == nil {
-			fallbackAcc, fallbackErr := h.lb.GetNextAccountExcludingByChannelWithTracker(ctx, excludeIDs, "grok", h.connTracker)
+			fallbackAcc, fallbackErr := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, extraFilter)
 			if fallbackErr == nil && fallbackAcc != nil {
 				acc = fallbackAcc
 			} else if lastErr != nil {

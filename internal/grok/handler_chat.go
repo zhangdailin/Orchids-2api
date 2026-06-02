@@ -530,14 +530,7 @@ func (h *Handler) buildVideoCreatePayload(
 		"sendFinalMetadata":           true,
 		"toolOverrides":               map[string]interface{}{"videoGen": true},
 		"enableSideBySide":            true,
-		"deviceEnvInfo": map[string]interface{}{
-			"darkModeEnabled":  false,
-			"devicePixelRatio": 2,
-			"screenWidth":      1920,
-			"screenHeight":     1080,
-			"viewportWidth":    1920,
-			"viewportHeight":   1080,
-		},
+		"deviceEnvInfo": appChatDeviceEnvInfo(),
 		"responseMetadata": map[string]interface{}{
 			"experiments": []interface{}{},
 			"modelConfigOverride": map[string]interface{}{

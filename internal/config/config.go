@@ -223,7 +223,7 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.OrchidsCCEntrypointMode = "auto"
 	cfg.OrchidsFSIgnore = []string{"debug-logs", "data", ".claude"}
 	cfg.GrokAPIBaseURL = "https://grok.com"
-	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 	v := false
 	cfg.WarpDisableTools = &v
 	cfg.WarpMaxToolResults = 10
