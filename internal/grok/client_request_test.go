@@ -93,6 +93,30 @@ func TestAppChatHeaders_MatchBrowserProfile(t *testing.T) {
 	}
 }
 
+func TestGrokHeaders_UseConfiguredStatsigAndCloudflareCookies(t *testing.T) {
+	c := New(&config.Config{
+		GrokStatsigID:         "browser-statsig-id",
+		GrokConfigCFClearance: "cf-clear",
+		GrokConfigCFBM:        "bm-token",
+	})
+
+	for name, headers := range map[string]http.Header{
+		"default": c.headers("plain-token"),
+		"appChat": c.appChatHeaders("plain-token"),
+		"console": c.consoleHeaders("plain-token"),
+	} {
+		if got := headers.Get("x-statsig-id"); got != "browser-statsig-id" {
+			t.Fatalf("%s x-statsig-id=%q want browser-statsig-id", name, got)
+		}
+		cookie := headers.Get("Cookie")
+		for _, want := range []string{"sso=plain-token", "sso-rw=plain-token", "cf_clearance=cf-clear", "__cf_bm=bm-token"} {
+			if !strings.Contains(cookie, want) {
+				t.Fatalf("%s Cookie=%q missing %q", name, cookie, want)
+			}
+		}
+	}
+}
+
 func TestDoRequest_DoesNotMutateInputHeaders(t *testing.T) {
 	t.Parallel()
 

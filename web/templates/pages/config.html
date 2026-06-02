@@ -48,6 +48,34 @@
           </div>
         </div>
 
+        <div class="settings-panel settings-panel-spaced">
+          <div class="settings-panel-head">
+            <div class="inline-actions">
+              <h3 class="settings-panel-title">Grok 浏览器指纹</h3>
+              <span class="mini-badge">Headers</span>
+            </div>
+            <span class="meta-text meta-text-xs">来自真实浏览器会话</span>
+          </div>
+
+          <div class="config-grid config-grid-gap-sm">
+            <div>
+              <label class="form-label">x-statsig-id</label>
+              <input type="text" id="cfg_grok_statsig_id" class="form-input" placeholder="浏览器抓包得到的 x-statsig-id">
+            </div>
+          </div>
+
+          <div class="config-grid config-grid-two config-grid-gap-sm">
+            <div>
+              <label class="form-label">cf_clearance</label>
+              <input type="password" id="cfg_grok_cf_clearance" class="form-input" placeholder="Cloudflare cf_clearance">
+            </div>
+            <div>
+              <label class="form-label">__cf_bm</label>
+              <input type="password" id="cfg_grok_cf_bm" class="form-input" placeholder="Cloudflare __cf_bm">
+            </div>
+          </div>
+        </div>
+
         <!-- Token Usage Cache Config -->
         <div class="settings-panel">
           <div class="settings-panel-head">

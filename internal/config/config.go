@@ -68,6 +68,9 @@ type Config struct {
 	GrokUserAgent             string   `json:"-"`
 	GrokCFClearance           string   `json:"-"`
 	GrokCFBM                  string   `json:"-"`
+	GrokStatsigID             string   `json:"grok_statsig_id,omitempty"`
+	GrokConfigCFClearance     string   `json:"grok_cf_clearance,omitempty"`
+	GrokConfigCFBM            string   `json:"grok_cf_bm,omitempty"`
 	GrokBaseProxyURL          string   `json:"-"`
 	GrokAssetProxyURL         string   `json:"-"`
 	GrokTemporary             *bool    `json:"grok_temporary,omitempty"`

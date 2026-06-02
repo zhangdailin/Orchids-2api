@@ -93,6 +93,9 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 		"enable_token_cache":"false",
 		"token_cache_ttl":"900",
 		"token_cache_strategy":"0",
+		"grok_statsig_id":"browser-statsig",
+		"grok_cf_clearance":"cf-clear",
+		"grok_cf_bm":"bm-token",
 		"proxy_url":"socks5://user:pass@127.0.0.1:1080",
 		"proxy_bypass":"example.com, internal.local"
 	}`
@@ -131,6 +134,15 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	if cfg.TokenCacheStrategy != "0" {
 		t.Fatalf("TokenCacheStrategy=%q want 0", cfg.TokenCacheStrategy)
 	}
+	if cfg.GrokStatsigID != "browser-statsig" {
+		t.Fatalf("GrokStatsigID=%q want browser-statsig", cfg.GrokStatsigID)
+	}
+	if cfg.GrokConfigCFClearance != "cf-clear" {
+		t.Fatalf("GrokConfigCFClearance=%q want cf-clear", cfg.GrokConfigCFClearance)
+	}
+	if cfg.GrokConfigCFBM != "bm-token" {
+		t.Fatalf("GrokConfigCFBM=%q want bm-token", cfg.GrokConfigCFBM)
+	}
 	if cfg.ProxyURL != "socks5://user:pass@127.0.0.1:1080" {
 		t.Fatalf("ProxyURL=%q want socks5://user:pass@127.0.0.1:1080", cfg.ProxyURL)
 	}
@@ -144,6 +156,9 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	}
 	if !strings.Contains(saved, `"admin_pass":"changed-secret"`) {
 		t.Fatalf("saved config missing updated admin_pass: %s", saved)
+	}
+	if !strings.Contains(saved, `"grok_statsig_id":"browser-statsig"`) {
+		t.Fatalf("saved config missing grok_statsig_id: %s", saved)
 	}
 }
 

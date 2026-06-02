@@ -109,6 +109,28 @@ func (c *Client) userAgent() string {
 	return defaultUA
 }
 
+func (c *Client) statsigID() string {
+	if c != nil && c.cfg != nil && strings.TrimSpace(c.cfg.GrokStatsigID) != "" {
+		return strings.TrimSpace(c.cfg.GrokStatsigID)
+	}
+	return defaultAppChatStatsigID
+}
+
+func (c *Client) cloudflareCookies() (string, string) {
+	if c == nil || c.cfg == nil {
+		return "", ""
+	}
+	cfClearance := strings.TrimSpace(c.cfg.GrokConfigCFClearance)
+	if cfClearance == "" {
+		cfClearance = strings.TrimSpace(c.cfg.GrokCFClearance)
+	}
+	cfBM := strings.TrimSpace(c.cfg.GrokConfigCFBM)
+	if cfBM == "" {
+		cfBM = strings.TrimSpace(c.cfg.GrokCFBM)
+	}
+	return cfClearance, cfBM
+}
+
 // baseHeaders 是预分配的请求头模板，包含所有固定的请求头
 // 这避免了在每次请求时重新分配这些固定头，提升性能
 var baseHeaders = http.Header{
@@ -273,16 +295,11 @@ func (c *Client) headers(token string) http.Header {
 
 	// 添加动态请求头
 	h.Set("User-Agent", c.userAgent())
-	h.Set("x-statsig-id", buildStatsigID())
+	h.Set("x-statsig-id", c.statsigID())
 	h.Set("x-xai-request-id", randomUUID())
 
 	// 构建 Cookie
-	cfClearance := ""
-	cfBM := ""
-	if c.cfg != nil {
-		cfClearance = strings.TrimSpace(c.cfg.GrokCFClearance)
-		cfBM = strings.TrimSpace(c.cfg.GrokCFBM)
-	}
+	cfClearance, cfBM := c.cloudflareCookies()
 	if cookie := buildGrokCookie(token, cfClearance, cfBM); cookie != "" {
 		h.Set("Cookie", cookie)
 	}
@@ -303,15 +320,10 @@ func (c *Client) appChatHeadersWithReferer(token, referer string) http.Header {
 	if referer = strings.TrimSpace(referer); referer != "" {
 		h.Set("Referer", referer)
 	}
-	h.Set("x-statsig-id", defaultAppChatStatsigID)
+	h.Set("x-statsig-id", c.statsigID())
 	h.Set("x-xai-request-id", randomUUID())
 
-	cfClearance := ""
-	cfBM := ""
-	if c != nil && c.cfg != nil {
-		cfClearance = strings.TrimSpace(c.cfg.GrokCFClearance)
-		cfBM = strings.TrimSpace(c.cfg.GrokCFBM)
-	}
+	cfClearance, cfBM := c.cloudflareCookies()
 	if cookie := buildGrokCookie(token, cfClearance, cfBM); cookie != "" {
 		h.Set("Cookie", cookie)
 	}
