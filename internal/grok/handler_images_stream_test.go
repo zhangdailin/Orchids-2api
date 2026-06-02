@@ -288,8 +288,11 @@ func TestEnsureImageConfig_UsesTopLevelModelOverride(t *testing.T) {
 	if got := cfg["aspectRatio"]; got != "3:2" {
 		t.Fatalf("aspectRatio=%v want 3:2", got)
 	}
-	if got := cfg["enableNsfw"]; got != true {
-		t.Fatalf("enableNsfw=%v want true", got)
+	if _, ok := cfg["enableNsfw"]; ok {
+		t.Fatalf("image payload should not include enableNsfw: %#v", cfg)
+	}
+	if _, ok := cfg["enable_nsfw"]; ok {
+		t.Fatalf("image payload should not include enable_nsfw: %#v", cfg)
 	}
 	if _, ok := payload["responseMetadata"]; ok {
 		t.Fatalf("responseMetadata should not be created for image config: %#v", payload["responseMetadata"])

@@ -280,21 +280,15 @@ func ensureImageAspectRatio(payload map[string]interface{}, modelID, ratio strin
 }
 
 func ensureImageNSFW(payload map[string]interface{}, modelID string, nsfw *bool) {
-	if payload == nil || nsfw == nil {
+	if payload == nil {
 		return
 	}
 	imageGenCfg := ensureImageModelConfig(payload, modelID)
 	if imageGenCfg == nil {
 		return
 	}
-	if !supportsAppChatImageNSFW(modelID) {
-		delete(imageGenCfg, "enableNsfw")
-		delete(imageGenCfg, "enable_nsfw")
-		return
-	}
-	// Keep both key styles for compatibility with different upstream parsers.
-	imageGenCfg["enableNsfw"] = *nsfw
-	imageGenCfg["enable_nsfw"] = *nsfw
+	delete(imageGenCfg, "enableNsfw")
+	delete(imageGenCfg, "enable_nsfw")
 }
 
 func supportsAppChatImageNSFW(modelID string) bool {
