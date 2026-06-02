@@ -277,6 +277,10 @@ func (s *chatAccountSession) Close() {
 }
 
 func (h *Handler) doChatSingleAccount(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
+	return h.doChatSingleAccountWithStatusPolicy(ctx, sess, payload, markAllGrokAccountStatuses)
+}
+
+func (h *Handler) doChatSingleAccountWithStatusPolicy(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, shouldMarkStatus grokAccountStatusPolicy) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
 	}
@@ -286,7 +290,9 @@ func (h *Handler) doChatSingleAccount(ctx context.Context, sess *chatAccountSess
 	}
 	resp, err := client.doChat(ctx, sess.token, payload)
 	if err != nil {
-		h.markAccountStatus(ctx, sess.acc, err)
+		if shouldMarkStatus == nil || shouldMarkStatus(err) {
+			h.markAccountStatus(ctx, sess.acc, err)
+		}
 		return nil, err
 	}
 	return resp, nil

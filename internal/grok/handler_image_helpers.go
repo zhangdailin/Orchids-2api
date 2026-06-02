@@ -12,6 +12,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,9 +109,9 @@ func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType st
 	if mediaType == "image" && strings.Contains(lurl, "encrypted-tbn0.gstatic.com") {
 		return "", fmt.Errorf("skip thumbnail url")
 	}
-	// If the client can't reach assets.grok.com (common in some regions), caching through this server
+	// If the client can't reach Grok/X assets (common in some regions), caching through this server
 	// is required for images to display at all.
-	forceCache := mediaType == "image" && strings.Contains(lurl, "assets.grok.com/")
+	forceCache := mediaType == "image" && mustCacheImageURL(lurl)
 
 	data, mimeType, err := h.client.downloadAsset(ctx, token, rawURL)
 	if err != nil {
@@ -127,7 +128,7 @@ func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType st
 				return "", fmt.Errorf("unsupported image data")
 			}
 		}
-		// For assets.grok.com, caching is required for display (clients may not reach grok CDN).
+		// For Grok/X image assets, caching is required for display (clients may not reach the CDN).
 		if forceCache {
 			// Always cache (even previews). We already avoid emitting -part-0 when full exists.
 		} else {
@@ -150,7 +151,27 @@ func isRasterImageMime(mimeType string) bool {
 }
 
 func mustCacheImageURL(rawURL string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(rawURL)), "assets.grok.com/")
+	raw := strings.TrimSpace(rawURL)
+	if raw == "" {
+		return false
+	}
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "/grok/v1/files/image/") || strings.HasPrefix(lower, "/v1/files/image/") {
+		return false
+	}
+	if isLikelyImageAssetPath(raw) {
+		return true
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Hostname() == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "assets.grok.com" || host == "grok.com" || strings.HasSuffix(host, ".grok.com") ||
+		host == "x.ai" || strings.HasSuffix(host, ".x.ai") {
+		return true
+	}
+	return false
 }
 
 func (h *Handler) imageOutputValue(ctx context.Context, token, url, format string) (string, error) {

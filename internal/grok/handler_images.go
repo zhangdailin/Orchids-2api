@@ -321,97 +321,16 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 		nsfw = &v
 	}
 
-	onePayload := h.client.chatPayload(spec, req.Prompt, true, req.N)
-	prepareAppChatImageGenerationPayload(onePayload, req.N)
-	ensureImageAspectRatio(onePayload, spec.UpstreamModel, resolveAspectRatio(req.Size))
-	ensureImageNSFW(onePayload, spec.UpstreamModel, nsfw)
 	if req.Stream {
-		resp, err := h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, &onePayload, nil, skipAppChatImageGrokAccountStatus)
-		if err != nil {
-			slog.Warn("grok app-chat image stream upstream failed",
-				"model", req.Model,
-				"status", parseUpstreamStatus(err),
-				"error", err,
-			)
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-		h.syncGrokQuota(sess.acc, resp.Header)
-		h.streamImageGeneration(w, resp.Body, sess.token, req.Prompt, req.ResponseFormat, req.N, publicBase)
+		h.streamAppChatImagesGeneration(ctx, w, sess, spec, req, publicBase, nsfw)
 		return
 	}
-
-	var urls []string
-	var debugHTTP []string
-	var debugAsset []string
-	var debugShapes []string
-	var debugNoImage []string
-
-	// Grok upstream may return only 2 images per call and may repeat.
-	// To reach N, request 1 image per call without rewriting the user's prompt.
-	maxAttempts := req.N * 2
-	promptVariants := grokAppChatImagePrompts(req.Prompt)
-	if maxAttempts < 4 {
-		maxAttempts = 4
+	urls, err := h.collectAppChatImageURLs(ctx, sess, spec, req, nsfw, true)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
 	}
-	deadline := time.Now().Add(60 * time.Second)
-	for i := 0; i < maxAttempts; i++ {
-		cur := normalizeGeneratedImageURLs(urls, 0)
-		if len(cur) >= req.N {
-			urls = cur
-			break
-		}
-		if time.Now().After(deadline) {
-			break
-		}
-		count := req.N
-		prompt := strings.TrimSpace(req.Prompt)
-		if len(promptVariants) > 0 {
-			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
-		}
-		payload := h.client.chatPayload(spec, prompt, true, count)
-		prepareAppChatImageGenerationPayload(payload, count)
-		ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
-		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
-		resp, err := h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, &payload, nil, skipAppChatImageGrokAccountStatus)
-		if err != nil {
-			slog.Warn("grok app-chat image upstream failed",
-				"model", req.Model,
-				"status", parseUpstreamStatus(err),
-				"error", err,
-			)
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-		h.syncGrokQuota(sess.acc, resp.Header)
-		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
-			if len(debugShapes) < 20 {
-				debugShapes = append(debugShapes, imageDebugShape(line))
-			}
-			if len(debugNoImage) < 20 {
-				debugNoImage = append(debugNoImage, appChatImageNoImageDiagnostics(line)...)
-			}
-			urls = append(urls, extractAppChatImageURLs(line)...)
-			return nil
-		})
-		resp.Body.Close()
-		if err != nil {
-			http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		urls = normalizeGeneratedImageURLs(urls, 0)
-	}
-	urls = normalizeGeneratedImageURLs(urls, req.N)
 	if len(urls) == 0 {
-		slog.Warn("grok image generation returned no images",
-			"model", req.Model,
-			"attempts", maxAttempts,
-			"event_shapes", uniqueStrings(debugShapes),
-			"diagnostics", uniqueStrings(debugNoImage),
-			"http_candidates", len(uniqueStrings(debugHTTP)),
-			"asset_candidates", len(uniqueStrings(debugAsset)),
-		)
 		http.Error(w, "no image generated", http.StatusBadGateway)
 		return
 	}
@@ -445,6 +364,106 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, publicBase string, nsfw *bool) {
+	onePayload := h.client.chatPayload(spec, req.Prompt, true, req.N)
+	prepareAppChatImageGenerationPayload(onePayload, req.N)
+	ensureImageAspectRatio(onePayload, spec.UpstreamModel, resolveAspectRatio(req.Size))
+	ensureImageNSFW(onePayload, spec.UpstreamModel, nsfw)
+	resp, err := h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, &onePayload, nil, skipAppChatImageGrokAccountStatus)
+	if err != nil {
+		slog.Warn("grok app-chat image stream upstream failed",
+			"model", req.Model,
+			"status", parseUpstreamStatus(err),
+			"error", err,
+		)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	h.syncGrokQuota(sess.acc, resp.Header)
+	h.streamImageGeneration(w, resp.Body, sess.token, req.Prompt, req.ResponseFormat, req.N, publicBase)
+}
+
+func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, nsfw *bool, allowSwitch bool) ([]string, error) {
+	var urls []string
+	var debugHTTP []string
+	var debugAsset []string
+	var debugShapes []string
+	var debugNoImage []string
+
+	// Grok upstream may return only 2 images per call and may repeat.
+	// To reach N, request 1 image per call without rewriting the user's prompt.
+	maxAttempts := req.N * 2
+	promptVariants := grokAppChatImagePrompts(req.Prompt)
+	if maxAttempts < 4 {
+		maxAttempts = 4
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for i := 0; i < maxAttempts; i++ {
+		cur := normalizeGeneratedImageURLs(urls, 0)
+		if len(cur) >= req.N {
+			urls = cur
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		count := req.N
+		prompt := strings.TrimSpace(req.Prompt)
+		if len(promptVariants) > 0 {
+			prompt = promptVariants[promptVariantIndex(i, promptVariants)]
+		}
+		payload := h.client.chatPayload(spec, prompt, true, count)
+		prepareAppChatImageGenerationPayload(payload, count)
+		ensureImageAspectRatio(payload, spec.UpstreamModel, resolveAspectRatio(req.Size))
+		ensureImageNSFW(payload, spec.UpstreamModel, nsfw)
+		var resp *http.Response
+		var err error
+		if allowSwitch {
+			resp, err = h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, &payload, nil, skipAppChatImageGrokAccountStatus)
+		} else {
+			resp, err = h.doChatSingleAccountWithStatusPolicy(ctx, sess, payload, skipAppChatImageGrokAccountStatus)
+		}
+		if err != nil {
+			slog.Warn("grok app-chat image upstream failed",
+				"model", req.Model,
+				"status", parseUpstreamStatus(err),
+				"error", err,
+			)
+			return nil, err
+		}
+		h.syncGrokQuota(sess.acc, resp.Header)
+		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
+			if len(debugShapes) < 20 {
+				debugShapes = append(debugShapes, imageDebugShape(line))
+			}
+			if len(debugNoImage) < 20 {
+				debugNoImage = append(debugNoImage, appChatImageNoImageDiagnostics(line)...)
+			}
+			urls = append(urls, extractAppChatImageURLs(line)...)
+			return nil
+		})
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("stream parse error: %w", err)
+		}
+		urls = normalizeGeneratedImageURLs(urls, 0)
+	}
+	urls = normalizeGeneratedImageURLs(urls, req.N)
+	if len(urls) == 0 {
+		slog.Warn("grok image generation returned no images",
+			"model", req.Model,
+			"attempts", maxAttempts,
+			"event_shapes", uniqueStrings(debugShapes),
+			"diagnostics", uniqueStrings(debugNoImage),
+			"http_candidates", len(uniqueStrings(debugHTTP)),
+			"asset_candidates", len(uniqueStrings(debugAsset)),
+		)
+		return nil, fmt.Errorf("no image generated")
+	}
+	return urls, nil
 }
 
 func prepareAppChatImageGenerationPayload(payload map[string]interface{}, count int) {

@@ -2,13 +2,18 @@ package grok
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"github.com/goccy/go-json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/config"
+	"orchids-api/internal/store"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,5 +161,60 @@ func TestImagineImageB64FromURL_LocalCachedFile(t *testing.T) {
 	want := base64.StdEncoding.EncodeToString(raw)
 	if got != want {
 		t.Fatalf("b64 mismatch: got=%q want=%q", got, want)
+	}
+}
+
+func TestGenerateAppChatImagineBatch_ReturnsLocalCachedURL(t *testing.T) {
+	oldBase := cacheBaseDir
+	cacheBaseDir = t.TempDir()
+	t.Cleanup(func() { cacheBaseDir = oldBase })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != defaultChatPath {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"result":{"response":{"modelResponse":{"imageGenerationResponse":{"progress":100,"imageUrl":"https://assets.grok.com/users/u/generated/a/image.png"}}}}}` + "\n"))
+	}))
+	defer upstream.Close()
+
+	h := NewHandler(&config.Config{GrokAPIBaseURL: upstream.URL}, nil)
+	h.client.assetClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"image/png"}},
+			Body:       io.NopCloser(bytes.NewReader(testPNGBytes(t))),
+			Request:    req,
+		}, nil
+	})}
+	sess := &chatAccountSession{
+		acc:   &store.Account{ID: 1, Subscription: "basic"},
+		token: "basic-token",
+	}
+	spec, ok := ResolveModel("grok-imagine-image-lite")
+	if !ok {
+		t.Fatal("missing grok-imagine-image-lite spec")
+	}
+
+	images, _, err := h.generateAppChatImagineBatch(context.Background(), sess, spec, "apple", "2:3", "grok-imagine-image-lite", 1, nil)
+	if err != nil {
+		t.Fatalf("generateAppChatImagineBatch error: %v", err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("images=%d want=1", len(images))
+	}
+	if !isLocalImagineImageURL(images[0].URL) {
+		t.Fatalf("url=%q want local cached file url", images[0].URL)
+	}
+	if strings.Contains(images[0].URL, "assets.grok.com") {
+		t.Fatalf("url=%q should not expose grok asset url", images[0].URL)
+	}
+	_, fileName, ok := parseFilesPath(images[0].URL)
+	if !ok {
+		t.Fatalf("parse local file url failed: %q", images[0].URL)
+	}
+	if _, err := os.Stat(filepath.Join(cacheBaseDir, "image", fileName)); err != nil {
+		t.Fatalf("cached image missing: %v", err)
 	}
 }

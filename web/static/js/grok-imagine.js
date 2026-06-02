@@ -346,10 +346,10 @@
   function imageFromImagineEvent(payload) {
     if (!payload || typeof payload !== "object") return "";
     if (payload.type === "image") {
-      return String(payload.b64_json || payload.file_url || payload.url || "");
+      return String(payload.file_url || payload.url || payload.b64_json || "");
     }
     if (payload.type === "image_generation.completed") {
-      return String(payload.b64_json || payload.url || payload.image || "");
+      return String(payload.url || payload.image || payload.b64_json || "");
     }
     return "";
   }

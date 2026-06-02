@@ -337,6 +337,19 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 			used = append(used, sess.acc.ID)
 		}
 
+		if grokAccountPool(sess.acc) == "basic" {
+			images, elapsedMS, appChatErr := h.generateAppChatImagineBatch(ctx, sess, spec, prompt, aspectRatio, imagineModel, n, nsfw)
+			sess.Close()
+			if appChatErr != nil {
+				lastErr = appChatErr
+				if shouldSwitchGrokAccount(appChatErr) && attempt < maxAttempts-1 {
+					continue
+				}
+				return nil, 0, appChatErr
+			}
+			return images, elapsedMS, nil
+		}
+
 		images := make([]imagineImage, 0, n)
 		events, errs := h.streamImagineWSImages(ctx, sess, strings.TrimSpace(prompt), resolveAspectRatio(aspectRatio), n, nsfwEnabled, imagineModel == "grok-imagine-image-pro")
 		for ev := range events {
@@ -345,17 +358,16 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 			}
 			val, convErr := h.imagineImageOutputValue(ctx, sess.token, ev, "url")
 			if convErr != nil {
-				if strings.TrimSpace(ev.URL) == "" || mustCacheImageURL(ev.URL) {
-					lastErr = convErr
-					continue
-				}
-				val = ev.URL
+				lastErr = fmt.Errorf("image cache failed: %w", convErr)
+				continue
 			}
 			val = normalizeImagineImageURL(val)
-			if val != "" {
+			if isLocalImagineImageURL(val) {
 				images = append(images, imagineImage{URL: val})
 			} else if strings.TrimSpace(ev.Blob) != "" {
 				images = append(images, imagineImage{B64: strings.TrimSpace(ev.Blob)})
+			} else if val != "" {
+				lastErr = fmt.Errorf("image was not cached locally")
 			}
 		}
 		err = <-errs
@@ -376,6 +388,39 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 		return nil, 0, lastErr
 	}
 	return nil, 0, fmt.Errorf("no image generated")
+}
+
+func (h *Handler) generateAppChatImagineBatch(ctx context.Context, sess *chatAccountSession, spec ModelSpec, prompt, aspectRatio, model string, n int, nsfw *bool) ([]imagineImage, int, error) {
+	startedAt := time.Now()
+	req := ImagesGenerationsRequest{
+		Model:          model,
+		Prompt:         strings.TrimSpace(prompt),
+		N:              n,
+		Size:           imagineImageSizeFromAspectRatio(aspectRatio),
+		ResponseFormat: "url",
+		NSFW:           nsfw,
+	}
+	values, err := h.collectAppChatImageURLs(ctx, sess, spec, req, nsfw, false)
+	if err != nil {
+		return nil, 0, err
+	}
+	images := make([]imagineImage, 0, len(values))
+	for _, raw := range values {
+		val, convErr := h.imageOutputValue(ctx, sess.token, raw, "url")
+		if convErr != nil {
+			return nil, 0, fmt.Errorf("image cache failed: %w", convErr)
+		}
+		raw = val
+		u := normalizeImagineImageURL(raw)
+		if !isLocalImagineImageURL(u) {
+			return nil, 0, fmt.Errorf("image was not cached locally")
+		}
+		images = append(images, imagineImage{URL: u})
+	}
+	if len(images) == 0 {
+		return nil, 0, fmt.Errorf("no image generated")
+	}
+	return images, int(time.Since(startedAt) / time.Millisecond), nil
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) bool {
@@ -460,9 +505,6 @@ func (h *Handler) runImagineLoop(
 			sequence++
 			fileURL := normalizeImagineImageURL(img.URL)
 			b64 := strings.TrimSpace(img.B64)
-			if b64 == "" && fileURL != "" {
-				b64 = imagineImageB64FromURL(fileURL)
-			}
 			if !emit(map[string]interface{}{
 				"type":         "image",
 				"b64_json":     b64,
