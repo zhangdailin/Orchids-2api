@@ -405,6 +405,7 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 		maxAttempts = 4
 	}
 	deadline := time.Now().Add(60 * time.Second)
+	excludedAccountIDs := make([]int64, 0, maxAttempts)
 	for i := 0; i < maxAttempts; i++ {
 		cur := normalizeGeneratedImageURLs(urls, 0)
 		if len(cur) >= req.N {
@@ -436,6 +437,7 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 			)
 			return nil, err
 		}
+		imageLimitHit := false
 		h.syncGrokQuota(sess.acc, resp.Header)
 		err = parseUpstreamLines(resp.Body, func(line map[string]interface{}) error {
 			if len(debugShapes) < 20 {
@@ -443,6 +445,9 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 			}
 			if len(debugNoImage) < 20 {
 				debugNoImage = append(debugNoImage, appChatImageNoImageDiagnostics(line)...)
+			}
+			if isAppChatImageLimitResponse(line) {
+				imageLimitHit = true
 			}
 			urls = append(urls, extractAppChatImageURLs(line)...)
 			return nil
@@ -452,6 +457,25 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 			return nil, fmt.Errorf("stream parse error: %w", err)
 		}
 		urls = normalizeGeneratedImageURLs(urls, 0)
+		if len(urls) == 0 && imageLimitHit {
+			err := fmt.Errorf("grok upstream status=429 body=image generation limit reached")
+			h.markAccountStatus(ctx, sess.acc, err)
+			if !allowSwitch || sess == nil || i == maxAttempts-1 {
+				return nil, err
+			}
+			if sess.acc != nil && sess.acc.ID != 0 {
+				excludedAccountIDs = appendUniqueInt64(excludedAccountIDs, sess.acc.ID)
+				sess.Close()
+				next, switchErr := h.openChatAccountSessionExcludingWithPools(ctx, excludedAccountIDs, sess.poolCandidates)
+				if switchErr != nil {
+					return nil, err
+				}
+				sess.acc = next.acc
+				sess.token = next.token
+				sess.poolCandidates = next.poolCandidates
+				sess.release = next.release
+			}
+		}
 	}
 	urls = normalizeGeneratedImageURLs(urls, req.N)
 	if len(urls) == 0 {
@@ -485,6 +509,15 @@ func (h *Handler) doAppChatImageRequest(ctx context.Context, sess *chatAccountSe
 		return h.doAppChatCreateAndRespondWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, payload, nil, skipAppChatImageGrokAccountStatus)
 	}
 	return h.doAppChatCreateAndRespondSingleAccountWithStatusPolicy(ctx, sess, *payload, skipAppChatImageGrokAccountStatus)
+}
+
+func appendUniqueInt64(values []int64, value int64) []int64 {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func promptVariantIndex(i int, variants []string) int {

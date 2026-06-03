@@ -2019,6 +2019,37 @@ func appChatImageNoImageDiagnostics(resp map[string]interface{}) []string {
 	return out
 }
 
+func isAppChatImageLimitResponse(resp map[string]interface{}) bool {
+	if resp == nil {
+		return false
+	}
+	response := resp
+	if nested := mapAtAnyPath(resp, []string{"result", "response"}); nested != nil {
+		response = nested
+	}
+	for _, path := range [][]string{
+		{"error", "renderToolRateLimited"},
+		{"userResponse", "streamErrors"},
+		{"modelResponse", "streamErrors"},
+		{"streamErrors"},
+		{"errors"},
+	} {
+		if strings.Contains(strings.ToLower(diagnosticValueSummary(valueAtPath(response, path...))), "rendertoolratelimited") {
+			return true
+		}
+	}
+	for _, msg := range []string{
+		firstNonEmptyStringAtAnyPath(response, []string{"error", "message"}),
+		firstNonEmptyStringAtAnyPath(response, []string{"modelResponse", "message"}),
+	} {
+		lower := strings.ToLower(msg)
+		if strings.Contains(lower, "image generation limit") || strings.Contains(lower, "try again later") {
+			return true
+		}
+	}
+	return false
+}
+
 func firstNonEmptyStringAtAnyPath(root interface{}, paths ...[]string) string {
 	for _, path := range paths {
 		if s := strings.TrimSpace(fmt.Sprint(valueAtPath(root, path...))); s != "" && s != "<nil>" {

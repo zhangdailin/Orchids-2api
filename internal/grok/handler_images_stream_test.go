@@ -350,6 +350,28 @@ func TestCollectAppChatImageURLs_LiteUsesNewConversationEndpoint(t *testing.T) {
 	}
 }
 
+func TestIsAppChatImageLimitResponse(t *testing.T) {
+	resp := map[string]interface{}{
+		"result": map[string]interface{}{
+			"response": map[string]interface{}{
+				"modelResponse": map[string]interface{}{
+					"streamErrors": []interface{}{
+						map[string]interface{}{
+							"message": "Unable to render: You've reached your image generation limit. Please try again later.",
+							"renderToolRateLimited": map[string]interface{}{
+								"rateLimitedCount": 1,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if !isAppChatImageLimitResponse(resp) {
+		t.Fatalf("limit response was not detected")
+	}
+}
+
 func TestEnsureImageNSFW_DoesNotCreateModelOverride(t *testing.T) {
 	payload := map[string]interface{}{}
 	nsfw := true
