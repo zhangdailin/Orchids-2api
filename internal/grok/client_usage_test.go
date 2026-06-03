@@ -237,13 +237,13 @@ func TestGetVoiceToken_UsesRawInstructionsWhenProvided(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getVoiceToken() error: %v", err)
 	}
-	if session["personality"] != nil {
-		t.Fatalf("personality=%#v want nil", session["personality"])
+	if got, _ := session["personality"].(string); got != "assistant" {
+		t.Fatalf("personality=%q", got)
 	}
-	if got, _ := session["instructions"].(string); got != "speak Chinese" {
-		t.Fatalf("instructions=%q", got)
+	if _, ok := session["instructions"]; ok {
+		t.Fatalf("instructions should be omitted: %#v", session)
 	}
-	if got, _ := session["is_raw_instructions"].(bool); !got {
-		t.Fatalf("is_raw_instructions=%v", got)
+	if _, ok := session["is_raw_instructions"]; ok {
+		t.Fatalf("is_raw_instructions should be omitted: %#v", session)
 	}
 }

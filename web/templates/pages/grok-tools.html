@@ -414,9 +414,9 @@
               </div>
               <div class="function-settings-block">
                 <label class="field-label" for="voiceInstruction">自定义指令</label>
-                <textarea id="voiceInstruction" class="form-input voice-instruction-input" rows="4" placeholder="可选。填写后会按 Grok 原生 raw instructions 发送，优先于 Personality。"></textarea>
+                <textarea id="voiceInstruction" class="form-input voice-instruction-input" rows="4" placeholder="暂不发送到 LiveKit。请优先使用 Personality，避免 Grok agent 反复重连。"></textarea>
               </div>
-              <p class="voice-hint voice-hint-spaced">提示：自定义指令为空时使用 Personality；填写后会使用 raw instructions。选择 Custom voice_id 后会把输入值作为 voice 发送。</p>
+              <p class="voice-hint voice-hint-spaced">提示：LiveKit 当前只发送 Voice / Personality / Speed。自定义指令会保留在页面里，但不会传给 Grok agent，以避免反复重连。</p>
             </div>
 
             <div class="grok-panel voice-card">
@@ -558,7 +558,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="{{.AdminPath}}/js/common.js?v=20260328-1"></script>
   <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260604-masonry-1to1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260604-2"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260604-3"></script>
 </body>
 
 </html>

@@ -1093,17 +1093,12 @@ func (c *Client) getVoiceToken(ctx context.Context, token, voice, personality st
 
 	session := map[string]interface{}{
 		"voice":          strings.TrimSpace(voice),
-		"personality":    nil,
+		"personality":    strings.TrimSpace(personality),
 		"playback_speed": speed,
 		"enable_vision":  false,
 		"turn_detection": map[string]interface{}{"type": "server_vad"},
 	}
-	if customInstruction := strings.TrimSpace(instruction); customInstruction != "" {
-		session["instructions"] = customInstruction
-		session["is_raw_instructions"] = true
-	} else {
-		session["personality"] = strings.TrimSpace(personality)
-	}
+	_ = instruction
 
 	sessionPayload, err := json.Marshal(session)
 	if err != nil {

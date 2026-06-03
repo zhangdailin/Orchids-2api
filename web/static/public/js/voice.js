@@ -291,14 +291,13 @@
     const voice = voiceSelect === "custom" ? customVoice : voiceSelect;
     const personality = String(personalityEl.value || "assistant").trim() || "assistant";
     const speed = Math.max(0.1, Number(speedEl.value || 1));
-    const instruction = String(instructionEl?.value || "").trim();
     if (!voice) {
       throw new Error("Custom voice_id is required");
     }
 
     const data = await window.PublicApp.requestJSON("/v1/public/voice/token", {
       method: "POST",
-      body: JSON.stringify({ voice, personality, speed, instruction }),
+      body: JSON.stringify({ voice, personality, speed }),
     });
 
     const token = String(data.token || "").trim();

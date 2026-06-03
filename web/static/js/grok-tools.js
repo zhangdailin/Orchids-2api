@@ -3547,7 +3547,6 @@
     const voice = voiceSelect === "custom" ? customVoice : voiceSelect;
     const personality = String(document.getElementById("voicePersonality")?.value || "assistant").trim() || "assistant";
     const speed = Number(document.getElementById("voiceSpeed")?.value || 1);
-    const instruction = String(document.getElementById("voiceInstruction")?.value || "").trim();
     if (!voice) {
       throw new Error("请选择声音，或填写自定义 voice_id");
     }
@@ -3559,7 +3558,6 @@
         voice,
         personality,
         speed: speed > 0 ? speed : 1,
-        instruction,
       }),
     });
     if (handleUnauthorized(res)) return null;
