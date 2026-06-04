@@ -404,8 +404,8 @@
               <div class="function-settings-block">
                 <label class="field-label" for="voiceSDKVersion">LiveKit SDK</label>
                 <select id="voiceSDKVersion" class="form-input">
-                  <option value="stable">Stable 2.7.3</option>
-                  <option value="latest">Latest 2.19.1</option>
+                  <option value="stable">Stable 2.7.3 推荐</option>
+                  <option value="latest">Latest 2.19.1 实验</option>
                 </select>
               </div>
               <div id="voiceCustomBlock" class="function-settings-block hidden">
@@ -423,7 +423,7 @@
                 <label class="field-label" for="voiceInstruction">自定义指令</label>
                 <textarea id="voiceInstruction" class="form-input voice-instruction-input" rows="4" placeholder="暂不发送到 LiveKit。请优先使用 Personality，避免 Grok agent 反复重连。"></textarea>
               </div>
-              <p class="voice-hint voice-hint-spaced">提示：LiveKit 当前只发送 Voice / Personality / Speed。自定义指令会保留在页面里，但不会传给 Grok agent，以避免反复重连。</p>
+              <p class="voice-hint voice-hint-spaced">提示：LiveKit 当前只发送 Voice / Personality / Speed。自定义指令会保留在页面里，但不会传给 Grok agent，以避免反复重连。Latest SDK 仍可能触发 Grok agent 断开，建议使用 Stable。</p>
             </div>
 
             <div class="grok-panel voice-card">
@@ -565,7 +565,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="{{.AdminPath}}/js/common.js?v=20260328-1"></script>
   <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260604-masonry-1to1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260604-6"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.js?v=20260604-7"></script>
 </body>
 
 </html>
