@@ -3483,6 +3483,10 @@
     saveGrokToolsUIState({ voiceSDKVersion: "stable" });
   }
 
+  function isActiveVoiceRoom(room) {
+    return voiceState.room === room && !voiceState.stopping && !voiceState.latestSDKFallback;
+  }
+
   async function handleLatestLiveKitAgentDisconnect(room, participant) {
     if (voiceState.room !== room || voiceState.stopping || voiceState.latestSDKFallback) return;
     const identity = String(participant?.identity || "");
@@ -3728,13 +3732,13 @@
       }
     });
     room.on(LiveKitSDK.RoomEvent.Reconnecting, () => {
-      if (voiceState.room !== room || voiceState.stopping) return;
+      if (!isActiveVoiceRoom(room)) return;
       voiceState.reconnecting = true;
       appendVoiceLog("Voice reconnecting");
       setVoiceStatus("重连中...", "warn");
     });
     room.on(LiveKitSDK.RoomEvent.Reconnected, () => {
-      if (voiceState.room !== room || voiceState.stopping) return;
+      if (!isActiveVoiceRoom(room)) return;
       voiceState.reconnecting = false;
       appendVoiceLog("Voice reconnected");
       setVoiceStatus("已连接", "ok");
@@ -3771,6 +3775,7 @@
       appendVoiceLog("Connected to LiveKit signaling server");
       ensureVoiceMicSupport();
       await enableVoiceMicrophone(LiveKitSDK, room);
+      if (!isActiveVoiceRoom(room)) return;
       setVoiceStatus(t("voice.connected"), "ok");
       setVoiceButtons(true);
       appendVoiceLog("Voice session connected");
