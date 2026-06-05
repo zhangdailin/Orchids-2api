@@ -2,12 +2,9 @@ package grok
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"github.com/goccy/go-json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -58,21 +55,6 @@ type imagineImage struct {
 	URL string
 }
 
-func imagineImageSizeFromAspectRatio(ratio string) string {
-	switch resolveAspectRatio(strings.TrimSpace(ratio)) {
-	case "9:16":
-		return "720x1280"
-	case "16:9":
-		return "1280x720"
-	case "3:2":
-		return "1792x1024"
-	case "2:3":
-		return "1024x1792"
-	default:
-		return "1024x1024"
-	}
-}
-
 func normalizeImagineImageURL(raw string) string {
 	u := strings.TrimSpace(raw)
 	if u == "" {
@@ -90,20 +72,6 @@ func normalizeImagineImageURL(raw string) string {
 		}
 	}
 	return u
-}
-
-func imagineImageB64FromURL(raw string) string {
-	u := normalizeImagineImageURL(raw)
-	mediaType, fileName, ok := parseFilesPath(u)
-	if !ok || mediaType != "image" || strings.TrimSpace(fileName) == "" {
-		return ""
-	}
-	fullPath := filepath.Join(cacheBaseDir, mediaType, fileName)
-	data, err := os.ReadFile(fullPath)
-	if err != nil || len(data) == 0 {
-		return ""
-	}
-	return base64.StdEncoding.EncodeToString(data)
 }
 
 func isLocalImagineImageURL(raw string) bool {

@@ -187,61 +187,6 @@ func imageURLScore(raw string) int {
 	return score
 }
 
-func appendImageCandidates(urls []string, debugHTTP []string, debugAsset []string, n int) []string {
-	if n <= 0 {
-		n = 4
-	}
-	candidates := make([]string, 0, len(urls)+len(debugHTTP)+len(debugAsset))
-	candidates = append(candidates, urls...)
-
-	// 1) Prefer direct image URLs from observed http strings.
-	for _, u := range debugHTTP {
-		if isLikelyImageURL(u) {
-			candidates = append(candidates, u)
-		}
-	}
-
-	// 2) Parse JSON card strings or asset-like strings from debugAsset and collect up to n.
-	for _, p := range debugAsset {
-		p = strings.TrimSpace(p)
-		if p == "" || strings.Contains(p, "grok-3") || strings.Contains(p, "grok-4") {
-			continue
-		}
-		if strings.HasPrefix(p, "{") || strings.HasPrefix(p, "[") {
-			preferred := extractPreferredImageURLsFromJSONText(p)
-			if len(preferred) == 0 {
-				preferred = extractImageURLsFromText(p)
-			}
-			for _, u := range preferred {
-				if isLikelyImageURL(u) {
-					candidates = append(candidates, u)
-				}
-			}
-			continue
-		}
-
-		for _, u := range extractImageURLsFromText(p) {
-			if isLikelyImageURL(u) {
-				candidates = append(candidates, u)
-			}
-		}
-		for _, assetPath := range extractGrokAssetPathsFromText(p) {
-			if isLikelyImageAssetPath(assetPath) {
-				candidates = append(candidates, "https://assets.grok.com/"+strings.TrimPrefix(assetPath, "/"))
-			}
-		}
-
-		if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
-			if isLikelyImageURL(p) {
-				candidates = append(candidates, p)
-			}
-		} else if isLikelyImageAssetPath(p) {
-			candidates = append(candidates, "https://assets.grok.com/"+strings.TrimPrefix(p, "/"))
-		}
-	}
-	return normalizeGeneratedImageURLs(candidates, n)
-}
-
 func extractPreferredImageURLsFromJSONText(s string) []string {
 	s = strings.TrimSpace(s)
 	if s == "" || (!strings.HasPrefix(s, "{") && !strings.HasPrefix(s, "[")) {

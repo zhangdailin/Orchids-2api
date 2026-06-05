@@ -287,18 +287,6 @@ func buildGrokCookie(token, cfClearance, cfBM string) string {
 	return joinGrokCookieItems(items)
 }
 
-func isGrokFullBrowserCookie(raw string) bool {
-	items := grokCookieItems(raw)
-	if len(items) == 0 {
-		return false
-	}
-	has := make(map[string]bool, len(items))
-	for _, item := range items {
-		has[item.name] = true
-	}
-	return has["sso"] && has["sso-rw"] && (has["x-userid"] || has["grok_device_id"])
-}
-
 func appChatDeviceEnvInfo() map[string]interface{} {
 	return map[string]interface{}{
 		"darkModeEnabled":  true,
@@ -944,14 +932,6 @@ func rateLimitModelName(spec ModelSpec) string {
 		return upstream
 	}
 	return "fast"
-}
-
-func isGrokModelNotFoundError(err error) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "model is not found") || strings.Contains(lower, "model not found")
 }
 
 func (c *Client) uploadFile(ctx context.Context, token, fileName, fileMimeType, contentBase64 string) (string, string, error) {

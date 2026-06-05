@@ -340,13 +340,6 @@ func (c *Client) GetToken() (string, error) {
 	return c.fetchToken()
 }
 
-func (c *Client) GetChatToken() (string, error) {
-	if c == nil || c.config == nil {
-		return "", errors.New("missing config")
-	}
-	return c.getChatToken()
-}
-
 func (c *Client) forceRefreshToken() (string, error) {
 	if c.config == nil {
 		return "", fmt.Errorf("missing config")

@@ -194,14 +194,6 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	h.base.MarkAccountStatus(ctx, acc, err)
 }
 
-func (h *Handler) openChatAccountSession(ctx context.Context) (*chatAccountSession, error) {
-	return h.openChatAccountSessionExcluding(ctx, nil)
-}
-
-func (h *Handler) openChatAccountSessionExcluding(ctx context.Context, excludeIDs []int64) (*chatAccountSession, error) {
-	return h.openChatAccountSessionExcludingWithPools(ctx, excludeIDs, nil)
-}
-
 func (h *Handler) openChatAccountSessionForModel(ctx context.Context, spec ModelSpec) (*chatAccountSession, error) {
 	return h.openChatAccountSessionForModelExcluding(ctx, nil, spec)
 }
@@ -285,10 +277,6 @@ func (s *chatAccountSession) Close() {
 	s.release = nil
 }
 
-func (h *Handler) doChatSingleAccount(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}) (*http.Response, error) {
-	return h.doChatSingleAccountWithStatusPolicy(ctx, sess, payload, markAllGrokAccountStatuses)
-}
-
 func (h *Handler) doChatSingleAccountWithStatusPolicy(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, shouldMarkStatus grokAccountStatusPolicy) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
@@ -329,10 +317,6 @@ type grokAccountStatusPolicy func(error) bool
 
 func markAllGrokAccountStatuses(err error) bool {
 	return err != nil
-}
-
-func skipAntiBotGrokAccountStatus(err error) bool {
-	return !isGrokAntiBotError(err)
 }
 
 func skipAppChatImageGrokAccountStatus(err error) bool {

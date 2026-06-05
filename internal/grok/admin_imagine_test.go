@@ -2,13 +2,10 @@ package grok
 
 import (
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -162,26 +159,5 @@ func TestNormalizeImagineRoute(t *testing.T) {
 		if got := normalizeImagineRoute(tt.in); got != tt.want {
 			t.Fatalf("normalizeImagineRoute(%q)=%q want %q", tt.in, got, tt.want)
 		}
-	}
-}
-
-func TestImagineImageB64FromURL_LocalCachedFile(t *testing.T) {
-	oldBase := cacheBaseDir
-	cacheBaseDir = t.TempDir()
-	t.Cleanup(func() { cacheBaseDir = oldBase })
-
-	imageDir := filepath.Join(cacheBaseDir, "image")
-	if err := os.MkdirAll(imageDir, 0o755); err != nil {
-		t.Fatalf("mkdir image dir: %v", err)
-	}
-	raw := []byte("fake-image-bytes")
-	if err := os.WriteFile(filepath.Join(imageDir, "sample.jpg"), raw, 0o644); err != nil {
-		t.Fatalf("write sample image: %v", err)
-	}
-
-	got := imagineImageB64FromURL("/v1/files/image/sample.jpg")
-	want := base64.StdEncoding.EncodeToString(raw)
-	if got != want {
-		t.Fatalf("b64 mismatch: got=%q want=%q", got, want)
 	}
 }

@@ -361,37 +361,6 @@ func normalizeGrokAssetURL(raw string) string {
 // Some Grok responses include image card/tool metadata where URLs aren't under the known keys.
 // We conservatively collect http(s) links that look like images and point to Grok-related hosts.
 
-func collectHTTPStrings(value interface{}, limit int) []string {
-	out := make([]string, 0, 16)
-	seen := map[string]struct{}{}
-	var walk func(v interface{})
-	walk = func(v interface{}) {
-		if limit > 0 && len(out) >= limit {
-			return
-		}
-		switch x := v.(type) {
-		case map[string]interface{}:
-			for _, vv := range x {
-				walk(vv)
-			}
-		case []interface{}:
-			for _, vv := range x {
-				walk(vv)
-			}
-		case string:
-			s := strings.TrimSpace(x)
-			if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
-				if _, ok := seen[s]; !ok {
-					seen[s] = struct{}{}
-					out = append(out, s)
-				}
-			}
-		}
-	}
-	walk(value)
-	return out
-}
-
 func collectAssetLikeStrings(value interface{}, limit int) []string {
 	out := make([]string, 0, 32)
 	seen := map[string]struct{}{}

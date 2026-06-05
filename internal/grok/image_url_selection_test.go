@@ -30,40 +30,6 @@ func TestNormalizeGeneratedImageURLsPrefersFullOverPart(t *testing.T) {
 	}
 }
 
-func TestAppendImageCandidatesPrefersGrokPath(t *testing.T) {
-	debugHTTP := []string{"https://example.com/other.jpg"}
-	debugAsset := []string{"users/u/generated/a/image.jpg"}
-	got := appendImageCandidates(nil, debugHTTP, debugAsset, 1)
-	if len(got) != 1 {
-		t.Fatalf("len=%d want=1", len(got))
-	}
-	if got[0] != "https://assets.grok.com/users/u/generated/a/image.jpg" {
-		t.Fatalf("got=%q want grok asset url", got[0])
-	}
-}
-
-func TestAppendImageCandidatesExtractsAssetPathInsideText(t *testing.T) {
-	debugAsset := []string{`{"message":"rendered users/u-1/generated/a2/image.png for preview"}`}
-	got := appendImageCandidates(nil, nil, debugAsset, 1)
-	if len(got) != 1 {
-		t.Fatalf("len=%d want=1 got=%#v", len(got), got)
-	}
-	if got[0] != "https://assets.grok.com/users/u-1/generated/a2/image.png" {
-		t.Fatalf("got=%q want grok asset url", got[0])
-	}
-}
-
-func TestAppendImageCandidatesExtractsJSONArrayText(t *testing.T) {
-	debugAsset := []string{`["https://assets.grok.com/users/u-1/generated/a3/image.webp"]`}
-	got := appendImageCandidates(nil, nil, debugAsset, 1)
-	if len(got) != 1 {
-		t.Fatalf("len=%d want=1 got=%#v", len(got), got)
-	}
-	if got[0] != "https://assets.grok.com/users/u-1/generated/a3/image.webp" {
-		t.Fatalf("got=%q want grok asset url", got[0])
-	}
-}
-
 func TestAppendImageResultURLsAcceptsAssetIDContentURL(t *testing.T) {
 	resp := map[string]interface{}{
 		"userResponse": map[string]interface{}{
