@@ -741,24 +741,7 @@ async function deleteOfflineModelsForCurrentChannel() {
   }
 }
 
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text === null || text === undefined ? "" : String(text);
-  return div.innerHTML;
-}
 
-function encodeData(value) {
-  return encodeURIComponent(value === null || value === undefined ? "" : String(value));
-}
-
-function decodeData(value) {
-  if (!value) return "";
-  try {
-    return decodeURIComponent(value);
-  } catch (err) {
-    return value;
-  }
-}
 
 document.addEventListener("DOMContentLoaded", () => {
   const searchInput = document.getElementById("modelSearchInput");

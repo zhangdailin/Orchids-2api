@@ -239,3 +239,54 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+
+// Centralized utility helper functions
+function escapeHtml(text) {
+  if (text === null || text === undefined) return '';
+  const div = document.createElement("div");
+  div.textContent = String(text);
+  return div.innerHTML;
+}
+
+function encodeData(value) {
+  return encodeURIComponent(value === null || value === undefined ? "" : String(value));
+}
+
+function decodeData(value) {
+  if (!value) return "";
+  try {
+    return decodeURIComponent(value);
+  } catch (err) {
+    return value;
+  }
+}
+
+function formatTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  const now = new Date();
+  const diff = (now - d) / 1000;
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
+  if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
+  return d.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatBytes(bytes) {
+  const num = Number(bytes || 0);
+  if (!Number.isFinite(num) || num <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = num;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx++;
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[idx]}`;
+}

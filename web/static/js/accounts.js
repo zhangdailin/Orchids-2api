@@ -1404,27 +1404,6 @@ async function deleteAccount(id) {
   }
 }
 
-// Escape HTML
-function escapeHtml(text) {
-  if (text === null || text === undefined) return '';
-  const div = document.createElement("div");
-  div.textContent = String(text);
-  return div.innerHTML;
-}
-
-function encodeData(value) {
-  return encodeURIComponent(value === null || value === undefined ? "" : String(value));
-}
-
-function decodeData(value) {
-  if (!value) return "";
-  try {
-    return decodeURIComponent(value);
-  } catch (err) {
-    return value;
-  }
-}
-
 function parseDataId(value) {
   const decoded = decodeData(value);
   if (decoded === "") return "";
@@ -1465,23 +1444,6 @@ function formatTokenDisplay(acc) {
   return '-';
 }
 
-// Format time
-function formatTime(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "-";
-  const now = new Date();
-  const diff = (now - d) / 1000;
-  if (diff < 60) return "刚刚";
-  if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
-  if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
-  return d.toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
 
 // Export accounts
 function exportAccounts() {
