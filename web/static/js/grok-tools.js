@@ -584,17 +584,7 @@
     const codeBlocks = [];
     const fenced = escaped.replace(/```([a-zA-Z0-9_-]+)?\n([\s\S]*?)```/g, (_match, lang, code) => {
       const safeLang = lang ? escapeHTML(lang) : "";
-      const langLabel = safeLang ? safeLang.toUpperCase() : "TEXT";
-      const html = `<div class="code-block-container">
-        <div class="code-block-header">
-          <span class="code-block-lang">${langLabel}</span>
-          <button class="code-block-copy-btn" type="button" onclick="copyCodeBlock(this)">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            <span>Copy</span>
-          </button>
-        </div>
-        <pre class="code-block"><code${safeLang ? ` class="language-${safeLang}"` : ""}>${code}</code></pre>
-      </div>`;
+      const html = `<pre class="code-block"><code${safeLang ? ` class="language-${safeLang}"` : ""}>${code}</code></pre>`;
       const token = `@@CODEBLOCK_${codeBlocks.length}@@`;
       codeBlocks.push(html);
       return token;
@@ -1131,21 +1121,6 @@
     if (empty) empty.style.display = "none";
     const row = document.createElement("div");
     row.className = `message-row ${role}`;
-
-    // Avatar
-    const avatar = document.createElement("div");
-    avatar.className = "message-avatar";
-    if (role === "assistant") {
-      avatar.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="avatar-svg grok-avatar"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>`;
-    } else {
-      avatar.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="avatar-svg user-avatar"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`;
-    }
-    row.appendChild(avatar);
-
-    // Message Wrapper
-    const wrapper = document.createElement("div");
-    wrapper.className = "message-wrapper";
-
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
     let contentEl = document.createElement("div");
@@ -1162,17 +1137,13 @@
       contentEl = renderUserContent(content, attachment);
       bubble.appendChild(contentEl);
     }
-    wrapper.appendChild(bubble);
-
-    // Floating actions toolbar using SVG icons
+    row.appendChild(bubble);
     const actions = document.createElement("div");
     actions.className = "message-actions";
-
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "action-btn";
-    copyBtn.title = "复制内容";
-    copyBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+    copyBtn.textContent = "复制";
     copyBtn.addEventListener("click", () => {
       const text = role === "assistant"
         ? String(bubble.innerText || "").trim()
@@ -1180,36 +1151,28 @@
       copyToClipboard(text);
     });
     actions.appendChild(copyBtn);
-
     if (role === "user") {
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.className = "action-btn";
-      editBtn.title = "编辑消息";
-      editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+      editBtn.textContent = "编辑";
       editBtn.addEventListener("click", () => startEditChatMessage(row, content, attachment));
       actions.appendChild(editBtn);
     } else {
       const retryBtn = document.createElement("button");
       retryBtn.type = "button";
       retryBtn.className = "action-btn";
-      retryBtn.title = "重新生成";
-      retryBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>`;
+      retryBtn.textContent = "重试";
       retryBtn.addEventListener("click", () => retryAssistantMessage(row));
-
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.className = "action-btn";
-      editBtn.title = "修改回复";
-      editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+      editBtn.textContent = "编辑";
       editBtn.addEventListener("click", () => startEditAssistantMessage(row));
-
       actions.appendChild(retryBtn);
       actions.appendChild(editBtn);
     }
-    wrapper.appendChild(actions);
-    row.appendChild(wrapper);
-
+    row.appendChild(actions);
     log.appendChild(row);
     log.scrollTop = log.scrollHeight;
     return contentEl;
@@ -1358,11 +1321,6 @@
         }
       }
       setRenderedHTML(contentEl, renderAssistantContent(assistantText));
-      if (chatState.sending) {
-        const cursor = document.createElement("span");
-        cursor.className = "typing-cursor";
-        contentEl.appendChild(cursor);
-      }
       if (hasThink) {
         updateThinkSummary(contentEl, typeof thinkElapsed === "number" ? thinkElapsed : null);
         const blocks = contentEl.querySelectorAll(".think-block[data-think=\"true\"]");
@@ -1484,7 +1442,6 @@
       setChatSendButtonState(false);
       renderChatSessions();
       saveChatSessions();
-      updateAssistantView();
     }
   }
 
@@ -3491,24 +3448,6 @@
   }
 
   window.switchGrokToolTab = switchGrokToolTab;
-
-  window.copyCodeBlock = function(btn) {
-    const container = btn.closest(".code-block-container");
-    if (!container) return;
-    const codeEl = container.querySelector("pre code");
-    if (!codeEl) return;
-    copyToClipboard(codeEl.textContent);
-    const span = btn.querySelector("span");
-    if (span) {
-      const originalText = span.textContent;
-      span.textContent = "Copied!";
-      btn.classList.add("copied");
-      setTimeout(() => {
-        span.textContent = originalText;
-        btn.classList.remove("copied");
-      }, 2000);
-    }
-  };
 
   function bindEvents() {
 
