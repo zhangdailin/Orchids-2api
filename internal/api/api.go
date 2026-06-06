@@ -588,20 +588,67 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		} else if limitErr != nil {
 			slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", limitErr)
 		}
+		featureConfig := warp.AccountFeatureConfig{}
 		if a.store != nil && acc.ID != 0 {
 			modelCtx, modelCancel := context.WithTimeout(ctx, 15*time.Second)
-			choices, source, modelErr := warpClient.FetchDiscoveredModelChoices(modelCtx)
+			features, source, modelErr := warpClient.FetchDiscoveredFeatureModelChoices(modelCtx)
 			modelCancel()
+			choices := warp.AgentModeModelChoices(features)
+			featureConfig = warp.AccountFeatureConfigFromChoices(features)
 			if modelErr == nil && len(choices) > 0 {
 				models := make([]string, 0, len(choices))
 				for _, choice := range choices {
 					models = append(models, choice.ID)
 				}
-				if err := warp.SaveAccountModelChoicesForAccount(ctx, a.store, acc.ID, models); err != nil {
+				existing, err := warp.LoadAccountModelChoices(ctx, a.store)
+				if err != nil {
 					slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
+				} else {
+					if existing == nil {
+						existing = &warp.AccountModelChoices{Accounts: map[string][]string{}}
+					}
+					if existing.Accounts == nil {
+						existing.Accounts = map[string][]string{}
+					}
+					if existing.Sources == nil {
+						existing.Sources = map[string]string{}
+					}
+					if existing.FeatureConfigs == nil {
+						existing.FeatureConfigs = map[string]warp.AccountFeatureConfig{}
+					}
+					key := strconv.FormatInt(acc.ID, 10)
+					existing.Accounts[key] = models
+					existing.Sources[key] = source
+					if !featureConfig.IsEmpty() {
+						existing.FeatureConfigs[key] = featureConfig
+					}
+					if err := warp.SaveAccountModelChoices(ctx, a.store, existing); err != nil {
+						slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
+					}
 				}
 			} else if modelErr != nil {
 				slog.Warn("Warp model choices fetch failed after refresh", "account_id", acc.ID, "error", modelErr)
+			}
+		}
+		if strings.TrimSpace(acc.StatusCode) == "403" {
+			probeModel := firstNonEmptyString(featureConfig.BaseModel, warp.DefaultModel())
+			probeCtx, probeCancel := context.WithTimeout(ctx, 20*time.Second)
+			probeErr := warpClient.ProbeModelWithFeatureConfig(probeCtx, probeModel, featureConfig)
+			probeCancel()
+			if probeErr != nil {
+				httpStatus := http.StatusBadRequest
+				if code := warp.HTTPStatusCode(probeErr); code >= 400 {
+					httpStatus = code
+				}
+				accountStatus := classifyAccountStatusFromError(probeErr.Error())
+				if accountStatus == "" && httpStatus == http.StatusForbidden {
+					accountStatus = "403"
+				}
+				if accountStatus == "403" {
+					return accountStatus, httpStatus, fmt.Errorf("failed to verify warp AI feature after refresh: %w", probeErr)
+				}
+				slog.Warn("Warp AI feature probe failed after refresh; preserving existing 403 status", "account_id", acc.ID, "error", probeErr)
+				return "403", httpStatus, fmt.Errorf("failed to verify warp AI feature after refresh: %w", probeErr)
 			}
 		}
 		return "", 0, nil
@@ -631,22 +678,11 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			return "", 0, nil
 		}
 		usageStatus := classifyAccountStatusFromError(usageErr.Error())
-		if usageStatus == "401" || usageStatus == "403" {
-			return usageStatus, httpStatusFromAccountStatus(usageStatus), fmt.Errorf("failed to fetch puter usage: %w", usageErr)
+		httpStatus := http.StatusBadGateway
+		if usageStatus != "" {
+			httpStatus = httpStatusFromAccountStatus(usageStatus)
 		}
-		slog.Warn("Puter usage sync failed; falling back to verification ping", "account_id", acc.ID, "error", usageErr)
-		if err := puterVerifyAccount(ctx, acc, a.config.Load()); err != nil {
-			status := classifyAccountStatusFromError(err.Error())
-			if status == "402" {
-				return status, 0, nil
-			}
-			httpStatus := http.StatusBadGateway
-			if status != "" {
-				httpStatus = httpStatusFromAccountStatus(status)
-			}
-			return status, httpStatus, fmt.Errorf("failed to verify puter account: %w", err)
-		}
-		return "", 0, nil
+		return usageStatus, httpStatus, fmt.Errorf("failed to fetch puter usage: %w", usageErr)
 	}
 
 	cfg := a.config.Load()
@@ -663,33 +699,6 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			strings.TrimSpace(acc.SessionCookie) == "" &&
 			strings.TrimSpace(acc.Token) == "" {
 			httpStatus = http.StatusBadRequest
-		}
-
-		// Keep quota display usable for session-only Orchids accounts:
-		// even when chat auth cannot be established, the Clerk session JWT may
-		// still be enough to read credits.
-		quotaSynced := false
-		if creditsJWT := orchidsCreditsToken(acc); creditsJWT != "" {
-			if sid, sub := clerk.ParseSessionInfoFromJWT(creditsJWT); sub != "" {
-				if acc.SessionID == "" && sid != "" {
-					acc.SessionID = sid
-				}
-				if acc.UserID == "" {
-					acc.UserID = sub
-				}
-			}
-			if strings.TrimSpace(acc.UserID) != "" {
-				if creditsInfo, creditsErr := orchidsFetchCredits(ctx, creditsJWT, acc.UserID, proxyFunc); creditsErr == nil {
-					applyOrchidsQuotaFromCredits(acc, creditsInfo)
-					quotaSynced = true
-				} else {
-					slog.Warn("Orchids quota fallback failed after chat auth failure", "account_id", acc.ID, "error", creditsErr)
-				}
-			}
-		}
-		if quotaSynced {
-			slog.Warn("Orchids chat auth refresh failed but quota sync succeeded; keeping account refresh successful", "account_id", acc.ID, "status", status, "error", err)
-			return "", 0, nil
 		}
 		return status, httpStatus, fmt.Errorf("failed to refresh account: %w", err)
 	}

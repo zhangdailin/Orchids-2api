@@ -18,12 +18,8 @@ import (
 )
 
 const (
-	orchidsAppURL          = "https://www.orchids.app/"
-	defaultOrchidsActionID = "4024929f98f58f3e813cf1e5f42d2e952b1dde0f40"
-	orchidsUserAgent       = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
-
-	// Legacy fallback. Real value is fetched dynamically via an RSC GET.
-	defaultNextRouterStateTree = `["",{"children":["__PAGE__",{},null,null]},null,null,true]`
+	orchidsAppURL    = "https://www.orchids.app/"
+	orchidsUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
 )
 
 // OrchidsPlanCredits maps plan names to their monthly credit limits.
@@ -50,9 +46,7 @@ var actionCache = struct {
 	mu      sync.Mutex
 	id      string
 	expires time.Time
-}{
-	id: defaultOrchidsActionID,
-}
+}{}
 
 const actionCacheTTL = 6 * time.Hour
 
@@ -170,14 +164,10 @@ func resolveOrchidsActionID(ctx context.Context, proxyFunc func(*http.Request) (
 
 	id, err := discoverOrchidsActionID(ctx, proxyFunc)
 	if err != nil || strings.TrimSpace(id) == "" {
-		actionCache.mu.Lock()
-		actionCache.id = defaultOrchidsActionID
-		actionCache.expires = time.Now().Add(30 * time.Minute)
-		actionCache.mu.Unlock()
 		if err != nil {
-			return defaultOrchidsActionID, err
+			return "", err
 		}
-		return defaultOrchidsActionID, fmt.Errorf("empty action id")
+		return "", fmt.Errorf("empty action id")
 	}
 
 	actionCache.mu.Lock()
@@ -223,7 +213,6 @@ func discoverOrchidsActionID(ctx context.Context, proxyFunc func(*http.Request) 
 	}
 
 	preferred := []string{"getUserProfile", "getUserCredits", "getCredits", "getUserUsage", "getUsage"}
-	var fallbackID string
 
 	for _, src := range scriptURLs {
 		if !strings.Contains(src, "/_next/static/chunks/") {
@@ -253,16 +242,6 @@ func discoverOrchidsActionID(ctx context.Context, proxyFunc func(*http.Request) 
 			if id := actions[name]; id != "" {
 				return id, nil
 			}
-		}
-		for name, id := range actions {
-			lower := strings.ToLower(name)
-			if strings.Contains(lower, "credit") || strings.Contains(lower, "usage") || strings.Contains(lower, "quota") {
-				fallbackID = id
-				break
-			}
-		}
-		if fallbackID != "" {
-			return fallbackID, nil
 		}
 	}
 
@@ -332,9 +311,12 @@ func buildOrchidsCreditsRequest(ctx context.Context, sessionJWT string, userID s
 	req.Header.Set("Referer", "https://www.orchids.app/")
 
 	if includeContext {
-		stateTree := defaultNextRouterStateTree
-		if tree, err := fetchNextRouterStateTree(ctx, proxyFunc); err == nil && strings.TrimSpace(tree) != "" {
-			stateTree = tree
+		stateTree, err := fetchNextRouterStateTree(ctx, proxyFunc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch next router state tree: %w", err)
+		}
+		if strings.TrimSpace(stateTree) == "" {
+			return nil, fmt.Errorf("empty next router state tree")
 		}
 		req.Header.Set("Next-Router-State-Tree", stateTree)
 
@@ -407,7 +389,7 @@ func FetchCreditsWithProxy(ctx context.Context, sessionJWT string, userID string
 
 	actionID, err := resolveOrchidsActionID(ctx, proxyFunc)
 	if err != nil {
-		slog.Warn("Orchids credits: action id discover failed, using fallback", "error", err)
+		return nil, fmt.Errorf("failed to discover orchids credits action id: %w", err)
 	}
 
 	// Current Orchids getUserProfile works with a minimal server-action POST.

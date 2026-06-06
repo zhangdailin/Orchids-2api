@@ -15,8 +15,16 @@ import (
 const accountModelChoicesSettingKey = "warp_account_model_choices"
 
 type AccountModelChoices struct {
-	Accounts map[string][]string `json:"accounts"`
-	Sources  map[string]string   `json:"sources,omitempty"`
+	Accounts       map[string][]string             `json:"accounts"`
+	Sources        map[string]string               `json:"sources,omitempty"`
+	FeatureConfigs map[string]AccountFeatureConfig `json:"feature_configs,omitempty"`
+}
+
+type AccountFeatureConfig struct {
+	BaseModel             string `json:"base_model,omitempty"`
+	CodingModel           string `json:"coding_model,omitempty"`
+	CliAgentModel         string `json:"cli_agent_model,omitempty"`
+	ComputerUseAgentModel string `json:"computer_use_agent_model,omitempty"`
 }
 
 func LoadAccountModelChoices(ctx context.Context, s *store.Store) (*AccountModelChoices, error) {
@@ -52,6 +60,9 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 	if len(choices.Sources) > 0 {
 		normalized.Sources = make(map[string]string, len(choices.Sources))
 	}
+	if len(choices.FeatureConfigs) > 0 {
+		normalized.FeatureConfigs = make(map[string]AccountFeatureConfig, len(choices.FeatureConfigs))
+	}
 	for accountID, models := range choices.Accounts {
 		key := strings.TrimSpace(accountID)
 		if key == "" {
@@ -65,6 +76,11 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 		if normalized.Sources != nil {
 			if source := strings.TrimSpace(choices.Sources[key]); source != "" {
 				normalized.Sources[key] = source
+			}
+		}
+		if normalized.FeatureConfigs != nil {
+			if cfg := normalizeAccountFeatureConfig(choices.FeatureConfigs[key]); !cfg.IsEmpty() {
+				normalized.FeatureConfigs[key] = cfg
 			}
 		}
 	}
@@ -93,6 +109,9 @@ func SaveAccountModelChoicesForAccount(ctx context.Context, s *store.Store, acco
 	normalized := normalizeAccountModelIDs(models)
 	if len(normalized) == 0 {
 		delete(existing.Accounts, key)
+		if existing.FeatureConfigs != nil {
+			delete(existing.FeatureConfigs, key)
+		}
 	} else {
 		existing.Accounts[key] = normalized
 	}
@@ -137,6 +156,71 @@ func AccountSupportsModelForAccount(choices *AccountModelChoices, acc *store.Acc
 		}
 	}
 	return false
+}
+
+func AccountFeatureConfigFromChoices(features *FeatureModelChoices) AccountFeatureConfig {
+	if features == nil {
+		return AccountFeatureConfig{}
+	}
+	return normalizeAccountFeatureConfig(AccountFeatureConfig{
+		BaseModel:             features.AgentMode.DefaultID,
+		CodingModel:           features.Coding.DefaultID,
+		CliAgentModel:         features.CliAgent.DefaultID,
+		ComputerUseAgentModel: features.ComputerUseAgent.DefaultID,
+	})
+}
+
+func EffectiveAccountFeatureConfig(acc *store.Account, choices *AccountModelChoices, requestedBaseModel string) AccountFeatureConfig {
+	cfg := AccountFeatureConfig{
+		BaseModel:             normalizeWarpModel(requestedBaseModel),
+		CliAgentModel:         identifier,
+		ComputerUseAgentModel: computerUseModel,
+	}
+	if choices != nil && acc != nil && acc.ID != 0 {
+		key := strconv.FormatInt(acc.ID, 10)
+		if stored := normalizeAccountFeatureConfig(choices.FeatureConfigs[key]); !stored.IsEmpty() {
+			if stored.CodingModel != "" {
+				cfg.CodingModel = stored.CodingModel
+			}
+			if stored.CliAgentModel != "" {
+				cfg.CliAgentModel = stored.CliAgentModel
+			}
+			if stored.ComputerUseAgentModel != "" {
+				cfg.ComputerUseAgentModel = stored.ComputerUseAgentModel
+			}
+		}
+	}
+	cfg.BaseModel = normalizeWarpModel(cfg.BaseModel)
+	cfg.CodingModel = canonicalModelID(cfg.CodingModel)
+	cfg.CliAgentModel = firstNonEmptyModelID(cfg.CliAgentModel)
+	cfg.ComputerUseAgentModel = firstNonEmptyModelID(cfg.ComputerUseAgentModel)
+	if cfg.CliAgentModel == "" {
+		cfg.CliAgentModel = identifier
+	}
+	if cfg.ComputerUseAgentModel == "" {
+		cfg.ComputerUseAgentModel = computerUseModel
+	}
+	return cfg
+}
+
+func normalizeAccountFeatureConfig(cfg AccountFeatureConfig) AccountFeatureConfig {
+	return AccountFeatureConfig{
+		BaseModel:             canonicalModelID(cfg.BaseModel),
+		CodingModel:           canonicalModelID(cfg.CodingModel),
+		CliAgentModel:         canonicalModelID(cfg.CliAgentModel),
+		ComputerUseAgentModel: canonicalModelID(cfg.ComputerUseAgentModel),
+	}
+}
+
+func firstNonEmptyModelID(model string) string {
+	return canonicalModelID(model)
+}
+
+func (cfg AccountFeatureConfig) IsEmpty() bool {
+	return cfg.BaseModel == "" &&
+		cfg.CodingModel == "" &&
+		cfg.CliAgentModel == "" &&
+		cfg.ComputerUseAgentModel == ""
 }
 
 func normalizeAccountModelIDs(models []string) []string {

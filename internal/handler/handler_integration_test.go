@@ -737,7 +737,7 @@ func TestHandleMessages_Puter_DirectSSE_NonStreamRepeatWriteFollowupReturnsFallb
 	if strings.Contains(out, `"content":null`) {
 		t.Fatalf("expected silent duplicate-write suppression, got null content: %s", out)
 	}
-	if strings.Contains(out, genericEmptyOutputFallbackText) {
+	if strings.Contains(out, "No output was presented to the user") {
 		t.Fatalf("did not expect generic empty fallback after duplicate write suppression, got: %s", out)
 	}
 	if strings.Contains(out, "duplicate mutating tool call was suppressed") {

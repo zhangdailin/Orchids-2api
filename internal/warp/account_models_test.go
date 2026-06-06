@@ -28,6 +28,13 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 		Accounts: map[string][]string{
 			"1": {"gpt-5.2-medium", "gpt-5-2-medium", "claude-opus-4-6"},
 		},
+		FeatureConfigs: map[string]AccountFeatureConfig{
+			"1": {
+				BaseModel:             "gpt-5.2-medium",
+				CliAgentModel:         "cli-agent-team-auto",
+				ComputerUseAgentModel: "computer-use-agent-team-auto",
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("SaveAccountModelChoices() error = %v", err)
@@ -59,6 +66,16 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 	}
 	if AccountSupportsModelForAccount(choices, paid, DefaultModel()) {
 		t.Fatal("expected default model to require explicit account support when choices are cached")
+	}
+	cfg := EffectiveAccountFeatureConfig(paid, choices, DefaultModel())
+	if cfg.BaseModel != DefaultModel() {
+		t.Fatalf("feature base=%q want %q", cfg.BaseModel, DefaultModel())
+	}
+	if cfg.CliAgentModel != "cli-agent-team-auto" {
+		t.Fatalf("cli agent=%q want cli-agent-team-auto", cfg.CliAgentModel)
+	}
+	if cfg.ComputerUseAgentModel != "computer-use-agent-team-auto" {
+		t.Fatalf("computer use agent=%q want computer-use-agent-team-auto", cfg.ComputerUseAgentModel)
 	}
 	exhausted := &store.Account{
 		ID:                   1,

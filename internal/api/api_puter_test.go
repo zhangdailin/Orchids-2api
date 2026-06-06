@@ -32,7 +32,7 @@ func TestRefreshAccountState_PuterRequiresAuthToken(t *testing.T) {
 	}
 }
 
-func TestRefreshAccountState_PuterAcceptsValidToken(t *testing.T) {
+func TestRefreshAccountState_PuterUsageFailureDoesNotFallbackToVerify(t *testing.T) {
 	prevVerify := puterVerifyAccount
 	prevUsage := puterFetchMonthlyUsage
 	t.Cleanup(func() {
@@ -40,12 +40,11 @@ func TestRefreshAccountState_PuterAcceptsValidToken(t *testing.T) {
 		puterFetchMonthlyUsage = prevUsage
 	})
 
-	called := false
 	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 		return nil, errors.New("usage endpoint unavailable")
 	}
 	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-		called = true
+		t.Fatal("puter verifier should not be called after usage sync failure")
 		return nil
 	}
 
@@ -53,14 +52,11 @@ func TestRefreshAccountState_PuterAcceptsValidToken(t *testing.T) {
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("refreshAccountState() error = %v", err)
+	if err == nil {
+		t.Fatal("refreshAccountState() expected error")
 	}
-	if status != "" || httpStatus != 0 {
-		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
-	}
-	if !called {
-		t.Fatal("expected verifier to be called")
+	if status != "" || httpStatus != http.StatusBadGateway {
+		t.Fatalf("status=%q httpStatus=%d want empty/502", status, httpStatus)
 	}
 }
 
@@ -151,7 +147,8 @@ func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
 		return nil, errors.New("usage endpoint unavailable")
 	}
 	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-		return errors.New("unexpected status code 401: unauthorized")
+		t.Fatal("puter verifier should not be called after usage sync failure")
+		return nil
 	}
 
 	a := New(nil, "", "", &config.Config{})
@@ -161,11 +158,11 @@ func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if status != "401" {
-		t.Fatalf("status=%q want 401", status)
+	if status != "" {
+		t.Fatalf("status=%q want empty", status)
 	}
-	if httpStatus != http.StatusUnauthorized {
-		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusUnauthorized)
+	if httpStatus != http.StatusBadGateway {
+		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusBadGateway)
 	}
 }
 
@@ -181,20 +178,21 @@ func TestRefreshAccountState_PuterInsufficientFundsCompletesWith402Status(t *tes
 		return nil, errors.New("usage endpoint unavailable")
 	}
 	puterVerifyAccount = func(ctx context.Context, acc *store.Account, cfg *config.Config) error {
-		return errors.New("puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")
+		t.Fatal("puter verifier should not be called after usage sync failure")
+		return nil
 	}
 
 	a := New(nil, "", "", &config.Config{})
 	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("refreshAccountState() error = %v", err)
+	if err == nil {
+		t.Fatal("expected error")
 	}
-	if status != "402" {
-		t.Fatalf("status=%q want 402", status)
+	if status != "" {
+		t.Fatalf("status=%q want empty", status)
 	}
-	if httpStatus != 0 {
-		t.Fatalf("httpStatus=%d want 0", httpStatus)
+	if httpStatus != http.StatusBadGateway {
+		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusBadGateway)
 	}
 }

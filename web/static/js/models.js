@@ -156,16 +156,10 @@ function modelRefreshSourceLabel(source) {
   if (!value) return "未知来源";
   const labels = {
     upstream_api: "账号上游 API",
-    orchids_public_page: "Orchids 公开页面",
-    orchids_static_catalog_fallback: "Orchids 内置列表",
-    warp_static_catalog: "Warp 内置列表",
-    warp_static_catalog_fallback: "Warp 内置列表",
+    public_page: "Orchids 公开页面",
     puter_public_models: "Puter 公开模型 API",
     puter_public_models_test_mode: "Puter 公开 API + 账号验证",
     puter_public_models_unverified: "Puter 公开 API",
-    puter_static_catalog_fallback: "Puter 内置列表",
-    puter_static_catalog_fallback_test_mode: "Puter 内置列表 + 账号验证",
-    puter_static_catalog_fallback_unverified: "Puter 内置列表",
     grok_console_probe: "Grok 账号探测",
   };
   if (labels[value]) return labels[value];

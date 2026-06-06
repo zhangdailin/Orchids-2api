@@ -1050,7 +1050,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh := newStreamHandler(
 		h.config, w, logger, suppressThinking, isStream, responseFormat, effectiveWorkdir,
 	)
-	sh.setPreferPriorToolResultFallback(lastUserIsToolResultFollowup(upstreamMessages))
 	allowedToolNames := []string(nil)
 	if !isOrchidsProtocol {
 		allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
@@ -1132,22 +1131,25 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		payloadMessages := upstreamMessages
 		payloadSystem := req.System
 
+		warpFeatureConfig := h.resolveWarpFeatureConfig(r.Context(), currentAccount, mappedModel)
 		upstreamReq := upstream.UpstreamRequest{
-			Prompt:        builtPrompt,
-			ChatHistory:   chatHistory,
-			Workdir:       effectiveWorkdir,
-			Model:         mappedModel,
-			Stream:        req.Stream,
-			Messages:      payloadMessages,
-			System:        payloadSystem,
-			Tools:         effectiveTools,
-			NoTools:       gateNoTools,
-			NoThinking:    noThinking,
-			TraceID:       traceID,
-			ChatSessionID: chatSessionID,
-			ProjectID:     "",
-			IsFirstPrompt: false,
-			DirectSSE:     nil,
+			Prompt:               builtPrompt,
+			ChatHistory:          chatHistory,
+			Workdir:              effectiveWorkdir,
+			Model:                mappedModel,
+			Stream:               req.Stream,
+			Messages:             payloadMessages,
+			System:               payloadSystem,
+			Tools:                effectiveTools,
+			NoTools:              gateNoTools,
+			NoThinking:           noThinking,
+			TraceID:              traceID,
+			ChatSessionID:        chatSessionID,
+			ProjectID:            "",
+			IsFirstPrompt:        false,
+			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
+			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
+			DirectSSE:            nil,
 		}
 		if orchidsOwnsFinalSSE {
 			upstreamReq.DirectSSE = sh
@@ -1297,7 +1299,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
 							markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
 						} else {
-							markAccountStatus(r.Context(), h.loadBalancer.Store, currentAccount, status)
+							h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, status)
 						}
 					}
 				}
@@ -1311,14 +1313,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					sh.InjectUpstreamError(errStr)
 				}
 				if errClass.Category == "canceled" {
-					sh.setSuppressEmptyOutputFallback(true)
+					sh.finishResponse("end_turn")
+					return
 				}
 				sh.finishResponse("end_turn")
 				return
 			}
 
 			if r.Context().Err() != nil {
-				sh.setSuppressEmptyOutputFallback(true)
 				sh.finishResponse("end_turn")
 				return
 			}
@@ -1364,10 +1366,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					currentAccount = nextAccount
 					if currentAccount != nil {
 						trackedAccountID = h.acquireTrackedAccount(currentAccount)
+						warpFeatureConfig = h.resolveWarpFeatureConfig(r.Context(), currentAccount, upstreamReq.Model)
+						upstreamReq.WarpCliAgentModel = warpFeatureConfig.CliAgentModel
+						upstreamReq.WarpComputerUseModel = warpFeatureConfig.ComputerUseAgentModel
 						if verboseDiagnostics {
 							slog.Debug("Switched to account", "account", currentAccount.Name)
 						}
 					} else {
+						warpFeatureConfig = warp.AccountFeatureConfig{}
+						upstreamReq.WarpCliAgentModel = ""
+						upstreamReq.WarpComputerUseModel = ""
 						if verboseDiagnostics {
 							slog.Debug("Switched to default upstream config")
 						}
@@ -1377,6 +1385,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						apiClient = prevClient
 						currentAccount = prevAccount
 						trackedAccountID = h.acquireTrackedAccount(currentAccount)
+						warpFeatureConfig = h.resolveWarpFeatureConfig(r.Context(), currentAccount, upstreamReq.Model)
+						upstreamReq.WarpCliAgentModel = warpFeatureConfig.CliAgentModel
+						upstreamReq.WarpComputerUseModel = warpFeatureConfig.ComputerUseAgentModel
 						slog.Warn(
 							"No alternate accounts available; retrying current account",
 							"trace_id", traceID,

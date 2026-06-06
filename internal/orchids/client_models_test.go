@@ -2,7 +2,6 @@ package orchids
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -91,19 +90,5 @@ func TestSendRequestWithPayload_AllowsModelVerificationFlow(t *testing.T) {
 	}, nil, nil)
 	if err != nil {
 		t.Fatalf("SendRequestWithPayload() error = %v", err)
-	}
-}
-
-func TestShouldFallbackFromWSToSSE_SkipsAuthFailures(t *testing.T) {
-	err := wsFallbackError{err: errors.New("ws dial failed: failed to get ws token: no active sessions found")}
-	if shouldFallbackFromWSToSSE(err) {
-		t.Fatal("expected session auth failure to skip SSE fallback")
-	}
-}
-
-func TestShouldFallbackFromWSToSSE_AllowsNonAuthFailures(t *testing.T) {
-	err := wsFallbackError{err: errors.New("ws dial failed: websocket: bad handshake")}
-	if !shouldFallbackFromWSToSSE(err) {
-		t.Fatal("expected non-auth WS failure to keep SSE fallback")
 	}
 }

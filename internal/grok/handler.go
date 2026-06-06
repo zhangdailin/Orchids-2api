@@ -242,16 +242,10 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 			}
 		}
 		if acc == nil {
-			fallbackAcc, fallbackErr := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, extraFilter)
-			if fallbackErr == nil && fallbackAcc != nil {
-				acc = fallbackAcc
-			} else if lastErr != nil {
+			if lastErr != nil {
 				return nil, lastErr
-			} else if fallbackErr != nil {
-				return nil, fallbackErr
-			} else {
-				return nil, fmt.Errorf("no enabled accounts available for channel: grok")
 			}
+			return nil, fmt.Errorf("no enabled grok accounts available for requested pools: %s", strings.Join(candidates, ","))
 		}
 	}
 	raw := strings.TrimSpace(acc.ClientCookie)

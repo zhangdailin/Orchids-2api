@@ -61,9 +61,72 @@ func TestFetchFeatureAgentModeModelChoices_NormalizesIDsAndDefault(t *testing.T)
 		t.Fatalf("defaultID=%q want gpt-5.1-medium", defaultID)
 	}
 	gotIDs := []string{choices[0].ID, choices[1].ID}
-	wantIDs := []string{"claude-4.6-sonnet", "gpt-5.1-medium"}
+	wantIDs := []string{"gpt-5.1-medium", "claude-4.6-sonnet"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("choice ids=%+v want %+v", gotIDs, wantIDs)
+	}
+}
+
+func TestFetchFeatureModelChoices_IncludesAgentSpecificDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"user": {
+					"__typename": "UserOutput",
+					"user": {
+						"workspaces": [
+							{
+								"featureModelChoice": {
+									"agentMode": {
+										"defaultId": "auto-open",
+										"choices": [
+											{"id": "auto-open", "displayName": "Auto Open"}
+										]
+									},
+									"coding": {
+										"defaultId": "auto",
+										"choices": [
+											{"id": "auto", "displayName": "Auto"}
+										]
+									},
+									"cliAgent": {
+										"defaultId": "cli-agent-team-auto",
+										"choices": [
+											{"id": "cli-agent-team-auto", "displayName": "Team Auto"}
+										]
+									},
+									"computerUseAgent": {
+										"defaultId": "computer-use-agent-team-auto",
+										"choices": [
+											{"id": "computer-use-agent-team-auto", "displayName": "Team Computer Auto"}
+										]
+									}
+								}
+							}
+						]
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	features, err := fetchFeatureModelChoices(context.Background(), warpRewriteClient(t, server.URL), "jwt")
+	if err != nil {
+		t.Fatalf("fetchFeatureModelChoices() error: %v", err)
+	}
+	if features.AgentMode.DefaultID != "auto-open" {
+		t.Fatalf("agent default=%q want auto-open", features.AgentMode.DefaultID)
+	}
+	if features.CliAgent.DefaultID != "cli-agent-team-auto" {
+		t.Fatalf("cli agent default=%q want cli-agent-team-auto", features.CliAgent.DefaultID)
+	}
+	if features.ComputerUseAgent.DefaultID != "computer-use-agent-team-auto" {
+		t.Fatalf("computer use default=%q want computer-use-agent-team-auto", features.ComputerUseAgent.DefaultID)
+	}
+	if got := AgentModeModelChoices(features); len(got) != 1 || got[0].ID != "auto-open" {
+		t.Fatalf("agent mode choices=%+v want auto-open", got)
 	}
 }
 

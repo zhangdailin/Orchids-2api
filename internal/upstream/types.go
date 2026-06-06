@@ -18,22 +18,24 @@ type DirectSSEEmitter interface {
 
 // UpstreamRequest 统一上游请求结构（Warp/Orchids 复用）
 type UpstreamRequest struct {
-	Prompt        string
-	ChatHistory   []interface{}
-	Model         string
-	Stream        bool
-	Messages      []prompt.Message
-	System        []prompt.SystemItem
-	Tools         []interface{}
-	NoTools       bool
-	NoThinking    bool
-	TraceID       string
-	Attempt       int
-	ChatSessionID string
-	Workdir       string // Dynamic local workdir override
-	ProjectID     string
-	IsFirstPrompt bool
-	DirectSSE     DirectSSEEmitter
+	Prompt               string
+	ChatHistory          []interface{}
+	Model                string
+	Stream               bool
+	Messages             []prompt.Message
+	System               []prompt.SystemItem
+	Tools                []interface{}
+	NoTools              bool
+	NoThinking           bool
+	TraceID              string
+	Attempt              int
+	ChatSessionID        string
+	Workdir              string // Dynamic local workdir override
+	ProjectID            string
+	IsFirstPrompt        bool
+	WarpCliAgentModel    string
+	WarpComputerUseModel string
+	DirectSSE            DirectSSEEmitter
 }
 
 // SSEMessage 统一上游 SSE 消息结构（Warp/Orchids 复用）

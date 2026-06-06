@@ -469,19 +469,17 @@ func TestNormalizeUpstreamToolCall_DoesNotRebaseSandboxMetadataReadPath(t *testi
 	}
 }
 
-func TestNormalizeUpstreamToolCall_ForeignAbsoluteReadFallsBackToBashWhenWorkdirUnknown(t *testing.T) {
+func TestNormalizeUpstreamToolCall_ForeignAbsoluteReadStaysReadWhenWorkdirUnknown(t *testing.T) {
 	name, input := normalizeUpstreamToolCall("Read", `{"file_path":"/Users/jianxinwei/workspace/cursor-monitor/README.md"}`, "/home/dailin")
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
+	if name != "Read" {
+		t.Fatalf("expected Read, got %q", name)
 	}
-	if !strings.Contains(input, "README.md") {
-		t.Fatalf("expected basename candidate in bash fallback, got %s", input)
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
 	}
-	if !strings.Contains(input, "sed -n '1,240p'") {
-		t.Fatalf("expected bash read fallback command, got %s", input)
-	}
-	if strings.Contains(input, " -- ") {
-		t.Fatalf("expected BSD-compatible sed fallback without --, got %s", input)
+	if payload["file_path"] != "/Users/jianxinwei/workspace/cursor-monitor/README.md" {
+		t.Fatalf("expected original file_path to remain explicit, got %q", payload["file_path"])
 	}
 }
 
@@ -803,7 +801,7 @@ func TestWriteOpenAIFrame_Output(t *testing.T) {
 	}
 }
 
-func TestStreamHandler_WriteChunkFallback_EmitsTextBlock(t *testing.T) {
+func TestStreamHandler_WriteChunkBuffer_EmitsTextBlock(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
@@ -822,7 +820,7 @@ func TestStreamHandler_WriteChunkFallback_EmitsTextBlock(t *testing.T) {
 		t.Fatalf("expected text content block, got: %s", out)
 	}
 	if !strings.Contains(out, `"text":"fallback hello"`) {
-		t.Fatalf("expected fallback text delta, got: %s", out)
+		t.Fatalf("expected buffered write chunk text delta, got: %s", out)
 	}
 	if !strings.Contains(out, "event: content_block_stop") {
 		t.Fatalf("expected content_block_stop, got: %s", out)
@@ -1028,7 +1026,6 @@ func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequeste
 	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
 	defer sh.release()
 
-	sh.setSuppressEmptyOutputFallback(true)
 	sh.finishResponse("end_turn")
 
 	out := rec.buf.String()
@@ -1048,13 +1045,12 @@ func TestStreamHandler_FinishResponse_SilentlySuppressesFallbackForSuppressedDup
 	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
 	defer sh.release()
 
-	sh.setPreferPriorToolResultFallback(true)
 	sh.toolDedupCount = 1
 	sh.suppressedToolCalls = 1
 	sh.finishResponse("end_turn")
 
 	out := rec.buf.String()
-	if strings.Contains(out, genericEmptyOutputFallbackText) {
+	if strings.Contains(out, "No output was presented to the user") {
 		t.Fatalf("did not expect generic empty fallback when duplicate-tool fallback is preferred, got: %s", out)
 	}
 	if strings.Contains(out, "duplicate mutating tool call was suppressed") {

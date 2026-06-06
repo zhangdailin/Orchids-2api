@@ -35,10 +35,11 @@ func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	}
 
 	disableWarpTools := req.NoTools || len(req.Tools) == 0
+	modelConfig := buildRequestModelConfig(req)
 	apiReq := warpapi.Request_builder{
 		TaskContext: warpapi.Request_TaskContext_builder{}.Build(),
 		Input:       buildRequestInput(query, req.Workdir),
-		Settings:    buildRequestSettings(normalizeWarpModel(req.Model), disableWarpTools),
+		Settings:    buildRequestSettings(modelConfig, disableWarpTools),
 		Metadata:    buildRequestMetadata(req.ChatSessionID),
 	}.Build()
 	if !disableWarpTools {
@@ -224,6 +225,21 @@ func normalizeWarpModel(model string) string {
 	return canonical
 }
 
+func buildRequestModelConfig(req upstream.UpstreamRequest) AccountFeatureConfig {
+	cfg := AccountFeatureConfig{
+		BaseModel:             normalizeWarpModel(req.Model),
+		CliAgentModel:         canonicalModelID(req.WarpCliAgentModel),
+		ComputerUseAgentModel: canonicalModelID(req.WarpComputerUseModel),
+	}
+	if cfg.CliAgentModel == "" {
+		cfg.CliAgentModel = identifier
+	}
+	if cfg.ComputerUseAgentModel == "" {
+		cfg.ComputerUseAgentModel = computerUseModel
+	}
+	return cfg
+}
+
 func buildRequestInput(query, workdir string) *warpapi.Request_Input {
 	agent := warpapi.AgentType_AGENT_TYPE_PRIMARY
 	userQuery := warpapi.Request_Input_UserQuery_builder{
@@ -262,8 +278,15 @@ func buildInputContext(workdir string) *warpapi.InputContext {
 	}.Build()
 }
 
-func buildRequestSettings(model string, disableTools bool) *warpapi.Request_Settings {
-	cliAgentModel := identifier
+func buildRequestSettings(modelConfig AccountFeatureConfig, disableTools bool) *warpapi.Request_Settings {
+	cliAgentModel := firstNonEmptyModelID(modelConfig.CliAgentModel)
+	if cliAgentModel == "" {
+		cliAgentModel = identifier
+	}
+	computerAgentModel := firstNonEmptyModelID(modelConfig.ComputerUseAgentModel)
+	if computerAgentModel == "" {
+		computerAgentModel = computerUseModel
+	}
 	contextLimit := uint32(0)
 	supportedTools := []warpapi.ToolType(nil)
 	supportedCliAgentTools := []warpapi.ToolType(nil)
@@ -275,9 +298,9 @@ func buildRequestSettings(model string, disableTools bool) *warpapi.Request_Sett
 	isolation := warpapi.IsolationLevel_NONE
 	return warpapi.Request_Settings_builder{
 		ModelConfig: warpapi.Request_Settings_ModelConfig_builder{
-			Base:                        stringPtr(model),
+			Base:                        stringPtr(normalizeWarpModel(modelConfig.BaseModel)),
 			CliAgent:                    stringPtr(cliAgentModel),
-			ComputerUseAgent:            stringPtr(computerUseModel),
+			ComputerUseAgent:            stringPtr(computerAgentModel),
 			BaseModelContextWindowLimit: &contextLimit,
 		}.Build(),
 		WebContextRetrievalEnabled:                 boolPtr(true),

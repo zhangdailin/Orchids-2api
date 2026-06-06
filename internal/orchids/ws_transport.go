@@ -50,18 +50,6 @@ const (
 	orchidsWSOrigin         = "https://www.orchids.app"
 )
 
-type wsFallbackError struct {
-	err error
-}
-
-func (e wsFallbackError) Error() string {
-	return e.err.Error()
-}
-
-func (e wsFallbackError) Unwrap() error {
-	return e.err
-}
-
 // Orchids Event Types
 const (
 	EventConnected          = "connected"
@@ -150,9 +138,6 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 
 	ws := GetConnectionPoolManager().GetConnection(c.wsConnectionKey(), c.dialWSConnection)
 	if err := ws.BeginRequest(ctx); err != nil {
-		if parentCtx.Err() == nil {
-			return wsFallbackError{err: fmt.Errorf("ws dial failed: %w", err)}
-		}
 		return fmt.Errorf("ws dial failed: %w", err)
 	}
 	defer ws.EndRequest()
@@ -186,11 +171,6 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 	// }
 
 	if err := ws.SendRequest(orchidsReq); err != nil {
-		if parentCtx.Err() == nil {
-			invalidateConn = true
-			slog.Warn("Orchids WS write failed before first message", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "request_written", requestWritten, "error", err)
-			return wsFallbackError{err: fmt.Errorf("ws write failed: %w", err)}
-		}
 		invalidateConn = true
 		return fmt.Errorf("ws write failed: %w", err)
 	}
@@ -255,8 +235,8 @@ func (c *Client) sendRequestWS(ctx context.Context, req upstream.UpstreamRequest
 			}
 			if parentCtx.Err() == nil && !receivedAnyMessage {
 				invalidateConn = true
-				slog.Warn("Orchids WS fallback before first message", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "request_written", requestWritten, "stage", "read_message", "error", err)
-				return wsFallbackError{err: err}
+				slog.Warn("Orchids WS failed before first message", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "chat_session_id", chatSessionID, "request_written", requestWritten, "stage", "read_message", "error", err)
+				return err
 			}
 			invalidateConn = true
 			break

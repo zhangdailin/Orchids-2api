@@ -17,7 +17,6 @@ import (
 	"orchids-api/internal/clerk"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
-	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
@@ -287,10 +286,10 @@ func (c *Client) GetToken() (string, error) {
 					}
 					if tokErr != nil {
 						slog.Warn("Orchids token fetch: tokens endpoint failed", "session_id", info.SessionID, "error", tokErr)
+						return "", tokErr
 					}
 				}
-				// Info returned but missing JWT/sessionID.
-				slog.Warn("Orchids token fetch: clerk info missing jwt/session", "has_jwt", strings.TrimSpace(info.JWT) != "", "session_id", info.SessionID)
+				return "", fmt.Errorf("orchids clerk info missing usable jwt/session")
 			} else if err != nil {
 				accountClerkInfoErr = err
 				lower := strings.ToLower(err.Error())
@@ -305,8 +304,9 @@ func (c *Client) GetToken() (string, error) {
 				} else {
 					slog.Warn("Orchids token fetch: clerk info failed", "error", err)
 				}
+				return "", err
 			}
-			// If Clerk fetch fails, fall back to any stored token below.
+			return "", fmt.Errorf("orchids clerk info missing response")
 		}
 
 		// Per-account JWT: allow using a pasted bearer token directly.
@@ -369,13 +369,14 @@ func (c *Client) forceRefreshToken() (string, error) {
 					logKey = fmt.Sprintf("acct:%d", accountID)
 				}
 				if shouldLogNoActiveSession(logKey) {
-					slog.Warn("Clerk token 刷新未命中 active session，回退 session token", "account_id", accountID, "email", email, "has_session_id", hasSessionID, "error", err)
+					slog.Warn("Clerk token refresh failed without active session", "account_id", accountID, "email", email, "has_session_id", hasSessionID, "error", err)
 				}
 			} else {
-				slog.Warn("Clerk token 刷新失败，尝试 session token", "error", err)
+				slog.Warn("Clerk token refresh failed", "error", err)
 			}
+			return "", err
 		} else {
-			slog.Debug("Clerk token 刷新未返回 JWT，尝试 session token")
+			return "", fmt.Errorf("clerk token refresh returned empty jwt")
 		}
 	}
 
@@ -533,13 +534,6 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if err == nil {
 		return nil
 	}
-	if transport == orchidsTransportWS && isWSFallback(err) && ctx.Err() == nil && shouldFallbackFromWSToSSE(err) {
-		slog.Warn("Orchids transport fallback", "trace_id", traceIDForLog(req), "attempt", attemptForLog(req), "from", orchidsTransportWS, "to", orchidsTransportSSE, "chat_session_id", req.ChatSessionID, "error", err)
-		if logger != nil {
-			logger.LogUpstreamSSE("ws_fallback", err.Error())
-		}
-		return c.dispatchTransport(ctx, orchidsTransportSSE, req, onMessage, logger)
-	}
 	return err
 }
 
@@ -655,15 +649,6 @@ func (c *Client) requestTimeout() time.Duration {
 		return time.Duration(c.config.RequestTimeout) * time.Second
 	}
 	return 30 * time.Second
-}
-
-func isWSFallback(err error) bool {
-	var fallback wsFallbackError
-	return errors.As(err, &fallback)
-}
-
-func shouldFallbackFromWSToSSE(err error) bool {
-	return !apperrors.IsAccountAuthFailure(err)
 }
 
 func getCachedToken(sessionID string) (string, bool) {

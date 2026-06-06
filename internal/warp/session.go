@@ -412,15 +412,7 @@ func fetchWarpAuthTokens(ctx context.Context, httpClient *http.Client, form url.
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	body, err := postWarpTokenForm(ctx, httpClient, warpFirebaseURL, form)
-	if err == nil {
-		return body, nil
-	}
-	proxyBody, proxyErr := postWarpTokenForm(ctx, httpClient, warpTokenProxyURL, form)
-	if proxyErr == nil {
-		return proxyBody, nil
-	}
-	return nil, fmt.Errorf("refresh token via firebase failed: %w; proxy fallback failed: %w", err, proxyErr)
+	return postWarpTokenForm(ctx, httpClient, warpFirebaseURL, form)
 }
 
 func postWarpTokenForm(ctx context.Context, httpClient *http.Client, endpoint string, form url.Values) ([]byte, error) {

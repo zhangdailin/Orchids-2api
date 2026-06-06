@@ -140,7 +140,7 @@ func TestGetTokenDoesNotDoubleHitClerkAfterAccountFetch429(t *testing.T) {
 	}
 }
 
-func TestGetTokenFallsBackToSessionTokensEndpointWhenSessionKnown(t *testing.T) {
+func TestGetTokenDoesNotFallbackToSessionTokensEndpointWhenSessionKnown(t *testing.T) {
 	prevFetch := orchidsFetchClerkInfoWithSession
 	prevRefresh := orchidsFetchClerkInfoWithProjectAndSession
 	t.Cleanup(func() {
@@ -152,11 +152,10 @@ func TestGetTokenFallsBackToSessionTokensEndpointWhenSessionKnown(t *testing.T) 
 		return nil, fmt.Errorf("unexpected status code 429: too many requests")
 	}
 	orchidsFetchClerkInfoWithProjectAndSession = func(clientCookie string, sessionCookie string, clientUat string, sessionID string, customProjectID string, proxyFunc func(*http.Request) (*url.URL, error)) (*clerk.AccountInfo, error) {
-		t.Fatal("expected GetToken to use stored session via tokens endpoint instead of second Clerk refresh")
+		t.Fatal("expected GetToken to avoid a second Clerk refresh call")
 		return nil, nil
 	}
 
-	token := "header." + encodeJWTClaims(`{"sid":"sess_789","sub":"user_789","exp":4102444800}`) + ".sig"
 	client := NewFromAccount(&store.Account{
 		ID:           4,
 		AccountType:  "orchids",
@@ -166,24 +165,17 @@ func TestGetTokenFallsBackToSessionTokensEndpointWhenSessionKnown(t *testing.T) 
 	}, &config.Config{AutoRefreshToken: true})
 	client.httpClient = &http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
-			if req.URL.Path != "/v1/client/sessions/sess_789/tokens" {
-				t.Fatalf("unexpected path: %s", req.URL.Path)
-			}
-			body := io.NopCloser(strings.NewReader(`{"jwt":"` + token + `"}`))
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       body,
-				Header:     make(http.Header),
-			}, nil
+			t.Fatalf("unexpected session token endpoint call to %s", req.URL.String())
+			return nil, nil
 		}),
 	}
 
 	got, err := client.GetToken()
-	if err != nil {
-		t.Fatalf("GetToken() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "429") {
+		t.Fatalf("GetToken() error = %v, want 429 error", err)
 	}
-	if got != token {
-		t.Fatalf("GetToken()=%q want %q", got, token)
+	if got != "" {
+		t.Fatalf("GetToken()=%q want empty token", got)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -52,7 +53,9 @@ func TestHandleMessages_Warp403MarksAccountBlocked(t *testing.T) {
 		ContextSummaryMaxTokens: 256,
 		ContextKeepTurns:        2,
 	}, lb)
+	upstreamCalls := 0
 	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
+		upstreamCalls++
 		return &errorUpstreamEdge{err: errors.New("warp stream request failed: HTTP 403")}
 	})
 
@@ -77,5 +80,23 @@ func TestHandleMessages_Warp403MarksAccountBlocked(t *testing.T) {
 	}
 	if updated.LastAttempt.IsZero() {
 		t.Fatal("expected last_attempt to be set")
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("upstreamCalls=%d want 1 after first request", upstreamCalls)
+	}
+
+	payload["messages"] = []map[string]any{{"role": "user", "content": "hi again"}}
+	body2, _ := json.Marshal(payload)
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(body2))
+	h.HandleMessages(rec2, req2)
+	if rec2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("second status=%d want 503 body=%s", rec2.Code, rec2.Body.String())
+	}
+	if !strings.Contains(rec2.Body.String(), "no enabled accounts available for channel: warp") {
+		t.Fatalf("second body=%q want no available warp account", rec2.Body.String())
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("upstreamCalls=%d want still 1 after cached 403", upstreamCalls)
 	}
 }

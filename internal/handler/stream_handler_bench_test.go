@@ -122,15 +122,6 @@ func BenchmarkMaskDedupKey(b *testing.B) {
 	}
 }
 
-func BenchmarkFallbackToolCallID(b *testing.B) {
-	name := "Write"
-	input := `{"file_path":"/tmp/a.txt","content":"hello"}`
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = fallbackToolCallID(name, input)
-	}
-}
-
 func BenchmarkHasRequiredToolInputUnknownMalformed(b *testing.B) {
 	tool := "UnknownTool"
 	input := `{"bad":`

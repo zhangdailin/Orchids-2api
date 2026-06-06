@@ -625,7 +625,6 @@ func TestDirectFinalToolUseBlocksPassThroughWithoutAllowedToolFiltering(t *testi
 	)
 	defer h.release()
 	h.setAllowedToolNames([]string{"Read"})
-	h.setSuppressEmptyOutputFallback(true)
 
 	h.handleMessage(upstream.SSEMessage{
 		Type: "content_block_start",

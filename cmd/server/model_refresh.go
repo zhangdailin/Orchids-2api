@@ -65,11 +65,12 @@ type discoveredModel struct {
 }
 
 type warpAccountDiscovery struct {
-	index   int
-	id      int64
-	choices []warp.ModelChoice
-	source  string
-	ok      bool
+	index         int
+	id            int64
+	choices       []warp.ModelChoice
+	source        string
+	featureConfig warp.AccountFeatureConfig
+	ok            bool
 }
 
 type modelRefreshFunc func(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (*modelRefreshResult, error)
@@ -235,8 +236,10 @@ func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *s
 	items, err := fetchPuterPublicModelChoices(ctx, proxyFunc)
 	source := "puter_public_models"
 	if err != nil || len(items) == 0 {
-		source = "puter_static_catalog_fallback"
-		items = puterPublicChoicesFromDiscovered(puterSeedDiscoveredModels())
+		if err != nil {
+			return nil, "", fmt.Errorf("puter public model discovery failed: %w", err)
+		}
+		return nil, "", fmt.Errorf("puter public model discovery returned no choices")
 	}
 
 	candidates := puterChoicesToDiscovered(items)
@@ -275,22 +278,6 @@ func puterChoicesToDiscovered(items []puterPublicModelChoice) []discoveredModel 
 			name = id
 		}
 		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
-	}
-	return out
-}
-
-func puterPublicChoicesFromDiscovered(items []discoveredModel) []puterPublicModelChoice {
-	out := make([]puterPublicModelChoice, 0, len(items))
-	for _, item := range items {
-		id := strings.TrimSpace(item.ID)
-		if id == "" {
-			continue
-		}
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			name = id
-		}
-		out = append(out, puterPublicModelChoice{ID: id, Name: name})
 	}
 	return out
 }
@@ -443,27 +430,6 @@ func isPuterModelDefinitiveReject(err error) bool {
 		return true
 	}
 	return false
-}
-
-func puterSeedDiscoveredModels() []discoveredModel {
-	items := puter.SeedModels(0)
-	out := make([]discoveredModel, 0, len(items))
-	for i, item := range items {
-		id := strings.TrimSpace(item.ModelID)
-		if id == "" {
-			continue
-		}
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			name = id
-		}
-		out = append(out, discoveredModel{
-			ID:        id,
-			Name:      name,
-			SortOrder: i,
-		})
-	}
-	return out
 }
 
 func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
@@ -690,7 +656,7 @@ func isAcceptedGrokCanonical(requested, canonical string) bool {
 
 func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
 	if s == nil {
-		return warpSeedDiscoveredModels(), "warp_static_catalog", nil
+		return nil, "", fmt.Errorf("store not configured")
 	}
 
 	accounts, err := enabledAccountsByType(ctx, s, "warp")
@@ -730,24 +696,28 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 				for idx := range jobs {
 					acc := accounts[idx]
 					client := warp.NewFromAccount(acc, cfg)
-					choices, source, discoverErr := client.FetchDiscoveredModelChoices(ctx)
+					features, source, discoverErr := client.FetchDiscoveredFeatureModelChoices(ctx)
 					client.Close()
 					if discoverErr != nil {
 						continue
 					}
+					choices := warp.AgentModeModelChoices(features)
+					featureConfig := warp.AccountFeatureConfigFromChoices(features)
 					if warp.AccountFreeOnly(acc) {
-						choices, source = probeWarpFreeOnlyModelChoices(ctx, cfg, acc, choices)
-						if len(choices) == 0 {
-							choices = []warp.ModelChoice{{ID: warp.DefaultModel(), Name: "Warp Auto Open"}}
-							source = "free_probe_fallback"
-						}
+						probedChoices, probeSource := probeWarpFreeOnlyModelChoices(ctx, cfg, acc, choices)
+						choices = probedChoices
+						source = appendWarpDiscoverySource(source, probeSource)
+					}
+					if len(choices) == 0 {
+						continue
 					}
 					results <- warpAccountDiscovery{
-						index:   idx,
-						id:      acc.ID,
-						choices: choices,
-						source:  source,
-						ok:      true,
+						index:         idx,
+						id:            acc.ID,
+						choices:       choices,
+						source:        source,
+						featureConfig: featureConfig,
+						ok:            true,
 					}
 				}
 			}()
@@ -787,7 +757,7 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 	if len(out) > 0 {
 		return out, joinWarpDiscoverySources(sourceSet), nil
 	}
-	return warpSeedDiscoveredModels(), "warp_static_catalog_fallback", nil
+	return nil, "", fmt.Errorf("warp model discovery returned no account choices")
 }
 
 func probeWarpFreeOnlyModelChoices(ctx context.Context, cfg *config.Config, acc *store.Account, discovered []warp.ModelChoice) ([]warp.ModelChoice, string) {
@@ -803,6 +773,25 @@ func probeWarpFreeOnlyModelChoices(ctx context.Context, cfg *config.Config, acc 
 		return nil, "free_probe"
 	}
 	return out, "free_probe"
+}
+
+func appendWarpDiscoverySource(parts ...string) string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		for _, sub := range strings.Split(part, "+") {
+			sub = strings.TrimSpace(sub)
+			if sub == "" {
+				continue
+			}
+			if _, exists := seen[sub]; exists {
+				continue
+			}
+			seen[sub] = struct{}{}
+			out = append(out, sub)
+		}
+	}
+	return strings.Join(out, "+")
 }
 
 func warpFreeOnlyProbeCandidates(discovered []warp.ModelChoice) []warp.ModelChoice {
@@ -878,6 +867,7 @@ func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoverie
 	}
 	accountChoices := &warp.AccountModelChoices{Accounts: make(map[string][]string)}
 	accountChoices.Sources = make(map[string]string)
+	accountChoices.FeatureConfigs = make(map[string]warp.AccountFeatureConfig)
 	for _, result := range discoveries {
 		if !result.ok || result.id == 0 || len(result.choices) == 0 {
 			continue
@@ -891,6 +881,9 @@ func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoverie
 		if source := strings.TrimSpace(result.source); source != "" {
 			accountChoices.Sources[key] = source
 		}
+		if !result.featureConfig.IsEmpty() {
+			accountChoices.FeatureConfigs[key] = result.featureConfig
+		}
 	}
 	if len(accountChoices.Accounts) == 0 {
 		return
@@ -902,25 +895,12 @@ func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoverie
 	}
 }
 
-func warpSeedDiscoveredModels() []discoveredModel {
-	items := store.BuildWarpSeedModels()
-	out := make([]discoveredModel, 0, len(items))
-	for i, item := range items {
-		out = append(out, discoveredModel{
-			ID:        strings.TrimSpace(item.ModelID),
-			Name:      strings.TrimSpace(item.Name),
-			SortOrder: i,
-		})
-	}
-	return out
-}
-
 func joinWarpDiscoverySources(sourceSet map[string]struct{}) string {
 	if len(sourceSet) == 0 {
 		return "warp_graphql"
 	}
 	ordered := make([]string, 0, 1)
-	for _, part := range []string{"feature_model_choice_agent_mode"} {
+	for _, part := range []string{"feature_model_choice_all", "feature_model_choice_agent_mode", "free_probe"} {
 		if _, ok := sourceSet[part]; ok {
 			ordered = append(ordered, part)
 		}
@@ -1060,7 +1040,7 @@ func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 		return false
 	}
 	source = strings.TrimSpace(source)
-	return strings.Contains(source, "feature_model_choice_agent_mode")
+	return strings.Contains(source, "feature_model_choice_agent_mode") || strings.Contains(source, "feature_model_choice_all")
 }
 
 func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Model, ordered []discoveredModel) string {

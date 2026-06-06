@@ -91,7 +91,7 @@ func TestParseModelRefreshConcurrency(t *testing.T) {
 	}
 }
 
-func TestSyncModelsForChannel_SkipsVerificationAndUsesDiscoveryList(t *testing.T) {
+func TestSyncModelsForChannel_WarpRequiresAccountDiscovery(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
@@ -99,21 +99,15 @@ func TestSyncModelsForChannel_SkipsVerificationAndUsesDiscoveryList(t *testing.T
 	clearModelsForChannel(t, ctx, s, "Warp")
 
 	result, err := syncModelsForChannel(ctx, &config.Config{}, s, "Warp")
-	if err != nil {
-		t.Fatalf("syncModelsForChannel() error = %v", err)
+	if err == nil {
+		t.Fatalf("syncModelsForChannel() result=%+v want error", result)
 	}
-	if result.Discovered == 0 {
-		t.Fatal("expected discovered warp models to be non-empty")
-	}
-	if result.Verified != result.Discovered {
-		t.Fatalf("verified=%d want discovered=%d", result.Verified, result.Discovered)
-	}
-	if result.Concurrency != defaultModelRefreshConcurrency {
-		t.Fatalf("concurrency=%d want %d", result.Concurrency, defaultModelRefreshConcurrency)
+	if !strings.Contains(err.Error(), "warp model discovery returned no account choices") {
+		t.Fatalf("error=%v want warp discovery failure", err)
 	}
 }
 
-func TestSyncModelsForChannelConcurrent_RecordsConcurrency(t *testing.T) {
+func TestSyncModelsForChannelConcurrent_WarpRequiresAccountDiscovery(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
@@ -121,11 +115,11 @@ func TestSyncModelsForChannelConcurrent_RecordsConcurrency(t *testing.T) {
 	clearModelsForChannel(t, ctx, s, "Warp")
 
 	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Warp", 8)
-	if err != nil {
-		t.Fatalf("syncModelsForChannelConcurrent() error = %v", err)
+	if err == nil {
+		t.Fatalf("syncModelsForChannelConcurrent() result=%+v want error", result)
 	}
-	if result.Concurrency != 8 {
-		t.Fatalf("concurrency=%d want 8", result.Concurrency)
+	if !strings.Contains(err.Error(), "warp model discovery returned no account choices") {
+		t.Fatalf("error=%v want warp discovery failure", err)
 	}
 }
 
@@ -489,6 +483,10 @@ func TestSaveWarpAccountModelChoices(t *testing.T) {
 				{ID: "gpt-5.2-medium"},
 				{ID: "claude-opus-4-6"},
 			},
+			featureConfig: warp.AccountFeatureConfig{
+				CliAgentModel:         "cli-agent-team-auto",
+				ComputerUseAgentModel: "computer-use-agent-team-auto",
+			},
 		},
 		{
 			id: 2,
@@ -515,6 +513,13 @@ func TestSaveWarpAccountModelChoices(t *testing.T) {
 	}
 	if choices.Sources["1"] != "" {
 		t.Fatalf("source=%q want empty", choices.Sources["1"])
+	}
+	cfg := warp.EffectiveAccountFeatureConfig(acc, choices, "gpt-5.2-medium")
+	if cfg.CliAgentModel != "cli-agent-team-auto" {
+		t.Fatalf("cli agent=%q want cli-agent-team-auto", cfg.CliAgentModel)
+	}
+	if cfg.ComputerUseAgentModel != "computer-use-agent-team-auto" {
+		t.Fatalf("computer use agent=%q want computer-use-agent-team-auto", cfg.ComputerUseAgentModel)
 	}
 }
 

@@ -304,11 +304,8 @@ func TestToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected undeclared tool call to be suppressed and fallback text, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
-		t.Fatalf("expected fallback text block, got %q", got)
+	if len(h.contentBlocks) != 0 {
+		t.Fatalf("expected undeclared tool call to be suppressed without fallback text, got %#v", h.contentBlocks)
 	}
 	if h.suppressedToolCalls != 1 {
 		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
@@ -346,11 +343,8 @@ func TestWriteToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected undeclared Write tool call to be suppressed and replaced with fallback text, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
-		t.Fatalf("expected fallback text block, got %q", got)
+	if len(h.contentBlocks) != 0 {
+		t.Fatalf("expected undeclared Write tool call to be suppressed without fallback text, got %#v", h.contentBlocks)
 	}
 	if h.suppressedToolCalls != 1 {
 		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
@@ -388,11 +382,8 @@ func TestSandboxMetadataReadToolCall_IsSuppressed(t *testing.T) {
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected suppressed tool call to fall back to a single text block, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
-		t.Fatalf("expected fallback text block, got %q", got)
+	if len(h.contentBlocks) != 0 {
+		t.Fatalf("expected suppressed tool call without fallback text, got %#v", h.contentBlocks)
 	}
 	if h.suppressedToolCalls != 1 {
 		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
@@ -430,11 +421,8 @@ func TestTodoWriteToolCall_IsSuppressedWhenNotDeclared(t *testing.T) {
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected TodoWrite tool call to be suppressed and replaced with fallback text, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
-		t.Fatalf("expected fallback text block, got %q", got)
+	if len(h.contentBlocks) != 0 {
+		t.Fatalf("expected TodoWrite tool call to be suppressed without fallback text, got %#v", h.contentBlocks)
 	}
 	if h.suppressedToolCalls != 1 {
 		t.Fatalf("suppressedToolCalls=%d want=1", h.suppressedToolCalls)
@@ -687,11 +675,8 @@ func TestTaskToolCall_IsRejectedWhenDelegatedToolsExceedAllowedSet(t *testing.T)
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected empty-output fallback text block after rejecting delegated Task, got %#v", h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["type"].(string); got != "text" {
-		t.Fatalf("expected text fallback block, got %q", got)
+	if len(h.contentBlocks) != 0 {
+		t.Fatalf("expected rejected delegated Task without fallback text, got %#v", h.contentBlocks)
 	}
 	if h.suppressedToolCalls == 0 {
 		t.Fatalf("expected suppressed tool call count to increase")
@@ -827,7 +812,7 @@ func TestBashToolCallDifferentIDsDifferentCommands_BothAccepted(t *testing.T) {
 	}
 }
 
-func TestToolCallMissingID_UsesFallbackAndIsAccepted(t *testing.T) {
+func TestToolCallMissingID_IsSuppressed(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
@@ -854,11 +839,8 @@ func TestToolCallMissingID_UsesFallbackAndIsAccepted(t *testing.T) {
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(h.contentBlocks))
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
-		t.Fatalf("expected Bash tool call, got %q", got)
+	if len(h.contentBlocks) != 0 {
+		t.Fatalf("expected missing-id tool call to be suppressed, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
 	}
 }
 
@@ -932,11 +914,8 @@ func TestSeedSideEffectDedupFromMessages_SuppressRepeatDeleteAcrossTurns(t *test
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected repeated delete tool call to be suppressed and fallback text injected, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
-		t.Fatalf("expected fallback text block, got %q", got)
+	if len(h.contentBlocks) != 0 {
+		t.Fatalf("expected repeated delete tool call to be suppressed without fallback text, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
 	}
 	if h.toolDedupCount != 1 {
 		t.Fatalf("expected dedup count 1, got %d", h.toolDedupCount)
@@ -1096,11 +1075,8 @@ func TestSeedSideEffectDedupFromMessages_SuppressesRepeatSuccessfulEditAcrossTur
 	if h.toolDedupCount != 1 {
 		t.Fatalf("expected successful edit retry to be deduped, got %d", h.toolDedupCount)
 	}
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected fallback text block after deduped repeat edit, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["text"].(string); !strings.Contains(got, "No output was presented") {
-		t.Fatalf("expected fallback text block, got %q", got)
+	if len(h.contentBlocks) != 0 {
+		t.Fatalf("expected deduped repeat edit without fallback text, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
 	}
 }
 

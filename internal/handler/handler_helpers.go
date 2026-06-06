@@ -187,6 +187,20 @@ func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices 
 	return ok
 }
 
+func (h *Handler) resolveWarpFeatureConfig(ctx context.Context, acc *store.Account, requestedModel string) warp.AccountFeatureConfig {
+	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
+		return warp.AccountFeatureConfig{}
+	}
+	var choices *warp.AccountModelChoices
+	if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+		loaded, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
+		if err == nil {
+			choices = loaded
+		}
+	}
+	return warp.EffectiveAccountFeatureConfig(acc, choices, requestedModel)
+}
+
 func firstString(values ...string) string {
 	for _, value := range values {
 		value = strings.TrimSpace(value)

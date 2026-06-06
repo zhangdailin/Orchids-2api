@@ -93,7 +93,10 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	if strings.EqualFold(acc.AccountType, "puter") {
 		return puter.NewFromAccount(acc, cfg)
 	}
-	return orchids.NewFromAccount(acc, cfg)
+	if strings.EqualFold(acc.AccountType, "orchids") {
+		return orchids.NewFromAccount(acc, cfg)
+	}
+	return nil
 }
 
 func (h *Handler) Close() {

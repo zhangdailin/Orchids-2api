@@ -117,6 +117,33 @@ func TestBuildRequestBytes_AutoOpenUsesDedicatedComputerUseModel(t *testing.T) {
 	}
 }
 
+func TestBuildRequestBytes_UsesAccountFeatureAgentModels(t *testing.T) {
+	_, payload, err := buildRequestBytes(upstream.UpstreamRequest{
+		Prompt:               "open a browser",
+		Model:                "auto-open",
+		WarpCliAgentModel:    "cli-agent-team-auto",
+		WarpComputerUseModel: "computer-use-agent-team-auto",
+	})
+	if err != nil {
+		t.Fatalf("buildRequestBytes error: %v", err)
+	}
+
+	var decoded warpapi.Request
+	if err := proto.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode request proto: %v", err)
+	}
+	modelConfig := decoded.GetSettings().GetModelConfig()
+	if got := modelConfig.GetBase(); got != "auto-open" {
+		t.Fatalf("base model=%q want auto-open", got)
+	}
+	if got := modelConfig.GetCliAgent(); got != "cli-agent-team-auto" {
+		t.Fatalf("cli agent model=%q want cli-agent-team-auto", got)
+	}
+	if got := modelConfig.GetComputerUseAgent(); got != "computer-use-agent-team-auto" {
+		t.Fatalf("computer use model=%q want computer-use-agent-team-auto", got)
+	}
+}
+
 func TestEstimateInputTokens_OfficialProtoProfile(t *testing.T) {
 	estimate, err := EstimateInputTokens("say hi", "gpt-4o", nil, nil, nil, false, "")
 	if err != nil {

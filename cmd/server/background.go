@@ -184,39 +184,6 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			info, err := clerk.FetchAccountInfoWithSessionContextProxy(acc.ClientCookie, acc.SessionCookie, acc.ClientUat, acc.SessionID, proxyFunc)
 			if err != nil {
 				errLower := strings.ToLower(err.Error())
-				if strings.Contains(errLower, "no active sessions") {
-					jwt := strings.TrimSpace(acc.Token)
-					if jwt == "" {
-						orchidsClient := orchids.NewFromAccount(acc, cfg)
-						if refreshed, jwtErr := orchidsClient.GetToken(); jwtErr == nil {
-							jwt = strings.TrimSpace(refreshed)
-						}
-					}
-					if jwt != "" {
-						acc.Token = jwt
-						if sid, sub := clerk.ParseSessionInfoFromJWT(jwt); sub != "" {
-							if acc.SessionID == "" && sid != "" {
-								acc.SessionID = sid
-							}
-							if acc.UserID == "" {
-								acc.UserID = sub
-							}
-						}
-						creditsInfo, creditsErr := orchids.FetchCreditsWithProxy(context.Background(), jwt, acc.UserID, proxyFunc)
-						if creditsErr != nil {
-							slog.Warn("Orchids credits sync failed (fallback)", "account", acc.Name, "error", creditsErr)
-						} else if creditsInfo != nil {
-							acc.Subscription = strings.ToLower(creditsInfo.Plan)
-							acc.UsageCurrent = creditsInfo.Credits
-							acc.UsageLimit = orchids.PlanCreditLimit(creditsInfo.Plan)
-							slog.Debug("Orchids credits synced (fallback)", "account", acc.Name, "credits", acc.UsageCurrent, "limit", acc.UsageLimit, "plan", acc.Subscription)
-						}
-						if err := s.UpdateAccount(context.Background(), acc); err != nil {
-							slog.Warn("Auto refresh token: update account failed (fallback)", "account", acc.Name, "error", err)
-						}
-						continue
-					}
-				}
 				switch {
 				case strings.Contains(errLower, "status code 401") || strings.Contains(errLower, "unauthorized"):
 					lb.MarkAccountStatus(context.Background(), acc, "401")
@@ -366,11 +333,11 @@ func fetchOrchidsModelChoices(ctx context.Context, cfg *config.Config, s *store.
 	publicModels, fallbackErr := fetchOrchidsPublicModelChoicesWithProxy(ctx, proxyFunc)
 	if fallbackErr != nil {
 		if err != nil {
-			return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", fmt.Errorf("upstream api fetch failed: %v; fallback failed: %w", err, fallbackErr)
+			return nil, "", fmt.Errorf("upstream api fetch failed: %v; public page fetch failed: %w", err, fallbackErr)
 		}
-		return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", fallbackErr
+		return nil, "", fallbackErr
 	}
-	return normalizeOrchidsModelChoices(publicModels), "public_page_fallback", err
+	return normalizeOrchidsModelChoices(publicModels), "public_page", err
 }
 
 func normalizeOrchidsModelChoices(items []orchidsPublicModelChoice) []orchidsPublicModelChoice {

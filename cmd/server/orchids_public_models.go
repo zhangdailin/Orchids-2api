@@ -19,22 +19,6 @@ type orchidsPublicModelChoice struct {
 
 var orchidsPublicModelPattern = regexp.MustCompile(`value:"([^"]+)"[^}]*?label:"([^"]+)"[^}]*?supportsOrchids\s*:\s*(?:!0|true)`)
 
-var orchidsFallbackPublicModels = []orchidsPublicModelChoice{
-	{ID: "auto", Name: "Auto"},
-	{ID: "claude-sonnet-4-6", Name: "Claude Sonnet 4.6"},
-	{ID: "claude-opus-4.6", Name: "Claude Opus 4.6"},
-	{ID: "claude-haiku-4-5", Name: "Claude Haiku 4.5"},
-	{ID: "gemini-3.1-pro", Name: "Gemini 3.1 Pro"},
-	{ID: "gemini-3-flash", Name: "Gemini 3 Flash"},
-	{ID: "gemini-3-pro", Name: "Gemini 3 Pro"},
-	{ID: "gpt-5.3-codex", Name: "GPT-5.3 Codex"},
-	{ID: "gpt-5.2-codex", Name: "GPT-5.2 Codex"},
-	{ID: "gpt-5.2", Name: "GPT-5.2"},
-	{ID: "grok-4.1-fast", Name: "Grok 4.1 Fast"},
-	{ID: "glm-5", Name: "GLM 5"},
-	{ID: "kimi-k2.5", Name: "Kimi K2.5"},
-}
-
 var orchidsPublicModelCache = struct {
 	mu      sync.Mutex
 	items   []orchidsPublicModelChoice
@@ -74,16 +58,16 @@ func fetchOrchidsPublicModelChoicesWithProxy(ctx context.Context, proxyFunc func
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return orchidsFallbackPublicModels, fmt.Errorf("public models html fetch failed: %d", resp.StatusCode)
+		return nil, fmt.Errorf("public models html fetch failed: %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return orchidsFallbackPublicModels, err
+		return nil, err
 	}
 
 	scriptURLs := extractOrchidsScriptURLs(string(body))
 	if len(scriptURLs) == 0 {
-		return orchidsFallbackPublicModels, fmt.Errorf("no script urls found")
+		return nil, fmt.Errorf("no script urls found")
 	}
 
 	scriptCtx, cancelScripts := context.WithTimeout(ctx, 25*time.Second)
@@ -121,7 +105,7 @@ func fetchOrchidsPublicModelChoicesWithProxy(ctx context.Context, proxyFunc func
 	}
 
 	if len(out) == 0 {
-		return orchidsFallbackPublicModels, fmt.Errorf("no public model choices found")
+		return nil, fmt.Errorf("no public model choices found")
 	}
 
 	orchidsPublicModelCache.mu.Lock()

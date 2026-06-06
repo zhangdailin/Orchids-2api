@@ -45,7 +45,6 @@ const (
 	sseDeferredFlushFrameThreshold = 4
 	sseDeferredFlushByteThreshold  = 2048
 	sseBufferedWriteMax            = 4096
-	genericEmptyOutputFallbackText = "No output was presented to the user. This may be due to tool calls being suppressed or the model producing no text content."
 )
 
 var (
@@ -277,25 +276,23 @@ type streamHandler struct {
 	ssePayloadScratch     []byte
 
 	// Tool Handling (proxy mode only)
-	toolBlocks                    map[string]int
-	pendingToolCalls              []toolCall
-	toolInputNames                map[string]string
-	toolInputBuffers              map[string]*strings.Builder
-	toolInputHadDelta             map[string]bool
-	pendingDirectToolUses         map[int]*directToolUseState
-	toolCallHandled               map[string]bool
-	toolCallEmitted               map[string]struct{}
-	currentToolInputID            string
-	toolCallCount                 int
-	skippedDirectBlockIndices     map[int]struct{}
-	suppressedToolCalls           int
-	bashCallDedup                 map[string]struct{}
-	seedToolDedup                 map[string]struct{}
-	toolDedupCount                int
-	toolDedupKeys                 map[string]int
-	introDedup                    map[string]struct{}
-	suppressEmptyOutputFallback   bool
-	preferPriorToolResultFallback bool
+	toolBlocks                map[string]int
+	pendingToolCalls          []toolCall
+	toolInputNames            map[string]string
+	toolInputBuffers          map[string]*strings.Builder
+	toolInputHadDelta         map[string]bool
+	pendingDirectToolUses     map[int]*directToolUseState
+	toolCallHandled           map[string]bool
+	toolCallEmitted           map[string]struct{}
+	currentToolInputID        string
+	toolCallCount             int
+	skippedDirectBlockIndices map[int]struct{}
+	suppressedToolCalls       int
+	bashCallDedup             map[string]struct{}
+	seedToolDedup             map[string]struct{}
+	toolDedupCount            int
+	toolDedupKeys             map[string]int
+	introDedup                map[string]struct{}
 
 	// Throttling
 	lastScanTime time.Time
@@ -369,18 +366,6 @@ func newStreamHandler(
 		ssePayloadScratch:         make([]byte, 0, 512),
 	}
 	return h
-}
-
-func (h *streamHandler) setSuppressEmptyOutputFallback(suppress bool) {
-	h.mu.Lock()
-	h.suppressEmptyOutputFallback = suppress
-	h.mu.Unlock()
-}
-
-func (h *streamHandler) setPreferPriorToolResultFallback(prefer bool) {
-	h.mu.Lock()
-	h.preferPriorToolResultFallback = prefer
-	h.mu.Unlock()
 }
 
 func (h *streamHandler) setDisallowToolCalls(disallow bool) {
@@ -1157,7 +1142,6 @@ func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool 
 		blockType = strings.TrimSpace(blockType)
 		if blockType == "thinking" && h.suppressThinking {
 			h.mu.Lock()
-			h.suppressEmptyOutputFallback = true
 			h.skippedDirectBlockIndices[index] = struct{}{}
 			h.mu.Unlock()
 			return true
@@ -1333,9 +1317,9 @@ func (h *streamHandler) handleDirectFinalSSEEvent(msg upstream.SSEMessage) bool 
 			toolID := strings.TrimSpace(pending.id)
 			toolName, normalizedInput := normalizeUpstreamToolCall(pending.name, inputStr, h.workdir)
 			if toolID == "" {
-				toolID = fallbackToolCallID(toolName, normalizedInput)
+				return true
 			}
-			if toolID == "" || toolName == "" {
+			if toolName == "" {
 				return true
 			}
 			if h.toolCallHandled[toolID] {
@@ -1496,9 +1480,6 @@ func normalizeUpstreamToolCall(name, input, workdir string) (string, string) {
 	sanitized = rewriteBashGitProjectPathCommandInput(normalizedName, sanitized, workdir)
 	sanitized = rewriteForeignBashSandboxPathInput(normalizedName, sanitized, workdir)
 	sanitized = rewriteForeignAbsoluteToolPathInput(normalizedName, sanitized, workdir)
-	if bashInput, ok := rewriteAbsoluteReadToBashFallback(normalizedName, sanitized, workdir); ok {
-		return "Bash", bashInput
-	}
 	return normalizedName, sanitized
 }
 
@@ -1945,81 +1926,6 @@ func rewriteBashReadCandidatesToLocalSearch(command, workdir string) (string, bo
 	}
 	parts = append(parts, "echo 'File does not exist.'; exit 1")
 	return strings.Join(parts, "; "), true
-}
-
-func rewriteAbsoluteReadToBashFallback(name, input, workdir string) (string, bool) {
-	if !strings.EqualFold(strings.TrimSpace(name), "read") {
-		return "", false
-	}
-
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return "", false
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return "", false
-	}
-	rawPath, _ := payload["file_path"].(string)
-	rawPath = strings.TrimSpace(rawPath)
-	if rawPath == "" || !isToolAbsolutePath(rawPath) {
-		return "", false
-	}
-	if isNonProjectSandboxPath(rawPath) {
-		return "", false
-	}
-	if strings.TrimSpace(workdir) == "" {
-		return "", false
-	}
-	if sameOrWithinPath(rawPath, workdir) {
-		return "", false
-	}
-
-	candidates := relativeReadCandidates(rawPath)
-	if len(candidates) == 0 {
-		return "", false
-	}
-
-	var parts []string
-	for _, candidate := range candidates {
-		quoted := strconv.Quote(candidate)
-		parts = append(parts, "if [ -f "+quoted+" ]; then sed -n '1,240p' < "+quoted+"; exit 0; fi")
-	}
-	command := strings.Join(parts, "; ") + "; echo 'File does not exist.'; exit 1"
-	normalized, err := json.Marshal(map[string]string{
-		"command":     command,
-		"description": "Read likely local file by relative candidates",
-	})
-	if err != nil {
-		return "", false
-	}
-	return string(normalized), true
-}
-
-func relativeReadCandidates(pathValue string) []string {
-	parts := splitPathSegments(pathValue)
-	if len(parts) == 0 {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	out := make([]string, 0, 6)
-	maxKeep := 4
-	if len(parts) < maxKeep {
-		maxKeep = len(parts)
-	}
-	for keep := maxKeep; keep >= 1; keep-- {
-		candidate := filepath.Join(parts[len(parts)-keep:]...)
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		out = append(out, candidate)
-	}
-	return out
 }
 
 func rebaseCandidatePathToWorkdir(pathValue, workdir string) string {
@@ -2492,25 +2398,6 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		}
 	}
 
-	// Ensure there's some text output before closing if we return end_turn with no output
-	if stopReason != "tool_use" && !h.suppressEmptyOutputFallback && !h.hasAnyOutput() {
-		emptyMsg := h.emptyOutputFallbackText()
-		if emptyMsg != "" {
-			if h.isStream {
-				h.emitTextBlockWithMode(emptyMsg, false)
-			} else {
-				h.mu.Lock()
-				h.responseText.WriteString(emptyMsg)
-				h.contentBlocks = append(h.contentBlocks, map[string]interface{}{
-					"type": "text",
-					"text": emptyMsg,
-				})
-				h.hasTextOutput = true
-				h.mu.Unlock()
-			}
-		}
-	}
-
 	h.mu.Lock()
 	if h.hasReturn {
 		h.mu.Unlock()
@@ -2728,15 +2615,6 @@ func (h *streamHandler) emitTextBlock(text string) {
 	h.emitTextBlockWithMode(text, false)
 }
 
-func (h *streamHandler) emptyOutputFallbackText() string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.preferPriorToolResultFallback && h.toolDedupCount > 0 {
-		return ""
-	}
-	return genericEmptyOutputFallbackText
-}
-
 func (h *streamHandler) emitTextBlockWithMode(text string, final bool) {
 	if !h.isStream || text == "" {
 		return
@@ -2924,22 +2802,6 @@ func sideEffectToolDedupKey(name, input string, workdir ...string) string {
 		return ""
 	}
 	return sideEffectToolDedupKeyFromFields(nameKey, fields, firstOptionalString(workdir...))
-}
-
-func fallbackToolCallID(toolName, input string) string {
-	nameKey := strings.ToLower(strings.TrimSpace(toolName))
-	if nameKey == "" {
-		return ""
-	}
-	normalizedInput := strings.TrimSpace(input)
-	if normalizedInput == "" {
-		normalizedInput = "{}"
-	}
-	sum := fnv1a64Pair(nameKey, normalizedInput)
-	out := make([]byte, 0, len("tool_anon_")+16)
-	out = append(out, "tool_anon_"...)
-	out = strconv.AppendUint(out, sum, 16)
-	return string(out)
 }
 
 func hasRequiredToolInput(name, input string) bool {
@@ -3285,21 +3147,6 @@ func fnv1a64String(s string) uint64 {
 	return h
 }
 
-func fnv1a64Pair(a, b string) uint64 {
-	h := fnv64Offset
-	for i := 0; i < len(a); i++ {
-		h ^= uint64(a[i])
-		h *= fnv64Prime
-	}
-	h ^= 0
-	h *= fnv64Prime
-	for i := 0; i < len(b); i++ {
-		h ^= uint64(b[i])
-		h *= fnv64Prime
-	}
-	return h
-}
-
 func (h *streamHandler) markWriteErrorLocked(event string, err error) {
 	if err == nil {
 		return
@@ -3321,29 +3168,7 @@ func (h *streamHandler) forceFinishIfMissing() {
 	hasToolCalls := h.toolCallCount > 0 ||
 		len(h.pendingToolCalls) > 0 ||
 		len(h.toolCallEmitted) > 0
-	hasOutput := h.hasTextOutput || h.responseText.Len() > 0 || len(h.contentBlocks) > 0
 	h.mu.Unlock()
-
-	// Inject a fallback text block if upstream produced nothing.
-	if !hasToolCalls && !hasOutput {
-		slog.Warn("Upstream returned no output; injecting fallback text block")
-		h.ensureBlock("text")
-		h.mu.Lock()
-		internalIdx := h.activeTextBlockIndex
-		sseIdx := h.activeTextSSEIndex
-		h.mu.Unlock()
-
-		emptyMsg := "No response from upstream. The request may not be supported in this mode."
-		if h.isStream {
-			deltaData, _ := marshalSSEContentBlockDeltaTextBytes(sseIdx, emptyMsg)
-			h.writeSSEBytes("content_block_delta", deltaData)
-		} else {
-			h.responseText.WriteString(emptyMsg)
-			if builder, ok := h.textBlockBuilders[internalIdx]; ok {
-				builder.WriteString(emptyMsg)
-			}
-		}
-	}
 
 	stopReason := "end_turn"
 	if hasToolCalls {
@@ -3925,10 +3750,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr, h.workdir)
 		toolName, inputStr = h.rewriteWebToolCallToClient(toolName, inputStr)
 		if toolID == "" {
-			toolID = fallbackToolCallID(toolName, inputStr)
-			if toolID == "" {
-				return
-			}
+			return
 		}
 		if h.toolCallHandled[toolID] {
 			return

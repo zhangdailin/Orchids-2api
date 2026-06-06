@@ -133,12 +133,6 @@ func main() {
 				return client
 			}
 		}
-		// Fallback to orchids
-		if p := registry.Get("orchids"); p != nil {
-			if client, ok := p.NewClient(acc, c).(handler.UpstreamClient); ok {
-				return client
-			}
-		}
 		return nil
 	})
 

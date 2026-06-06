@@ -62,7 +62,6 @@
     activeId: "",
     sending: false,
     abortController: null,
-    pendingFile: null,
     sidebarOpen: false,
     model: "grok-4.3",
     models: [
@@ -476,15 +475,6 @@
     session.messages = session.messages.slice(-MAX_CHAT_MESSAGES);
     session.updatedAt = Date.now();
     return overflow;
-  }
-
-  function readFileAsDataURL(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
-      reader.readAsDataURL(file);
-    });
   }
 
   function saveChatSessions() {
@@ -1717,10 +1707,9 @@
     const input = document.getElementById("grokPromptInput");
     const prompt = String(input?.value || "").trim();
     if (!prompt) return;
-    const attachment = chatState.pendingFile ? { ...chatState.pendingFile } : null;
     const session = activeChatSession();
     if (!session) return;
-    session.messages.push({ role: "user", content: prompt, attachment });
+    session.messages.push({ role: "user", content: prompt });
     session.updatedAt = Date.now();
     trimChatSessionMessages(session);
     ensureChatTitle(session);
@@ -1731,7 +1720,6 @@
       input.style.height = "40px";
     }
 
-    clearPendingChatFile();
     const contentEl = appendChatMessage("assistant", "");
     await requestChatCompletion(session, contentEl);
   }
@@ -1745,9 +1733,7 @@
     const modelDropdown = document.getElementById("grokModelDropdown");
     const settingsToggle = document.getElementById("grokSettingsToggle");
     const settingsPanel = document.getElementById("grokSettingsPanel");
-    const attachBtn = document.getElementById("grokAttachBtn");
-    const fileInput = document.getElementById("grokFileInput");
-    const fileRemoveBtn = document.getElementById("grokFileRemoveBtn");
+    const settingsCloseBtn = document.getElementById("grokSettingsCloseBtn");
     const sidebarToggle = document.getElementById("grokChatSidebarToggle");
     const sidebarOverlay = document.getElementById("grokChatSidebarOverlay");
     const collapseBtn = document.getElementById("grokChatCollapseBtn");
@@ -1771,31 +1757,6 @@
         }
         sendChatMessage().catch(() => {});
       });
-    }
-    if (attachBtn && fileInput) {
-      attachBtn.addEventListener("click", () => fileInput.click());
-    }
-    if (fileInput) {
-      fileInput.addEventListener("change", async () => {
-        const file = fileInput.files && fileInput.files[0];
-        if (!file) return;
-        try {
-          const dataUrl = await readFileAsDataURL(file);
-          chatState.pendingFile = {
-            name: file.name || "upload.bin",
-            type: file.type || "",
-            dataUrl,
-          };
-          renderPendingChatFile();
-        } catch (err) {
-          showToast(err?.message || "读取文件失败", "error");
-        } finally {
-          fileInput.value = "";
-        }
-      });
-    }
-    if (fileRemoveBtn) {
-      fileRemoveBtn.addEventListener("click", () => clearPendingChatFile());
     }
     if (input) {
       let composing = false;
@@ -1825,6 +1786,7 @@
     if (modelChip && modelDropdown) {
       modelChip.addEventListener("click", (event) => {
         event.stopPropagation();
+        closeChatSettingsPanel(settingsToggle, settingsPanel);
         modelDropdown.classList.toggle("show");
       });
       modelDropdown.addEventListener("click", (event) => {
@@ -1840,12 +1802,28 @@
     if (settingsToggle && settingsPanel) {
       settingsToggle.addEventListener("click", (event) => {
         event.stopPropagation();
-        settingsPanel.classList.toggle("show");
+        modelDropdown?.classList.remove("show");
+        toggleChatSettingsPanel(settingsToggle, settingsPanel);
+      });
+      settingsPanel.addEventListener("click", (event) => {
+        event.stopPropagation();
+      });
+    }
+    if (settingsCloseBtn) {
+      settingsCloseBtn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeChatSettingsPanel(settingsToggle, settingsPanel);
+        settingsToggle?.focus();
       });
     }
     document.addEventListener("click", () => {
       modelDropdown?.classList.remove("show");
-      settingsPanel?.classList.remove("show");
+      closeChatSettingsPanel(settingsToggle, settingsPanel);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      modelDropdown?.classList.remove("show");
+      closeChatSettingsPanel(settingsToggle, settingsPanel);
     });
     if (tempRange && tempValue) {
       tempRange.addEventListener("input", () => {
@@ -1864,6 +1842,25 @@
       systemInput.addEventListener("input", () => {
         saveGrokToolsUIState({ chatSystemPrompt: String(systemInput.value || "") });
       });
+    }
+  }
+
+  function toggleChatSettingsPanel(toggle, panel) {
+    if (!panel) return;
+    const willShow = !panel.classList.contains("show");
+    panel.classList.toggle("show", willShow);
+    panel.setAttribute("aria-hidden", willShow ? "false" : "true");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", willShow ? "true" : "false");
+    }
+  }
+
+  function closeChatSettingsPanel(toggle, panel) {
+    if (!panel) return;
+    panel.classList.remove("show");
+    panel.setAttribute("aria-hidden", "true");
+    if (toggle) {
+      toggle.setAttribute("aria-expanded", "false");
     }
   }
 
@@ -1898,29 +1895,10 @@
     renderChatModelDropdown();
     renderChatSessions();
     rerenderChatThread();
-    renderPendingChatFile();
     setChatSendButtonState(false);
     bindChatEvents();
     closeChatSidebar();
     syncChatSidebarState();
-  }
-
-  function renderPendingChatFile() {
-    const badge = document.getElementById("grokFileBadge");
-    const name = document.getElementById("grokFileName");
-    if (!badge || !name) return;
-    if (!chatState.pendingFile?.name) {
-      badge.classList.add("hidden");
-      name.textContent = "";
-      return;
-    }
-    badge.classList.remove("hidden");
-    name.textContent = chatState.pendingFile.name;
-  }
-
-  function clearPendingChatFile() {
-    chatState.pendingFile = null;
-    renderPendingChatFile();
   }
 
   function setVoiceStatus(text, type) {

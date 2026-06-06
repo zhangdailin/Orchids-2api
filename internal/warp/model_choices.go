@@ -12,6 +12,25 @@ type ModelChoice struct {
 	Name string
 }
 
+type FeatureModelChoices struct {
+	AgentMode        FeatureModelGroup
+	Coding           FeatureModelGroup
+	CliAgent         FeatureModelGroup
+	ComputerUseAgent FeatureModelGroup
+}
+
+type FeatureModelGroup struct {
+	DefaultID string
+	Choices   []ModelChoice
+}
+
+func AgentModeModelChoices(features *FeatureModelChoices) []ModelChoice {
+	if features == nil {
+		return nil
+	}
+	return mergeWarpModelChoices(features.AgentMode.DefaultID, features.AgentMode.Choices)
+}
+
 const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContext: RequestContext!) {
   user(requestContext: $requestContext) {
     __typename
@@ -20,6 +39,27 @@ const getFeatureModelChoicesQuery = `query GetFeatureModelChoices($requestContex
         workspaces {
           featureModelChoice {
             agentMode {
+              defaultId
+              choices {
+                id
+                displayName
+              }
+            }
+            coding {
+              defaultId
+              choices {
+                id
+                displayName
+              }
+            }
+            cliAgent {
+              defaultId
+              choices {
+                id
+                displayName
+              }
+            }
+            computerUseAgent {
               defaultId
               choices {
                 id
@@ -49,10 +89,10 @@ func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice
 	}
 
 	jwt := c.session.currentJWT()
-	agentChoices, defaultID, err := fetchFeatureAgentModeModelChoices(ctx, client, jwt)
+	features, err := fetchFeatureModelChoices(ctx, client, jwt)
 
-	if len(agentChoices) > 0 {
-		return mergeWarpModelChoices(defaultID, agentChoices), "feature_model_choice_agent_mode", nil
+	if features != nil && len(features.AgentMode.Choices) > 0 {
+		return mergeWarpModelChoices(features.AgentMode.DefaultID, features.AgentMode.Choices), "feature_model_choice_agent_mode", nil
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("warp model discovery failed: %w", err)
@@ -60,7 +100,35 @@ func (c *Client) FetchDiscoveredModelChoices(ctx context.Context) ([]ModelChoice
 	return nil, "", fmt.Errorf("warp model discovery returned no choices")
 }
 
+func (c *Client) FetchDiscoveredFeatureModelChoices(ctx context.Context) (*FeatureModelChoices, string, error) {
+	if c == nil || c.session == nil {
+		return nil, "", fmt.Errorf("warp session not initialized")
+	}
+
+	client := c.authHTTPClient()
+	if err := c.session.ensureToken(ctx, client); err != nil {
+		return nil, "", err
+	}
+
+	features, err := fetchFeatureModelChoices(ctx, client, c.session.currentJWT())
+	if err != nil {
+		return nil, "", fmt.Errorf("warp feature model discovery failed: %w", err)
+	}
+	if features == nil || len(features.AgentMode.Choices) == 0 {
+		return nil, "", fmt.Errorf("warp feature model discovery returned no agent mode choices")
+	}
+	return features, "feature_model_choice_all", nil
+}
+
 func fetchFeatureAgentModeModelChoices(ctx context.Context, client *http.Client, jwt string) ([]ModelChoice, string, error) {
+	features, err := fetchFeatureModelChoices(ctx, client, jwt)
+	if features == nil {
+		return nil, "", err
+	}
+	return features.AgentMode.Choices, features.AgentMode.DefaultID, err
+}
+
+func fetchFeatureModelChoices(ctx context.Context, client *http.Client, jwt string) (*FeatureModelChoices, error) {
 	payload := map[string]interface{}{
 		"query":         getFeatureModelChoicesQuery,
 		"operationName": "GetFeatureModelChoices",
@@ -79,13 +147,10 @@ func fetchFeatureAgentModeModelChoices(ctx context.Context, client *http.Client,
 				User struct {
 					Workspaces []struct {
 						FeatureModelChoice struct {
-							AgentMode struct {
-								DefaultID string `json:"defaultId"`
-								Choices   []struct {
-									ID          string `json:"id"`
-									DisplayName string `json:"displayName"`
-								} `json:"choices"`
-							} `json:"agentMode"`
+							AgentMode        featureModelGroupResponse `json:"agentMode"`
+							Coding           featureModelGroupResponse `json:"coding"`
+							CliAgent         featureModelGroupResponse `json:"cliAgent"`
+							ComputerUseAgent featureModelGroupResponse `json:"computerUseAgent"`
 						} `json:"featureModelChoice"`
 					} `json:"workspaces"`
 				} `json:"user"`
@@ -96,32 +161,59 @@ func fetchFeatureAgentModeModelChoices(ctx context.Context, client *http.Client,
 		} `json:"errors"`
 	}
 	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "GetFeatureModelChoices", payload, &resp); err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if len(resp.Errors) > 0 {
-		return nil, "", fmt.Errorf("warp graphql: %s", resp.Errors[0].Message)
+		return nil, fmt.Errorf("warp graphql: %s", resp.Errors[0].Message)
 	}
 	if !strings.EqualFold(strings.TrimSpace(resp.Data.User.Type), "UserOutput") {
 		if msg := strings.TrimSpace(resp.Data.User.Error.Message); msg != "" {
-			return nil, "", fmt.Errorf("warp graphql: %s", msg)
+			return nil, fmt.Errorf("warp graphql: %s", msg)
 		}
-		return nil, "", fmt.Errorf("warp graphql returned %q for feature model choices", strings.TrimSpace(resp.Data.User.Type))
+		return nil, fmt.Errorf("warp graphql returned %q for feature model choices", strings.TrimSpace(resp.Data.User.Type))
 	}
 
-	var choices []ModelChoice
-	defaultID := ""
+	features := &FeatureModelChoices{}
 	for _, workspace := range resp.Data.User.User.Workspaces {
-		agentMode := workspace.FeatureModelChoice.AgentMode
-		if defaultID == "" {
-			defaultID = canonicalModelID(agentMode.DefaultID)
-		}
-		for _, choice := range agentMode.Choices {
-			if normalized, ok := normalizeWarpModelChoice(choice.ID, choice.DisplayName); ok {
-				choices = append(choices, normalized)
-			}
+		choice := workspace.FeatureModelChoice
+		features.AgentMode = mergeFeatureModelGroup(features.AgentMode, normalizeFeatureModelGroup(choice.AgentMode))
+		features.Coding = mergeFeatureModelGroup(features.Coding, normalizeFeatureModelGroup(choice.Coding))
+		features.CliAgent = mergeFeatureModelGroup(features.CliAgent, normalizeFeatureModelGroup(choice.CliAgent))
+		features.ComputerUseAgent = mergeFeatureModelGroup(features.ComputerUseAgent, normalizeFeatureModelGroup(choice.ComputerUseAgent))
+	}
+	return features, nil
+}
+
+type featureModelGroupResponse struct {
+	DefaultID string `json:"defaultId"`
+	Choices   []struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"displayName"`
+	} `json:"choices"`
+}
+
+func normalizeFeatureModelGroup(raw featureModelGroupResponse) FeatureModelGroup {
+	group := FeatureModelGroup{
+		DefaultID: canonicalModelID(raw.DefaultID),
+		Choices:   make([]ModelChoice, 0, len(raw.Choices)),
+	}
+	for _, choice := range raw.Choices {
+		if normalized, ok := normalizeWarpModelChoice(choice.ID, choice.DisplayName); ok {
+			group.Choices = append(group.Choices, normalized)
 		}
 	}
-	return choices, defaultID, nil
+	if group.DefaultID == "" && len(group.Choices) > 0 {
+		group.DefaultID = group.Choices[0].ID
+	}
+	return group
+}
+
+func mergeFeatureModelGroup(current, next FeatureModelGroup) FeatureModelGroup {
+	if current.DefaultID == "" {
+		current.DefaultID = next.DefaultID
+	}
+	current.Choices = mergeWarpModelChoices(current.DefaultID, current.Choices, next.Choices)
+	return current
 }
 
 func normalizeWarpModelChoice(id, name string) (ModelChoice, bool) {

@@ -300,8 +300,7 @@
   background: var(--primary);
 }
 
-.model-chip,
-.file-badge {
+.model-chip {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -314,16 +313,8 @@
   color: var(--text-main);
 }
 
-.file-input,
 .ref-file-input {
   display: none;
-}
-
-.file-remove {
-  border: 0;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
 }
 
 .model-dropdown,
@@ -339,10 +330,45 @@
   box-shadow: var(--shadow-md);
 }
 
+.popover {
+  position: relative;
+}
+
 .model-dropdown.show,
 .settings-panel.show,
 .popover.open .settings-panel {
   display: block;
+}
+
+.chat-settings-panel {
+  right: 0;
+  bottom: calc(100% + 10px);
+  width: min(560px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  padding: 14px;
+}
+
+.chat-settings-head {
+  margin-bottom: 12px;
+}
+
+.chat-settings-ranges {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chat-system-input {
+  min-height: 150px;
+  max-height: 42vh;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.panel-close-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
 }
 
 .model-option {
@@ -1146,8 +1172,7 @@
   backdrop-filter: blur(16px);
 }
 
-.model-chip,
-.file-badge {
+.model-chip {
   border-color: var(--border-color);
   background: var(--bg-surface-hover);
 }
@@ -1407,6 +1432,26 @@
   .composer-actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .chat-settings-panel {
+    position: fixed;
+    right: max(14px, env(safe-area-inset-right, 0px));
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    left: max(14px, env(safe-area-inset-left, 0px));
+    z-index: 90;
+    width: auto;
+    min-width: 0;
+    max-height: min(70vh, 520px);
+    overflow-y: auto;
+  }
+
+  .chat-settings-ranges {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-system-input {
+    min-height: 132px;
   }
 
   .model-chip {

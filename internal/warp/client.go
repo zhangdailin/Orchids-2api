@@ -95,6 +95,10 @@ func (c *Client) Close() {
 }
 
 func (c *Client) ProbeModel(ctx context.Context, model string) error {
+	return c.ProbeModelWithFeatureConfig(ctx, model, AccountFeatureConfig{})
+}
+
+func (c *Client) ProbeModelWithFeatureConfig(ctx context.Context, model string, featureConfig AccountFeatureConfig) error {
 	if c == nil || c.session == nil {
 		return fmt.Errorf("warp session not initialized")
 	}
@@ -102,9 +106,11 @@ func (c *Client) ProbeModel(ctx context.Context, model string) error {
 	defer cancel()
 
 	req := upstream.UpstreamRequest{
-		Prompt:  "Reply with ok.",
-		Model:   model,
-		NoTools: true,
+		Prompt:               "Reply with ok.",
+		Model:                model,
+		NoTools:              true,
+		WarpCliAgentModel:    featureConfig.CliAgentModel,
+		WarpComputerUseModel: featureConfig.ComputerUseAgentModel,
 	}
 
 	authClient := c.authHTTPClient()

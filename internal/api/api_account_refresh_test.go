@@ -339,7 +339,7 @@ func TestRefreshAccountState_OrchidsTokenRefreshFailureMarksUnauthorized(t *test
 	}
 }
 
-func TestRefreshAccountState_OrchidsTokenRefreshFailureWithQuotaFallbackReturnsSuccess(t *testing.T) {
+func TestRefreshAccountState_OrchidsTokenRefreshFailureDoesNotFallbackToQuota(t *testing.T) {
 	prevGetToken := orchidsGetAccountToken
 	prevFetchCredits := orchidsFetchCredits
 	t.Cleanup(func() {
@@ -352,12 +352,7 @@ func TestRefreshAccountState_OrchidsTokenRefreshFailureWithQuotaFallbackReturnsS
 		return "", errors.New("unexpected status code 429: too many requests")
 	}
 	orchidsFetchCredits = func(ctx context.Context, sessionJWTArg string, userID string, proxyFunc func(*http.Request) (*url.URL, error)) (*orchids.CreditsInfo, error) {
-		if sessionJWTArg != sessionJWT {
-			t.Fatalf("sessionJWT=%q want %q", sessionJWTArg, sessionJWT)
-		}
-		if userID != "user_quota" {
-			t.Fatalf("userID=%q want user_quota", userID)
-		}
+		t.Fatal("credits fetch should not be called after chat token refresh failure")
 		return &orchids.CreditsInfo{Credits: 321, Plan: "PRO"}, nil
 	}
 
@@ -368,23 +363,14 @@ func TestRefreshAccountState_OrchidsTokenRefreshFailureWithQuotaFallbackReturnsS
 	}
 
 	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err != nil {
-		t.Fatalf("refreshAccountState() error: %v", err)
+	if err == nil {
+		t.Fatal("refreshAccountState() expected error")
 	}
-	if status != "" {
-		t.Fatalf("status=%q want empty", status)
+	if status != "429" {
+		t.Fatalf("status=%q want 429", status)
 	}
-	if httpStatus != 0 {
-		t.Fatalf("httpStatus=%d want 0", httpStatus)
-	}
-	if acc.SessionID != "sess_quota" {
-		t.Fatalf("SessionID=%q want sess_quota", acc.SessionID)
-	}
-	if acc.UserID != "user_quota" {
-		t.Fatalf("UserID=%q want user_quota", acc.UserID)
-	}
-	if acc.Subscription != "pro" || acc.UsageCurrent != 321 || acc.UsageLimit != orchids.PlanCreditLimit("PRO") {
-		t.Fatalf("unexpected orchids quota sync: subscription=%q current=%v limit=%v", acc.Subscription, acc.UsageCurrent, acc.UsageLimit)
+	if httpStatus != http.StatusTooManyRequests {
+		t.Fatalf("httpStatus=%d want 429", httpStatus)
 	}
 }
 
