@@ -750,11 +750,58 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	preSelectWarpRequest := strings.EqualFold(targetChannel, "warp")
+	preSelectPuterRequest := strings.EqualFold(targetChannel, "puter")
+	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest
+	suggestionMode := isSuggestionMode(req.Messages)
+	noThinking := suggestionMode || h.config.SuppressThinking
+	gateNoTools := false
+	toolGateReasons := make([]string, 0, 2)
+	toolGateMessage := ""
+	suppressThinking := noThinking
+	if suggestionMode {
+		gateNoTools = true
+		toolGateReasons = append(toolGateReasons, "suggestion_mode")
+		toolGateMessage = buildToolGateMessage(req.Messages, true)
+	}
+	if lastUserIsToolResultFollowup(req.Messages) {
+		if preSelectPassthroughRequest {
+			if verboseDiagnostics {
+				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", preSelectWarpRequest, "puter", preSelectPuterRequest)
+			}
+		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
+			if verboseDiagnostics {
+				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", preSelectWarpRequest)
+			}
+		} else {
+			gateNoTools = true
+			toolGateReasons = append(toolGateReasons, "tool_result_followup")
+			toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
+			if verboseDiagnostics {
+				slog.Debug("tool_gate: disabled tools for tool_result-only follow-up", "warp", preSelectWarpRequest)
+			}
+		}
+	}
+	effectiveTools := req.Tools
+	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
+		effectiveTools = nil
+	}
+	if gateNoTools {
+		effectiveTools = nil
+		if verboseDiagnostics {
+			slog.Debug("tool_gate: disabled tools", "warp", preSelectWarpRequest, "reasons", toolGateReasons)
+		}
+	}
+	requireWarpCloudAgent := preSelectWarpRequest && warpRequestRequiresCloudAgent(req.Messages, effectiveTools)
+
 	// 选择账号 (Initial Selection)
 	failedAccountIDs := []int64{}
 	failedAccountSet := make(map[int64]struct{})
 
-	apiClient, currentAccount, err := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, req.Model)
+	apiClient, currentAccount, err := h.selectAccountWithOptions(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
+		ModelID:               req.Model,
+		RequireWarpCloudAgent: requireWarpCloudAgent,
+	})
 	if err != nil {
 		slog.Error("selectAccount failed", "error", err, "channel", targetChannel)
 		logger.LogEarlyExit("select_account_failed", map[string]interface{}{
@@ -776,11 +823,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		accountSnapshot = &snap
 	}
 
-	isWarpRequest := strings.EqualFold(forcedChannel, "warp")
+	isWarpRequest := preSelectWarpRequest
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		isWarpRequest = true
 	}
-	isPuterRequest := strings.EqualFold(forcedChannel, "puter")
+	isPuterRequest := preSelectPuterRequest
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
 		isPuterRequest = true
 	}
@@ -826,45 +873,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		h.releaseTrackedAccount(trackedAccountID)
 	}()
 
-	suggestionMode := isSuggestionMode(req.Messages)
-	noThinking := suggestionMode || h.config.SuppressThinking
-	gateNoTools := false
-	toolGateReasons := make([]string, 0, 2)
-	toolGateMessage := ""
-	suppressThinking := noThinking
-	if suggestionMode {
-		gateNoTools = true
-		toolGateReasons = append(toolGateReasons, "suggestion_mode")
-		toolGateMessage = buildToolGateMessage(req.Messages, true)
-	}
-	if lastUserIsToolResultFollowup(req.Messages) {
-		if isPassthroughRequest {
-			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", isWarpRequest, "puter", isPuterRequest)
-			}
-		} else if shouldKeepToolsForWarpToolResultFollowup(req.Messages) {
-			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for exploratory tool_result follow-up", "warp", isWarpRequest)
-			}
-		} else {
-			gateNoTools = true
-			toolGateReasons = append(toolGateReasons, "tool_result_followup")
-			toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
-			if verboseDiagnostics {
-				slog.Debug("tool_gate: disabled tools for tool_result-only follow-up", "warp", isWarpRequest)
-			}
-		}
-	}
-	effectiveTools := req.Tools
-	if h.config.WarpDisableTools != nil && *h.config.WarpDisableTools {
-		effectiveTools = nil
-	}
-	if gateNoTools {
-		effectiveTools = nil
-		if verboseDiagnostics {
-			slog.Debug("tool_gate: disabled tools", "warp", isWarpRequest, "reasons", toolGateReasons)
-		}
-	}
 	chatSessionID := ""
 	if isWarpRequest && conversationKey != "" {
 		chatSessionID, _ = h.sessionStore.GetConvID(r.Context(), conversationKey)
@@ -1277,6 +1285,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 			errStr := err.Error()
 			errClass := classifyUpstreamError(errStr)
+			warpCloudAgentForbidden := isWarpCloudAgentForbiddenError(errStr)
 			if isWarpRequest {
 				h.refundWarpCredits(apiClient, errClass.Category)
 			}
@@ -1293,13 +1302,20 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				if status := classifyAccountStatus(errStr); status != "" {
 					// Mark status if it's auth-related OR a quota/rate-limit style cooldown.
 					if !errClass.Retryable || errClass.Category == "auth" || errClass.Category == "auth_blocked" || status == "403" || status == "429" || status == "402" {
-						if verboseDiagnostics {
+						skipAccountStatusMark := isWarpRequest && status == "403" && warpCloudAgentForbidden
+						if skipAccountStatusMark {
+							if verboseDiagnostics {
+								slog.Debug("跳过账号全局 403 标记: Warp cloud agent 能力不足", "account_id", currentAccount.ID, "category", errClass.Category)
+							}
+						} else if verboseDiagnostics {
 							slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", status, "category", errClass.Category)
 						}
-						if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
-							markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
-						} else {
-							h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, status)
+						if !skipAccountStatusMark {
+							if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
+								markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
+							} else {
+								h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, status)
+							}
 						}
 					}
 				}
@@ -1346,6 +1362,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				"retries_remaining", retriesRemaining,
 			)
 			if errClass.SwitchAccount && currentAccount != nil && h.loadBalancer != nil {
+				if isWarpRequest && warpCloudAgentForbidden {
+					requireWarpCloudAgent = true
+				}
 				prevClient := apiClient
 				prevAccount := currentAccount
 				if _, ok := failedAccountSet[currentAccount.ID]; !ok {
@@ -1360,7 +1379,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					trackedAccountID = 0
 				}
 
-				nextClient, nextAccount, retryErr := h.selectAccount(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, upstreamReq.Model)
+				nextClient, nextAccount, retryErr := h.selectAccountWithOptions(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
+					ModelID:               upstreamReq.Model,
+					RequireWarpCloudAgent: requireWarpCloudAgent,
+				})
 				if retryErr == nil {
 					apiClient = nextClient
 					currentAccount = nextAccount

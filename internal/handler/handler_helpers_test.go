@@ -229,3 +229,88 @@ func TestSelectAccountRecord_WarpExhaustedPaidAccountIsFreeOnly(t *testing.T) {
 		t.Fatalf("selectAccountRecord(default) account=%v want id=1", account)
 	}
 }
+
+func TestSelectAccountRecord_WarpToolRequestRequiresCloudAgentAccount(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+	if err := s.CreateAccount(ctx, &store.Account{
+		AccountType:          "warp",
+		RefreshToken:         "warp-free-token",
+		Subscription:         "free",
+		WarpMonthlyLimit:     60,
+		WarpMonthlyRemaining: 50,
+		Enabled:              true,
+		Weight:               1,
+	}); err != nil {
+		t.Fatalf("CreateAccount(free) error = %v", err)
+	}
+	if err := s.CreateAccount(ctx, &store.Account{
+		AccountType:          "warp",
+		RefreshToken:         "warp-paid-token",
+		Subscription:         "build/business",
+		WarpMonthlyLimit:     1500,
+		WarpMonthlyRemaining: 100,
+		Enabled:              true,
+		Weight:               1,
+	}); err != nil {
+		t.Fatalf("CreateAccount(paid) error = %v", err)
+	}
+
+	account, err := h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{
+		ModelID:               "auto-open",
+		RequireWarpCloudAgent: true,
+	})
+	if err != nil {
+		t.Fatalf("selectAccountRecordWithOptions(tool request) error = %v", err)
+	}
+	if account == nil || account.ID != 2 {
+		t.Fatalf("selected account=%v want paid id=2", account)
+	}
+
+	account, err = h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{
+		ModelID: "auto-open",
+	})
+	if err != nil {
+		t.Fatalf("selectAccountRecordWithOptions(chat request) error = %v", err)
+	}
+	if account == nil || account.ID == 0 {
+		t.Fatalf("selected account=%v want any warp account", account)
+	}
+}
+
+func TestSelectAccountRecord_WarpToolRequestRejectsFreeOnlyPool(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+	if err := s.CreateAccount(ctx, &store.Account{
+		AccountType:          "warp",
+		RefreshToken:         "warp-free-token",
+		Subscription:         "free",
+		WarpMonthlyLimit:     60,
+		WarpMonthlyRemaining: 50,
+		Enabled:              true,
+		Weight:               1,
+	}); err != nil {
+		t.Fatalf("CreateAccount(free) error = %v", err)
+	}
+
+	_, err := h.selectAccountRecordWithOptions(ctx, "warp", nil, accountSelectionOptions{
+		ModelID:               "auto-open",
+		RequireWarpCloudAgent: true,
+	})
+	if err == nil {
+		t.Fatal("selectAccountRecordWithOptions() error = nil, want no cloud agent account")
+	}
+	if !strings.Contains(err.Error(), "cloud agent requires a non-free Warp account") {
+		t.Fatalf("error=%q want no available warp account", err.Error())
+	}
+}

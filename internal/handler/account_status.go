@@ -30,6 +30,11 @@ func isWarpQuotaExhaustedError(errStr string) bool {
 		strings.Contains(lower, "run out of credits")
 }
 
+func isWarpCloudAgentForbiddenError(errStr string) bool {
+	lower := strings.ToLower(errStr)
+	return strings.Contains(lower, "not allowed to use the provided cloud agent")
+}
+
 func markAccountStatus(ctx context.Context, store *store.Store, acc *store.Account, status string) {
 	if acc == nil || store == nil || status == "" {
 		return

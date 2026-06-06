@@ -265,6 +265,77 @@ func lastUserIsToolResultFollowup(messages []prompt.Message) bool {
 	return false
 }
 
+func warpRequestRequiresCloudAgent(messages []prompt.Message, tools []interface{}) bool {
+	if len(tools) > 0 {
+		return true
+	}
+	if messagesContainToolExchange(messages) {
+		return true
+	}
+	return looksLikeWarpAgentIntent(lastNonSuggestionUserText(messages))
+}
+
+func messagesContainToolExchange(messages []prompt.Message) bool {
+	for _, msg := range messages {
+		if msg.Content.IsString() {
+			continue
+		}
+		for _, block := range msg.Content.GetBlocks() {
+			switch strings.TrimSpace(block.Type) {
+			case "tool_use", "tool_result":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func looksLikeWarpAgentIntent(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(stripSystemRemindersForMode(text)))
+	if lower == "" {
+		return false
+	}
+
+	for _, marker := range []string{
+		"创建文件", "生成文件", "修改文件", "编辑文件", "保存到", "写入",
+		"执行命令", "运行命令", "跑一下", "跑测试", "运行测试", "编译", "构建",
+		"修复代码", "改代码", "写代码", "代码实现", "项目里", "仓库里",
+		"update the file", "create file", "write file", "save to",
+		"run command", "execute command", "compile", "run tests", "fix the code", "write code",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+
+	if looksLikeSourceOrCommandSubject(lower) {
+		for _, action := range []string{
+			"帮我", "写", "生成", "创建", "实现", "修改", "修复", "运行", "执行", "编译", "构建",
+			"write", "create", "generate", "build", "implement", "modify", "edit", "fix", "run", "execute", "compile",
+		} {
+			if strings.Contains(lower, action) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func looksLikeSourceOrCommandSubject(lower string) bool {
+	for _, marker := range []string{
+		"python", "golang", " go ", "javascript", "typescript", "node", "react", "vue", "java", "rust", "php", "ruby",
+		"代码", "源码", "函数", "类", "接口", "脚本", "计算器", "文件", "项目", "仓库", "应用",
+		"code", "function", "class", "api", "calculator", "file", "project", "repo", "repository", " app", "application",
+		".py", ".go", ".js", ".ts", ".tsx", ".jsx", ".java", ".rs", ".php", ".rb", "package.json", "go.mod",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func shouldKeepToolsForWarpToolResultFollowup(messages []prompt.Message) bool {
 	if !lastUserIsToolResultFollowup(messages) {
 		return false

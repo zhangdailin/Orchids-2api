@@ -113,6 +113,58 @@ func TestChannelFromPath(t *testing.T) {
 	}
 }
 
+func TestWarpRequestRequiresCloudAgent(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []prompt.Message
+		tools    []interface{}
+		want     bool
+	}{
+		{
+			name:     "plain english chat",
+			messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
+			want:     false,
+		},
+		{
+			name:     "plain chinese chat",
+			messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "你好"}}},
+			want:     false,
+		},
+		{
+			name:     "creative writing does not require agent",
+			messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "帮我写一个故事"}}},
+			want:     false,
+		},
+		{
+			name:     "coding request without explicit tools",
+			messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "帮我用python写一个计算器"}}},
+			want:     true,
+		},
+		{
+			name:     "explicit tool schemas",
+			messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
+			tools:    []interface{}{map[string]interface{}{"name": "Bash"}},
+			want:     true,
+		},
+		{
+			name: "tool result follow-up",
+			messages: []prompt.Message{
+				{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_use", ID: "tool_1", Name: "Read"}}}},
+				{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{Type: "tool_result", ToolUseID: "tool_1", Content: "README.md"}}}},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := warpRequestRequiresCloudAgent(tt.messages, tt.tools); got != tt.want {
+				t.Fatalf("warpRequestRequiresCloudAgent()=%v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractWorkdirFromRequestPriority(t *testing.T) {
 	baseReq := func() *http.Request {
 		r := httptest.NewRequest(http.MethodPost, "http://example.com/warp/v1/messages", nil)

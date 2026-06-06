@@ -150,3 +150,10 @@ func AccountFreeOnly(acc *store.Account) bool {
 	}
 	return AccountQuotaExhausted(acc)
 }
+
+func AccountSupportsCloudAgent(acc *store.Account) bool {
+	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
+		return false
+	}
+	return !AccountFreeOnly(acc)
+}
