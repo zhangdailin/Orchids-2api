@@ -276,9 +276,8 @@ func buildRequestSettings(model string, disableTools bool) *warpapi.Request_Sett
 	return warpapi.Request_Settings_builder{
 		ModelConfig: warpapi.Request_Settings_ModelConfig_builder{
 			Base:                        stringPtr(model),
-			Coding:                      stringPtr(model),
 			CliAgent:                    stringPtr(cliAgentModel),
-			ComputerUseAgent:            stringPtr(model),
+			ComputerUseAgent:            stringPtr(computerUseModel),
 			BaseModelContextWindowLimit: &contextLimit,
 		}.Build(),
 		WebContextRetrievalEnabled:                 boolPtr(true),

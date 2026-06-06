@@ -20,6 +20,7 @@ const (
 	clientVersion     = "v0.2026.05.06.15.42.stable_03"
 	clientID          = "warp-app"
 	identifier        = "cli-agent-auto"
+	computerUseModel  = "computer-use-agent-auto"
 )
 
 const defaultModel = "auto-open"

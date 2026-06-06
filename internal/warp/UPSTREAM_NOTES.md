@@ -76,9 +76,10 @@ Current request construction mirrors upstream's `api::Request` shape:
 - `metadata.conversation_id` is populated only for server-issued Warp
   conversation IDs, not local `chat_*` placeholders.
 - `settings.model_config.base` is the requested model.
-- `settings.model_config.coding` and `computer_use_agent` currently mirror the
-  requested model.
 - `settings.model_config.cli_agent = "cli-agent-auto"`.
+- `settings.model_config.computer_use_agent = "computer-use-agent-auto"`.
+- `settings.model_config.coding` is left empty because official Warp no longer
+  sends this deprecated role field.
 - `settings.model_config.base_model_context_window_limit = 0`.
 - `settings.supports_parallel_tool_calls = true`
 - `settings.supports_reasoning_message = true`
@@ -125,8 +126,8 @@ Current behavior:
 
 - Official `RequestParams` can send separate coding, CLI-agent, computer-use,
   BYO key, custom provider, research-agent, bundled-skills, and orchestration
-  settings. Orchids-2api currently mirrors the requested base model for role
-  models and leaves those optional advanced settings disabled.
+  settings. Orchids-2api currently uses official default role models and leaves
+  those optional advanced settings disabled.
 - Official client converts native Warp conversation state into separate
   `UserInputs` and action-result inputs. Orchids-2api receives OpenAI/Claude
   style chat history, so it bridges the current user/tool-result turn into one

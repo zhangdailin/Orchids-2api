@@ -81,8 +81,39 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	if got := decoded.GetSettings().GetModelConfig().GetCliAgent(); got != identifier {
 		t.Fatalf("cli agent model=%q want %q", got, identifier)
 	}
+	if got := decoded.GetSettings().GetModelConfig().GetComputerUseAgent(); got != computerUseModel {
+		t.Fatalf("computer use model=%q want %q", got, computerUseModel)
+	}
+	if got := decoded.GetSettings().GetModelConfig().GetCoding(); got != "" {
+		t.Fatalf("coding model=%q want empty", got)
+	}
 	if got := decoded.GetInput().GetContext().GetDirectory().GetPwd(); got != "/repo" {
 		t.Fatalf("pwd=%q want /repo", got)
+	}
+}
+
+func TestBuildRequestBytes_AutoOpenUsesDedicatedComputerUseModel(t *testing.T) {
+	_, payload, err := buildRequestBytes(upstream.UpstreamRequest{
+		Prompt: "open a shell",
+		Model:  "auto-open",
+	})
+	if err != nil {
+		t.Fatalf("buildRequestBytes error: %v", err)
+	}
+
+	var decoded warpapi.Request
+	if err := proto.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode request proto: %v", err)
+	}
+	modelConfig := decoded.GetSettings().GetModelConfig()
+	if got := modelConfig.GetBase(); got != "auto-open" {
+		t.Fatalf("base model=%q want auto-open", got)
+	}
+	if got := modelConfig.GetComputerUseAgent(); got != computerUseModel {
+		t.Fatalf("computer use model=%q want %q", got, computerUseModel)
+	}
+	if got := modelConfig.GetCoding(); got != "" {
+		t.Fatalf("coding model=%q want empty", got)
 	}
 }
 
