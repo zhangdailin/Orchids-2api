@@ -602,7 +602,9 @@ func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, r
 		if logger != nil {
 			logger.LogUpstreamHTTPError(consoleResponsesURL, parseUpstreamStatus(err), "", err)
 		}
-		h.markAccountStatus(ctx, sess.acc, err)
+		if skipConsoleGrokAccountStatus(err) {
+			h.markAccountStatus(ctx, sess.acc, err)
+		}
 		http.Error(w, err.Error(), upstreamHTTPResponseStatus(err))
 		return
 	}
@@ -641,7 +643,9 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 			return resp, nil
 		}
 		lastErr = err
-		h.markAccountStatus(ctx, sess.acc, err)
+		if skipConsoleGrokAccountStatus(err) {
+			h.markAccountStatus(ctx, sess.acc, err)
+		}
 		if !shouldSwitchConsoleGrokAccount(err) || attempt == maxAttempts-1 {
 			return nil, err
 		}

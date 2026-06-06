@@ -289,7 +289,7 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 	fastSess.Close()
 }
 
-func TestOpenChatAccountSessionForImageLitePrefersBasicPool(t *testing.T) {
+func TestOpenChatAccountSessionForImageLiteSkipsBasicPool(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -314,8 +314,8 @@ func TestOpenChatAccountSessionForImageLitePrefersBasicPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open image lite session error=%v", err)
 	}
-	if NormalizeSSOToken(sess.token) != "basic-token" {
-		t.Fatalf("token=%q want sso basic-token", sess.token)
+	if NormalizeSSOToken(sess.token) != "lite-token" {
+		t.Fatalf("token=%q want sso lite-token", sess.token)
 	}
 	sess.Close()
 }
@@ -447,6 +447,33 @@ func TestOpenChatAccountSessionForImagineLiteSkipsCoolingLiteWithoutBasicFallbac
 		t.Fatal("missing grok-imagine-image-lite spec")
 	}
 	sess, err := h.openChatAccountSessionForImagineLite(context.Background(), nil, spec)
+	if err == nil {
+		defer sess.Close()
+		t.Fatalf("open image lite with cooling lite and basic unexpectedly succeeded token=%q", sess.token)
+	}
+}
+
+func TestOpenChatAccountSessionForImageLiteSkipsCoolingLiteWithoutBasicFallback(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	for _, acc := range []*store.Account{
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=lite-token", Subscription: "lite", StatusCode: "429", LastAttempt: time.Now(), Weight: 1},
+		{AccountType: "grok", Enabled: true, ClientCookie: "sso=basic-token", Subscription: "basic", Weight: 1},
+	} {
+		if err := s.CreateAccount(context.Background(), acc); err != nil {
+			t.Fatalf("CreateAccount() error = %v", err)
+		}
+	}
+
+	spec, ok := ResolveModel("grok-imagine-image-lite")
+	if !ok {
+		t.Fatal("missing grok-imagine-image-lite spec")
+	}
+	sess, err := h.openChatAccountSessionForModel(context.Background(), spec)
 	if err == nil {
 		defer sess.Close()
 		t.Fatalf("open image lite with cooling lite and basic unexpectedly succeeded token=%q", sess.token)

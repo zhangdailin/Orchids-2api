@@ -238,7 +238,9 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 				break
 			}
 			if err != nil {
-				lastErr = err
+				if lastErr == nil || strings.Contains(err.Error(), "rate-limited or cooling down") {
+					lastErr = err
+				}
 			}
 		}
 		if acc == nil {
@@ -506,6 +508,13 @@ func shouldSwitchGrokAccount(err error) bool {
 	default:
 		return false
 	}
+}
+
+func skipConsoleGrokAccountStatus(err error) bool {
+	if err == nil {
+		return false
+	}
+	return parseUpstreamStatus(err) != http.StatusTooManyRequests
 }
 
 func shouldSwitchConsoleGrokAccount(err error) bool {
