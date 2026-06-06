@@ -15,6 +15,7 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/http2"
+	netproxy "golang.org/x/net/proxy"
 )
 
 // NewBrowserLikeTransport keeps the old API surface for callers that expect a
@@ -165,10 +166,20 @@ func dialHTTPSProxyAware(ctx context.Context, network, addr string, proxyFunc fu
 		conn, err := (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, network, addr)
 		return conn, host, err
 	}
-	if proxyURL.Scheme != "http" && proxyURL.Scheme != "" {
+	switch strings.ToLower(strings.TrimSpace(proxyURL.Scheme)) {
+	case "", "http":
+		return dialHTTPProxyTunnel(ctx, network, addr, host, proxyURL)
+	case "socks5", "socks5h":
+		conn, err := dialSOCKS5Proxy(ctx, network, addr, proxyURL)
+		return conn, host, err
+	case "https":
+		return nil, "", fmt.Errorf("browser http2 proxy scheme %q is not supported; use http or socks5", proxyURL.Scheme)
+	default:
 		return nil, "", fmt.Errorf("browser http2 proxy scheme %q is not supported", proxyURL.Scheme)
 	}
+}
 
+func dialHTTPProxyTunnel(ctx context.Context, network, addr, targetHost string, proxyURL *url.URL) (net.Conn, string, error) {
 	proxyAddr := proxyURL.Host
 	if _, _, splitErr := net.SplitHostPort(proxyAddr); splitErr != nil {
 		proxyAddr = net.JoinHostPort(proxyAddr, "80")
@@ -181,7 +192,38 @@ func dialHTTPSProxyAware(ctx context.Context, network, addr string, proxyFunc fu
 		conn.Close()
 		return nil, "", err
 	}
-	return conn, host, nil
+	return conn, targetHost, nil
+}
+
+func dialSOCKS5Proxy(ctx context.Context, network, addr string, proxyURL *url.URL) (net.Conn, error) {
+	proxyAddr := strings.TrimSpace(proxyURL.Host)
+	if proxyAddr == "" {
+		return nil, fmt.Errorf("socks5 proxy host is empty")
+	}
+	if _, _, splitErr := net.SplitHostPort(proxyAddr); splitErr != nil {
+		proxyAddr = net.JoinHostPort(proxyAddr, "1080")
+	}
+
+	var auth *netproxy.Auth
+	if proxyURL.User != nil {
+		password := ""
+		if pass, ok := proxyURL.User.Password(); ok {
+			password = pass
+		}
+		auth = &netproxy.Auth{
+			User:     proxyURL.User.Username(),
+			Password: password,
+		}
+	}
+	forward := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	dialer, err := netproxy.SOCKS5(network, proxyAddr, auth, forward)
+	if err != nil {
+		return nil, err
+	}
+	if ctxDialer, ok := dialer.(netproxy.ContextDialer); ok {
+		return ctxDialer.DialContext(ctx, network, addr)
+	}
+	return dialer.Dial(network, addr)
 }
 
 func writeHTTPConnect(ctx context.Context, conn net.Conn, target string, proxyURL *url.URL) error {
