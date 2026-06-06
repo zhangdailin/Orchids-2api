@@ -331,6 +331,13 @@ func skipAppChatImageGrokAccountStatus(err error) bool {
 	}
 }
 
+func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
+	if err == nil {
+		return false
+	}
+	return !strings.Contains(strings.ToLower(err.Error()), "fetch url status=")
+}
+
 // doChatWithAutoSwitchRebuild retries once with a switched account and rebuilds payload for the new token.
 func (h *Handler) doChatWithAutoSwitchRebuild(
 	ctx context.Context,

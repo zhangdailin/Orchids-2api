@@ -372,7 +372,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	payload, err := buildPayload(sess.token)
 	if err != nil {
-		h.markAccountStatus(r.Context(), sess.acc, err)
+		if skipExternalAttachmentFetchGrokAccountStatus(err) {
+			h.markAccountStatus(r.Context(), sess.acc, err)
+		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -530,7 +532,7 @@ func (h *Handler) buildVideoCreatePayload(
 		"sendFinalMetadata":           true,
 		"toolOverrides":               map[string]interface{}{"videoGen": true},
 		"enableSideBySide":            true,
-		"deviceEnvInfo": appChatDeviceEnvInfo(),
+		"deviceEnvInfo":               appChatDeviceEnvInfo(),
 		"responseMetadata": map[string]interface{}{
 			"experiments": []interface{}{},
 			"modelConfigOverride": map[string]interface{}{

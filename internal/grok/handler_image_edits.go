@@ -62,7 +62,7 @@ func (h *Handler) buildImageEditPayload(spec ModelSpec, prompt string, imageURLs
 		},
 		"disableMemory":   disableMemory,
 		"forceSideBySide": false,
-		"deviceEnvInfo": appChatDeviceEnvInfo(),
+		"deviceEnvInfo":   appChatDeviceEnvInfo(),
 	}
 	if customPersonality != "" {
 		payload["customPersonality"] = customPersonality
@@ -235,7 +235,9 @@ func (h *Handler) handleChatImageEdit(
 
 	rawPayload, err := h.buildImageEditPayloadFromInputs(ctx, sess.token, spec, prompt, imageURLs)
 	if err != nil {
-		h.markAccountStatus(ctx, sess.acc, err)
+		if skipExternalAttachmentFetchGrokAccountStatus(err) {
+			h.markAccountStatus(ctx, sess.acc, err)
+		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -441,7 +443,9 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 
 	rawPayload, err := h.buildImageEditRequestPayload(r.Context(), sess.token, spec, prompt, uploads)
 	if err != nil {
-		h.markAccountStatus(r.Context(), sess.acc, err)
+		if skipExternalAttachmentFetchGrokAccountStatus(err) {
+			h.markAccountStatus(r.Context(), sess.acc, err)
+		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
