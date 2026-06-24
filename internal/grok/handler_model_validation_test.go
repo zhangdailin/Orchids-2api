@@ -130,14 +130,8 @@ func TestResolveModel_AcceptsOfficialGrok43(t *testing.T) {
 	if spec.ID != "grok-4.3" {
 		t.Fatalf("spec.ID=%q want grok-4.3", spec.ID)
 	}
-	if spec.ConsoleModel != "" {
-		t.Fatalf("ConsoleModel=%q want empty (grok-4.3 now routes through App Chat API)", spec.ConsoleModel)
-	}
-	if spec.ModelMode != "grok-420-computer-use-sa" {
-		t.Fatalf("ModelMode=%q want grok-420-computer-use-sa", spec.ModelMode)
-	}
-	if spec.UpstreamModel != "grok-4.3-beta" {
-		t.Fatalf("UpstreamModel=%q want grok-4.3-beta", spec.UpstreamModel)
+	if spec.ConsoleModel != "grok-4.3" {
+		t.Fatalf("ConsoleModel=%q want grok-4.3", spec.ConsoleModel)
 	}
 }
 
@@ -197,7 +191,7 @@ func TestEnsureModelEnabled_RejectsRemovedGrok43BetaEvenWhenStored(t *testing.T)
 	}
 }
 
-func TestHandleChatCompletions_Grok43UsesAppChatWithAttachments(t *testing.T) {
+func TestHandleChatCompletions_Grok43NeverFallsBackToAppChat(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -219,10 +213,11 @@ func TestHandleChatCompletions_Grok43UsesAppChatWithAttachments(t *testing.T) {
 
 	h.HandleChatCompletions(rec, req)
 
-	// grok-4.3 now routes through the App Chat API (no ConsoleModel).
-	// The request should not be rejected with the old "console.x.ai" message.
-	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "console.x.ai") {
-		t.Fatalf("grok-4.3 should route through App Chat API, not console.x.ai: body=%s", rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "console.x.ai") {
+		t.Fatalf("body=%q want console.x.ai guidance", rec.Body.String())
 	}
 }
 
