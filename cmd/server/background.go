@@ -59,7 +59,8 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			slog.Error("Auto refresh token: list accounts failed", "error", err)
 			return
 		}
-		seenGrokTokens := map[string]bool{}
+		grokTokenResults := map[string]*grok.RateLimitInfo{}
+		grokTokenErrors := map[string]error{}
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "warp") {
 				if !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
@@ -107,9 +108,8 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				}
 				continue
 			}
-			// Grok accounts store SSO tokens in ClientCookie and are not Clerk-backed.
+			// Grok accounts: check once per unique token, cache result.
 			if strings.EqualFold(acc.AccountType, "grok") {
-				grokClient := grok.New(cfg)
 				token := grok.NormalizeSSOToken(acc.ClientCookie)
 				if token == "" {
 					token = grok.NormalizeSSOToken(acc.RefreshToken)
@@ -117,46 +117,51 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				if token == "" {
 					continue
 				}
-				if seenGrokTokens[token] {
+				// Apply cached result from a prior account with the same token.
+				if info, ok := grokTokenResults[token]; ok {
+					if info != nil {
+						grok.ApplyQuotaInfo(acc, info)
+					}
+					if grokTokenErrors[token] == nil {
+						acc.StatusCode = ""
+						acc.LastAttempt = time.Time{}
+					}
+					if err := s.UpdateAccount(context.Background(), acc); err != nil {
+						slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
+					}
 					continue
 				}
-				seenGrokTokens[token] = true
-
-				// Space out rate-limit checks to avoid triggering upstream 429.
+				grokClient := grok.New(cfg)
+			// First account with this token — call the rate-limits endpoint.
 				time.Sleep(200 * time.Millisecond)
-
 				verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 60*time.Second)
 				info, verifyErr := grokClient.VerifyToken(verifyCtx, token, strings.TrimSpace(acc.AgentMode))
 				verifyCancel()
+				grokTokenResults[token] = info
+				grokTokenErrors[token] = verifyErr
 				if verifyErr != nil {
 					statusCode := apperrors.ClassifyAccountStatus(verifyErr.Error())
 					if statusCode == "" {
 						statusCode = "500"
 					}
-					// A 429 from the rate-limits check endpoint itself is
-					// transient — do not mark the account as rate-limited.
 					if statusCode != "429" {
 						acc.StatusCode = statusCode
 						acc.LastAttempt = time.Now()
 					}
-					if err := s.UpdateAccount(context.Background(), acc); err != nil {
-						slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "grok", "error", err)
-					}
 					if statusCode == "429" {
-						slog.Debug("Auto refresh token: rate-limit check throttled, will retry next interval", "account", acc.Name)
+						slog.Debug("Auto refresh token: rate-limit check throttled, will retry next interval")
 					} else {
-						slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "grok", "status", statusCode, "error", verifyErr)
+						slog.Warn("Auto refresh token failed", "account_id", acc.ID, "type", "grok", "status", statusCode, "error", verifyErr)
 					}
-					continue
+				} else {
+					if info != nil {
+						grok.ApplyQuotaInfo(acc, info)
+					}
+					acc.StatusCode = ""
+					acc.LastAttempt = time.Time{}
 				}
-
-				if info != nil {
-					grok.ApplyQuotaInfo(acc, info)
-				}
-				acc.StatusCode = ""
-				acc.LastAttempt = time.Time{}
 				if err := s.UpdateAccount(context.Background(), acc); err != nil {
-					slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "grok", "error", err)
+					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 				}
 				continue
 			}
