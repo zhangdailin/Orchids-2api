@@ -154,10 +154,14 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					// Mark the account so the admin can see the check failed.
 					// Check-endpoint 429 gets a short 30s cooldown via quota_reset_at
 					// to distinguish it from a real account-level 429 (1 min default).
-					acc.StatusCode = statusCode
-					acc.LastAttempt = time.Now()
-					if statusCode == "429" {
-						acc.QuotaResetAt = time.Now().Add(30 * time.Second)
+					// Don't shorten an existing longer cooldown (e.g. 60s from
+					// resource-exhausted set by the request path).
+					if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
+						acc.StatusCode = statusCode
+						acc.LastAttempt = time.Now()
+						if statusCode == "429" {
+							acc.QuotaResetAt = time.Now().Add(30 * time.Second)
+						}
 					}
 					grokTokenStatuses[token] = struct {
 						statusCode   string
@@ -173,14 +177,20 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					if info != nil {
 						grok.ApplyQuotaInfo(acc, info)
 					}
-					acc.StatusCode = ""
-					acc.LastAttempt = time.Time{}
-					acc.QuotaResetAt = time.Time{}
+					// Don't clear a cooldown that was just set by a request-path
+					// error (e.g. resource-exhausted 429). The load balancer
+					// respects quota_reset_at; clearing it prematurely would
+					// put the account back into rotation too soon.
+					if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
+						acc.StatusCode = ""
+						acc.LastAttempt = time.Time{}
+						acc.QuotaResetAt = time.Time{}
+					}
 					grokTokenStatuses[token] = struct {
 						statusCode   string
 						lastAttempt  time.Time
 						quotaResetAt time.Time
-					}{"", time.Time{}, time.Time{}}
+					}{acc.StatusCode, acc.LastAttempt, acc.QuotaResetAt}
 				}
 				if err := s.UpdateAccount(context.Background(), acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
