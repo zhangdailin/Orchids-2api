@@ -133,8 +133,11 @@ func TestResolveModel_AcceptsOfficialGrok43(t *testing.T) {
 	if spec.ConsoleModel != "" {
 		t.Fatalf("ConsoleModel=%q want empty (grok-4.3 now routes through App Chat API)", spec.ConsoleModel)
 	}
-	if spec.ModelMode != "MODEL_MODE_AUTO" {
-		t.Fatalf("ModelMode=%q want MODEL_MODE_AUTO", spec.ModelMode)
+	if spec.ModelMode != "grok-420-computer-use-sa" {
+		t.Fatalf("ModelMode=%q want grok-420-computer-use-sa", spec.ModelMode)
+	}
+	if spec.UpstreamModel != "grok-4.3-beta" {
+		t.Fatalf("UpstreamModel=%q want grok-4.3-beta", spec.UpstreamModel)
 	}
 }
 

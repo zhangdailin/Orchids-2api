@@ -35,7 +35,7 @@ func TestDoConsole_DoesNotRetry429OnSameAccount(t *testing.T) {
 		},
 	}
 
-	_, err := h.doConsole(context.Background(), "token", map[string]interface{}{"model": "grok-4.3", "input": "hi"})
+	_, err := h.doConsole(context.Background(), "token", map[string]interface{}{"model": "grok-build-0.1", "input": "hi"})
 	if err == nil {
 		t.Fatal("expected doConsole() to fail on 429")
 	}
@@ -79,13 +79,13 @@ func TestServeConsoleChat_MarksAccountOn429(t *testing.T) {
 		},
 	}
 
-	sess, err := h.openChatAccountSessionForModel(context.Background(), ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3", Tier: grokTierLite})
+	sess, err := h.openChatAccountSessionForModel(context.Background(), ModelSpec{ID: "grok-build-0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierLite})
 	if err != nil {
 		t.Fatalf("open console session error=%v", err)
 	}
 	defer sess.Close()
 
-	_, err = h.doConsoleWithAutoSwitch(context.Background(), sess, map[string]interface{}{"model": "grok-4.3", "input": "hi"})
+	_, err = h.doConsoleWithAutoSwitch(context.Background(), sess, map[string]interface{}{"model": "grok-build-0.1", "input": "hi"})
 	if err == nil {
 		t.Fatal("expected 429 error")
 	}
@@ -170,14 +170,14 @@ func TestServeConsoleChat_SwitchesAccountOn429(t *testing.T) {
 		},
 	}
 
-	sess, err := h.openChatAccountSessionForModel(context.Background(), ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3", Tier: grokTierSuper})
+	sess, err := h.openChatAccountSessionForModel(context.Background(), ModelSpec{ID: "grok-build-0.1", ConsoleModel: "grok-build-0.1", Tier: grokTierSuper})
 	if err != nil {
 		t.Fatalf("open console session error=%v", err)
 	}
 	failedID := sess.acc.ID
 	defer sess.Close()
 
-	resp, err := h.doConsoleWithAutoSwitch(context.Background(), sess, map[string]interface{}{"model": "grok-4.3", "input": "hi"})
+	resp, err := h.doConsoleWithAutoSwitch(context.Background(), sess, map[string]interface{}{"model": "grok-build-0.1", "input": "hi"})
 	if err != nil {
 		t.Fatalf("doConsoleWithAutoSwitch() error = %v", err)
 	}
