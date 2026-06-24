@@ -37,7 +37,7 @@ func TestShouldSwitchConsoleGrokAccount(t *testing.T) {
 		want bool
 	}{
 		{name: "nil", err: nil, want: false},
-		{name: "team rate limit", err: errors.New("grok upstream status=429 body=too many requests for team"), want: false},
+		{name: "team rate limit", err: errors.New("grok upstream status=429 body=too many requests for team"), want: true},
 		{name: "403", err: errors.New("grok upstream status=403 body=forbidden"), want: true},
 		{name: "timeout", err: errors.New("context deadline exceeded"), want: true},
 	}
@@ -77,8 +77,8 @@ func TestSkipAppChatImageGrokAccountStatus(t *testing.T) {
 		wantMark   bool
 		wantSwitch bool
 	}{
-		{name: "plain 403", err: errors.New("grok upstream status=403 body=forbidden"), wantMark: false, wantSwitch: true},
-		{name: "anti bot 403", err: errors.New("grok upstream status=403 body=Request rejected by anti-bot rules"), wantMark: false, wantSwitch: true},
+		{name: "plain 403", err: errors.New("grok upstream status=403 body=forbidden"), wantMark: true, wantSwitch: true},
+		{name: "anti bot 403", err: errors.New("grok upstream status=403 body=Request rejected by anti-bot rules"), wantMark: true, wantSwitch: true},
 		{name: "401", err: errors.New("grok upstream status=401 body=unauthorized"), wantMark: true, wantSwitch: false},
 		{name: "429", err: errors.New("grok upstream status=429 body=too many requests"), wantMark: true, wantSwitch: true},
 		{name: "network", err: errors.New("read: connection reset by peer"), wantMark: true, wantSwitch: true},

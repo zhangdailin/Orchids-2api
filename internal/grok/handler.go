@@ -319,12 +319,7 @@ func skipAppChatImageGrokAccountStatus(err error) bool {
 	if err == nil {
 		return false
 	}
-	switch parseUpstreamStatus(err) {
-	case http.StatusForbidden:
-		return false
-	default:
-		return !isGrokAntiBotError(err)
-	}
+	return true
 }
 
 func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
@@ -514,14 +509,11 @@ func skipConsoleGrokAccountStatus(err error) bool {
 	if err == nil {
 		return false
 	}
-	return parseUpstreamStatus(err) != http.StatusTooManyRequests
+	return true
 }
 
 func shouldSwitchConsoleGrokAccount(err error) bool {
 	if err == nil {
-		return false
-	}
-	if parseUpstreamStatus(err) == http.StatusTooManyRequests {
 		return false
 	}
 	return shouldSwitchGrokAccount(err)
