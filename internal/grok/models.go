@@ -78,19 +78,19 @@ func (m ModelSpec) PoolCandidates() []string {
 	case m.IsImage && normalizeModelID(m.ID) == "grok-imagine-image-lite" && m.Tier == grokTierBasic:
 		return []string{"lite", "super", "heavy"}
 	case m.PreferBest && m.Tier == grokTierHeavy:
-		return []string{"heavy"}
+		return []string{"heavy", "basic"}
 	case m.PreferBest && m.Tier == grokTierSuper:
-		return []string{"heavy", "super", "lite"}
+		return []string{"heavy", "super", "lite", "basic"}
 	case m.PreferBest && m.Tier == grokTierLite:
-		return []string{"heavy", "super", "lite"}
+		return []string{"heavy", "super", "lite", "basic"}
 	case m.PreferBest:
 		return []string{"heavy", "super", "lite", "basic"}
 	case m.Tier == grokTierHeavy:
-		return []string{"heavy"}
+		return []string{"heavy", "basic"}
 	case m.Tier == grokTierSuper:
-		return []string{"super", "lite", "heavy"}
+		return []string{"super", "lite", "heavy", "basic"}
 	case m.Tier == grokTierLite:
-		return []string{"lite", "super", "heavy"}
+		return []string{"lite", "super", "heavy", "basic"}
 	default:
 		return []string{"basic", "lite", "super", "heavy"}
 	}

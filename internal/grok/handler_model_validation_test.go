@@ -512,7 +512,7 @@ func TestOpenChatAccountSessionForImageLiteTierOverrideSkipsCoolingLiteWithoutBa
 	}
 }
 
-func TestOpenChatAccountSessionForModel_RejectsWhenPoolMetadataMissing(t *testing.T) {
+func TestOpenChatAccountSessionForModel_FallsBackToBasicAccount(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -533,9 +533,12 @@ func TestOpenChatAccountSessionForModel_RejectsWhenPoolMetadataMissing(t *testin
 		t.Fatal("missing grok-4.3 spec")
 	}
 	sess, err := h.openChatAccountSessionForModel(context.Background(), spec)
-	if err == nil {
-		defer sess.Close()
-		t.Fatalf("open session with missing pool metadata unexpectedly succeeded token=%q", sess.token)
+	if err != nil {
+		t.Fatalf("open session for grok-4.3 with basic account should fall back: error=%v", err)
+	}
+	defer sess.Close()
+	if NormalizeSSOToken(sess.token) != "unknown-tier-token" {
+		t.Fatalf("token=%q want sso=unknown-tier-token", sess.token)
 	}
 }
 
