@@ -37,8 +37,8 @@ func TestShouldSwitchGrokAccount_ConsoleScenarios(t *testing.T) {
 		want bool
 	}{
 		{name: "nil", err: nil, want: false},
-		{name: "team rate limit", err: errors.New("grok upstream status=429 body=too many requests for team"), want: false},
-		{name: "resource exhausted", err: errors.New("grok upstream status=429 body={\"code\":\"resource-exhausted\",\"error\":\"Too many requests for team\"}"), want: false},
+		{name: "team rate limit", err: errors.New("grok upstream status=429 body=too many requests for team"), want: true},
+		{name: "resource exhausted", err: errors.New("grok upstream status=429 body={\"code\":\"resource-exhausted\",\"error\":\"Too many requests for team\"}"), want: true},
 		{name: "account rate limit", err: errors.New("grok upstream status=429 body=rate limit exceeded"), want: true},
 		{name: "403", err: errors.New("grok upstream status=403 body=forbidden"), want: true},
 		{name: "timeout", err: errors.New("context deadline exceeded"), want: true},
