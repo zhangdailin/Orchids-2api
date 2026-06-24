@@ -351,17 +351,17 @@ func (h *Handler) doAppChatImageRequest(ctx context.Context, sess *chatAccountSe
 			return nil, fmt.Errorf("empty payload")
 		}
 		if allowSwitch {
-			return h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, payload, nil, skipAppChatImageGrokAccountStatus)
+			return h.doAutoSwitchRequest(ctx, sess, payload, nil, markAllGrokAccountStatuses, (*Client).doChat)
 		}
-		return h.doChatSingleAccountWithStatusPolicy(ctx, sess, *payload, skipAppChatImageGrokAccountStatus)
+		return h.doSingleAccountRequest(ctx, sess, *payload, markAllGrokAccountStatuses, (*Client).doChat)
 	}
 	if payload == nil {
 		return nil, fmt.Errorf("empty payload")
 	}
 	if allowSwitch {
-		return h.doAppChatCreateAndRespondWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, payload, nil, skipAppChatImageGrokAccountStatus)
+		return h.doAutoSwitchRequest(ctx, sess, payload, nil, markAllGrokAccountStatuses, (*Client).doAppChatCreateAndRespond)
 	}
-	return h.doAppChatCreateAndRespondSingleAccountWithStatusPolicy(ctx, sess, *payload, skipAppChatImageGrokAccountStatus)
+	return h.doSingleAccountRequest(ctx, sess, *payload, markAllGrokAccountStatuses, (*Client).doAppChatCreateAndRespond)
 }
 
 func appendUniqueInt64(values []int64, value int64) []int64 {

@@ -273,7 +273,14 @@ func (s *chatAccountSession) Close() {
 	s.release = nil
 }
 
-func (h *Handler) doChatSingleAccountWithStatusPolicy(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, shouldMarkStatus grokAccountStatusPolicy) (*http.Response, error) {
+// doSingleAccountRequest calls the Grok API once on a single account without retry switching.
+func (h *Handler) doSingleAccountRequest(
+	ctx context.Context,
+	sess *chatAccountSession,
+	payload map[string]interface{},
+	shouldMarkStatus grokAccountStatusPolicy,
+	callAPI func(*Client, context.Context, string, map[string]interface{}) (*http.Response, error),
+) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
 	}
@@ -281,25 +288,7 @@ func (h *Handler) doChatSingleAccountWithStatusPolicy(ctx context.Context, sess 
 	if client == nil {
 		return nil, fmt.Errorf("grok client not configured")
 	}
-	resp, err := client.doChat(ctx, sess.token, payload)
-	if err != nil {
-		if shouldMarkStatus == nil || shouldMarkStatus(err) {
-			h.markAccountStatus(ctx, sess.acc, err)
-		}
-		return nil, err
-	}
-	return resp, nil
-}
-
-func (h *Handler) doAppChatCreateAndRespondSingleAccountWithStatusPolicy(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, shouldMarkStatus grokAccountStatusPolicy) (*http.Response, error) {
-	if sess == nil || strings.TrimSpace(sess.token) == "" {
-		return nil, fmt.Errorf("empty chat session")
-	}
-	client := h.currentClient()
-	if client == nil {
-		return nil, fmt.Errorf("grok client not configured")
-	}
-	resp, err := client.doAppChatCreateAndRespond(ctx, sess.token, payload)
+	resp, err := callAPI(client, ctx, sess.token, payload)
 	if err != nil {
 		if shouldMarkStatus == nil || shouldMarkStatus(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
@@ -315,13 +304,6 @@ func markAllGrokAccountStatuses(err error) bool {
 	return err != nil
 }
 
-func skipAppChatImageGrokAccountStatus(err error) bool {
-	if err == nil {
-		return false
-	}
-	return true
-}
-
 func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
 	if err == nil {
 		return false
@@ -329,22 +311,24 @@ func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
 	return !strings.Contains(strings.ToLower(err.Error()), "fetch url status=")
 }
 
-// doChatWithAutoSwitchRebuild retries once with a switched account and rebuilds payload for the new token.
+// doChatWithAutoSwitchRebuild calls doChat with automatic account switching and payload rebuild on failure.
 func (h *Handler) doChatWithAutoSwitchRebuild(
 	ctx context.Context,
 	sess *chatAccountSession,
 	payload *map[string]interface{},
 	rebuild func(token string) (map[string]interface{}, error),
 ) (*http.Response, error) {
-	return h.doChatWithAutoSwitchRebuildWithStatusPolicy(ctx, sess, payload, rebuild, markAllGrokAccountStatuses)
+	return h.doAutoSwitchRequest(ctx, sess, payload, rebuild, markAllGrokAccountStatuses, (*Client).doChat)
 }
 
-func (h *Handler) doChatWithAutoSwitchRebuildWithStatusPolicy(
+// doAutoSwitchRequest calls the Grok API with automatic account switching on failure.
+func (h *Handler) doAutoSwitchRequest(
 	ctx context.Context,
 	sess *chatAccountSession,
 	payload *map[string]interface{},
 	rebuild func(token string) (map[string]interface{}, error),
 	shouldMarkStatus grokAccountStatusPolicy,
+	callAPI func(*Client, context.Context, string, map[string]interface{}) (*http.Response, error),
 ) (*http.Response, error) {
 	if sess == nil || strings.TrimSpace(sess.token) == "" {
 		return nil, fmt.Errorf("empty chat session")
@@ -369,70 +353,7 @@ func (h *Handler) doChatWithAutoSwitchRebuildWithStatusPolicy(
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
 		}
-		resp, err := client.doChat(ctx, sess.token, *payload)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
-		if shouldMarkStatus == nil || shouldMarkStatus(err) {
-			h.markAccountStatus(ctx, sess.acc, err)
-		}
-		if !shouldSwitchGrokAccount(err) || attempt == maxAttempts-1 {
-			return nil, err
-		}
-
-		sess.Close()
-		next, err2 := h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
-		if err2 != nil {
-			return nil, err
-		}
-		sess.acc = next.acc
-		sess.token = next.token
-		sess.poolCandidates = next.poolCandidates
-		sess.release = next.release
-
-		if rebuild != nil {
-			newPayload, rbErr := rebuild(sess.token)
-			if rbErr != nil {
-				return nil, rbErr
-			}
-			*payload = newPayload
-		}
-	}
-	return nil, lastErr
-}
-
-func (h *Handler) doAppChatCreateAndRespondWithAutoSwitchRebuildWithStatusPolicy(
-	ctx context.Context,
-	sess *chatAccountSession,
-	payload *map[string]interface{},
-	rebuild func(token string) (map[string]interface{}, error),
-	shouldMarkStatus grokAccountStatusPolicy,
-) (*http.Response, error) {
-	if sess == nil || strings.TrimSpace(sess.token) == "" {
-		return nil, fmt.Errorf("empty chat session")
-	}
-	if payload == nil {
-		return nil, fmt.Errorf("empty payload")
-	}
-	client := h.currentClient()
-	if client == nil {
-		return nil, fmt.Errorf("grok client not configured")
-	}
-	maxAttempts := 2
-	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		maxAttempts = h.cfg.AccountSwitchCount
-	}
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
-	used := make([]int64, 0, maxAttempts)
-	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if sess.acc != nil && sess.acc.ID != 0 {
-			used = append(used, sess.acc.ID)
-		}
-		resp, err := client.doAppChatCreateAndRespond(ctx, sess.token, *payload)
+		resp, err := callAPI(client, ctx, sess.token, *payload)
 		if err == nil {
 			return resp, nil
 		}
@@ -503,20 +424,6 @@ func shouldSwitchGrokAccount(err error) bool {
 	default:
 		return false
 	}
-}
-
-func skipConsoleGrokAccountStatus(err error) bool {
-	if err == nil {
-		return false
-	}
-	return true
-}
-
-func shouldSwitchConsoleGrokAccount(err error) bool {
-	if err == nil {
-		return false
-	}
-	return shouldSwitchGrokAccount(err)
 }
 
 func upstreamHTTPResponseStatus(err error) int {

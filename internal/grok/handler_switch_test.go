@@ -30,7 +30,7 @@ func TestShouldSwitchGrokAccount(t *testing.T) {
 	}
 }
 
-func TestShouldSwitchConsoleGrokAccount(t *testing.T) {
+func TestShouldSwitchGrokAccount_ConsoleScenarios(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -43,8 +43,8 @@ func TestShouldSwitchConsoleGrokAccount(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldSwitchConsoleGrokAccount(tt.err); got != tt.want {
-				t.Fatalf("shouldSwitchConsoleGrokAccount(%v)=%v want=%v", tt.err, got, tt.want)
+			if got := shouldSwitchGrokAccount(tt.err); got != tt.want {
+				t.Fatalf("shouldSwitchGrokAccount(%v)=%v want=%v", tt.err, got, tt.want)
 			}
 		})
 	}
@@ -70,7 +70,7 @@ func TestUpstreamHTTPResponseStatus(t *testing.T) {
 	}
 }
 
-func TestSkipAppChatImageGrokAccountStatus(t *testing.T) {
+func TestMarkAllGrokAccountStatuses(t *testing.T) {
 	tests := []struct {
 		name       string
 		err        error
@@ -85,8 +85,8 @@ func TestSkipAppChatImageGrokAccountStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := skipAppChatImageGrokAccountStatus(tt.err); got != tt.wantMark {
-				t.Fatalf("skipAppChatImageGrokAccountStatus()=%v want mark=%v", got, tt.wantMark)
+			if got := markAllGrokAccountStatuses(tt.err); got != tt.wantMark {
+				t.Fatalf("markAllGrokAccountStatuses()=%v want mark=%v", got, tt.wantMark)
 			}
 			if got := shouldSwitchGrokAccount(tt.err); got != tt.wantSwitch {
 				t.Fatalf("shouldSwitchGrokAccount()=%v want %v", got, tt.wantSwitch)
