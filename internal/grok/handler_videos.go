@@ -257,9 +257,19 @@ func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec Mod
 	}
 	update("in_progress", 1)
 
-	sess, err := h.openChatAccountSessionForModel(ctx, spec)
-	if err != nil {
-		h.failVideoJob(job, err)
+	// Retry opening a session with account switching — video generation
+	// can take minutes and the 429 cooldown may clear while we wait.
+	var sess *chatAccountSession
+	var sessErr error
+	for attempt := 0; attempt < 10; attempt++ {
+		sess, sessErr = h.openChatAccountSessionForModel(ctx, spec)
+		if sessErr == nil {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if sessErr != nil {
+		h.failVideoJob(job, sessErr)
 		return
 	}
 	defer sess.Close()
