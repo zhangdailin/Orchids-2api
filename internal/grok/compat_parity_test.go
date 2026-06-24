@@ -57,7 +57,7 @@ func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
 		{modelID: "grok-4.20-auto", wantUpstream: "grok-4.20-auto", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-4.20-expert", wantUpstream: "grok-4.20-expert", wantModelMode: "MODEL_MODE_EXPERT"},
 		{modelID: "grok-4.20-heavy", wantUpstream: "grok-4.20-heavy", wantModelMode: "MODEL_MODE_HEAVY"},
-		{modelID: "grok-4.3", wantUpstream: "grok-4.3", wantModelMode: ""},
+		{modelID: "grok-4.3", wantUpstream: "grok-4.3", wantModelMode: "MODEL_MODE_AUTO"},
 		{modelID: "grok-build-0.1", wantUpstream: "grok-build-0.1", wantModelMode: ""},
 	}
 	for _, tc := range cases {
