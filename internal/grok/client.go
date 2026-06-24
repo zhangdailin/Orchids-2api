@@ -687,6 +687,9 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 }
 
 func (c *Client) doChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
+	if err := appChatRateLimitEndpoint(ctx); err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

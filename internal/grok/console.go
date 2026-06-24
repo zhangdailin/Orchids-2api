@@ -308,6 +308,9 @@ func consoleBuiltinToolName(name string) string {
 }
 
 func (h *Handler) doConsole(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
+	if err := consoleRateLimitEndpoint(ctx); err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -630,7 +633,7 @@ func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccount
 	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
 		switchDeadline = time.Now().Add(time.Duration(h.cfg.AccountSwitchCount) * time.Second)
 	}
-	const switchPace = 550 * time.Millisecond
+	const switchPace = 100 * time.Millisecond
 
 	used := make([]int64, 0)
 	var lastErr error

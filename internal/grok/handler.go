@@ -363,7 +363,7 @@ func (h *Handler) doAutoSwitchRequest(
 	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
 		switchDeadline = time.Now().Add(time.Duration(h.cfg.AccountSwitchCount) * time.Second)
 	}
-	const switchPace = 550 * time.Millisecond
+	const switchPace = 100 * time.Millisecond
 	used := make([]int64, 0)
 	var lastErr error
 	for {
