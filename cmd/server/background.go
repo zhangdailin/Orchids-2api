@@ -60,9 +60,6 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			return
 		}
 		for _, acc := range accounts {
-			if strings.TrimSpace(acc.Name) == "" {
-				continue
-			}
 			if strings.EqualFold(acc.AccountType, "warp") {
 				if !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
 					continue
@@ -129,12 +126,20 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					if statusCode == "" {
 						statusCode = "500"
 					}
-					acc.StatusCode = statusCode
-					acc.LastAttempt = time.Now()
+					// A 429 from the rate-limits check endpoint itself is
+					// transient — do not mark the account as rate-limited.
+					if statusCode != "429" {
+						acc.StatusCode = statusCode
+						acc.LastAttempt = time.Now()
+					}
 					if err := s.UpdateAccount(context.Background(), acc); err != nil {
 						slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "grok", "error", err)
 					}
-					slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "grok", "status", statusCode, "error", verifyErr)
+					if statusCode == "429" {
+						slog.Debug("Auto refresh token: rate-limit check throttled, will retry next interval", "account", acc.Name)
+					} else {
+						slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "grok", "status", statusCode, "error", verifyErr)
+					}
 					continue
 				}
 

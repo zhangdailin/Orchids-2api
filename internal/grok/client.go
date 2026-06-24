@@ -874,12 +874,14 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 	}
 
 	model := strings.TrimSpace(modelID)
-	if model == "" {
-		model = "grok-4.20-0309"
-	}
 	spec, ok := ResolveModelOrDynamic(model)
 	if !ok {
-		return nil, fmt.Errorf("model not found")
+		// Fall back to a known default model when the model ID is not recognized
+		// (e.g. AgentMode="grok-3" stored on older accounts).
+		spec, ok = ResolveModelOrDynamic("grok-4.20-0309")
+		if !ok {
+			return nil, fmt.Errorf("model not found")
+		}
 	}
 	return c.getUsageBySpec(ctx, token, spec)
 }
