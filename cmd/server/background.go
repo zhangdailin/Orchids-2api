@@ -59,6 +59,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			slog.Error("Auto refresh token: list accounts failed", "error", err)
 			return
 		}
+		seenGrokTokens := map[string]bool{}
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "warp") {
 				if !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
@@ -114,9 +115,15 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					token = grok.NormalizeSSOToken(acc.RefreshToken)
 				}
 				if token == "" {
-					slog.Warn("Auto refresh token skipped", "account", acc.Name, "type", "grok", "error", "empty token")
 					continue
 				}
+				if seenGrokTokens[token] {
+					continue
+				}
+				seenGrokTokens[token] = true
+
+				// Space out rate-limit checks to avoid triggering upstream 429.
+				time.Sleep(200 * time.Millisecond)
 
 				verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 60*time.Second)
 				info, verifyErr := grokClient.VerifyToken(verifyCtx, token, strings.TrimSpace(acc.AgentMode))

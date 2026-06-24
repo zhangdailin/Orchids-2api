@@ -402,6 +402,14 @@ func shouldSwitchGrokAccount(err error) bool {
 	}
 	status := classifyAccountStatusFromError(err.Error())
 	if status == "403" || status == "429" {
+		// Team-level rate limits ("resource-exhausted") apply to the
+		// token/session, not the individual account. Switching accounts
+		// that share the same token would just hit the same limit.
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "resource-exhausted") ||
+			strings.Contains(lower, "too many requests for team") {
+			return false
+		}
 		return true
 	}
 	if upstreamStatus := parseUpstreamStatus(err); upstreamStatus == http.StatusBadGateway ||
