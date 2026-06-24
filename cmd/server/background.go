@@ -61,6 +61,11 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 		}
 		grokTokenResults := map[string]*grok.RateLimitInfo{}
 		grokTokenErrors := map[string]error{}
+		grokTokenStatuses := map[string]struct {
+			statusCode   string
+			lastAttempt  time.Time
+			quotaResetAt time.Time
+		}{}
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "warp") {
 				if !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
@@ -110,6 +115,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			}
 			// Grok accounts: check once per unique token, cache result.
 			if strings.EqualFold(acc.AccountType, "grok") {
+				slog.Debug("Auto refresh grok account", "account_id", acc.ID)
 				token := grok.NormalizeSSOToken(acc.ClientCookie)
 				if token == "" {
 					token = grok.NormalizeSSOToken(acc.RefreshToken)
@@ -122,17 +128,18 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					if info != nil {
 						grok.ApplyQuotaInfo(acc, info)
 					}
-					if grokTokenErrors[token] == nil {
-						acc.StatusCode = ""
-						acc.LastAttempt = time.Time{}
+					if cached, ok2 := grokTokenStatuses[token]; ok2 {
+						acc.StatusCode = cached.statusCode
+						acc.LastAttempt = cached.lastAttempt
+						acc.QuotaResetAt = cached.quotaResetAt
 					}
 					if err := s.UpdateAccount(context.Background(), acc); err != nil {
 						slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 					}
 					continue
 				}
+				// First account with this token — call the rate-limits endpoint.
 				grokClient := grok.New(cfg)
-			// First account with this token — call the rate-limits endpoint.
 				time.Sleep(200 * time.Millisecond)
 				verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 60*time.Second)
 				info, verifyErr := grokClient.VerifyToken(verifyCtx, token, strings.TrimSpace(acc.AgentMode))
@@ -144,10 +151,19 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					if statusCode == "" {
 						statusCode = "500"
 					}
-					if statusCode != "429" {
-						acc.StatusCode = statusCode
-						acc.LastAttempt = time.Now()
+					// Mark the account so the admin can see the check failed.
+					// Check-endpoint 429 gets a short 30s cooldown via quota_reset_at
+					// to distinguish it from a real account-level 429 (1 min default).
+					acc.StatusCode = statusCode
+					acc.LastAttempt = time.Now()
+					if statusCode == "429" {
+						acc.QuotaResetAt = time.Now().Add(30 * time.Second)
 					}
+					grokTokenStatuses[token] = struct {
+						statusCode   string
+						lastAttempt  time.Time
+						quotaResetAt time.Time
+					}{acc.StatusCode, acc.LastAttempt, acc.QuotaResetAt}
 					if statusCode == "429" {
 						slog.Debug("Auto refresh token: rate-limit check throttled, will retry next interval")
 					} else {
@@ -159,13 +175,19 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					}
 					acc.StatusCode = ""
 					acc.LastAttempt = time.Time{}
+					acc.QuotaResetAt = time.Time{}
+					grokTokenStatuses[token] = struct {
+						statusCode   string
+						lastAttempt  time.Time
+						quotaResetAt time.Time
+					}{"", time.Time{}, time.Time{}}
 				}
 				if err := s.UpdateAccount(context.Background(), acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 				}
 				continue
 			}
-			proxyFunc := http.ProxyFromEnvironment
+						proxyFunc := http.ProxyFromEnvironment
 			if cfg != nil {
 				proxyFunc = util.ProxyFuncFromConfig(cfg)
 			}
