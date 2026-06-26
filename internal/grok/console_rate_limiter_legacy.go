@@ -1,5 +1,3 @@
-//go:build legacy_console
-
 package grok
 
 import (
