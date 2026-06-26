@@ -100,8 +100,8 @@ func TestRefreshAccountState_GrokQuotaIgnoresStaleAgentMode(t *testing.T) {
 	if status != "" || httpStatus != 0 {
 		t.Fatalf("unexpected status=%q httpStatus=%d", status, httpStatus)
 	}
-	if len(requestedModels) != 1 || requestedModels[0] != "auto" {
-		t.Fatalf("requestedModels=%v want [auto]", requestedModels)
+	if len(requestedModels) != 1 || requestedModels[0] != "fast" {
+		t.Fatalf("requestedModels=%v want [fast]", requestedModels)
 	}
 	if acc.AgentMode != "grok-3" {
 		t.Fatalf("AgentMode=%q want grok-3", acc.AgentMode)

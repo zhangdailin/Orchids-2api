@@ -1,3 +1,5 @@
+//go:build legacy_console
+
 package grok
 
 import (
@@ -315,7 +317,12 @@ func (h *Handler) doConsole(ctx context.Context, token string, payload map[strin
 	if err != nil {
 		return nil, err
 	}
-	return h.client.doRequestWith429Retry(ctx, consoleResponsesURL, http.MethodPost, body, h.client.consoleHeaders(token), http.StatusOK, false, false)
+	resp, err := h.client.doRequestWith429Retry(ctx, consoleResponsesURL, http.MethodPost, body, h.client.consoleHeaders(token), http.StatusOK, false, false)
+	if err != nil {
+		noteConsoleRateLimitError(err)
+		return nil, err
+	}
+	return resp, nil
 }
 
 func shouldServeConsoleChat(spec ModelSpec, attachments []AttachmentInput) bool {
@@ -350,8 +357,16 @@ func (c *Client) ProbeConsoleModel(ctx context.Context, token string, modelID st
 		result.Error = err.Error()
 		return result
 	}
+	if err := consoleRateLimitEndpoint(ctx); err != nil {
+		result.Error = err.Error()
+		if status := parseUpstreamStatus(err); status > 0 {
+			result.Status = status
+		}
+		return result
+	}
 	resp, err := c.doRequestWith429Retry(ctx, consoleResponsesURL, http.MethodPost, body, c.consoleHeaders(token), http.StatusOK, false, false)
 	if err != nil {
+		noteConsoleRateLimitError(err)
 		result.Error = err.Error()
 		if status := parseUpstreamStatus(err); status > 0 {
 			result.Status = status
@@ -540,15 +555,6 @@ func appendUniqueConsoleAnnotations(dst []map[string]interface{}, src []map[stri
 		dst = append(dst, ann)
 	}
 	return dst
-}
-
-func interfaceSlice(v interface{}) []interface{} {
-	switch x := v.(type) {
-	case []interface{}:
-		return x
-	default:
-		return nil
-	}
 }
 
 func consoleUsage(v map[string]interface{}) map[string]interface{} {

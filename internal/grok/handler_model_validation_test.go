@@ -2,6 +2,7 @@ package grok
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
+	"orchids-api/internal/config"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
 )
@@ -122,32 +124,37 @@ func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t
 	}
 }
 
-func TestResolveModel_AcceptsOfficialGrok43(t *testing.T) {
-	spec, ok := ResolveModel("grok-4.3")
+func TestResolveModel_RejectsConsoleOnlyGrok43(t *testing.T) {
+	for _, id := range []string{"grok-4.3", "grok-build-0.1"} {
+		if _, ok := ResolveModel(id); ok {
+			t.Fatalf("ResolveModel(%s) = true, want false", id)
+		}
+		if _, ok := ResolveModelOrDynamic(id); ok {
+			t.Fatalf("ResolveModelOrDynamic(%s) = true, want false", id)
+		}
+		if !IsDeprecatedModelID(id) {
+			t.Fatalf("%s should be deprecated", id)
+		}
+	}
+}
+
+func TestResolveModel_AllowsGrok43BetaAppChat(t *testing.T) {
+	spec, ok := ResolveModel("grok-4.3-beta")
 	if !ok {
-		t.Fatal("ResolveModel(grok-4.3) = false, want true")
+		t.Fatal("ResolveModel(grok-4.3-beta) = false, want true")
 	}
-	if spec.ID != "grok-4.3" {
-		t.Fatalf("spec.ID=%q want grok-4.3", spec.ID)
+	if _, ok := ResolveModelOrDynamic("grok-4.3-beta"); !ok {
+		t.Fatal("ResolveModelOrDynamic(grok-4.3-beta) = false, want true")
 	}
-	if spec.ConsoleModel != "grok-4.3" {
-		t.Fatalf("ConsoleModel=%q want grok-4.3", spec.ConsoleModel)
+	if IsDeprecatedModelID("grok-4.3-beta") {
+		t.Fatal("grok-4.3-beta should not be deprecated")
 	}
-}
-
-func TestResolveModel_RejectsRemovedGrok43Beta(t *testing.T) {
-	if _, ok := ResolveModel("grok-4.3-beta"); ok {
-		t.Fatal("ResolveModel(grok-4.3-beta) = true, want false")
-	}
-	if _, ok := ResolveModelOrDynamic("grok-4.3-beta"); ok {
-		t.Fatal("ResolveModelOrDynamic(grok-4.3-beta) = true, want false")
-	}
-	if !IsDeprecatedModelID("grok-4.3-beta") {
-		t.Fatal("grok-4.3-beta should be deprecated")
+	if spec.ModeID != "grok-420-computer-use-sa" {
+		t.Fatalf("ModeID=%q want grok-420-computer-use-sa", spec.ModeID)
 	}
 }
 
-func TestEnsureModelEnabled_AcceptsOfficialGrok43StoreRecord(t *testing.T) {
+func TestEnsureModelEnabled_RejectsConsoleOnlyGrok43EvenWhenStored(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -164,12 +171,12 @@ func TestEnsureModelEnabled_AcceptsOfficialGrok43StoreRecord(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	if err := h.ensureModelEnabled(context.Background(), "grok-4.3"); err != nil {
-		t.Fatalf("ensureModelEnabled(grok-4.3) error = %v", err)
+	if err := h.ensureModelEnabled(context.Background(), "grok-4.3"); err == nil {
+		t.Fatalf("ensureModelEnabled(grok-4.3) succeeded, want error")
 	}
 }
 
-func TestEnsureModelEnabled_RejectsRemovedGrok43BetaEvenWhenStored(t *testing.T) {
+func TestEnsureModelEnabled_AllowsGrok43BetaAppChat(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -186,12 +193,12 @@ func TestEnsureModelEnabled_RejectsRemovedGrok43BetaEvenWhenStored(t *testing.T)
 		t.Fatalf("CreateModel(beta) error = %v", err)
 	}
 
-	if err := h.ensureModelEnabled(context.Background(), "grok-4.3-beta"); err == nil {
-		t.Fatal("ensureModelEnabled(grok-4.3-beta) succeeded, want error")
+	if err := h.ensureModelEnabled(context.Background(), "grok-4.3-beta"); err != nil {
+		t.Fatalf("ensureModelEnabled(grok-4.3-beta) error=%v", err)
 	}
 }
 
-func TestHandleChatCompletions_Grok43NeverFallsBackToAppChat(t *testing.T) {
+func TestHandleChatCompletions_Grok43RejectedBeforeUpstream(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -207,7 +214,25 @@ func TestHandleChatCompletions_Grok43NeverFallsBackToAppChat(t *testing.T) {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	body := `{"model":"grok-4.3","messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}],"stream":false}`
+	var upstreamPaths []string
+	h.client = &Client{
+		cfg: &config.Config{},
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				upstreamPaths = append(upstreamPaths, req.URL.Path)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(
+						`{"result":{"response":{"modelResponse":{"responseId":"resp_1","message":"OK","metadata":{"llm_info":{"modelHash":"hash_1"}}}}}}`,
+					)),
+					Request: req,
+				}, nil
+			}),
+		},
+	}
+
+	body := `{"model":"grok-4.3","messages":[{"role":"user","content":"hello"}],"stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
@@ -216,8 +241,8 @@ func TestHandleChatCompletions_Grok43NeverFallsBackToAppChat(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "console.x.ai") {
-		t.Fatalf("body=%q want console.x.ai guidance", rec.Body.String())
+	if len(upstreamPaths) != 0 {
+		t.Fatalf("upstream paths=%#v want none", upstreamPaths)
 	}
 }
 
@@ -239,9 +264,9 @@ func TestOpenChatAccountSessionForModel_UsesGrok2APIPoolCandidates(t *testing.T)
 		}
 	}
 
-	superSpec, ok := ResolveModel("grok-4.20-0309")
+	superSpec, ok := ResolveModel("grok-4.20-0309-non-reasoning-super")
 	if !ok {
-		t.Fatal("missing grok-4.20-0309 spec")
+		t.Fatal("missing grok-4.20-0309-non-reasoning-super spec")
 	}
 	superSess, err := h.openChatAccountSessionForModel(context.Background(), superSpec)
 	if err != nil {
@@ -528,13 +553,13 @@ func TestOpenChatAccountSessionForModel_FallsBackToBasicAccount(t *testing.T) {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	spec, ok := ResolveModel("grok-4.3")
+	spec, ok := ResolveModel("grok-4.20-0309-non-reasoning")
 	if !ok {
-		t.Fatal("missing grok-4.3 spec")
+		t.Fatal("missing grok-4.20-0309-non-reasoning spec")
 	}
 	sess, err := h.openChatAccountSessionForModel(context.Background(), spec)
 	if err != nil {
-		t.Fatalf("open session for grok-4.3 with basic account should fall back: error=%v", err)
+		t.Fatalf("open session for grok-4.20-0309-non-reasoning with unknown-tier account should fall back: error=%v", err)
 	}
 	defer sess.Close()
 	if NormalizeSSOToken(sess.token) != "unknown-tier-token" {

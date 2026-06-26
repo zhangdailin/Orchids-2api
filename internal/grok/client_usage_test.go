@@ -40,8 +40,8 @@ func TestGetUsage_DefaultModelDoesNotFallback(t *testing.T) {
 	if len(requestedModels) != 1 {
 		t.Fatalf("expected 1 request, got %d", len(requestedModels))
 	}
-	if requestedModels[0] != "auto" {
-		t.Fatalf("expected default model to use auto rate-limit mode, got %q", requestedModels[0])
+	if requestedModels[0] != "fast" {
+		t.Fatalf("expected default model to use fast rate-limit mode, got %q", requestedModels[0])
 	}
 }
 
@@ -91,6 +91,11 @@ func TestRateLimitModelName_UsesModeAcceptedByUpstream(t *testing.T) {
 			name: "auto mode",
 			spec: ModelSpec{UpstreamModel: "grok-4.20-0309", ModelMode: "MODEL_MODE_AUTO"},
 			want: "auto",
+		},
+		{
+			name: "explicit mode id",
+			spec: ModelSpec{UpstreamModel: "grok-4.3-beta", ModelMode: "MODEL_MODE_GROK_4_3", ModeID: "grok-420-computer-use-sa"},
+			want: "grok-420-computer-use-sa",
 		},
 		{
 			name: "fallback upstream",
@@ -151,6 +156,37 @@ func TestChatPayload_UsesCurrentAppChatModelFields(t *testing.T) {
 	}
 	if got, _ := textPayload["linkQuery"].(bool); got {
 		t.Fatalf("linkQuery=%v want false", got)
+	}
+}
+
+func TestSupportedTextModelsBuildAppChatPayload(t *testing.T) {
+	c := New(nil)
+	for _, spec := range SupportedModels {
+		if spec.IsImage || spec.IsVideo {
+			continue
+		}
+		t.Run(spec.ID, func(t *testing.T) {
+			if spec.ConsoleModel != "" {
+				t.Fatalf("ConsoleModel=%q want empty; text models should use app chat", spec.ConsoleModel)
+			}
+			payload := c.chatPayload(spec, "hello", true, 0)
+			if _, ok := payload["modelName"]; ok {
+				t.Fatalf("text app-chat payload should not include modelName: %#v", payload["modelName"])
+			}
+			if got, _ := payload["modeId"].(string); got == "" {
+				t.Fatalf("modeId missing for app chat payload: %#v", payload)
+			}
+			if _, ok := payload["modelTier"]; ok {
+				t.Fatalf("text app-chat payload should not include modelTier: %#v", payload["modelTier"])
+			}
+			if _, ok := payload["modelMode"]; ok {
+				t.Fatalf("text app-chat payload should not include modelMode: %#v", payload["modelMode"])
+			}
+			respMeta, _ := payload["responseMetadata"].(map[string]interface{})
+			if _, ok := respMeta["requestModelDetails"]; ok {
+				t.Fatalf("text app-chat payload should not include requestModelDetails: %#v", respMeta["requestModelDetails"])
+			}
+		})
 	}
 }
 

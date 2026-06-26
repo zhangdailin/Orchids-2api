@@ -68,7 +68,7 @@ var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *
 	return client.FetchMonthlyUsage(ctx)
 }
 
-const defaultGrokVerifyModelID = "grok-4.20-0309"
+const defaultGrokVerifyModelID = "grok-4.20-0309-non-reasoning"
 
 func normalizeGrokVerifyModelID(raw string) string {
 	model := strings.TrimSpace(raw)

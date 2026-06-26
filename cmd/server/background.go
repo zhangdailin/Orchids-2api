@@ -45,9 +45,161 @@ func preserveLatestAccountStatus(ctx context.Context, s *store.Store, acc *store
 }
 
 var (
-	grokRefreshMu     sync.Mutex
-	grokRefreshOffset int
+	grokRefreshMu           sync.Mutex
+	grokRefreshOffset       int
+	grokRefreshBackoffUntil time.Time
 )
+
+const (
+	maxGrokRefreshPerCycle = 5
+	grokRefresh429Backoff  = 10 * time.Minute
+	grokRefreshPause       = 500 * time.Millisecond
+)
+
+type grokRefreshCandidate struct {
+	token    string
+	model    string
+	accounts []*store.Account
+}
+
+func buildGrokRefreshCandidates(accounts []*store.Account) []grokRefreshCandidate {
+	byToken := make(map[string]int, len(accounts))
+	candidates := make([]grokRefreshCandidate, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc == nil || !strings.EqualFold(acc.AccountType, "grok") {
+			continue
+		}
+		token := grok.NormalizeSSOToken(acc.ClientCookie)
+		if token == "" {
+			token = grok.NormalizeSSOToken(acc.RefreshToken)
+		}
+		if token == "" {
+			continue
+		}
+		if idx, ok := byToken[token]; ok {
+			candidates[idx].accounts = append(candidates[idx].accounts, acc)
+			if candidates[idx].model == "" {
+				candidates[idx].model = strings.TrimSpace(acc.AgentMode)
+			}
+			continue
+		}
+		byToken[token] = len(candidates)
+		candidates = append(candidates, grokRefreshCandidate{
+			token:    token,
+			model:    strings.TrimSpace(acc.AgentMode),
+			accounts: []*store.Account{acc},
+		})
+	}
+	return candidates
+}
+
+func nextGrokRefreshBatch(candidates []grokRefreshCandidate, max int) []grokRefreshCandidate {
+	if len(candidates) == 0 || max <= 0 {
+		return nil
+	}
+	if max > len(candidates) {
+		max = len(candidates)
+	}
+
+	grokRefreshMu.Lock()
+	start := grokRefreshOffset % len(candidates)
+	grokRefreshOffset += max
+	grokRefreshMu.Unlock()
+
+	out := make([]grokRefreshCandidate, 0, max)
+	for i := 0; i < max; i++ {
+		out = append(out, candidates[(start+i)%len(candidates)])
+	}
+	return out
+}
+
+func grokRefreshInBackoff(now time.Time) bool {
+	grokRefreshMu.Lock()
+	defer grokRefreshMu.Unlock()
+	return !grokRefreshBackoffUntil.IsZero() && now.Before(grokRefreshBackoffUntil)
+}
+
+func setGrokRefreshBackoff(until time.Time) {
+	grokRefreshMu.Lock()
+	if until.After(grokRefreshBackoffUntil) {
+		grokRefreshBackoffUntil = until
+	}
+	grokRefreshMu.Unlock()
+}
+
+func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store, accounts []*store.Account) {
+	if len(accounts) == 0 || s == nil {
+		return
+	}
+	now := time.Now()
+	if grokRefreshInBackoff(now) {
+		slog.Debug("Auto refresh grok: skipped during rate-limit backoff")
+		return
+	}
+
+	batch := nextGrokRefreshBatch(buildGrokRefreshCandidates(accounts), maxGrokRefreshPerCycle)
+	if len(batch) == 0 {
+		return
+	}
+
+	grokClient := grok.New(cfg)
+	for _, candidate := range batch {
+		if grokRefreshPause > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(grokRefreshPause):
+			}
+		}
+
+		verifyCtx, verifyCancel := context.WithTimeout(ctx, 60*time.Second)
+		info, verifyErr := grokClient.VerifyToken(verifyCtx, candidate.token, candidate.model)
+		verifyCancel()
+
+		if verifyErr != nil {
+			statusCode := apperrors.ClassifyAccountStatus(verifyErr.Error())
+			if statusCode == "" {
+				statusCode = "500"
+			}
+			if statusCode == "429" {
+				setGrokRefreshBackoff(time.Now().Add(grokRefresh429Backoff))
+				slog.Warn("Auto refresh grok: rate-limit check throttled; pausing grok refresh", "backoff", grokRefresh429Backoff.String(), "error", verifyErr)
+				return
+			}
+			for _, acc := range candidate.accounts {
+				if acc == nil {
+					continue
+				}
+				if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
+					acc.StatusCode = statusCode
+					acc.LastAttempt = time.Now()
+				}
+				if err := s.UpdateAccount(ctx, acc); err != nil {
+					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
+				}
+			}
+			slog.Warn("Auto refresh token failed", "type", "grok", "status", statusCode, "error", verifyErr)
+			continue
+		}
+
+		for _, acc := range candidate.accounts {
+			if acc == nil {
+				continue
+			}
+			if info != nil {
+				grok.ApplyQuotaInfo(acc, info)
+			}
+			if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
+				acc.StatusCode = ""
+				acc.LastAttempt = time.Time{}
+				acc.QuotaResetAt = time.Time{}
+			}
+			if err := s.UpdateAccount(ctx, acc); err != nil {
+				slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
+			}
+		}
+	}
+}
 
 func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Store, lb *loadbalancer.LoadBalancer) {
 	if !cfg.AutoRefreshToken {
@@ -65,7 +217,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			slog.Error("Auto refresh token: list accounts failed", "error", err)
 			return
 		}
-	grokRefreshQueue := make([]*store.Account, 0)
+		grokRefreshQueue := make([]*store.Account, 0)
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "warp") {
 				if !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
@@ -118,62 +270,6 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				grokRefreshQueue = append(grokRefreshQueue, acc)
 				continue
 			}
-
-	// Batch-process Grok accounts: at most 5 per cycle, rotating through
-	// the full set so each account is refreshed every few minutes.
-		const maxGrokPerCycle = 5
-		if len(grokRefreshQueue) > 0 {
-			grokRefreshMu.Lock()
-			start := grokRefreshOffset % len(grokRefreshQueue)
-			grokRefreshOffset += maxGrokPerCycle
-			grokRefreshMu.Unlock()
-
-			grokClient := grok.New(cfg)
-			for i := 0; i < maxGrokPerCycle; i++ {
-				idx := (start + i) % len(grokRefreshQueue)
-				acc := grokRefreshQueue[idx]
-				token := grok.NormalizeSSOToken(acc.ClientCookie)
-				if token == "" {
-					token = grok.NormalizeSSOToken(acc.RefreshToken)
-				}
-				if token == "" {
-					continue
-				}
-
-				time.Sleep(500 * time.Millisecond)
-				verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 60*time.Second)
-				info, verifyErr := grokClient.VerifyToken(verifyCtx, token, strings.TrimSpace(acc.AgentMode))
-				verifyCancel()
-
-				if verifyErr != nil {
-					statusCode := apperrors.ClassifyAccountStatus(verifyErr.Error())
-					if statusCode == "" {
-						statusCode = "500"
-					}
-					if statusCode != "429" && (acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt)) {
-						acc.StatusCode = statusCode
-						acc.LastAttempt = time.Now()
-					}
-					if statusCode == "429" {
-						slog.Debug("Auto refresh grok: rate-limit check throttled", "account_id", acc.ID)
-					} else {
-						slog.Warn("Auto refresh token failed", "account_id", acc.ID, "type", "grok", "status", statusCode, "error", verifyErr)
-					}
-				} else {
-					if info != nil {
-						grok.ApplyQuotaInfo(acc, info)
-					}
-					if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
-						acc.StatusCode = ""
-						acc.LastAttempt = time.Time{}
-						acc.QuotaResetAt = time.Time{}
-					}
-				}
-				if err := s.UpdateAccount(context.Background(), acc); err != nil {
-					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
-				}
-			}
-		}
 
 			proxyFunc := http.ProxyFromEnvironment
 			if cfg != nil {
@@ -268,6 +364,7 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				continue
 			}
 		}
+		refreshGrokAccounts(context.Background(), cfg, s, grokRefreshQueue)
 	}
 
 	go func() {

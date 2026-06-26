@@ -160,7 +160,7 @@ function modelRefreshSourceLabel(source) {
     puter_public_models: "Puter 公开模型 API",
     puter_public_models_test_mode: "Puter 公开 API + 账号验证",
     puter_public_models_unverified: "Puter 公开 API",
-    grok_console_probe: "Grok 账号探测",
+    grok_app_chat_static: "Grok App Chat 模型表",
   };
   if (labels[value]) return labels[value];
   if (value.startsWith("warp_graphql")) return "Warp 账号 GraphQL";

@@ -199,7 +199,6 @@ func (s *Store) seedModels() error {
 	}
 
 	s.cleanupDeprecatedModelIDs(ctx)
-	s.ensureRequiredGrokChatModels(ctx)
 
 	return nil
 }
@@ -224,7 +223,8 @@ func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
 		"grok-4.20-non-reasoning",
 		"grok-4.20-multi-agent",
 		"grok-420",
-		"grok-4.3-beta",
+		"grok-4.3",
+		"grok-build-0.1",
 		"grok-code-fast",
 		"grok-code-fast-1",
 		"grok-imagine-1.0",
@@ -250,31 +250,17 @@ func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
 }
 
 func (s *Store) ensureRequiredGrokChatModels(ctx context.Context) {
-	required := []struct {
-		id   string
-		name string
-	}{
-		{"grok-4.3", "Grok 4.3"},
-		{"grok-build-0.1", "Grok Build 0.1"},
-	}
-	for _, item := range required {
-		if _, err := s.GetModelByChannelAndModelID(ctx, "Grok", item.id); err == nil {
+	for _, src := range buildGrokSeedModels() {
+		if _, err := s.GetModelByChannelAndModelID(ctx, src.Channel, src.ModelID); err == nil {
 			continue
 		}
-		record := &Model{
-			Channel:   "Grok",
-			ModelID:   item.id,
-			Name:      item.name,
-			Status:    ModelStatusAvailable,
-			Verified:  true,
-			IsDefault: false,
-			SortOrder: 15,
-		}
-		if err := s.CreateModel(ctx, record); err != nil {
-			slog.Warn("Failed to ensure required Grok model", "model_id", item.id, "error", err)
+		record := src
+		record.ID = ""
+		if err := s.CreateModel(ctx, &record); err != nil {
+			slog.Warn("Failed to ensure Grok app-chat model", "model_id", src.ModelID, "error", err)
 			continue
 		}
-		slog.Debug("Ensured required Grok model", "model_id", item.id)
+		slog.Debug("Ensured Grok app-chat model", "model_id", src.ModelID)
 	}
 }
 
@@ -297,8 +283,7 @@ func buildGrokSeedModels() []Model {
 		{"grok-4.20-auto", "Grok 4.20 Auto"},
 		{"grok-4.20-expert", "Grok 4.20 Expert"},
 		{"grok-4.20-heavy", "Grok 4.20 Heavy"},
-		{"grok-4.3", "Grok 4.3"},
-		{"grok-build-0.1", "Grok Build 0.1"},
+		{"grok-4.3-beta", "Grok 4.3 Beta"},
 		{"grok-imagine-image-lite", "Grok Imagine Image Lite"},
 		{"grok-imagine-image", "Grok Imagine Image"},
 		{"grok-imagine-image-pro", "Grok Imagine Image Pro"},
@@ -314,7 +299,7 @@ func buildGrokSeedModels() []Model {
 			Name:      item.name,
 			Status:    ModelStatusAvailable,
 			Verified:  true,
-			IsDefault: i == 1,
+			IsDefault: i == 0,
 			SortOrder: i,
 		})
 	}

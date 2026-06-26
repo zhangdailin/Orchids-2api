@@ -349,15 +349,6 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	defer sess.Close()
 
-	if shouldServeConsoleChat(spec, attachments) {
-		h.serveConsoleChat(r.Context(), w, &req, spec, sess, logger)
-		return
-	}
-	if requiresConsoleResponses(spec) {
-		http.Error(w, fmt.Sprintf("model %s is only supported through console.x.ai responses and does not support attachments in this API", req.Model), http.StatusBadRequest)
-		return
-	}
-
 	buildPayload := func(token string) (map[string]interface{}, error) {
 		fileAttachments := []string(nil)
 		if !spec.IsVideo {

@@ -13,7 +13,6 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/grok"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -289,26 +288,6 @@ func TestVerifyPuterDiscoveredModelsSerial_RequiresAcceptedProbe(t *testing.T) {
 	}
 }
 
-func TestGrokCanonicalAcceptanceRejectsFallbackModels(t *testing.T) {
-	tests := []struct {
-		requested string
-		canonical string
-		want      bool
-	}{
-		{requested: "grok-4.20-0309", canonical: "grok-4.20-0309", want: true},
-		{requested: "grok-4.3", canonical: "grok-4.3", want: true},
-		{requested: "grok-4.3-latest", canonical: "grok-4.3", want: false},
-		{requested: "grok-latest", canonical: "grok-4.3", want: false},
-		{requested: "grok-3-mini", canonical: "grok-4.20-0309", want: false},
-		{requested: "grok-420", canonical: "grok-4.20-0309", want: false},
-	}
-	for _, tt := range tests {
-		if got := isAcceptedGrokCanonical(tt.requested, tt.canonical); got != tt.want {
-			t.Fatalf("isAcceptedGrokCanonical(%q,%q)=%v want %v", tt.requested, tt.canonical, got, tt.want)
-		}
-	}
-}
-
 func TestGrokProbeCandidatesIncludesPolicyAndExistingModels(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
@@ -357,16 +336,26 @@ func TestCanonicalizeDiscoveredModels_NormalizesLegacyGrok43(t *testing.T) {
 	}
 }
 
-func TestGrokConsoleModelsRemainAcceptedAfterProbeFallback(t *testing.T) {
-	candidates := []discoveredModel{{ID: "grok-4.3", Name: "Grok 4.3"}}
-	accepted := make([]bool, len(candidates))
-	for idx, candidate := range candidates {
-		if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
-			accepted[idx] = true
-		}
+func TestDiscoverGrokModelsUsesAppChatStaticList(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+
+	items, source, err := discoverGrokModelsConcurrent(context.Background(), &config.Config{}, s, 4)
+	if err != nil {
+		t.Fatalf("discoverGrokModelsConcurrent() error = %v", err)
 	}
-	if !accepted[0] {
-		t.Fatal("expected grok-4.3 to remain accepted as a console model")
+	if source != "grok_app_chat_static" {
+		t.Fatalf("source=%q want grok_app_chat_static", source)
+	}
+
+	gotSet := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		gotSet[item.ID] = struct{}{}
+	}
+	for _, id := range modelpolicy.PublicGrokModelIDs() {
+		if _, ok := gotSet[id]; !ok {
+			t.Fatalf("expected app chat model %q in %+v", id, items)
+		}
 	}
 }
 

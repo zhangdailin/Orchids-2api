@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/modelpolicy"
 )
 
 func TestResolveModel_RejectsRemovedAliases(t *testing.T) {
@@ -48,17 +49,23 @@ func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
 		modelID       string
 		wantUpstream  string
 		wantModelMode string
+		wantModeID    string
 	}{
-		{modelID: "grok-4.20-0309-non-reasoning", wantUpstream: "grok-4.20-0309-non-reasoning", wantModelMode: "MODEL_MODE_FAST"},
-		{modelID: "grok-4.20-0309", wantUpstream: "grok-4.20-0309", wantModelMode: "MODEL_MODE_AUTO"},
-		{modelID: "grok-4.20-0309-reasoning", wantUpstream: "grok-4.20-0309-reasoning", wantModelMode: "MODEL_MODE_EXPERT"},
-		{modelID: "grok-4.20-multi-agent-0309", wantUpstream: "grok-4.20-multi-agent-0309", wantModelMode: "MODEL_MODE_HEAVY"},
-		{modelID: "grok-4.20-fast", wantUpstream: "grok-4.20-fast", wantModelMode: "MODEL_MODE_FAST"},
-		{modelID: "grok-4.20-auto", wantUpstream: "grok-4.20-auto", wantModelMode: "MODEL_MODE_AUTO"},
-		{modelID: "grok-4.20-expert", wantUpstream: "grok-4.20-expert", wantModelMode: "MODEL_MODE_EXPERT"},
-		{modelID: "grok-4.20-heavy", wantUpstream: "grok-4.20-heavy", wantModelMode: "MODEL_MODE_HEAVY"},
-		{modelID: "grok-4.3", wantUpstream: "grok-4.3", wantModelMode: ""},
-		{modelID: "grok-build-0.1", wantUpstream: "grok-build-0.1", wantModelMode: ""},
+		{modelID: "grok-4.20-0309-non-reasoning", wantUpstream: "grok-4.20-0309-non-reasoning", wantModelMode: "MODEL_MODE_FAST", wantModeID: "fast"},
+		{modelID: "grok-4.20-0309", wantUpstream: "grok-4.20-0309", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
+		{modelID: "grok-4.20-0309-reasoning", wantUpstream: "grok-4.20-0309-reasoning", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
+		{modelID: "grok-4.20-0309-non-reasoning-super", wantUpstream: "grok-4.20-0309-non-reasoning-super", wantModelMode: "MODEL_MODE_FAST", wantModeID: "fast"},
+		{modelID: "grok-4.20-0309-super", wantUpstream: "grok-4.20-0309-super", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
+		{modelID: "grok-4.20-0309-reasoning-super", wantUpstream: "grok-4.20-0309-reasoning-super", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
+		{modelID: "grok-4.20-0309-non-reasoning-heavy", wantUpstream: "grok-4.20-0309-non-reasoning-heavy", wantModelMode: "MODEL_MODE_FAST", wantModeID: "fast"},
+		{modelID: "grok-4.20-0309-heavy", wantUpstream: "grok-4.20-0309-heavy", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
+		{modelID: "grok-4.20-0309-reasoning-heavy", wantUpstream: "grok-4.20-0309-reasoning-heavy", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
+		{modelID: "grok-4.20-multi-agent-0309", wantUpstream: "grok-4.20-multi-agent-0309", wantModelMode: "MODEL_MODE_HEAVY", wantModeID: "heavy"},
+		{modelID: "grok-4.20-fast", wantUpstream: "grok-4.20-fast", wantModelMode: "MODEL_MODE_FAST", wantModeID: "fast"},
+		{modelID: "grok-4.20-auto", wantUpstream: "grok-4.20-auto", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
+		{modelID: "grok-4.20-expert", wantUpstream: "grok-4.20-expert", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
+		{modelID: "grok-4.20-heavy", wantUpstream: "grok-4.20-heavy", wantModelMode: "MODEL_MODE_HEAVY", wantModeID: "heavy"},
+		{modelID: "grok-4.3-beta", wantUpstream: "grok-4.3-beta", wantModelMode: "MODEL_MODE_GROK_4_3", wantModeID: "grok-420-computer-use-sa"},
 	}
 	for _, tc := range cases {
 		spec, ok := ResolveModel(tc.modelID)
@@ -70,6 +77,27 @@ func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
 		}
 		if spec.ModelMode != tc.wantModelMode {
 			t.Fatalf("%s mode=%q want=%q", tc.modelID, spec.ModelMode, tc.wantModelMode)
+		}
+		if spec.ModeID != tc.wantModeID {
+			t.Fatalf("%s modeID=%q want=%q", tc.modelID, spec.ModeID, tc.wantModeID)
+		}
+	}
+}
+
+func TestPublicGrokModelsAllResolveToAppChatSpecs(t *testing.T) {
+	for _, id := range modelpolicy.PublicGrokModelIDs() {
+		spec, ok := ResolveModel(id)
+		if !ok {
+			t.Fatalf("public Grok model %q is missing from SupportedModels", id)
+		}
+		if spec.ConsoleModel != "" {
+			t.Fatalf("public Grok model %q has ConsoleModel=%q; default Grok path must stay on app chat", id, spec.ConsoleModel)
+		}
+		if spec.UpstreamModel == "" {
+			t.Fatalf("public Grok model %q has empty UpstreamModel", id)
+		}
+		if IsDeprecatedModelID(id) {
+			t.Fatalf("public Grok model %q should not be deprecated", id)
 		}
 	}
 }
@@ -107,8 +135,24 @@ func TestResolveModel_Grok420BetaRejected(t *testing.T) {
 	}
 }
 
-func TestResolveModel_Grok420CurrentBaselineAccepted(t *testing.T) {
-	for _, id := range []string{"grok-4.20-0309", "grok-4.20-fast", "grok-4.3", "grok-build-0.1"} {
+func TestResolveModel_Grok2APIAppChatModelsAccepted(t *testing.T) {
+	for _, id := range []string{
+		"grok-4.20-0309-non-reasoning",
+		"grok-4.20-0309",
+		"grok-4.20-0309-reasoning",
+		"grok-4.20-0309-non-reasoning-super",
+		"grok-4.20-0309-super",
+		"grok-4.20-0309-reasoning-super",
+		"grok-4.20-0309-non-reasoning-heavy",
+		"grok-4.20-0309-heavy",
+		"grok-4.20-0309-reasoning-heavy",
+		"grok-4.20-multi-agent-0309",
+		"grok-4.20-fast",
+		"grok-4.20-auto",
+		"grok-4.20-expert",
+		"grok-4.20-heavy",
+		"grok-4.3-beta",
+	} {
 		if _, ok := ResolveModel(id); !ok {
 			t.Fatalf("ResolveModel(%s) should succeed", id)
 		}
@@ -118,12 +162,20 @@ func TestResolveModel_Grok420CurrentBaselineAccepted(t *testing.T) {
 	}
 }
 
-func TestResolveModel_Grok43BetaRejected(t *testing.T) {
-	if _, ok := ResolveModel("grok-4.3-beta"); ok {
-		t.Fatalf("ResolveModel(grok-4.3-beta) should fail")
-	}
-	if _, ok := ResolveModelOrDynamic("grok-4.3-beta"); ok {
-		t.Fatalf("ResolveModelOrDynamic(grok-4.3-beta) should fail")
+func TestResolveModel_RejectsConsoleOnlyGrokModels(t *testing.T) {
+	for _, id := range []string{
+		"grok-4.3",
+		"grok-build-0.1",
+	} {
+		if _, ok := ResolveModel(id); ok {
+			t.Fatalf("ResolveModel(%s) should fail", id)
+		}
+		if _, ok := ResolveModelOrDynamic(id); ok {
+			t.Fatalf("ResolveModelOrDynamic(%s) should fail", id)
+		}
+		if !IsDeprecatedModelID(id) {
+			t.Fatalf("%s should be deprecated", id)
+		}
 	}
 }
 
@@ -295,6 +347,12 @@ func TestBuildChatPayload_InjectsSamplingOverrides(t *testing.T) {
 	}
 	if got, _ := override["reasoningEffort"].(string); got != "medium" {
 		t.Fatalf("reasoningEffort=%q want=medium", got)
+	}
+	if _, ok := payload["modelName"]; ok {
+		t.Fatalf("text app-chat payload should not include modelName: %#v", payload["modelName"])
+	}
+	if got, _ := payload["modeId"].(string); got != "auto" {
+		t.Fatalf("modeId=%q want auto", got)
 	}
 }
 

@@ -361,7 +361,7 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 		}
 	}
 	lb.mu.Unlock()
-	lb.persistAccountStatus(ctx, acc, "后台刷新失败: "+status)
+	lb.persistAccountStatus(ctx, acc, "账号状态标记: "+status)
 }
 
 func (lb *LoadBalancer) persistAccountStatus(ctx context.Context, acc *store.Account, reason string) {

@@ -114,7 +114,6 @@ func TestGrokHeaders_UseConfiguredStatsigAndCloudflareCookies(t *testing.T) {
 	for name, headers := range map[string]http.Header{
 		"default": c.headers("plain-token"),
 		"appChat": c.appChatHeaders("plain-token"),
-		"console": c.consoleHeaders("plain-token"),
 	} {
 		if got := headers.Get("x-statsig-id"); got != statsigID {
 			t.Fatalf("%s x-statsig-id=%q want configured browser statsig", name, got)

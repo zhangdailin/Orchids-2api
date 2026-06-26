@@ -70,7 +70,7 @@ func TestHandleModelByID_ReturnsVisibleModel(t *testing.T) {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-4.3", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models/grok-4.20-0309-non-reasoning", nil)
 	rec := httptest.NewRecorder()
 
 	h.HandleModelByID(rec, req)
@@ -143,7 +143,7 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenOnlyBasicPoolExists(t *testing.T
 	if !strings.Contains(body, "grok-4.20-0309-non-reasoning") {
 		t.Fatalf("expected basic model in body=%s", body)
 	}
-	if !strings.Contains(body, "grok-4.20-0309-super") || !strings.Contains(body, "grok-imagine-video") {
+	if !strings.Contains(body, "grok-4.20-0309-non-reasoning-super") || !strings.Contains(body, "grok-imagine-video") {
 		t.Fatalf("expected enabled grok models to remain visible regardless of pool state, body=%s", body)
 	}
 }
@@ -174,11 +174,16 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenAccountsHaveStatusCode(t *testin
 		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "grok-4.3") {
+	if !strings.Contains(body, "grok-4.20-0309-non-reasoning") {
 		t.Fatalf("expected grok models to remain visible despite account status, body=%s", body)
 	}
-	if strings.Contains(body, "grok-4.3-beta") {
-		t.Fatalf("expected removed beta model to stay hidden, body=%s", body)
+	if !strings.Contains(body, "grok-4.3-beta") {
+		t.Fatalf("expected app-chat beta model to remain visible, body=%s", body)
+	}
+	for _, hidden := range []string{"grok-4.3", "grok-build-0.1"} {
+		if strings.Contains(body, `"id":"`+hidden+`"`) {
+			t.Fatalf("expected removed model %s to stay hidden, body=%s", hidden, body)
+		}
 	}
 }
 

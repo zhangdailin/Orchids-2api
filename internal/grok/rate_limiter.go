@@ -64,13 +64,11 @@ func (tb *tokenBucket) wait(ctx context.Context) error {
 
 // endpointRateLimiters holds per-endpoint token buckets.
 var (
-	endpointRateLimiters   = map[string]*tokenBucket{}
-	endpointRateLimiterMu  sync.Mutex
+	endpointRateLimiters  = map[string]*tokenBucket{}
+	endpointRateLimiterMu sync.Mutex
 )
 
 func init() {
-	// Console API: 1.5 RPS with burst 2 (headroom below 2 RPS limit).
-	endpointRateLimiters["console.x.ai"] = newTokenBucket(1.5, 2)
 	// App Chat API: 5 RPS with burst 10 (generous, adjust as needed).
 	endpointRateLimiters["grok.com"] = newTokenBucket(5, 10)
 	// Rate-limits check: 0.5 RPS with burst 1 (very conservative).
@@ -78,8 +76,7 @@ func init() {
 }
 
 // rateLimitEndpoint blocks until it is safe to call the given endpoint URL.
-// The endpoint is identified by a key: "console.x.ai", "grok.com", or
-// "grok.com/rate-limits".
+// The endpoint is identified by a key: "grok.com" or "grok.com/rate-limits".
 func rateLimitEndpoint(ctx context.Context, endpointKey string) error {
 	endpointRateLimiterMu.Lock()
 	tb := endpointRateLimiters[endpointKey]
@@ -92,11 +89,6 @@ func rateLimitEndpoint(ctx context.Context, endpointKey string) error {
 	}
 	slog.Debug("Rate limiter: token acquired", "endpoint", endpointKey)
 	return nil
-}
-
-// consoleRateLimitEndpoint waits for the console.x.ai rate limiter.
-func consoleRateLimitEndpoint(ctx context.Context) error {
-	return rateLimitEndpoint(ctx, "console.x.ai")
 }
 
 // appChatRateLimitEndpoint waits for the grok.com App Chat rate limiter.

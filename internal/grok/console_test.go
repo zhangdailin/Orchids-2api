@@ -1,3 +1,5 @@
+//go:build legacy_console
+
 package grok
 
 import (
@@ -6,10 +8,22 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 )
+
+func resetConsoleTeamCooldownForTest(t *testing.T) {
+	t.Helper()
+	clear := func() {
+		consoleTeamCooldownMu.Lock()
+		consoleTeamCooldownUntil = time.Time{}
+		consoleTeamCooldownMu.Unlock()
+	}
+	clear()
+	t.Cleanup(clear)
+}
 
 func TestDoConsole_DoesNotRetry429OnSameAccount(t *testing.T) {
 	t.Parallel()
@@ -99,6 +113,86 @@ func TestServeConsoleChat_MarksAccountOn429(t *testing.T) {
 	}
 	if got.LastAttempt.IsZero() {
 		t.Fatal("LastAttempt is zero, want cooldown timestamp")
+	}
+}
+
+func TestServeConsoleChat_DoesNotSwitchOrMarkOnConsoleTeam429(t *testing.T) {
+	resetConsoleTeamCooldownForTest(t)
+
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	acc1 := &store.Account{
+		AccountType:  "grok",
+		Enabled:      true,
+		ClientCookie: "sso=super-token-a",
+		Subscription: "super",
+		Weight:       1,
+	}
+	acc2 := &store.Account{
+		AccountType:  "grok",
+		Enabled:      true,
+		ClientCookie: "sso=super-token-b",
+		Subscription: "super",
+		Weight:       1,
+	}
+	for _, acc := range []*store.Account{acc1, acc2} {
+		if err := s.CreateAccount(context.Background(), acc); err != nil {
+			t.Fatalf("CreateAccount() error = %v", err)
+		}
+	}
+
+	calls := 0
+	h.cfg = &config.Config{AccountSwitchCount: 2}
+	h.client = &Client{
+		cfg: &config.Config{},
+		httpClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(
+						`{"code":"resource-exhausted","error":"Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.3. Your team's rate limit is - Requests per Second (actual/limit): 2/2, Requests per Minute (actual/limit): 73/60."}`,
+					)),
+					Request: req,
+				}, nil
+			}),
+		},
+	}
+
+	sess, err := h.openChatAccountSessionForModel(context.Background(), ModelSpec{ID: "grok-4.3", ConsoleModel: "grok-4.3", Tier: grokTierSuper})
+	if err != nil {
+		t.Fatalf("open console session error=%v", err)
+	}
+	firstID := sess.acc.ID
+	defer sess.Close()
+
+	_, err = h.doConsoleWithAutoSwitch(context.Background(), sess, map[string]interface{}{"model": "grok-4.3", "input": "hi"})
+	if err == nil {
+		t.Fatal("expected 429 error")
+	}
+	if sess.acc.ID != firstID {
+		t.Fatalf("switched account=%d, want original account %d", sess.acc.ID, firstID)
+	}
+	if calls != 1 {
+		t.Fatalf("request count=%d want 1", calls)
+	}
+
+	for _, acc := range []*store.Account{acc1, acc2} {
+		got, err := s.GetAccount(context.Background(), acc.ID)
+		if err != nil {
+			t.Fatalf("GetAccount(%d) error = %v", acc.ID, err)
+		}
+		if got.StatusCode != "" {
+			t.Fatalf("account %d StatusCode=%q want empty", acc.ID, got.StatusCode)
+		}
+		if !got.LastAttempt.IsZero() {
+			t.Fatalf("account %d LastAttempt=%v want zero", acc.ID, got.LastAttempt)
+		}
 	}
 }
 

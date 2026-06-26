@@ -318,7 +318,7 @@ func (h *Handler) doSingleAccountRequest(
 type grokAccountStatusPolicy func(error) bool
 
 func markAllGrokAccountStatuses(err error) bool {
-	return err != nil
+	return err != nil && !isSharedGrokRateLimitError(err)
 }
 
 func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
@@ -419,8 +419,14 @@ func shouldSwitchGrokAccount(err error) bool {
 		return false
 	}
 	status := classifyAccountStatusFromError(err.Error())
-	if status == "403" || status == "429" {
+	if status == "403" {
 		return true
+	}
+	if status == "429" {
+		return !isSharedGrokRateLimitError(err)
+	}
+	if isSharedGrokRateLimitError(err) {
+		return false
 	}
 	if upstreamStatus := parseUpstreamStatus(err); upstreamStatus == http.StatusBadGateway ||
 		upstreamStatus == http.StatusServiceUnavailable ||
@@ -442,6 +448,22 @@ func shouldSwitchGrokAccount(err error) bool {
 	default:
 		return false
 	}
+}
+
+func isSharedGrokRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	if parseUpstreamStatus(err) != http.StatusTooManyRequests && !strings.Contains(lower, "too many requests") {
+		return false
+	}
+	return strings.Contains(lower, "too_many_requests") ||
+		strings.Contains(lower, "too many requests for team") ||
+		strings.Contains(lower, "resource-exhausted") ||
+		strings.Contains(lower, "resource_exhausted") ||
+		strings.Contains(lower, "please try again in a bit") ||
+		strings.Contains(lower, "body=too many requests")
 }
 
 func upstreamHTTPResponseStatus(err error) int {

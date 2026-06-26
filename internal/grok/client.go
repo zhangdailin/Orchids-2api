@@ -391,11 +391,20 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		temporary = c.cfg.GrokChatTemporary()
 		noMemory = c.cfg.GrokChatDisableMemory(noMemory)
 	}
+	includeModelFields := spec.IsImage || spec.IsVideo
+	responseMetadata := map[string]interface{}{}
+	if includeModelFields {
+		responseMetadata["modelConfigOverride"] = map[string]interface{}{
+			"modelMap": map[string]interface{}{},
+		}
+		responseMetadata["requestModelDetails"] = map[string]interface{}{
+			"modelId": spec.UpstreamModel,
+		}
+	}
 	payload := map[string]interface{}{
 		"collectionIds":               []string{},
 		"disabledConnectorIds":        []string{},
 		"temporary":                   temporary,
-		"modelName":                   spec.UpstreamModel,
 		"message":                     text,
 		"fileAttachments":             []string{},
 		"imageAttachments":            []string{},
@@ -414,30 +423,28 @@ func (c *Client) chatPayload(spec ModelSpec, text string, noMemory bool, imageCo
 		"returnRawGrokInXaiRequest":   false,
 		"enableSideBySide":            true,
 		"sendFinalMetadata":           true,
-		"responseMetadata": map[string]interface{}{
-			"modelConfigOverride": map[string]interface{}{
-				"modelMap": map[string]interface{}{},
-			},
-			"requestModelDetails": map[string]interface{}{
-				"modelId": spec.UpstreamModel,
-			},
-		},
-		"disableMemory": noMemory,
-		"deviceEnvInfo": appChatDeviceEnvInfo(),
+		"responseMetadata":            responseMetadata,
+		"disableMemory":               noMemory,
+		"deviceEnvInfo":               appChatDeviceEnvInfo(),
+	}
+	if includeModelFields {
+		payload["modelName"] = spec.UpstreamModel
 	}
 	if imageCount > 0 {
 		payload["toolOverrides"] = map[string]interface{}{"imageGen": true}
 	}
-	if strings.TrimSpace(spec.ModelMode) != "" {
+	if includeModelFields && strings.TrimSpace(spec.ModelMode) != "" {
 		payload["modelMode"] = spec.ModelMode
 	}
 	if modeID := appChatModeID(spec); modeID != "" {
 		payload["modeId"] = modeID
 	}
-	if tier := appChatModelTier(spec); tier != "" {
-		payload["modelTier"] = tier
+	if includeModelFields {
+		if tier := appChatModelTier(spec); tier != "" {
+			payload["modelTier"] = tier
+		}
 	}
-	if spec.PreferBest {
+	if includeModelFields && spec.PreferBest {
 		payload["preferBest"] = true
 	}
 	if c != nil && c.cfg != nil {
@@ -460,6 +467,9 @@ func (c *Client) appChatImagePayload(spec ModelSpec, prompt, _ string, _ int) ma
 }
 
 func appChatModeID(spec ModelSpec) string {
+	if modeID := strings.TrimSpace(spec.ModeID); modeID != "" {
+		return modeID
+	}
 	mode := strings.TrimSpace(spec.ModelMode)
 	switch mode {
 	case "MODEL_MODE_FAST":
@@ -470,6 +480,8 @@ func appChatModeID(spec ModelSpec) string {
 		return "expert"
 	case "MODEL_MODE_HEAVY":
 		return "heavy"
+	case "MODEL_MODE_GROK_4_3":
+		return "grok-420-computer-use-sa"
 	}
 	if mode != "" {
 		return mode
@@ -881,7 +893,7 @@ func (c *Client) GetUsage(ctx context.Context, token, modelID string) (*RateLimi
 	if !ok {
 		// Fall back to a known default model when the model ID is not recognized
 		// (e.g. AgentMode="grok-3" stored on older accounts).
-		spec, ok = ResolveModelOrDynamic("grok-4.20-0309")
+		spec, ok = ResolveModelOrDynamic("grok-4.20-0309-non-reasoning")
 		if !ok {
 			return nil, fmt.Errorf("model not found")
 		}
@@ -918,6 +930,9 @@ func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpe
 }
 
 func rateLimitModelName(spec ModelSpec) string {
+	if modeID := strings.TrimSpace(spec.ModeID); modeID != "" {
+		return modeID
+	}
 	mode := strings.TrimSpace(spec.ModelMode)
 	switch mode {
 	case "MODEL_MODE_FAST":
@@ -928,6 +943,8 @@ func rateLimitModelName(spec ModelSpec) string {
 		return "expert"
 	case "MODEL_MODE_HEAVY":
 		return "heavy"
+	case "MODEL_MODE_GROK_4_3":
+		return "grok-420-computer-use-sa"
 	}
 	if mode != "" {
 		return mode

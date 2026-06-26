@@ -146,7 +146,7 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	model, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-imagine-image")
+	model, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
 	}
@@ -164,12 +164,12 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 		mini.Close()
 	})
 
-	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-imagine-image"); err == nil {
+	if _, err := s.GetModelByChannelAndModelID(ctx, "orchids", "claude-opus-4-6"); err == nil {
 		t.Fatal("expected deleted model to stay deleted after store restart")
 	}
 }
 
-func TestStoreNew_EnsuresRequiredGrokChatModelsWithExistingModelList(t *testing.T) {
+func TestStoreNew_SeedsGrokAppChatModelsWithoutConsoleLegacyModels(t *testing.T) {
 	t.Parallel()
 
 	mini := miniredis.RunT(t)
@@ -185,7 +185,7 @@ func TestStoreNew_EnsuresRequiredGrokChatModelsWithExistingModelList(t *testing.
 	}
 
 	ctx := context.Background()
-	for _, id := range []string{"grok-4.3", "grok-build-0.1"} {
+	for _, id := range []string{"grok-4.3-beta"} {
 		model, err := s.GetModelByChannelAndModelID(ctx, "grok", id)
 		if err != nil {
 			t.Fatalf("GetModelByChannelAndModelID(%s) error = %v", id, err)
@@ -214,9 +214,12 @@ func TestStoreNew_EnsuresRequiredGrokChatModelsWithExistingModelList(t *testing.
 		mini.Close()
 	})
 
+	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-4.3-beta"); err != nil {
+		t.Fatalf("expected grok-4.3-beta to be seeded after restart: %v", err)
+	}
 	for _, id := range []string{"grok-4.3", "grok-build-0.1"} {
-		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err != nil {
-			t.Fatalf("expected %s to be ensured after restart: %v", id, err)
+		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err == nil {
+			t.Fatalf("expected console legacy model %s to stay removed", id)
 		}
 	}
 	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-user-custom"); err != nil {

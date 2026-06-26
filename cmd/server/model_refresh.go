@@ -433,85 +433,15 @@ func isPuterModelDefinitiveReject(err error) bool {
 }
 
 func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
-	accounts, err := enabledAccountsByType(ctx, s, "grok")
-	if err != nil {
-		return nil, "", err
-	}
-	if len(accounts) == 0 {
-		return nil, "", fmt.Errorf("no enabled grok accounts")
-	}
-
-	tokens := grokAccountTokens(accounts)
-	if len(tokens) == 0 {
-		return nil, "", fmt.Errorf("no enabled grok account token")
-	}
-
+	_ = cfg
+	_ = concurrency
 	candidates := canonicalizeDiscoveredModels(grokProbeCandidateModels(ctx, s), canonicalGrokRefreshModelID)
-	client := grok.New(refreshModelRequestConfig(cfg, "grok"))
-	accepted := make([]bool, len(candidates))
-	workerCount := boundedModelRefreshWorkers(len(candidates), concurrency)
-	if workerCount <= 1 {
-		token := tokens[0]
-		for i, candidate := range candidates {
-			if spec, ok := grok.ResolveModel(candidate.ID); ok && (spec.IsImage || spec.IsVideo) {
-				accepted[i] = true
-				continue
-			}
-			if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
-				accepted[i] = true
-				continue
-			}
-			result := client.ProbeConsoleModel(ctx, token, candidate.ID)
-			accepted[i] = result.OK && isAcceptedGrokCanonical(candidate.ID, result.CanonicalModel)
-		}
-	} else {
-		jobs := make(chan int, len(candidates))
-		var wg sync.WaitGroup
-		wg.Add(workerCount)
-		for worker := 0; worker < workerCount; worker++ {
-			go func() {
-				defer wg.Done()
-				for idx := range jobs {
-					candidate := candidates[idx]
-					if strings.TrimSpace(candidate.ID) == "" {
-						continue
-					}
-					if spec, ok := grok.ResolveModel(candidate.ID); ok && (spec.IsImage || spec.IsVideo) {
-						accepted[idx] = true
-						continue
-					}
-					if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
-						accepted[idx] = true
-						continue
-					}
-					if err := ctx.Err(); err != nil {
-						continue
-					}
-					token := tokens[idx%len(tokens)]
-					result := client.ProbeConsoleModel(ctx, token, candidate.ID)
-					accepted[idx] = result.OK && isAcceptedGrokCanonical(candidate.ID, result.CanonicalModel)
-				}
-			}()
-		}
-		for idx := range candidates {
-			jobs <- idx
-		}
-		close(jobs)
-		wg.Wait()
-	}
-
-	for idx, candidate := range candidates {
-		if accepted[idx] {
-			continue
-		}
-		if spec, ok := grok.ResolveModel(candidate.ID); ok && strings.TrimSpace(spec.ConsoleModel) != "" {
-			accepted[idx] = true
-		}
-	}
-
 	out := make([]discoveredModel, 0, len(candidates))
-	for idx, candidate := range candidates {
-		if !accepted[idx] {
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		if _, ok := grok.ResolveModel(candidate.ID); !ok {
 			continue
 		}
 		out = append(out, discoveredModel{
@@ -521,9 +451,9 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		})
 	}
 	if len(out) == 0 {
-		return nil, "", fmt.Errorf("no grok models verified by console.x.ai")
+		return nil, "", fmt.Errorf("no grok app chat models")
 	}
-	return out, "grok_console_probe", nil
+	return out, "grok_app_chat_static", nil
 }
 
 func canonicalGrokRefreshModelID(modelID string) string {
@@ -611,15 +541,9 @@ func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredM
 	}
 
 	for _, id := range []string{
-		"grok-4.20-0309",
 		"grok-4.20-0309-non-reasoning",
-		"grok-4.20-0309-reasoning",
 		"grok-4.20-fast",
-		"grok-4.20-auto",
-		"grok-4.20-expert",
 		"grok-4.20-heavy",
-		"grok-4.3",
-		"grok-build-0.1",
 	} {
 		name := id
 		if spec, ok := grok.ResolveModel(id); ok && strings.TrimSpace(spec.Name) != "" {
@@ -640,18 +564,6 @@ func grokProbeCandidateModels(ctx context.Context, s *store.Store) []discoveredM
 	}
 
 	return out
-}
-
-func isAcceptedGrokCanonical(requested, canonical string) bool {
-	requested = strings.ToLower(strings.TrimSpace(requested))
-	canonical = strings.ToLower(strings.TrimSpace(canonical))
-	if requested == "" || canonical == "" {
-		return false
-	}
-	if requested == canonical {
-		return true
-	}
-	return false
 }
 
 func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {

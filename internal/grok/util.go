@@ -2346,6 +2346,15 @@ func interfaceToInt(v interface{}) int {
 	return 0
 }
 
+func interfaceSlice(v interface{}) []interface{} {
+	switch x := v.(type) {
+	case []interface{}:
+		return x
+	default:
+		return nil
+	}
+}
+
 func valueAtPath(root interface{}, path ...string) interface{} {
 	cur := root
 	for _, key := range path {
