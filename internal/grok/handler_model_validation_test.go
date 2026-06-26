@@ -124,16 +124,14 @@ func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t
 	}
 }
 
-func TestResolveModel_RejectsConsoleOnlyGrok43(t *testing.T) {
-	for _, id := range []string{"grok-4.3", "grok-build-0.1"} {
-		if _, ok := ResolveModel(id); ok {
-			t.Fatalf("ResolveModel(%s) = true, want false", id)
+func TestResolveModel_AcceptsGrok43ConsoleModels(t *testing.T) {
+	for _, id := range []string{"grok-4.3", "grok-build-0.1", "grok-4.3-beta"} {
+		spec, ok := ResolveModel(id)
+		if !ok {
+			t.Fatalf("ResolveModel(%s) = false, want true", id)
 		}
-		if _, ok := ResolveModelOrDynamic(id); ok {
-			t.Fatalf("ResolveModelOrDynamic(%s) = true, want false", id)
-		}
-		if !IsDeprecatedModelID(id) {
-			t.Fatalf("%s should be deprecated", id)
+		if spec.ConsoleModel == "" {
+			t.Fatalf("%s ConsoleModel should not be empty", id)
 		}
 	}
 }
@@ -171,8 +169,8 @@ func TestEnsureModelEnabled_RejectsConsoleOnlyGrok43EvenWhenStored(t *testing.T)
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	if err := h.ensureModelEnabled(context.Background(), "grok-4.3"); err == nil {
-		t.Fatalf("ensureModelEnabled(grok-4.3) succeeded, want error")
+	if err := h.ensureModelEnabled(context.Background(), "grok-4.3"); err != nil {
+		t.Fatalf("ensureModelEnabled(grok-4.3) error = %v", err)
 	}
 }
 

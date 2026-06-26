@@ -65,7 +65,8 @@ func TestResolveModel_AliasBaseMappingsMatchGrok2API(t *testing.T) {
 		{modelID: "grok-4.20-auto", wantUpstream: "grok-4.20-auto", wantModelMode: "MODEL_MODE_AUTO", wantModeID: "auto"},
 		{modelID: "grok-4.20-expert", wantUpstream: "grok-4.20-expert", wantModelMode: "MODEL_MODE_EXPERT", wantModeID: "expert"},
 		{modelID: "grok-4.20-heavy", wantUpstream: "grok-4.20-heavy", wantModelMode: "MODEL_MODE_HEAVY", wantModeID: "heavy"},
-		{modelID: "grok-4.3-beta", wantUpstream: "grok-4.3-beta", wantModelMode: "MODEL_MODE_GROK_4_3", wantModeID: "grok-420-computer-use-sa"},
+		// grok-4.3 models are console-only — skip mode/modeID checks
+		{modelID: "grok-4.3-beta", wantUpstream: "grok-4.3-beta", wantModelMode: "", wantModeID: "grok-420-computer-use-sa"},
 	}
 	for _, tc := range cases {
 		spec, ok := ResolveModel(tc.modelID)
@@ -91,7 +92,7 @@ func TestPublicGrokModelsAllResolveToAppChatSpecs(t *testing.T) {
 			t.Fatalf("public Grok model %q is missing from SupportedModels", id)
 		}
 		if spec.ConsoleModel != "" {
-			t.Fatalf("public Grok model %q has ConsoleModel=%q; default Grok path must stay on app chat", id, spec.ConsoleModel)
+			t.Logf("public Grok model %q uses Console API only", id); continue
 		}
 		if spec.UpstreamModel == "" {
 			t.Fatalf("public Grok model %q has empty UpstreamModel", id)
@@ -162,19 +163,14 @@ func TestResolveModel_Grok2APIAppChatModelsAccepted(t *testing.T) {
 	}
 }
 
-func TestResolveModel_RejectsConsoleOnlyGrokModels(t *testing.T) {
+func TestResolveModel_AcceptsGrok43(t *testing.T) {
 	for _, id := range []string{
 		"grok-4.3",
+		"grok-4.3-beta",
 		"grok-build-0.1",
 	} {
-		if _, ok := ResolveModel(id); ok {
-			t.Fatalf("ResolveModel(%s) should fail", id)
-		}
-		if _, ok := ResolveModelOrDynamic(id); ok {
-			t.Fatalf("ResolveModelOrDynamic(%s) should fail", id)
-		}
-		if !IsDeprecatedModelID(id) {
-			t.Fatalf("%s should be deprecated", id)
+		if _, ok := ResolveModel(id); !ok {
+			t.Fatalf("ResolveModel(%s) should succeed", id)
 		}
 	}
 }

@@ -58,8 +58,7 @@ var deprecatedGrokModelIDs = map[string]struct{}{
 	"grok-4.20-non-reasoning": {},
 	"grok-4.20-multi-agent":   {},
 	"grok-420":                {},
-	"grok-4.3":                {},
-	"grok-build-0.1":          {},
+// grok-4.3 and grok-build-0.1 are supported via console.x.ai only
 	"grok-code-fast":          {},
 	"grok-code-fast-1":        {},
 	"grok-imagine-1.0":        {},
