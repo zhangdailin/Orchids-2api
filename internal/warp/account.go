@@ -81,7 +81,10 @@ func InferSubscriptionFromRequestLimit(info *RequestLimitInfo) string {
 	case limit > 0:
 		return "free"
 	default:
-		return "unknown"
+		// limit == 0: either a free account or the GraphQL returned
+		// empty data. Return "" so the existing subscription is preserved
+		// rather than overwriting it with "unknown".
+		return ""
 	}
 }
 

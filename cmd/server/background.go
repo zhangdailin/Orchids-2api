@@ -255,6 +255,11 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 					slog.Warn("Warp usage sync failed", "account", acc.Name, "error", limitErr)
 				} else if limitInfo != nil {
 					warp.ApplyRequestLimitInfoToAccount(acc, limitInfo, bonuses)
+					// If the GraphQL succeeded but returned no tier info and
+					// the account has no subscription yet, default to free.
+					if strings.TrimSpace(acc.Subscription) == "" || strings.EqualFold(acc.Subscription, "unknown") {
+						acc.Subscription = "free"
+					}
 					slog.Debug("Warp usage synced", "account", acc.Name, "limit", acc.UsageLimit, "used", acc.UsageCurrent, "subscription", acc.Subscription)
 				}
 
