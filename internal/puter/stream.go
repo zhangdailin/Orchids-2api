@@ -92,17 +92,52 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 				onMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: event})
 			}
 		case "error":
-			message := strings.TrimSpace(chunk.Message)
-			if message == "" {
-				message = line
-			}
-			return result, fmt.Errorf("puter stream error: %s", message)
+			return result, puterStreamError(chunk.Message, line)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return result, fmt.Errorf("failed to read puter stream: %w", err)
 	}
 	return result, nil
+}
+
+// puterStreamError 把 puter 的错误事件归一成可分类的错误。puter 经常把 HTTP
+// 状态码直接拼在 message 开头(如 "400 {json}"),而 errors.ClassifyUpstreamError
+// 只识别 status=/HTTP 等模式,裸 "400" 会落成 unknown→可重试→无意义重试甚至换账号。
+// 这里把开头的状态码改写为 status=xxx,让分类器正确归类:
+// 400→client 不可重试、429→rate_limit、401→auth、5xx→server。
+func puterStreamError(message, line string) error {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = line
+	}
+	if code, rest := splitLeadingHTTPStatus(message); code != "" {
+		if rest == "" {
+			return fmt.Errorf("puter stream error: status=%s", code)
+		}
+		return fmt.Errorf("puter stream error: status=%s, message=%s", code, rest)
+	}
+	return fmt.Errorf("puter stream error: %s", message)
+}
+
+// splitLeadingHTTPStatus 识别消息开头的三位 HTTP 状态码(如 "400 {...}")。
+// 仅当前三位都是数字且后面紧跟空格或冒号时才认定,避免误判普通文本。
+func splitLeadingHTTPStatus(message string) (code, rest string) {
+	if len(message) < 3 {
+		return "", message
+	}
+	for i := 0; i < 3; i++ {
+		if message[i] < '0' || message[i] > '9' {
+			return "", message
+		}
+	}
+	if len(message) == 3 {
+		return message, ""
+	}
+	if message[3] == ' ' || message[3] == ':' {
+		return message[:3], strings.TrimSpace(message[4:])
+	}
+	return "", message
 }
 
 func normalizePuterStreamLine(line string) string {

@@ -34,8 +34,9 @@ var (
 )
 
 type Client struct {
-	httpClient *http.Client
-	authToken  string
+	httpClient     *http.Client
+	authToken      string
+	requestTimeout time.Duration
 }
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -55,8 +56,9 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	}
 
 	return &Client{
-		httpClient: util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
-		authToken:  ResolveAuthToken(acc),
+		httpClient:     util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
+		authToken:      ResolveAuthToken(acc),
+		requestTimeout: timeout,
 	}
 }
 
@@ -200,7 +202,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		logger.LogUpstreamRequest(puterAPIURL, map[string]string{"provider": "puter"}, body)
 	}
 
-	reqCtx, cancel := util.WithDefaultTimeout(ctx, 5*time.Minute)
+	reqCtx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout)
 	defer cancel()
 	resp, err := c.doChatRequest(reqCtx, body)
 	if err != nil {
