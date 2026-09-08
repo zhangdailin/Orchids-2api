@@ -191,24 +191,6 @@ func TestInjectNoAvailableAccountError_RateLimitUsesHelpfulMessage(t *testing.T)
 	}
 }
 
-func TestInjectNoAvailableAccountError_PuterProviderLimitDoesNotBlameAccounts(t *testing.T) {
-	rec := httptest.NewRecorder()
-	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
-
-	sh.InjectNoAvailableAccountError(
-		`puter API error: status=429, body={"code":"upstream_rate_limited","message":"AI provider rate limit exceeded"}`,
-		errors.New("no enabled accounts available for channel: puter"),
-	)
-
-	body := sh.textBlockBuilders[sh.activeTextBlockIndex].String()
-	if !strings.Contains(body, "requested Puter model's provider") {
-		t.Fatalf("expected model-provider guidance, got: %s", body)
-	}
-	if strings.Contains(body, "all available accounts") {
-		t.Fatalf("model-scoped failure must not blame all accounts, got: %s", body)
-	}
-}
-
 func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 	tests := []struct {
 		name     string

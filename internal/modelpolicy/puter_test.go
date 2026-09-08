@@ -23,22 +23,6 @@ func TestLatestPuterModels(t *testing.T) {
 	if IsLatestPuterModelID("claude-opus-4-5") {
 		t.Fatal("old Puter model unexpectedly allowed")
 	}
-	for _, freeModel := range []string{
-		"openrouter:minimax/minimax-m3:free",
-		"infron:deepseek/deepseek-v4-flash:free",
-	} {
-		if !IsLatestPuterModelID(freeModel) || !IsExplicitFreePuterModelID(freeModel) {
-			t.Fatalf("explicitly free Puter model %q was rejected", freeModel)
-		}
-	}
-	for _, paidOrUnsupported := range []string{
-		"openrouter:minimax/minimax-m3",
-		"togetherai:qwen/model:free",
-	} {
-		if IsExplicitFreePuterModelID(paidOrUnsupported) {
-			t.Fatalf("non-supported free route %q unexpectedly allowed", paidOrUnsupported)
-		}
-	}
 	want := []string{
 		"claude-opus-5", "claude-sonnet-5", "claude-fable-5",
 		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",

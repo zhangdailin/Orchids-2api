@@ -2689,9 +2689,7 @@ func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr 
 	if selectErr != nil {
 		selectErrText = strings.ToLower(selectErr.Error())
 	}
-	if isPuterModelScopedRateLimit(lastErr) {
-		errorMsg = "Request failed: the requested Puter model's provider is currently unavailable or its account requirements are not met. Please try another verified model."
-	} else if apperrors.ClassifyUpstreamError(lastErr).Category == "rate_limit" || strings.Contains(selectErrText, "rate-limited") {
+	if apperrors.ClassifyUpstreamError(lastErr).Category == "rate_limit" || strings.Contains(selectErrText, "rate-limited") {
 		errorMsg = "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account."
 	}
 	if selectErr != nil {

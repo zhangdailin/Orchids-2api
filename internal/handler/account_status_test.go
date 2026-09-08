@@ -112,21 +112,6 @@ func TestIsWarpQuotaExhaustedError(t *testing.T) {
 	}
 }
 
-func TestIsPuterModelScopedRateLimit(t *testing.T) {
-	for _, errStr := range []string{
-		`puter API error: status=429, body={"code":"upstream_rate_limited"}`,
-		`AI provider rate limit exceeded`,
-		`429 Free model requires Team balance greater than $4.999999.`,
-	} {
-		if !isPuterModelScopedRateLimit(errStr) {
-			t.Fatalf("expected model-scoped Puter rate limit: %s", errStr)
-		}
-	}
-	if isPuterModelScopedRateLimit("HTTP 429 Too Many Requests") {
-		t.Fatal("generic Puter 429 should retain account cooldown behavior")
-	}
-}
-
 func TestMarkWarpQuotaExhausted(t *testing.T) {
 	mini := miniredis.RunT(t)
 	defer mini.Close()

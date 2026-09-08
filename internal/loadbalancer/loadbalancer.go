@@ -208,6 +208,9 @@ const (
 	// 402 对 Puter 来说通常表示余额/credits 不足。Puter 暂无稳定额度/重置时间接口，
 	// 默认按日冷却，避免无额度账号反复撞上游。
 	retry402Default = 24 * time.Hour
+	// Puter 的路由额度可能在短窗口内恢复，且当前错误不提供 reset 时间。
+	// 每 15 分钟允许一次探测，在避免请求风暴的同时防止整个通道停用一天。
+	retry402Puter = 15 * time.Minute
 	// 429 冷却时间：限流通常是暂时性的，优先等待较短窗口再恢复尝试
 	retry429Default = 1 * time.Minute
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
@@ -278,14 +281,10 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		if acc.LastAttempt.IsZero() {
 			return false
 		}
-		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "puter") {
-			// Puter's insufficient_funds response has no reset time and repeated
-			// probes can starve healthy accounts before the retry budget reaches
-			// them. Keep this account isolated until an explicit account refresh,
-			// credential update, or a provider supplied reset time clears it.
-			return false
-		}
 		cooldown := retry402Default
+		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "puter") {
+			cooldown = retry402Puter
+		}
 		if now.Sub(acc.LastAttempt) >= cooldown {
 			lb.clearAccountStatus(ctx, acc, "402 冷却完成，自动恢复尝试")
 			return true

@@ -109,7 +109,7 @@ func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
 	return c.runChat(ctx, upstream.UpstreamRequest{
 		Model:    modelID,
 		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "Reply only OK."}}},
-	}, 45*time.Second, false, nil, nil)
+	}, 45*time.Second, true, nil, nil)
 }
 
 func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
@@ -229,12 +229,6 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 	if err != nil {
 		return nil, err
 	}
-	driverModelID := modelID
-	if service == "openrouter" || service == "infron" {
-		if _, alias, ok := strings.Cut(modelID, ":"); ok && strings.TrimSpace(alias) != "" {
-			driverModelID = alias
-		}
-	}
 
 	tools := normalizeToolDefinitions(req.Tools)
 	if req.NoTools {
@@ -261,7 +255,7 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 		Method:    defaultMethod,
 		Args: RequestArgs{
 			Messages: msgs,
-			Model:    driverModelID,
+			Model:    modelID,
 			Stream:   true,
 			Tools:    tools,
 		},
@@ -275,10 +269,6 @@ func serviceForModel(modelID string) (string, error) {
 		return "", fmt.Errorf("unsupported puter model %q", modelID)
 	}
 	switch {
-	case strings.HasPrefix(modelID, "openrouter:"):
-		return "openrouter", nil
-	case strings.HasPrefix(modelID, "infron:"):
-		return "infron", nil
 	case strings.HasPrefix(modelID, "claude-"):
 		return "claude", nil
 	case strings.HasPrefix(modelID, "gpt-"):

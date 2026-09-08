@@ -14,7 +14,6 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
-	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
@@ -236,16 +235,6 @@ func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *s
 		}
 		return candidates, source + "_unverified", nil
 	}
-	probeAccounts := accounts[:0]
-	for _, acc := range accounts {
-		if acc != nil && strings.TrimSpace(acc.StatusCode) == "" {
-			probeAccounts = append(probeAccounts, acc)
-		}
-	}
-	accounts = probeAccounts
-	if len(accounts) == 0 {
-		return candidates, source + "_quota_limited", nil
-	}
 
 	summary := verifyPuterDiscoveredModelsConcurrent(ctx, cfg, accounts, candidates, concurrency)
 	verified := summary.Verified
@@ -253,9 +242,9 @@ func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *s
 		return candidates, source + "_quota_limited", nil
 	}
 	if len(verified) == 0 {
-		return nil, "", fmt.Errorf("no puter models verified by live probe")
+		return nil, "", fmt.Errorf("no puter models verified by test_mode")
 	}
-	return verified, source + "_live_probe", nil
+	return verified, source + "_test_mode", nil
 }
 
 func puterChoicesToDiscovered(items []puterPublicModelChoice) []discoveredModel {
@@ -981,10 +970,7 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 	for _, model := range candidates {
 		fetchedSet[model.ID] = model
 	}
-	candidatesVerified := modelRefreshCandidatesVerified(channel, source)
-	if candidatesVerified {
-		result.Verified = len(candidates)
-	}
+	result.Verified = len(candidates)
 
 	for _, model := range existingModels {
 		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), channel) {
@@ -998,19 +984,13 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 
 	for _, model := range candidates {
 		existing := existingByID[model.ID]
-		isUnverifiedPuterFree := strings.EqualFold(strings.TrimSpace(channel), "puter") &&
-			modelpolicy.IsExplicitFreePuterModelID(model.ID) && !candidatesVerified
 		if existing == nil {
-			status := store.ModelStatusAvailable
-			if isUnverifiedPuterFree {
-				status = store.ModelStatusMaintenance
-			}
 			record := &store.Model{
 				Channel:   channel,
 				ModelID:   model.ID,
 				Name:      util.FirstNonEmpty(model.Name, model.ID),
-				Status:    status,
-				Verified:  candidatesVerified,
+				Status:    store.ModelStatusAvailable,
+				Verified:  true,
 				IsDefault: model.ID == defaultModelID,
 				SortOrder: model.SortOrder,
 			}
@@ -1031,28 +1011,7 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			}
 			result.Added++
 			result.AddedModelIDs = append(result.AddedModelIDs, model.ID)
-			if status != store.ModelStatusAvailable {
-				result.OfflineModelIDs = append(result.OfflineModelIDs, model.ID)
-			}
 			continue
-		}
-		if modelpolicy.IsExplicitFreePuterModelID(model.ID) {
-			desiredStatus := store.ModelStatusAvailable
-			if isUnverifiedPuterFree {
-				desiredStatus = store.ModelStatusMaintenance
-			}
-			if existing.Status != desiredStatus || existing.Verified != candidatesVerified {
-				updated := *existing
-				updated.Status = desiredStatus
-				updated.Verified = candidatesVerified
-				if err := s.UpdateModel(ctx, &updated); err != nil {
-					return nil, err
-				}
-				result.Updated++
-				if desiredStatus != store.ModelStatusAvailable {
-					result.OfflineModelIDs = append(result.OfflineModelIDs, model.ID)
-				}
-			}
 		}
 	}
 	if shouldForceWarpDefault(channel, defaultModelID) {
@@ -1088,20 +1047,9 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 	return result, nil
 }
 
-func modelRefreshCandidatesVerified(channel, source string) bool {
-	if !strings.EqualFold(strings.TrimSpace(channel), "puter") {
-		return true
-	}
-	source = strings.TrimSpace(source)
-	return strings.HasSuffix(source, "_live_probe")
-}
-
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 	if strings.EqualFold(strings.TrimSpace(channel), "puter") {
-		// Puter's catalog varies by route, account and time. A missing entry is
-		// not proof that an existing model has been retired, so refresh is
-		// additive and explicit deletion remains an operator action.
-		return false
+		return strings.HasPrefix(strings.TrimSpace(source), "puter_public_models")
 	}
 	if !strings.EqualFold(strings.TrimSpace(channel), "warp") {
 		return false
