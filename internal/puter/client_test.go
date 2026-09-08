@@ -248,6 +248,20 @@ func TestVerifyModelRequiresUsableEvent(t *testing.T) {
 	}
 }
 
+func TestBuildRequestUsesProviderAliasForQualifiedFreeModel(t *testing.T) {
+	client := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil)
+	req, err := client.buildRequest(upstream.UpstreamRequest{
+		Model:    "openrouter:minimax/minimax-m3:free",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest() error=%v", err)
+	}
+	if req.Service != "openrouter" || req.Args.Model != "minimax/minimax-m3:free" {
+		t.Fatalf("request service=%q model=%q", req.Service, req.Args.Model)
+	}
+}
+
 func TestSendRequestWithPayloadPropagatesEnvelopeErrors(t *testing.T) {
 	for _, body := range []string{
 		`{"success":false,"error":{"iface":"puter-chat-completion","code":"no_implementation_available","message":"No implementation available","status":502}}`,

@@ -229,6 +229,12 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 	if err != nil {
 		return nil, err
 	}
+	driverModelID := modelID
+	if service == "openrouter" || service == "infron" {
+		if _, alias, ok := strings.Cut(modelID, ":"); ok && strings.TrimSpace(alias) != "" {
+			driverModelID = alias
+		}
+	}
 
 	tools := normalizeToolDefinitions(req.Tools)
 	if req.NoTools {
@@ -255,7 +261,7 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 		Method:    defaultMethod,
 		Args: RequestArgs{
 			Messages: msgs,
-			Model:    modelID,
+			Model:    driverModelID,
 			Stream:   true,
 			Tools:    tools,
 		},
