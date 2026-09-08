@@ -235,8 +235,8 @@ func normalizeWarpTokenInput(acc *store.Account) {
 		return
 	}
 	acc.RefreshToken = warp.RefreshToken(acc)
-	// Warp only accepts its explicit refresh_token. Clear all legacy fields so
-	// they cannot become an alternate authentication source.
+	// Only the official device-login flow supplies Warp session credentials.
+	// Clear legacy fields so they cannot become alternate authentication sources.
 	acc.Token = ""
 	acc.ClientCookie = ""
 	acc.SessionCookie = ""
@@ -247,12 +247,14 @@ func normalizeWarpTokenOutput(acc *store.Account) *store.Account {
 		return nil
 	}
 	copyAcc := *acc
-	if strings.EqualFold(copyAcc.AccountType, "warp") {
-		copyAcc.RefreshToken = warp.RefreshToken(&copyAcc)
-		// Never expose stale runtime or legacy credential fields for Warp.
+	if strings.EqualFold(strings.TrimSpace(copyAcc.AccountType), "warp") {
+		// Browser-login session credentials are private, including on export.
+		copyAcc.RefreshToken = ""
 		copyAcc.Token = ""
 		copyAcc.ClientCookie = ""
 		copyAcc.SessionCookie = ""
+		copyAcc.OAuthAccessToken = ""
+		copyAcc.OAuthRefreshToken = ""
 	}
 	return &copyAcc
 }
@@ -358,7 +360,12 @@ func preserveGrokOAuthCredentials(acc, existing *store.Account) {
 	}
 }
 
-func normalizeAccountOutput(acc *store.Account) *store.Account {
+type accountOutput struct {
+	*store.Account
+	WarpAuthenticated bool `json:"warp_authenticated,omitempty"`
+}
+
+func normalizeAccountOutput(acc *store.Account) *accountOutput {
 	out := normalizeWarpTokenOutput(acc)
 	if out == nil {
 		return nil
@@ -377,7 +384,10 @@ func normalizeAccountOutput(acc *store.Account) *store.Account {
 		// durable refresh token through normal account endpoints.
 		out.OAuthRefreshToken = ""
 	}
-	return out
+	return &accountOutput{
+		Account:           out,
+		WarpAuthenticated: strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
+	}
 }
 
 func normalizedAccountCredentialKey(acc *store.Account) string {
@@ -1008,7 +1018,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		if accounts == nil {
 			accounts = []*store.Account{}
 		}
-		normalized := make([]*store.Account, 0, len(accounts))
+		normalized := make([]*accountOutput, 0, len(accounts))
 		for _, acc := range accounts {
 			if acc == nil {
 				continue
@@ -1023,6 +1033,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
 		if strings.TrimSpace(acc.AccountType) == "" {
 			http.Error(w, "account_type is required", http.StatusBadRequest)
 			return
@@ -1032,11 +1043,8 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if strings.EqualFold(acc.AccountType, "warp") {
-			normalizeWarpTokenInput(&acc)
-			if acc.RefreshToken == "" {
-				http.Error(w, "missing warp refresh token", http.StatusBadRequest)
-				return
-			}
+			http.Error(w, "Warp accounts must be added using official web login (/api/warp/device-auth)", http.StatusBadRequest)
+			return
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
 			acc.NSFWEnabled = true
@@ -1685,6 +1693,11 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(acc.AccountType) == "" {
 			acc.AccountType = existing.AccountType
 		}
+		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
+		if strings.EqualFold(strings.TrimSpace(existing.AccountType), "warp") && acc.AccountType != "warp" {
+			http.Error(w, "Warp login accounts cannot change account type", http.StatusBadRequest)
+			return
+		}
 		if strings.TrimSpace(acc.AccountType) == "" {
 			http.Error(w, "account_type is required", http.StatusBadRequest)
 			return
@@ -1694,6 +1707,13 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if strings.EqualFold(acc.AccountType, "warp") {
+			if !strings.EqualFold(strings.TrimSpace(existing.AccountType), "warp") ||
+				acc.RefreshToken != "" || acc.Token != "" || acc.ClientCookie != "" ||
+				acc.SessionCookie != "" || acc.OAuthAccessToken != "" || acc.OAuthRefreshToken != "" {
+				http.Error(w, "Warp credentials can only be obtained through official web login", http.StatusBadRequest)
+				return
+			}
+			acc.RefreshToken = existing.RefreshToken
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
@@ -1711,9 +1731,6 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			acc.SessionID = existing.SessionID
 		}
 		if isWarpAccount {
-			if strings.TrimSpace(acc.RefreshToken) == "" {
-				acc.RefreshToken = existing.RefreshToken
-			}
 			if strings.TrimSpace(acc.DeviceID) == "" {
 				acc.DeviceID = existing.DeviceID
 			}
@@ -1787,10 +1804,15 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 	exportData := ExportData{
 		Version:  1,
 		ExportAt: time.Now(),
-		Accounts: make([]store.Account, len(accounts)),
+		Accounts: make([]store.Account, 0, len(accounts)),
 	}
-	for i, acc := range accounts {
-		normalized := *normalizeAccountOutput(acc)
+	for _, acc := range accounts {
+		// Warp sessions are not portable credentials. Log in again on the target
+		// server; exporting them would recreate the removed token-import path.
+		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
+			continue
+		}
+		normalized := *normalizeAccountOutput(acc).Account
 		// Export must preserve OAuth credentials (normalizeAccountOutput hides
 		// them for list/query responses); an OAuth export that drops them is
 		// unusable on re-import.
@@ -1801,7 +1823,7 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 		}
 		normalized.ID = 0
 		normalized.RequestCount = 0
-		exportData.Accounts[i] = normalized
+		exportData.Accounts = append(exportData.Accounts, normalized)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1826,6 +1848,7 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 	for _, acc := range exportData.Accounts {
 		acc.ID = 0
 		acc.RequestCount = 0
+		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
 		if strings.TrimSpace(acc.AccountType) == "" {
 			result.Skipped++
 			continue
@@ -1835,7 +1858,8 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if strings.EqualFold(acc.AccountType, "warp") {
-			normalizeWarpTokenInput(&acc)
+			result.Skipped++
+			continue
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
 			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {

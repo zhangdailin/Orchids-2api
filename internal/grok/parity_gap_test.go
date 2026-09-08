@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 )
 
@@ -213,104 +212,6 @@ func TestPrepareGrokSessionSeparatesTenantsAndSoftReplay(t *testing.T) {
 	otherModel := prepareGrokSession(reqA, "grok-4.5", "", []ChatMessage{{Role: "user", Content: "hello"}})
 	if otherModel.Key == a.Key {
 		t.Fatal("session identity must be model-isolated")
-	}
-}
-
-func TestQualityGateRetriesLongMissingThinkingButAllowsShortReply(t *testing.T) {
-	long := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"this is a sufficiently long visible answer without reasoning evidence\"}\n\n" +
-		"data: {\"type\":\"response.completed\"}\n\n"
-	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(long))}
-	missing, err := gateResponseForThinkingWithOptions(context.Background(), resp, 30*time.Second, 32)
-	if err != nil || !missing {
-		t.Fatalf("long missing-thinking gate = %v,%v", missing, err)
-	}
-
-	short := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"
-	resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(short))}
-	missing, err = gateResponseForThinkingWithOptions(context.Background(), resp, 30*time.Second, 32)
-	if err != nil || missing {
-		t.Fatalf("short reply gate = %v,%v", missing, err)
-	}
-
-	withThinking := "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"plan\"}\n\n"
-	resp = &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(bytes.NewBufferString(withThinking))}
-	missing, err = gateResponseForThinkingWithOptions(context.Background(), resp, 30*time.Second, 32)
-	if err != nil || missing {
-		t.Fatalf("thinking gate = %v,%v", missing, err)
-	}
-}
-
-func TestQualityGateHoldDeadlineReleasesLiveStream(t *testing.T) {
-	reader, writer := io.Pipe()
-	response := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       reader,
-	}
-	go func() {
-		time.Sleep(30 * time.Millisecond)
-		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"late answer\"}\n\n")
-		_ = writer.Close()
-	}()
-	started := time.Now()
-	missing, err := gateResponseForThinkingWithOptions(context.Background(), response, 10*time.Millisecond, 32)
-	if err != nil || missing {
-		t.Fatalf("gate=%v,%v", missing, err)
-	}
-	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		t.Fatalf("quality gate exceeded hold deadline: %v", elapsed)
-	}
-	data, err := io.ReadAll(response.Body)
-	if err != nil || !strings.Contains(string(data), "late answer") {
-		t.Fatalf("released body=%q err=%v", data, err)
-	}
-}
-
-func TestMissingThinkingSecondStrikeDisablesAccountPersistently(t *testing.T) {
-	h, database, mini := setupValidationHandler(t)
-	defer func() {
-		_ = database.Close()
-		mini.Close()
-	}()
-	h.cfg = &config.Config{GrokThinkingCooldownSec: 1}
-	account := &store.Account{Name: "quality", AccountType: "grok", Enabled: true}
-	if err := database.CreateAccount(context.Background(), account); err != nil {
-		t.Fatal(err)
-	}
-	h.markMissingThinking(context.Background(), account)
-	first, err := database.GetAccount(context.Background(), account.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first.MissingThinkingStrikes != 1 || !first.Enabled || first.QuotaResetAt.IsZero() {
-		t.Fatalf("first strike=%#v", first)
-	}
-	account.MissingThinkingLastAt = time.Now().Add(-2 * time.Second)
-	h.markMissingThinking(context.Background(), account)
-	second, err := database.GetAccount(context.Background(), account.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.Enabled || second.MissingThinkingStrikes < 2 || second.StatusCode != "missing_thinking_disabled" {
-		t.Fatalf("second strike=%#v", second)
-	}
-}
-
-func TestStreamLoopGuardSeparatesAndDetectsRepeatedBlocks(t *testing.T) {
-	var guard streamLoopGuard
-	block := strings.Repeat("abcdefgh", 16)
-	for index := 0; index < 3; index++ {
-		if guard.Add(block) {
-			t.Fatalf("loop detected too early at %d", index)
-		}
-	}
-	if !guard.Add(block) {
-		t.Fatal("four repeated 128-byte blocks should be detected")
-	}
-	var normal streamLoopGuard
-	normalText := strings.Repeat("a", 128) + strings.Repeat("b", 128) + strings.Repeat("c", 128) + strings.Repeat("d", 128)
-	if normal.Add(normalText) {
-		t.Fatal("normal prose should not trigger conservative loop guard")
 	}
 }
 

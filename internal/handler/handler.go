@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net/http"
 	rtdebug "runtime/debug"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +49,6 @@ type Handler struct {
 	auditLogger   audit.Logger
 
 	sessionStore SessionStore
-	dedupStore   DedupStore
 	// Coalesces upstream model-config refresh signals per Warp account.
 	warpModelRefreshes sync.Map
 }
@@ -114,13 +112,6 @@ type openAINonStreamResponse struct {
 
 const keepAliveInterval = 15 * time.Second
 const maxRequestBytes = 50 * 1024 * 1024 // 50MB
-const duplicateWindow = 2 * time.Second
-const duplicateCleanupWindow = 10 * time.Second
-
-type recentRequest struct {
-	last     time.Time
-	inFlight int
-}
 
 func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	h := &Handler{
@@ -129,7 +120,6 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 		connTracker:  loadbalancer.NewMemoryConnTracker(),
 		clientCache:  newAccountClientCache(),
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
-		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
 		auditLogger:  audit.NewNopLogger(),
 	}
 
@@ -149,11 +139,6 @@ func (h *Handler) SetSessionStore(ss SessionStore) {
 	h.sessionStore = ss
 }
 
-// SetDedupStore replaces the default in-memory dedup store.
-func (h *Handler) SetDedupStore(ds DedupStore) {
-	h.dedupStore = ds
-}
-
 // SetAuditLogger replaces the default nop audit logger.
 func (h *Handler) SetAuditLogger(al audit.Logger) {
 	h.auditLogger = al
@@ -168,8 +153,9 @@ func (h *Handler) computeRequestHash(r *http.Request, body []byte) string {
 	hasher := sha256.New()
 	hasher.Write([]byte(r.URL.Path))
 	hasher.Write([]byte{0})
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		hasher.Write([]byte(auth))
+	for _, identity := range []string{middleware.APIKeyFingerprint(r.Context()), r.Header.Get("Authorization"), r.Header.Get("X-API-Key")} {
+		hasher.Write([]byte(identity))
+		hasher.Write([]byte{0})
 	}
 	hasher.Write([]byte{0})
 	hasher.Write(body)
@@ -283,216 +269,12 @@ func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason st
 	}
 }
 
-func (h *Handler) computeSemanticRequestHash(r *http.Request, req ClaudeRequest) string {
-	if lastUserIsToolResultFollowup(req.Messages) {
-		return ""
-	}
-	userText := normalizeTopicText(extractUserText(req.Messages))
-	if userText == "" {
-		return ""
-	}
-	if len(userText) > 4096 {
-		userText = userText[:4096]
-	}
-
-	mode := "chat"
-	if isTopicClassifierRequest(req) {
-		mode = "topic_classifier"
-	} else if isTitleGenerationRequest(req) {
-		mode = "title_generation"
-	} else if ok, _ := isCommandPrefixRequest(req); ok {
-		mode = "command_prefix"
-	}
-
-	hasher := sha256.New()
-	hasher.Write([]byte(r.URL.Path))
-	hasher.Write([]byte{0})
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		hasher.Write([]byte(auth))
-	}
-	hasher.Write([]byte{0})
-	hasher.Write([]byte(strings.ToLower(strings.TrimSpace(req.Model))))
-	hasher.Write([]byte{0})
-	hasher.Write([]byte(strings.ToLower(strings.TrimSpace(conversationKeyForRequest(r, req)))))
-	hasher.Write([]byte{0})
-	hasher.Write([]byte(mode))
-	hasher.Write([]byte{0})
-	if req.Stream {
-		hasher.Write([]byte{1})
-	} else {
-		hasher.Write([]byte{0})
-	}
-	hasher.Write([]byte{0})
-	hasher.Write([]byte(userText))
-	return hex.EncodeToString(hasher.Sum(nil))
-}
-
 func shortRequestTrace(hash string) string {
 	hash = strings.TrimSpace(hash)
 	if len(hash) <= 12 {
 		return hash
 	}
 	return hash[:12]
-}
-
-func (h *Handler) registerRequest(hash string) (bool, bool) {
-	return h.dedupStore.Register(context.Background(), hash)
-}
-
-func (h *Handler) finishRequest(hash string) {
-	h.dedupStore.Finish(context.Background(), hash)
-}
-
-func stainlessRetryCount(r *http.Request) int {
-	if r == nil {
-		return 0
-	}
-	raw := strings.TrimSpace(r.Header.Get("X-Stainless-Retry-Count"))
-	if raw == "" {
-		return 0
-	}
-	count, err := strconv.Atoi(raw)
-	if err != nil || count < 0 {
-		return 0
-	}
-	return count
-}
-
-func writeRetryDedupError(w http.ResponseWriter, inFlight bool) {
-	status := http.StatusConflict
-	code := apperrors.CodeInvalidRequest
-	message := "Automatic retry suppressed because an identical request was already handled recently."
-	if inFlight {
-		status = http.StatusTooManyRequests
-		code = apperrors.CodeOverloaded
-		message = "Automatic retry suppressed because an identical request is still in progress. Retry again shortly."
-		w.Header().Set("Retry-After", "1")
-	}
-	apperrors.New(code, message, status).WriteResponse(w)
-}
-
-func (h *Handler) writeDuplicateResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat) {
-	if req.Stream {
-		if responseFormat == adapter.FormatOpenAI {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-
-			type openAIStreamChoice struct {
-				Index int `json:"index"`
-				Delta struct {
-					Role string `json:"role,omitempty"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason,omitempty"`
-			}
-			type openAIStreamChunk struct {
-				ID      string               `json:"id"`
-				Object  string               `json:"object"`
-				Created int64                `json:"created"`
-				Model   string               `json:"model"`
-				Choices []openAIStreamChoice `json:"choices"`
-			}
-			startChunk := openAIStreamChunk{
-				ID:      "dup",
-				Object:  "chat.completion.chunk",
-				Created: time.Now().Unix(),
-				Model:   req.Model,
-				Choices: []openAIStreamChoice{{
-					Index: 0,
-					Delta: struct {
-						Role string `json:"role,omitempty"`
-					}{Role: "assistant"},
-				}},
-			}
-			stopReason := "stop"
-			stopChunk := struct {
-				ID      string `json:"id"`
-				Object  string `json:"object"`
-				Created int64  `json:"created"`
-				Model   string `json:"model"`
-				Choices []struct {
-					Index        int            `json:"index"`
-					Delta        map[string]any `json:"delta"`
-					FinishReason *string        `json:"finish_reason,omitempty"`
-				} `json:"choices"`
-			}{
-				ID:      "dup",
-				Object:  "chat.completion.chunk",
-				Created: time.Now().Unix(),
-				Model:   req.Model,
-				Choices: []struct {
-					Index        int            `json:"index"`
-					Delta        map[string]any `json:"delta"`
-					FinishReason *string        `json:"finish_reason,omitempty"`
-				}{{
-					Index:        0,
-					Delta:        map[string]any{},
-					FinishReason: &stopReason,
-				}},
-			}
-			rawStart, _ := json.Marshal(startChunk)
-			rawStop, _ := json.Marshal(stopChunk)
-			_ = writeOpenAIFrame(w, rawStart)
-			_ = writeOpenAIFrame(w, rawStop)
-			_, _ = w.Write(sseDoneLineBytes)
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		msgStart, _ := marshalSSEMessageStartBytes("dup", req.Model, 0, 0)
-		_ = writeSSEFrameBytes(w, "message_start", msgStart)
-		_ = writeSSEFrameBytes(w, "message_stop", sseMessageStopBytes)
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if responseFormat == adapter.FormatOpenAI {
-		emptyMsg := openAINonStreamMessage{
-			Role:    "assistant",
-			Content: "",
-		}
-		stopReason := "stop"
-		resp := openAINonStreamResponse{
-			ID:      "dup",
-			Object:  "chat.completion",
-			Created: time.Now().Unix(),
-			Model:   req.Model,
-			Choices: []openAINonStreamChoice{{
-				Index:        0,
-				Message:      emptyMsg,
-				FinishReason: &stopReason,
-			}},
-			Usage: openAINonStreamUsage{},
-		}
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			slog.Error("Failed to write duplicate response", "error", err)
-		}
-		return
-	}
-	if err := json.NewEncoder(w).Encode(struct {
-		Type     string `json:"type"`
-		Deduped  bool   `json:"deduped"`
-		Message  string `json:"message"`
-		Model    string `json:"model"`
-		Streamed bool   `json:"streamed"`
-	}{
-		Type:     "duplicate_request",
-		Deduped:  true,
-		Message:  "duplicate request suppressed",
-		Model:    req.Model,
-		Streamed: false,
-	}); err != nil {
-		slog.Error("Failed to write duplicate response", "error", err)
-	}
 }
 
 func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
@@ -556,78 +338,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	logger.LogIncomingRequest(req)
 
 	reqHash := h.computeRequestHash(r, bodyBytes)
-	semanticHash := h.computeSemanticRequestHash(r, req)
-	bypassDedup := hasInterruptedRetryMarker(req.Messages)
 	traceID := shortRequestTrace(reqHash)
-	retryCount := stainlessRetryCount(r)
 	if verboseDiagnostics {
-		slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "semantic_hash", semanticHash, "path", r.URL.Path, "content_length", len(bodyBytes), "retry", retryCount, "bypass_dedup", bypassDedup)
+		slog.Debug("Request fingerprint", "trace_id", traceID, "hash", reqHash, "path", r.URL.Path, "content_length", len(bodyBytes))
 	}
-
-	registeredKeys := []string{}
-	if !bypassDedup {
-		exactKey := "exact:" + reqHash
-		if dup, inFlight := h.registerRequest(exactKey); dup {
-			if retryCount > 0 {
-				slog.Warn("Duplicate retry request rejected", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent(), "retry_count", retryCount)
-				logger.LogEarlyExit("duplicate_retry_request", map[string]interface{}{
-					"hash":        exactKey,
-					"in_flight":   inFlight,
-					"path":        r.URL.Path,
-					"kind":        "exact",
-					"retry_count": retryCount,
-				})
-				writeRetryDedupError(w, inFlight)
-				return
-			}
-			slog.Warn("Duplicate request suppressed", "hash", reqHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
-			logger.LogEarlyExit("duplicate_request", map[string]interface{}{
-				"hash":      exactKey,
-				"in_flight": inFlight,
-				"path":      r.URL.Path,
-				"kind":      "exact",
-			})
-			h.writeDuplicateResponse(w, req, responseFormat)
-			return
-		}
-		registeredKeys = append(registeredKeys, exactKey)
-
-		if semanticHash != "" {
-			semanticKey := "semantic:" + semanticHash
-			if dup, inFlight := h.registerRequest(semanticKey); dup {
-				for i := len(registeredKeys) - 1; i >= 0; i-- {
-					h.finishRequest(registeredKeys[i])
-				}
-				if retryCount > 0 {
-					slog.Warn("Semantic duplicate retry request rejected", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent(), "retry_count", retryCount)
-					logger.LogEarlyExit("duplicate_retry_request", map[string]interface{}{
-						"hash":        semanticKey,
-						"in_flight":   inFlight,
-						"path":        r.URL.Path,
-						"kind":        "semantic",
-						"retry_count": retryCount,
-					})
-					writeRetryDedupError(w, inFlight)
-					return
-				}
-				slog.Warn("Semantic duplicate request suppressed", "hash", semanticHash, "in_flight", inFlight, "path", r.URL.Path, "user_agent", r.UserAgent())
-				logger.LogEarlyExit("duplicate_request", map[string]interface{}{
-					"hash":      semanticKey,
-					"in_flight": inFlight,
-					"path":      r.URL.Path,
-					"kind":      "semantic",
-				})
-				h.writeDuplicateResponse(w, req, responseFormat)
-				return
-			}
-			registeredKeys = append(registeredKeys, semanticKey)
-		}
-	}
-	defer func() {
-		for i := len(registeredKeys) - 1; i >= 0; i-- {
-			h.finishRequest(registeredKeys[i])
-		}
-	}()
 
 	// ...
 	if ok, command := isCommandPrefixRequest(req); ok {
@@ -700,8 +414,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	effectiveWorkdir, prevWorkdir, workdirChanged := h.resolveWorkdir(r, req, conversationKey)
 	if workdirChanged {
-		slog.Warn("检测到工作目录变化，已清空历史", "prev", prevWorkdir, "next", effectiveWorkdir, "session", conversationKey)
-		req.Messages = resetMessagesForNewWorkdir(req.Messages)
+		slog.Info("工作目录变化，保留完整请求历史并新建上游会话", "prev", prevWorkdir, "next", effectiveWorkdir, "session", conversationKey)
 		// 工作目录变化时清除上游会话ID，强制开启新对话
 		if conversationKey != "" {
 			h.sessionStore.DeleteSession(r.Context(), conversationKey)
@@ -1027,7 +740,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	sh.setDisallowToolCalls(gateNoTools)
 	sh.setEmptyOutputFallback(successfulFileMutationToolResultFallback(upstreamMessages))
-	sh.seedSideEffectDedupFromMessages(upstreamMessages)
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	activeWarpConversationID := chatSessionID
 	// Capture the server-issued Warp conversation and bind it to both an

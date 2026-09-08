@@ -35,22 +35,23 @@ func (s *buildToolNormalizationState) addWarning(value string) {
 }
 
 func (s *buildToolNormalizationState) alias(namespace, name string) string {
-	key := strings.ToLower(strings.TrimSpace(namespace)) + "\x00" + strings.ToLower(strings.TrimSpace(name))
+	key := strings.TrimSpace(namespace) + "\x00" + strings.TrimSpace(name)
 	if alias := s.aliases[key]; alias != "" {
 		return alias
 	}
 	base := buildToolAlias(namespace, name)
-	s.seen[base]++
 	alias := base
-	if s.seen[base] > 1 {
-		suffix := fmt.Sprintf("_%d", s.seen[base])
-		limit := 64 - len(suffix)
+	for index := 2; s.seen[alias] > 0; index++ {
+		suffix := fmt.Sprintf("_%d", index)
+		limit := 128 - len(suffix)
+		prefix := base
 		if limit < len(base) {
-			base = base[:limit]
+			prefix = base[:limit]
 		}
-		alias = strings.TrimSuffix(base, "_") + suffix
+		alias = strings.TrimSuffix(prefix, "_") + suffix
 		s.addWarning("function_name_collision_renamed")
 	}
+	s.seen[alias] = 1
 	s.aliases[key] = alias
 	return alias
 }
@@ -106,6 +107,12 @@ func collectBuildToolAliases(payload map[string]interface{}) map[string]buildToo
 // responsesPayloadFromChat converts Chat/Messages compatibility input into
 // the native Responses wire shape used by both Build and Console.
 func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsRequest, build bool) (map[string]interface{}, error) {
+	if build {
+		spec.Upstream, spec.ConsoleModel = UpstreamCLI, ""
+	}
+	if err := validateNativeChatContent(req.Messages); err != nil {
+		return nil, err
+	}
 	input, instructions := responsesInputFromChatMessages(req.Messages)
 	if len(req.ResponsesInput) > 0 {
 		input = append([]interface{}(nil), req.ResponsesInput...)
@@ -141,9 +148,7 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		payload["max_output_tokens"] = *req.MaxTokens
 	}
 	if req.ReasoningEffort != nil {
-		if effort := normalizeResponsesEffort(*req.ReasoningEffort); effort != "" {
-			payload["reasoning"] = map[string]interface{}{"effort": effort}
-		}
+		payload["reasoning"] = map[string]interface{}{"effort": *req.ReasoningEffort}
 	}
 	if len(req.Stop) > 0 {
 		payload["stop"] = append([]string(nil), req.Stop...)
@@ -157,7 +162,7 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		payload["text"] = map[string]interface{}{"format": normalizeChatResponseFormat(req.ResponseFormat)}
 	}
 	include := uniqueStrings(append([]string(nil), req.Include...))
-	if req.ReasoningEffort != nil && normalizeResponsesEffort(*req.ReasoningEffort) != "none" {
+	if req.ReasoningEffort != nil && !strings.EqualFold(strings.TrimSpace(*req.ReasoningEffort), "none") {
 		include = uniqueStrings(append(include, "reasoning.encrypted_content"))
 	}
 	if len(include) > 0 {
@@ -174,6 +179,9 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 			payload["parallel_tool_calls"] = *req.ParallelToolCalls
 		}
 	}
+	if err := validatePayloadReasoning(payload); err != nil {
+		return nil, err
+	}
 	if build {
 		if strings.TrimSpace(req.PromptCacheKey) != "" {
 			payload["prompt_cache_key"] = strings.TrimSpace(req.PromptCacheKey)
@@ -186,7 +194,6 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	// Console is stateless and rejects these client-side state hints.
 	payload["store"] = false
 	delete(payload, "prompt_cache_key")
-	payload["tools"] = injectConsoleSearchTools(interfaceMaps(payload["tools"]))
 	if len(interfaceMaps(payload["tools"])) == 0 {
 		delete(payload, "tools")
 		delete(payload, "tool_choice")
@@ -248,6 +255,19 @@ func responsesInputFromChatMessages(messages []ChatMessage) ([]interface{}, stri
 	return items, strings.TrimSpace(instructions.String())
 }
 
+func validateNativeChatContent(messages []ChatMessage) error {
+	for _, message := range messages {
+		for _, part := range interfaceMaps(message.Content) {
+			switch parseLooseStringAny(part["type"]) {
+			case "text", "input_text", "output_text", "image_url", "input_image":
+			default:
+				return fmt.Errorf("Build/Console Chat does not support content.type=%q", part["type"])
+			}
+		}
+	}
+	return nil
+}
+
 func responsesMessageParts(content interface{}, assistant bool) []interface{} {
 	textType := "input_text"
 	if assistant {
@@ -272,7 +292,11 @@ func responsesMessageParts(content interface{}, assistant bool) []interface{} {
 			case "image_url", "input_image", "image":
 				if url := responseImageURL(block); url != "" {
 					part := map[string]interface{}{"type": "input_image", "image_url": url}
-					if detail := strings.TrimSpace(fmt.Sprint(block["detail"])); detail != "" && detail != "<nil>" {
+					detail := parseLooseStringAny(block["detail"])
+					if nested, ok := block["image_url"].(map[string]interface{}); ok && detail == "" {
+						detail = parseLooseStringAny(nested["detail"])
+					}
+					if detail != "" {
 						part["detail"] = detail
 					}
 					parts = append(parts, part)
@@ -334,23 +358,6 @@ func stringifyToolArguments(value interface{}) string {
 		return string(raw)
 	}
 	return "{}"
-}
-
-func normalizeResponsesEffort(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "none":
-		return "none"
-	case "minimal", "low":
-		return "low"
-	case "medium":
-		return "medium"
-	case "high":
-		return "high"
-	case "xhigh", "max":
-		return "xhigh"
-	default:
-		return ""
-	}
 }
 
 func normalizeChatResponseFormat(format map[string]interface{}) map[string]interface{} {
@@ -441,6 +448,16 @@ func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 	}
 	payload["tools"] = normalized
 	normalizeBuildToolChoice(payload, state)
+	for _, item := range interfaceMaps(payload["input"]) {
+		if parseLooseStringAny(item["type"]) != "function_call" {
+			continue
+		}
+		key := strings.TrimSpace(parseLooseStringAny(item["namespace"])) + "\x00" + strings.TrimSpace(parseLooseStringAny(item["name"]))
+		if alias := state.aliases[key]; alias != "" {
+			item["name"] = alias
+			delete(item, "namespace")
+		}
+	}
 	if len(state.warnings) > 0 {
 		payload[buildCompatibilityWarningsKey] = append([]string(nil), state.warnings...)
 	}
@@ -568,8 +585,11 @@ func buildToolAlias(namespace, name string) string {
 		value = namespace + "__" + name
 	}
 	value = strings.Trim(buildToolAliasInvalid.ReplaceAllString(value, "_"), "_")
-	if len(value) > 64 {
-		value = value[:64]
+	if value == "" {
+		value = "tool"
+	}
+	if len(value) > 128 {
+		value = value[:128]
 	}
 	return value
 }
@@ -592,11 +612,11 @@ func normalizeBuildToolChoice(payload map[string]interface{}, state *buildToolNo
 		payload["tool_choice"] = map[string]interface{}{"type": "function", "name": "apply_patch"}
 		return
 	}
-	name := strings.TrimSpace(fmt.Sprint(choice["name"]))
-	namespace := strings.TrimSpace(fmt.Sprint(choice["namespace"]))
+	name := strings.TrimSpace(parseLooseStringAny(choice["name"]))
+	namespace := strings.TrimSpace(parseLooseStringAny(choice["namespace"]))
 	if nested, ok := choice["function"].(map[string]interface{}); ok {
 		name = strings.TrimSpace(fmt.Sprint(nested["name"]))
-		namespace = strings.TrimSpace(fmt.Sprint(nested["namespace"]))
+		namespace = strings.TrimSpace(parseLooseStringAny(nested["namespace"]))
 	}
 	if name != "" && name != "<nil>" {
 		payload["tool_choice"] = map[string]interface{}{"type": "function", "name": state.alias(namespace, name)}
@@ -607,4 +627,21 @@ func mapsEqualJSON(left, right map[string]interface{}) bool {
 	a, errA := json.Marshal(left)
 	b, errB := json.Marshal(right)
 	return errA == nil && errB == nil && string(a) == string(b)
+}
+
+// Validate structure only. Upstreams, not the relay's model catalog, decide
+// which reasoning effort values are supported. Never downgrade client values.
+func validatePayloadReasoning(payload map[string]interface{}) error {
+	if raw, exists := payload["reasoning"]; exists && raw != nil {
+		reasoning, ok := raw.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("reasoning must be an object")
+		}
+		if raw, exists := reasoning["effort"]; exists {
+			if effort, ok := raw.(string); !ok || strings.TrimSpace(effort) == "" {
+				return fmt.Errorf("reasoning.effort must be a non-empty string")
+			}
+		}
+	}
+	return nil
 }

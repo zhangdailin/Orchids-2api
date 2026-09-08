@@ -43,7 +43,7 @@ func NewCLIClient(cfg *config.Config) *CLIClient {
 	client := &CLIClient{cfg: cfg}
 	// Shared browser client keeps the utls Chrome TLS fingerprint; the CLI
 	// upstream tolerates browser-like TLS even though headers are CLI identity.
-	client.httpClient = util.GetSharedBrowserHTTPClient("cli", 120*time.Second, nil)
+	client.httpClient = util.GetSharedBrowserHTTPClientWithHeaderTimeout("cli", cfg.GrokRequestTimeout(ProviderBuild), 0, nil)
 	client.oauth = NewCLIOAuth(cfg, client.httpClient)
 	client.egress = egress.NewManager(cfg)
 	return client
@@ -93,6 +93,7 @@ func (c *CLIClient) cliHeaders(acc *store.Account, accessToken string) http.Head
 		}
 		if userID := strings.TrimSpace(acc.UserID); userID != "" {
 			h.Set("x-grok-user-id", userID)
+			h.Set("x-userid", userID) // Billing's alias must also use the refreshed identity.
 		}
 	}
 	return h
@@ -132,17 +133,10 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 	if acc == nil {
 		return nil, fmt.Errorf("empty cli account")
 	}
-	// A Build team-level RPM/RPS limit applies to every sibling account in the
-	// same team.  Waiting here is essential: retryWithAccountSwitch may select
-	// a different OAuth row, but that row still shares the same upstream bucket.
-	// The wait is context-cancellable and does not mark the account as failed.
+	ctx = withRateLimitAccount(ctx, acc)
 	modelID := strings.TrimSpace(fmt.Sprint(payload["model"]))
-	if modelID != "" && strings.TrimSpace(acc.TeamID) != "" {
-		for _, scope := range []RateLimitScope{RateLimitScopeRPS, RateLimitScopeRPM} {
-			if err := teamCooldown.Wait(ctx, scope, acc.TeamID, modelID); err != nil {
-				return nil, err
-			}
-		}
+	if err := waitScopedRateLimit(ctx, ProviderBuild, acc.OAuthAccessToken, modelID, c.cfg.GrokRequestsPerSecond(ProviderBuild)); err != nil {
+		return nil, err
 	}
 	challengeRetried := false
 	authRetried := false
@@ -163,7 +157,7 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
-			if meta := noteTeamRateLimit(resp.StatusCode, resp.Header, raw); meta != nil {
+			if meta := noteScopedRateLimit(ctx, ProviderBuild, acc.OAuthAccessToken, modelID, resp.StatusCode, resp.Header, raw); meta != nil {
 				// Keep the selected account's durable diagnostic state in sync. The
 				// in-memory team/model registry remains authoritative for waiting;
 				// this timestamp is only for admin visibility and restart diagnostics.
@@ -204,155 +198,68 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 }
 
 func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {
-	if c == nil || c.oauth == nil {
-		return nil, fmt.Errorf("grok cli client not configured")
-	}
-	token, err := c.oauth.AccessToken(ctx, acc)
-	if err != nil {
-		return nil, err
-	}
-	if token == "" {
-		return nil, fmt.Errorf("grok cli account access token is empty")
-	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
-	endpoint := c.baseURL() + path
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header = c.cliHeaders(acc, token)
-	req.Header.Set("Content-Type", "application/json")
+	headers := http.Header{"Content-Type": {"application/json"}}
 	if strings.HasPrefix(path, "/videos/") {
-		modelOverride := strings.TrimSpace(fmt.Sprint(payload["model"]))
-		if modelOverride == "" || modelOverride == "<nil>" {
-			modelOverride = "grok-imagine-video-1.5"
-		}
-		req.Header.Set("x-grok-model-override", modelOverride)
+		model, _ := payload["model"].(string)
+		headers.Set("x-grok-model-override", firstNonEmpty(strings.TrimSpace(model), "grok-imagine-video-1.5"))
 	}
-	if sessionID := strings.TrimSpace(fmt.Sprint(payload["prompt_cache_key"])); sessionID != "" && sessionID != "<nil>" {
-		req.Header.Set("x-grok-session-id", sessionID)
-		req.Header.Set("x-grok-conv-id", sessionID)
+	if session, _ := payload["prompt_cache_key"].(string); strings.TrimSpace(session) != "" {
+		headers.Set("x-grok-session-id", strings.TrimSpace(session))
+		headers.Set("x-grok-conv-id", strings.TrimSpace(session))
 	}
-
-	resp, err := c.doCLIRequest(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if err := decodeHTTPResponseBody(resp); err != nil {
-		resp.Body.Close()
-		return nil, fmt.Errorf("grok cli decode failed: %w", err)
-	}
-	return resp, nil
+	return c.request(ctx, acc, http.MethodPost, c.baseURL()+path, body, headers)
 }
 
-// doFallbackResponsesAt sends a request to the direct xAI API with the same
+// doFallbackRequest sends a request to the direct xAI API with the same
 // refreshed OAuth credential and fail-closed egress policy as the Build path.
-func (c *CLIClient) doFallbackResponsesAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {
-	if c == nil || c.oauth == nil || acc == nil {
-		return nil, fmt.Errorf("grok cli fallback is not configured")
+func (c *CLIClient) doFallbackRequest(ctx context.Context, acc *store.Account, method, path string, payload map[string]interface{}) (*http.Response, error) {
+	if c == nil {
+		return nil, fmt.Errorf("grok cli client not configured")
 	}
-	token, err := c.oauth.AccessToken(ctx, acc)
+	var body []byte
+	headers := http.Header{}
+	if payload != nil {
+		var err error
+		body, err = json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		headers.Set("Content-Type", "application/json")
+	}
+	base := c.cfg.GrokCLIFallbackBaseURLOrDefault()
+	resp, err := c.request(ctx, acc, method, strings.TrimRight(base, "/")+"/"+strings.TrimLeft(strings.TrimSpace(path), "/"), body, headers)
 	if err != nil {
-		return nil, err
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	base := "https://api.x.ai/v1"
-	if c.cfg != nil {
-		base = c.cfg.GrokCLIFallbackBaseURLOrDefault()
-	}
-	endpoint := strings.TrimRight(base, "/") + "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header = c.cliHeaders(acc, token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.doCLIRequest(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if err := decodeHTTPResponseBody(resp); err != nil {
-		_ = resp.Body.Close()
 		return nil, err
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
 	}
-	raw, headers := readBoundedResponse(resp)
-	return nil, newCLIUpstreamError(resp.StatusCode, headers, raw)
-}
-
-func (c *CLIClient) doFallbackResource(ctx context.Context, acc *store.Account, method, path string) (*http.Response, error) {
-	if c == nil || c.oauth == nil || acc == nil {
-		return nil, fmt.Errorf("grok cli fallback is not configured")
-	}
-	token, err := c.oauth.AccessToken(ctx, acc)
-	if err != nil {
-		return nil, err
-	}
-	base := "https://api.x.ai/v1"
-	if c.cfg != nil {
-		base = c.cfg.GrokCLIFallbackBaseURLOrDefault()
-	}
-	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(base, "/")+"/"+strings.TrimLeft(path, "/"), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header = c.cliHeaders(acc, token)
-	resp, err := c.doCLIRequest(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if err := decodeHTTPResponseBody(resp); err != nil {
-		_ = resp.Body.Close()
-		return nil, err
-	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return resp, nil
-	}
-	raw, headers := readBoundedResponse(resp)
-	return nil, newCLIUpstreamError(resp.StatusCode, headers, raw)
+	raw, responseHeaders := readBoundedResponse(resp)
+	return nil, newCLIUpstreamError(resp.StatusCode, responseHeaders, raw)
 }
 
 // doResponseResource forwards GET/DELETE for a stored Build Responses
 // resource. Non-2xx statuses are returned intact so the downstream API can
 // preserve the upstream resource semantics.
 func (c *CLIClient) doResponseResource(ctx context.Context, acc *store.Account, method, path, rawQuery string) (*http.Response, error) {
-	if c == nil || c.oauth == nil || acc == nil {
-		return nil, fmt.Errorf("grok cli client or account not configured")
-	}
 	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
-	for attempt := 0; attempt < 2; attempt++ {
-		token, err := c.oauth.AccessToken(ctx, acc)
+	endpoint := c.baseURL() + path
+	if strings.TrimSpace(rawQuery) != "" {
+		endpoint += "?" + rawQuery
+	}
+	headers := http.Header{}
+	if strings.HasPrefix(path, "/videos/") {
+		headers.Set("x-grok-model-override", "grok-imagine-video-1.5")
+	}
+	for attempt := 0; ; attempt++ {
+		resp, err := c.request(ctx, acc, method, endpoint, nil, headers)
 		if err != nil {
 			return nil, err
-		}
-		endpoint := c.baseURL() + path
-		if strings.TrimSpace(rawQuery) != "" {
-			endpoint += "?" + rawQuery
-		}
-		req, err := http.NewRequestWithContext(ctx, method, endpoint, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header = c.cliHeaders(acc, token)
-		if strings.HasPrefix(path, "/videos/") {
-			req.Header.Set("x-grok-model-override", "grok-imagine-video-1.5")
-		}
-		resp, err := c.doCLIRequest(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		if err := decodeHTTPResponseBody(resp); err != nil {
-			_ = resp.Body.Close()
-			return nil, fmt.Errorf("grok cli decode failed: %w", err)
 		}
 		if resp.StatusCode != http.StatusUnauthorized || attempt > 0 || strings.TrimSpace(acc.OAuthRefreshToken) == "" {
 			return resp, nil
@@ -362,7 +269,6 @@ func (c *CLIClient) doResponseResource(ctx context.Context, acc *store.Account, 
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("grok cli resource authentication failed")
 }
 
 // VerifyAccount checks a Build CLI OAuth account by minting a token and probing
@@ -378,22 +284,11 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 	}
 	challengeRetried := false
 	for {
-		token, err := c.oauth.AccessToken(ctx, acc)
+		resp, err := c.request(ctx, acc, http.MethodGet, c.baseURL()+"/models", nil, nil)
 		if err != nil {
 			if oauthErr, ok := err.(*cliOAuthError); ok {
 				return oauthErr.Status(), err
 			}
-			return "", err
-		}
-		endpoint := c.baseURL() + "/models"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-		if err != nil {
-			return "", err
-		}
-		req.Header = c.cliHeaders(acc, token)
-
-		resp, err := c.doCLIRequest(ctx, req)
-		if err != nil {
 			return "", err
 		}
 		if resp.StatusCode == http.StatusOK {
@@ -421,22 +316,9 @@ func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]stri
 		return nil, fmt.Errorf("grok cli models is not configured")
 	}
 	ApplyCLIOAuthIdentity(acc)
-	token, err := c.oauth.AccessToken(ctx, acc)
+	resp, err := c.request(ctx, acc, http.MethodGet, c.baseURL()+"/models", nil, nil)
 	if err != nil {
 		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL()+"/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header = c.cliHeaders(acc, token)
-	resp, err := c.doCLIRequest(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if err := decodeHTTPResponseBody(resp); err != nil {
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("decode grok cli models response: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, cliOAuthMaxBodyBytes))
@@ -486,11 +368,34 @@ func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]stri
 	return models, nil
 }
 
-// doCLIRequest issues an HTTP request through the CLI client, routing via the
-// egress lease when enabled (bound UA + clearance on a proxy-pool node). Egress
-// is fail-closed: when enabled, an acquire failure is returned rather than
-// silently falling back to the direct client. Node health is fed from the
-// response, and the lease is released when the response body is closed.
+// request is the single authenticated Build HTTP entry for chat, resources,
+// models, billing and fallback. Callers retain their endpoint status semantics.
+func (c *CLIClient) request(ctx context.Context, acc *store.Account, method, endpoint string, body []byte, headers http.Header) (*http.Response, error) {
+	if c == nil || c.oauth == nil || acc == nil {
+		return nil, fmt.Errorf("grok cli client or account not configured")
+	}
+	token, err := c.oauth.AccessToken(ctx, acc)
+	if err != nil {
+		return nil, err
+	}
+	if token == "" {
+		return nil, fmt.Errorf("grok cli account access token is empty")
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header = c.cliHeaders(acc, token)
+	for key, values := range headers {
+		req.Header[key] = append([]string(nil), values...)
+	}
+	return doUpstreamHTTP(req, func(req *http.Request) (*http.Response, error) {
+		return c.doCLIRequest(ctx, req)
+	}, c.cfg.GrokStreamIdleTimeout())
+}
+
+// doCLIRequest is the fail-closed egress adapter. A successful response owns
+// its lease until the shared response lifecycle closes the body.
 func (c *CLIClient) doCLIRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
 	if c.egress == nil || !c.egress.Enabled() {
 		return c.httpClient.Do(req)

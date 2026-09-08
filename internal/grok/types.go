@@ -37,6 +37,7 @@ type ChatCompletionsRequest struct {
 	OutputConfig        map[string]interface{}   `json:"output_config,omitempty"`
 	ThinkingConfig      map[string]interface{}   `json:"thinking_config,omitempty"`
 	ReasoningReplay     bool                     `json:"-"`
+	startedAt           time.Time
 }
 
 type ChatMessage struct {
@@ -559,9 +560,6 @@ const (
 var grokToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 func validateToolDefinitions(tools []ToolDef) error {
-	if len(tools) > maxToolDefinitions {
-		return fmt.Errorf("tools must contain at most %d items", maxToolDefinitions)
-	}
 	seen := make(map[string]struct{}, len(tools))
 	for i, tool := range tools {
 		if !strings.EqualFold(strings.TrimSpace(tool.Type), "function") {
@@ -570,18 +568,15 @@ func validateToolDefinitions(tools []ToolDef) error {
 		if tool.Function == nil {
 			return fmt.Errorf("tools.%d.function is required", i)
 		}
-		name := strings.TrimSpace(fmt.Sprint(tool.Function["name"]))
-		if !grokToolNamePattern.MatchString(name) {
-			return fmt.Errorf("tools.%d.function.name must match [A-Za-z0-9_-]{1,64}", i)
+		name, ok := tool.Function["name"].(string)
+		if !ok || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("tools.%d.function.name must be a non-empty string", i)
 		}
-		key := strings.ToLower(name)
+		key := strings.TrimSpace(name)
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("tools.%d.function.name duplicates %q", i, name)
 		}
 		seen[key] = struct{}{}
-		if description := strings.TrimSpace(fmt.Sprint(tool.Function["description"])); len(description) > maxToolDescriptionBytes {
-			return fmt.Errorf("tools.%d.function.description must be at most %d bytes", i, maxToolDescriptionBytes)
-		}
 		if parameters, ok := tool.Function["parameters"]; ok && parameters != nil {
 			raw, err := json.Marshal(parameters)
 			if err != nil {
@@ -591,6 +586,25 @@ func validateToolDefinitions(tools []ToolDef) error {
 			if err := json.Unmarshal(raw, &decoded); err != nil {
 				return fmt.Errorf("tools.%d.function.parameters must be valid JSON", i)
 			}
+		}
+	}
+	return nil
+}
+
+// Web emulates tools in a prompt; its limits are not Build/Console contracts.
+func validateWebToolDefinitions(tools []ToolDef) error {
+	if err := validateToolDefinitions(tools); err != nil {
+		return err
+	}
+	if len(tools) > maxToolDefinitions {
+		return fmt.Errorf("tools must contain at most %d items on Web", maxToolDefinitions)
+	}
+	for i, tool := range tools {
+		if !grokToolNamePattern.MatchString(strings.TrimSpace(tool.Function["name"].(string))) {
+			return fmt.Errorf("tools.%d.function.name must match [A-Za-z0-9_-]{1,64} on Web", i)
+		}
+		if description := strings.TrimSpace(parseLooseStringAny(tool.Function["description"])); len(description) > maxToolDescriptionBytes {
+			return fmt.Errorf("tools.%d.function.description must be at most %d bytes on Web", i, maxToolDescriptionBytes)
 		}
 	}
 	return nil
@@ -625,12 +639,12 @@ func (r *ChatCompletionsRequest) Validate() error {
 			fn, _ := v["function"].(map[string]interface{})
 			name, _ := fn["name"].(string)
 			name = strings.TrimSpace(name)
-			if strings.TrimSpace(fmt.Sprint(v["type"])) != "function" || !grokToolNamePattern.MatchString(name) {
+			if strings.TrimSpace(fmt.Sprint(v["type"])) != "function" || name == "" {
 				return fmt.Errorf("tool_choice object must have type=function and function.name")
 			}
 			found := false
 			for _, tool := range r.Tools {
-				if strings.EqualFold(strings.TrimSpace(fmt.Sprint(tool.Function["name"])), name) {
+				if strings.TrimSpace(fmt.Sprint(tool.Function["name"])) == name {
 					found = true
 					break
 				}
@@ -640,26 +654,6 @@ func (r *ChatCompletionsRequest) Validate() error {
 			}
 		default:
 			return fmt.Errorf("tool_choice must be auto, required, none, or a specific function object")
-		}
-	}
-	if r.Temperature == nil {
-		v := 0.8
-		r.Temperature = &v
-	} else if *r.Temperature < 0 || *r.Temperature > 2 {
-		return fmt.Errorf("temperature must be between 0 and 2")
-	}
-	if r.TopP == nil {
-		v := 0.95
-		r.TopP = &v
-	} else if *r.TopP < 0 || *r.TopP > 1 {
-		return fmt.Errorf("top_p must be between 0 and 1")
-	}
-	if r.ReasoningEffort != nil {
-		v := strings.ToLower(strings.TrimSpace(*r.ReasoningEffort))
-		switch v {
-		case "none", "minimal", "low", "medium", "high", "xhigh":
-		default:
-			return fmt.Errorf("reasoning_effort must be one of none/minimal/low/medium/high/xhigh")
 		}
 	}
 	if r.ImageConfig != nil {

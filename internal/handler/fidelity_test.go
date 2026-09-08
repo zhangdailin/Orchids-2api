@@ -32,4 +32,3 @@ func TestSanitizeSystemItems_DefaultPreservesVerbatim(t *testing.T) {
 		}
 	}
 }
-

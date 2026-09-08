@@ -180,6 +180,13 @@ func TestMediaInputUploadAndConsoleFileIDResolution(t *testing.T) {
 		t.Fatalf("resolved image = %q", resolved)
 	}
 	wrongOwner := strings.Repeat("0", 64)
+	buildReferences, err := h.resolveBuildVideoReferences(context.Background(), []string{response.FileID}, owner)
+	if err != nil || len(buildReferences) != 1 || buildReferences[0] != resolved {
+		t.Fatalf("Build owned input resolution: %v %v", buildReferences, err)
+	}
+	if _, err := h.resolveBuildVideoReferences(context.Background(), []string{response.FileID}, wrongOwner); err == nil {
+		t.Fatal("Build must reject another API key's media input")
+	}
 	wrongPayload := map[string]interface{}{
 		"image": map[string]interface{}{"url": localMediaInputPrefix + "image:" + response.FileID},
 	}

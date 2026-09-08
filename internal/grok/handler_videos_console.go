@@ -721,7 +721,7 @@ func (h *Handler) doConsoleVideoJSON(ctx context.Context, sess *chatAccountSessi
 	if h == nil || h.currentClient() == nil || sess == nil {
 		return nil, fmt.Errorf("Console video client is not configured")
 	}
-	response, err := h.currentClient().doConsoleDPoPRequestWithHeaders(ctx, sess.token, method, h.consoleURL(path), body, http.Header{
+	response, err := h.currentClient().doConsoleDPoPRequestWithHeaders(withRateLimitAccount(ctx, sess.acc), sess.token, method, h.consoleURL(path), body, http.Header{
 		"Content-Type": []string{"application/json"},
 		"Accept":       []string{"application/json"},
 	})

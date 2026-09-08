@@ -93,7 +93,6 @@ func newTestHandler(client UpstreamClient) *Handler {
 		config:       &config.Config{DebugEnabled: false},
 		client:       client,
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
-		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
 		auditLogger:  audit.NewNopLogger(),
 	}
 }
@@ -669,7 +668,6 @@ func TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
 		},
 		client:       client,
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
-		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
 		auditLogger:  audit.NewNopLogger(),
 	}
 
@@ -770,7 +768,7 @@ func TestWarpToolResultFollowupWithText_HonorsEmptyTools(t *testing.T) {
 	}
 }
 
-func TestWarpToolResultFollowup_DuplicateWriteFallsBackToPriorToolResult(t *testing.T) {
+func TestWarpToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{
@@ -845,6 +843,10 @@ func TestWarpToolResultFollowup_DuplicateWriteFallsBackToPriorToolResult(t *test
 	if strings.Contains(out, "duplicate mutating tool call was suppressed") {
 		t.Fatalf("did not expect duplicate-tool-result fallback in response, got: %s", out)
 	}
+	if !strings.Contains(out, "tool_new_1") || !strings.Contains(out, `"name":"Write"`) {
+		t.Fatalf("repeat tool call was suppressed: %s", out)
+	}
+
 }
 
 func TestWarpToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testing.T) {

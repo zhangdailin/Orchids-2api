@@ -176,104 +176,47 @@ func (h *Handler) resolveNSFWTargets(r *http.Request) (adminNSFWEnableRequest, [
 	return req, targets, collectGrokAccountsByToken(accounts), nil
 }
 
-func (h *Handler) runNSFWEnableBatch(
-	ctx context.Context,
-	targets []nsfwTarget,
-	tokenAccounts map[string][]*store.Account,
-	concurrency int,
-	onItem func(masked string, res nsfwItemResult),
-) (int, map[string]nsfwItemResult) {
-	concurrency = normalizeNSFWConcurrency(concurrency)
-
-	var (
-		mu      sync.Mutex
-		okCount int
-		results = make(map[string]nsfwItemResult, len(targets))
-	)
-	sem := make(chan struct{}, concurrency)
-	wg := sync.WaitGroup{}
-
-	for _, item := range targets {
-		target := item
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				res := nsfwItemResult{
-					Success:     false,
-					HTTPStatus:  0,
-					GRPCStatus:  -1,
-					AccountID:   target.AccountID,
-					AccountName: target.AccountName,
-					Error:       ctx.Err().Error(),
-				}
-				key := maskToken(target.Token)
-				if key == "" {
-					key = "unknown"
-				}
-				mu.Lock()
-				results[key] = res
-				mu.Unlock()
-				if onItem != nil {
-					onItem(key, res)
-				}
-				return
-			}
-			defer func() { <-sem }()
-
+func (h *Handler) runNSFWEnableBatch(ctx context.Context, targets []nsfwTarget, tokenAccounts map[string][]*store.Account, concurrency int, onItem func(string, nsfwItemResult)) (int, map[string]nsfwItemResult) {
+	var mu sync.Mutex
+	okCount := 0
+	results := make(map[string]nsfwItemResult, len(targets))
+	process := func(target nsfwTarget) {
+		res := nsfwItemResult{AccountID: target.AccountID, AccountName: target.AccountName, GRPCStatus: -1}
+		if err := ctx.Err(); err != nil {
+			res.Error = err.Error()
+		} else {
 			callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 			defer cancel()
-
 			outcome := h.client.EnableNSFWDetailed(callCtx, target.Token)
-			res := nsfwItemResult{
-				Success:     outcome.Success,
-				HTTPStatus:  outcome.HTTPStatus,
-				GRPCStatus:  outcome.GRPCStatus,
-				GRPCMessage: outcome.GRPCMessage,
-				Error:       strings.TrimSpace(outcome.Error),
-				AccountID:   target.AccountID,
-				AccountName: target.AccountName,
-			}
+			res.Success, res.HTTPStatus, res.GRPCStatus = outcome.Success, outcome.HTTPStatus, outcome.GRPCStatus
+			res.GRPCMessage, res.Error = outcome.GRPCMessage, strings.TrimSpace(outcome.Error)
 			if !res.Success && res.Error == "" {
 				res.Error = "enable nsfw failed"
 			}
 			if res.Success {
-				if accounts := tokenAccounts[target.Token]; len(accounts) > 0 {
-					for _, acc := range accounts {
-						if acc == nil {
-							continue
-						}
-						if acc.NSFWEnabled {
-							continue
-						}
-						acc.NSFWEnabled = true
-						if updateErr := h.lb.Store.UpdateAccount(callCtx, acc); updateErr != nil {
-							slog.Warn("persist nsfw account state failed", "account_id", acc.ID, "error", updateErr)
-						}
+				for _, acc := range tokenAccounts[target.Token] {
+					if acc == nil || acc.NSFWEnabled {
+						continue
+					}
+					acc.NSFWEnabled = true
+					if err := h.lb.Store.UpdateAccount(callCtx, acc); err != nil {
+						slog.Warn("persist nsfw account state failed", "account_id", acc.ID, "error", err)
 					}
 				}
 			}
-
-			key := maskToken(target.Token)
-			if key == "" {
-				key = "unknown"
-			}
-
-			mu.Lock()
-			results[key] = res
-			if res.Success {
-				okCount++
-			}
-			mu.Unlock()
-
-			if onItem != nil {
-				onItem(key, res)
-			}
-		}()
+		}
+		key := firstNonEmpty(maskToken(target.Token), "unknown")
+		mu.Lock()
+		results[key] = res
+		if res.Success {
+			okCount++
+		}
+		mu.Unlock()
+		if onItem != nil {
+			onItem(key, res)
+		}
 	}
-	wg.Wait()
+	runWorkerPool(ctx, targets, normalizeNSFWConcurrency(concurrency), process, process)
 	return okCount, results
 }
 

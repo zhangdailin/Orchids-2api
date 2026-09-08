@@ -42,7 +42,6 @@ cp config.example.json config.json
 | `response_store_ttl_hours` | `720` | Build stored Response 账号归属记录的 Redis TTL（小时） |
 | `grok_console_base_url` | `https://console.x.ai/v1` | Grok Console Responses、标准视频、TTS、STT 和 Realtime 的 DPoP 上游基址 |
 | `grok_cli_fallback_base_url` | `https://api.x.ai/v1` | Build 视频主路由返回确认的 403 后使用的 XAI fallback 基址 |
-| `grok_quality_max_attempts` | `6` | 缺失思考证据时跨不同账号尝试的总次数，范围 1–16 |
 
 ### 2.2 Redis
 
@@ -99,16 +98,42 @@ cp config.example.json config.json
 
 这些字段会被持久化，不会被 `ApplyHardcoded()` 覆盖。
 
-## 3. 运行时硬编码默认值
+## 3. 运行时限制与固定默认值
+
+### 3.1 可配置的重试、超时与 Grok 限速
+
+以下字段可通过配置文件/Redis 持久化；`ApplyHardcoded()` 不再覆盖有效值。整数设置省略或小于等于 0 时使用默认值，超过上限时钳制到上限。配置修改后重启服务，使 HTTP 客户端与入口中间件一致更新。
+
+| 字段 | 默认值 | 上限/含义 |
+|---|---|---|
+| `max_retries` | `3` | 单次 HTTP 请求最大重试次数，上限 20 |
+| `retry_delay` | `1000` | 重试基准延迟，毫秒，上限 60000 |
+| `account_switch_count` | `5` | Grok 账号尝试次数，包含首轮，上限 20；不再误作秒数 |
+| `request_timeout` | `600` | 通用请求超时，秒，上限 86400 |
+| `concurrency_timeout` | 跟随 `request_timeout` | 入口请求执行超时，秒，上限 86400；不是单纯排队等待时间 |
+| `retry_429_interval` | `60` | 无精确 reset 信息时的 Web 429 重试间隔，秒，上限 3600 |
+| `grok_web_timeout_seconds` | 跟随 `request_timeout` | Web HTTP 总超时，含响应体读取，上限 86400 秒 |
+| `grok_console_timeout_seconds` | 跟随 `request_timeout` | Console HTTP 总超时，含响应体读取，上限 86400 秒 |
+| `grok_build_timeout_seconds` | 跟随 `request_timeout` | Build HTTP 总超时，含响应体读取，上限 86400 秒 |
+| `grok_stream_idle_seconds` | `120` | Build/Console SSE 有效输出空闲超时，上限 3600 秒；keepalive 不重置计时 |
+| `grok_web_rps` / `grok_console_rps` / `grok_build_rps` | `0` | 0 关闭主动限速；正数按账号/团队限速，范围 0.01–1000，每个桶 burst=1 |
+
+限流状态按 provider、账号/已知团队、模型隔离；真实 429 冷却不随主动限速关闭。优先使用 `Retry-After`，再使用响应中的 reset 信息；信息缺失时只冷却受影响的账号/模型，不再全局停顿。限流注册表为进程内状态，不是跨副本共享限流。
+
+总超时与空闲超时是不同边界。长回答需要同时满足入口 `concurrency_timeout` 和目标 provider HTTP 超时。中转层已删除思考质量门控、额外质量重试和缺失思考惩罚；历史 `grok_quality_*` / `grok_missing_thinking_cooldown_seconds` 配置不再生效。存储会话仍保留账号绑定。
+
+Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress 固定 120 秒总超时或共享客户端 HTTP/1 固定 120 秒响应头上限影响；等待响应头仍受 HTTP 总超时约束。其他模型继续使用原有共享客户端策略。
+
+### 3.2 仍然固定的默认值
 
 这些值由 [config.go](../internal/config/config.go) 里的 `ApplyHardcoded()` 强制覆盖，不能指望仅靠配置文件改变。
 
 | 字段 | 当前值 | 说明 |
 |---|---|---|
 | `output_token_mode` | `final` | 输出 token 统计模式 |
-| `context_max_tokens` | `100000` | 上下文上限 |
-| `context_summary_max_tokens` | `800` | 摘要上限 |
-| `context_keep_turns` | `6` | 会话保留轮数 |
+| `context_max_tokens` | 不生效 | 旧兼容字段；不在中转层截断或自动压缩上下文 |
+| `context_summary_max_tokens` | 不生效 | 旧兼容字段；不生成中转层摘要 |
+| `context_keep_turns` | 不生效 | 旧兼容字段；不按轮数删除请求历史 |
 | `grok_api_base_url` | `https://grok.com` | Grok 基础地址 |
 | `warp_disable_tools` | `false` | Warp 工具默认开启 |
 | `warp_max_tool_results` | `10` | Warp 单轮工具结果上限 |
@@ -118,15 +143,10 @@ cp config.example.json config.json
 | `public_enabled` | `true` | 公共页面默认开启 |
 | `image_final_min_bytes` | `100000` | imagine 最终图阈值 |
 | `image_medium_min_bytes` | `30000` | imagine 中间图阈值 |
-| `max_retries` | `3` | 请求最大重试次数 |
-| `retry_delay` | `1000` | 重试基准延迟（毫秒） |
-| `request_timeout` | `600` | 请求超时（秒） |
-| `retry_429_interval` | `60` | 429 重试间隔（秒） |
 | `token_refresh_interval` | `1` | token 自动刷新间隔（分钟） |
 | `auto_refresh_token` | `true` | 自动刷新账号 token |
 | `load_balancer_cache_ttl` | `5` | 负载均衡缓存 TTL（秒） |
 | `concurrency_limit` | `100` | 并发上限 |
-| `concurrency_timeout` | `300` | 并发等待超时（秒） |
 | `adaptive_timeout` | `true` | 自适应超时 |
 
 ## 4. 最小可用配置

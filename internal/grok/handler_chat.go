@@ -33,10 +33,6 @@ func appendUsage(dst []byte, usage map[string]interface{}) []byte {
 	return dst
 }
 
-func appendChatCompletionChunk(dst []byte, id string, created int64, model, fingerprint, role, content string, finish string, hasFinish bool) []byte {
-	return appendChatCompletionChunkWithUsage(dst, id, created, model, fingerprint, role, content, finish, hasFinish, nil)
-}
-
 // appendChatCompletionChunkPrefix writes the common leading fields of a
 // chat.completion.chunk SSE frame.
 func appendChatCompletionChunkPrefix(dst []byte, id string, created int64, model, fingerprint string) []byte {
@@ -183,6 +179,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
+	req.startedAt = time.Now()
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 	debugLogSSE := h != nil && h.cfg != nil && h.cfg.DebugLogSSE
 	logger := debug.New(verboseDiagnostics, verboseDiagnostics && debugLogSSE)
@@ -302,6 +299,32 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Native providers consume structured messages directly, without Web's
+	// prompt/attachment adapter or its tool limits.
+	if !spec.IsVideo && modelRoutedToCLI(spec, h.cfg) {
+		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
+		if err != nil {
+			http.Error(w, "no available grok cli token: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		defer sess.Close()
+		h.serveNativeChat(r.Context(), w, &req, spec, sess, logger, true)
+		return
+	}
+	if !spec.IsVideo && requiresConsoleResponses(spec) {
+		sess, err := h.openConsoleAccountSession(r.Context(), nil, req.Model)
+		if err != nil {
+			http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		defer sess.Close()
+		h.serveNativeChat(r.Context(), w, &req, spec, sess, logger, false)
+		return
+	}
+	if err := validateWebToolDefinitions(req.Tools); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	parallelToolCalls := true
 	if req.ParallelToolCalls != nil {
 		parallelToolCalls = *req.ParallelToolCalls
@@ -343,37 +366,12 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if modelRoutedToCLI(spec, h.cfg) {
-		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
-		if err != nil {
-			http.Error(w, "no available grok cli token: "+err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		defer sess.Close()
-		h.serveCLIChat(r.Context(), w, &req, spec, sess, logger)
-		return
-	}
-
-	var sess *chatAccountSession
-	if shouldServeConsoleChat(spec, attachments) {
-		sess, err = h.openConsoleAccountSession(r.Context(), nil, req.Model)
-	} else {
-		sess, err = h.openChatAccountSessionForModel(r.Context(), spec)
-	}
+	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer sess.Close()
-
-	if shouldServeConsoleChat(spec, attachments) {
-		h.serveConsoleChat(r.Context(), w, &req, spec, sess, logger)
-		return
-	}
-	if requiresConsoleResponses(spec) {
-		http.Error(w, fmt.Sprintf("model %s is only supported through console.x.ai responses and does not support attachments in this API", req.Model), http.StatusBadRequest)
-		return
-	}
 
 	buildPayload := func(token string) (map[string]interface{}, error) {
 		fileAttachments := []string(nil)
@@ -798,51 +796,6 @@ func validUTF8Prefix(s string) string {
 	return ""
 }
 
-func collapseDuplicatedLongChunk(text string) string {
-	original := strings.TrimSpace(stripZeroWidth(text))
-	if original == "" {
-		return text
-	}
-	current := original
-	for {
-		next, ok := collapseDuplicatedLongChunkOnce(current)
-		if !ok {
-			break
-		}
-		current = next
-	}
-	if current == original {
-		return text
-	}
-	return current
-}
-
-func collapseDuplicatedLongChunkOnce(trimmed string) (string, bool) {
-	runes := []rune(trimmed)
-	if len(runes) < 24 {
-		return "", false
-	}
-
-	for sep := 0; sep <= 3; sep++ {
-		total := len(runes) - sep
-		if total <= 0 || total%2 != 0 {
-			continue
-		}
-		half := total / 2
-		first := strings.TrimSpace(stripZeroWidth(string(runes[:half])))
-		second := strings.TrimSpace(stripZeroWidth(string(runes[half+sep:])))
-		mid := strings.TrimSpace(stripZeroWidth(string(runes[half : half+sep])))
-		if first == "" || second == "" || first != second || mid != "" {
-			continue
-		}
-		if utf8.RuneCountInString(first) < 12 {
-			return "", false
-		}
-		return first, true
-	}
-	return "", false
-}
-
 func stripZeroWidth(s string) string {
 	if s == "" {
 		return s
@@ -1087,7 +1040,6 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		emitted = map[string]bool{}
 	}
 	sawModelMessage := false
-	lastTextChunkNorm := ""
 	var tokenFallback strings.Builder
 	var reasoningContent strings.Builder
 	lastThinkingMessage := ""
@@ -1102,8 +1054,6 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		toolPump = newToolStreamPump(toolParser)
 	}
 	finalSnapshotMarkdown := make([]string, 0, 4)
-	var contentLoopGuard, reasoningLoopGuard streamLoopGuard
-	doomLoop := false
 
 	var mf *streamMarkupFilter
 	if !hasAttachments && !toolStreamMode {
@@ -1126,44 +1076,13 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		if toolStreamMode {
 			return
 		}
-		if len(content) >= 24 {
-			collapsed := collapseDuplicatedLongChunk(content)
-			if collapsed != content && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
-				slog.Debug("grok stream collapsed duplicated text chunk",
-					"before_chars", utf8.RuneCountInString(strings.TrimSpace(content)),
-					"after_chars", utf8.RuneCountInString(strings.TrimSpace(collapsed)))
-			}
-			content = collapsed
-		}
-		norm := strings.TrimSpace(content)
-		if norm == "" {
-			return
-		}
-		if contentLoopGuard.Add(content) {
-			doomLoop = true
-			return
-		}
-
-		if norm == lastTextChunkNorm && utf8.RuneCountInString(norm) >= 12 {
-			if h != nil && h.cfg != nil && h.cfg.DebugEnabled {
-				slog.Debug("grok stream skip duplicate text chunk", "chars", utf8.RuneCountInString(norm))
-			}
-			return
-		}
-		emitChunk("", content, "", false)
-		if utf8.RuneCountInString(norm) >= 12 {
-			lastTextChunkNorm = norm
-		} else {
-			lastTextChunkNorm = ""
+		if content != "" {
+			emitChunk("", content, "", false)
 		}
 	}
 
 	emitReasoningChunk := func(content string) {
 		if content == "" {
-			return
-		}
-		if reasoningLoopGuard.Add(content) {
-			doomLoop = true
 			return
 		}
 		raw := appendChatCompletionReasoningChunk(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, content)
@@ -1275,9 +1194,6 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	}
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
-		if doomLoop {
-			return fmt.Errorf("upstream repetition loop detected")
-		}
 		if logger != nil {
 			if raw, err := json.Marshal(resp); err == nil {
 				logger.LogUpstreamSSE("response", string(raw))
@@ -1389,10 +1305,6 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
 		return
 	}
-	if doomLoop {
-		writeSSEStreamError(w, flusher, logger, "upstream repetition loop detected")
-		return
-	}
 
 	finalBufferedText := ""
 	finalSnapshotContent := ""
@@ -1437,9 +1349,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	if !toolStreamMode {
 		switch {
 		case strings.TrimSpace(pendingModelMessage) != "":
-			finalSnapshotContent = collapseDuplicatedLongChunk(sanitizeUpstreamText(pendingModelMessage))
+			finalSnapshotContent = sanitizeUpstreamText(pendingModelMessage)
 		case tokenFallback.Len() > 0:
-			finalSnapshotContent = collapseDuplicatedLongChunk(sanitizeUpstreamText(tokenFallback.String()))
+			finalSnapshotContent = sanitizeUpstreamText(tokenFallback.String())
 		}
 		if len(finalSnapshotMarkdown) > 0 {
 			finalSnapshotContent += strings.Join(finalSnapshotMarkdown, "")
@@ -1591,12 +1503,10 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 	if strings.TrimSpace(finalContent) == "" {
 		finalContent = tokenClean
 	}
-	finalContent = collapseDuplicatedLongChunk(finalContent)
 	reasoningContent := sanitizeUpstreamText(reasoningSnapshot)
 	if strings.TrimSpace(reasoningContent) == "" {
 		reasoningContent = sanitizeUpstreamText(reasoningTokens.String())
 	}
-	reasoningContent = collapseDuplicatedLongChunk(reasoningContent)
 
 	var toolCalls []map[string]interface{}
 	if toolCallsEnabled(tools, toolChoice) {

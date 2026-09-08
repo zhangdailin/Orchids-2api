@@ -207,7 +207,7 @@ func validateChatMessages(messages []ChatMessage) error {
 		}
 		switch content := msg.Content.(type) {
 		case string:
-			if strings.TrimSpace(content) == "" && !(role == "assistant" && len(msg.ToolCalls) > 0) {
+			if strings.TrimSpace(content) == "" && role != "tool" && !(role == "assistant" && len(msg.ToolCalls) > 0) {
 				return fmt.Errorf("message content cannot be empty")
 			}
 		case []interface{}:
@@ -236,7 +236,7 @@ func validateChatMessages(messages []ChatMessage) error {
 					if _, ok := userContentTypes[blockType]; !ok {
 						return fmt.Errorf("invalid content block type: '%s'", blockTypeRaw)
 					}
-				} else if blockType != "text" {
+				} else if blockType != "text" && !((role == "assistant" || role == "tool") && blockType == "image_url") {
 					return fmt.Errorf("the '%s' role only supports 'text' type, got '%s'", role, blockTypeRaw)
 				}
 
@@ -433,4 +433,3 @@ func extractVideoPromptAndAttachments(messages []ChatMessage) (string, []Attachm
 	}
 	return "", nil, fmt.Errorf("video prompt cannot be empty")
 }
-

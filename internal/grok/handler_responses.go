@@ -1,7 +1,6 @@
 package grok
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -265,26 +264,17 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	subReq.ContentLength = int64(len(raw))
 
 	if chatReq.Stream {
-		reader, writer := io.Pipe()
-		streamWriter := newStreamingChatWriter(writer)
-		go func() {
-			h.HandleChatCompletions(streamWriter, subReq)
-			streamWriter.WriteHeader(http.StatusOK)
-			_ = writer.Close()
-		}()
-		<-streamWriter.ready
-		if streamWriter.status < 200 || streamWriter.status >= 300 {
-			body, _ := io.ReadAll(reader)
-			for key, values := range streamWriter.header {
-				for _, value := range values {
-					w.Header().Add(key, value)
+		h.withChatStream(subReq, func(status int, header http.Header, reader io.Reader) {
+			if status < 200 || status >= 300 {
+				for key, values := range header {
+					w.Header()[key] = values
 				}
+				w.WriteHeader(status)
+				_, _ = io.Copy(w, reader)
+				return
 			}
-			w.WriteHeader(streamWriter.status)
-			_, _ = w.Write(body)
-			return
-		}
-		writeResponsesStreamFromChatReaderRequest(w, req, reader)
+			writeResponsesStreamFromChatReaderRequest(w, req, reader)
+		})
 		return
 	}
 
@@ -380,7 +370,7 @@ func (h *Handler) handleNativeCLIResponses(w http.ResponseWriter, r *http.Reques
 func copyNativeCLIResponseHeaders(dst, src http.Header) {
 	// Forward only end-to-end response metadata. Hop-by-hop headers must not be
 	// copied because net/http owns the downstream connection.
-	for _, key := range []string{"Content-Type", "Cache-Control", "X-Request-Id", "X-Request-ID"} {
+	for _, key := range []string{"Content-Type", "Cache-Control", "X-Request-Id", "X-Request-ID", "X-Grok2api-Compatibility-Warnings", "X-Grok2api-Reasoning-Recovery"} {
 		if values, ok := src[key]; ok {
 			dst.Del(key)
 			for _, value := range values {
@@ -680,43 +670,81 @@ func firstNonNil(values ...interface{}) interface{} {
 
 func responsesObjectFromChat(model string, chat map[string]interface{}) map[string]interface{} {
 	output := responsesOutputFromChat(chat)
-	return map[string]interface{}{
-		"id":                  "resp_" + randomHex(12),
-		"object":              "response",
-		"created_at":          time.Now().Unix(),
-		"status":              "completed",
-		"model":               firstNonEmpty(strings.TrimSpace(fmt.Sprint(chat["model"])), model),
-		"output":              output,
-		"parallel_tool_calls": true,
-		"tool_choice":         "auto",
-		"usage":               responsesUsageFromChat(chat["usage"]),
+	finish := ""
+	if choices := interfaceSlice(chat["choices"]); len(choices) > 0 {
+		choice, _ := choices[0].(map[string]interface{})
+		finish = streamString(choice["finish_reason"])
 	}
+	status, details := responseStatusFromFinish(finish)
+	result := map[string]interface{}{"id": "resp_" + randomHex(12), "object": "response", "created_at": time.Now().Unix(), "status": status, "model": firstNonEmpty(interfaceString(chat["model"]), model), "output": output, "parallel_tool_calls": true, "tool_choice": "auto", "usage": responsesUsageFromChat(chat["usage"])}
+	if details != nil {
+		result["incomplete_details"] = details
+	}
+	if chat["error"] != nil {
+		result["status"] = "failed"
+		result["error"] = chat["error"]
+	}
+	for _, raw := range output {
+		item, _ := raw.(map[string]interface{})
+		if item["type"] != "web_search_call" {
+			item["status"] = status
+		}
+	}
+	return result
 }
 
 func responsesOutputFromChat(chat map[string]interface{}) []interface{} {
+	out := []interface{}{}
 	choices := interfaceSlice(chat["choices"])
 	if len(choices) == 0 {
-		return []interface{}{}
+		return out
 	}
 	choice, _ := choices[0].(map[string]interface{})
 	message, _ := choice["message"].(map[string]interface{})
 	if message == nil {
-		return []interface{}{}
+		return out
 	}
-	out := make([]interface{}, 0, 2)
-	if reasoning := strings.TrimSpace(fmt.Sprint(firstNonNil(message["reasoning_content"], message["reasoning"]))); reasoning != "" && reasoning != "<nil>" {
-		item := map[string]interface{}{
-			"id": "rs_" + randomHex(12), "type": "reasoning", "status": "completed",
-			"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": reasoning}},
+	if thoughts := interfaceSlice(message["x_grok_reasoning"]); len(thoughts) > 0 {
+		for _, raw := range thoughts {
+			item, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			copy := cloneStringInterfaceMap(item)
+			copy["id"] = "rs_" + randomHex(12)
+			copy["status"] = "completed"
+			out = append(out, copy)
 		}
-		if encrypted := strings.TrimSpace(fmt.Sprint(message["reasoning_encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
-			item["encrypted_content"] = encrypted
+	} else {
+		text := streamString(firstNonNil(message["reasoning_content"], message["reasoning"]))
+		signature := streamString(message["reasoning_encrypted_content"])
+		if text != "" || signature != "" {
+			item := map[string]interface{}{"id": "rs_" + randomHex(12), "type": "reasoning", "status": "completed", "summary": []interface{}{}}
+			if text != "" {
+				item["summary"] = []interface{}{map[string]interface{}{"type": "summary_text", "text": text}}
+			}
+			if signature != "" {
+				item["encrypted_content"] = signature
+			}
+			out = append(out, item)
+		}
+	}
+	seen := map[string]bool{}
+	for _, raw := range interfaceSlice(message["x_grok_searches"]) {
+		search, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		key := searchIdentity(search)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		item := cloneStringInterfaceMap(search)
+		if interfaceString(item["id"]) == "" {
+			item["id"] = "ws_" + randomHex(12)
 		}
 		out = append(out, item)
-	} else if encrypted := strings.TrimSpace(fmt.Sprint(message["reasoning_encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
-		out = append(out, map[string]interface{}{
-			"id": "rs_" + randomHex(12), "type": "reasoning", "status": "completed", "summary": []interface{}{}, "encrypted_content": encrypted,
-		})
 	}
 	for _, raw := range interfaceSlice(message["tool_calls"]) {
 		call, _ := raw.(map[string]interface{})
@@ -724,20 +752,15 @@ func responsesOutputFromChat(chat map[string]interface{}) []interface{} {
 			out = append(out, item)
 		}
 	}
-	text := strings.TrimSpace(fmt.Sprint(message["content"]))
-	if text != "" && text != "<nil>" {
-		part := map[string]interface{}{
-			"type":        "output_text",
-			"text":        text,
-			"annotations": firstNonNil(message["annotations"], []interface{}{}),
-		}
-		out = append(out, map[string]interface{}{
-			"id":      "msg_" + randomHex(12),
-			"type":    "message",
-			"status":  "completed",
-			"role":    "assistant",
-			"content": []interface{}{part},
-		})
+	parts := []interface{}{}
+	if text := streamString(message["content"]); text != "" {
+		parts = append(parts, map[string]interface{}{"type": "output_text", "text": text, "annotations": responseAnnotations(message["annotations"])})
+	}
+	if text := streamString(message["refusal"]); text != "" {
+		parts = append(parts, map[string]interface{}{"type": "refusal", "refusal": text})
+	}
+	if len(parts) > 0 {
+		out = append(out, map[string]interface{}{"id": "msg_" + randomHex(12), "type": "message", "status": "completed", "role": "assistant", "content": parts})
 	}
 	return out
 }
@@ -751,14 +774,14 @@ func responseFunctionCallItem(call map[string]interface{}) map[string]interface{
 	if name == "" {
 		return nil
 	}
-	args := parseLooseStringAny(fn["arguments"])
+	args := streamString(fn["arguments"])
 	if args == "" {
 		args = "{}"
 	}
 	return map[string]interface{}{
 		"id":        "fc_" + randomHex(12),
 		"type":      "function_call",
-		"call_id":   firstNonEmpty(strings.TrimSpace(fmt.Sprint(call["id"])), "call_"+randomHex(12)),
+		"call_id":   firstNonEmpty(streamString(call["id"]), "call_"+randomHex(12)),
 		"name":      name,
 		"arguments": args,
 		"status":    "completed",
@@ -767,20 +790,29 @@ func responseFunctionCallItem(call map[string]interface{}) map[string]interface{
 
 func responsesUsageFromChat(raw interface{}) map[string]interface{} {
 	usage, _ := raw.(map[string]interface{})
-	if usage == nil {
-		return map[string]interface{}{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-	}
 	input := interfaceToInt(firstNonNil(usage["prompt_tokens"], usage["input_tokens"]))
 	output := interfaceToInt(firstNonNil(usage["completion_tokens"], usage["output_tokens"]))
 	total := interfaceToInt(usage["total_tokens"])
 	if total == 0 {
 		total = input + output
 	}
-	return map[string]interface{}{
-		"input_tokens":  input,
-		"output_tokens": output,
-		"total_tokens":  total,
+	result := cloneStringInterfaceMap(usage)
+	if result == nil {
+		result = map[string]interface{}{}
 	}
+	delete(result, "prompt_tokens")
+	delete(result, "completion_tokens")
+	delete(result, "prompt_tokens_details")
+	delete(result, "completion_tokens_details")
+	result["input_tokens"] = input
+	result["output_tokens"] = output
+	result["total_tokens"] = total
+	for target, source := range map[string]string{"input_tokens_details": "prompt_tokens_details", "output_tokens_details": "completion_tokens_details"} {
+		if details, ok := firstNonNil(usage[target], usage[source]).(map[string]interface{}); ok {
+			result[target] = cloneStringInterfaceMap(details)
+		}
+	}
+	return result
 }
 
 func copyCapturedResponse(w http.ResponseWriter, rec *captureResponseWriter) {
@@ -795,279 +827,4 @@ func copyCapturedResponse(w http.ResponseWriter, rec *captureResponseWriter) {
 	}
 	w.WriteHeader(code)
 	_, _ = w.Write(rec.body.Bytes())
-}
-
-type responseStreamToolState struct {
-	itemID      string
-	callID      string
-	name        string
-	outputIndex int
-	arguments   strings.Builder
-}
-
-func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request ResponsesCreateRequest, reader io.Reader) {
-	model := request.Model
-	streamResponseHeaders(w)
-	id := "resp_" + randomHex(12)
-	messageID := "msg_" + randomHex(12)
-	reasoningID := "rs_" + randomHex(12)
-	startedMessage := false
-	startedReasoning := false
-	reasoningIndex := -1
-	messageIndex := -1
-	var text strings.Builder
-	var reasoning strings.Builder
-	var encryptedReasoning string
-	var output []interface{}
-	var usage map[string]interface{}
-	sawDone := false
-	sawMeaningful := false
-	failedCode := ""
-	failedMessage := ""
-	toolStates := make(map[int]*responseStreamToolState)
-	toolOrder := make([]int, 0)
-
-	writeSSEJSON := func(event string, payload map[string]interface{}) {
-		raw, err := json.Marshal(payload)
-		if err != nil {
-			raw = []byte(`{}`)
-		}
-		writeSSEBytes(w, event, raw)
-	}
-	createdResponse := map[string]interface{}{
-		"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "in_progress", "model": model, "output": []interface{}{},
-	}
-	if len(request.Metadata) > 0 {
-		createdResponse["metadata"] = request.Metadata
-	}
-	writeSSEJSON("response.created", map[string]interface{}{
-		"type":     "response.created",
-		"response": createdResponse,
-	})
-	closeReasoning := func() {
-		if !startedReasoning {
-			return
-		}
-		value := reasoning.String()
-		writeSSEJSON("response.reasoning_summary_text.done", map[string]interface{}{
-			"type": "response.reasoning_summary_text.done", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0, "text": value,
-		})
-		part := map[string]interface{}{"type": "summary_text", "text": value}
-		writeSSEJSON("response.reasoning_summary_part.done", map[string]interface{}{
-			"type": "response.reasoning_summary_part.done", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0, "part": part,
-		})
-		item := map[string]interface{}{"id": reasoningID, "type": "reasoning", "status": "completed", "summary": []interface{}{part}}
-		if encryptedReasoning != "" {
-			item["encrypted_content"] = encryptedReasoning
-		}
-		output[reasoningIndex] = item
-		writeSSEJSON("response.output_item.done", map[string]interface{}{
-			"type": "response.output_item.done", "output_index": reasoningIndex, "item": item,
-		})
-		startedReasoning = false
-	}
-
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" {
-			continue
-		}
-		if data == "[DONE]" {
-			sawDone = true
-			break
-		}
-		var chunk map[string]interface{}
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
-		}
-		if upstreamError, ok := chunk["error"].(map[string]interface{}); ok {
-			failedCode = firstNonEmpty(parseLooseStringAny(upstreamError["code"]), "upstream_stream_error")
-			failedMessage = firstNonEmpty(parseLooseStringAny(upstreamError["message"]), "upstream stream failed")
-			break
-		}
-		if u := responsesUsageFromChat(chunk["usage"]); interfaceToInt(u["total_tokens"]) > 0 {
-			usage = u
-		}
-		choices := interfaceSlice(chunk["choices"])
-		if len(choices) == 0 {
-			continue
-		}
-		choice, _ := choices[0].(map[string]interface{})
-		delta, _ := choice["delta"].(map[string]interface{})
-		if encrypted := strings.TrimSpace(fmt.Sprint(delta["reasoning_encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
-			sawMeaningful = true
-			if !startedReasoning {
-				startedReasoning = true
-				reasoningIndex = len(output)
-				output = append(output, nil)
-				writeSSEJSON("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": reasoningIndex,
-					"item": map[string]interface{}{"id": reasoningID, "type": "reasoning", "status": "in_progress", "summary": []interface{}{}},
-				})
-				writeSSEJSON("response.reasoning_summary_part.added", map[string]interface{}{
-					"type": "response.reasoning_summary_part.added", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0,
-					"part": map[string]interface{}{"type": "summary_text", "text": ""},
-				})
-			}
-			encryptedReasoning = encrypted
-		}
-		if value := strings.TrimSpace(fmt.Sprint(firstNonNil(delta["reasoning_content"], delta["reasoning"]))); value != "" && value != "<nil>" {
-			sawMeaningful = true
-			if !startedReasoning {
-				startedReasoning = true
-				reasoningIndex = len(output)
-				output = append(output, nil)
-				writeSSEJSON("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": reasoningIndex,
-					"item": map[string]interface{}{"id": reasoningID, "type": "reasoning", "status": "in_progress", "summary": []interface{}{}},
-				})
-				writeSSEJSON("response.reasoning_summary_part.added", map[string]interface{}{
-					"type": "response.reasoning_summary_part.added", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0,
-					"part": map[string]interface{}{"type": "summary_text", "text": ""},
-				})
-			}
-			reasoning.WriteString(value)
-			writeSSEJSON("response.reasoning_summary_text.delta", map[string]interface{}{
-				"type": "response.reasoning_summary_text.delta", "item_id": reasoningID, "output_index": reasoningIndex, "summary_index": 0, "delta": value,
-			})
-		}
-		if content, ok := delta["content"].(string); ok && content != "" {
-			sawMeaningful = true
-			closeReasoning()
-			if !startedMessage {
-				startedMessage = true
-				messageIndex = len(output)
-				output = append(output, nil)
-				writeSSEJSON("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": messageIndex,
-					"item": map[string]interface{}{"id": messageID, "type": "message", "role": "assistant", "content": []interface{}{}, "status": "in_progress"},
-				})
-				writeSSEJSON("response.content_part.added", map[string]interface{}{
-					"type": "response.content_part.added", "item_id": messageID, "output_index": messageIndex, "content_index": 0,
-					"part": map[string]interface{}{"type": "output_text", "text": "", "annotations": []interface{}{}},
-				})
-			}
-			text.WriteString(content)
-			writeSSEJSON("response.output_text.delta", map[string]interface{}{
-				"type": "response.output_text.delta", "item_id": messageID, "output_index": messageIndex, "content_index": 0, "delta": content,
-			})
-		}
-		for _, rawCall := range interfaceSlice(delta["tool_calls"]) {
-			sawMeaningful = true
-			closeReasoning()
-			call, _ := rawCall.(map[string]interface{})
-			if call == nil {
-				continue
-			}
-			callIndex := interfaceToInt(call["index"])
-			fn, _ := call["function"].(map[string]interface{})
-			state := toolStates[callIndex]
-			if state == nil {
-				callID := firstNonEmpty(parseLooseStringAny(call["id"]), "call_"+randomHex(12))
-				state = &responseStreamToolState{
-					itemID: "fc_" + randomHex(12), callID: callID,
-					name: firstNonEmpty(parseLooseStringAny(fn["name"]), "tool"), outputIndex: len(output),
-				}
-				toolStates[callIndex] = state
-				toolOrder = append(toolOrder, callIndex)
-				output = append(output, nil)
-				writeSSEJSON("response.output_item.added", map[string]interface{}{
-					"type": "response.output_item.added", "output_index": state.outputIndex,
-					"item": map[string]interface{}{"id": state.itemID, "type": "function_call", "call_id": state.callID, "name": state.name, "arguments": "", "status": "in_progress"},
-				})
-			}
-			if id := parseLooseStringAny(call["id"]); id != "" {
-				state.callID = id
-			}
-			if name := parseLooseStringAny(fn["name"]); name != "" {
-				state.name = name
-			}
-			if fragment, ok := fn["arguments"].(string); ok && fragment != "" {
-				state.arguments.WriteString(fragment)
-				writeSSEJSON("response.function_call_arguments.delta", map[string]interface{}{
-					"type": "response.function_call_arguments.delta", "item_id": state.itemID, "output_index": state.outputIndex, "delta": fragment,
-				})
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		failedCode = "stream_read_error"
-		failedMessage = "chat stream read error"
-	}
-	if failedCode == "" && !sawDone {
-		failedCode = "upstream_stream_incomplete"
-		failedMessage = "chat stream ended before [DONE]"
-	}
-	if failedCode == "" && !sawMeaningful {
-		failedCode = "empty_upstream_stream"
-		failedMessage = "chat stream completed without output"
-	}
-	if failedCode != "" {
-		writeSSEJSON("response.failed", map[string]interface{}{
-			"type":     "response.failed",
-			"response": map[string]interface{}{"id": id, "object": "response", "status": "failed", "model": model, "error": map[string]interface{}{"code": failedCode, "message": failedMessage}},
-		})
-		writeSSEBytes(w, "", []byte("[DONE]"))
-		return
-	}
-	closeReasoning()
-	for _, callIndex := range toolOrder {
-		state := toolStates[callIndex]
-		if state == nil || strings.TrimSpace(state.name) == "" {
-			continue
-		}
-		arguments := state.arguments.String()
-		if strings.TrimSpace(arguments) == "" {
-			arguments = "{}"
-		}
-		item := map[string]interface{}{
-			"id": state.itemID, "type": "function_call", "call_id": state.callID,
-			"name": state.name, "arguments": arguments, "status": "completed",
-		}
-		output[state.outputIndex] = item
-		writeSSEJSON("response.function_call_arguments.done", map[string]interface{}{
-			"type": "response.function_call_arguments.done", "item_id": state.itemID, "output_index": state.outputIndex, "arguments": arguments,
-		})
-		writeSSEJSON("response.output_item.done", map[string]interface{}{
-			"type": "response.output_item.done", "output_index": state.outputIndex, "item": item,
-		})
-	}
-	if startedMessage {
-		fullText := text.String()
-		part := map[string]interface{}{"type": "output_text", "text": fullText, "annotations": []interface{}{}}
-		msg := map[string]interface{}{"id": messageID, "type": "message", "status": "completed", "role": "assistant", "content": []interface{}{part}}
-		output[messageIndex] = msg
-		writeSSEJSON("response.output_text.done", map[string]interface{}{
-			"type": "response.output_text.done", "item_id": messageID, "output_index": messageIndex, "content_index": 0, "text": fullText,
-		})
-		writeSSEJSON("response.content_part.done", map[string]interface{}{
-			"type": "response.content_part.done", "item_id": messageID, "output_index": messageIndex, "content_index": 0, "part": part,
-		})
-		writeSSEJSON("response.output_item.done", map[string]interface{}{
-			"type": "response.output_item.done", "output_index": messageIndex, "item": msg,
-		})
-	}
-	if usage == nil {
-		usage = map[string]interface{}{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-	}
-	completedResponse := map[string]interface{}{
-		"id": id, "object": "response", "created_at": time.Now().Unix(), "status": "completed", "model": model, "output": output, "usage": usage,
-	}
-	if len(request.Metadata) > 0 {
-		completedResponse["metadata"] = request.Metadata
-	}
-	if strings.TrimSpace(request.Truncation) != "" {
-		completedResponse["truncation"] = request.Truncation
-	}
-	writeSSEJSON("response.completed", map[string]interface{}{
-		"type":     "response.completed",
-		"response": completedResponse,
-	})
-	writeSSEBytes(w, "", []byte("[DONE]"))
 }

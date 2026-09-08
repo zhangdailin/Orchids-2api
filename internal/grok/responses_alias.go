@@ -1,11 +1,10 @@
 package grok
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/goccy/go-json"
 )
@@ -17,8 +16,9 @@ const maxBuildAliasResponseBytes = 128 << 20
 // API boundary.
 func rewriteBuildToolAliasResponse(source io.ReadCloser, contentType string, aliases map[string]buildToolAliasIdentity) io.ReadCloser {
 	reader, writer := io.Pipe()
+	closed := &sourceClosingPipe{PipeReader: reader, source: source}
 	go func() {
-		defer source.Close()
+		defer closed.closeSource()
 		var err error
 		if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 			err = rewriteBuildToolAliasSSE(writer, source, aliases)
@@ -27,8 +27,17 @@ func rewriteBuildToolAliasResponse(source io.ReadCloser, contentType string, ali
 		}
 		_ = writer.CloseWithError(err)
 	}()
-	return reader
+	return closed
 }
+
+type sourceClosingPipe struct {
+	*io.PipeReader
+	source io.Closer
+	once   sync.Once
+}
+
+func (r *sourceClosingPipe) closeSource() { r.once.Do(func() { _ = r.source.Close() }) }
+func (r *sourceClosingPipe) Close() error { err := r.PipeReader.Close(); r.closeSource(); return err }
 
 func rewriteBuildToolAliasJSONBody(dst io.Writer, source io.Reader, aliases map[string]buildToolAliasIdentity) error {
 	raw, err := io.ReadAll(io.LimitReader(source, maxBuildAliasResponseBytes+1))
@@ -44,120 +53,63 @@ func rewriteBuildToolAliasJSONBody(dst io.Writer, source io.Reader, aliases map[
 }
 
 func rewriteBuildToolAliasSSE(dst io.Writer, source io.Reader, aliases map[string]buildToolAliasIdentity) error {
-	reader := bufio.NewReaderSize(source, 64*1024)
-	state := &buildToolAliasStreamState{calls: map[string]*buildToolAliasStreamCall{}}
-	var block bytes.Buffer
-	for {
-		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
-			block.WriteString(line)
-			if strings.TrimSpace(line) == "" {
-				converted, emit := rewriteBuildToolAliasSSEBlock(block.String(), aliases, state)
-				block.Reset()
-				if emit {
-					if _, writeErr := io.WriteString(dst, converted); writeErr != nil {
-						return writeErr
-					}
-				}
+	calls := map[string]*strings.Builder{}
+	return consumeCompatibleSSE(source, func(frame compatibleSSEEvent) error {
+		if !frame.HasData() || string(frame.Data()) == "[DONE]" {
+			return frame.writeTo(dst)
+		}
+		var payload map[string]interface{}
+		if json.Unmarshal(frame.Data(), &payload) != nil || payload == nil {
+			return frame.writeTo(dst)
+		}
+		kind := firstNonEmpty(interfaceString(payload["type"]), frame.Event)
+		item, _ := payload["item"].(map[string]interface{})
+		id, callID := interfaceString(item["id"]), interfaceString(item["call_id"])
+		if identity, ok := aliases[interfaceString(item["name"])]; ok && identity.Kind == "tool_search" {
+			call := calls[firstNonEmpty(id, callID)]
+			if call == nil {
+				call = &strings.Builder{}
+			}
+			if id != "" {
+				calls[id] = call
+			}
+			if callID != "" {
+				calls[callID] = call
 			}
 		}
-		if err != nil {
-			if err == io.EOF {
-				if block.Len() > 0 {
-					converted, emit := rewriteBuildToolAliasSSEBlock(block.String(), aliases, state)
-					if emit {
-						_, err = io.WriteString(dst, converted)
+		if call := calls[firstNonEmpty(interfaceString(payload["item_id"]), interfaceString(payload["call_id"]))]; call != nil {
+			switch kind {
+			case "response.function_call_arguments.delta", "response.function_call_arguments.done":
+				value := streamString(payload["delta"])
+				if kind == "response.function_call_arguments.done" {
+					value = streamString(payload["arguments"])
+					if value != "" {
+						call.Reset()
 					}
 				}
-				return err
+				if call.Len()+len(value) > upstreamMaxEventBytes {
+					return fmt.Errorf("tool search arguments exceed 8 MiB")
+				}
+				call.WriteString(value)
+				return nil // Internal search arguments become one public tool_search_call.
 			}
+		}
+		if kind == "response.output_item.done" {
+			if call := calls[firstNonEmpty(id, callID)]; call != nil && call.Len() > 0 && interfaceString(item["arguments"]) == "" {
+				item["arguments"] = call.String()
+			}
+			delete(calls, id)
+			delete(calls, callID)
+		}
+		restoreBuildVisibleTools(payload, aliases)
+		rewriteBuildToolAliasValue(payload, aliases)
+		converted, err := json.Marshal(payload)
+		if err != nil {
 			return err
 		}
-	}
-}
-
-type buildToolAliasStreamCall struct {
-	arguments strings.Builder
-}
-
-type buildToolAliasStreamState struct {
-	calls map[string]*buildToolAliasStreamCall
-}
-
-func rewriteBuildToolAliasSSEBlock(block string, aliases map[string]buildToolAliasIdentity, state *buildToolAliasStreamState) (string, bool) {
-	if strings.TrimSpace(block) == "" {
-		return block, true
-	}
-	lines := strings.Split(strings.ReplaceAll(block, "\r\n", "\n"), "\n")
-	eventType := ""
-	dataIndex := -1
-	dataPrefix := "data: "
-	for index, line := range lines {
-		if strings.HasPrefix(line, "event:") {
-			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-		}
-		if dataIndex < 0 && strings.HasPrefix(line, "data:") {
-			dataIndex = index
-			prefixEnd := len("data:")
-			for prefixEnd < len(line) && (line[prefixEnd] == ' ' || line[prefixEnd] == '\t') {
-				prefixEnd++
-			}
-			dataPrefix = line[:prefixEnd]
-		}
-	}
-	if dataIndex < 0 {
-		return strings.Join(lines, "\n"), true
-	}
-	data := strings.TrimSpace(strings.TrimPrefix(lines[dataIndex], "data:"))
-	if data == "" || data == "[DONE]" {
-		return strings.Join(lines, "\n"), true
-	}
-	var payload map[string]interface{}
-	if json.Unmarshal([]byte(data), &payload) != nil {
-		return strings.Join(lines, "\n"), true
-	}
-	if eventType == "" {
-		eventType = strings.TrimSpace(fmt.Sprint(payload["type"]))
-	}
-	if item, _ := payload["item"].(map[string]interface{}); item != nil {
-		alias := strings.TrimSpace(fmt.Sprint(item["name"]))
-		if identity, ok := aliases[alias]; ok && identity.Kind == "tool_search" {
-			id := firstNonEmpty(parseLooseStringAny(item["id"]), parseLooseStringAny(item["call_id"]))
-			if id != "" {
-				state.calls[id] = &buildToolAliasStreamCall{}
-			}
-		}
-	}
-	itemID := firstNonEmpty(parseLooseStringAny(payload["item_id"]), parseLooseStringAny(payload["call_id"]))
-	if call := state.calls[itemID]; call != nil {
-		switch eventType {
-		case "response.function_call_arguments.delta":
-			call.arguments.WriteString(parseLooseStringAny(payload["delta"]))
-			return "", false
-		case "response.function_call_arguments.done":
-			if arguments := parseLooseStringAny(payload["arguments"]); arguments != "" {
-				call.arguments.Reset()
-				call.arguments.WriteString(arguments)
-			}
-			return "", false
-		}
-	}
-	if eventType == "response.output_item.done" {
-		if item, _ := payload["item"].(map[string]interface{}); item != nil {
-			id := firstNonEmpty(parseLooseStringAny(item["id"]), parseLooseStringAny(item["call_id"]))
-			if call := state.calls[id]; call != nil && call.arguments.Len() > 0 && parseLooseStringAny(item["arguments"]) == "" {
-				item["arguments"] = call.arguments.String()
-			}
-		}
-	}
-	restoreBuildVisibleTools(payload, aliases)
-	rewriteBuildToolAliasValue(payload, aliases)
-	converted, err := json.Marshal(payload)
-	if err != nil {
-		return strings.Join(lines, "\n"), true
-	}
-	lines[dataIndex] = dataPrefix + string(converted)
-	return strings.Join(lines, "\n"), true
+		frame.data = []string{string(converted)}
+		return frame.writeTo(dst)
+	})
 }
 
 func rewriteBuildToolAliasesJSON(raw []byte, aliases map[string]buildToolAliasIdentity) []byte {

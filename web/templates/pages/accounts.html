@@ -63,7 +63,7 @@
 
         <div class="toolbar-actions toolbar-actions-spread">
           <div class="inline-actions">
-            <button class="btn btn-outline" onclick="exportAccounts()">导出</button>
+            <button class="btn btn-outline" onclick="exportAccounts()" title="不包含 Warp 登录会话；迁移后请重新进行官方网页登录">导出（不含 Warp）</button>
           </div>
           <div class="toolbar-divider"></div>
           <div class="inline-actions">
@@ -109,8 +109,9 @@
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v=20260825-3"></script>
-  <script src="{{.AdminPath}}/js/accounts.js?v=20260825-5"></script>
+  <script src="{{.AdminPath}}/js/common.js?v=20260908-1"></script>
+  <script src="{{.AdminPath}}/js/puter-auth.js?v=20260908-1"></script>
+  <script src="{{.AdminPath}}/js/accounts.js?v=20260908-1"></script>
 </body>
 
 </html>

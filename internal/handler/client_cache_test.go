@@ -27,7 +27,6 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 		config:       cfg,
 		clientCache:  newAccountClientCache(),
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
-		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
 	}
 
 	created := 0
@@ -78,7 +77,6 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 		config:       cfg,
 		clientCache:  newAccountClientCache(),
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
-		dedupStore:   NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
 	}
 
 	created := 0

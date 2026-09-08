@@ -2,9 +2,13 @@ package grok
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
+
+	"orchids-api/internal/store"
 )
 
 // tokenBucket is a simple thread-safe token bucket rate limiter.
@@ -29,6 +33,9 @@ func newTokenBucket(ratePerSec, burst float64) *tokenBucket {
 // Returns nil if a token was acquired, or ctx.Err() if cancelled.
 func (tb *tokenBucket) wait(ctx context.Context) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		tb.mu.Lock()
 		now := time.Now()
 		elapsed := now.Sub(tb.lastUpdate).Seconds()
@@ -62,29 +69,96 @@ func (tb *tokenBucket) wait(ctx context.Context) error {
 	}
 }
 
-// endpointRateLimiters holds per-endpoint token buckets.
+// Optional pacing buckets contain credential fingerprints, never credentials.
 var (
 	endpointRateLimiters  = map[string]*tokenBucket{}
 	endpointRateLimiterMu sync.Mutex
 )
 
-func init() {
-	// App Chat API: 5 RPS with burst 10 (generous, adjust as needed).
-	endpointRateLimiters["grok.com"] = newTokenBucket(5, 10)
+type rateLimitAccountContextKey struct{}
+
+func withRateLimitAccount(ctx context.Context, acc *store.Account) context.Context {
+	if acc == nil {
+		return ctx
+	}
+	identity := ""
+	if acc.TeamID != "" {
+		identity = "team:" + acc.TeamID
+	}
+	if identity == "" && acc.ID != 0 {
+		identity = fmt.Sprintf("account:%d", acc.ID)
+	}
+	return context.WithValue(ctx, rateLimitAccountContextKey{}, identity)
 }
 
-// rateLimitEndpoint blocks until it is safe to call the given endpoint URL.
-// The endpoint is identified by a key: "grok.com" or "grok.com/rate-limits".
-func rateLimitEndpoint(ctx context.Context, endpointKey string) error {
+func rateLimitIdentity(ctx context.Context, token string) string {
+	if identity, _ := ctx.Value(rateLimitAccountContextKey{}).(string); identity != "" {
+		return identity
+	}
+	return "token:" + dpopCacheKey(token)
+}
+
+func waitScopedRateLimit(ctx context.Context, provider, token, model string, rate float64) error {
+	identity := provider + ":" + rateLimitIdentity(ctx, token)
+	for _, scope := range []RateLimitScope{RateLimitScopeRPS, RateLimitScopeRPM} {
+		for _, target := range uniqueStrings([]string{model, "*"}) {
+			if err := teamCooldown.Wait(ctx, scope, identity, target); err != nil {
+				return err
+			}
+		}
+	}
+	if rate <= 0 {
+		return ctx.Err()
+	}
+	endpointKey := identity
 	endpointRateLimiterMu.Lock()
 	tb := endpointRateLimiters[endpointKey]
-	endpointRateLimiterMu.Unlock()
-	if tb == nil {
-		return nil
+	if tb == nil || tb.rate != rate {
+		if len(endpointRateLimiters) >= teamCooldownMaxSize {
+			// Evict only an idle bucket; never split an active account's limiter.
+			for key, candidate := range endpointRateLimiters {
+				candidate.mu.Lock()
+				idle := time.Since(candidate.lastUpdate) > time.Minute
+				candidate.mu.Unlock()
+				if idle {
+					delete(endpointRateLimiters, key)
+					break
+				}
+			}
+			if len(endpointRateLimiters) >= teamCooldownMaxSize {
+				endpointRateLimiterMu.Unlock()
+				return fmt.Errorf("grok pacing registry capacity reached")
+			}
+		}
+		tb = newTokenBucket(rate, 1)
+		endpointRateLimiters[endpointKey] = tb
 	}
+	endpointRateLimiterMu.Unlock()
 	if err := tb.wait(ctx); err != nil {
 		return err
 	}
 	slog.Debug("Rate limiter: token acquired", "endpoint", endpointKey)
 	return nil
+}
+
+func noteScopedRateLimit(ctx context.Context, provider, token, model string, status int, header http.Header, body []byte) *RateLimitMetadata {
+	if status != http.StatusTooManyRequests {
+		return nil
+	}
+	meta := RateLimitFromResponse(status, header, body)
+	if meta == nil {
+		meta = &RateLimitMetadata{Scope: RateLimitScopeRPM, RetryAfter: time.Minute}
+	}
+	if retry := parseRetryAfterHeader(header.Get("Retry-After"), time.Now()); retry > 0 {
+		meta.RetryAfter = retry
+	}
+	identity := provider + ":" + rateLimitIdentity(ctx, token)
+	for _, target := range uniqueStrings([]string{firstNonEmpty(model, meta.Model, "*"), meta.Model}) {
+		teamCooldown.Note(meta.Scope, identity, target, meta.RetryAfter)
+		if meta.TeamID != "" {
+			teamCooldown.Note(meta.Scope, provider+":team:"+meta.TeamID, target, meta.RetryAfter)
+		}
+	}
+	recordTeamCooldownHit(meta)
+	return meta
 }

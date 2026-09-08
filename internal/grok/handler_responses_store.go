@@ -1,7 +1,6 @@
 package grok
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -18,9 +17,14 @@ import (
 )
 
 const defaultStoredResponseTTL = 30 * 24 * time.Hour
-const maxStoredResponseIDCaptureBytes = 4 << 20
 
 func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Request, modelID string, spec ModelSpec, payload map[string]interface{}, upstreamPath string, saveOwnership bool) {
+	spec.Upstream, spec.ConsoleModel = UpstreamCLI, ""
+	started := time.Now()
+	if err := validatePayloadReasoning(payload); err != nil {
+		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
 	toolAliases := collectBuildToolAliases(payload)
 	if err := normalizeBuildResponsesPayload(payload); err != nil {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -78,28 +82,6 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		writeResponsesAPIError(w, upstreamHTTPResponseStatus(err), "upstream_error", err.Error())
 		return
 	}
-	if !pinned {
-		streaming, _ := payload["stream"].(bool)
-		qualityReq := &ChatCompletionsRequest{Stream: streaming, ResponsesTools: interfaceMaps(payload["tools"])}
-		if reasoning, _ := payload["reasoning"].(map[string]interface{}); reasoning != nil {
-			qualityReq.ReasoningEffort = responsesReasoningEffort(reasoning)
-		}
-		stored, _ := payload["store"].(bool)
-		qualityEligible := upstreamPath == "/responses" && previousID == "" && !stored
-		if qualityEligible && responseRequiresThinking(spec, qualityReq) {
-			resp, err = h.retryMissingThinking(r.Context(), sess, resp, ProviderBuild,
-				func(exclude []int64) (*chatAccountSession, error) {
-					return h.openCLIAccountSession(r.Context(), exclude, spec.UpstreamModel)
-				},
-				func() (*http.Response, error) {
-					return h.cliClient.doResponsesAt(r.Context(), sess.acc, upstreamPath, payload)
-				})
-			if err != nil {
-				writeResponsesAPIError(w, upstreamHTTPResponseStatus(err), "upstream_error", err.Error())
-				return
-			}
-		}
-	}
 	defer resp.Body.Close()
 	h.syncGrokQuota(sess.acc, resp.Header)
 	copyNativeCLIResponseHeaders(w.Header(), resp.Header)
@@ -114,15 +96,15 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		defer rewritten.Close()
 		responseBody = rewritten
 	}
-	responseID, captured := copyNativeCLIResponseAndCaptureModel(w, responseBody, resp.Header.Get("Content-Type"), modelID)
-	h.auditRequest(r.Context(), sess.acc, ProviderBuild, modelID, fmt.Sprint(resp.StatusCode), usageFromCapturedResponse(captured))
-	if session := sessionFromContext(r.Context()); session.Replay && len(captured) > 0 {
+	responseID, captured, result := copyNativeCLIResponseAndCaptureModel(w, responseBody, resp.Header.Get("Content-Type"), modelID)
+	h.auditChatOutcome(r.Context(), sess.acc, &ChatCompletionsRequest{Model: modelID, startedAt: started}, result)
+	if session := sessionFromContext(r.Context()); session.Replay && len(captured) > 0 && result.Err == nil {
 		if encrypted := encryptedReasoningFromResponse(captured); encrypted != "" {
 			h.storeReasoningReplay(modelID, session.Key, encrypted)
 		}
 	}
 
-	if !saveOwnership || ownerHash == "" || responseID == "" || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if !saveOwnership || ownerHash == "" || responseID == "" || resp.StatusCode < 200 || resp.StatusCode >= 300 || result.Err != nil {
 		return
 	}
 	if err := h.saveStoredResponse(r, &store.StoredResponse{
@@ -134,37 +116,6 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	}); err != nil {
 		slog.Error("failed to save response ownership", "response_id", responseID, "account_id", sess.acc.ID, "error", err)
 	}
-}
-
-func usageFromCapturedResponse(data []byte) map[string]interface{} {
-	if len(data) == 0 {
-		return nil
-	}
-	var payload map[string]interface{}
-	if json.Unmarshal(data, &payload) == nil {
-		usage, _ := payload["usage"].(map[string]interface{})
-		return usage
-	}
-	var latest map[string]interface{}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "data:"))
-		if line == "" || line == "[DONE]" {
-			continue
-		}
-		var event map[string]interface{}
-		if json.Unmarshal([]byte(line), &event) != nil {
-			continue
-		}
-		if response, _ := event["response"].(map[string]interface{}); response != nil {
-			if usage, _ := response["usage"].(map[string]interface{}); usage != nil {
-				latest = usage
-			}
-		}
-		if usage, _ := event["usage"].(map[string]interface{}); usage != nil {
-			latest = usage
-		}
-	}
-	return latest
 }
 
 // HandleResponsesCompact forwards the native Build Responses compaction API.
@@ -297,134 +248,123 @@ func responseIDFromResourcePath(path string) string {
 	return strings.TrimSpace(decoded)
 }
 
-func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader, contentType, model string) (string, []byte) {
+func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader, contentType, model string) (responseID string, captured []byte, result chatOutcome) {
 	fullCapture := newBoundedResponseCapture(8 << 20)
-	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		capture := newBoundedResponseCapture(maxStoredResponseIDCaptureBytes)
-		if _, err := io.Copy(io.MultiWriter(w, capture, fullCapture), body); err != nil || capture.overflow {
-			return "", fullCapture.data
+	defer func() {
+		captured = fullCapture.data
+		if result.Err != nil {
+			result.Finish = "error"
 		}
-		return responseIDFromJSON(capture.data), fullCapture.data
+	}()
+	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		if _, result.Err = io.Copy(io.MultiWriter(w, fullCapture), body); result.Err != nil {
+			return
+		}
+		if fullCapture.overflow {
+			result.Err = fmt.Errorf("response audit JSON exceeded capture limit")
+			return
+		}
+		var response map[string]interface{}
+		if result.Err = json.Unmarshal(fullCapture.data, &response); result.Err != nil {
+			return
+		}
+		if response == nil {
+			result.Err = fmt.Errorf("invalid upstream response JSON")
+			return
+		}
+		responseID = interfaceString(response["id"])
+		result.Usage = consoleUsage(response)
+		result.Finish, result.Err = responseTerminalFinish("", response)
+		return
 	}
 
-	reader := bufio.NewReaderSize(body, 64*1024)
-	responseID := ""
 	flusher, _ := w.(http.Flusher)
-	line := newBoundedResponseCapture(maxStoredResponseIDCaptureBytes)
-	var contentLoopGuard, reasoningLoopGuard streamLoopGuard
-	terminal := false
-	done := false
-	readFailed := false
-	for {
-		fragment, err := reader.ReadSlice('\n')
-		if len(fragment) > 0 {
-			_, _ = w.Write(fragment)
-			_, _ = line.Write(fragment)
-			_, _ = fullCapture.Write(fragment)
-			if flusher != nil {
-				flusher.Flush()
+	target := io.MultiWriter(w, fullCapture)
+	terminal, done := false, false
+	failureCode, failureMessage := "", ""
+	err := consumeCompatibleSSE(body, func(frame compatibleSSEEvent) error {
+		var event map[string]interface{}
+		kind := ""
+		if frame.HasData() {
+			data := frame.Data()
+			if string(data) == "[DONE]" {
+				done = true
+				return io.EOF
 			}
-		}
-		if err == bufio.ErrBufferFull {
-			continue
-		}
-		if !line.overflow {
-			if id := responseIDFromSSELine(line.data); id != "" {
+			if err := json.Unmarshal(data, &event); err != nil || event == nil {
+				failureCode, failureMessage = "invalid_upstream_event", "upstream response event is not a JSON object"
+				return fmt.Errorf("%s", failureMessage)
+			}
+			kind = firstNonEmpty(interfaceString(event["type"]), frame.Event)
+			response, _ := event["response"].(map[string]interface{})
+			if id := interfaceString(response["id"]); id != "" {
 				responseID = id
 			}
-			eventType, isDone := nativeResponseTerminalFromSSELine(line.data)
-			if eventType == "response.completed" || eventType == "response.failed" || eventType == "response.incomplete" {
-				terminal = true
-			}
-			if isDone {
-				done = true
-			}
-			content, reasoning := nativeResponseLoopDeltas(line.data)
-			if contentLoopGuard.Add(content) || reasoningLoopGuard.Add(reasoning) {
-				failure, _ := json.Marshal(map[string]interface{}{
-					"type": "response.failed", "response": map[string]interface{}{
-						"id": responseID, "object": "response", "status": "failed",
-						"error": map[string]interface{}{"code": "upstream_repetition_loop", "message": "upstream repetition loop detected"},
-					},
-				})
-				writeSSEBytes(w, "response.failed", failure)
-				writeSSEBytes(w, "", []byte("[DONE]"))
-				terminal = true
-				done = true
-				break
-			}
 		}
-		line.Reset()
-		if err != nil {
-			readFailed = err != io.EOF
-			break
+		if err := frame.writeTo(target); err != nil {
+			result.Err = err
+			return err
 		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		if usage := consoleUsageFromStreamEvent(event); len(usage) > 0 {
+			result.Usage = usage
+		}
+		item, _ := event["item"].(map[string]interface{})
+		meaningful := strings.HasSuffix(kind, ".delta") && streamString(event["delta"]) != ""
+		toolStart := kind == "response.output_item.added" && interfaceString(item["type"]) == "function_call" && interfaceString(item["name"]) != ""
+		if result.FirstToken.IsZero() && (meaningful || toolStart) {
+			result.FirstToken = time.Now()
+		}
+		switch kind {
+		case "response.completed", "response.failed", "response.incomplete", "error":
+			response, _ := event["response"].(map[string]interface{})
+			if response == nil {
+				response = event
+			}
+			result.Finish, result.Err = responseTerminalFinish(kind, response)
+			terminal = true
+			return io.EOF // A logical terminal must not wait for the socket to close.
+		}
+		return nil
+	})
+	if !terminal && result.Err != nil {
+		return
 	}
 	if !terminal {
-		code := "upstream_stream_incomplete"
-		message := "upstream stream ended before a terminal response event"
-		if readFailed {
-			code = "stream_read_error"
-			message = "upstream response stream could not be read"
-		} else if done {
-			code = "upstream_terminal_missing"
-			message = "upstream sent [DONE] without a terminal response event"
+		if failureCode == "" {
+			failureCode, failureMessage = "upstream_stream_incomplete", "upstream stream ended before a terminal response event"
+			if err != nil && err != io.EOF {
+				failureCode, failureMessage = "stream_read_error", "upstream response stream could not be read"
+			} else if done {
+				failureCode, failureMessage = "upstream_terminal_missing", "upstream sent [DONE] without a terminal response event"
+			}
+		}
+		result.Err = fmt.Errorf("%s", failureMessage)
+		if err != nil && err != io.EOF {
+			result.Err = fmt.Errorf("%s: %w", failureMessage, err)
 		}
 		failure, _ := json.Marshal(map[string]interface{}{
 			"type": "response.failed", "response": map[string]interface{}{
 				"id": responseID, "object": "response", "status": "failed", "model": model,
-				"error": map[string]interface{}{"code": code, "message": message},
+				"error": map[string]interface{}{"code": failureCode, "message": failureMessage},
 			},
 		})
-		writeSSEBytes(w, "response.failed", failure)
-		if !done {
-			writeSSEBytes(w, "", []byte("[DONE]"))
+		frame := compatibleSSEEvent{Event: "response.failed", data: []string{string(failure)}}
+		if err := frame.writeTo(target); err != nil {
+			result.Err = err
+			return
 		}
-		_, _ = fullCapture.Write([]byte("event: response.failed\ndata: "))
-		_, _ = fullCapture.Write(failure)
-		_, _ = fullCapture.Write([]byte("\n\ndata: [DONE]\n\n"))
 	}
-	return responseID, fullCapture.data
-}
-
-func nativeResponseTerminalFromSSELine(line []byte) (string, bool) {
-	trimmed := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(trimmed, "data:") {
-		return "", false
+	// Emit exactly one DONE, after the terminal (including a synthesized failure).
+	if err := (compatibleSSEEvent{data: []string{"[DONE]"}}).writeTo(target); err != nil {
+		result.Err = err
 	}
-	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-	if payload == "[DONE]" {
-		return "", true
+	if flusher != nil {
+		flusher.Flush()
 	}
-	var event map[string]interface{}
-	if json.Unmarshal([]byte(payload), &event) != nil {
-		return "", false
-	}
-	return strings.TrimSpace(fmt.Sprint(event["type"])), false
-}
-
-func nativeResponseLoopDeltas(line []byte) (content, reasoning string) {
-	trimmed := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(trimmed, "data:") {
-		return "", ""
-	}
-	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-	if payload == "" || payload == "[DONE]" {
-		return "", ""
-	}
-	var event map[string]interface{}
-	if json.Unmarshal([]byte(payload), &event) != nil {
-		return "", ""
-	}
-	typeName := strings.ToLower(strings.TrimSpace(fmt.Sprint(event["type"])))
-	delta, _ := event["delta"].(string)
-	if strings.Contains(typeName, "reasoning") || strings.Contains(typeName, "thinking") {
-		return "", delta
-	}
-	if strings.Contains(typeName, "output_text") || strings.Contains(typeName, "content") {
-		return delta, ""
-	}
-	return "", ""
+	return
 }
 
 type boundedResponseCapture struct {
@@ -449,36 +389,6 @@ func (c *boundedResponseCapture) Write(p []byte) (int, error) {
 		c.overflow = true
 	}
 	return len(p), nil
-}
-
-func (c *boundedResponseCapture) Reset() {
-	c.data = c.data[:0]
-	c.overflow = false
-}
-
-func responseIDFromSSELine(line []byte) string {
-	trimmed := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(trimmed, "data:") {
-		return ""
-	}
-	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-	if payload == "" || payload == "[DONE]" {
-		return ""
-	}
-	return responseIDFromJSON([]byte(payload))
-}
-
-func responseIDFromJSON(raw []byte) string {
-	var payload map[string]interface{}
-	if json.Unmarshal(raw, &payload) != nil {
-		return ""
-	}
-	if response, _ := payload["response"].(map[string]interface{}); response != nil {
-		if id := strings.TrimSpace(parseLooseStringAny(response["id"])); id != "" {
-			return id
-		}
-	}
-	return strings.TrimSpace(parseLooseStringAny(payload["id"]))
 }
 
 func writeResponsesAPIError(w http.ResponseWriter, status int, code, message string) {

@@ -130,6 +130,7 @@ func registerRoutes(
 	// Admin routes under /api/* only (no dual prefix)
 	mux.HandleFunc("/api/accounts", sessionAuth(apiHandler.HandleAccounts))
 	mux.HandleFunc("/api/accounts/", sessionAuth(apiHandler.HandleAccountByID))
+	mux.HandleFunc("/api/puter/web-login", sessionAuth(apiHandler.HandlePuterWebLogin))
 	mux.HandleFunc("/api/warp/device-auth", sessionAuth(apiHandler.HandleWarpDeviceAuthorization))
 	mux.HandleFunc("/api/warp/device-auth/", sessionAuth(apiHandler.HandleWarpDeviceAuthorization))
 	mux.HandleFunc("/api/grok/device-auth", sessionAuth(apiHandler.HandleGrokDeviceAuthorization))

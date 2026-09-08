@@ -270,13 +270,10 @@ func formatToolHistory(messages []ChatMessage) []ChatMessage {
 			}
 			out = append(out, ChatMessage{
 				Role:    "assistant",
-				Content: strings.Join(parts, "\n"),
+				Content: toolHistoryContentWithImages(strings.Join(parts, "\n"), msg.Content),
 			})
 		case role == "tool":
 			content := strings.TrimSpace(extractContentText(msg.Content))
-			if content == "" {
-				content = strings.TrimSpace(fmt.Sprint(msg.Content))
-			}
 			name := strings.TrimSpace(msg.Name)
 			if name == "" {
 				name = "unknown"
@@ -284,13 +281,28 @@ func formatToolHistory(messages []ChatMessage) []ChatMessage {
 			callID := strings.TrimSpace(msg.ToolCallID)
 			out = append(out, ChatMessage{
 				Role:    "user",
-				Content: strings.TrimSpace(fmt.Sprintf("tool (%s, %s): %s", name, callID, content)),
+				Content: toolHistoryContentWithImages(strings.TrimSpace(fmt.Sprintf("tool (%s, %s): %s", name, callID, content)), msg.Content),
 			})
 		default:
 			out = append(out, msg)
 		}
 	}
 	return out
+}
+
+// Web emulates tool history in text, but images must remain attachments rather
+// than becoming a printed Go map (or disappearing from assistant history).
+func toolHistoryContentWithImages(text string, original interface{}) interface{} {
+	parts := []interface{}{map[string]interface{}{"type": "text", "text": text}}
+	for _, part := range interfaceMaps(original) {
+		if parseLooseStringAny(part["type"]) == "image_url" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 1 {
+		return text
+	}
+	return parts
 }
 
 func (p toolCallParser) parseCalls(content string) (string, []map[string]interface{}) {

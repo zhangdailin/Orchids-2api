@@ -260,6 +260,13 @@ func (c *Client) doConsoleDPoPRequest(ctx context.Context, token, method, endpoi
 // the DPoP retry rules used by Responses. Voice endpoints need to override the
 // request Content-Type for multipart STT and the response Accept type for TTS.
 func (c *Client) doConsoleDPoPRequestWithHeaders(ctx context.Context, token, method, endpoint string, body []byte, overrides http.Header) (*http.Response, error) {
+	var payload struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &payload)
+	if err := waitScopedRateLimit(ctx, ProviderConsole, token, payload.Model, c.cfg.GrokRequestsPerSecond(ProviderConsole)); err != nil {
+		return nil, err
+	}
 	for attempt := 0; attempt < 2; attempt++ {
 		session, cacheKey, err := c.dpopSession(ctx, token)
 		if err != nil {
@@ -280,12 +287,10 @@ func (c *Client) doConsoleDPoPRequestWithHeaders(ctx context.Context, token, met
 		if err := applyDPoPAuthorization(req, session); err != nil {
 			return nil, err
 		}
-		resp, err := c.httpClient.Do(req)
+		client := *c.httpClient
+		client.Timeout = c.cfg.GrokRequestTimeout(ProviderConsole)
+		resp, err := doUpstreamHTTP(req, client.Do, c.cfg.GrokStreamIdleTimeout())
 		if err != nil {
-			return nil, err
-		}
-		if err := decodeHTTPResponseBody(resp); err != nil {
-			resp.Body.Close()
 			return nil, err
 		}
 		if resp.StatusCode == http.StatusOK {
@@ -293,7 +298,7 @@ func (c *Client) doConsoleDPoPRequestWithHeaders(ctx context.Context, token, met
 		}
 		raw, headerCopy := readBoundedResponse(resp)
 		if resp.StatusCode == http.StatusTooManyRequests {
-			noteTeamRateLimit(resp.StatusCode, resp.Header, raw)
+			noteScopedRateLimit(ctx, ProviderConsole, token, payload.Model, resp.StatusCode, resp.Header, raw)
 		}
 		// DPoP 401 (session expiry) and explicit DPoP 403 challenges invalidate the
 		// DPoP session and retry at most once. Cloudflare/egress challenges and

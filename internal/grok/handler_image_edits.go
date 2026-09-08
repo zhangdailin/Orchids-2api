@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -15,154 +14,55 @@ import (
 
 var imageEditPlaceholderRE = regexp.MustCompile(`(?i)@IMAGE(\d+)\b`)
 
-func (h *Handler) buildImageEditPayload(spec ModelSpec, prompt string, imageURLs []string, parentPostID string) map[string]interface{} {
-	imageEditCfg := map[string]interface{}{
-		"imageReferences": imageURLs,
-	}
-	if strings.TrimSpace(parentPostID) != "" {
-		imageEditCfg["parentPostId"] = strings.TrimSpace(parentPostID)
-	}
-	temporary := true
-	disableMemory := false
-	customPersonality := ""
-	if h != nil && h.cfg != nil {
-		temporary = h.cfg.GrokChatTemporary()
-		disableMemory = h.cfg.GrokChatDisableMemory(false)
-		customPersonality = h.cfg.GrokChatCustomInstruction()
+// The Web edit wire format follows grok2api's mediaGenInput.imageToImage
+// contract. inputAssets are metadata IDs, not download URLs.
+func (h *Handler) buildImageEditPayload(spec ModelSpec, prompt string, assets []string, aspectRatio string) map[string]interface{} {
+	input := map[string]interface{}{"prompt": strings.TrimSpace(prompt), "inputAssets": assets}
+	if aspectRatio != "" {
+		input["aspectRatio"] = aspectRatio
 	}
 	payload := map[string]interface{}{
-		"temporary":                 temporary,
-		"modelName":                 spec.UpstreamModel,
-		"modelMode":                 spec.ModelMode,
-		"message":                   strings.TrimSpace(prompt),
-		"fileAttachments":           []string{},
-		"imageAttachments":          []string{},
-		"disableSearch":             false,
-		"enableImageGeneration":     true,
-		"returnImageBytes":          false,
-		"returnRawGrokInXaiRequest": false,
-		"enableImageStreaming":      true,
-		"imageGenerationCount":      2,
-		"forceConcise":              false,
-		"toolOverrides":             map[string]interface{}{"imageGen": true},
-		"enableSideBySide":          true,
-		"sendFinalMetadata":         true,
-		"isReasoning":               false,
-		"disableTextFollowUps":      true,
-		"responseMetadata": map[string]interface{}{
-			"modelConfigOverride": map[string]interface{}{
-				"modelMap": map[string]interface{}{
-					"imageEditModel":       "imagine",
-					"imageEditModelConfig": imageEditCfg,
-				},
-			},
-			"requestModelDetails": map[string]interface{}{
-				"modelId": spec.UpstreamModel,
-			},
-		},
-		"disableMemory":   disableMemory,
-		"forceSideBySide": false,
-		"deviceEnvInfo":   appChatDeviceEnvInfo(),
+		"modelName": spec.UpstreamModel, "message": strings.TrimSpace(prompt),
+		"enableImageStreaming": true, "enableSideBySide": true, "sendFinalMetadata": true,
+		"mediaGenInput": map[string]interface{}{"imageToImage": input},
 	}
-	if customPersonality != "" {
-		payload["customPersonality"] = customPersonality
+	if h != nil && h.cfg != nil {
+		payload["temporary"] = h.cfg.GrokChatTemporary()
+		payload["disableMemory"] = h.cfg.GrokChatDisableMemory(false)
+		if instruction := h.cfg.GrokChatCustomInstruction(); instruction != "" {
+			payload["customPersonality"] = instruction
+		}
 	}
 	return payload
 }
 
-func (h *Handler) buildImageEditRequestPayload(
-	ctx context.Context,
-	token string,
-	spec ModelSpec,
-	prompt string,
-	inputs []imageEditUploadInput,
-) (map[string]interface{}, error) {
+func (h *Handler) buildImageEditRequestPayload(ctx context.Context, token string, spec ModelSpec, prompt string, inputs []imageEditUploadInput, ratio string) (map[string]interface{}, error) {
+	values := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		values = append(values, dataURIFromBytes(input.mime, input.data))
+	}
+	return h.buildImageEditPayloadFromInputs(ctx, token, spec, prompt, values, ratio)
+}
+
+func (h *Handler) buildImageEditPayloadFromInputs(ctx context.Context, token string, spec ModelSpec, prompt string, inputs []string, ratio string) (map[string]interface{}, error) {
 	refs := make([]imageEditReference, 0, len(inputs))
-	for _, in := range inputs {
-		dataURI := dataURIFromBytes(in.mime, in.data)
-		fileID, fileURI, err := h.uploadSingleInput(ctx, token, dataURI)
+	assets := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		fileID, _, err := h.uploadSingleInput(ctx, token, input)
 		if err != nil {
 			return nil, fmt.Errorf("image upload failed: %w", err)
 		}
-		u := strings.TrimSpace(fileURI)
-		if u == "" {
-			return nil, fmt.Errorf("image upload failed: empty file uri")
+		fileID = strings.TrimSpace(fileID)
+		if fileID == "" {
+			return nil, fmt.Errorf("image upload returned no fileMetadataId")
 		}
-		if !strings.HasPrefix(strings.ToLower(u), "http://") && !strings.HasPrefix(strings.ToLower(u), "https://") {
-			u = "https://assets.grok.com/" + strings.TrimLeft(u, "/")
-		}
-		refs = append(refs, imageEditReference{
-			fileID:     strings.TrimSpace(fileID),
-			contentURL: u,
-		})
+		assets = append(assets, fileID)
+		refs = append(refs, imageEditReference{fileID: fileID})
 	}
-	imageURLs := imageEditReferenceURLs(refs)
-	prompt = replaceImageEditPlaceholders(prompt, refs)
-
-	parentPostID := ""
-	if len(imageURLs) > 0 {
-		if postID, err := h.client.createMediaPost(ctx, token, "MEDIA_POST_TYPE_IMAGE", prompt, ""); err == nil {
-			parentPostID = postID
-		} else {
-			slog.Warn("grok image edit create post failed, continue without parentPostId", "error", err)
-		}
+	if len(assets) == 0 {
+		return nil, fmt.Errorf("image_url is required for image edits")
 	}
-	return h.buildImageEditPayload(spec, prompt, imageURLs, parentPostID), nil
-}
-
-func (h *Handler) buildImageEditPayloadFromInputs(
-	ctx context.Context,
-	token string,
-	spec ModelSpec,
-	prompt string,
-	inputs []string,
-) (map[string]interface{}, error) {
-	refs := make([]imageEditReference, 0, len(inputs))
-	for _, in := range inputs {
-		raw := strings.TrimSpace(in)
-		if raw == "" {
-			continue
-		}
-		fileID, fileURI, err := h.uploadSingleInput(ctx, token, raw)
-		if err != nil {
-			return nil, fmt.Errorf("image upload failed: %w", err)
-		}
-		u := strings.TrimSpace(fileURI)
-		if u == "" {
-			return nil, fmt.Errorf("image upload failed: empty file uri")
-		}
-		if !strings.HasPrefix(strings.ToLower(u), "http://") && !strings.HasPrefix(strings.ToLower(u), "https://") {
-			u = "https://assets.grok.com/" + strings.TrimLeft(u, "/")
-		}
-		refs = append(refs, imageEditReference{
-			fileID:     strings.TrimSpace(fileID),
-			contentURL: u,
-		})
-	}
-	imageURLs := imageEditReferenceURLs(refs)
-	if len(imageURLs) == 0 {
-		return nil, fmt.Errorf("image upload failed: empty image urls")
-	}
-	prompt = replaceImageEditPlaceholders(prompt, refs)
-
-	parentPostID := ""
-	if postID, err := h.client.createMediaPost(ctx, token, "MEDIA_POST_TYPE_IMAGE", prompt, ""); err == nil {
-		parentPostID = postID
-	} else {
-		slog.Warn("grok image edit create post failed, continue without parentPostId", "error", err)
-	}
-	return h.buildImageEditPayload(spec, prompt, imageURLs, parentPostID), nil
-}
-
-func imageEditReferenceURLs(refs []imageEditReference) []string {
-	out := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		u := strings.TrimSpace(ref.contentURL)
-		if u != "" {
-			out = append(out, u)
-		}
-	}
-	return out
+	return h.buildImageEditPayload(spec, replaceImageEditPlaceholders(prompt, refs), assets, ratio), nil
 }
 
 func replaceImageEditPlaceholders(prompt string, refs []imageEditReference) string {
@@ -221,6 +121,7 @@ func (h *Handler) handleChatImageEdit(
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	ratio, _ := normalizeImageAspectRatio("", imageCfg.Size)
 
 	sess, err := h.openChatAccountSessionForModel(ctx, spec)
 	if err != nil {
@@ -229,7 +130,7 @@ func (h *Handler) handleChatImageEdit(
 	}
 	defer sess.Close()
 
-	rawPayload, err := h.buildImageEditPayloadFromInputs(ctx, sess.token, spec, prompt, imageURLs)
+	rawPayload, err := h.buildImageEditPayloadFromInputs(ctx, sess.token, spec, prompt, imageURLs, ratio)
 	if err != nil {
 		if skipExternalAttachmentFetchGrokAccountStatus(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
@@ -238,7 +139,7 @@ func (h *Handler) handleChatImageEdit(
 		return
 	}
 	rebuildPayload := func(token string) (map[string]interface{}, error) {
-		return h.buildImageEditPayloadFromInputs(ctx, token, spec, prompt, imageURLs)
+		return h.buildImageEditPayloadFromInputs(ctx, token, spec, prompt, imageURLs, ratio)
 	}
 
 	if req.Stream {
@@ -318,6 +219,10 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		if _, err := normalizeImageEditSize(r.FormValue("size")); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if _, err := normalizeImageAspectRatio(r.FormValue("aspect_ratio"), r.FormValue("size")); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -420,7 +325,8 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sess.Close()
 
-	rawPayload, err := h.buildImageEditRequestPayload(r.Context(), sess.token, spec, prompt, uploads)
+	ratio, _ := normalizeImageAspectRatio(r.FormValue("aspect_ratio"), r.FormValue("size"))
+	rawPayload, err := h.buildImageEditRequestPayload(r.Context(), sess.token, spec, prompt, uploads, ratio)
 	if err != nil {
 		if skipExternalAttachmentFetchGrokAccountStatus(err) {
 			h.markAccountStatus(r.Context(), sess.acc, err)
@@ -429,7 +335,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rebuildPayload := func(token string) (map[string]interface{}, error) {
-		return h.buildImageEditRequestPayload(r.Context(), token, spec, prompt, uploads)
+		return h.buildImageEditRequestPayload(r.Context(), token, spec, prompt, uploads, ratio)
 	}
 
 	if stream {

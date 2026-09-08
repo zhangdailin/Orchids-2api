@@ -120,7 +120,7 @@ func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, 
 	// Isolate the connection pool by node + fingerprint so different clearance
 	// bindings never share mismatched connection/TLS state.
 	poolKey := "egress:" + node.Name + "|" + fingerprint
-	client := util.GetSharedBrowserHTTPClient(poolKey, 120*time.Second, proxyFuncForNode(*node))
+	client := util.GetSharedBrowserHTTPClientWithHeaderTimeout(poolKey, m.cfg.GrokRequestTimeout(strings.ToLower(strings.TrimSpace(scope))), 0, proxyFuncForNode(*node))
 
 	lease := &Lease{
 		NodeID:           node.Name,

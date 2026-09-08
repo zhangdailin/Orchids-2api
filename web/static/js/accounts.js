@@ -206,25 +206,25 @@ function applyTokenLabels(type) {
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
   const accountId = String(document.getElementById("accountId")?.value || "");
+  const puterWebLoginGroup = document.getElementById("puterWebLoginGroup");
+  if (puterWebLoginGroup) puterWebLoginGroup.hidden = type !== "puter" || Boolean(accountId);
   const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
   if (warpDeviceLoginGroup) {
     warpDeviceLoginGroup.hidden = type !== "warp" || Boolean(accountId);
   }
+  const saveButton = document.querySelector('#accountForm button[type="submit"]');
+  if (saveButton) saveButton.hidden = type === "warp" && !accountId;
+  applyCredentialModeUI(type);
   if (!label || !input || !hint) return;
   if (type === 'warp') {
-    label.textContent = "Warp Auth";
-    input.placeholder = "每行一个 refresh_token";
-    hint.textContent = accountId
-      ? "编辑时仅保存第一行 refresh_token"
-      : "支持批量添加 Warp；每行一个 refresh_token";
-    input.required = true;
+    input.value = "";
+    input.required = false;
   } else if (type === 'grok') {
     label.textContent = "SSO Token";
     input.placeholder = "每行一个 sso token（或包含 sso= 的 Cookie）";
     hint.textContent = accountId
       ? "编辑时仅保存第一行 SSO Token"
       : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
-    applyCredentialModeUI(type);
   } else if (type === 'puter') {
       label.textContent = "Auth Token";
       input.placeholder = "每行一个 Puter auth_token";
@@ -446,19 +446,20 @@ function applyCredentialModeUI(type) {
   if (!modeGroup || !modeSelect) return;
   const isGrok = String(type || "").trim().toLowerCase() === "grok";
   modeGroup.hidden = !isGrok;
-  if (!isGrok) return;
   const mode = String(modeSelect?.value || "sso").trim().toLowerCase();
+  const isOAuth = isGrok && mode === "oauth";
+  const showToken = type !== "warp" && !isOAuth;
   const providerGroup = document.getElementById("grokProviderGroup");
-  if (providerGroup) providerGroup.hidden = mode !== "sso";
-  document.getElementById("ssoCredentialGroup").hidden = mode !== "sso";
-  document.getElementById("oauthCredentialGroup").hidden = mode !== "oauth";
-  document.getElementById("oauthRefreshGroup").hidden = mode !== "oauth";
-  document.getElementById("oauthExpiresGroup").hidden = mode !== "oauth";
+  if (providerGroup) providerGroup.hidden = !isGrok || mode !== "sso";
+  document.getElementById("ssoCredentialGroup").hidden = !showToken;
+  document.getElementById("oauthCredentialGroup").hidden = !isOAuth;
+  document.getElementById("oauthRefreshGroup").hidden = !isOAuth;
+  document.getElementById("oauthExpiresGroup").hidden = !isOAuth;
   const grokDeviceLoginGroup = document.getElementById("grokDeviceLoginGroup");
   const accountId = String(document.getElementById("accountId")?.value || "");
-  if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = mode !== "oauth" || Boolean(accountId);
+  if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = !isOAuth || Boolean(accountId);
   const clientCookie = document.getElementById("clientCookie");
-  if (clientCookie) clientCookie.required = mode === "sso";
+  if (clientCookie) clientCookie.required = showToken;
 }
 
 function currentCredentialMode() {
@@ -486,10 +487,6 @@ function normalizeCredentialForType(type, credential) {
   const normalizedType = String(type || "").trim().toLowerCase();
   const raw = String(credential || "").trim();
   if (!raw) return "";
-
-  if (normalizedType === "warp") {
-    return raw;
-  }
 
   if (normalizedType === "grok") {
     const ssoMatch = raw.match(/(?:^|[;\s])sso=([^;\s]+)/i);
@@ -603,7 +600,9 @@ function buildAccountPayload(type, baseData, credential) {
     return payload;
   }
   if (type === "warp") {
-    payload.refresh_token = credential;
+    // Warp edits contain settings only; credentials belong to web login.
+    delete payload.refresh_token;
+    delete payload.client_cookie;
   } else {
     payload.client_cookie = credential;
   }
@@ -778,8 +777,8 @@ function evaluateAccountStatus(acc) {
 
   const type = normalizeAccountType(acc);
   if (type === 'warp') {
-    if (!getAccountToken(acc)) {
-      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Refresh Token' };
+    if (!hasSidebarAccountCredential(acc)) {
+      return { normal: false, text: '待登录', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '请使用 Warp 官方网页登录' };
     }
   } else if (type === 'grok') {
     // OAuth secrets are redacted by the account list API. credential_type is
@@ -1378,6 +1377,7 @@ function toggleSelectAll(checked) {
 
 // Open modal
 function openModal(account = null) {
+  globalThis.PuterWebLogin?.stop();
   const modal = document.getElementById("accountModal");
   const title = document.getElementById("modalTitle");
   const form = document.getElementById("accountForm");
@@ -1431,6 +1431,7 @@ function openModal(account = null) {
 
 // Close modal
 function closeModal() {
+  globalThis.PuterWebLogin?.stop();
   stopWarpDeviceLogin(true);
   resetWarpDeviceLoginStatus();
   stopGrokDeviceLogin(true);
@@ -1446,6 +1447,10 @@ async function saveAccount(e) {
   e.preventDefault();
   const id = document.getElementById("accountId").value;
   const type = document.getElementById("accountType").value;
+  if (type === "warp" && !id) {
+    showToast("请使用 Warp 官方网页登录添加账号", "error");
+    return;
+  }
   const token = document.getElementById("clientCookie").value;
   const mode = currentCredentialMode();
   const isOAuth = type === "grok" && mode === "oauth";
@@ -1472,7 +1477,7 @@ async function saveAccount(e) {
     if (oauthExpires) data.oauth_expires_at = oauthExpires;
   }
 
-  if (!isOAuth && credentials.length === 0) {
+  if (type !== "warp" && !isOAuth && credentials.length === 0) {
     if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
       const details = []
         .concat(duplicateInputs.slice(0, 4).map((item) => `输入重复: ${item}`))
@@ -1580,6 +1585,9 @@ function parseDataId(value) {
 
 function formatTokenDisplay(acc) {
   const type = normalizeAccountType(acc);
+  if (type === 'warp') {
+    return hasSidebarAccountCredential(acc) ? '登录会话已配置' : '待官网登录';
+  }
   if (type === 'grok' && isSidebarGrokOAuthAccount(acc)) {
     const accessToken = String(acc.oauth_access_token || "");
     if (accessToken) {
@@ -1592,10 +1600,7 @@ function formatTokenDisplay(acc) {
   const token = acc.token;
   if (token) {
     if (token.length > 30) {
-      if (type === 'warp') {
-        // Warp tokens (JWTs) have long common prefixes, so show more of the end
-        return token.substring(0, 10) + '...' + token.substring(token.length - 10);
-      } else if (type === 'grok') {
+      if (type === 'grok') {
         return token.substring(0, 8) + '...' + token.substring(token.length - 8);
       }
       return token.substring(0, 30) + '...';
@@ -1605,10 +1610,6 @@ function formatTokenDisplay(acc) {
   if (type === 'grok' && getAccountToken(acc)) {
     const sso = getAccountToken(acc);
     return sso.length > 20 ? sso.substring(0, 8) + '...' + sso.substring(sso.length - 8) : sso;
-  }
-  if (type === 'warp' && getAccountToken(acc)) {
-    const rt = getAccountToken(acc);
-    return rt.length > 30 ? rt.substring(0, 10) + '...' + rt.substring(rt.length - 10) : rt;
   }
   if (type === 'puter' && getAccountToken(acc)) {
     const token = getAccountToken(acc);

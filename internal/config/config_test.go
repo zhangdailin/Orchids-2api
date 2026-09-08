@@ -71,11 +71,11 @@ func TestApplyHardcodedOverridesValues(t *testing.T) {
 	if cfg.ContextMaxTokens != 100000 {
 		t.Fatalf("ContextMaxTokens=%d want=100000", cfg.ContextMaxTokens)
 	}
-	if cfg.MaxRetries != 3 {
-		t.Fatalf("MaxRetries=%d want=3", cfg.MaxRetries)
+	if cfg.MaxRetries != 20 {
+		t.Fatalf("MaxRetries=%d want bounded maximum 20", cfg.MaxRetries)
 	}
-	if cfg.RequestTimeout != 600 {
-		t.Fatalf("RequestTimeout=%d want=600", cfg.RequestTimeout)
+	if cfg.RequestTimeout != 999 {
+		t.Fatalf("RequestTimeout=%d want configured 999", cfg.RequestTimeout)
 	}
 	if cfg.ConcurrencyTimeout != cfg.RequestTimeout {
 		t.Fatalf("ConcurrencyTimeout=%d want RequestTimeout=%d", cfg.ConcurrencyTimeout, cfg.RequestTimeout)

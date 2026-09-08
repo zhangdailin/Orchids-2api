@@ -9,7 +9,6 @@ import (
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
-	"orchids-api/internal/prompt"
 	"orchids-api/internal/upstream"
 )
 
@@ -36,7 +35,7 @@ func TestHasRequiredToolInput(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, _, got := evaluateToolCallInput(tc.tool, tc.input)
+			got := validToolCallInput(tc.tool, tc.input)
 			if got != tc.expected {
 				t.Fatalf("hasRequiredToolInput(%q, %q) = %v, want %v", tc.tool, tc.input, got, tc.expected)
 			}
@@ -96,7 +95,7 @@ func TestToolCallSameIDInvalidThenValid_UsesValidOne(t *testing.T) {
 	}
 }
 
-func TestWriteToolCallDifferentIDsSameInput_Deduped(t *testing.T) {
+func TestWriteToolCallDifferentIDsSameInput_Preserved(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
@@ -133,8 +132,8 @@ func TestWriteToolCallDifferentIDsSameInput_Deduped(t *testing.T) {
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(h.contentBlocks))
+	if len(h.contentBlocks) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(h.contentBlocks))
 	}
 	block := h.contentBlocks[0]
 	if got, _ := block["type"].(string); got != "tool_use" {
@@ -145,7 +144,7 @@ func TestWriteToolCallDifferentIDsSameInput_Deduped(t *testing.T) {
 	}
 }
 
-func TestWriteToolCallDifferentIDsSameWorkdirTarget_Deduped(t *testing.T) {
+func TestWriteToolCallDifferentIDsSameWorkdirTarget_Preserved(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
@@ -185,11 +184,8 @@ func TestWriteToolCallDifferentIDsSameWorkdirTarget_Deduped(t *testing.T) {
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
+	if len(h.contentBlocks) != 2 {
 		t.Fatalf("expected 1 deduped content block, got %d: %v", len(h.contentBlocks), h.contentBlocks)
-	}
-	if h.toolDedupCount != 1 {
-		t.Fatalf("expected dedup count 1, got %d", h.toolDedupCount)
 	}
 }
 
@@ -726,7 +722,7 @@ func TestSkillToolCall_IsAcceptedWhenClientDeclaredSkill(t *testing.T) {
 	}
 }
 
-func TestBashToolCallDifferentIDsSameCommand_Deduped(t *testing.T) {
+func TestBashToolCallDifferentIDsSameCommand_Preserved(t *testing.T) {
 	t.Parallel()
 
 	h := newStreamHandler(
@@ -763,8 +759,8 @@ func TestBashToolCallDifferentIDsSameCommand_Deduped(t *testing.T) {
 		Event: map[string]interface{}{"finishReason": "tool_use"},
 	})
 
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected 1 content block, got %d", len(h.contentBlocks))
+	if len(h.contentBlocks) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(h.contentBlocks))
 	}
 	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
 		t.Fatalf("expected Bash tool call, got %q", got)
@@ -841,427 +837,5 @@ func TestToolCallMissingID_IsSuppressed(t *testing.T) {
 
 	if len(h.contentBlocks) != 0 {
 		t.Fatalf("expected missing-id tool call to be suppressed, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
-	}
-}
-
-func TestMaskDedupKey_DoesNotLeakRawCommand(t *testing.T) {
-	t.Parallel()
-
-	raw := "bash:rm /Users/dailin/Documents/GitHub/TEST/calculator.py"
-	masked := maskDedupKey(raw)
-	if strings.Contains(masked, "rm ") || strings.Contains(masked, "calculator.py") {
-		t.Fatalf("masked key leaks raw command/path: %q", masked)
-	}
-	if !strings.HasPrefix(masked, "bash#") {
-		t.Fatalf("unexpected masked key prefix: %q", masked)
-	}
-}
-
-func TestSeedSideEffectDedupFromMessages_SuppressRepeatDeleteAcrossTurns(t *testing.T) {
-	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-		"",
-	)
-	defer h.release()
-
-	history := []prompt.Message{
-		{Role: "user", Content: prompt.MessageContent{Text: "删除这个文件"}},
-		{
-			Role: "assistant",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:  "tool_use",
-						ID:    "tool_old_1",
-						Name:  "Bash",
-						Input: map[string]interface{}{"command": "rm /Users/dailin/Documents/GitHub/TEST/calculator.py"},
-					},
-				},
-			},
-		},
-		{
-			Role: "user",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:      "tool_result",
-						ToolUseID: "tool_old_1",
-						Content:   "Done",
-					},
-				},
-			},
-		},
-	}
-	h.seedSideEffectDedupFromMessages(history)
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_new_1",
-			"toolName":   "Bash",
-			"input":      `{"command":"rm /Users/dailin/Documents/GitHub/TEST/calculator.py"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected repeated delete tool call to be suppressed without fallback text, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
-	}
-	if h.toolDedupCount != 1 {
-		t.Fatalf("expected dedup count 1, got %d", h.toolDedupCount)
-	}
-}
-
-func TestSeedSideEffectDedupFromMessages_DoesNotSuppressFailedEditRetryAfterRead(t *testing.T) {
-	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-		"",
-	)
-	defer h.release()
-
-	history := []prompt.Message{
-		{Role: "user", Content: prompt.MessageContent{Text: "把第三行改掉"}},
-		{
-			Role: "assistant",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:  "tool_use",
-						ID:    "tool_edit_1",
-						Name:  "Edit",
-						Input: map[string]interface{}{"file_path": "/tmp/demo.txt", "old_string": "three", "new_string": "LONG_SESSION_OK"},
-					},
-				},
-			},
-		},
-		{
-			Role: "user",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:      "tool_result",
-						ToolUseID: "tool_edit_1",
-						Content:   "File has not been read yet. Read it first before writing to it.",
-					},
-				},
-			},
-		},
-		{
-			Role: "assistant",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:  "tool_use",
-						ID:    "tool_read_1",
-						Name:  "Read",
-						Input: map[string]interface{}{"file_path": "/tmp/demo.txt"},
-					},
-				},
-			},
-		},
-		{
-			Role: "user",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:      "tool_result",
-						ToolUseID: "tool_read_1",
-						Content:   "one\ntwo\nthree",
-					},
-				},
-			},
-		},
-	}
-	h.seedSideEffectDedupFromMessages(history)
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_edit_2",
-			"toolName":   "Edit",
-			"input":      `{"file_path":"/tmp/demo.txt","old_string":"three","new_string":"LONG_SESSION_OK"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if h.toolDedupCount != 0 {
-		t.Fatalf("expected failed edit retry not to be deduped, got %d", h.toolDedupCount)
-	}
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected retry edit tool call to be emitted, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Edit" {
-		t.Fatalf("expected Edit tool call, got %q", got)
-	}
-}
-
-func TestSeedSideEffectDedupFromMessages_SuppressesRepeatSuccessfulEditAcrossTurns(t *testing.T) {
-	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-		"",
-	)
-	defer h.release()
-
-	history := []prompt.Message{
-		{Role: "user", Content: prompt.MessageContent{Text: "把第三行改掉"}},
-		{
-			Role: "assistant",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:  "tool_use",
-						ID:    "tool_edit_1",
-						Name:  "Edit",
-						Input: map[string]interface{}{"file_path": "/tmp/demo.txt", "old_string": "three", "new_string": "LONG_SESSION_OK"},
-					},
-				},
-			},
-		},
-		{
-			Role: "user",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:      "tool_result",
-						ToolUseID: "tool_edit_1",
-						Content:   "Done",
-					},
-				},
-			},
-		},
-	}
-	h.seedSideEffectDedupFromMessages(history)
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_edit_2",
-			"toolName":   "Edit",
-			"input":      `{"file_path":"/tmp/demo.txt","old_string":"three","new_string":"LONG_SESSION_OK"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if h.toolDedupCount != 1 {
-		t.Fatalf("expected successful edit retry to be deduped, got %d", h.toolDedupCount)
-	}
-	if len(h.contentBlocks) != 0 {
-		t.Fatalf("expected deduped repeat edit without fallback text, got %d blocks: %v", len(h.contentBlocks), h.contentBlocks)
-	}
-}
-
-func TestSeedSideEffectDedupFromMessages_DoesNotUseOlderTurnBeforeLatestUserText(t *testing.T) {
-	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-		"",
-	)
-	defer h.release()
-
-	history := []prompt.Message{
-		{Role: "user", Content: prompt.MessageContent{Text: "先删除A"}},
-		{
-			Role: "assistant",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:  "tool_use",
-						ID:    "tool_old_1",
-						Name:  "Bash",
-						Input: map[string]interface{}{"command": "rm /tmp/a.txt"},
-					},
-				},
-			},
-		},
-		{Role: "user", Content: prompt.MessageContent{Text: "现在处理B"}},
-	}
-	h.seedSideEffectDedupFromMessages(history)
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_new_1",
-			"toolName":   "Bash",
-			"input":      `{"command":"rm /tmp/a.txt"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected old-turn command not pre-deduped, got %d blocks", len(h.contentBlocks))
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
-		t.Fatalf("expected Bash tool call, got %q", got)
-	}
-}
-
-func TestSeedSideEffectDedupFromMessages_DoesNotSuppressRepeatGitBashAcrossTurns(t *testing.T) {
-	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-		"",
-	)
-	defer h.release()
-
-	history := []prompt.Message{
-		{Role: "user", Content: prompt.MessageContent{Text: "上传到 git"}},
-		{
-			Role: "assistant",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:  "tool_use",
-						ID:    "tool_git_1",
-						Name:  "Bash",
-						Input: map[string]interface{}{"command": "git add -A && git status --short"},
-					},
-				},
-			},
-		},
-		{
-			Role: "user",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:      "tool_result",
-						ToolUseID: "tool_git_1",
-						Content:   "M internal/handler/handler.go\nM internal/handler/handler_test.go",
-					},
-				},
-			},
-		},
-	}
-	h.seedSideEffectDedupFromMessages(history)
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_git_2",
-			"toolName":   "Bash",
-			"input":      `{"command":"git add -A && git status --short"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if h.toolDedupCount != 0 {
-		t.Fatalf("expected repeated git bash command not to be deduped, got %d", h.toolDedupCount)
-	}
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected repeated git bash tool call to be emitted, got %d blocks", len(h.contentBlocks))
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
-		t.Fatalf("expected Bash tool call, got %q", got)
-	}
-}
-
-func TestRepeatedReadOnlyBashToolCall_IsNotDeduped(t *testing.T) {
-	t.Parallel()
-
-	h := newStreamHandler(
-		&config.Config{},
-		httptest.NewRecorder(),
-		debug.New(false, false),
-		false,
-		false,
-		adapter.FormatAnthropic,
-		"",
-	)
-	defer h.release()
-
-	history := []prompt.Message{
-		{Role: "user", Content: prompt.MessageContent{Text: "优化这个项目"}},
-		{
-			Role: "assistant",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{
-						Type:  "tool_use",
-						ID:    "tool_old_1",
-						Name:  "Bash",
-						Input: map[string]interface{}{"command": "find /Users/dailin/Documents/GitHub/truth_social_scraper -type f | sort"},
-					},
-				},
-			},
-		},
-		{
-			Role: "user",
-			Content: prompt.MessageContent{
-				Blocks: []prompt.ContentBlock{
-					{Type: "tool_result", ToolUseID: "tool_old_1", Content: "./api.py"},
-				},
-			},
-		},
-	}
-	h.seedSideEffectDedupFromMessages(history)
-
-	h.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]interface{}{
-			"toolCallId": "tool_new_1",
-			"toolName":   "Bash",
-			"input":      `{"command":"find /Users/dailin/Documents/GitHub/truth_social_scraper -type f | sort"}`,
-		},
-	})
-	h.handleMessage(upstream.SSEMessage{
-		Type:  "model.finish",
-		Event: map[string]interface{}{"finishReason": "tool_use"},
-	})
-
-	if h.toolDedupCount != 0 {
-		t.Fatalf("expected read-only bash command not to be deduped, got %d", h.toolDedupCount)
-	}
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("expected repeated read-only bash tool call to be emitted, got %d blocks", len(h.contentBlocks))
-	}
-	if got, _ := h.contentBlocks[0]["name"].(string); got != "Bash" {
-		t.Fatalf("expected Bash tool call, got %q", got)
 	}
 }

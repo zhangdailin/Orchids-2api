@@ -303,6 +303,7 @@ type responseStore interface {
 }
 
 type reasoningReplayStore interface {
+	DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error
 	SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error
 	GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error)
 	SavePuterReasoningReplay(ctx context.Context, replay *StoredPuterReasoningReplay, ttl time.Duration) error
@@ -758,6 +759,13 @@ func (s *Store) DeleteStoredResponse(ctx context.Context, responseID, ownerHash 
 		return fmt.Errorf("response store not configured")
 	}
 	return s.responses.DeleteStoredResponse(ctx, responseID, ownerHash)
+}
+
+func (s *Store) DeleteReasoningReplay(ctx context.Context, model, key string) error {
+	if s == nil || s.reasoning == nil {
+		return nil
+	}
+	return s.reasoning.DeleteReasoningReplay(ctx, model, key)
 }
 
 func (s *Store) SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error {

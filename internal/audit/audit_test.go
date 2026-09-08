@@ -14,6 +14,7 @@ func setupRedisLogger(t *testing.T) (*RedisLogger, *miniredis.Miniredis) {
 	t.Helper()
 	s := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: s.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
 	logger := NewRedisLogger(client, "test:", 1000)
 	return logger, s
 }
@@ -41,7 +42,6 @@ func readLoggedEvents(t *testing.T, logger *RedisLogger, count int64) []Event {
 
 func TestRedisLoggerLog(t *testing.T) {
 	logger, _ := setupRedisLogger(t)
-	defer logger.Close()
 	ctx := context.Background()
 
 	logger.Log(ctx, Event{
@@ -59,8 +59,8 @@ func TestRedisLoggerLog(t *testing.T) {
 		Error:     "timeout",
 	})
 
-	// Give async writer time to flush
-	time.Sleep(100 * time.Millisecond)
+	// Close drains the async queue. A fixed sleep races the writer on loaded CI.
+	logger.Close()
 
 	events := readLoggedEvents(t, logger, 10)
 	if len(events) != 2 {
@@ -78,12 +78,11 @@ func TestRedisLoggerLog(t *testing.T) {
 
 func TestRedisLoggerTimestamp(t *testing.T) {
 	logger, _ := setupRedisLogger(t)
-	defer logger.Close()
 	ctx := context.Background()
 
 	before := time.Now()
 	logger.Log(ctx, Event{Action: "test", Status: "success"})
-	time.Sleep(100 * time.Millisecond)
+	logger.Close()
 
 	events := readLoggedEvents(t, logger, 1)
 	if len(events) != 1 {

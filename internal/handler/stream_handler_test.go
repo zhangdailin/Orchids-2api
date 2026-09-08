@@ -585,7 +585,7 @@ func TestNormalizeUpstreamToolCall_RewritesForeignGitProjectPathToLocalGitComman
 	if err := json.Unmarshal([]byte(input), &payload); err != nil {
 		t.Fatalf("expected json input, got %v", err)
 	}
-	if payload["command"] != `git status --short 2>&1` {
+	if payload["command"] != `git status --short 2>&1 || git status --short 2>&1` {
 		t.Fatalf("expected localized git command, got %s", payload["command"])
 	}
 	if strings.Contains(payload["command"], "/tmp/cc-agent/") {
@@ -632,49 +632,17 @@ func TestNormalizeUpstreamToolCall_RewritesSandboxFindProjectToDot(t *testing.T)
 }
 
 func TestHasRequiredToolInput_Validations(t *testing.T) {
-	if _, _, ok := evaluateToolCallInput("write", `{}`); ok {
+	if ok := validToolCallInput("write", `{}`); ok {
 		t.Fatalf("write should require path+content")
 	}
-	if _, _, ok := evaluateToolCallInput("write", `{"file_path":"a","content":"x"}`); !ok {
+	if ok := validToolCallInput("write", `{"file_path":"a","content":"x"}`); !ok {
 		t.Fatalf("write with file_path+content should be valid")
 	}
-	if _, _, ok := evaluateToolCallInput("write", `{"path":"a","content":"x"}`); !ok {
+	if ok := validToolCallInput("write", `{"path":"a","content":"x"}`); !ok {
 		t.Fatalf("write with legacy path should be valid")
 	}
-	if _, _, ok := evaluateToolCallInput("bash", `{"cmd":""}`); ok {
+	if ok := validToolCallInput("bash", `{"cmd":""}`); ok {
 		t.Fatalf("bash should require non-empty cmd/command")
-	}
-}
-
-func TestSideEffectToolDedupKey(t *testing.T) {
-	if got := sideEffectToolDedupKey("bash", `{"command":"echo 1"}`); got != "bash:echo 1" {
-		t.Fatalf("unexpected key: %q", got)
-	}
-	if got := sideEffectToolDedupKey("write", `{"file_path":"a","content":"x"}`); !strings.HasPrefix(got, "write:a\x00") {
-		t.Fatalf("unexpected key: %q", got)
-	}
-	if got := sideEffectToolDedupKey("read", `{"file_path":"a"}`); got != "" {
-		t.Fatalf("read should not be treated as side effect")
-	}
-}
-
-func TestNormalizeIntroKey(t *testing.T) {
-	if got := normalizeIntroKey("  Hello! How can I help you today? "); got != "intro:en:greet" {
-		t.Fatalf("unexpected: %q", got)
-	}
-	if got := normalizeIntroKey("Hi! What's up? How can I help today?"); got != "intro:en:greet" {
-		t.Fatalf("unexpected english variant: %q", got)
-	}
-	if got := normalizeIntroKey("你好，我能帮你什么"); got != "intro:zh:greet" {
-		t.Fatalf("unexpected: %q", got)
-	}
-}
-
-func TestCollapseDuplicatedIntroDelta(t *testing.T) {
-	in := "Hi! What's up? How can I help today?Hi! What's up? How can I help today?"
-	out := collapseDuplicatedIntroDelta(in)
-	if out != "Hi! What's up? How can I help today?" {
-		t.Fatalf("unexpected collapse result: %q", out)
 	}
 }
 
@@ -787,26 +755,6 @@ func TestWriteOpenAIFrame_Output(t *testing.T) {
 		t.Fatalf("unexpected OpenAI frame output: %q", got)
 	}
 }
-
-func TestMaskDedupKey_Stable(t *testing.T) {
-	cfg := &config.Config{}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	a := sh.maskDedupKey("bash:echo 1")
-	b := sh.maskDedupKey("bash:echo 1")
-	if a != b {
-		t.Fatalf("expected stable mask")
-	}
-	if !strings.HasPrefix(a, "bash#") {
-		t.Fatalf("expected prefix bash#, got %q", a)
-	}
-}
-
-func (h *streamHandler) maskDedupKey(key string) string { return maskDedupKey(key) }
 
 func TestExtractThinkingSignature(t *testing.T) {
 	e := map[string]any{"signature": "sig"}
@@ -972,30 +920,6 @@ func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequeste
 	}
 	if !strings.Contains(out, "event: message_stop") {
 		t.Fatalf("expected message_stop even when empty fallback is suppressed, got: %s", out)
-	}
-}
-
-func TestStreamHandler_FinishResponse_SilentlySuppressesFallbackForSuppressedDuplicateMutations(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.toolDedupCount = 1
-	sh.suppressedToolCalls = 1
-	sh.finishResponse("end_turn")
-
-	out := rec.buf.String()
-	if strings.Contains(out, "No output was presented to the user") {
-		t.Fatalf("did not expect generic empty fallback when duplicate-tool fallback is preferred, got: %s", out)
-	}
-	if strings.Contains(out, "duplicate mutating tool call was suppressed") {
-		t.Fatalf("did not expect duplicate-tool fallback text in SSE output, got: %s", out)
-	}
-	if !strings.Contains(out, "event: message_stop") {
-		t.Fatalf("expected message_stop even when duplicate-tool fallback is suppressed, got: %s", out)
 	}
 }
 

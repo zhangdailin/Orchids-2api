@@ -2,7 +2,11 @@
 
 本文以当前实现为准，用于跟踪与 `chenyme/grok2api` 的主要能力差异。最近一次逐文件复核基线为上游提交 `62d2775cb3cd5196cc885dd98e323c90afeda023`（2026-08-25）。
 
+2026-09-08 补充：接口覆盖不代表行为完全等价。最新行为复核和本轮协议修复分别见 [差异报告](D:/Code/Orchids-2api/docs/grok2api-deep-comparison-2026-09-08.md) 与 [修复说明](D:/Code/Orchids-2api/docs/grok-fixes-2026-09-08.md)。质量重试现需显式设置 `grok_quality_enabled=true`；Console 不再无条件注入搜索工具。
+
 ## 已完成
+
+2026-09-08 实现替换补充：质量分类器、语义空闲计时器及共享 SSE codec 已采用上游 `44a390b8` 对应实现，旧路径与保留差异见 [替换记录](D:/Code/Orchids-2api/docs/grok2api-adoption-2026-09-08.md)。该轮仅覆盖记录中的模块，不表示全量能力等价。
 
 - [x] Grok Build、Web、Console 凭据边界与账号级模型快照
 - [x] Chat Completions、Responses、Anthropic Messages JSON/SSE

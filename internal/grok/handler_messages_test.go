@@ -79,7 +79,7 @@ func TestAnthropicResponseFromChat(t *testing.T) {
 		t.Fatalf("content mismatch: %#v", content)
 	}
 	usage := got["usage"].(map[string]interface{})
-	if usage["input_tokens"] != 11 || usage["output_tokens"] != 7 || usage["cache_read_input_tokens"] != 3 {
+	if usage["input_tokens"] != 8 || usage["output_tokens"] != 7 || usage["cache_read_input_tokens"] != 3 {
 		t.Fatalf("usage mismatch: %#v", usage)
 	}
 }

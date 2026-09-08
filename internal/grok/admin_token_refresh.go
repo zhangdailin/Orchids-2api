@@ -110,78 +110,39 @@ func updateGrokUsageAccount(acc *store.Account, info *RateLimitInfo, status stri
 	acc.LastAttempt = time.Now()
 }
 
-func (h *Handler) runTokenRefreshBatch(
-	ctx context.Context,
-	tokens []string,
-	model string,
-	tokenAccounts map[string][]*store.Account,
-	concurrency int,
-	onItem func(token string, ok bool),
-) map[string]bool {
-	concurrency = normalizeNSFWConcurrency(concurrency)
-
-	var (
-		mu      sync.Mutex
-		results = make(map[string]bool, len(tokens))
-	)
-	sem := make(chan struct{}, concurrency)
-	wg := sync.WaitGroup{}
-
-	for _, raw := range tokens {
-		token := raw
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				mu.Lock()
-				results[token] = false
-				mu.Unlock()
-				if onItem != nil {
-					onItem(token, false)
-				}
-				return
-			}
-			defer func() { <-sem }()
-
+func (h *Handler) runTokenRefreshBatch(ctx context.Context, tokens []string, model string, tokenAccounts map[string][]*store.Account, concurrency int, onItem func(string, bool)) map[string]bool {
+	var mu sync.Mutex
+	results := make(map[string]bool, len(tokens))
+	process := func(token string) {
+		success := false
+		if ctx.Err() == nil {
 			callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
-
 			info, err := h.client.VerifyToken(callCtx, token, model)
-			success := err == nil
-			statusCode := ""
-			if !success {
-				statusCode = apperrors.ClassifyAccountStatus(err.Error())
-				if statusCode == "" {
-					statusCode = "500"
-				}
-			}
-
-			if accounts := tokenAccounts[token]; len(accounts) > 0 {
-				for _, acc := range accounts {
-					updateGrokUsageAccount(acc, info, statusCode)
-					if updateErr := h.lb.Store.UpdateAccount(callCtx, acc); updateErr != nil {
-						slog.Warn("update grok usage account failed", "account_id", acc.ID, "error", updateErr)
-					}
-				}
-			}
-
-			if !success {
+			success = err == nil
+			status := ""
+			if err != nil {
+				status = firstNonEmpty(apperrors.ClassifyAccountStatus(err.Error()), "500")
 				slog.Warn("grok token usage refresh failed", "token", maskToken(token), "error", err)
 			}
-
-			mu.Lock()
-			results[token] = success
-			mu.Unlock()
-
-			if onItem != nil {
-				onItem(token, success)
+			for _, acc := range tokenAccounts[token] {
+				if acc == nil {
+					continue
+				}
+				updateGrokUsageAccount(acc, info, status)
+				if err := h.lb.Store.UpdateAccount(callCtx, acc); err != nil {
+					slog.Warn("update grok usage account failed", "account_id", acc.ID, "error", err)
+				}
 			}
-		}()
+		}
+		mu.Lock()
+		results[token] = success
+		mu.Unlock()
+		if onItem != nil {
+			onItem(token, success)
+		}
 	}
-
-	wg.Wait()
+	runWorkerPool(ctx, tokens, normalizeNSFWConcurrency(concurrency), process, process)
 	return results
 }
 

@@ -380,25 +380,3 @@ func TestEnsureImageNSFW_DoesNotCreateModelOverride(t *testing.T) {
 		t.Fatalf("modelConfigOverride should not be created by NSFW cleanup: %#v", payload["modelConfigOverride"])
 	}
 }
-
-func TestGrokAppChatImagePrompt_PrefersDrawTrigger(t *testing.T) {
-	if got := grokAppChatImagePrompt("a red apple"); got != "a red apple" {
-		t.Fatalf("prompt=%q", got)
-	}
-	if got := grokAppChatImagePrompt("Draw a red apple"); got != "Draw a red apple" {
-		t.Fatalf("prompt=%q", got)
-	}
-}
-
-func TestGrokAppChatImagePrompts_AddsSafePortraitFallbackForShortChinesePrompt(t *testing.T) {
-	got := grokAppChatImagePrompts("美女图片")
-	if len(got) != 2 {
-		t.Fatalf("len=%d want 2: %#v", len(got), got)
-	}
-	if got[0] != "美女图片" {
-		t.Fatalf("first=%q", got[0])
-	}
-	if !strings.Contains(got[1], "safe-for-work portrait photo of an adult woman") {
-		t.Fatalf("fallback=%q", got[1])
-	}
-}

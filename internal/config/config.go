@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/goccy/go-json"
 )
@@ -82,11 +81,13 @@ type Config struct {
 	GrokCLIOAuthDeviceURL   string   `json:"grok_cli_oauth_device_url,omitempty"`
 	GrokCLIOAuthTokenURL    string   `json:"grok_cli_oauth_token_url,omitempty"`
 	GrokCLIModelIDs         []string `json:"grok_cli_model_ids,omitempty"`
-	GrokQualityHoldSeconds  int      `json:"grok_quality_hold_seconds,omitempty"`
-	GrokQualityMinChars     int      `json:"grok_quality_min_visible_chars,omitempty"`
-	GrokQualityOnExhausted  string   `json:"grok_quality_on_exhausted,omitempty"`
-	GrokThinkingCooldownSec int      `json:"grok_missing_thinking_cooldown_seconds,omitempty"`
-	GrokQualityMaxAttempts  int      `json:"grok_quality_max_attempts,omitempty"`
+	GrokWebRPS              float64  `json:"grok_web_rps,omitempty"`
+	GrokConsoleRPS          float64  `json:"grok_console_rps,omitempty"`
+	GrokBuildRPS            float64  `json:"grok_build_rps,omitempty"`
+	GrokWebTimeout          int      `json:"grok_web_timeout_seconds,omitempty"`
+	GrokConsoleTimeout      int      `json:"grok_console_timeout_seconds,omitempty"`
+	GrokBuildTimeout        int      `json:"grok_build_timeout_seconds,omitempty"`
+	GrokStreamIdleSeconds   int      `json:"grok_stream_idle_seconds,omitempty"`
 
 	// ── Grok egress (proxy pool + FlareSolverr + clearance) ──
 	GrokEgressEnabled          bool               `json:"grok_egress_enabled,omitempty"`
@@ -106,16 +107,16 @@ type Config struct {
 	ImageNSFW              *bool    `json:"-"`
 	ImageFinalMinBytes     int      `json:"-"`
 	ImageMediumMinBytes    int      `json:"-"`
-	MaxRetries             int      `json:"-"`
-	RetryDelay             int      `json:"-"`
-	AccountSwitchCount     int      `json:"-"`
-	RequestTimeout         int      `json:"-"`
-	Retry429Interval       int      `json:"-"`
+	MaxRetries             int      `json:"max_retries,omitempty"`
+	RetryDelay             int      `json:"retry_delay,omitempty"`
+	AccountSwitchCount     int      `json:"account_switch_count,omitempty"`
+	RequestTimeout         int      `json:"request_timeout,omitempty"`
+	Retry429Interval       int      `json:"retry_429_interval,omitempty"`
 	TokenRefreshInterval   int      `json:"-"`
 	AutoRefreshToken       bool     `json:"-"`
 	LoadBalancerCacheTTL   int      `json:"-"`
 	ConcurrencyLimit       int      `json:"-"`
-	ConcurrencyTimeout     int      `json:"-"`
+	ConcurrencyTimeout     int      `json:"concurrency_timeout,omitempty"`
 	AdaptiveTimeout        bool     `json:"-"`
 	ProxyURL               string   `json:"proxy_url"`
 	ProxyHTTP              string   `json:"proxy_http"`
@@ -249,9 +250,9 @@ func ApplyDefaults(cfg *Config) {
 	ApplyHardcoded(cfg)
 }
 
-// ApplyHardcoded unconditionally sets all non-configurable fields to their
-// fixed values. Call this after any JSON decode (config file, Redis, API)
-// to ensure these values cannot be overridden.
+// ApplyHardcoded sets fixed fields and supplies bounded defaults for runtime
+// retry/deadline settings. Configured runtime values survive file/Redis/API
+// round trips; protocol constants remain non-configurable.
 func ApplyHardcoded(cfg *Config) {
 	cfg.UpstreamMode = "ws"
 	cfg.ContextMaxTokens = 100000
@@ -269,16 +270,16 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.PublicEnabled = &vTrue
 	cfg.ImageFinalMinBytes = 100000
 	cfg.ImageMediumMinBytes = 30000
-	cfg.MaxRetries = 3
-	cfg.RetryDelay = 1000
-	cfg.AccountSwitchCount = 5
-	cfg.RequestTimeout = 600
-	cfg.Retry429Interval = 60
+	cfg.MaxRetries = boundedDefault(cfg.MaxRetries, 3, 20)
+	cfg.RetryDelay = boundedDefault(cfg.RetryDelay, 1000, 60000)
+	cfg.AccountSwitchCount = boundedDefault(cfg.AccountSwitchCount, 5, 20)
+	cfg.RequestTimeout = boundedDefault(cfg.RequestTimeout, 600, 86400)
+	cfg.Retry429Interval = boundedDefault(cfg.Retry429Interval, 60, 3600)
 	cfg.TokenRefreshInterval = 1
 	cfg.AutoRefreshToken = true
 	cfg.LoadBalancerCacheTTL = 5
 	cfg.ConcurrencyLimit = 100
-	cfg.ConcurrencyTimeout = cfg.RequestTimeout
+	cfg.ConcurrencyTimeout = boundedDefault(cfg.ConcurrencyTimeout, cfg.RequestTimeout, 86400)
 	cfg.AdaptiveTimeout = true
 	cfg.DebugLogSSE = cfg.DebugEnabled
 }
@@ -307,49 +308,6 @@ func (c *Config) GrokChatCustomInstruction() string {
 		return ""
 	}
 	return strings.TrimSpace(c.GrokCustomInstruction)
-}
-
-func (c *Config) GrokQualityHoldDuration() time.Duration {
-	if c == nil || c.GrokQualityHoldSeconds <= 0 {
-		return 30 * time.Second
-	}
-	return time.Duration(c.GrokQualityHoldSeconds) * time.Second
-}
-
-func (c *Config) GrokQualityMinVisibleChars() int {
-	if c == nil || c.GrokQualityMinChars <= 0 {
-		return 32
-	}
-	return c.GrokQualityMinChars
-}
-
-func (c *Config) GrokQualityExhaustedMode() string {
-	if c == nil {
-		return "fail_open"
-	}
-	switch strings.ToLower(strings.TrimSpace(c.GrokQualityOnExhausted)) {
-	case "error", "503", "quality_degraded":
-		return "error"
-	default:
-		return "fail_open"
-	}
-}
-
-func (c *Config) GrokMissingThinkingCooldown() time.Duration {
-	if c == nil || c.GrokThinkingCooldownSec <= 0 {
-		return 10 * time.Minute
-	}
-	return time.Duration(c.GrokThinkingCooldownSec) * time.Second
-}
-
-func (c *Config) GrokQualityAttempts() int {
-	if c == nil || c.GrokQualityMaxAttempts <= 0 {
-		return 6
-	}
-	if c.GrokQualityMaxAttempts > 16 {
-		return 16
-	}
-	return c.GrokQualityMaxAttempts
 }
 
 // GrokCLIBaseURLOrDefault returns the Build CLI proxy base URL, defaulting to

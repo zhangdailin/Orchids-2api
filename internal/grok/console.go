@@ -1,7 +1,6 @@
 package grok
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -21,16 +20,6 @@ func (h *Handler) consoleURL(path string) string {
 		base = h.cfg.GrokConsoleBaseURLOrDefault()
 	}
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
-}
-
-type consoleContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-type consoleMessageItem struct {
-	Role    string                `json:"role"`
-	Content []consoleContentBlock `json:"content"`
 }
 
 func chatMessageContentText(content interface{}) string {
@@ -91,17 +80,9 @@ func consoleInputHasEncryptedReasoning(input []interface{}) bool {
 func insertConsoleReplayBeforeLastUser(input []interface{}, replay map[string]interface{}) []interface{} {
 	insertAt := len(input)
 	for index := len(input) - 1; index >= 0; index-- {
-		switch item := input[index].(type) {
-		case consoleMessageItem:
-			if strings.EqualFold(strings.TrimSpace(item.Role), "user") {
-				insertAt = index
-				index = -1
-			}
-		case map[string]interface{}:
-			if strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["role"])), "user") {
-				insertAt = index
-				index = -1
-			}
+		if item, ok := input[index].(map[string]interface{}); ok && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["role"])), "user") {
+			insertAt = index
+			break
 		}
 	}
 	out := make([]interface{}, 0, len(input)+1)
@@ -122,14 +103,6 @@ func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
 		}
 		name := strings.TrimSpace(fmt.Sprint(tool.Function["name"]))
 		if name == "" {
-			continue
-		}
-		switch consoleBuiltinToolName(name) {
-		case "web_search":
-			out = append(out, map[string]interface{}{"type": "web_search"})
-			continue
-		case "x_search":
-			out = append(out, map[string]interface{}{"type": "x_search"})
 			continue
 		}
 		item := map[string]interface{}{
@@ -177,75 +150,12 @@ func consoleToolChoiceFromOpenAI(choice interface{}) interface{} {
 	}
 }
 
-func injectConsoleSearchTools(tools []map[string]interface{}) []map[string]interface{} {
-	out := make([]map[string]interface{}, 0, len(tools)+2)
-	hasWebSearch := false
-	hasXSearch := false
-	for _, tool := range tools {
-		if tool == nil {
-			continue
-		}
-		copied := make(map[string]interface{}, len(tool))
-		for k, v := range tool {
-			copied[k] = v
-		}
-		switch consoleToolName(copied) {
-		case "web_search":
-			hasWebSearch = true
-		case "x_search":
-			hasXSearch = true
-		}
-		out = append(out, copied)
-	}
-	if !hasWebSearch {
-		out = append(out, map[string]interface{}{"type": "web_search"})
-	}
-	if !hasXSearch {
-		out = append(out, map[string]interface{}{"type": "x_search"})
-	}
-	return out
-}
-
-func consoleToolName(tool map[string]interface{}) string {
-	if tool == nil {
-		return ""
-	}
-	toolType := strings.ToLower(strings.TrimSpace(fmt.Sprint(tool["type"])))
-	if toolType == "function" {
-		return consoleBuiltinToolName(fmt.Sprint(tool["name"]))
-	}
-	return consoleBuiltinToolName(toolType)
-}
-
-func consoleBuiltinToolName(name string) string {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "web_search":
-		return "web_search"
-	case "x_search":
-		return "x_search"
-	default:
-		return ""
-	}
-}
-
 func (h *Handler) doConsole(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
-	if err := consoleRateLimitEndpoint(ctx); err != nil {
-		return nil, err
-	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := h.client.doConsoleDPoPRequest(ctx, token, http.MethodPost, h.consoleURL("responses"), body)
-	if err != nil {
-		noteConsoleRateLimitError(err)
-		return nil, err
-	}
-	return resp, nil
-}
-
-func shouldServeConsoleChat(spec ModelSpec, attachments []AttachmentInput) bool {
-	return strings.TrimSpace(spec.ConsoleModel) != "" && len(attachments) == 0
+	return h.client.doConsoleDPoPRequest(ctx, token, http.MethodPost, h.consoleURL("responses"), body)
 }
 
 func requiresConsoleResponses(spec ModelSpec) bool {
@@ -309,6 +219,7 @@ func consoleExtractMessageText(v interface{}) string {
 	switch x := v.(type) {
 	case map[string]interface{}:
 		if output, ok := x["output"].([]interface{}); ok {
+			var text strings.Builder
 			for _, item := range output {
 				m, ok := item.(map[string]interface{})
 				if !ok {
@@ -318,10 +229,14 @@ func consoleExtractMessageText(v interface{}) string {
 				if t != "message" && t != "response.output_message" {
 					continue
 				}
-				if s := strings.TrimSpace(consoleExtractText(m["content"])); s != "" {
-					return s
+				for _, raw := range interfaceSlice(m["content"]) {
+					part, _ := raw.(map[string]interface{})
+					if kind := interfaceString(part["type"]); kind == "output_text" || kind == "text" {
+						text.WriteString(streamString(part["text"]))
+					}
 				}
 			}
+			return text.String()
 		}
 	}
 	return strings.TrimSpace(consoleExtractText(v))
@@ -335,7 +250,7 @@ func consoleFlatAnnotations(v interface{}) []map[string]interface{} {
 		if url == "" {
 			return
 		}
-		key := url + "\x00" + title
+		key := fmt.Sprintf("%s\x00%s\x00%d:%d", url, title, start, end)
 		if _, ok := seen[key]; ok {
 			return
 		}
@@ -353,21 +268,21 @@ func consoleFlatAnnotations(v interface{}) []map[string]interface{} {
 		case map[string]interface{}:
 			t := strings.ToLower(strings.TrimSpace(fmt.Sprint(x["type"])))
 			if t == "url_citation" || (x["url"] != nil && (x["title"] != nil || x["start_index"] != nil || x["end_index"] != nil)) {
-				add(fmt.Sprint(x["url"]), fmt.Sprint(x["title"]), interfaceToInt(x["start_index"]), interfaceToInt(x["end_index"]))
+				add(streamString(x["url"]), streamString(x["title"]), interfaceToInt(x["start_index"]), interfaceToInt(x["end_index"]))
 			}
 			if t == "web_search_call" {
 				if action, _ := x["action"].(map[string]interface{}); action != nil {
 					for _, src := range interfaceSlice(action["sources"]) {
 						if m, _ := src.(map[string]interface{}); m != nil {
-							add(fmt.Sprint(m["url"]), fmt.Sprint(m["title"]), 0, 0)
+							add(streamString(m["url"]), streamString(m["title"]), 0, 0)
 						}
 					}
 					if strings.EqualFold(strings.TrimSpace(fmt.Sprint(action["type"])), "open_page") {
-						add(fmt.Sprint(action["url"]), "", 0, 0)
+						add(streamString(action["url"]), "", 0, 0)
 					}
 				}
 			}
-			for _, key := range []string{"annotation", "annotations", "content", "output", "item"} {
+			for _, key := range []string{"annotation", "annotations", "content", "output", "item", "response", "url_citation"} {
 				if child, ok := x[key]; ok {
 					walk(child)
 				}
@@ -407,10 +322,10 @@ func appendUniqueConsoleAnnotations(dst []map[string]interface{}, src []map[stri
 	}
 	seen := make(map[string]struct{}, len(dst)+len(src))
 	for _, ann := range dst {
-		seen[fmt.Sprint(ann["url"])+"\x00"+fmt.Sprint(ann["title"])] = struct{}{}
+		seen[fmt.Sprintf("%v\x00%v\x00%v:%v", ann["url"], ann["title"], ann["start_index"], ann["end_index"])] = struct{}{}
 	}
 	for _, ann := range src {
-		key := fmt.Sprint(ann["url"]) + "\x00" + fmt.Sprint(ann["title"])
+		key := fmt.Sprintf("%v\x00%v\x00%v:%v", ann["url"], ann["title"], ann["start_index"], ann["end_index"])
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -444,12 +359,19 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 	if reasoning == 0 {
 		reasoning = interfaceToInt(raw["reasoning_tokens"])
 	}
+	if reasoning == 0 {
+		if details, _ := raw["completion_tokens_details"].(map[string]interface{}); details != nil {
+			reasoning = interfaceToInt(details["reasoning_tokens"])
+		}
+	}
+	inputDetails, _ := firstDefined(raw["input_tokens_details"], raw["prompt_tokens_details"]).(map[string]interface{})
+	cached := min(max(interfaceToInt(inputDetails["cached_tokens"]), 0), max(prompt, 0))
 	return map[string]interface{}{
 		"prompt_tokens":     prompt,
 		"completion_tokens": completion,
 		"total_tokens":      total,
 		"prompt_tokens_details": map[string]interface{}{
-			"cached_tokens": 0,
+			"cached_tokens": cached,
 			"text_tokens":   prompt,
 			"audio_tokens":  0,
 			"image_tokens":  0,
@@ -468,7 +390,7 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 // is evaluated lazily so it is only built on the success path.
 func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, sess *chatAccountSession, logger *debug.Logger, name, url string, headers func() http.Header, payload map[string]interface{}, resp *http.Response, err error) {
 	if err != nil {
-		h.auditRequest(ctx, sess.acc, ProviderForAccount(sess.acc), req.Model, fmt.Sprint(upstreamHTTPResponseStatus(err)), nil)
+		h.auditChatOutcome(ctx, sess.acc, req, chatOutcome{Finish: "error", Err: err})
 		slog.Error(name+" chat upstream failed", "url", url, "status", parseUpstreamStatus(err), "error", err)
 		if logger != nil {
 			logger.LogUpstreamHTTPError(url, parseUpstreamStatus(err), "", err)
@@ -480,45 +402,78 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 	defer resp.Body.Close()
-	h.auditRequest(ctx, sess.acc, ProviderForAccount(sess.acc), req.Model, fmt.Sprint(resp.StatusCode), nil)
+	if recovery := resp.Header.Get("X-Grok2API-Reasoning-Recovery"); recovery != "" {
+		w.Header().Set("X-Grok2API-Reasoning-Recovery", recovery)
+	}
 	if logger != nil {
 		logger.LogUpstreamRequest(url, debugHeaderMap(headers()), payload)
 	}
 	h.syncGrokQuota(sess.acc, resp.Header)
 	if req.Stream {
-		h.streamConsoleChat(w, req, resp.Body)
+		result := h.streamConsoleChat(w, req, resp.Body)
+		h.auditChatOutcome(ctx, sess.acc, req, result)
 		return
 	}
-	h.collectConsoleChat(w, req, resp.Body)
+	result := h.collectConsoleChat(w, req, resp.Body)
+	h.auditChatOutcome(ctx, sess.acc, req, result)
 }
 
-func (h *Handler) serveConsoleChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger) {
-	payload, err := h.consolePayload(spec, req)
+func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger, build bool) {
+	if h == nil || sess == nil || sess.acc == nil || (build && h.cliClient == nil) || (!build && h.client == nil) {
+		http.Error(w, "grok upstream client or account not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if req.startedAt.IsZero() {
+		req.startedAt = time.Now()
+	}
+	payload, err := h.responsesPayloadFromChat(spec, req, build)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp, err := h.doConsoleWithAutoSwitch(ctx, sess, payload, req.Model)
-	if err == nil && responseRequiresThinking(spec, req) {
-		resp, err = h.retryMissingThinking(ctx, sess, resp, ProviderConsole,
-			func(exclude []int64) (*chatAccountSession, error) {
-				return h.openConsoleAccountSession(ctx, exclude, req.Model)
-			},
-			func() (*http.Response, error) { return h.doConsole(ctx, sess.token, payload) })
+	provider, endpoint, model := ProviderConsole, h.consoleURL("responses"), req.Model
+	if build {
+		provider, endpoint, model = ProviderBuild, h.cliBaseURL()+"/responses", spec.UpstreamModel
+		if warnings := takeBuildCompatibilityWarnings(payload); warnings != "" {
+			w.Header().Set("X-Grok2API-Compatibility-Warnings", warnings)
+		}
 	}
-	h.finishUpstreamChat(ctx, w, req, sess, logger, "console", h.consoleURL("responses"),
-		func() http.Header { return h.client.consoleHeaders(sess.token) }, payload, resp, err)
+	openNext := func(excluded []int64) (*chatAccountSession, error) {
+		if build {
+			return h.openCLIAccountSession(ctx, excluded, model)
+		}
+		return h.openConsoleAccountSession(ctx, excluded, model)
+	}
+	request := func() (*http.Response, error) {
+		if build {
+			return h.cliClient.doResponsesAt(ctx, sess.acc, "/responses", payload)
+		}
+		return h.doConsole(withRateLimitAccount(ctx, sess.acc), sess.token, payload)
+	}
+	resp, err := h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond, request, openNext, nil)
+	if build && err == nil && resp != nil {
+		tools := append(append([]map[string]interface{}(nil), req.ResponsesTools...), consoleToolsFromOpenAI(req.Tools)...)
+		if aliases := collectBuildToolAliases(map[string]interface{}{"tools": tools}); len(aliases) > 0 {
+			resp.Body = rewriteBuildToolAliasResponse(resp.Body, resp.Header.Get("Content-Type"), aliases)
+		}
+	}
+	h.finishUpstreamChat(ctx, w, req, sess, logger, provider, endpoint, func() http.Header {
+		if build {
+			return h.cliHeaders(sess.acc, sess.token)
+		}
+		return h.client.consoleHeaders(sess.token)
+	}, payload, resp, err)
 }
 
-// retryWithAccountSwitch runs a request in a time-budgeted loop, switching to
+// retryWithAccountSwitch runs a request in a bounded loop, switching to
 // the next account whenever shouldSwitchGrokAccount fires. doRequest issues the
 // request against the current session; openNext returns its replacement.
 // onSwitch runs after each successful account swap (e.g. to rebuild the request
 // payload for the new account).
 func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountSession, switchPace time.Duration, doRequest func() (*http.Response, error), openNext func(used []int64) (*chatAccountSession, error), onSwitch func() error) (*http.Response, error) {
-	switchDeadline := time.Now().Add(10 * time.Second)
+	maxAttempts := 5
 	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		switchDeadline = time.Now().Add(time.Duration(h.cfg.AccountSwitchCount) * time.Second)
+		maxAttempts = min(h.cfg.AccountSwitchCount, 20)
 	}
 
 	used := make([]int64, 0)
@@ -534,14 +489,14 @@ func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountS
 		if sess.acc != nil {
 			provider = ProviderForAccount(sess.acc)
 		}
-		h.auditAttempt(ctx, sess.acc, provider, attempt, started, err)
+		h.auditAttemptDiagnostic(ctx, sess.acc, provider, attempt, started, err, "account_attempt", resp, nil, "")
 		if err == nil {
 			return resp, nil
 		}
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
-		if !shouldSwitchGrokAccount(err) || time.Now().After(switchDeadline) {
+		if !shouldSwitchGrokAccount(err) || attempt >= maxAttempts {
 			return nil, err
 		}
 
@@ -565,42 +520,79 @@ func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountS
 	}
 }
 
-func (h *Handler) doConsoleWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelIDs ...string) (*http.Response, error) {
-	if sess == nil || strings.TrimSpace(sess.token) == "" {
-		return nil, fmt.Errorf("empty chat session")
-	}
-	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
-		func() (*http.Response, error) { return h.doConsole(ctx, sess.token, payload) },
-		func(used []int64) (*chatAccountSession, error) {
-			return h.openConsoleAccountSession(ctx, used, modelIDs...)
-		}, nil)
-}
-
-func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) {
+func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) (outcome chatOutcome) {
 	var raw map[string]interface{}
 	if err := json.NewDecoder(body).Decode(&raw); err != nil {
+		outcome.Err = err
 		http.Error(w, "console response parse error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	if raw["error"] != nil || interfaceString(raw["status"]) == "failed" {
+		outcome.Err = responseFailure(raw)
+		http.Error(w, outcome.Err.Error(), http.StatusBadGateway)
+		return
+	}
 	text := consoleExtractMessageText(raw)
+	refusal := consoleExtractRefusal(raw)
+	filter := stopFilter{sequences: req.Stop}
+	text = filter.push(text, true)
 	reasoning := consoleExtractReasoningText(raw)
 	encryptedReasoning := consoleExtractEncryptedReasoning(raw)
 	annotations := consoleChatAnnotations(consoleFlatAnnotations(raw))
 	toolCalls := consoleToolCallsFromOutput(raw)
+	seen := map[string]bool{}
+	for _, entry := range interfaceSlice(raw["output"]) {
+		item, _ := entry.(map[string]interface{})
+		if interfaceString(item["type"]) != "function_call" {
+			continue
+		}
+		id := firstNonEmpty(interfaceString(item["call_id"]), interfaceString(item["id"]))
+		name := interfaceString(item["name"])
+		args, validArgs := item["arguments"].(string)
+		if id == "" || id == "<nil>" || name == "" || name == "<nil>" || seen[id] || !validArgs || !json.Valid([]byte(args)) {
+			outcome.Err = fmt.Errorf("invalid or duplicate upstream function_call")
+			http.Error(w, outcome.Err.Error(), http.StatusBadGateway)
+			return
+		}
+		seen[id] = true
+	}
 	message := map[string]interface{}{
 		"role":        "assistant",
 		"content":     text,
 		"refusal":     nil,
 		"annotations": annotations,
 	}
+	if refusal != "" {
+		message["refusal"] = refusal
+	}
+	var searches []interface{}
+	for _, entry := range interfaceSlice(raw["output"]) {
+		item, _ := entry.(map[string]interface{})
+		if interfaceString(item["type"]) == "web_search_call" {
+			searches = append(searches, item)
+		}
+	}
+	if len(searches) > 0 {
+		message["x_grok_searches"] = searches
+	}
+	if filter.matched != "" {
+		message["stop_sequence"] = filter.matched
+	}
 	if strings.TrimSpace(reasoning) != "" {
 		message["reasoning_content"] = reasoning
 	}
 	if encryptedReasoning != "" {
 		message["reasoning_encrypted_content"] = encryptedReasoning
-		if req.ReasoningReplay {
-			h.storeReasoningReplay(req.Model, req.PromptCacheKey, encryptedReasoning)
+	}
+	var reasoningItems []interface{}
+	for _, entry := range interfaceSlice(raw["output"]) {
+		item, _ := entry.(map[string]interface{})
+		if interfaceString(item["type"]) == "reasoning" {
+			reasoningItems = append(reasoningItems, item)
 		}
+	}
+	if len(reasoningItems) > 1 {
+		message["x_grok_reasoning"] = reasoningItems
 	}
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
@@ -610,8 +602,22 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 			message["content"] = nil
 		}
 	}
+	if interfaceString(raw["status"]) == "incomplete" {
+		finishReason = "length"
+	}
+	if filter.matched != "" {
+		finishReason = "stop"
+	}
+	if text == "" && refusal == "" && len(toolCalls) == 0 && finishReason != "length" && filter.matched == "" {
+		outcome.Err = fmt.Errorf("upstream completed response with no content or tool calls")
+		http.Error(w, outcome.Err.Error(), http.StatusBadGateway)
+		return
+	}
+	outcome.Usage = firstUsage(consoleUsage(raw), addReasoningUsage(buildChatUsagePayload(req, text+refusal, toolCalls), reasoning))
+	outcome.Finish = finishReason
+	outcome.FirstToken = time.Now()
 	resp := map[string]interface{}{
-		"id":                 firstNonEmpty(fmt.Sprint(raw["id"]), "chatcmpl_"+randomHex(8)),
+		"id":                 firstNonEmpty(interfaceString(raw["id"]), "chatcmpl_"+randomHex(8)),
 		"object":             "chat.completion",
 		"created":            time.Now().Unix(),
 		"model":              req.Model,
@@ -622,22 +628,31 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 			"message":       message,
 			"finish_reason": finishReason,
 		}},
-		"usage": firstUsage(consoleUsage(raw), addReasoningUsage(buildChatUsagePayload(req, text, toolCalls), reasoning)),
+		"usage": outcome.Usage,
 	}
-	writeJSON(w, resp)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		outcome.Err = err
+		outcome.Finish = "error"
+		return
+	}
+	if req.ReasoningReplay && encryptedReasoning != "" {
+		h.storeReasoningReplay(req.Model, req.PromptCacheKey, encryptedReasoning)
+	}
+	return
 }
 
 func consoleExtractReasoningText(raw map[string]interface{}) string {
 	if raw == nil {
 		return ""
 	}
-	var rawText strings.Builder
-	var summaryText strings.Builder
+	var result strings.Builder
 	for _, value := range interfaceSlice(raw["output"]) {
 		item, _ := value.(map[string]interface{})
 		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
 			continue
 		}
+		var rawText, summaryText strings.Builder
 		for _, value := range interfaceSlice(item["content"]) {
 			part, _ := value.(map[string]interface{})
 			if part == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(part["type"])), "reasoning_text") {
@@ -656,27 +671,30 @@ func consoleExtractReasoningText(raw map[string]interface{}) string {
 				summaryText.WriteString(text)
 			}
 		}
+		if rawText.Len() > 0 {
+			result.WriteString(rawText.String())
+		} else {
+			result.WriteString(summaryText.String())
+		}
 	}
-	if rawText.Len() > 0 {
-		return rawText.String()
-	}
-	return summaryText.String()
+	return result.String()
 }
 
 func consoleExtractEncryptedReasoning(raw map[string]interface{}) string {
 	if raw == nil {
 		return ""
 	}
+	latest := ""
 	for _, value := range interfaceSlice(raw["output"]) {
 		item, _ := value.(map[string]interface{})
 		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
 			continue
 		}
 		if encrypted := strings.TrimSpace(fmt.Sprint(item["encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
-			return encrypted
+			latest = encrypted
 		}
 	}
-	return ""
+	return latest
 }
 
 func consoleToolCallsFromOutput(raw map[string]interface{}) []map[string]interface{} {
@@ -734,32 +752,6 @@ func consoleToolCallFromItem(raw interface{}) map[string]interface{} {
 	}
 }
 
-type consoleStreamToolCall struct {
-	ID        string
-	Name      string
-	Arguments strings.Builder
-}
-
-func (tc *consoleStreamToolCall) openAIToolCall(index int) map[string]interface{} {
-	id := strings.TrimSpace(tc.ID)
-	if id == "" {
-		id = "call_" + randomHex(12)
-	}
-	args := strings.TrimSpace(tc.Arguments.String())
-	if args == "" {
-		args = "{}"
-	}
-	return map[string]interface{}{
-		"index": index,
-		"id":    id,
-		"type":  "function",
-		"function": map[string]interface{}{
-			"name":      strings.TrimSpace(tc.Name),
-			"arguments": args,
-		},
-	}
-}
-
 func firstUsage(a, b map[string]interface{}) map[string]interface{} {
 	if len(a) > 0 {
 		return a
@@ -777,242 +769,6 @@ func consoleUsageFromStreamEvent(ev map[string]interface{}) map[string]interface
 		}
 	}
 	return consoleUsage(ev)
-}
-
-func appendConsoleFinalChunk(dst []byte, id string, created int64, model, fingerprint, finish string, annotations []interface{}, usage map[string]interface{}) []byte {
-	delta := map[string]interface{}{}
-	if len(annotations) > 0 {
-		delta["annotations"] = annotations
-	}
-	chunk := map[string]interface{}{
-		"id":                 id,
-		"object":             "chat.completion.chunk",
-		"created":            created,
-		"model":              model,
-		"service_tier":       nil,
-		"system_fingerprint": fingerprint,
-		"choices": []map[string]interface{}{{
-			"index":         0,
-			"delta":         delta,
-			"logprobs":      nil,
-			"finish_reason": finish,
-		}},
-		"usage": usage,
-	}
-	raw, err := json.Marshal(chunk)
-	if err != nil {
-		return appendChatCompletionChunkWithUsage(dst, id, created, model, fingerprint, "", "", finish, true, usage)
-	}
-	return append(dst, raw...)
-}
-
-func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) {
-	flusher := streamResponseHeaders(w)
-	id := "chatcmpl_" + randomHex(8)
-	fingerprint := ""
-	raw := appendChatCompletionChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "assistant", "", "", false)
-	writeSSE(w, flusher, "", raw)
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
-	var event string
-	var final strings.Builder
-	var reasoning strings.Builder
-	var reasoningSummary strings.Builder
-	var encryptedReasoning string
-	rawReasoningSeen := false
-	var annotations []map[string]interface{}
-	var finalUsage map[string]interface{}
-	var toolCalls []*consoleStreamToolCall
-	var activeToolCall *consoleStreamToolCall
-	var contentLoopGuard, reasoningLoopGuard streamLoopGuard
-	doomLoop := false
-	emitReasoning := func(value string) {
-		if value == "" {
-			return
-		}
-		if reasoningLoopGuard.Add(value) {
-			doomLoop = true
-			writeSSEStreamError(w, flusher, nil, "upstream reasoning repetition loop detected")
-			return
-		}
-		reasoning.WriteString(value)
-		raw := appendChatCompletionReasoningChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, value)
-		writeSSE(w, flusher, "", raw)
-	}
-	flushReasoningSummary := func() {
-		if rawReasoningSeen || reasoningSummary.Len() == 0 {
-			return
-		}
-		emitReasoning(reasoningSummary.String())
-		reasoningSummary.Reset()
-	}
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
-			continue
-		}
-		var ev map[string]interface{}
-		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			writeSSEStreamError(w, flusher, nil, "console stream parse error: "+err.Error())
-			return
-		}
-		annotations = appendUniqueConsoleAnnotations(annotations, consoleFlatAnnotations(ev))
-		if usage := consoleUsageFromStreamEvent(ev); len(usage) > 0 {
-			finalUsage = usage
-		}
-		eventLower := strings.ToLower(strings.TrimSpace(event))
-		if eventLower == "" {
-			eventLower = strings.ToLower(strings.TrimSpace(fmt.Sprint(ev["type"])))
-		}
-		if reasoningDelta := consoleReasoningDelta(eventLower, ev); reasoningDelta != "" {
-			if strings.Contains(eventLower, "reasoning_text") && !strings.Contains(eventLower, "summary") {
-				if !rawReasoningSeen {
-					rawReasoningSeen = true
-					reasoningSummary.Reset()
-				}
-				emitReasoning(reasoningDelta)
-			} else {
-				reasoningSummary.WriteString(reasoningDelta)
-			}
-			if doomLoop {
-				return
-			}
-			continue
-		}
-		if item, _ := ev["item"].(map[string]interface{}); item != nil && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "function_call") {
-			name := strings.TrimSpace(fmt.Sprint(item["name"]))
-			if name != "" && name != "<nil>" {
-				tc := &consoleStreamToolCall{
-					ID:   strings.TrimSpace(fmt.Sprint(item["call_id"])),
-					Name: name,
-				}
-				if tc.ID == "" || tc.ID == "<nil>" {
-					tc.ID = strings.TrimSpace(fmt.Sprint(item["id"]))
-				}
-				if args, ok := item["arguments"]; ok && args != nil {
-					switch v := args.(type) {
-					case string:
-						tc.Arguments.WriteString(v)
-					default:
-						if buf, err := json.Marshal(v); err == nil {
-							tc.Arguments.Write(buf)
-						}
-					}
-				}
-				toolCalls = append(toolCalls, tc)
-				activeToolCall = tc
-			}
-			continue
-		}
-		if item, _ := ev["item"].(map[string]interface{}); item != nil && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
-			if encrypted := strings.TrimSpace(fmt.Sprint(item["encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
-				encryptedReasoning = encrypted
-				chunk := map[string]interface{}{
-					"id": id, "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": req.Model,
-					"choices": []map[string]interface{}{{"index": 0, "delta": map[string]interface{}{"reasoning_encrypted_content": encrypted}, "finish_reason": nil}},
-				}
-				if encoded, err := json.Marshal(chunk); err == nil {
-					writeSSE(w, flusher, "", encoded)
-				}
-			}
-		}
-		if strings.Contains(eventLower, "function_call_arguments") {
-			if activeToolCall == nil && len(toolCalls) > 0 {
-				activeToolCall = toolCalls[len(toolCalls)-1]
-			}
-			if activeToolCall != nil {
-				if strings.Contains(eventLower, ".delta") {
-					if delta := strings.TrimSpace(fmt.Sprint(ev["delta"])); delta != "" && delta != "<nil>" {
-						activeToolCall.Arguments.WriteString(delta)
-					}
-				}
-				if strings.Contains(eventLower, ".done") {
-					if args := strings.TrimSpace(fmt.Sprint(ev["arguments"])); args != "" && args != "<nil>" {
-						activeToolCall.Arguments.Reset()
-						activeToolCall.Arguments.WriteString(args)
-					}
-				}
-			}
-			continue
-		}
-		if strings.Contains(eventLower, "output_text") {
-			flushReasoningSummary()
-		}
-		content := consoleDeltaText(eventLower, ev)
-		if content == "" {
-			continue
-		}
-		if contentLoopGuard.Add(content) {
-			writeSSEStreamError(w, flusher, nil, "upstream content repetition loop detected")
-			return
-		}
-		final.WriteString(content)
-		raw = appendChatCompletionChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "", content, "", false)
-		writeSSE(w, flusher, "", raw)
-	}
-	if err := scanner.Err(); err != nil {
-		writeSSEStreamError(w, flusher, nil, "console stream read error: "+err.Error())
-		return
-	}
-	flushReasoningSummary()
-	if doomLoop {
-		return
-	}
-	if req.ReasoningReplay && encryptedReasoning != "" {
-		h.storeReasoningReplay(req.Model, req.PromptCacheKey, encryptedReasoning)
-	}
-	indexedToolCalls := make([]map[string]interface{}, 0, len(toolCalls))
-	for _, tc := range toolCalls {
-		if tc == nil || strings.TrimSpace(tc.Name) == "" {
-			continue
-		}
-		indexedToolCalls = append(indexedToolCalls, tc.openAIToolCall(len(indexedToolCalls)))
-	}
-	usage := finalUsage
-	if len(usage) == 0 {
-		usage = addReasoningUsage(buildChatUsagePayload(req, final.String(), indexedToolCalls), reasoning.String())
-	}
-	if len(indexedToolCalls) > 0 {
-		raw = appendChatCompletionToolCallsChunkWithUsage(nil, id, time.Now().Unix(), req.Model, fingerprint, indexedToolCalls, "tool_calls", true, usage)
-		writeSSE(w, flusher, "", raw)
-		writeSSE(w, flusher, "", []byte("[DONE]"))
-		return
-	}
-	raw = appendConsoleFinalChunk(nil, id, time.Now().Unix(), req.Model, fingerprint, "stop", consoleChatAnnotations(annotations), usage)
-	writeSSE(w, flusher, "", raw)
-	writeSSE(w, flusher, "", []byte("[DONE]"))
-}
-
-func consoleDeltaText(event string, ev map[string]interface{}) string {
-	event = strings.ToLower(strings.TrimSpace(event))
-	if !strings.Contains(event, "delta") || strings.Contains(event, "reasoning") {
-		return ""
-	}
-	for _, key := range []string{"delta", "text"} {
-		raw, ok := ev[key]
-		if !ok || raw == nil {
-			continue
-		}
-		s, ok := raw.(string)
-		if !ok {
-			s = fmt.Sprint(raw)
-		}
-		if s != "" && s != "<nil>" {
-			return s
-		}
-	}
-	if strings.Contains(event, "output_text") {
-		return consoleExtractText(ev)
-	}
-	return ""
 }
 
 func consoleReasoningDelta(event string, ev map[string]interface{}) string {

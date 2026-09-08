@@ -326,7 +326,7 @@ func TestCLIResponsesWaitsForTeamModelCooldownBeforeUpstream(t *testing.T) {
 	previous := teamCooldown
 	teamCooldown = newTeamCooldownRegistry()
 	defer func() { teamCooldown = previous }()
-	teamCooldown.Note(RateLimitScopeRPM, "team-1", "grok-4.6", time.Minute)
+	teamCooldown.Note(RateLimitScopeRPM, ProviderBuild+":team:team-1", "grok-4.6", time.Minute)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()

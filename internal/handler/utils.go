@@ -214,19 +214,6 @@ func extractUserText(messages []prompt.Message) string {
 	return ""
 }
 
-func hasInterruptedRetryMarker(messages []prompt.Message) bool {
-	for _, msg := range messages {
-		if strings.ToLower(strings.TrimSpace(msg.Role)) != "user" {
-			continue
-		}
-		text := strings.TrimSpace(stripSystemRemindersForMode(msg.ExtractText()))
-		if strings.Contains(text, "[Request interrupted by user]") {
-			return true
-		}
-	}
-	return false
-}
-
 func lastUserIsToolResultFollowup(messages []prompt.Message) bool {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]

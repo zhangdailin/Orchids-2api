@@ -179,7 +179,7 @@ func TestChatCompletionsRequestValidate_CompatFields(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsRequestValidate_DefaultSampling(t *testing.T) {
+func TestChatCompletionsRequestValidate_LeavesSamplingToUpstream(t *testing.T) {
 	req := ChatCompletionsRequest{
 		Model: "grok-4.20-0309",
 		Messages: []ChatMessage{{
@@ -190,10 +190,10 @@ func TestChatCompletionsRequestValidate_DefaultSampling(t *testing.T) {
 	if err := req.Validate(); err != nil {
 		t.Fatalf("Validate() error: %v", err)
 	}
-	if req.Temperature == nil || *req.Temperature != 0.8 {
+	if req.Temperature != nil {
 		t.Fatalf("temperature default mismatch: got=%v", req.Temperature)
 	}
-	if req.TopP == nil || *req.TopP != 0.95 {
+	if req.TopP != nil {
 		t.Fatalf("top_p default mismatch: got=%v", req.TopP)
 	}
 }
@@ -257,18 +257,18 @@ func TestChatCompletionsRequestValidate_ToolChoice(t *testing.T) {
 	}
 }
 
-func TestChatCompletionsRequestValidate_RejectsUnsafeToolDefinitions(t *testing.T) {
+func TestWebToolValidationRejectsUnsupportedDefinitions(t *testing.T) {
 	base := ChatCompletionsRequest{
 		Model:    "grok-4.20-0309",
 		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
 	}
 	for _, tools := range [][]ToolDef{
 		{{Type: "function", Function: map[string]interface{}{"name": "invalid name"}}},
-		{{Type: "function", Function: map[string]interface{}{"name": "weather"}}, {Type: "function", Function: map[string]interface{}{"name": "WEATHER"}}},
+		{{Type: "function", Function: map[string]interface{}{"name": "weather"}}, {Type: "function", Function: map[string]interface{}{"name": "weather"}}},
 		{{Type: "function", Function: map[string]interface{}{"name": "weather", "description": strings.Repeat("x", maxToolDescriptionBytes+1)}}},
 	} {
 		base.Tools = tools
-		if err := base.Validate(); err == nil {
+		if err := validateWebToolDefinitions(base.Tools); err == nil {
 			t.Fatalf("expected tool validation error for %#v", tools)
 		}
 	}
@@ -294,14 +294,14 @@ func TestNormalizeImageEditSize_MatchesGrok2API(t *testing.T) {
 		t.Fatalf("normalizeImageEditSize valid failed: got=%q err=%v", got, err)
 	}
 	if _, err := normalizeImageEditSize("1792x1024"); err == nil {
-		t.Fatalf("normalizeImageEditSize should reject non-square edit size")
+		t.Fatalf("normalizeImageEditSize should reject unsupported edit size")
 	}
 }
 
 func TestReplaceImageEditPlaceholders_MatchesGrok2API(t *testing.T) {
 	got := replaceImageEditPlaceholders("blend @IMAGE1 with @image2 and keep @IMAGE3", []imageEditReference{
-		{fileID: "file-a", contentURL: "https://assets.grok.com/a/content"},
-		{fileID: "file-b", contentURL: "https://assets.grok.com/b/content"},
+		{fileID: "file-a"},
+		{fileID: "file-b"},
 	})
 	want := "blend @file-a with @file-b and keep @IMAGE3"
 	if got != want {
@@ -388,7 +388,7 @@ func TestBuildImageEditPayload_UsesGrokConfigFlags(t *testing.T) {
 	h := &Handler{cfg: cfg}
 	spec := ModelSpec{ID: "grok-imagine-image-edit", UpstreamModel: "imagine-image-edit"}
 
-	payload := h.buildImageEditPayload(spec, "edit this", []string{"https://assets.grok.com/demo.png"}, "post-1")
+	payload := h.buildImageEditPayload(spec, "edit this", []string{"metadata-1"}, "2:3")
 	if got, _ := payload["temporary"].(bool); got {
 		t.Fatalf("temporary=%v want=false", got)
 	}
@@ -398,28 +398,12 @@ func TestBuildImageEditPayload_UsesGrokConfigFlags(t *testing.T) {
 	if got, _ := payload["customPersonality"].(string); got != "image mode" {
 		t.Fatalf("customPersonality=%q want=%q", got, "image mode")
 	}
-	respMeta, ok := payload["responseMetadata"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("responseMetadata missing")
+	input := payload["mediaGenInput"].(map[string]interface{})["imageToImage"].(map[string]interface{})
+	if input["aspectRatio"] != "2:3" || input["inputAssets"].([]string)[0] != "metadata-1" {
+		t.Fatalf("image edit input=%#v", input)
 	}
-	reqDetails, ok := respMeta["requestModelDetails"].(map[string]interface{})
-	if !ok || reqDetails["modelId"] != "imagine-image-edit" {
-		t.Fatalf("requestModelDetails=%#v", reqDetails)
-	}
-	if _, ok := payload["deviceEnvInfo"].(map[string]interface{}); !ok {
-		t.Fatalf("deviceEnvInfo missing")
-	}
-	if got, _ := payload["modelMode"].(string); got != spec.ModelMode {
-		t.Fatalf("modelMode=%q want=%q", got, spec.ModelMode)
-	}
-	if got, _ := payload["disableSearch"].(bool); got {
-		t.Fatalf("disableSearch=%v want=false", got)
-	}
-	if _, ok := payload["fileAttachments"].([]string); !ok {
-		t.Fatalf("fileAttachments missing")
-	}
-	if _, ok := payload["imageAttachments"].([]string); !ok {
-		t.Fatalf("imageAttachments missing")
+	if payload["responseMetadata"] != nil {
+		t.Fatal("legacy image model override leaked")
 	}
 }
 

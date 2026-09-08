@@ -24,7 +24,6 @@ import (
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/perf"
-	"orchids-api/internal/prompt"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/toolname"
 	"orchids-api/internal/upstream"
@@ -218,9 +217,6 @@ type streamHandler struct {
 	contentBlocks         []map[string]interface{}
 	pendingThinkingSig    string
 	hasTextOutput         bool
-	lastTextDelta         string
-	lastTextDeltaSource   string
-	lastTextDeltaAt       time.Time
 	deferredFlushFrames   int
 	deferredFlushBytes    int
 	openAIChunkScratch    []byte
@@ -236,11 +232,6 @@ type streamHandler struct {
 	currentToolInputID  string
 	toolCallCount       int
 	suppressedToolCalls int
-	bashCallDedup       map[string]struct{}
-	seedToolDedup       map[string]struct{}
-	toolDedupCount      int
-	toolDedupKeys       map[string]int
-	introDedup          map[string]struct{}
 
 	// Callbacks
 	onConversationID     func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
@@ -293,10 +284,6 @@ func newStreamHandler(
 		toolInputHadDelta:        make(map[string]bool),
 		toolCallHandled:          make(map[string]bool),
 		toolCallEmitted:          make(map[string]struct{}),
-		bashCallDedup:            make(map[string]struct{}),
-		seedToolDedup:            make(map[string]struct{}),
-		toolDedupKeys:            make(map[string]int),
-		introDedup:               make(map[string]struct{}),
 		allowedToolNames:         make(map[string]struct{}),
 		msgID:                    responseMessageID(responseFormat),
 		startTime:                time.Now(),
@@ -757,12 +744,6 @@ func (h *streamHandler) resetRoundState() {
 	clear(h.toolInputHadDelta)
 	clear(h.toolCallHandled)
 	clear(h.toolCallEmitted)
-	clear(h.bashCallDedup)
-	for key := range h.seedToolDedup {
-		h.bashCallDedup[key] = struct{}{}
-	}
-	h.toolDedupCount = 0
-	clear(h.toolDedupKeys)
 	h.currentToolInputID = ""
 	h.toolCallCount = 0
 	h.outputTokens = 0
@@ -771,92 +752,8 @@ func (h *streamHandler) resetRoundState() {
 	h.useUpstreamUsage = false
 	h.finalStopReason = ""
 	h.hasTextOutput = false
-	h.lastTextDelta = ""
-	h.lastTextDeltaSource = ""
-	h.lastTextDeltaAt = time.Time{}
 	h.deferredFlushFrames = 0
 	h.deferredFlushBytes = 0
-}
-
-// seedSideEffectDedupFromMessages pre-seeds dedup keys from prior assistant tool_use blocks.
-func (h *streamHandler) seedSideEffectDedupFromMessages(messages []prompt.Message) {
-	if len(messages) == 0 {
-		return
-	}
-	lastUserTextIdx := -1
-	for i, msg := range messages {
-		if strings.ToLower(strings.TrimSpace(msg.Role)) != "user" {
-			continue
-		}
-		if strings.TrimSpace(msg.ExtractText()) != "" {
-			lastUserTextIdx = i
-		}
-	}
-	if lastUserTextIdx < 0 {
-		return
-	}
-
-	candidates := make(map[string]string)
-	for i, msg := range messages {
-		if i <= lastUserTextIdx || strings.ToLower(strings.TrimSpace(msg.Role)) != "assistant" {
-			continue
-		}
-		for _, block := range msg.Content.GetBlocks() {
-			if block.Type != "tool_use" {
-				continue
-			}
-			toolID := strings.TrimSpace(block.ID)
-			if toolID == "" {
-				continue
-			}
-			nameKey := strings.ToLower(strings.TrimSpace(block.Name))
-			if nameKey == "" {
-				continue
-			}
-			input := strings.TrimSpace(stringifyToolInput(block.Input))
-			if input == "" {
-				input = "{}"
-			}
-			if !shouldPreseedSideEffectDedup(nameKey, input) {
-				continue
-			}
-			key := sideEffectToolDedupKey(nameKey, input, h.workdir)
-			if key == "" {
-				continue
-			}
-			candidates[toolID] = key
-		}
-	}
-	if len(candidates) == 0 {
-		return
-	}
-
-	successfulKeys := make(map[string]struct{})
-	for i, msg := range messages {
-		if i <= lastUserTextIdx || !strings.EqualFold(strings.TrimSpace(msg.Role), "user") || msg.Content.IsString() {
-			continue
-		}
-		for _, block := range msg.Content.GetBlocks() {
-			if block.Type != "tool_result" {
-				continue
-			}
-			key, ok := candidates[strings.TrimSpace(block.ToolUseID)]
-			if !ok || key == "" {
-				continue
-			}
-			text := strings.TrimSpace(extractToolResultContent(block.Content))
-			if text == "" || looksLikeToolResultFailure(text) {
-				delete(successfulKeys, key)
-				continue
-			}
-			successfulKeys[key] = struct{}{}
-		}
-	}
-
-	for key := range successfulKeys {
-		h.seedToolDedup[key] = struct{}{}
-		h.bashCallDedup[key] = struct{}{}
-	}
 }
 
 func stringifyToolInput(input interface{}) string {
@@ -1224,7 +1121,7 @@ func rewriteForeignGitCCommand(command, workdir string) (string, bool) {
 		return "", false
 	}
 	sb.WriteString(command[last:])
-	return collapseDuplicateGitFallback(strings.TrimSpace(sb.String())), true
+	return strings.TrimSpace(sb.String()), true
 }
 
 func looksLikeForeignGitProjectPath(pathValue, workdir string) bool {
@@ -1241,19 +1138,6 @@ func looksLikeForeignGitProjectPath(pathValue, workdir string) bool {
 		return true
 	}
 	return windowsDrivePathRegex.MatchString(pathValue)
-}
-
-func collapseDuplicateGitFallback(command string) string {
-	parts := strings.Split(command, "||")
-	if len(parts) != 2 {
-		return command
-	}
-	left := strings.TrimSpace(parts[0])
-	right := strings.TrimSpace(parts[1])
-	if left == "" || right == "" || left != right {
-		return command
-	}
-	return left
 }
 
 func rewriteForeignBashReadCommandInput(name, input, workdir string) string {
@@ -1959,13 +1843,6 @@ func (h *streamHandler) finalizeCompletion(stopReason string) {
 	h.mu.Unlock()
 
 	// 闂傚倷娴囧畷鍨叏閹惰姤鍊块柨鏇楀亾妞ゎ厼鐏濊灒闁兼祴鏅濋ˇ顖炴倵楠炲灝鍔氭い锔诲灣缁鎮滃Ο鍦畾濡炪倖鐗楁笟妤呭磿閵夛妇绠?
-	h.mu.Lock()
-	suppressedDedup := h.toolDedupCount
-	dedupKeys := maps.Clone(h.toolDedupKeys)
-	h.mu.Unlock()
-	if suppressedDedup > 0 && logutil.VerboseDiagnosticsEnabled() {
-		slog.Debug("tool call dedup summary", "suppressed_count", suppressedDedup, "dedup_keys", dedupKeys)
-	}
 	h.logger.LogSummary(h.inputTokens, h.outputTokens, time.Since(h.startTime), stopReason)
 	slog.Debug("Request completed", "input_tokens", h.inputTokens, "output_tokens", h.outputTokens, "duration", time.Since(h.startTime))
 }
@@ -2185,8 +2062,7 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		return false
 	}
 
-	_, key, ok := evaluateToolCallInput(call.name, call.input, h.workdir)
-	if !ok {
+	if !validToolCallInput(call.name, call.input) {
 		h.mu.Lock()
 		h.suppressedToolCalls++
 		if h.surfaceToolRejects && h.emptyOutputFallback == "" {
@@ -2197,28 +2073,6 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 			slog.Debug("invalid tool call suppressed", "tool", call.name, "input", call.input)
 		}
 		return false
-	}
-	if key != "" {
-		maskedKey := maskDedupKey(key)
-		detail := summarizeToolCallDedupDetail(call.name, call.input, h.workdir)
-		h.mu.Lock()
-		if _, ok := h.bashCallDedup[key]; ok {
-			h.toolDedupCount++
-			h.toolDedupKeys[maskedKey]++
-			h.suppressedToolCalls++
-			if h.surfaceToolRejects && h.emptyOutputFallback == "" {
-				h.emptyOutputFallback = "The requested operation was already completed; the duplicate tool call was not repeated."
-			}
-			suppressed := h.toolDedupCount
-			h.mu.Unlock()
-			if h.config != nil && h.config.DebugEnabled {
-				slog.Debug("duplicate mutating tool call suppressed", "tool", call.name, "dedup_key", maskedKey, "suppressed_total", suppressed, "detail", detail)
-			}
-			return false
-		}
-		h.bashCallDedup[key] = struct{}{}
-		h.seedToolDedup[key] = struct{}{}
-		h.mu.Unlock()
 	}
 	return true
 }
@@ -2252,90 +2106,6 @@ func (h *streamHandler) taskDelegationAllowedLocked(input string) bool {
 	return true
 }
 
-func maskDedupKey(key string) string {
-	tool := key
-	if idx := strings.IndexByte(tool, ':'); idx > 0 {
-		tool = tool[:idx]
-	}
-	sum := fnv1a64String(key)
-	out := make([]byte, 0, len(tool)+1+16)
-	out = append(out, tool...)
-	out = append(out, '#')
-	out = strconv.AppendUint(out, sum, 16)
-	return string(out)
-}
-
-func sideEffectToolDedupKey(name, input string, workdir ...string) string {
-	nameKey := normalizeToolNameKey(name)
-	if !isSideEffectToolName(nameKey) {
-		return ""
-	}
-	fields, ok := decodeToolInputFields(input)
-	if !ok {
-		return ""
-	}
-	return sideEffectToolDedupKeyFromFields(nameKey, fields, firstOptionalString(workdir...))
-}
-
-func evaluateToolCallInput(name, input string, workdir ...string) (nameKey string, dedupKey string, ok bool) {
-	nameKey = normalizeToolNameKey(name)
-	if nameKey == "" {
-		return "", "", false
-	}
-	if !isStructuredToolName(nameKey) {
-		return nameKey, "", true
-	}
-	fields, parsed := decodeToolInputFields(input)
-	if !parsed {
-		return nameKey, "", false
-	}
-	if !hasRequiredToolInputFields(nameKey, fields) {
-		return nameKey, "", false
-	}
-	return nameKey, sideEffectToolDedupKeyFromFields(nameKey, fields, firstOptionalString(workdir...)), true
-}
-
-func firstOptionalString(values ...string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	return values[0]
-}
-
-func shouldPreseedSideEffectDedup(nameKey, input string) bool {
-	nameKey = normalizeToolNameKey(nameKey)
-	if nameKey != "bash" {
-		return true
-	}
-	fields, ok := decodeToolInputFields(input)
-	if !ok {
-		return true
-	}
-	command := strings.TrimSpace(fields.Command)
-	if command == "" {
-		command = strings.TrimSpace(fields.Cmd)
-	}
-	// Git staging/status commands may legitimately repeat across turns before the
-	// model reaches commit/push, so don't suppress them from prior history.
-	return !looksLikeGitBashCommand(command)
-}
-
-func looksLikeGitBashCommand(command string) bool {
-	lower := strings.ToLower(strings.TrimSpace(command))
-	if lower == "" {
-		return false
-	}
-	if strings.HasPrefix(lower, "git ") || strings.HasPrefix(lower, "git.exe ") {
-		return true
-	}
-	for _, marker := range []string{"&& git ", "&& git.exe ", "; git ", "; git.exe ", "|| git ", "|| git.exe ", "\ngit ", "\ngit.exe ", "\n git ", "\n git.exe "} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 func normalizeToolNameKey(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
@@ -2362,25 +2132,14 @@ func isStructuredToolName(nameKey string) bool {
 	}
 }
 
-func isSideEffectToolName(nameKey string) bool {
-	switch nameKey {
-	case "bash", "write", "edit":
-		return true
-	default:
-		return false
-	}
-}
-
 type toolInputFields struct {
-	Command    string          `json:"command"`
-	Cmd        string          `json:"cmd"`
-	FilePath   string          `json:"file_path"`
-	Path       string          `json:"path"`
-	Content    json.RawMessage `json:"content"`
-	Old        json.RawMessage `json:"old_string"`
-	New        json.RawMessage `json:"new_string"`
-	IsReadOnly *bool           `json:"is_read_only"`
-	IsRisky    *bool           `json:"is_risky"`
+	Command  string          `json:"command"`
+	Cmd      string          `json:"cmd"`
+	FilePath string          `json:"file_path"`
+	Path     string          `json:"path"`
+	Content  json.RawMessage `json:"content"`
+	Old      json.RawMessage `json:"old_string"`
+	New      json.RawMessage `json:"new_string"`
 }
 
 func decodeToolInputFields(input string) (toolInputFields, bool) {
@@ -2422,200 +2181,6 @@ func hasRequiredToolInputFields(nameKey string, fields toolInputFields) bool {
 	default:
 		return true
 	}
-}
-
-func canonicalToolRawValue(raw json.RawMessage) string {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" {
-		return ""
-	}
-	var asString string
-	if err := json.Unmarshal(raw, &asString); err == nil {
-		return asString
-	}
-	var decoded interface{}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return trimmed
-	}
-	normalized, err := json.Marshal(decoded)
-	if err != nil {
-		return trimmed
-	}
-	return string(normalized)
-}
-
-func summarizeToolCallDedupDetail(name, input, workdir string) string {
-	nameKey := normalizeToolNameKey(name)
-	fields, ok := decodeToolInputFields(input)
-	if !ok {
-		return ""
-	}
-	switch nameKey {
-	case "write":
-		path := canonicalToolPathForDedup(resolveToolPath(fields.FilePath, fields.Path), workdir)
-		content := canonicalToolRawValue(fields.Content)
-		return summarizeDedupPayload("path", path, content)
-	case "edit":
-		path := canonicalToolPathForDedup(resolveToolPath(fields.FilePath, fields.Path), workdir)
-		oldValue := canonicalToolRawValue(fields.Old)
-		newValue := canonicalToolRawValue(fields.New)
-		return "path=" + path +
-			" old_len=" + strconv.Itoa(len(oldValue)) +
-			" old_hash=" + strconv.FormatUint(fnv1a64String(oldValue), 16) +
-			" new_len=" + strconv.Itoa(len(newValue)) +
-			" new_hash=" + strconv.FormatUint(fnv1a64String(newValue), 16) +
-			" new_preview=" + strconv.Quote(shortDedupPreview(newValue, 48))
-	case "bash":
-		command := strings.TrimSpace(fields.Command)
-		if command == "" {
-			command = strings.TrimSpace(fields.Cmd)
-		}
-		return summarizeDedupPayload("command", "", command)
-	default:
-		return ""
-	}
-}
-
-func summarizeDedupPayload(label, path, value string) string {
-	parts := make([]string, 0, 5)
-	if strings.TrimSpace(path) != "" {
-		parts = append(parts, "path="+path)
-	}
-	parts = append(parts, label+"_len="+strconv.Itoa(len(value)))
-	parts = append(parts, label+"_hash="+strconv.FormatUint(fnv1a64String(value), 16))
-	parts = append(parts, label+"_preview="+strconv.Quote(shortDedupPreview(value, 48)))
-	return strings.Join(parts, " ")
-}
-
-func shortDedupPreview(value string, limit int) string {
-	value = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(value, "\r", " "), "\n", "\\n"))
-	if value == "" || limit <= 0 {
-		return value
-	}
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	if limit <= 3 {
-		return string(runes[:limit])
-	}
-	return string(runes[:limit-3]) + "..."
-}
-
-func sideEffectToolDedupKeyFromFields(nameKey string, fields toolInputFields, workdir string) string {
-	if !isSideEffectToolName(nameKey) {
-		return ""
-	}
-	switch nameKey {
-	case "bash":
-		command := strings.TrimSpace(fields.Command)
-		if strings.TrimSpace(command) == "" {
-			command = strings.TrimSpace(fields.Cmd)
-		}
-		command = strings.TrimSpace(command)
-		if command == "" {
-			return ""
-		}
-		if isReadOnlyBashCommand(command, fields.IsReadOnly, fields.IsRisky) {
-			return ""
-		}
-		return "bash:" + command
-	case "write":
-		path := canonicalToolPathForDedup(resolveToolPath(fields.FilePath, fields.Path), workdir)
-		if path == "" {
-			return ""
-		}
-		if len(fields.Content) == 0 {
-			return ""
-		}
-		return "write:" + path + "\x00" + canonicalToolRawValue(fields.Content)
-	case "edit":
-		path := canonicalToolPathForDedup(resolveToolPath(fields.FilePath, fields.Path), workdir)
-		if path == "" {
-			return ""
-		}
-		if len(fields.Old) == 0 || len(fields.New) == 0 {
-			return ""
-		}
-		return "edit:" + path + "\x00" + canonicalToolRawValue(fields.Old) + "\x00" + canonicalToolRawValue(fields.New)
-	default:
-		return ""
-	}
-}
-
-func canonicalToolPathForDedup(pathValue, workdir string) string {
-	pathValue = strings.TrimSpace(pathValue)
-	if pathValue == "" {
-		return ""
-	}
-	cleanPath := filepath.Clean(pathValue)
-	workdir = strings.TrimSpace(workdir)
-	if workdir == "" {
-		return filepath.ToSlash(cleanPath)
-	}
-	cleanWorkdir := filepath.Clean(workdir)
-	if filepath.IsAbs(cleanPath) {
-		if sameOrWithinPath(cleanPath, cleanWorkdir) {
-			if rel, err := filepath.Rel(cleanWorkdir, cleanPath); err == nil {
-				return filepath.ToSlash(filepath.Clean(rel))
-			}
-		}
-		return filepath.ToSlash(cleanPath)
-	}
-	return filepath.ToSlash(filepath.Clean(cleanPath))
-}
-
-func isReadOnlyBashCommand(command string, isReadOnly, isRisky *bool) bool {
-	if isRisky != nil && *isRisky {
-		return false
-	}
-	if isReadOnly != nil {
-		return *isReadOnly
-	}
-
-	lower := strings.ToLower(strings.TrimSpace(command))
-	if lower == "" {
-		return false
-	}
-	if strings.Contains(lower, " -exec ") || strings.Contains(lower, " -delete") {
-		return false
-	}
-	if strings.Contains(lower, "&&") || strings.Contains(lower, "||") || strings.Contains(lower, ";") {
-		return false
-	}
-	if strings.Contains(lower, ">") || strings.Contains(lower, "<") {
-		return false
-	}
-
-	segments := strings.Split(lower, "|")
-	for _, segment := range segments {
-		fields := strings.Fields(strings.TrimSpace(segment))
-		if len(fields) == 0 {
-			return false
-		}
-		cmd := fields[0]
-		switch cmd {
-		case "find", "sort", "ls", "pwd", "cat", "head", "tail", "grep", "rg", "wc", "stat", "file", "tree", "du", "basename", "dirname", "realpath", "readlink", "which", "type", "fd":
-			continue
-		case "sed":
-			if len(fields) > 1 && fields[1] == "-n" {
-				continue
-			}
-			return false
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func fnv1a64String(s string) uint64 {
-	h := fnv64Offset
-	for i := 0; i < len(s); i++ {
-		h ^= uint64(s[i])
-		h *= fnv64Prime
-	}
-	return h
 }
 
 func (h *streamHandler) markWriteErrorLocked(event string, err error) {
@@ -2665,98 +2230,6 @@ func (h *streamHandler) hasVisibleOutput() bool {
 		h.responseText.Len() > 0
 	h.mu.Unlock()
 	return has
-}
-
-func (h *streamHandler) shouldSkipIntroDelta(delta string) bool {
-	key := normalizeIntroKey(delta)
-	if key == "" {
-		return false
-	}
-	h.mu.Lock()
-	_, exists := h.introDedup[key]
-	if !exists {
-		h.introDedup[key] = struct{}{}
-	}
-	h.mu.Unlock()
-	return exists
-}
-
-func (h *streamHandler) shouldSkipCrossChannelDuplicateDelta(source, delta string) bool {
-	if strings.TrimSpace(delta) == "" || source == "" {
-		return false
-	}
-	now := time.Now()
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	skip := h.lastTextDelta == delta &&
-		h.lastTextDeltaSource != "" &&
-		h.lastTextDeltaSource != source &&
-		now.Sub(h.lastTextDeltaAt) <= 2*time.Second
-
-	h.lastTextDelta = delta
-	h.lastTextDeltaSource = source
-	h.lastTextDeltaAt = now
-	return skip
-}
-
-func normalizeIntroKey(delta string) string {
-	text := strings.TrimSpace(delta)
-	if text == "" {
-		return ""
-	}
-	lower := strings.ToLower(text)
-	compactLower := strings.Join(strings.Fields(strings.ReplaceAll(lower, "\U0001F44B", "")), " ")
-	switch lower {
-	case "hi! how can i help you today?",
-		"hello! how can i help you today?",
-		"hi! how can i help you today!",
-		"hello! how can i help you today!":
-		return "intro:en:greet"
-	}
-	switch compactLower {
-	case "hi! what's up? how can i help today?",
-		"hello! what's up? how can i help today?",
-		"hi! how can i help today?",
-		"hello! how can i help today?",
-		"hi! how can i help you today?",
-		"hello! how can i help you today?",
-		"hi! how can i help you today!",
-		"hello! how can i help you today!":
-		return "intro:en:greet"
-	}
-	if (strings.HasPrefix(compactLower, "hi!") || strings.HasPrefix(compactLower, "hello!") || strings.HasPrefix(compactLower, "hey!")) &&
-		(strings.Contains(compactLower, "how can i help today") || strings.Contains(compactLower, "how can i help you today")) {
-		return "intro:en:greet"
-	}
-	if strings.HasPrefix(text, "\u4f60\u597d") || strings.HasPrefix(text, "\u60a8\u597d") || strings.Contains(text, "\u6211\u80fd\u5e2e\u4f60") {
-		return "intro:zh:greet"
-	}
-	if strings.Contains(lower, "warp") && (strings.HasPrefix(text, "\u6211\u662f") || strings.Contains(text, "agent mode")) {
-		return "intro:zh:warp"
-	}
-	if strings.Contains(lower, "claude") && (strings.HasPrefix(text, "\u6211\u662f") || strings.Contains(lower, "claude 4")) {
-		return "intro:zh:claude"
-	}
-	return ""
-}
-
-func collapseDuplicatedIntroDelta(delta string) string {
-	text := strings.TrimSpace(delta)
-	if text == "" || len(text)%2 != 0 {
-		return delta
-	}
-	half := len(text) / 2
-	first := strings.TrimSpace(text[:half])
-	second := strings.TrimSpace(text[half:])
-	if first == "" || second == "" || first != second {
-		return delta
-	}
-	if normalizeIntroKey(first) == "" {
-		return delta
-	}
-	return first
 }
 
 // extractThinkingSignature extracts a signature from event or event.data.
@@ -2942,19 +2415,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	case "model.text-delta":
 		delta, _ := msg.Event["delta"].(string)
-		source := eventKey
 		if delta == "" {
-			return
-		}
-		delta = collapseDuplicatedIntroDelta(delta)
-
-		if h.shouldSkipIntroDelta(delta) {
-			return
-		}
-		if h.shouldSkipCrossChannelDuplicateDelta(source, delta) {
-			if h.config != nil && h.config.DebugEnabled {
-				slog.Debug("skip cross-channel duplicate delta", "source", source, "delta_len", len(delta))
-			}
 			return
 		}
 		h.markTextOutput()
@@ -3235,4 +2696,17 @@ func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr 
 		errorMsg = fmt.Sprintf("%s (selector: %v, last error: %s)", errorMsg, selectErr, lastErr)
 	}
 	h.InjectErrorText("Injecting no available account error to client", errorMsg)
+}
+
+// Tool shape validation is independent of whether another call had the same input.
+func validToolCallInput(name, input string) bool {
+	nameKey := normalizeToolNameKey(name)
+	if nameKey == "" {
+		return false
+	}
+	if !isStructuredToolName(nameKey) {
+		return true
+	}
+	fields, ok := decodeToolInputFields(input)
+	return ok && hasRequiredToolInputFields(nameKey, fields)
 }

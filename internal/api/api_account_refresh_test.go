@@ -189,7 +189,7 @@ func TestRefreshAccountState_GrokMissingToken(t *testing.T) {
 	}
 }
 
-func TestHandleAccounts_PostRejectsDuplicateWarpRefreshToken(t *testing.T) {
+func TestHandleAccounts_PostRejectsManualWarpLogin(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
@@ -209,11 +209,11 @@ func TestHandleAccounts_PostRejectsDuplicateWarpRefreshToken(t *testing.T) {
 
 	a.HandleAccounts(rec, req)
 
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status=%d want 409 body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want 400 body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "duplicate warp token") {
-		t.Fatalf("body=%q want duplicate warp token", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "official web login") {
+		t.Fatalf("body=%q want official web login guidance", rec.Body.String())
 	}
 }
 
@@ -342,7 +342,7 @@ func TestHandleAccountByID_PutClearsLegacyWarpCredentialFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodPut, "/api/accounts/"+strconv.FormatInt(acc.ID, 10), strings.NewReader(`{"account_type":"warp","refresh_token":"warp-refresh","enabled":true,"name":"renamed"}`))
+	req := httptest.NewRequest(http.MethodPut, "/api/accounts/"+strconv.FormatInt(acc.ID, 10), strings.NewReader(`{"account_type":"warp","enabled":true,"name":"renamed"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HandleAccountByID(rec, req)
@@ -358,6 +358,12 @@ func TestHandleAccountByID_PutClearsLegacyWarpCredentialFields(t *testing.T) {
 	}
 	if stored.Token != "" || stored.ClientCookie != "" || stored.SessionCookie != "" {
 		t.Fatalf("legacy credential fields were retained: %#v", stored)
+	}
+	if stored.RefreshToken != "warp-refresh" || stored.Name != "renamed" {
+		t.Fatal("settings edit must preserve the private login session")
+	}
+	if strings.Contains(rec.Body.String(), "warp-refresh") || !strings.Contains(rec.Body.String(), `"warp_authenticated":true`) {
+		t.Fatalf("expected credential presence without the secret: %s", rec.Body.String())
 	}
 }
 

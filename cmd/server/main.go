@@ -129,10 +129,6 @@ func main() {
 		h.SetSessionStore(sessionStore)
 		slog.Debug("Session store initialized", "backend", "redis")
 
-		dedupStore := handler.NewRedisDedupStore(redisClient, s.RedisPrefix(), 2*time.Second)
-		h.SetDedupStore(dedupStore)
-		slog.Debug("Dedup store initialized", "backend", "redis")
-
 		auditLogger := audit.NewRedisLogger(redisClient, s.RedisPrefix(), 10000)
 		h.SetAuditLogger(auditLogger)
 		grokHandler.SetAuditLogger(auditLogger)

@@ -60,7 +60,7 @@ func (h *Handler) runBuildVideoCreateJob(ctx context.Context, job *videoJob, spe
 		fallbackPayload := cloneStringInterfaceMap(payload)
 		fallbackPayload["model"] = "grok-imagine-video-1.5-preview"
 		fallbackPayload["output"] = map[string]interface{}{"upload_url": uploadURL}
-		response, err = h.cliClient.doFallbackResponsesAt(leaseCtx, sess.acc, "/videos/generations", fallbackPayload)
+		response, err = h.cliClient.doFallbackRequest(leaseCtx, sess.acc, http.MethodPost, "/videos/generations", fallbackPayload)
 		if err != nil {
 			h.handleConsoleVideoJobError(job, lease, err)
 			return
@@ -117,12 +117,18 @@ func buildCLIVideoPayload(job *videoJob, spec ModelSpec, cfg *VideoConfig) (map[
 	}
 	if len(job.InputReferences) > 0 {
 		references := make([]map[string]interface{}, 0, len(job.InputReferences))
+		var total int64
 		for _, value := range job.InputReferences {
-			if !publicHTTPSURL(value) {
-				return nil, fmt.Errorf("Build video reference images must be public HTTPS URLs")
+			value = strings.TrimSpace(value)
+			size, err := validateBuildVideoReference(value)
+			if err != nil {
+				return nil, err
 			}
-			parsed, _ := url.Parse(strings.TrimSpace(value))
-			references = append(references, map[string]interface{}{"image_url": parsed.String()})
+			total += size
+			if total > maxResolvedMediaBytes {
+				return nil, fmt.Errorf("combined inline reference images exceed 32 MiB")
+			}
+			references = append(references, map[string]interface{}{"image_url": value})
 		}
 		payload["reference_images"] = references
 	}
@@ -177,7 +183,7 @@ func (h *Handler) pollBuildVideoJob(ctx context.Context, lease *consoleVideoJobL
 		var response *http.Response
 		var err error
 		if job.BuildFallback {
-			response, err = h.cliClient.doFallbackResource(ctx, sess.acc, http.MethodGet, "/videos/"+url.PathEscape(requestID))
+			response, err = h.cliClient.doFallbackRequest(ctx, sess.acc, http.MethodGet, "/videos/"+url.PathEscape(requestID), nil)
 		} else {
 			response, err = h.cliClient.doResponseResource(ctx, sess.acc, http.MethodGet, "/videos/"+url.PathEscape(requestID), "")
 		}

@@ -7,10 +7,16 @@ that client.
 ## Authentication Policy
 
 Orchids-2api does not read, decrypt, or parse the official Warp desktop
-client's local credential storage. Warp accounts authenticate only with the
-refresh token explicitly saved in the account store. The service exchanges that
-refresh token through Warp's official Secure Token endpoint and performs the
-normal client-login handshake.
+client's local credential storage. New Warp accounts must be added through the
+official web/device login at `app.warp.dev`. Manual token creation, credential
+replacement via account updates, and Warp account file imports are disabled.
+Account exports exclude Warp; log in again on the destination server.
+
+The official flow obtains a refresh token, stored privately for automatic
+session renewal through Warp's Secure Token endpoint and the normal client-login
+handshake. This protocol dependency is not a second user-facing login method.
+Management responses expose only a `warp_authenticated` credential-presence
+flag, never the session token. Existing stored accounts are not deleted.
 
 ## Multi-Agent Transport
 
@@ -50,8 +56,9 @@ hex/byte-template builder has been removed.
 
 ## Borrowed Behaviors
 
-- Authenticate only with the explicit account `refresh_token`; no persisted
-  client file, JSON payload, callback URL, cookie, or cached JWT is accepted.
+- Obtain session credentials only through official web/device login; no manual
+  token, client file, JSON credential payload, callback URL, cookie, or cached JWT
+  is accepted as an account creation method.
 - Match official WARP headers for client version and OS metadata.
 - Suppress `User-Agent` and rely on `X-Warp-Client-ID`, matching Warp's custom
   client-role header behavior.

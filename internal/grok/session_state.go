@@ -176,6 +176,13 @@ func (h *Handler) loadReasoningReplay(model, key string) string {
 		return ""
 	}
 	h.sessionMu.Lock()
+	if latest, ok := h.replay[mapKey]; ok && time.Now().Before(latest.ExpiresAt) {
+		h.sessionMu.Unlock()
+		return latest.EncryptedContent
+	}
+	if h.replay == nil {
+		h.replay = map[string]reasoningReplayEntry{}
+	}
 	h.replay[mapKey] = reasoningReplayEntry{EncryptedContent: persisted.EncryptedContent, ExpiresAt: persisted.ExpiresAt}
 	h.sessionMu.Unlock()
 	return persisted.EncryptedContent
@@ -187,17 +194,17 @@ func (h *Handler) storeReasoningReplay(model, key, encrypted string) {
 		return
 	}
 	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+	if h.replay == nil {
+		h.replay = map[string]reasoningReplayEntry{}
+	}
 	h.replay[replayMapKey(model, key)] = reasoningReplayEntry{EncryptedContent: encrypted, ExpiresAt: time.Now().Add(grokSessionStateTTL)}
-	h.sessionMu.Unlock()
+	// Serialize persistence with invalidation. A detached save must not resurrect
+	// a rejected ciphertext after a later request has already cleared it.
 	if h.lb != nil && h.lb.Store != nil {
-		persistentStore := h.lb.Store
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			_ = persistentStore.SaveReasoningReplay(ctx, &store.StoredReasoningReplay{
-				Model: model, SessionKey: key, EncryptedContent: encrypted,
-			}, grokSessionStateTTL)
-		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		_ = h.lb.Store.SaveReasoningReplay(ctx, &store.StoredReasoningReplay{Model: model, SessionKey: key, EncryptedContent: encrypted}, grokSessionStateTTL)
 	}
 }
 
@@ -263,48 +270,39 @@ func nativeInputHasEncryptedReasoning(input []interface{}) bool {
 }
 
 func encryptedReasoningFromResponse(raw []byte) string {
-	lines := strings.Split(string(raw), "\n")
-	for index := len(lines) - 1; index >= 0; index-- {
-		line := strings.TrimSpace(lines[index])
-		if strings.HasPrefix(line, "data:") {
-			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		}
-		if line == "" || line == "[DONE]" {
-			continue
-		}
-		var value interface{}
-		if json.Unmarshal([]byte(line), &value) == nil {
-			if encrypted := findEncryptedReasoning(value); encrypted != "" {
-				return encrypted
+	var response map[string]interface{}
+	if json.Unmarshal(raw, &response) == nil {
+		return responseEncryptedReasoning(response)
+	}
+	latest := ""
+	_ = readResponseSSE(strings.NewReader(string(raw)), func(_ string, data string) error {
+		var event map[string]interface{}
+		if json.Unmarshal([]byte(data), &event) == nil {
+			if encrypted := responseEncryptedReasoning(event); encrypted != "" {
+				latest = encrypted
 			}
 		}
-	}
-	var value interface{}
-	if json.Unmarshal(raw, &value) == nil {
-		return findEncryptedReasoning(value)
-	}
-	return ""
+		return nil
+	})
+	return latest
 }
 
-func findEncryptedReasoning(value interface{}) string {
-	switch item := value.(type) {
-	case map[string]interface{}:
-		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
-			if encrypted := strings.TrimSpace(fmt.Sprint(item["encrypted_content"])); encrypted != "" && encrypted != "<nil>" {
-				return encrypted
-			}
-		}
-		for _, child := range item {
-			if encrypted := findEncryptedReasoning(child); encrypted != "" {
-				return encrypted
-			}
-		}
-	case []interface{}:
-		for _, child := range item {
-			if encrypted := findEncryptedReasoning(child); encrypted != "" {
-				return encrypted
-			}
-		}
+// Only protocol reasoning items count; arbitrary nested tool arguments or
+// metadata must not become the next request's encrypted reasoning state.
+func responseEncryptedReasoning(event map[string]interface{}) string {
+	response, _ := event["response"].(map[string]interface{})
+	if response == nil {
+		response = event
+	}
+	if encrypted := consoleExtractEncryptedReasoning(response); encrypted != "" {
+		return encrypted
+	}
+	item, _ := event["item"].(map[string]interface{})
+	if item == nil {
+		item = event
+	}
+	if interfaceString(item["type"]) == "reasoning" {
+		return interfaceString(item["encrypted_content"])
 	}
 	return ""
 }

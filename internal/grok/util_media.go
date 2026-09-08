@@ -485,10 +485,12 @@ func normalizeImageEditSize(size string) (string, error) {
 	if s == "" {
 		return "1024x1024", nil
 	}
-	if s != "1024x1024" {
-		return "", fmt.Errorf("image edit currently only supports size '1024x1024'")
+	switch s {
+	case "auto", "1024x1024", "1024x1536", "1536x1024":
+		return s, nil
+	default:
+		return "", fmt.Errorf("image edit size must be auto/1024x1024/1024x1536/1536x1024")
 	}
-	return "1024x1024", nil
 }
 
 func extractImageProgress(resp map[string]interface{}) (index int, progress int, ok bool) {

@@ -34,27 +34,9 @@ func (c *CLIClient) FetchBilling(ctx context.Context, acc *store.Account) (*CLIB
 		return nil, fmt.Errorf("grok cli billing is not configured")
 	}
 	ApplyCLIOAuthIdentity(acc)
-	token, err := c.oauth.AccessToken(ctx, acc)
+	resp, err := c.request(ctx, acc, http.MethodGet, c.baseURL()+"/billing?format=credits", nil, nil)
 	if err != nil {
 		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL()+"/billing?format=credits", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header = c.cliHeaders(acc, token)
-	// Billing uses the non-streaming CLI metadata names. Sending both aliases
-	// is harmless, while x-userid is required by the official endpoint.
-	if userID := strings.TrimSpace(acc.UserID); userID != "" {
-		req.Header.Set("x-userid", userID)
-	}
-	resp, err := c.doCLIRequest(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if err := decodeHTTPResponseBody(resp); err != nil {
-		_ = resp.Body.Close()
-		return nil, fmt.Errorf("decode grok cli billing response: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, cliOAuthMaxBodyBytes))
@@ -103,7 +85,7 @@ func (c *CLIClient) FetchBilling(ctx context.Context, acc *store.Account) (*CLIB
 	// The billing response does not consistently include the user's paid plan.
 	// The official CLI exposes it separately; it is useful account metadata but
 	// never a substitute for a numeric quota.
-	if tier, tierErr := c.fetchSubscriptionTier(ctx, acc, token); tierErr == nil && tier != "" {
+	if tier, tierErr := c.fetchSubscriptionTier(ctx, acc); tierErr == nil && tier != "" {
 		info.Subscription = tier
 	}
 	if !info.HasUsagePercent && info.PeriodEnd.IsZero() && !info.HasMonthly {
@@ -178,22 +160,10 @@ func cliBillingNumber(raw json.RawMessage) (float64, bool) {
 	return 0, false
 }
 
-func (c *CLIClient) fetchSubscriptionTier(ctx context.Context, acc *store.Account, token string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL()+"/user?include=subscription", nil)
+func (c *CLIClient) fetchSubscriptionTier(ctx context.Context, acc *store.Account) (string, error) {
+	resp, err := c.request(ctx, acc, http.MethodGet, c.baseURL()+"/user?include=subscription", nil, nil)
 	if err != nil {
 		return "", err
-	}
-	req.Header = c.cliHeaders(acc, token)
-	if userID := strings.TrimSpace(acc.UserID); userID != "" {
-		req.Header.Set("x-userid", userID)
-	}
-	resp, err := c.doCLIRequest(ctx, req)
-	if err != nil {
-		return "", err
-	}
-	if err := decodeHTTPResponseBody(resp); err != nil {
-		_ = resp.Body.Close()
-		return "", fmt.Errorf("decode grok cli subscription response: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, cliOAuthMaxBodyBytes))

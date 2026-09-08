@@ -141,7 +141,7 @@ func (h *Handler) forwardConsoleImageRequest(ctx context.Context, w http.Respons
 		return
 	}
 	defer sess.Close()
-	response, err := client.doConsoleDPoPRequestWithHeaders(ctx, sess.token, http.MethodPost, h.consoleURL(path), body, http.Header{
+	response, err := client.doConsoleDPoPRequestWithHeaders(withRateLimitAccount(ctx, sess.acc), sess.token, http.MethodPost, h.consoleURL(path), body, http.Header{
 		"Content-Type": []string{"application/json"},
 		"Accept":       []string{"application/json"},
 	})

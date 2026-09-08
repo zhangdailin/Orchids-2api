@@ -11,6 +11,26 @@ import (
 	"time"
 )
 
+func TestBrowserHTTPClientCustomHeaderDeadlineIsIsolated(t *testing.T) {
+	defaultClient := GetSharedBrowserHTTPClient("header-isolation-test", 10*time.Minute, nil)
+	longClient := GetSharedBrowserHTTPClientWithHeaderTimeout("header-isolation-test", 10*time.Minute, 0, nil)
+	if defaultClient == longClient {
+		t.Fatal("different header deadlines share a cached client")
+	}
+	if got := defaultClient.Transport.(*browserLikeRoundTripper).http1.ResponseHeaderTimeout; got != 2*time.Minute {
+		t.Fatal(got)
+	}
+	if got := longClient.Transport.(*browserLikeRoundTripper).http1.ResponseHeaderTimeout; got != 0 {
+		t.Fatal(got)
+	}
+	if longClient.Timeout != 10*time.Minute {
+		t.Fatal("total deadline lost")
+	}
+	if GetSharedBrowserHTTPClientWithHeaderTimeout("header-isolation-test", 10*time.Minute, 0, nil) != longClient {
+		t.Fatal("matching client not cached")
+	}
+}
+
 func TestDialHTTPSProxyAwareSupportsSOCKS5(t *testing.T) {
 	target := startEchoListener(t)
 	proxy := startSOCKS5Proxy(t)

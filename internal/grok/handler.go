@@ -55,8 +55,7 @@ type imageEditUploadInput struct {
 }
 
 type imageEditReference struct {
-	fileID     string
-	contentURL string
+	fileID string
 }
 
 func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
@@ -91,71 +90,44 @@ func (h *Handler) SetAuditLogger(logger audit.Logger) {
 	}
 }
 
-func (h *Handler) auditAttempt(ctx context.Context, acc *store.Account, provider string, attempt int, started time.Time, err error) {
+func (h *Handler) auditAttempt(ctx context.Context, acc *store.Account, provider string, attempt int, started time.Time, err error, stages ...string) {
+	stage := "request"
+	if len(stages) > 0 {
+		stage = stages[0]
+	}
+	h.auditAttemptDiagnostic(ctx, acc, provider, attempt, started, err, stage, nil, nil, "")
+}
+
+func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req *ChatCompletionsRequest, result chatOutcome) {
 	if h == nil || h.auditLogger == nil {
 		return
 	}
-	status := "ok"
-	metadata := map[string]interface{}{}
-	if err != nil {
+	status, message := result.Finish, ""
+	if result.Err != nil {
 		status = "error"
-		metadata["http_status"] = upstreamHTTPResponseStatus(err)
-		metadata["error_kind"] = fmt.Sprint(ClassifyUpstreamError(err))
+		message = result.Err.Error()
+	}
+	usage := result.Usage
+	prompt, _ := usage["prompt_tokens_details"].(map[string]interface{})
+	completion, _ := usage["completion_tokens_details"].(map[string]interface{})
+	metadata := map[string]interface{}{"finish_reason": result.Finish}
+	duration := int64(0)
+	if !req.startedAt.IsZero() {
+		duration = time.Since(req.startedAt).Milliseconds()
+		if !result.FirstToken.IsZero() {
+			metadata["first_token_ms"] = result.FirstToken.Sub(req.startedAt).Milliseconds()
+		}
 	}
 	accountID := int64(0)
+	provider := ""
 	if acc != nil {
 		accountID = acc.ID
+		provider = ProviderForAccount(acc)
 	}
-	h.auditLogger.Log(ctx, audit.Event{
-		RequestID: middleware.GetTraceID(ctx), Action: "grok_upstream_attempt", APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID,
-		Channel: "grok", Provider: provider, Attempt: attempt, Duration: time.Since(started).Milliseconds(), Status: status, Metadata: metadata,
-	})
-}
-
-func (h *Handler) auditQualityAttempt(ctx context.Context, acc *store.Account, provider string, attempt int, missing bool) {
-	if h == nil || h.auditLogger == nil {
-		return
-	}
-	accountID := int64(0)
-	if acc != nil {
-		accountID = acc.ID
-	}
-	status := "accepted"
-	if missing {
-		status = "missing_thinking"
-	}
-	h.auditLogger.Log(ctx, audit.Event{
-		RequestID: middleware.GetTraceID(ctx), Action: "grok_quality_attempt", APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID,
-		Channel: "grok", Provider: provider, Attempt: attempt, Status: status,
-	})
-}
-
-func (h *Handler) auditRequest(ctx context.Context, acc *store.Account, provider, model, status string, usage map[string]interface{}) {
-	if h == nil || h.auditLogger == nil {
-		return
-	}
-	accountID := int64(0)
-	if acc != nil {
-		accountID = acc.ID
-	}
-	input := interfaceToInt(firstNonNil(usage["input_tokens"], usage["prompt_tokens"]))
-	output := interfaceToInt(firstNonNil(usage["output_tokens"], usage["completion_tokens"]))
-	cached := 0
-	reasoning := 0
-	if details, _ := usage["input_tokens_details"].(map[string]interface{}); details != nil {
-		cached = interfaceToInt(details["cached_tokens"])
-	}
-	if details, _ := usage["prompt_tokens_details"].(map[string]interface{}); details != nil && cached == 0 {
-		cached = interfaceToInt(details["cached_tokens"])
-	}
-	if details, _ := usage["output_tokens_details"].(map[string]interface{}); details != nil {
-		reasoning = interfaceToInt(details["reasoning_tokens"])
-	}
-	h.auditLogger.Log(ctx, audit.Event{
-		RequestID: middleware.GetTraceID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Model: model,
-		Channel: "grok", Provider: provider, Status: status, InputTokens: input, OutputTokens: output,
-		CachedInputTokens: cached, ReasoningTokens: reasoning,
-	})
+	h.auditLogger.Log(ctx, audit.Event{RequestID: middleware.GetTraceID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
+		AccountID: accountID, Model: req.Model, Channel: "grok", Provider: provider, Status: status, Error: message, Duration: duration, Metadata: metadata,
+		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]),
+		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])})
 }
 
 // SetConnTracker lets the Grok selectors share the deployment-wide tracker
@@ -463,6 +435,11 @@ func (h *Handler) reserveAccount(acc *store.Account) (func(), bool) {
 }
 
 func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err error) {
+	// Invalid parameters and missing resources are request errors, not evidence
+	// that the credential is unusable. Do not poison account routing with them.
+	if status := parseUpstreamStatus(err); status >= 400 && status < 500 && status != 401 && status != 402 && status != 403 && status != 429 {
+		return
+	}
 	// Cloudflare / DPoP challenges are egress problems, not account problems.
 	// Do not cool or disable the account; the egress layer must re-solve.
 	if isEgressChallengeError(err) {
@@ -476,7 +453,8 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	if err != nil && isResourceExhaustedError(err) && acc != nil {
 		cooldown := 60 * time.Second
 		if meta := ParseRateLimitMetadata([]byte(err.Error())); meta != nil {
-			if remaining := teamCooldown.RetryAfterFor(meta.Scope, meta.TeamID, meta.Model); remaining > 0 {
+			identity := ProviderForAccount(acc) + ":" + rateLimitIdentity(withRateLimitAccount(ctx, acc), "")
+			if remaining := teamCooldown.RetryAfterFor(meta.Scope, identity, meta.Model); remaining > 0 {
 				cooldown = remaining
 			} else if meta.RetryAfter > 0 {
 				cooldown = meta.RetryAfter
@@ -783,20 +761,10 @@ func isSharedGrokRateLimitError(err error) bool {
 }
 
 func upstreamHTTPResponseStatus(err error) int {
-	switch parseUpstreamStatus(err) {
-	case http.StatusTooManyRequests:
-		return http.StatusTooManyRequests
-	case http.StatusForbidden:
-		return http.StatusForbidden
-	case http.StatusUnauthorized:
-		return http.StatusUnauthorized
-	case http.StatusServiceUnavailable:
-		return http.StatusServiceUnavailable
-	case http.StatusGatewayTimeout:
-		return http.StatusGatewayTimeout
-	default:
-		return http.StatusBadGateway
+	if status := parseUpstreamStatus(err); status >= 400 && status <= 599 {
+		return status
 	}
+	return http.StatusBadGateway
 }
 
 func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {

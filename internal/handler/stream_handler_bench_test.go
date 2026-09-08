@@ -78,20 +78,12 @@ func writeOpenAIFrameMultiWrite(w io.Writer, payload []byte) error {
 	return err
 }
 
-func BenchmarkMaskDedupKey(b *testing.B) {
-	key := "bash:echo hello world"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = maskDedupKey(key)
-	}
-}
-
-func BenchmarkToolValidationAndDedupWrite_Combined(b *testing.B) {
+func BenchmarkToolValidationWrite(b *testing.B) {
 	tool := "Write"
 	input := `{"file_path":"/tmp/a.txt","content":"hello"}`
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_, _, ok := evaluateToolCallInput(tool, input)
+		ok := validToolCallInput(tool, input)
 		if !ok {
 			b.Fatal("unexpected invalid input")
 		}

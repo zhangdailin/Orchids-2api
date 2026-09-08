@@ -41,10 +41,17 @@ func (rt *browserLikeRoundTripper) CloseIdleConnections() {
 var browserHTTPClientCache = clientPool{clients: make(map[string]*http.Client)}
 
 func GetSharedBrowserHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
+	return GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey, timeout, responseHeaderTimeoutForClient(timeout), proxyFunc)
+}
+
+// A zero headerTimeout leaves header waiting bounded by the HTTP total
+// deadline. Keep it in the cache key so custom long-lived inference clients
+// cannot inherit another caller's shorter HTTP/1 header deadline.
+func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
 	if proxyKey == "" {
 		proxyKey = "direct"
 	}
-	cacheKey := "browser|" + sharedHTTPClientCacheKey(proxyKey, timeout)
+	cacheKey := "browser|" + sharedHTTPClientCacheKey(proxyKey, timeout) + fmt.Sprintf("|headers=%d", headerTimeout)
 
 	browserHTTPClientCache.mu.RLock()
 	client, ok := browserHTTPClientCache.clients[cacheKey]
@@ -70,7 +77,7 @@ func GetSharedBrowserHTTPClient(proxyKey string, timeout time.Duration, proxyFun
 			IdleConnTimeout:       90 * time.Second,
 			TLSHandshakeTimeout:   15 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
-			ResponseHeaderTimeout: responseHeaderTimeoutForClient(timeout),
+			ResponseHeaderTimeout: headerTimeout,
 			TLSClientConfig:       &stdtls.Config{MinVersion: stdtls.VersionTLS12},
 		},
 		http2: &http2.Transport{

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -244,40 +245,31 @@ func listOnlineAccountTokens(onlineAccounts []map[string]interface{}) []string {
 
 // runWorkerPool fans items out across up to workers goroutines, honouring ctx
 // cancellation, and waits for all workers to drain before returning. Workers
-// stop taking new items once ctx is cancelled.
-func runWorkerPool[T any](ctx context.Context, items []T, workers int, process func(T)) {
-	if workers > len(items) {
-		workers = len(items)
-	}
-	if workers < 1 {
-		return
-	}
-	jobs := make(chan T)
+// skip upstream work on cancellation; canceled optionally records each skipped item.
+func runWorkerPool[T any](ctx context.Context, items []T, workers int, process func(T), canceled func(T)) {
+	workers = min(workers, len(items))
+	var next atomic.Int64
 	var wg sync.WaitGroup
-	worker := func() {
-		defer wg.Done()
-		for item := range jobs {
-			select {
-			case <-ctx.Done():
-				return
-			default:
+	for range max(0, workers) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				index := int(next.Add(1) - 1)
+				if index >= len(items) {
+					return
+				}
+				if ctx.Err() != nil {
+					if canceled == nil {
+						return
+					}
+					canceled(items[index])
+				} else {
+					process(items[index])
+				}
 			}
-			process(item)
-		}
+		}()
 	}
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		go worker()
-	}
-sendLoop:
-	for _, item := range items {
-		select {
-		case <-ctx.Done():
-			break sendLoop
-		case jobs <- item:
-		}
-	}
-	close(jobs)
 	wg.Wait()
 }
 
@@ -351,7 +343,7 @@ func (h *Handler) fetchOnlineAssetDetails(
 		if onItem != nil {
 			onItem(item.token, detail, err == nil)
 		}
-	})
+	}, nil)
 	return details, totalCount
 }
 
@@ -938,7 +930,7 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 			mu.Unlock()
 
 			task.record(token, ok, entry)
-		})
+		}, nil)
 
 		if ctx.Err() != nil {
 			task.finish("cancelled", "")

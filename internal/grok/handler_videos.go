@@ -358,6 +358,12 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 128<<20)
+	defer func() {
+		if r.MultipartForm != nil {
+			_ = r.MultipartForm.RemoveAll()
+		}
+	}()
 	req, err := parseVideosRequest(r)
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -407,11 +413,10 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if spec.Upstream == UpstreamCLI {
-		for _, reference := range req.InputReferences {
-			if !publicHTTPSURL(reference) {
-				http.Error(w, "Build video reference images must be public HTTPS URLs; local multipart uploads are not supported yet", http.StatusBadRequest)
-				return
-			}
+		req.InputReferences, err = h.resolveBuildVideoReferences(r.Context(), req.InputReferences, videoRequestOwner(r))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 	job := &videoJob{

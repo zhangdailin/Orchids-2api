@@ -211,8 +211,9 @@ func buildTestAccount(t *testing.T, userID, teamID string) *store.Account {
 }
 
 func TestResponseIDCaptureFromSSE(t *testing.T) {
-	line := []byte(`data: {"type":"response.created","response":{"id":"resp_stream"}}`)
-	if got := responseIDFromSSELine(line); got != "resp_stream" {
+	input := "event: response.completed\ndata: {\"response\":\ndata: {\"id\":\"resp_stream\"}}\n\n"
+	recorder := httptest.NewRecorder()
+	if got, _, _ := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6"); got != "resp_stream" {
 		t.Fatalf("response id=%q", got)
 	}
 }

@@ -1,0 +1,346 @@
+package grok
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/goccy/go-json"
+	"orchids-api/internal/audit"
+	"orchids-api/internal/store"
+)
+
+func parityFrame(kind string, fields map[string]interface{}) string {
+	if fields == nil {
+		fields = map[string]interface{}{}
+	}
+	fields["type"] = kind
+	raw, _ := json.Marshal(fields)
+	return "event: " + kind + "\ndata: " + string(raw) + "\n\n"
+}
+func parityItem(kind, id, call, name, args string) string {
+	return parityFrame(kind, map[string]interface{}{"item": map[string]interface{}{"type": "function_call", "id": id, "call_id": call, "name": name, "arguments": args}})
+}
+func parityTerminal(kind string) string {
+	return parityFrame(kind, map[string]interface{}{"response": map[string]interface{}{"status": strings.TrimPrefix(kind, "response.")}})
+}
+func parityText(text string) string {
+	return parityFrame("response.output_text.delta", map[string]interface{}{"delta": text})
+}
+func parityRun(t *testing.T, stream string, stop ...string) (string, chatOutcome) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	result := (&Handler{}).streamConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.6", Stream: true, Stop: stop}, strings.NewReader(stream))
+	return rec.Body.String(), result
+}
+
+type parityTool struct {
+	id, name, args string
+	starts         int
+}
+
+func parityTools(t *testing.T, stream string) map[int]*parityTool {
+	t.Helper()
+	calls := map[int]*parityTool{}
+	err := readResponseSSE(strings.NewReader(stream), func(_, data string) error {
+		if data == "[DONE]" {
+			return nil
+		}
+		var chunk map[string]interface{}
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return err
+		}
+		for _, raw := range interfaceSlice(chunk["choices"]) {
+			choice, _ := raw.(map[string]interface{})
+			delta, _ := choice["delta"].(map[string]interface{})
+			for _, raw := range interfaceSlice(delta["tool_calls"]) {
+				call, _ := raw.(map[string]interface{})
+				index := interfaceToInt(call["index"])
+				fn, _ := call["function"].(map[string]interface{})
+				if calls[index] == nil {
+					calls[index] = &parityTool{}
+				}
+				tool := calls[index]
+				if id := interfaceString(call["id"]); id != "" {
+					tool.id = id
+					tool.starts++
+				}
+				tool.name += streamString(fn["name"])
+				tool.args += streamString(fn["arguments"])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return calls
+}
+
+func TestParityToolsDeduplicateAndAssociateInterleavedArguments(t *testing.T) {
+	stream := parityItem("response.output_item.added", "fc_a", "call_a", "Read", "") + parityItem("response.output_item.added", "fc_b", "call_b", "Search", "")
+	stream += parityFrame("response.function_call_arguments.delta", map[string]interface{}{"item_id": "fc_a", "delta": "{\"path\":\"hello "})
+	stream += parityFrame("response.function_call_arguments.delta", map[string]interface{}{"item_id": "fc_b", "delta": "{\"query\":\"b\"}"})
+	stream += parityFrame("response.function_call_arguments.delta", map[string]interface{}{"item_id": "fc_a", "delta": " world\"}"})
+	stream += parityItem("response.output_item.done", "fc_a", "call_a", "Read", `{"path":"hello  world"}`) + parityItem("response.output_item.done", "fc_b", "call_b", "Search", `{"query":"b"}`) + parityTerminal("response.completed")
+	body, result := parityRun(t, stream)
+	if result.Err != nil {
+		t.Fatal(result.Err, body)
+	}
+	calls := parityTools(t, body)
+	if len(calls) != 2 || calls[0].starts != 1 || calls[1].starts != 1 || calls[0].args != `{"path":"hello  world"}` || calls[1].args != `{"query":"b"}` {
+		t.Fatalf("calls=%+v body=%s", calls, body)
+	}
+	var messages bytes.Buffer
+	if err := translateOpenAIChatStreamToAnthropic(&messages, strings.NewReader(body), "grok-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(messages.String(), `"type":"tool_use"`) != 2 || strings.Contains(messages.String(), "<nil>") {
+		t.Fatal(messages.String())
+	}
+}
+
+func TestParityRejectsUnknownToolEventsAndInvalidIdentity(t *testing.T) {
+	for name, stream := range map[string]string{
+		"unknown_item":         parityFrame("response.function_call_arguments.delta", map[string]interface{}{"item_id": "unknown", "delta": "{}"}),
+		"empty_name":           parityItem("response.output_item.added", "fc_a", "call_a", "", "{}"),
+		"duplicate_call_id":    parityItem("response.output_item.added", "fc_a", "call_a", "Read", "{}") + parityItem("response.output_item.added", "fc_b", "call_a", "Read", "{}"),
+		"invalid_json":         parityItem("response.output_item.added", "fc_a", "call_a", "Read", "{") + parityTerminal("response.completed"),
+		"conflicting_snapshot": parityItem("response.output_item.added", "fc_a", "call_a", "Read", "{}") + parityItem("response.output_item.done", "fc_a", "call_a", "Read", `{"a":1}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, result := parityRun(t, stream)
+			if result.Err == nil || strings.Contains(body, `"finish_reason":"stop"`) {
+				t.Fatal(body)
+			}
+		})
+	}
+}
+
+func TestParityTerminalErrorsReachMessages(t *testing.T) {
+	for name, stream := range map[string]string{
+		"failed":                parityFrame("response.failed", map[string]interface{}{"response": map[string]interface{}{"error": map[string]interface{}{"message": "synthetic failure"}}}),
+		"empty_completed":       parityTerminal("response.completed"),
+		"thinking_only":         parityFrame("response.reasoning_text.delta", map[string]interface{}{"delta": "plan"}) + parityTerminal("response.completed"),
+		"eof":                   parityText("partial"),
+		"done_without_terminal": "data: [DONE]\n\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			body, result := parityRun(t, stream)
+			if result.Err == nil {
+				t.Fatal(body)
+			}
+			var out bytes.Buffer
+			err := translateOpenAIChatStreamToAnthropic(&out, strings.NewReader(body), "grok-4.6")
+			if err == nil || !strings.Contains(out.String(), "event: error") || strings.Contains(out.String(), "event: message_stop") {
+				t.Fatal(err, out.String())
+			}
+		})
+	}
+	for _, data := range []string{"data: {bad-json}\n\n", "data: {\"error\":{\"message\":\"explicit failure\"}}\n\n"} {
+		var out bytes.Buffer
+		if err := translateOpenAIChatStreamToAnthropic(&out, strings.NewReader(data), "grok-4.6"); err == nil || strings.Contains(out.String(), "event: message_stop") {
+			t.Fatal(out.String())
+		}
+	}
+}
+
+func TestParityIncompleteAndStopSequences(t *testing.T) {
+	body, result := parityRun(t, parityText("partial")+parityTerminal("response.incomplete"))
+	if result.Err != nil || result.Finish != "length" {
+		t.Fatal(result, body)
+	}
+	var out bytes.Buffer
+	if err := translateOpenAIChatStreamToAnthropic(&out, strings.NewReader(body), "grok-4.6"); err != nil || !strings.Contains(out.String(), `"stop_reason":"max_tokens"`) {
+		t.Fatal(err, out.String())
+	}
+	for _, prefix := range []string{"before ", ""} {
+		body, result = parityRun(t, parityText(prefix+"E")+parityText("N")+parityText("D after")+parityTerminal("response.completed"), "END")
+		if result.Err != nil || strings.Contains(body, "after") || !strings.Contains(body, `"stop_sequence":"END"`) {
+			t.Fatal(result, body)
+		}
+		out.Reset()
+		if err := translateOpenAIChatStreamToAnthropic(&out, strings.NewReader(body), "grok-4.6"); err != nil || !strings.Contains(out.String(), `"stop_reason":"stop_sequence"`) {
+			t.Fatal(err, out.String())
+		}
+	}
+	filter := stopFilter{sequences: []string{"结束"}}
+	text := filter.push("正文结", false) + filter.push("束后缀", false) + filter.push("", true)
+	if text != "正文" || filter.matched != "结束" {
+		t.Fatal(text, filter)
+	}
+}
+
+func TestParityMissingToolIDsAndUsage(t *testing.T) {
+	for _, id := range []interface{}{nil, "", 42, "<nil>"} {
+		_, err := anthropicMessageToChat(anthropicMessage{Role: "assistant", Content: []interface{}{map[string]interface{}{"type": "tool_use", "id": id, "name": "Read", "input": map[string]interface{}{}}}})
+		if err == nil || strings.Contains(err.Error(), "duplicate") {
+			t.Fatal(id, err)
+		}
+	}
+	for _, cached := range []int{0, 80, 180} {
+		usage := anthropicUsageFromOpenAI(map[string]interface{}{"prompt_tokens": 100, "completion_tokens": 10, "prompt_tokens_details": map[string]interface{}{"cached_tokens": cached}})
+		if interfaceToInt(usage["input_tokens"])+interfaceToInt(usage["cache_read_input_tokens"]) != 100 {
+			t.Fatal(usage)
+		}
+	}
+}
+
+type parityNoticeWriter struct {
+	*httptest.ResponseRecorder
+	notice chan struct{}
+	once   bool
+}
+
+func (w *parityNoticeWriter) Write(data []byte) (int, error) {
+	if !w.once && bytes.Contains(data, []byte(`"name":"Read"`)) {
+		w.once = true
+		close(w.notice)
+	}
+	return w.ResponseRecorder.Write(data)
+}
+func TestParityToolsAreVisibleBeforeStreamCompletes(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+	w := &parityNoticeWriter{ResponseRecorder: httptest.NewRecorder(), notice: make(chan struct{})}
+	done := make(chan chatOutcome, 1)
+	go func() { done <- (&Handler{}).streamConsoleChat(w, &ChatCompletionsRequest{Model: "grok-4.6"}, reader) }()
+	_, _ = io.WriteString(writer, parityItem("response.output_item.added", "fc_a", "call_a", "Read", ""))
+	select {
+	case <-w.notice:
+	case <-time.After(time.Second):
+		t.Fatal("tool identity buffered until EOF")
+	}
+	_, _ = io.WriteString(writer, parityItem("response.output_item.done", "fc_a", "call_a", "Read", "{}")+parityTerminal("response.completed"))
+	select {
+	case result := <-done:
+		if result.Err != nil {
+			t.Fatal(result.Err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal event did not complete the response")
+	}
+}
+
+func TestParityReasoningAndSearchBlocks(t *testing.T) {
+	stream := ""
+	for _, id := range []string{"rs1", "rs2"} {
+		stream += parityFrame("response.output_item.added", map[string]interface{}{"item": map[string]interface{}{"type": "reasoning", "id": id}})
+		stream += parityFrame("response.reasoning_summary_text.delta", map[string]interface{}{"item_id": id, "delta": "plan " + id})
+		stream += parityFrame("response.reasoning_text.delta", map[string]interface{}{"item_id": id, "delta": "duplicate " + id})
+		stream += parityFrame("response.output_item.done", map[string]interface{}{"item": map[string]interface{}{"type": "reasoning", "id": id, "encrypted_content": "signature_" + id}})
+	}
+	search := map[string]interface{}{"type": "web_search_call", "id": "ws1", "status": "completed", "action": map[string]interface{}{"query": "current news", "sources": []interface{}{map[string]interface{}{"url": "https://example.com/news", "title": "News"}}}}
+	stream += parityFrame("response.output_item.added", map[string]interface{}{"item": search}) + parityFrame("response.output_item.done", map[string]interface{}{"item": search})
+	stream += parityText("answer") + parityFrame("response.output_text.annotation.added", map[string]interface{}{"annotation": map[string]interface{}{"type": "url_citation", "url": "https://example.com/news", "title": "News"}}) + parityTerminal("response.completed")
+	body, result := parityRun(t, stream)
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	var out bytes.Buffer
+	if err := translateOpenAIChatStreamToAnthropic(&out, strings.NewReader(body), "grok-4.6"); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if strings.Count(s, `"content_block":{"signature":"","thinking":"","type":"thinking"}`) != 2 || strings.Contains(s, "duplicate") || strings.Count(s, `"type":"server_tool_use"`) != 1 || strings.Count(s, `"type":"web_search_tool_result"`) != 1 || !strings.Contains(s, `"type":"citations_delta"`) {
+		t.Fatal(s)
+	}
+}
+
+func TestParityClientSearchToolsRemainClientTools(t *testing.T) {
+	h := &Handler{}
+	spec, _ := ResolveModel("console/grok-4.3")
+	request := &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}, Tools: []ToolDef{{Type: "function", Function: map[string]interface{}{"name": "web_search", "parameters": map[string]interface{}{"type": "object"}}}}}
+	payload, err := h.responsesPayloadFromChat(spec, request, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := interfaceMaps(payload["tools"])
+	if len(tools) != 1 || tools[0]["type"] != "function" || tools[0]["parameters"] == nil {
+		t.Fatal(tools)
+	}
+	request.Tools = nil
+	payload, err = h.responsesPayloadFromChat(spec, request, false)
+	if err != nil || len(interfaceMaps(payload["tools"])) != 0 {
+		t.Fatal(payload, err)
+	}
+}
+
+type parityAuditLog struct{ events []audit.Event }
+
+func (l *parityAuditLog) Log(_ context.Context, event audit.Event) {
+	l.events = append(l.events, event)
+}
+func TestParityAuditCapturesTerminalUsageAndFailure(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		var events parityAuditLog
+		h := &Handler{auditLogger: &events}
+		kind := "response.completed"
+		response := map[string]interface{}{"status": "completed", "usage": map[string]interface{}{"input_tokens": 100, "output_tokens": 10, "input_tokens_details": map[string]interface{}{"cached_tokens": 80}}}
+		if failed {
+			kind = "response.failed"
+			response["error"] = map[string]interface{}{"message": "failed upstream"}
+		}
+		_, _, result := copyNativeCLIResponseAndCaptureModel(httptest.NewRecorder(), strings.NewReader(parityText("hello")+parityFrame(kind, map[string]interface{}{"response": response})), "text/event-stream", "grok-4.6")
+		h.auditChatOutcome(context.Background(), &store.Account{ID: 1}, &ChatCompletionsRequest{Model: "grok-4.6", startedAt: time.Now().Add(-time.Second)}, result)
+		if len(events.events) != 1 || events.events[0].InputTokens != 100 || events.events[0].CachedInputTokens != 80 || (events.events[0].Status == "error") != failed {
+			t.Fatal(events.events)
+		}
+	}
+}
+
+type parityBlockingSource struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (s *parityBlockingSource) Read([]byte) (int, error) { <-s.closed; return 0, io.EOF }
+func (s *parityBlockingSource) Close() error             { s.once.Do(func() { close(s.closed) }); return nil }
+func TestParityAliasCancellationClosesUpstream(t *testing.T) {
+	source := &parityBlockingSource{closed: make(chan struct{})}
+	body := rewriteBuildToolAliasResponse(source, "text/event-stream", nil)
+	_ = body.Close()
+	select {
+	case <-source.closed:
+	case <-time.After(time.Second):
+		t.Fatal("upstream source remained open")
+	}
+}
+
+func TestParityNonStreamingDoesNotLeakReasoningAndPreservesAllMessages(t *testing.T) {
+	for _, onlyReasoning := range []bool{false, true} {
+		output := []interface{}{map[string]interface{}{"type": "reasoning", "content": []interface{}{map[string]interface{}{"type": "reasoning_text", "text": "private plan"}}}}
+		if !onlyReasoning {
+			for _, text := range []string{"first ", " second"} {
+				output = append(output, map[string]interface{}{"type": "message", "content": []interface{}{map[string]interface{}{"type": "output_text", "text": text}}})
+			}
+		}
+		data, _ := json.Marshal(map[string]interface{}{"status": "completed", "output": output})
+		rec := httptest.NewRecorder()
+		result := (&Handler{}).collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.6"}, bytes.NewReader(data))
+		if onlyReasoning {
+			if result.Err == nil {
+				t.Fatal("reasoning-only completion accepted")
+			}
+		} else if result.Err != nil || !strings.Contains(rec.Body.String(), `"content":"first  second"`) {
+			t.Fatal(result, rec.Body.String())
+		}
+	}
+}
+
+type parityFailedWriter struct{}
+
+func (*parityFailedWriter) Write([]byte) (int, error) { return 0, errors.New("client disconnected") }
+func TestParityMessagesPropagatesWriteFailure(t *testing.T) {
+	err := translateOpenAIChatStreamToAnthropic(&parityFailedWriter{}, strings.NewReader("data: [DONE]\n\n"), "grok-4.6")
+	if err == nil || !strings.Contains(err.Error(), "client disconnected") {
+		t.Fatal(err)
+	}
+}

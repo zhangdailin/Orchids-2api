@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/andybalholm/brotli"
@@ -67,10 +68,7 @@ type NSFWEnableResult struct {
 }
 
 func New(cfg *config.Config) *Client {
-	timeout := 120 * time.Second
-	if cfg != nil && cfg.RequestTimeout > 0 {
-		timeout = time.Duration(cfg.RequestTimeout) * time.Second
-	}
+	timeout := cfg.GrokRequestTimeout(ProviderWeb)
 	baseProxyOverride := strings.TrimSpace(getProxyField(cfg, "base"))
 	assetProxyOverride := strings.TrimSpace(getProxyField(cfg, "asset"))
 	baseProxy := resolveGrokProxy(cfg, baseProxyOverride)
@@ -682,11 +680,11 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			releaseLease = lease.Release
 		}
 
+		do := httpClient.Do
 		if lease != nil {
-			resp, err = lease.Do(req)
-		} else {
-			resp, err = httpClient.Do(req)
+			do = lease.Do
 		}
+		resp, err = doUpstreamHTTP(req, do, 0)
 		if err != nil {
 			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
 				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeTransportError)
@@ -694,22 +692,6 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			releaseLease()
 			if attempt >= maxRetries {
 				return nil, err
-			}
-			delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, 0, 0)
-			lastDelay = delay
-			if !sleepWithContext(ctx, delay) {
-				return nil, ctx.Err()
-			}
-			continue
-		}
-		if err := decodeHTTPResponseBody(resp); err != nil {
-			_ = resp.Body.Close()
-			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
-				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeTransportError)
-			}
-			releaseLease()
-			if attempt >= maxRetries {
-				return nil, fmt.Errorf("grok upstream decode failed: %w", err)
 			}
 			delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, 0, 0)
 			lastDelay = delay
@@ -841,7 +823,7 @@ func (c *Client) doChat(ctx context.Context, token string, payload map[string]in
 // separate from doChat so the transport selector can fall back without
 // recursively calling itself.
 func (c *Client) doRESTChat(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
-	if err := rateLimitEndpoint(ctx, "grok.com"); err != nil {
+	if err := waitScopedRateLimit(ctx, ProviderWeb, token, parseLooseStringAny(payload["modelName"]), c.cfg.GrokRequestsPerSecond(ProviderWeb)); err != nil {
 		return nil, err
 	}
 	body, err := json.Marshal(payload)
@@ -850,7 +832,11 @@ func (c *Client) doRESTChat(ctx context.Context, token string, payload map[strin
 	}
 
 	reqURL := c.baseURL() + defaultChatPath
-	return c.doAppChatRequest(ctx, reqURL, body, c.appChatHeaders(token))
+	headers := c.appChatHeaders(token)
+	if media, _ := payload["mediaGenInput"].(map[string]interface{}); media["imageToImage"] != nil {
+		headers.Set("Referer", c.baseURL()+"/imagine")
+	}
+	return c.doAppChatRequest(ctx, reqURL, body, headers)
 }
 
 func (c *Client) doAppChatCreateAndRespond(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
@@ -1385,48 +1371,14 @@ func (c *Client) clearAssets(ctx context.Context, token string) (total int, succ
 	if err != nil {
 		return 0, 0, 0, err
 	}
-
-	total = len(assetIDs)
-	if total == 0 {
-		return 0, 0, 0, nil
-	}
-
-	type job struct {
-		assetID string
-	}
-	workerCount := 8
-	if total < workerCount {
-		workerCount = total
-	}
-
-	jobs := make(chan job)
-	results := make(chan bool, total)
-
-	for i := 0; i < workerCount; i++ {
-		go func() {
-			for item := range jobs {
-				if err := c.deleteAsset(ctx, token, item.assetID); err != nil {
-					results <- false
-				} else {
-					results <- true
-				}
-			}
-		}()
-	}
-
-	for _, id := range assetIDs {
-		jobs <- job{assetID: id}
-	}
-	close(jobs)
-
-	for i := 0; i < total; i++ {
-		if <-results {
-			success++
-		} else {
-			failed++
+	var successes atomic.Int64
+	runWorkerPool(ctx, assetIDs, 8, func(id string) {
+		if c.deleteAsset(ctx, token, id) == nil {
+			successes.Add(1)
 		}
-	}
-	return total, success, failed, nil
+	}, nil)
+	total, success = len(assetIDs), int(successes.Load())
+	return total, success, total - success, nil
 }
 
 func grpcWebEncode(payload []byte) []byte {
@@ -1681,7 +1633,7 @@ func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*ht
 		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
 	}
 
-	return util.GetSharedBrowserHTTPClient(proxyKey, timeout, proxyFunc)
+	return util.GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey, timeout, 0, proxyFunc)
 }
 
 func parseRetryAfter(raw string) time.Duration {

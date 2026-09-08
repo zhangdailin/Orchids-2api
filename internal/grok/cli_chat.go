@@ -7,36 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"orchids-api/internal/debug"
 	"orchids-api/internal/store"
 )
-
-// serveCLIChat serves a chat completion through the Build CLI upstream
-// (cli-chat-proxy.grok.com/v1/responses) using an OAuth account. It reuses the
-// console Responses payload builder and the console stream/collect parsers,
-// which already understand standard Responses SSE.
-
-func (h *Handler) serveCLIChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger) {
-	payload, err := h.responsesPayloadFromChat(spec, req, true)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	compatibilityWarnings := takeBuildCompatibilityWarnings(payload)
-	if compatibilityWarnings != "" {
-		w.Header().Set("X-Grok2API-Compatibility-Warnings", compatibilityWarnings)
-	}
-	resp, err := h.doCLIWithAutoSwitch(ctx, sess, payload, spec.UpstreamModel)
-	if err == nil && responseRequiresThinking(spec, req) {
-		resp, err = h.retryMissingThinking(ctx, sess, resp, ProviderBuild,
-			func(exclude []int64) (*chatAccountSession, error) {
-				return h.openCLIAccountSession(ctx, exclude, spec.UpstreamModel)
-			},
-			func() (*http.Response, error) { return h.cliClient.doResponses(ctx, sess.acc, payload) })
-	}
-	h.finishUpstreamChat(ctx, w, req, sess, logger, "cli", h.cliBaseURL()+"/responses",
-		func() http.Header { return h.cliHeaders(sess.acc, sess.token) }, payload, resp, err)
-}
 
 func (h *Handler) cliBaseURL() string {
 	if h != nil && h.cfg != nil {
@@ -52,13 +24,9 @@ func (h *Handler) cliHeaders(acc *store.Account, token string) http.Header {
 	return h.cliClient.cliHeaders(acc, token)
 }
 
-// doCLIWithAutoSwitch issues a CLI request, switching to another OAuth account
+// doCLIWithAutoSwitchAt issues a CLI request, switching to another OAuth account
 // on transient failures (401 after refresh, 5xx) while treating team-level 429
 // as shared (no switch).
-func (h *Handler) doCLIWithAutoSwitch(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID string) (*http.Response, error) {
-	return h.doCLIWithAutoSwitchAt(ctx, sess, payload, modelID, "/responses")
-}
-
 func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID, path string) (*http.Response, error) {
 	if sess == nil || sess.acc == nil {
 		return nil, fmt.Errorf("empty cli chat session")
@@ -66,9 +34,8 @@ func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSe
 	if h == nil || h.cliClient == nil {
 		return nil, fmt.Errorf("grok cli client not configured")
 	}
-	client := h.cliClient
 	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
-		func() (*http.Response, error) { return client.doResponsesAt(ctx, sess.acc, path, payload) },
+		func() (*http.Response, error) { return h.cliClient.doResponsesAt(ctx, sess.acc, path, payload) },
 		func(used []int64) (*chatAccountSession, error) { return h.openCLIAccountSession(ctx, used, modelID) }, nil)
 }
 

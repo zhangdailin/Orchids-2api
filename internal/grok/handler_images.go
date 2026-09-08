@@ -328,7 +328,6 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 	// Grok upstream may return only 2 images per call and may repeat.
 	// To reach N, request 1 image per call without rewriting the user's prompt.
 	maxAttempts := req.N * 2
-	promptVariants := grokAppChatImagePrompts(req.Prompt)
 	if maxAttempts < 4 {
 		maxAttempts = 4
 	}
@@ -344,11 +343,7 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 			break
 		}
 		count := req.N
-		prompt := strings.TrimSpace(req.Prompt)
-		if len(promptVariants) > 0 {
-			prompt = promptVariants[min(i, len(promptVariants)-1)]
-		}
-		payload := h.client.appChatImagePayload(spec, prompt, req.Size, count)
+		payload := h.client.appChatImagePayload(spec, req.Prompt, req.Size, count)
 		ensureImageNSFW(payload)
 		resp, err := h.doAppChatImageRequest(ctx, sess, spec, &payload, allowSwitch)
 		if err != nil {
@@ -428,48 +423,4 @@ func (h *Handler) doAppChatImageRequest(ctx context.Context, sess *chatAccountSe
 		return h.doAutoSwitchRequest(ctx, sess, payload, nil, (*Client).doAppChatCreateAndRespond)
 	}
 	return h.doSingleAccountRequest(ctx, sess, *payload, markAllGrokAccountStatuses, (*Client).doAppChatCreateAndRespond)
-}
-
-func grokAppChatImagePrompts(prompt string) []string {
-	first := grokAppChatImagePrompt(prompt)
-	if first == "" {
-		return nil
-	}
-	variants := []string{first}
-	if looksLikeShortChinesePortraitPrompt(prompt) {
-		variants = append(variants, "Draw a safe-for-work portrait photo of an adult woman, fully clothed, non-sexual, tasteful fashion style, natural lighting, high quality.")
-	}
-	return uniqueStrings(variants)
-}
-
-func looksLikeShortChinesePortraitPrompt(prompt string) bool {
-	p := strings.TrimSpace(prompt)
-	if p == "" || len([]rune(p)) > 18 {
-		return false
-	}
-	hasChinese := false
-	for _, r := range p {
-		if r >= '\u4e00' && r <= '\u9fff' {
-			hasChinese = true
-			break
-		}
-	}
-	if !hasChinese {
-		return false
-	}
-	lower := strings.ToLower(p)
-	return strings.Contains(lower, "美女") ||
-		strings.Contains(lower, "女生") ||
-		strings.Contains(lower, "女孩") ||
-		strings.Contains(lower, "女人") ||
-		strings.Contains(lower, "人像") ||
-		strings.Contains(lower, "照片")
-}
-
-func grokAppChatImagePrompt(prompt string) string {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return prompt
-	}
-	return prompt
 }

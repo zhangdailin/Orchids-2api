@@ -708,7 +708,7 @@ func (h *Handler) doConsoleVoice(r *http.Request, modelID, method, path string, 
 			status: http.StatusServiceUnavailable, code: "account_unavailable", err: fmt.Errorf("no available Grok Console account: %w", err),
 		}
 	}
-	resp, err := h.currentClient().doConsoleDPoPRequestWithHeaders(r.Context(), sess.token, method, h.consoleURL(path), body, headers)
+	resp, err := h.currentClient().doConsoleDPoPRequestWithHeaders(withRateLimitAccount(r.Context(), sess.acc), sess.token, method, h.consoleURL(path), body, headers)
 	if err != nil {
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(r.Context(), sess.acc, err)

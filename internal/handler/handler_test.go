@@ -2,12 +2,8 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"net/http"
 	"testing"
-	"time"
-
-	"orchids-api/internal/prompt"
 )
 
 func TestComputeRequestHash_ChangesWithAuthPathBody(t *testing.T) {
@@ -36,126 +32,5 @@ func TestComputeRequestHash_ChangesWithAuthPathBody(t *testing.T) {
 	}
 	if h1 == h.computeRequestHash(mkReq("/v1/messages", "Bearer x"), bodyB) {
 		t.Fatalf("expected body to affect hash")
-	}
-}
-
-func TestComputeSemanticRequestHash_StableAndScoped(t *testing.T) {
-	h := &Handler{}
-	mkReq := func(path, auth string) *http.Request {
-		r, _ := http.NewRequest(http.MethodPost, "http://example.com"+path, bytes.NewReader([]byte("{}")))
-		if auth != "" {
-			r.Header.Set("Authorization", auth)
-		}
-		return r
-	}
-	base := ClaudeRequest{
-		Model:  "claude-3-5-sonnet",
-		Stream: true,
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "Hi!   there"}},
-		},
-	}
-
-	h1 := h.computeSemanticRequestHash(mkReq("/v1/messages", "Bearer x"), base)
-	h2 := h.computeSemanticRequestHash(mkReq("/v1/messages", "Bearer x"), base)
-	if h1 == "" || h1 != h2 {
-		t.Fatalf("expected stable semantic hash, got %q vs %q", h1, h2)
-	}
-
-	withConversation := base
-	withConversation.ConversationID = "conv-1"
-	if h1 == h.computeSemanticRequestHash(mkReq("/v1/messages", "Bearer x"), withConversation) {
-		t.Fatalf("expected conversation to affect semantic hash")
-	}
-
-	withDifferentUserText := base
-	withDifferentUserText.Messages = []prompt.Message{
-		{Role: "user", Content: prompt.MessageContent{Text: "Different question"}},
-	}
-	if h1 == h.computeSemanticRequestHash(mkReq("/v1/messages", "Bearer x"), withDifferentUserText) {
-		t.Fatalf("expected user text to affect semantic hash")
-	}
-}
-
-func TestComputeSemanticRequestHash_SkipsToolResultFollowup(t *testing.T) {
-	h := &Handler{}
-	req, _ := http.NewRequest(http.MethodPost, "http://example.com/v1/messages", bytes.NewReader([]byte("{}")))
-
-	followup := ClaudeRequest{
-		Model:  "claude-3-5-sonnet",
-		Stream: true,
-		Messages: []prompt.Message{
-			{Role: "user", Content: prompt.MessageContent{Text: "帮我优化这个项目"}},
-			{
-				Role: "assistant",
-				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
-					{
-						Type:  "tool_use",
-						ID:    "tool_1",
-						Name:  "Read",
-						Input: map[string]interface{}{"file_path": "/tmp/api.py"},
-					},
-				}},
-			},
-			{
-				Role: "user",
-				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
-					{
-						Type:      "tool_result",
-						ToolUseID: "tool_1",
-						Content:   "file one",
-					},
-				}},
-			},
-		},
-	}
-
-	if got := h.computeSemanticRequestHash(req, followup); got != "" {
-		t.Fatalf("expected empty semantic hash for tool_result follow-up, got %q", got)
-	}
-}
-
-func TestRegisterRequest_DedupWindowAndInFlight(t *testing.T) {
-	h := &Handler{
-		dedupStore: NewMemoryDedupStore(duplicateWindow, duplicateCleanupWindow),
-	}
-	key := "k"
-	ctx := context.Background()
-
-	dup, inFlight := h.dedupStore.Register(ctx, key)
-	if dup || inFlight {
-		t.Fatalf("first request should not be dup/inflight, got dup=%v inflight=%v", dup, inFlight)
-	}
-
-	dup, inFlight = h.dedupStore.Register(ctx, key)
-	if !dup {
-		t.Fatalf("second immediate request should be treated as duplicate")
-	}
-	if !inFlight {
-		t.Fatalf("expected inflight=true while original is in flight")
-	}
-
-	h.dedupStore.Finish(ctx, key)
-	dup, inFlight = h.dedupStore.Register(ctx, key)
-	if !dup {
-		t.Fatalf("request within dedup window should still be treated as duplicate")
-	}
-	if inFlight {
-		t.Fatalf("expected inflight=false after finish")
-	}
-}
-
-func TestDedupStore_WindowExpiry(t *testing.T) {
-	store := NewMemoryDedupStore(100*time.Millisecond, 10*time.Second)
-	ctx := context.Background()
-
-	store.Register(ctx, "hash1")
-	store.Finish(ctx, "hash1")
-
-	time.Sleep(150 * time.Millisecond)
-
-	dup, _ := store.Register(ctx, "hash1")
-	if dup {
-		t.Fatal("should not be duplicate after window expiry")
 	}
 }

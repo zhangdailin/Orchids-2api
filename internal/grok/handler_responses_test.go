@@ -281,7 +281,7 @@ func TestWriteResponsesStreamFromChatFailsEmptyAndPrematureStreams(t *testing.T)
 func TestCopyNativeCLIResponseAddsFailedTerminalOnPrematureEOF(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	input := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n"
-	id, _ := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
+	id, _, _ := copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
 	if id != "resp_1" {
 		t.Fatalf("id=%q", id)
 	}
@@ -294,7 +294,7 @@ func TestCopyNativeCLIResponseAddsFailedTerminalOnPrematureEOF(t *testing.T) {
 func TestCopyNativeCLIResponseKeepsValidTerminal(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	input := "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\ndata: [DONE]\n\n"
-	_, _ = copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
+	_, _, _ = copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader(input), "text/event-stream", "grok-4.6")
 	if count := strings.Count(recorder.Body.String(), "response.failed"); count != 0 {
 		t.Fatalf("unexpected failure: %s", recorder.Body.String())
 	}

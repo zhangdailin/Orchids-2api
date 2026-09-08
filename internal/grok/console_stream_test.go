@@ -31,7 +31,7 @@ func TestStreamConsoleChatSeparatesReasoningFromContent(t *testing.T) {
 	}
 }
 
-func TestStreamConsoleChatPrefersRawReasoningOverDuplicateSummary(t *testing.T) {
+func TestStreamConsoleChatStreamsFirstReasoningSourceWithoutDuplicates(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	stream := strings.Join([]string{
 		"event: response.reasoning_summary_text.delta",
@@ -46,8 +46,8 @@ func TestStreamConsoleChatPrefersRawReasoningOverDuplicateSummary(t *testing.T) 
 	}, "\n")
 	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream))
 	raw := recorder.Body.String()
-	if !strings.Contains(raw, `"reasoning_content":"raw reasoning"`) || strings.Contains(raw, "duplicate summary") {
-		t.Fatalf("raw reasoning precedence failed: %q", raw)
+	if !strings.Contains(raw, `"reasoning_content":"duplicate summary"`) || strings.Contains(raw, "raw reasoning") {
+		t.Fatalf("first reasoning source should stream immediately without later duplication: %q", raw)
 	}
 }
 

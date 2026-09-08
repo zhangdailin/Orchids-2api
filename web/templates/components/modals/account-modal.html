@@ -33,10 +33,16 @@
          <textarea class="form-input account-token-input" id="clientCookie" rows="8" wrap="off" spellcheck="false" required placeholder="每行一个 __session"></textarea>
          <small id="tokenHint" class="helper-text">按账号类型填写对应凭证</small>
        </div>
+       <div class="form-group" id="puterWebLoginGroup" hidden>
+         <label class="form-label">官方 Puter 登录（试验）</label>
+         <button class="btn btn-secondary" id="puterWebLoginButton" type="button" onclick="PuterWebLogin.start()">使用 Puter 官方网页登录</button>
+         <small class="helper-text">在 puter.com 登录并授权本管理站点，服务器验证后保存为 Puter 账号凭据；不接收密码。仅验证账号和额度，不自动发起付费 AI 请求。原有手填方式仍保留。</small>
+         <div class="account-import-status" id="puterWebLoginStatus" hidden></div>
+       </div>
        <div class="form-group" id="warpDeviceLoginGroup" hidden>
          <label class="form-label">官方 Warp 登录</label>
          <button class="btn btn-secondary" id="warpDeviceLoginButton" type="button" onclick="startWarpDeviceLogin()">使用 Warp 官方网页登录</button>
-         <small class="helper-text">浏览器将在 app.warp.dev 完成授权；本服务不会读取本地 Warp 文件或接收密码。</small>
+         <small class="helper-text">仅支持在 app.warp.dev 完成官方授权，不支持手填 Token 或文件导入。登录会话由服务器自动续期，不会返回到管理页面。</small>
          <div class="account-import-status" id="warpDeviceLoginStatus" hidden></div>
        </div>
        <div class="form-group" id="grokDeviceLoginGroup" hidden>

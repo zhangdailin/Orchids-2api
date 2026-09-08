@@ -890,6 +890,10 @@ func (s *redisStore) reasoningReplayKey(model, sessionKey string) string {
 	return s.prefix + "grok:reasoning_replay:" + hex.EncodeToString(digest[:])
 }
 
+func (s *redisStore) DeleteReasoningReplay(ctx context.Context, model, key string) error {
+	return s.client.Del(ctx, s.reasoningReplayKey(model, key)).Err()
+}
+
 func (s *redisStore) SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error {
 	if replay == nil || strings.TrimSpace(replay.Model) == "" || strings.TrimSpace(replay.SessionKey) == "" || strings.TrimSpace(replay.EncryptedContent) == "" {
 		return fmt.Errorf("invalid reasoning replay")

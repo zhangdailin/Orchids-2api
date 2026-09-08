@@ -282,3 +282,54 @@ func (h *Handler) resolveConsoleVideoFileIDs(ctx context.Context, payload map[st
 	}
 	return nil
 }
+
+// Resolve private input IDs before scheduling a Build job. Never send a local
+// path or another API key's asset upstream. Multipart data follows the same
+// byte/type limits as stored uploads.
+func (h *Handler) resolveBuildVideoReferences(ctx context.Context, references []string, owner string) ([]string, error) {
+	resolved := make([]string, 0, len(references))
+	var total int64
+	for index, reference := range references {
+		value := strings.TrimSpace(reference)
+		id := strings.TrimPrefix(value, localMediaInputPrefix+"image:")
+		if validMediaInputID(id) {
+			var err error
+			value, _, err = h.resolveMediaInputDataURL(ctx, id, owner, "image")
+			if err != nil {
+				return nil, fmt.Errorf("input_references[%d]: %w", index, err)
+			}
+		}
+		size, err := validateBuildVideoReference(value)
+		if err != nil {
+			return nil, fmt.Errorf("input_references[%d]: %w", index, err)
+		}
+		total += size
+		if total > maxResolvedMediaBytes {
+			return nil, fmt.Errorf("combined inline reference images exceed 32 MiB")
+		}
+		resolved = append(resolved, value)
+	}
+	return resolved, nil
+}
+
+func validateBuildVideoReference(value string) (int64, error) {
+	if publicHTTPSURL(value) {
+		return 0, nil
+	}
+	_, encoded, declared, err := parseDataURI(value)
+	if err != nil {
+		return 0, fmt.Errorf("reference image must be an HTTPS URL, image data URI, or owned media input ID")
+	}
+	if len(encoded) > base64.StdEncoding.EncodedLen(maxMediaInputBytes) {
+		return 0, fmt.Errorf("reference image exceeds 20 MiB")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(data) == 0 || len(data) > maxMediaInputBytes {
+		return 0, fmt.Errorf("reference image data is invalid or exceeds 20 MiB")
+	}
+	kind, mimeType, err := detectMediaInput(data, declared)
+	if err != nil || kind != "image" || !strings.EqualFold(mimeType, declared) {
+		return 0, fmt.Errorf("reference image MIME type does not match its content")
+	}
+	return int64(len(data)), nil
+}

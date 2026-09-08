@@ -24,7 +24,7 @@ function getSidebarAccountToken(acc) {
   if (!acc) return "";
   const type = normalizeSidebarAccountType(acc);
   if (type === "warp") {
-    return acc.refresh_token || "";
+    return ""; // Official-login session credentials are never exposed to the UI.
   }
   if (type === "puter") {
     return acc.client_cookie || acc.token || acc.session_cookie || "";
@@ -41,6 +41,7 @@ function isSidebarGrokOAuthAccount(acc) {
 }
 
 function hasSidebarAccountCredential(acc) {
+  if (normalizeSidebarAccountType(acc) === "warp") return acc?.warp_authenticated === true;
   return isSidebarGrokOAuthAccount(acc) || Boolean(getSidebarAccountToken(acc));
 }
 

@@ -34,6 +34,10 @@
 
 stored Response 归属记录按客户端 API Key 隔离。连续请求和资源管理会固定使用创建该 Response 的 Build OAuth 账号；归属记录过期或账号不可用时不会切换到其他账号。
 
+Build 原生 `context_management`、压缩输入和推理密文保留转发；`/responses/compact` 不可用时直接返回上游错误，不再调用模型生成本地摘要。中转层不按模型白名单降级 `reasoning.effort`，也不补写未指定的 `temperature` / `top_p`；具体值是否支持由上游决定。会话缓存键仍按租户隔离。
+
+中转层不再执行请求去重，`Idempotency-Key` 也不会触发中转层拦截；相同内容或相同键的并发、连续请求均正常转发。工具参数相同、文本重复、连续重复输出不再被自动抑制或中断。上游如自行实施去重，其行为不由本网关控制。切换工作目录会重建上游会话，但保留客户端完整消息历史。
+
 ### 1.4 Grok 图片与文件
 
 | 路径 | 方法 | 说明 |
@@ -97,6 +101,9 @@ stored Response 归属记录按客户端 API Key 隔离。连续请求和资源�
 | `/api/accounts/{id}` | GET/PUT/DELETE | 查询 / 更新 / 删除账号 |
 | `/api/accounts/{id}/check` | GET | 账号检查 |
 | `/api/accounts/{id}/usage` | GET | 账号用量 |
+| `/api/warp/device-auth` | POST | 启动 Warp 官方网页登录 |
+| `/api/warp/device-auth/{id}` | GET/DELETE | 查询授权状态 / 取消授权 |
+| `/api/puter/web-login` | POST | 试验：验证 Puter 官方弹窗授权并保存账号；需管理认证和同源 JSON 请求 |
 | `/api/keys` | GET/POST | API Key 列表 / 创建 |
 | `/api/keys/{id}` | PATCH/DELETE | 更新 API Key 状态或访问策略 / 删除 |
 | `/api/models` | GET/POST | 模型列表 / 创建模型 |
@@ -110,6 +117,12 @@ stored Response 归属记录按客户端 API Key 隔离。连续请求和资源�
 | `/api/config/cache/clear` | POST | 清空 prompt/token 缓存 |
 | `/api/token-cache/stats` | GET | Token 缓存统计 |
 | `/api/token-cache/clear` | POST | 清空 Token 缓存 |
+
+Warp 账号只能通过官方网页登录添加。`POST /api/accounts` 拒绝创建 Warp，
+`PUT /api/accounts/{id}` 仅允许编辑设置，不能提交 Token 或转换为其他账号类型。
+账号查询返回 `warp_authenticated` 表示服务器是否保存了登录凭据（不代表实时认证成功），不返回会话密钥。
+`/api/import` 跳过 Warp 并计入 `skipped`；`/api/export` 不包含 Warp 账号。
+迁移服务器后需重新进行 Warp 官方网页登录。已有账号及内部自动续期机制保留。
 
 ### 2.2 `/api/v1/admin/*` 和 `/v1/admin/*`
 
