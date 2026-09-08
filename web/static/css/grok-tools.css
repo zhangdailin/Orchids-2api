@@ -4,10 +4,40 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
+  width: min(100%, 1480px);
+  margin-inline: auto;
 }
 
 .grok-tools-page .header-section {
   margin-bottom: 6px;
+}
+
+.grok-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding-block: 4px 2px;
+}
+
+.grok-page-header h1 {
+  margin: 4px 0 6px;
+}
+
+.grok-page-header p {
+  max-width: 720px;
+  margin: 0;
+}
+
+.grok-eyebrow {
+  color: var(--primary-color);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.grok-account-link {
+  flex: 0 0 auto;
 }
 
 .grok-tools-workspace {
@@ -17,8 +47,71 @@
   min-width: 0;
 }
 
+.grok-capability-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 58px;
+  padding: 12px 16px;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 24%, var(--border-color));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--primary-color) 7%, var(--bg-surface));
+}
+
+.capability-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--text-secondary);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--text-secondary) 14%, transparent);
+}
+
+.capability-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.capability-copy strong {
+  color: var(--text-main);
+  font-size: 0.92rem;
+}
+
+.capability-copy span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.grok-capability-banner.is-ready .capability-indicator {
+  background: var(--success-color, #22a06b);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--success-color, #22a06b) 14%, transparent);
+}
+
+.grok-capability-banner.is-warning {
+  border-color: color-mix(in srgb, #d58b18 32%, var(--border-color));
+  background: color-mix(in srgb, #d58b18 8%, var(--bg-surface));
+}
+
+.grok-capability-banner.is-warning .capability-indicator {
+  background: #d58b18;
+  box-shadow: 0 0 0 5px color-mix(in srgb, #d58b18 15%, transparent);
+}
+
+.capability-action {
+  color: var(--primary-color);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .grok-tools-toolbar {
   align-items: center;
+  padding: 6px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
 }
 
 .grok-tabs {
@@ -34,6 +127,33 @@
 
 .grok-tabs .tab-item {
   white-space: nowrap;
+  min-height: 46px;
+  padding: 7px 16px;
+}
+
+.grok-tabs .tab-item span,
+.grok-tabs .tab-item small {
+  display: block;
+}
+
+.grok-tabs .tab-item small {
+  margin-top: 1px;
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+
+.grok-tabs .tab-item small.is-ready {
+  color: var(--success-color, #198754);
+}
+
+.grok-tabs .tab-item small.is-unavailable {
+  color: #b36b00;
+}
+
+.grok-tabs .tab-item.active small {
+  color: inherit;
+  opacity: 0.78;
 }
 
 .grok-section {
@@ -67,6 +187,55 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 4%, transparent);
+}
+
+.advanced-settings {
+  grid-column: 1 / -1;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-surface-hover);
+}
+
+.advanced-settings > summary {
+  padding: 12px 14px;
+  color: var(--text-main);
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.advanced-settings[open] > summary {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.advanced-settings > .field-label {
+  display: block;
+  padding: 14px 14px 6px;
+}
+
+.advanced-settings > .form-input {
+  width: calc(100% - 28px);
+  margin: 0 14px 14px;
+}
+
+.unavailable-field {
+  opacity: 0.62;
+}
+
+.unavailable-field textarea:disabled {
+  cursor: not-allowed;
+}
+
+.grok-tools-page button:focus-visible,
+.grok-tools-page a:focus-visible,
+.grok-tools-page input:focus-visible,
+.grok-tools-page textarea:focus-visible,
+.grok-tools-page select:focus-visible,
+.grok-tools-page summary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary-color) 32%, transparent);
+  outline-offset: 2px;
 }
 
 .grok-panel h3,
@@ -1375,6 +1544,22 @@
   .grok-tools-page .header-section {
     flex-direction: column;
     gap: 8px;
+  }
+
+  .grok-page-header {
+    align-items: stretch;
+  }
+
+  .grok-account-link {
+    align-self: flex-start;
+  }
+
+  .grok-capability-banner {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .capability-action {
+    grid-column: 2;
   }
 
   .grok-tabs {

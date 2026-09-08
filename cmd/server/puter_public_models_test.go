@@ -13,13 +13,15 @@ func TestNormalizePuterPublicModelDetailsKeepsOnlyCurrentPolicy(t *testing.T) {
 		{ID: "deepseek-v4-flash", Name: ""},
 		{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"},
 		{ID: "openrouter:openai/gpt-5.6", Name: "OpenRouter GPT"},
+		{ID: "openrouter:minimax/minimax-m3:free", Name: "MiniMax M3 Free"},
+		{ID: "infron:deepseek/deepseek-v4-flash:free", Name: "DeepSeek V4 Flash Free"},
 	})
 
 	ids := make([]string, 0, len(got))
 	for _, item := range got {
 		ids = append(ids, item.ID)
 	}
-	want := []string{"claude-opus-5", "deepseek-v4-flash", "gemini-3.5-flash"}
+	want := []string{"claude-opus-5", "deepseek-v4-flash", "gemini-3.5-flash", "infron:deepseek/deepseek-v4-flash:free", "openrouter:minimax/minimax-m3:free"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("ids=%v want %v", ids, want)
 	}

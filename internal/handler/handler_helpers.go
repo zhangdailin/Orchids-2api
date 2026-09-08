@@ -496,3 +496,10 @@ func shouldRetryCurrentAccountWhenNoAlternative(category string) bool {
 		return false
 	}
 }
+
+func shouldRetryCurrentAccountForRequest(category, channel, errStr string) bool {
+	if shouldRetryCurrentAccountWhenNoAlternative(category) {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(channel), "puter") && isPuterModelScopedRateLimit(errStr)
+}

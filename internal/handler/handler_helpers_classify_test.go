@@ -36,3 +36,15 @@ func TestShouldRetryCurrentAccountWhenNoAlternative_ModelUnavailable(t *testing.
 		t.Fatal("expected model_unavailable to retry the current account when no alternative exists")
 	}
 }
+
+func TestShouldRetryCurrentPuterAccountForModelScopedRateLimit(t *testing.T) {
+	t.Parallel()
+
+	errStr := `puter API error: status=429, body={"code":"upstream_rate_limited"}`
+	if !shouldRetryCurrentAccountForRequest("rate_limit", "puter", errStr) {
+		t.Fatal("expected Puter provider-scoped 429 to retry the current healthy account")
+	}
+	if shouldRetryCurrentAccountForRequest("rate_limit", "puter", "HTTP 429 Too Many Requests") {
+		t.Fatal("generic account-level 429 must not retry the same account")
+	}
+}

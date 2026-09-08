@@ -79,6 +79,11 @@
       "grok-4.3-beta",
     ],
   };
+  const grokCapabilityState = {
+    loaded: false,
+    failed: false,
+    counts: { build: 0, web: 0, console: 0 },
+  };
   const chatStorageKey = "grok_tools_chat_sessions_v1";
   const MAX_CHAT_MESSAGES = 5;
   const chatSidebarStateKey = "grok_tools_chat_sidebar_collapsed";
@@ -121,6 +126,118 @@
       return true;
     }
     return false;
+  }
+
+  function currentGrokToolTab() {
+    return String(document.querySelector("#grokToolsTabs .tab-item.active")?.dataset.tab || "imagine").toLowerCase();
+  }
+
+  function hasGrokCapability(tab) {
+    if (!grokCapabilityState.loaded || grokCapabilityState.failed) return true;
+    const counts = grokCapabilityState.counts;
+    if (tab === "chat") return counts.build + counts.web + counts.console > 0;
+    if (tab === "cache") return true;
+    return counts.web + counts.console > 0;
+  }
+
+  function grokAccountSummary() {
+    const counts = grokCapabilityState.counts;
+    const parts = [];
+    if (counts.build) parts.push(`${counts.build} 个 Build`);
+    if (counts.web) parts.push(`${counts.web} 个 Web`);
+    if (counts.console) parts.push(`${counts.console} 个 Console`);
+    return parts.length ? parts.join("、") : "没有可用的 Grok 账号";
+  }
+
+  function applyGrokCapabilityControls() {
+    if (!grokCapabilityState.loaded || grokCapabilityState.failed) return;
+    const controls = {
+      chat: document.getElementById("grokSendBtn"),
+      imagine: document.getElementById("imagineStartBtn"),
+      video: document.getElementById("videoStartBtn"),
+      voice: document.getElementById("voiceStartBtn"),
+    };
+    Object.entries(controls).forEach(([tab, control]) => {
+      if (!control) return;
+      const blocked = !hasGrokCapability(tab);
+      if (!(tab === "chat" && chatState.sending) && !(tab === "video" && videoState.running) && !(tab === "voice" && voiceState.running)) {
+        control.disabled = blocked;
+      }
+      control.dataset.capabilityBlocked = blocked ? "true" : "false";
+      if (blocked) control.title = `${tab === "chat" ? "对话" : tab === "imagine" ? "图片生成" : tab === "video" ? "视频生成" : "语音对话"}缺少可用账号`;
+    });
+  }
+
+  function updateGrokCapabilityPresentation(tab) {
+    const banner = document.getElementById("grokCapabilityBanner");
+    const title = document.getElementById("grokCapabilityTitle");
+    const text = document.getElementById("grokCapabilityText");
+    const action = document.getElementById("grokCapabilityAction");
+    if (!banner || !title || !text || !action) return;
+    const labels = { chat: "对话", imagine: "图片生成", video: "视频生成", voice: "语音对话", cache: "缓存管理" };
+    banner.classList.remove("is-loading", "is-ready", "is-warning");
+    action.classList.add("hidden");
+    if (!grokCapabilityState.loaded) {
+      banner.classList.add("is-loading");
+      title.textContent = "正在检查可用能力";
+      text.textContent = "读取账号和模型状态…";
+      return;
+    }
+    if (grokCapabilityState.failed) {
+      banner.classList.add("is-warning");
+      title.textContent = "暂时无法读取能力状态";
+      text.textContent = "你仍可继续操作；如请求失败，请检查账号管理页。";
+      action.classList.remove("hidden");
+      return;
+    }
+    const summary = grokAccountSummary();
+    if (tab === "cache") {
+      banner.classList.add("is-ready");
+      title.textContent = "本地缓存可用";
+      text.textContent = grokCapabilityState.counts.web > 0 ? `${summary}；可同时管理在线资产。` : `${summary}；在线资产需要 Grok Web 账号。`;
+      return;
+    }
+    if (hasGrokCapability(tab)) {
+      banner.classList.add("is-ready");
+      title.textContent = `${labels[tab] || "当前功能"}已就绪`;
+      text.textContent = `可用账号：${summary}。`;
+      return;
+    }
+    banner.classList.add("is-warning");
+    title.textContent = tab === "chat" ? "对话需要可用的 Grok 账号" : `${labels[tab]}需要 Grok Web 或 xAI Console 账号`;
+    text.textContent = `当前状态：${summary}。添加匹配账号后即可使用此功能。`;
+    action.classList.remove("hidden");
+  }
+
+  async function loadGrokCapabilities() {
+    try {
+      const res = await fetch("/api/accounts");
+      if (handleUnauthorized(res)) return;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const accounts = await res.json();
+      const counts = { build: 0, web: 0, console: 0 };
+      (Array.isArray(accounts) ? accounts : []).forEach((account) => {
+        if (!account || String(account.account_type || "").toLowerCase() !== "grok" || account.enabled === false) return;
+        const provider = String(account.grok_provider || (account.credential_type === "oauth" ? "build" : "web")).toLowerCase();
+        if (Object.prototype.hasOwnProperty.call(counts, provider)) counts[provider] += 1;
+      });
+      grokCapabilityState.counts = counts;
+      grokCapabilityState.failed = false;
+    } catch (err) {
+      grokCapabilityState.failed = true;
+      console.debug("Failed to load Grok capabilities:", err);
+    }
+    grokCapabilityState.loaded = true;
+    ["chat", "imagine", "video", "voice", "cache"].forEach((tab) => {
+      const badge = document.querySelector(`[data-capability="${tab}"]`);
+      if (!badge) return;
+      const ready = tab === "cache" || hasGrokCapability(tab);
+      badge.textContent = grokCapabilityState.failed ? "未知" : tab === "cache" ? "本地" : ready ? "可用" : "需账号";
+      badge.classList.toggle("is-ready", ready && !grokCapabilityState.failed);
+      badge.classList.toggle("is-unavailable", !ready || grokCapabilityState.failed);
+    });
+    applyGrokCapabilityControls();
+    updateGrokCapabilityPresentation(currentGrokToolTab());
   }
 
   function formatDateTime(ms) {
@@ -1290,6 +1407,7 @@
 
   async function requestChatCompletion(session, contentEl) {
     let assistantText = "";
+    let reasoningOpen = false;
     let hasThink = false;
     let thinkStartAt = null;
     let thinkElapsed = null;
@@ -1377,17 +1495,35 @@
           try {
             payloadChunk = JSON.parse(data);
           } catch (err) {
-            idx = buffer.indexOf("\n\n");
-            continue;
+            throw new Error("服务端返回了无效的流数据");
+          }
+          if (payloadChunk?.error) {
+            throw new Error(payloadChunk.error.message || String(payloadChunk.error));
           }
           const choice = payloadChunk?.choices?.[0];
+          const reasoning = typeof choice?.delta?.reasoning_content === "string" ? choice.delta.reasoning_content : "";
           const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
           const finalContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
+          const refusal = typeof choice?.delta?.refusal === "string" ? choice.delta.refusal : "";
+          if (reasoning) {
+            if (!reasoningOpen) {
+              assistantText += "<think>";
+              reasoningOpen = true;
+            }
+            assistantText += reasoning;
+            updateChatStatus("思考中...", "connecting");
+          }
+          if (reasoningOpen && (choice?.delta?.reasoning_done || delta || refusal || choice?.finish_reason)) {
+            assistantText += "</think>";
+            reasoningOpen = false;
+          }
           if (delta) {
             assistantText += delta;
+            updateChatStatus("生成中...", "connecting");
           } else if (finalContent) {
             assistantText = finalContent;
           }
+          if (refusal) assistantText += refusal;
           if (!hasThink && assistantText.includes("<think>")) {
             hasThink = true;
             thinkStartAt = Date.now();
@@ -1399,6 +1535,9 @@
           updateAssistantView();
           idx = buffer.indexOf("\n\n");
         }
+      }
+      if (!assistantText.trim()) {
+        throw new Error("服务端未返回可显示的内容，请重试或检查上游日志");
       }
       session.messages.push({ role: "assistant", content: assistantText.trim() });
       session.updatedAt = Date.now();
@@ -1482,6 +1621,7 @@
   }
 
   function renderChatSessions() {
+    const list = document.getElementById("grokSessionList");
     if (!list) return;
     list.innerHTML = "";
     chatState.sessions.forEach((session) => {
@@ -3308,6 +3448,8 @@
         btn.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
       }
     });
+    updateGrokCapabilityPresentation(nextTab);
+    applyGrokCapabilityControls();
     saveGrokToolsUIState({ activeToolTab: nextTab });
   }
 
@@ -3734,6 +3876,7 @@
     setVoiceStatus(t("common.notConnected"));
     syncVoiceOutputMute();
     updateCacheBatchUI();
+    await loadGrokCapabilities();
   }
 
   document.addEventListener("DOMContentLoaded", init);

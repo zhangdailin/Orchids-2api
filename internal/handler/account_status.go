@@ -29,6 +29,13 @@ func isWarpCloudAgentForbiddenError(errStr string) bool {
 	return strings.Contains(lower, "not allowed to use the provided cloud agent")
 }
 
+func isPuterModelScopedRateLimit(errStr string) bool {
+	lower := strings.ToLower(errStr)
+	return strings.Contains(lower, "upstream_rate_limited") ||
+		strings.Contains(lower, "ai provider rate limit exceeded") ||
+		strings.Contains(lower, "free model requires team balance")
+}
+
 func markWarpQuotaExhausted(ctx context.Context, accountStore *store.Store, acc *store.Account) {
 	if acc == nil || accountStore == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
 		return

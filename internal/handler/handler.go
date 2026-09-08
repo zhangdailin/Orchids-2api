@@ -934,7 +934,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				if status := apperrors.ClassifyAccountStatus(errStr); status != "" {
 					// Mark status if it's auth-related OR a quota/rate-limit style cooldown.
 					if !errClass.Retryable || errClass.Category == "auth" || errClass.Category == "auth_blocked" || status == "403" || status == "429" || status == "402" {
-						skipAccountStatusMark := isWarpRequest && status == "403" && warpCloudAgentForbidden
+						skipAccountStatusMark := (isWarpRequest && status == "403" && warpCloudAgentForbidden) ||
+							(strings.EqualFold(strings.TrimSpace(targetChannel), "puter") && status == "429" && isPuterModelScopedRateLimit(errStr))
 						if skipAccountStatusMark {
 							if verboseDiagnostics {
 								slog.Debug("跳过账号全局 403 标记: Warp cloud agent 能力不足", "account_id", currentAccount.ID, "category", errClass.Category)
@@ -1036,7 +1037,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				} else {
-					if shouldRetryCurrentAccountWhenNoAlternative(errClass.Category) && prevAccount != nil {
+					if shouldRetryCurrentAccountForRequest(errClass.Category, targetChannel, errStr) && prevAccount != nil {
 						apiClient = prevClient
 						currentAccount = prevAccount
 						trackedAccountID = h.acquireTrackedAccount(currentAccount)

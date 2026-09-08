@@ -228,7 +228,7 @@ func TestVerifyModelRequiresUsableEvent(t *testing.T) {
 			t.Cleanup(func() { puterAPIURL = prevURL })
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
-				if !strings.Contains(string(body), `"test_mode":true`) || !strings.Contains(string(body), `"model":"claude-opus-5"`) {
+				if !strings.Contains(string(body), `"test_mode":false`) || !strings.Contains(string(body), `"model":"claude-opus-5"`) {
 					t.Fatalf("invalid verify request: %s", body)
 				}
 				_, _ = io.WriteString(w, tt.body)
@@ -341,6 +341,8 @@ func TestServiceForCurrentModelsAndRejectsLegacyRoutes(t *testing.T) {
 		{"grok-4.5", "x-ai"},
 		{"deepseek-v4-flash", "deepseek"},
 		{"mistral-small-2603", "mistral"},
+		{"openrouter:minimax/minimax-m3:free", "openrouter"},
+		{"infron:deepseek/deepseek-v4-flash:free", "infron"},
 	}
 	for _, tt := range tests {
 		got, err := serviceForModel(tt.model)

@@ -32,6 +32,19 @@ func LatestPuterModelIDs() []string {
 
 func IsLatestPuterModelID(modelID string) bool {
 	id := strings.ToLower(strings.TrimSpace(modelID))
-	_, ok := latestPuterModelAllowlist[id]
-	return ok
+	if _, ok := latestPuterModelAllowlist[id]; ok {
+		return true
+	}
+	return IsExplicitFreePuterModelID(id)
+}
+
+// IsExplicitFreePuterModelID accepts provider-qualified routes that Puter's
+// official catalog labels with the :free suffix. Discovery still verifies
+// each candidate with test_mode before publishing it.
+func IsExplicitFreePuterModelID(modelID string) bool {
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if !strings.HasSuffix(id, ":free") {
+		return false
+	}
+	return strings.HasPrefix(id, "openrouter:") || strings.HasPrefix(id, "infron:")
 }

@@ -109,7 +109,7 @@ func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
 	return c.runChat(ctx, upstream.UpstreamRequest{
 		Model:    modelID,
 		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "Reply only OK."}}},
-	}, 45*time.Second, true, nil, nil)
+	}, 45*time.Second, false, nil, nil)
 }
 
 func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
@@ -269,6 +269,10 @@ func serviceForModel(modelID string) (string, error) {
 		return "", fmt.Errorf("unsupported puter model %q", modelID)
 	}
 	switch {
+	case strings.HasPrefix(modelID, "openrouter:"):
+		return "openrouter", nil
+	case strings.HasPrefix(modelID, "infron:"):
+		return "infron", nil
 	case strings.HasPrefix(modelID, "claude-"):
 		return "claude", nil
 	case strings.HasPrefix(modelID, "gpt-"):

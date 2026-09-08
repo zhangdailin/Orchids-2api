@@ -7,26 +7,38 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260601-1">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260606-4">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260908-1">
 </head>
 
 <body>
   {{template "sidebar.html" .}}
 
   <main class="main-content grok-tools-page">
-    <section class="header-section">
-      <h1>Grok 工具</h1>
-      <p>把 Grok 的对话、生成、语音和缓存能力收进一套统一控制台，让调试、切换和排障都在同一个工作台里完成。</p>
+    <section class="header-section grok-page-header">
+      <div>
+        <span class="grok-eyebrow">GROK WORKSPACE</span>
+        <h1>Grok 工作台</h1>
+        <p>对话、图片、视频和语音集中管理；系统会在操作前检查当前账号是否支持所需能力。</p>
+      </div>
+      <a class="btn btn-outline grok-account-link" href="{{.AdminPath}}/?tab=accounts">管理 Grok 账号</a>
     </section>
 
     <div class="grok-tools-workspace">
+      <section id="grokCapabilityBanner" class="grok-capability-banner is-loading" aria-live="polite">
+        <div class="capability-indicator" aria-hidden="true"></div>
+        <div class="capability-copy">
+          <strong id="grokCapabilityTitle">正在检查可用能力</strong>
+          <span id="grokCapabilityText">读取账号和模型状态…</span>
+        </div>
+        <a id="grokCapabilityAction" class="capability-action hidden" href="{{.AdminPath}}/?tab=accounts">添加所需账号</a>
+      </section>
       <div class="toolbar toolbar-compact grok-tools-toolbar" aria-label="Grok 工具导航">
         <div class="filter-tabs grok-tabs" id="grokToolsTabs">
-          <button class="tab-item" data-tab="chat" onclick="switchGrokToolTab('chat')">Chat</button>
-          <button class="tab-item active" data-tab="imagine" onclick="switchGrokToolTab('imagine')">Imagine</button>
-          <button class="tab-item" data-tab="video" onclick="switchGrokToolTab('video')">Video</button>
-          <button class="tab-item" data-tab="voice" onclick="switchGrokToolTab('voice')">Voice</button>
-          <button class="tab-item" data-tab="cache" onclick="switchGrokToolTab('cache')">Cache</button>
+          <button class="tab-item" data-tab="chat" onclick="switchGrokToolTab('chat')"><span>对话</span><small data-capability="chat">检查中</small></button>
+          <button class="tab-item active" data-tab="imagine" onclick="switchGrokToolTab('imagine')"><span>图片</span><small data-capability="imagine">检查中</small></button>
+          <button class="tab-item" data-tab="video" onclick="switchGrokToolTab('video')"><span>视频</span><small data-capability="video">检查中</small></button>
+          <button class="tab-item" data-tab="voice" onclick="switchGrokToolTab('voice')"><span>语音</span><small data-capability="voice">检查中</small></button>
+          <button class="tab-item" data-tab="cache" onclick="switchGrokToolTab('cache')"><span>缓存</span><small data-capability="cache">本地</small></button>
         </div>
       </div>
 
@@ -68,8 +80,8 @@
                   </svg>
                 </button>
                 <div>
-                <h2 class="chat-title-text">Chat 聊天</h2>
-                <p class="chat-subtitle">通过 chat 接口与 Grok 进行会话聊天</p>
+                <h2 class="chat-title-text">对话</h2>
+                <p class="chat-subtitle">选择模型，直接开始一段 Grok 对话</p>
                 </div>
               </div>
               <span id="grokChatStatus" class="status-text">就绪</span>
@@ -150,8 +162,8 @@
       <section id="grokImagineSection" class="content-card grok-section function-stack">
         <div class="function-header-row imagine-header-row">
           <div>
-            <h2 class="function-title">Imagine 瀑布流</h2>
-            <p class="function-subtitle">按 grok2api Masonry 方式每轮生成 6 张图，支持单轮与循环出图。</p>
+            <h2 class="function-title">图片生成</h2>
+            <p class="function-subtitle">每轮生成 6 张图片，可选择单轮或连续创作。</p>
           </div>
           <div class="function-actions imagine-header-actions">
             <button id="batchDownloadBtn" class="btn btn-outline" type="button">批量下载</button>
@@ -175,13 +187,13 @@
               <div class="imagine-masonry-toolbar">
                 <div class="imagine-masonry-controls">
                   <div id="imagineRunModeToggle" class="imagine-masonry-toggle" role="tablist" aria-label="生成轮次">
-                    <button type="button" class="imagine-masonry-toggle-btn is-active" data-imagine-run-mode="single">Rounds</button>
-                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-run-mode="continuous">Cycles</button>
+                    <button type="button" class="imagine-masonry-toggle-btn is-active" data-imagine-run-mode="single">单轮</button>
+                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-run-mode="continuous">连续</button>
                   </div>
                   <div id="imagineQualityToggle" class="imagine-masonry-toggle" role="tablist" aria-label="生成质量">
-                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-quality="basic">Basic</button>
-                    <button type="button" class="imagine-masonry-toggle-btn is-active" data-imagine-quality="lite">Lite</button>
-                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-quality="quality">Quality</button>
+                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-quality="basic">标准</button>
+                    <button type="button" class="imagine-masonry-toggle-btn is-active" data-imagine-quality="lite">快速</button>
+                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-quality="quality">高质量</button>
                   </div>
                   <label id="imagineRatioWrap" class="imagine-masonry-ratio" data-ratio="2:3" aria-label="宽高比">
                     <span class="imagine-masonry-ratio-icon" aria-hidden="true"></span>
@@ -219,7 +231,7 @@
       <section id="grokVideoSection" class="content-card grok-section function-stack section-hidden">
         <div class="function-header-row video-header-row">
           <div>
-            <h2 class="function-title">Video 视频生成</h2>
+            <h2 class="function-title">视频生成</h2>
             <p class="function-subtitle">生成短视频，支持参考图、进度展示与预览下载。</p>
           </div>
           <div class="function-actions video-actions">
@@ -269,10 +281,10 @@
               <div class="settings-block preset-block">
                 <label class="field-label">风格预设</label>
                 <select id="videoPreset" class="form-input">
-                  <option value="custom">Custom</option>
-                  <option value="fun">Fun</option>
-                  <option value="normal">Normal</option>
-                  <option value="spicy">Spicy</option>
+                  <option value="custom">自定义</option>
+                  <option value="fun">趣味</option>
+                  <option value="normal">自然</option>
+                  <option value="spicy">大胆</option>
                 </select>
               </div>
               <div class="settings-block upload-block">
@@ -284,18 +296,19 @@
                 <label class="field-label">&nbsp;</label>
                 <button class="btn btn-outline" id="videoClearImageBtn" type="button">清除</button>
               </div>
-              <div class="settings-block video-effort-block">
-                <label class="field-label">Reasoning</label>
+              <details class="settings-block video-effort-block advanced-settings">
+                <summary>高级设置</summary>
+                <label class="field-label">推理强度</label>
                 <select id="videoEffort" class="form-input">
-                  <option value="">(none)</option>
-                  <option value="none">none</option>
-                  <option value="minimal">minimal</option>
-                  <option value="low">low</option>
-                  <option value="medium">medium</option>
-                  <option value="high">high</option>
-                  <option value="xhigh">xhigh</option>
+                  <option value="">跟随模型默认</option>
+                  <option value="none">关闭</option>
+                  <option value="minimal">极低</option>
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                  <option value="xhigh">极高</option>
                 </select>
-              </div>
+              </details>
             </div>
           </div>
 
@@ -337,8 +350,8 @@
       <section id="grokVoiceSection" class="content-card grok-section function-stack section-hidden">
         <div class="function-header-row voice-header-row">
           <div>
-            <h2 class="function-title">LiveKit 陪聊</h2>
-            <p class="function-subtitle">LiveKit 语音会话，连接 Grok Voice。</p>
+            <h2 class="function-title">语音对话</h2>
+            <p class="function-subtitle">通过 LiveKit 与 Grok 进行实时语音会话。</p>
           </div>
           <div class="function-actions voice-actions">
             <button class="btn btn-primary" id="voiceStartBtn">开始会话</button>
@@ -384,8 +397,8 @@
                 </div>
               </div>
               <div class="function-settings-block">
-                <span class="field-label">LiveKit SDK</span>
-                <div class="meta-value">Stable 2.7.3</div>
+                <span class="field-label">语音连接组件</span>
+                <div class="meta-value">稳定版 2.7.3</div>
               </div>
               <div id="voiceCustomBlock" class="function-settings-block hidden">
                 <label class="field-label" for="voiceCustomID">自定义 voice_id</label>
@@ -398,11 +411,11 @@
                 </div>
                 <input id="voiceSpeed" class="range-input" type="range" min="0.5" max="2" step="0.1" value="1.0">
               </div>
-              <div class="function-settings-block">
+              <div class="function-settings-block unavailable-field">
                 <label class="field-label" for="voiceInstruction">自定义指令</label>
-                <textarea id="voiceInstruction" class="form-input voice-instruction-input" rows="4" placeholder="暂不发送到 LiveKit。请优先使用 Personality，避免 Grok agent 反复重连。"></textarea>
+                <textarea id="voiceInstruction" class="form-input voice-instruction-input" rows="3" disabled placeholder="当前语音接口暂不支持自定义指令"></textarea>
               </div>
-              <p class="voice-hint voice-hint-spaced">提示：LiveKit 当前只发送 Voice / Personality / Speed。自定义指令会保留在页面里，但不会传给 Grok agent，以避免反复重连。</p>
+              <p class="voice-hint voice-hint-spaced">语音会话将使用上方的音色、人格和语速设置。</p>
             </div>
 
             <div class="grok-panel voice-card">
@@ -544,7 +557,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="{{.AdminPath}}/js/common.js?v=20260605-2"></script>
   <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260605-1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260606-3"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260908-3"></script>
 </body>
 
 </html>
