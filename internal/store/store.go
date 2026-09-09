@@ -393,6 +393,16 @@ func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
 		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
 			continue
 		}
+		// Older catalog defaults used the public video ID as the Web model name.
+		// Repair only that exact mapping, preserving custom/provider routes.
+		if model.ModelID == "grok-imagine-video" && model.Provider == "web" && model.UpstreamModel == "grok-imagine-video" {
+			updated := *model
+			updated.UpstreamModel = "imagine-video-gen"
+			if err := s.UpdateModel(ctx, &updated); err != nil {
+				slog.Warn("failed to repair Grok video route", "model_id", model.ModelID, "error", err)
+			}
+			continue
+		}
 		if model.Provider != "" && model.UpstreamModel != "" && len(model.Capabilities) > 0 {
 			continue
 		}
@@ -546,6 +556,9 @@ func applyGrokRouteDefaults(model *Model) {
 	id := strings.ToLower(strings.TrimSpace(model.ModelID))
 	model.Origin = "catalog"
 	model.UpstreamModel = strings.TrimPrefix(strings.TrimPrefix(id, "console/"), "build/")
+	if id == "grok-imagine-video" {
+		model.UpstreamModel = "imagine-video-gen"
+	}
 	switch {
 	case strings.HasPrefix(id, "console/"), strings.HasPrefix(id, "grok-voice"), id == "grok-stt", id == "grok-imagine-video-1.5":
 		model.Provider = "console"

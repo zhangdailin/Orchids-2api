@@ -1,5 +1,5 @@
 (() => {
-  const BATCH_SIZE = 6;
+  const batchSize = () => Math.max(1, Math.min(6, Number(document.getElementById("imagineCount")?.value) || 6));
   const PARALLELISM = 2;
   const STORAGE_KEY = "grok_tools_ui_v1";
   const QUALITY_MODELS = {
@@ -78,7 +78,7 @@
 
   function syncQualityModel() {
     const quality = normalizeQuality(readToggle("#imagineQualityToggle", "imagineQuality", "lite"));
-    const model = qualityModel(quality);
+    const model = document.getElementById("imagineModel")?.value || qualityModel(quality);
     return { quality, model };
   }
 
@@ -188,7 +188,7 @@
       ["is-round", `第 ${round} 轮`],
       ["is-param", ratio],
       ["is-param", quality === "basic" ? "Basic" : quality === "quality" ? "Quality" : "Lite"],
-      ["is-count", `0/${BATCH_SIZE}`],
+      ["is-count", `0/${batchSize()}`],
       ["is-state", "正在生成"],
     ].forEach(([cls, text]) => {
       const chip = document.createElement("span");
@@ -204,7 +204,7 @@
     slotGrid.className = "imagine-masonry-grid";
     slotGrid.style.setProperty("--tile-aspect", aspectRatioCss(ratio));
 
-    const slots = Array.from({ length: BATCH_SIZE }, (_, index) => {
+    const slots = Array.from({ length: batchSize() }, (_, index) => {
       const tile = document.createElement("article");
       tile.className = "imagine-masonry-tile waterfall-item is-pending";
       tile.dataset.prompt = prompt;
@@ -238,10 +238,10 @@
 
   function updateBatch(batch, final) {
     if (!batch) return;
-    if (batch.countEl) batch.countEl.textContent = `${batch.ready}/${BATCH_SIZE}`;
+    if (batch.countEl) batch.countEl.textContent = `${batch.ready}/${batch.slots.length}`;
     if (!batch.stateEl) return;
     if (!final) return;
-    if (batch.ready >= BATCH_SIZE) {
+    if (batch.ready >= batch.slots.length) {
       batch.stateEl.dataset.state = "success";
       batch.stateEl.textContent = "生成成功";
     } else if (batch.ready > 0) {
@@ -364,7 +364,7 @@
   }
 
   async function requestImage(prompt, ratio, model, quality, nsfw, signal) {
-    if (normalizeQuality(quality) === "basic") {
+    if (normalizeQuality(quality) === "basic" || document.getElementById("imagineModel")?.value) {
       const res = await fetch("/grok/v1/images/generations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -376,6 +376,7 @@
           size: sizeForRatio(ratio),
           response_format: "url",
           nsfw,
+          ...(document.getElementById("imagineModel")?.value ? { resolution: document.getElementById("imagineResolution")?.value || "1k" } : {}),
         }),
       });
       if (!res.ok) throw new Error(await res.text());

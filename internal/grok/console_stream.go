@@ -265,7 +265,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 				if filter.matched == "" {
 					return toolItem(item, ev)
 				}
-			case "web_search_call":
+			case "web_search_call", "x_search_call":
 				if filter.matched != "" {
 					return nil
 				}
@@ -375,7 +375,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 						return err
 					}
 				}
-				if interfaceString(entry["type"]) == "web_search_call" && !searchDone[searchIdentity(entry)] && filter.matched == "" {
+				if (interfaceString(entry["type"]) == "web_search_call" || interfaceString(entry["type"]) == "x_search_call") && !searchDone[searchIdentity(entry)] && filter.matched == "" {
 					searchDone[searchIdentity(entry)] = true
 					if err := emit(map[string]interface{}{"x_grok_search": entry, "x_grok_search_done": true}, "", nil); err != nil {
 						return err

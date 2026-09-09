@@ -180,6 +180,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	req.startedAt = time.Now()
+	req.sourceOperation, _ = r.Context().Value(chatSourceOperationKey{}).(string)
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 	debugLogSSE := h != nil && h.cfg != nil && h.cfg.DebugLogSSE
 	logger := debug.New(verboseDiagnostics, verboseDiagnostics && debugLogSSE)

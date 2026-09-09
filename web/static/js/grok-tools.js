@@ -59,6 +59,7 @@
     activeId: "",
     sending: false,
     abortController: null,
+    renderFrame: 0,
     sidebarOpen: false,
     model: "grok-4.20-0309-non-reasoning",
     models: [
@@ -78,6 +79,8 @@
       "grok-4.20-heavy",
       "grok-4.3-beta",
     ],
+    capabilities: { chat: false, imagine: false, video: false, voice: false },
+    modelsLoaded: false,
   };
   const grokCapabilityState = {
     loaded: false,
@@ -85,7 +88,6 @@
     counts: { build: 0, web: 0, console: 0 },
   };
   const chatStorageKey = "grok_tools_chat_sessions_v1";
-  const MAX_CHAT_MESSAGES = 5;
   const chatSidebarStateKey = "grok_tools_chat_sidebar_collapsed";
   const grokToolsUIStorageKey = "grok_tools_ui_v1";
   const i18nMap = {
@@ -135,9 +137,10 @@
   function hasGrokCapability(tab) {
     if (!grokCapabilityState.loaded || grokCapabilityState.failed) return true;
     const counts = grokCapabilityState.counts;
-    if (tab === "chat") return counts.build + counts.web + counts.console > 0;
     if (tab === "cache") return true;
-    return counts.web + counts.console > 0;
+    if (chatState.modelsLoaded) return chatState.capabilities[tab] === true;
+    if (tab === "chat") return counts.build + counts.web + counts.console > 0;
+    return chatState.capabilities[tab] || counts.web + counts.console > 0;
   }
 
   function grokAccountSummary() {
@@ -580,16 +583,45 @@
       updatedAt: Date.now(),
       messages: [],
       model: chatState.model,
+      promptCacheKey: createPromptCacheKey(),
+      reasoningEffort: "",
+      webSearch: false,
+      xSearch: false,
     };
   }
 
+  function createPromptCacheKey() {
+    if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") return `grok-tools-${globalThis.crypto.randomUUID()}`;
+    return `grok-tools-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
   function trimChatSessionMessages(session) {
-    if (!session || !Array.isArray(session.messages)) return 0;
-    const overflow = session.messages.length - MAX_CHAT_MESSAGES;
-    if (overflow <= 0) return 0;
-    session.messages = session.messages.slice(-MAX_CHAT_MESSAGES);
-    session.updatedAt = Date.now();
-    return overflow;
+    // Preserve complete turns. Request limits must never silently delete history.
+    return 0;
+  }
+
+  function normalizeAssistantMessage(message) {
+    if (message.role !== "assistant" || !/<think>/i.test(String(message.content || ""))) return message;
+    // New-format messages store reasoning separately; content is the pure answer and must never be re-scanned.
+    if (String(message.reasoning || "").trim()) return message;
+    // Legacy history always led with a reasoning block. Mid-body think tags are real content (e.g. code examples).
+    const raw = String(message.content || "");
+    if (!/^\s*<think>/i.test(raw)) return message;
+    const thoughts = [];
+    const content = raw.replace(/<think>([\s\S]*?)(?:<\/think>|$)/gi, (_, text) => {
+      thoughts.push(text.trim());
+      return "";
+    });
+    return { ...message, content: content.trim(), reasoning: [message.reasoning || "", ...thoughts].filter(Boolean).join("\n\n") };
+  }
+
+  function assistantDisplay(message) {
+    const reasoning = String(message.reasoning || "");
+    return (reasoning ? `<think>${reasoning}</think>` : "") + String(message.content || "");
+  }
+
+  function renderToolActivity(tools) {
+    return (tools || []).map((tool) => `<div class="tool-activity">${escapeHtml(tool.name || tool.type || "工具")} · ${escapeHtml(tool.status || "in_progress")}${tool.detail ? `<pre>${escapeHtml(tool.detail)}</pre>` : ""}</div>`).join("");
   }
 
   function saveChatSessions() {
@@ -603,6 +635,7 @@
                 ? {
                     name: String(msg.attachment.name || ""),
                     type: String(msg.attachment.type || ""),
+                    dataUrl: msg.attachment.dataUrl,
                   }
                 : undefined,
             }))
@@ -614,7 +647,7 @@
         sessions,
       }));
     } catch (err) {
-      // ignore storage failures
+      updateChatStatus("浏览器存储空间不足，会话尚未保存；请释放存储空间后重试", "error");
     }
   }
 
@@ -647,6 +680,11 @@
       if (session && typeof session.isDefaultTitle === "undefined") {
         session.isDefaultTitle = !session.title || session.title === "新会话";
       }
+      if (session && !session.promptCacheKey) session.promptCacheKey = createPromptCacheKey();
+      if (session && typeof session.reasoningEffort !== "string") session.reasoningEffort = "";
+      if (session) session.webSearch = session.webSearch === true;
+      if (session) session.xSearch = session.xSearch === true;
+      if (Array.isArray(session?.messages)) session.messages = session.messages.map(normalizeAssistantMessage);
       trimChatSessionMessages(session);
     });
   }
@@ -1219,7 +1257,7 @@
     return wrapper;
   }
 
-  function appendChatMessage(role, content, attachment) {
+  function appendChatMessage(role, content, attachment, message) {
     const log = document.getElementById("grokChatLog");
     const empty = document.getElementById("grokChatEmpty");
     if (!log) return null;
@@ -1231,7 +1269,7 @@
     let contentEl = document.createElement("div");
     contentEl.className = role === "assistant" ? "message-content rendered" : "message-content";
     if (role === "assistant") {
-      setRenderedHTML(contentEl, renderAssistantContent(content || ""));
+      setRenderedHTML(contentEl, renderAssistantContent(message ? assistantDisplay(message) : content || "") + renderToolActivity(message?.tools));
       applyImageGrid(contentEl);
       if (String(content || "").includes("<think>")) {
         updateThinkSummary(contentEl, 0);
@@ -1287,7 +1325,7 @@
     const session = activeChatSession();
     if (!row || !session) return;
     const messages = Array.isArray(session.messages) ? session.messages : [];
-    const targetIndex = messages.findIndex((msg) => msg && msg.role === "user" && String(msg.content || "") === String(content || ""));
+    const targetIndex = Array.from(row.parentElement.querySelectorAll(".message-row")).indexOf(row);
     if (targetIndex < 0) return;
 
     const bubble = row.querySelector(".message-bubble");
@@ -1382,6 +1420,9 @@
         return;
       }
       msg.content = next;
+      msg.reasoning = "";
+      msg.tools = [];
+      session.promptCacheKey = createPromptCacheKey();
       session.updatedAt = Date.now();
       saveChatSessions();
       renderChatSessions();
@@ -1407,6 +1448,17 @@
 
   async function requestChatCompletion(session, contentEl) {
     let assistantText = "";
+    let answerText = "";
+    let reasoningText = "";
+    const toolActivities = new Map();
+    let saved = false;
+    let streamCompleted = false;
+    const persistAssistant = () => {
+      if (saved || (!answerText.trim() && !reasoningText.trim() && !toolActivities.size)) return;
+      saved = true;
+      session.messages.push({ role: "assistant", content: answerText, reasoning: reasoningText, tools: Array.from(toolActivities.values()) });
+      session.updatedAt = Date.now();
+    };
     let reasoningOpen = false;
     let hasThink = false;
     let thinkStartAt = null;
@@ -1426,7 +1478,7 @@
           savedThinkStates = Array.from(blocks).map((b) => b.hasAttribute("open"));
         }
       }
-      setRenderedHTML(contentEl, renderAssistantContent(assistantText));
+      setRenderedHTML(contentEl, renderAssistantContent(assistantText) + renderToolActivity(Array.from(toolActivities.values())));
       if (hasThink) {
         updateThinkSummary(contentEl, typeof thinkElapsed === "number" ? thinkElapsed : null);
         const blocks = contentEl.querySelectorAll(".think-block[data-think=\"true\"]");
@@ -1456,6 +1508,13 @@
       const log = document.getElementById("grokChatLog");
       if (log) log.scrollTop = log.scrollHeight;
     };
+    const scheduleAssistantView = () => {
+      if (chatState.renderFrame) return;
+      chatState.renderFrame = requestAnimationFrame(() => {
+        chatState.renderFrame = 0;
+        updateAssistantView();
+      });
+    };
 
     try {
       const payload = buildChatPayload();
@@ -1471,84 +1530,134 @@
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "";
+      // Line-oriented SSE scanner: tolerates CRLF line endings across chunk
+      // boundaries and processes a trailing frame not followed by a blank line.
+      // Bare CR line endings are not supported.
+      let carry = "";
+      const pendingData = [];
+      let finishReason = "";
+      const dispatchData = (data) => {
+        if (!data || data === "[DONE]") {
+          if (data === "[DONE]") streamCompleted = true;
+          return;
+        }
+        let payloadChunk = null;
+        try {
+          payloadChunk = JSON.parse(data);
+        } catch (err) {
+          throw new Error("服务端返回了无效的流数据");
+        }
+        if (payloadChunk?.error) {
+          throw new Error(payloadChunk.error.message || String(payloadChunk.error));
+        }
+        const choice = payloadChunk?.choices?.[0];
+        const finish = choice?.finish_reason || "";
+        if (finish) {
+          finishReason = finish;
+          streamCompleted = true;
+        }
+        const reasoning = typeof choice?.delta?.reasoning_content === "string" ? choice.delta.reasoning_content : "";
+        const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
+        const finalContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
+        const refusal = typeof choice?.delta?.refusal === "string" ? choice.delta.refusal : "";
+        if (reasoning) {
+          reasoningText += reasoning;
+          if (!reasoningOpen) {
+            assistantText += "<think>";
+            reasoningOpen = true;
+          }
+          assistantText += reasoning;
+          updateChatStatus("思考中...", "connecting");
+        }
+        if (reasoningOpen && (choice?.delta?.reasoning_done || delta || refusal || finish)) {
+          assistantText += "</think>";
+          reasoningOpen = false;
+        }
+        if (delta) {
+          answerText += delta;
+          assistantText += delta;
+          updateChatStatus("生成中...", "connecting");
+        } else if (finalContent) {
+          answerText = finalContent;
+          assistantText = finalContent;
+        }
+        if (refusal) { assistantText += refusal; answerText += refusal; }
+        const search = choice?.delta?.x_grok_search;
+        if (search) {
+          const id = search.id || search.call_id || search.type || "search";
+          const itemStatus = String(search.status || "").toLowerCase();
+          const status = itemStatus === "failed" || itemStatus === "incomplete" ? "failed" : choice.delta.x_grok_search_done ? "completed" : "in_progress";
+          toolActivities.set(id, { id, name: search.type || "搜索", status, detail: search.action?.query || "" });
+        }
+        for (const call of choice?.delta?.tool_calls || []) {
+          const key = String(call.index ?? call.id ?? toolActivities.size);
+          const previous = toolActivities.get(key) || { id: call.id || key, name: "工具", detail: "", status: "in_progress" };
+          if (call.function?.name) previous.name = call.function.name;
+          if (call.function?.arguments) previous.detail += call.function.arguments;
+          toolActivities.set(key, previous);
+        }
+        if (finish) for (const tool of toolActivities.values()) {
+          if (tool.status !== "failed") tool.status = finish === "tool_calls" ? "awaiting_result" : "completed";
+        }
+        if (!hasThink && assistantText.includes("<think>")) {
+          hasThink = true;
+          thinkStartAt = Date.now();
+          thinkElapsed = null;
+        }
+        if (hasThink && thinkStartAt && thinkElapsed === null && assistantText.includes("</think>")) {
+          thinkElapsed = Math.max(1, Math.round((Date.now() - thinkStartAt) / 1000));
+        }
+        scheduleAssistantView();
+      };
+      const handleLine = (line) => {
+        if (line === "") {
+          const data = pendingData.join("");
+          pendingData.length = 0;
+          dispatchData(data);
+          return;
+        }
+        if (line.startsWith("data:")) {
+          pendingData.push(line.slice(5).trimStart());
+        }
+      };
+      const feedChunk = (text) => {
+        const parts = (carry + text).split("\n");
+        carry = parts.pop();
+        for (let line of parts) {
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          handleLine(line);
+        }
+      };
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let idx = buffer.indexOf("\n\n");
-        while (idx >= 0) {
-          const chunk = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          const lines = chunk.split("\n");
-          let data = "";
-          lines.forEach((line) => {
-            if (line.startsWith("data:")) {
-              data += line.slice(5).trimStart();
-            }
-          });
-          if (!data || data === "[DONE]") {
-            idx = buffer.indexOf("\n\n");
-            continue;
-          }
-          let payloadChunk = null;
-          try {
-            payloadChunk = JSON.parse(data);
-          } catch (err) {
-            throw new Error("服务端返回了无效的流数据");
-          }
-          if (payloadChunk?.error) {
-            throw new Error(payloadChunk.error.message || String(payloadChunk.error));
-          }
-          const choice = payloadChunk?.choices?.[0];
-          const reasoning = typeof choice?.delta?.reasoning_content === "string" ? choice.delta.reasoning_content : "";
-          const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
-          const finalContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
-          const refusal = typeof choice?.delta?.refusal === "string" ? choice.delta.refusal : "";
-          if (reasoning) {
-            if (!reasoningOpen) {
-              assistantText += "<think>";
-              reasoningOpen = true;
-            }
-            assistantText += reasoning;
-            updateChatStatus("思考中...", "connecting");
-          }
-          if (reasoningOpen && (choice?.delta?.reasoning_done || delta || refusal || choice?.finish_reason)) {
-            assistantText += "</think>";
-            reasoningOpen = false;
-          }
-          if (delta) {
-            assistantText += delta;
-            updateChatStatus("生成中...", "connecting");
-          } else if (finalContent) {
-            assistantText = finalContent;
-          }
-          if (refusal) assistantText += refusal;
-          if (!hasThink && assistantText.includes("<think>")) {
-            hasThink = true;
-            thinkStartAt = Date.now();
-            thinkElapsed = null;
-          }
-          if (hasThink && thinkStartAt && thinkElapsed === null && assistantText.includes("</think>")) {
-            thinkElapsed = Math.max(1, Math.round((Date.now() - thinkStartAt) / 1000));
-          }
-          updateAssistantView();
-          idx = buffer.indexOf("\n\n");
-        }
+        feedChunk(decoder.decode(value, { stream: true }));
       }
-      if (!assistantText.trim()) {
+      feedChunk(decoder.decode());
+      if (carry) handleLine(carry.endsWith("\r") ? carry.slice(0, -1) : carry);
+      handleLine("");
+      if (!streamCompleted) throw new Error("连接中断，已保留收到的部分回答");
+      if (chatState.renderFrame) cancelAnimationFrame(chatState.renderFrame);
+      chatState.renderFrame = 0;
+      updateAssistantView();
+      if (!assistantText.trim() && !toolActivities.size) {
         throw new Error("服务端未返回可显示的内容，请重试或检查上游日志");
       }
-      session.messages.push({ role: "assistant", content: assistantText.trim() });
+      persistAssistant();
       session.updatedAt = Date.now();
       const trimmed = trimChatSessionMessages(session);
       if (trimmed > 0) {
         rerenderChatThread();
       }
       saveChatSessions();
-      updateChatStatus("完成", "ok");
+      if (finishReason === "length") {
+        updateChatStatus("回复因达到长度上限被截断", "error");
+      } else {
+        updateChatStatus("完成", "ok");
+      }
       return { aborted: false, text: assistantText.trim() };
     } catch (err) {
+      persistAssistant();
       if (err && err.name === "AbortError") {
         if (contentEl && !assistantText.trim()) {
           assistantText = "[stopped]";
@@ -1558,12 +1667,14 @@
         return { aborted: true, text: assistantText.trim() };
       }
       if (contentEl) {
-        assistantText = `[error] ${err.message || err}`;
+        if (!assistantText.trim()) assistantText = `[error] ${err.message || err}`;
         updateAssistantView();
       }
       updateChatStatus(err.message || "发送失败", "error");
       return { aborted: false, text: "" };
     } finally {
+      if (chatState.renderFrame) cancelAnimationFrame(chatState.renderFrame);
+      chatState.renderFrame = 0;
       chatState.sending = false;
       chatState.abortController = null;
       setChatSendButtonState(false);
@@ -1595,6 +1706,7 @@
     }
 
     session.messages = messages.slice(0, lastUserIndex + 1);
+    session.promptCacheKey = createPromptCacheKey();
     session.updatedAt = Date.now();
     saveChatSessions();
     renderChatSessions();
@@ -1617,7 +1729,7 @@
       }
       return;
     }
-    messages.forEach((msg) => appendChatMessage(msg.role, msg.content, msg.attachment));
+    messages.forEach((msg) => appendChatMessage(msg.role, msg.content, msg.attachment, msg));
   }
 
   function renderChatSessions() {
@@ -1665,6 +1777,15 @@
   }
 
   function syncChatModelUI() {
+    const route = chatState.routes?.find((item) => item.id === chatState.model);
+    const fixed = route?.provider === "console" && route.upstream_model === "grok-4.20-0309-reasoning";
+    const effortControl = document.getElementById("grokReasoningEffort");
+    if (effortControl) {
+      effortControl.disabled = fixed;
+      if (fixed) effortControl.value = "";
+      const none = Array.from(effortControl.options).find((option) => option.value === "none");
+      if (none) none.disabled = (route?.upstream_model || chatState.model) === "grok-4.6";
+    }
     const label = document.getElementById("grokModelLabel");
     if (label) label.textContent = chatState.model;
     const session = activeChatSession();
@@ -1701,10 +1822,31 @@
       if (handleUnauthorized(res)) return;
       if (!res.ok) return;
       const data = await res.json();
+      const routes = Array.isArray(data?.data) ? data.data : [];
+      const supports = (item, capability) => Array.isArray(item.capabilities) && item.capabilities.includes(capability);
+      chatState.routes = routes;
+      const videoSelect = document.getElementById("videoModel");
+      if (videoSelect) {
+        videoSelect.replaceChildren();
+        routes.filter((item) => supports(item, "video")).forEach((item) => {
+          const option = document.createElement("option"); option.value = item.id; option.textContent = item.id; videoSelect.appendChild(option);
+        });
+        videoSelect.addEventListener("change", syncVideoRouteControls);
+        ["videoAction", "videoReferenceURL", "videoReferenceVoice"].forEach((id) => document.getElementById(id)?.addEventListener("change", syncVideoRouteControls));
+        syncVideoRouteControls();
+      }
+      window.dispatchEvent(new CustomEvent("grok-models-loaded", { detail: routes }));
+      chatState.capabilities = {
+        chat: routes.some((item) => supports(item, "chat")),
+        imagine: routes.some((item) => supports(item, "image")),
+        video: routes.some((item) => supports(item, "video")),
+        voice: routes.some((item) => supports(item, "realtime") || supports(item, "tts") || supports(item, "stt")),
+      };
+      chatState.modelsLoaded = true;
       const models = Array.isArray(data?.data)
         ? data.data
+            .filter((item) => supports(item, "chat"))
             .map((item) => String(item?.id || "").trim())
-            .filter((id) => id && !id.includes("imagine"))
         : [];
       if (models.length === 0) return;
       chatState.models = models;
@@ -1737,6 +1879,7 @@
   }
 
   function deleteChatSession(id) {
+    if (chatState.sending) return;
     const idx = chatState.sessions.findIndex((item) => item && item.id === id);
     if (idx < 0) return;
     chatState.sessions.splice(idx, 1);
@@ -1778,12 +1921,14 @@
   }
 
   function switchChatSession(id) {
+    if (chatState.sending) return;
     if (!id || id === chatState.activeId) return;
     chatState.activeId = id;
     const session = activeChatSession();
     if (session && session.model) {
       chatState.model = session.model;
     }
+    syncChatSessionSettings(session);
     syncChatModelUI();
     renderChatModelDropdown();
     renderChatSessions();
@@ -1792,9 +1937,11 @@
   }
 
   function newChatSession() {
+    if (chatState.sending) return;
     const session = createChatSession();
     chatState.sessions.unshift(session);
     chatState.activeId = session.id;
+    syncChatSessionSettings(session);
     syncChatModelUI();
     renderChatModelDropdown();
     renderChatSessions();
@@ -1830,13 +1977,32 @@
       });
       messages.push({ role: msg.role, content: parts });
     });
-    return {
+    const payload = {
       model: chatState.model,
       stream: true,
       temperature: Number(document.getElementById("grokTempRange")?.value || 0.8),
       top_p: Number(document.getElementById("grokTopPRange")?.value || 0.95),
       messages,
     };
+    const effort = String(session.reasoningEffort || "").trim();
+    const route = chatState.routes?.find((item) => item.id === chatState.model);
+    if (effort === "none" && (route?.upstream_model || chatState.model) === "grok-4.6") throw new Error("Grok 4.6 不支持关闭推理，请选择自动或其他推理强度");
+    if (effort && !(route?.provider === "console" && route.upstream_model === "grok-4.20-0309-reasoning")) payload.reasoning_effort = effort;
+    if (session.promptCacheKey) payload.prompt_cache_key = session.promptCacheKey;
+    const tools = [];
+    if (session.webSearch) tools.push({ type: "web_search" });
+    if (session.xSearch) tools.push({ type: "x_search" });
+    if (tools.length) payload.x_responses_tools = tools;
+    return payload;
+  }
+
+  function syncChatSessionSettings(session) {
+    const effort = document.getElementById("grokReasoningEffort");
+    const webSearch = document.getElementById("grokWebSearch");
+    const xSearch = document.getElementById("grokXSearch");
+    if (effort) effort.value = String(session?.reasoningEffort || "");
+    if (webSearch) webSearch.checked = session?.webSearch === true;
+    if (xSearch) xSearch.checked = session?.xSearch === true;
   }
 
   async function sendChatMessage() {
@@ -1878,6 +2044,9 @@
     const tempValue = document.getElementById("grokTempValue");
     const topPRange = document.getElementById("grokTopPRange");
     const topPValue = document.getElementById("grokTopPValue");
+    const reasoningEffort = document.getElementById("grokReasoningEffort");
+    const webSearch = document.getElementById("grokWebSearch");
+    const xSearch = document.getElementById("grokXSearch");
 
     if (newBtn) newBtn.addEventListener("click", () => {
       newChatSession();
@@ -1929,6 +2098,11 @@
         const btn = event.target.closest(".model-option");
         if (!btn || !modelDropdown.contains(btn)) return;
         chatState.model = String(btn.dataset.model || chatState.model);
+        const session = activeChatSession();
+        if (session) {
+          session.model = chatState.model;
+          session.promptCacheKey = createPromptCacheKey();
+        }
         syncChatModelUI();
         renderChatModelDropdown();
         saveChatSessions();
@@ -1973,6 +2147,18 @@
         saveGrokToolsUIState({ chatTopP: Number(topPRange.value) });
       });
     }
+    [reasoningEffort, webSearch, xSearch].forEach((control) => {
+      if (!control) return;
+      control.addEventListener("change", () => {
+        const session = activeChatSession();
+        if (!session) return;
+        session.reasoningEffort = String(reasoningEffort?.value || "");
+        session.webSearch = webSearch?.checked === true;
+        session.xSearch = xSearch?.checked === true;
+        session.updatedAt = Date.now();
+        saveChatSessions();
+      });
+    });
     const systemInput = document.getElementById("grokSystemInput");
     if (systemInput) {
       systemInput.addEventListener("input", () => {
@@ -2027,6 +2213,7 @@
     if (systemInput && typeof uiState.chatSystemPrompt === "string") {
       systemInput.value = uiState.chatSystemPrompt;
     }
+    syncChatSessionSettings(activeChatSession());
     syncChatModelUI();
     renderChatModelDropdown();
     renderChatSessions();
@@ -2675,8 +2862,51 @@
     updateVideoItemLinks(container, safeUrl);
   }
 
+  function syncVideoRouteControls() {
+    const route = chatState.routes?.find((item) => item.id === document.getElementById("videoModel")?.value);
+    const consoleRoute = route?.provider === "console";
+    const action = document.getElementById("videoAction");
+    if (!action) return;
+    for (const option of action.options) option.disabled = option.value !== "generate" && (!consoleRoute || route?.id !== "grok-imagine-video");
+    if (action.selectedOptions[0]?.disabled) action.value = "generate";
+    const generate = action.value === "generate";
+    for (const id of ["videoReferenceURL", "videoReferenceVoice"]) document.getElementById(id).disabled = !consoleRoute || !generate;
+    document.getElementById("videoSourceURL").disabled = generate;
+    const resolution = document.getElementById("videoResolution");
+    const references = document.getElementById("videoReferenceURL").value || document.getElementById("videoReferenceVoice").value;
+    for (const option of resolution.options) option.disabled = option.value === "1080p" && (!consoleRoute || route?.id !== "grok-imagine-video-1.5" || !!references);
+    if (resolution.selectedOptions[0]?.disabled) resolution.value = "720p";
+    resolution.disabled = !generate;
+    const length = document.getElementById("videoLength");
+    length.min = consoleRoute ? (action.value === "extend" ? 2 : 1) : 6;
+    length.max = consoleRoute ? (action.value === "extend" ? 10 : 15) : 30;
+    length.disabled = action.value === "edit";
+  }
+
   async function createVideoTask(payload) {
-    const res = await fetch("/grok/v1/videos", {
+    const route = chatState.routes?.find((item) => item.id === payload.model);
+    const action = document.getElementById("videoAction")?.value || "generate";
+    let path = "/grok/v1/videos";
+    if (route?.provider === "console") {
+      path += action === "edit" ? "/edits" : action === "extend" ? "/extensions" : "/generations";
+      const body = { model: payload.model, prompt: payload.prompt };
+      if (action === "generate") {
+        Object.assign(body, { duration: payload.seconds, resolution: payload.resolution_name, aspect_ratio: document.getElementById("videoRatio").value });
+        if (payload.input_references[0]) body.image = { url: payload.input_references[0] };
+        const reference = document.getElementById("videoReferenceURL").value.trim();
+        const voice = document.getElementById("videoReferenceVoice").value.trim();
+        if (body.image && (reference || voice)) throw new Error("首帧图片与参考素材不能同时使用");
+        if (reference) body.reference_images = [{ url: reference }];
+        if (voice) body.reference_audios = [{ voice_id: voice }];
+      } else {
+        const url = document.getElementById("videoSourceURL").value.trim();
+        if (!url) throw new Error("请填写原视频 URL");
+        body.video = { url };
+        if (action === "extend") body.duration = payload.seconds;
+      }
+      payload = body;
+    } else if (action !== "generate") throw new Error("所选模型不支持此操作");
+    const res = await fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -2686,7 +2916,7 @@
       throw new Error(await res.text());
     }
     const data = await res.json();
-    return String(data.id || data.task_id || "").trim();
+    return String(data.id || data.task_id || data.request_id || "").trim();
   }
 
   async function stopVideoTask() {
@@ -2791,7 +3021,7 @@
     }
     const effort = String(document.getElementById("videoEffort")?.value || "").trim();
     const payload = {
-      model: "grok-imagine-video",
+      model: document.getElementById("videoModel")?.value || "grok-imagine-video",
       prompt,
       size: videoSizeForRatio(document.getElementById("videoRatio")?.value || "3:2"),
       seconds: Number(document.getElementById("videoLength")?.value || 6),

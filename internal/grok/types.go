@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+type chatSourceOperationKey struct{}
+
 type ChatCompletionsRequest struct {
 	Model               string                   `json:"model"`
 	Messages            []ChatMessage            `json:"messages"`
@@ -38,6 +40,7 @@ type ChatCompletionsRequest struct {
 	ThinkingConfig      map[string]interface{}   `json:"thinking_config,omitempty"`
 	ReasoningReplay     bool                     `json:"-"`
 	startedAt           time.Time
+	sourceOperation     string
 }
 
 type ChatMessage struct {

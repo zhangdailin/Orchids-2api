@@ -15,10 +15,13 @@ import (
 )
 
 type PublicModelResponse struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
+	ID            string   `json:"id"`
+	Object        string   `json:"object"`
+	Created       int64    `json:"created"`
+	OwnedBy       string   `json:"owned_by"`
+	Capabilities  []string `json:"capabilities,omitempty"`
+	Provider      string   `json:"provider,omitempty"`
+	UpstreamModel string   `json:"upstream_model,omitempty"`
 }
 
 type PublicModelsListResponse struct {
@@ -141,7 +144,11 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		publicModels = append(publicModels, publicModelResponse(m.ModelID, mChannel))
+		entry := publicModelResponse(m.ModelID, mChannel)
+		entry.Capabilities = m.Capabilities
+		entry.Provider = m.Provider
+		entry.UpstreamModel = m.UpstreamModel
+		publicModels = append(publicModels, entry)
 	}
 
 	resp := PublicModelsListResponse{

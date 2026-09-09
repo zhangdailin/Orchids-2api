@@ -3,8 +3,10 @@ package grok
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -156,41 +158,36 @@ func (h *Handler) loadReasoningReplay(model, key string) string {
 		return ""
 	}
 	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
 	mapKey := replayMapKey(model, key)
 	entry, ok := h.replay[mapKey]
 	if ok && time.Now().Before(entry.ExpiresAt) {
-		h.sessionMu.Unlock()
 		return entry.EncryptedContent
 	}
 	if ok {
 		delete(h.replay, mapKey)
 	}
-	h.sessionMu.Unlock()
 	if h.lb == nil || h.lb.Store == nil {
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	persisted, err := h.lb.Store.GetReasoningReplay(ctx, model, key)
-	if err != nil || persisted == nil || strings.TrimSpace(persisted.EncryptedContent) == "" {
+	if err != nil || persisted == nil || !validReplayCipher(persisted.EncryptedContent) {
 		return ""
 	}
-	h.sessionMu.Lock()
 	if latest, ok := h.replay[mapKey]; ok && time.Now().Before(latest.ExpiresAt) {
-		h.sessionMu.Unlock()
 		return latest.EncryptedContent
 	}
 	if h.replay == nil {
 		h.replay = map[string]reasoningReplayEntry{}
 	}
 	h.replay[mapKey] = reasoningReplayEntry{EncryptedContent: persisted.EncryptedContent, ExpiresAt: persisted.ExpiresAt}
-	h.sessionMu.Unlock()
 	return persisted.EncryptedContent
 }
 
 func (h *Handler) storeReasoningReplay(model, key, encrypted string) {
-	encrypted = strings.TrimSpace(encrypted)
-	if h == nil || strings.TrimSpace(key) == "" || encrypted == "" || len(encrypted) > 8<<20 {
+	if h == nil || strings.TrimSpace(key) == "" || !validReplayCipher(encrypted) {
 		return
 	}
 	h.sessionMu.Lock()
@@ -206,6 +203,28 @@ func (h *Handler) storeReasoningReplay(model, key, encrypted string) {
 		defer cancel()
 		_ = h.lb.Store.SaveReasoningReplay(ctx, &store.StoredReasoningReplay{Model: model, SessionKey: key, EncryptedContent: encrypted}, grokSessionStateTTL)
 	}
+}
+
+func validReplayCipher(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 8<<20 || strings.HasPrefix(value, "gAAAA") || strings.Contains(value, "=") {
+		return false
+	}
+	decoded, err := base64.RawStdEncoding.DecodeString(value)
+	if err != nil || len(decoded) < 50 {
+		return false
+	}
+	var counts [256]int
+	for _, b := range decoded {
+		counts[b]++
+	}
+	entropy := 0.0
+	for _, n := range counts {
+		if n > 0 {
+			p := float64(n) / float64(len(decoded))
+			entropy -= p * math.Log2(p)
+		}
+	}
+	return entropy/math.Log2(float64(min(len(decoded), 256))) >= 0.85
 }
 
 func (h *Handler) applyNativeReasoningReplay(model, key string, payload map[string]interface{}) {
@@ -229,7 +248,7 @@ func (h *Handler) applyNativeReasoningReplay(model, key string, payload map[stri
 	if len(input) == 0 || nativeInputHasEncryptedReasoning(input) {
 		return
 	}
-	replay := map[string]interface{}{"type": "reasoning", "summary": []interface{}{}, "content": nil, "encrypted_content": encrypted}
+	replay := map[string]interface{}{"type": "reasoning", "summary": []interface{}{}, "encrypted_content": encrypted}
 	insertAt := len(input)
 	for index := len(input) - 1; index >= 0; index-- {
 		item, _ := input[index].(map[string]interface{})
@@ -254,6 +273,77 @@ func (h *Handler) applyNativeReasoningReplay(model, key string, payload map[stri
 		includes = append(includes, "reasoning.encrypted_content")
 		payload["include"] = includes
 	}
+}
+
+func (h *Handler) clearReasoningReplay(ctx context.Context, model, key string) {
+	if h == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+	delete(h.replay, replayMapKey(model, key))
+	if h.lb != nil && h.lb.Store != nil {
+		_ = h.lb.Store.DeleteReasoningReplay(ctx, model, key)
+	}
+}
+
+func stripInjectedReasoningReplay(payload map[string]interface{}) bool {
+	input, ok := payload["input"].([]interface{})
+	if !ok {
+		return false
+	}
+	changed := false
+	next := make([]interface{}, 0, len(input))
+	for _, raw := range input {
+		item, _ := raw.(map[string]interface{})
+		if item != nil && strings.EqualFold(interfaceString(item["type"]), "compaction") {
+			next = append(next, raw)
+			continue
+		}
+		if item != nil && strings.EqualFold(interfaceString(item["type"]), "reasoning") && interfaceString(item["encrypted_content"]) != "" {
+			// A reasoning item without its proof is not portable. Preserve its
+			// readable summary as an ordinary assistant message instead.
+			parts := []interface{}{}
+			for _, summary := range interfaceMaps(item["summary"]) {
+				if value := interfaceString(summary["text"]); value != "" {
+					parts = append(parts, map[string]interface{}{"type": "output_text", "text": value})
+				}
+			}
+			changed = true
+			if len(parts) > 0 {
+				next = append(next, map[string]interface{}{"type": "message", "role": "assistant", "content": parts})
+			}
+			continue
+		}
+		next = append(next, raw)
+	}
+	if changed {
+		payload["input"] = next
+	}
+	return changed
+}
+
+func isReasoningReplayDecodeError(err error) bool {
+	if err == nil || parseUpstreamStatus(err) != http.StatusBadRequest {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "invalid_encrypted_content") ||
+		strings.Contains(text, "could not decrypt the provided encrypted_content") ||
+		strings.Contains(text, "could not decode the compaction blob")
+}
+
+func payloadHasCompactionInput(payload map[string]interface{}) bool {
+	input, ok := payload["input"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, raw := range input {
+		if item, ok := raw.(map[string]interface{}); ok && strings.EqualFold(interfaceString(item["type"]), "compaction") {
+			return true
+		}
+	}
+	return false
 }
 
 func nativeInputHasEncryptedReasoning(input []interface{}) bool {

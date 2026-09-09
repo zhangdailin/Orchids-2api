@@ -28,6 +28,7 @@ func (h *Handler) cliHeaders(acc *store.Account, token string) http.Header {
 // on transient failures (401 after refresh, 5xx) while treating team-level 429
 // as shared (no switch).
 func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSession, payload map[string]interface{}, modelID, path string) (*http.Response, error) {
+	ctx = withReasoningDiagnostics(ctx, payload)
 	if sess == nil || sess.acc == nil {
 		return nil, fmt.Errorf("empty cli chat session")
 	}

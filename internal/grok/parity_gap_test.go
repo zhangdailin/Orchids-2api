@@ -3,6 +3,7 @@ package grok
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -165,8 +166,8 @@ func TestAnthropicAdvancedFieldsAndReasoningReplayArePreserved(t *testing.T) {
 
 func TestReasoningReplayIsModelAndSessionIsolated(t *testing.T) {
 	h := &Handler{affinity: map[string]sessionAffinityEntry{}, replay: map[string]reasoningReplayEntry{}}
-	h.storeReasoningReplay("grok-4.6", "session-a", "cipher-a")
-	if got := h.loadReasoningReplay("grok-4.6", "session-a"); got != "cipher-a" {
+	h.storeReasoningReplay("grok-4.6", "session-a", validTestReplayCipher())
+	if got := h.loadReasoningReplay("grok-4.6", "session-a"); got != validTestReplayCipher() {
 		t.Fatalf("replay=%q want cipher-a", got)
 	}
 	if got := h.loadReasoningReplay("grok-4.5", "session-a"); got != "" {
@@ -179,21 +180,46 @@ func TestReasoningReplayIsModelAndSessionIsolated(t *testing.T) {
 	payload := map[string]interface{}{"input": []interface{}{map[string]interface{}{"role": "user", "content": "continue"}}}
 	h.applyNativeReasoningReplay("grok-4.6", "session-a", payload)
 	input := payload["input"].([]interface{})
-	if len(input) != 2 || input[0].(map[string]interface{})["encrypted_content"] != "cipher-a" {
+	if len(input) != 2 || input[0].(map[string]interface{})["encrypted_content"] != validTestReplayCipher() {
 		t.Fatalf("native replay injection=%#v", input)
+	}
+}
+
+func TestReasoningReplayUsesPortableShapeAndCanBeStripped(t *testing.T) {
+	h := &Handler{}
+	h.storeReasoningReplay("grok-4.6", "session-a", validTestReplayCipher())
+	req := &ChatCompletionsRequest{Model: "grok-4.6", PromptCacheKey: "session-a", ReasoningReplay: true, Messages: []ChatMessage{{Role: "user", Content: "next"}}}
+	payload, err := h.responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, req, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := payload["input"].([]interface{})
+	reasoning := input[0].(map[string]interface{})
+	if _, exists := reasoning["content"]; exists {
+		t.Fatalf("replay contains non-portable content field: %#v", reasoning)
+	}
+	if !stripInjectedReasoningReplay(payload) || len(payload["input"].([]interface{})) != 1 {
+		t.Fatalf("replay was not stripped: %#v", payload["input"])
+	}
+	stripped := payload["input"].([]interface{})[0].(map[string]interface{})
+	if _, exists := stripped["encrypted_content"]; exists {
+		t.Fatal("encrypted replay content was not removed")
+	}
+	if !isReasoningReplayDecodeError(fmt.Errorf("grok cli upstream status=400 body=Could not decode the compaction blob")) {
+		t.Fatal("compaction decode error was not recognized")
 	}
 }
 
 func TestNativeReasoningReplayConvertsStringInput(t *testing.T) {
 	h := &Handler{affinity: map[string]sessionAffinityEntry{}, replay: map[string]reasoningReplayEntry{}}
-	h.storeReasoningReplay("grok-4.6", "session", "cipher")
+	h.storeReasoningReplay("grok-4.6", "session", validTestReplayCipher())
 	payload := map[string]interface{}{"input": "continue"}
 	h.applyNativeReasoningReplay("grok-4.6", "session", payload)
 	input, ok := payload["input"].([]interface{})
 	if !ok || len(input) != 2 {
 		t.Fatalf("input=%#v", payload["input"])
 	}
-	if input[0].(map[string]interface{})["encrypted_content"] != "cipher" {
+	if input[0].(map[string]interface{})["encrypted_content"] != validTestReplayCipher() {
 		t.Fatalf("replay=%#v", input[0])
 	}
 }

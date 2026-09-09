@@ -22,6 +22,37 @@ var diagnosticCredential = regexp.MustCompile(`(?i)(?:api[_-]?key|access[_-]?tok
 var diagnosticOpaque = regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_.-]+)\b`)
 var diagnosticURL = regexp.MustCompile(`https?://[^\s"<>]+`)
 
+type reasoningDiagnosticsKey struct{}
+
+// Capture only bounded protocol controls from the payload actually sent upstream.
+// An omitted effort stays omitted: it does not mean low, medium, or disabled.
+func withReasoningDiagnostics(ctx context.Context, payload map[string]interface{}) context.Context {
+	values := map[string]string{}
+	reasoning, _ := payload["reasoning"].(map[string]interface{})
+	if effort, ok := reasoning["effort"].(string); ok {
+		switch effort = strings.ToLower(strings.TrimSpace(effort)); effort {
+		case "auto", "none", "minimal", "low", "medium", "high", "xhigh", "max":
+			values["reasoning_effort"] = effort
+		default:
+			values["reasoning_effort"] = "other"
+		}
+	}
+	if summary, ok := reasoning["summary"].(string); ok {
+		switch summary {
+		case "auto", "concise", "detailed":
+			values["reasoning_summary"] = summary
+		}
+	}
+	return context.WithValue(ctx, reasoningDiagnosticsKey{}, values)
+}
+
+func addReasoningDiagnostics(ctx context.Context, metadata map[string]interface{}) {
+	values, _ := ctx.Value(reasoningDiagnosticsKey{}).(map[string]string)
+	for key, value := range values {
+		metadata[key] = value
+	}
+}
+
 // Never retain request/output bodies, opaque reasoning, or unrestricted headers.
 // Known account secrets are removed before truncation, including escaped forms.
 func diagnosticText(text string, acc *store.Account) string {
@@ -61,6 +92,7 @@ func (h *Handler) auditAttemptDiagnostic(ctx context.Context, acc *store.Account
 		return
 	}
 	metadata := map[string]interface{}{"stage": stage, "started_at": started.UTC().Format(time.RFC3339Nano)}
+	addReasoningDiagnostics(ctx, metadata)
 	status := "ok"
 	if result != "" {
 		status = result

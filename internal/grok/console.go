@@ -432,6 +432,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		return
 	}
 	provider, endpoint, model := ProviderConsole, h.consoleURL("responses"), req.Model
+	ctx = withReasoningDiagnostics(ctx, payload)
 	if build {
 		provider, endpoint, model = ProviderBuild, h.cliBaseURL()+"/responses", spec.UpstreamModel
 		if warnings := takeBuildCompatibilityWarnings(payload); warnings != "" {
@@ -446,7 +447,27 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 	}
 	request := func() (*http.Response, error) {
 		if build {
-			return h.cliClient.doResponsesAt(ctx, sess.acc, "/responses", payload)
+			attemptStarted := time.Now()
+			resp, requestErr := h.cliClient.doResponsesAt(ctx, sess.acc, "/responses", payload)
+			if requestErr == nil || !req.ReasoningReplay || payloadHasCompactionInput(payload) || !isReasoningReplayDecodeError(requestErr) {
+				return resp, requestErr
+			}
+			h.auditAttempt(ctx, sess.acc, ProviderBuild, 1, attemptStarted, requestErr, "reasoning_replay_recovery")
+			h.clearReasoningReplay(ctx, req.Model, req.PromptCacheKey)
+			recoveryAttempt := 1
+			lastRecoveryStage := ""
+			retryResp, retryErr := recoverChatReasoning(payload, requestErr, func(stage string) (*http.Response, error) {
+				recoveryAttempt++
+				lastRecoveryStage = stage
+				started := time.Now()
+				response, failure := h.cliClient.doResponsesAt(ctx, sess.acc, "/responses", payload)
+				h.auditAttempt(ctx, sess.acc, ProviderBuild, recoveryAttempt, started, failure, stage)
+				return response, failure
+			})
+			if retryErr == nil && retryResp != nil {
+				retryResp.Header.Set("X-Grok2API-Reasoning-Recovery", lastRecoveryStage)
+			}
+			return retryResp, retryErr
 		}
 		return h.doConsole(withRateLimitAccount(ctx, sess.acc), sess.token, payload)
 	}

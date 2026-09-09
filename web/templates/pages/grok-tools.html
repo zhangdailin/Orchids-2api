@@ -125,6 +125,18 @@
                       <div class="settings-grid">
                         <div class="chat-settings-ranges">
                           <div class="settings-block">
+                            <label class="field-label" for="grokReasoningEffort">推理强度</label>
+                            <select id="grokReasoningEffort" class="form-input">
+                              <option value="">自动</option><option value="none">关闭</option><option value="low">低</option>
+                              <option value="medium">中</option><option value="high">高</option><option value="xhigh">极高</option>
+                            </select>
+                          </div>
+                          <div class="settings-block">
+                            <span class="field-label">联网工具</span>
+                            <label><input id="grokWebSearch" type="checkbox"> Web 搜索</label>
+                            <label><input id="grokXSearch" type="checkbox"> X 搜索</label>
+                          </div>
+                          <div class="settings-block">
                             <label class="field-label" for="grokTempRange">温度</label>
                             <div class="range-row">
                               <input id="grokTempRange" type="range" min="0" max="2" step="0.05" value="0.8">
@@ -186,6 +198,9 @@
               <textarea id="imaginePrompt" class="form-input imagine-masonry-textarea" rows="2" placeholder="描述你想生成的画面，Enter 生成，Shift+Enter 换行"></textarea>
               <div class="imagine-masonry-toolbar">
                 <div class="imagine-masonry-controls">
+                  <select id="imagineModel" class="form-input" aria-label="图片模型"><option value="">按质量档位选择</option></select>
+                  <select id="imagineCount" class="form-input" aria-label="图片数量"><option>1</option><option>2</option><option>3</option><option>4</option><option selected>6</option></select>
+                  <select id="imagineResolution" class="form-input" aria-label="图片分辨率" disabled><option value="1k">1k</option><option value="2k">2k</option></select>
                   <div id="imagineRunModeToggle" class="imagine-masonry-toggle" role="tablist" aria-label="生成轮次">
                     <button type="button" class="imagine-masonry-toggle-btn is-active" data-imagine-run-mode="single">单轮</button>
                     <button type="button" class="imagine-masonry-toggle-btn" data-imagine-run-mode="continuous">连续</button>
@@ -268,6 +283,16 @@
                 </select>
               </div>
               <div class="settings-block length-block">
+                <label class="field-label">视频模型</label>
+                <select id="videoModel" class="form-input"></select>
+                <label class="field-label">操作</label>
+                <select id="videoAction" class="form-input"><option value="generate">生成</option><option value="edit">编辑</option><option value="extend">延长</option></select>
+                <label class="field-label">原视频 URL（编辑 / 延长）</label>
+                <input id="videoSourceURL" class="form-input" type="url">
+                <label class="field-label">参考图片 URL（Console 生成）</label>
+                <input id="videoReferenceURL" class="form-input" type="url">
+                <label class="field-label">参考音色 ID（Console 生成）</label>
+                <input id="videoReferenceVoice" class="form-input">
                 <label class="field-label">视频时长</label>
                 <input id="videoLength" class="form-input" type="number" min="6" max="30" step="1" value="6">
               </div>
@@ -276,6 +301,7 @@
                 <select id="videoResolution" class="form-input">
                   <option value="480p">480p</option>
                   <option value="720p">720p</option>
+                  <option value="1080p">1080p</option>
                 </select>
               </div>
               <div class="settings-block preset-block">
@@ -556,8 +582,9 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="{{.AdminPath}}/js/common.js?v=20260605-2"></script>
-  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260605-1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260908-3"></script>
+  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260909-2"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260909-3"></script>
+  <script src="{{.AdminPath}}/js/grok-media-tools.js?v=20260909-2"></script>
 </body>
 
 </html>

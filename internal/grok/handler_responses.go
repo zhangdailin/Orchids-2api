@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -255,7 +256,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subReq := r.Clone(r.Context())
+	subReq := r.Clone(context.WithValue(r.Context(), chatSourceOperationKey{}, "responses"))
 	subReq.Method = http.MethodPost
 	subReq.URL.Path = "/v1/chat/completions"
 	subReq.Header = make(http.Header)
@@ -434,6 +435,7 @@ func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsReques
 	}
 	reasoningEffort := responsesReasoningEffort(req.Reasoning)
 	out := ChatCompletionsRequest{
+		sourceOperation:   "responses",
 		Model:             model,
 		Messages:          messages,
 		Stream:            req.Stream,

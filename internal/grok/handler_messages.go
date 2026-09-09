@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -84,7 +85,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicError(w, http.StatusInternalServerError, "failed to encode request")
 		return
 	}
-	subReq := r.Clone(r.Context())
+	subReq := r.Clone(context.WithValue(r.Context(), chatSourceOperationKey{}, "messages"))
 	subReq.Method = http.MethodPost
 	subReq.URL.Path = "/grok/v1/chat/completions"
 	subReq.Header = r.Header.Clone()
@@ -193,6 +194,7 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 		return ChatCompletionsRequest{}, err
 	}
 	return ChatCompletionsRequest{
+		sourceOperation:   "messages",
 		Model:             req.Model,
 		Messages:          messages,
 		Stream:            req.Stream,

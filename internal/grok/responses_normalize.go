@@ -120,7 +120,7 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	if req.ReasoningReplay && strings.TrimSpace(req.PromptCacheKey) != "" {
 		if encrypted := h.loadReasoningReplay(req.Model, req.PromptCacheKey); encrypted != "" && !consoleInputHasEncryptedReasoning(input) {
 			input = insertConsoleReplayBeforeLastUser(input, map[string]interface{}{
-				"type": "reasoning", "summary": []interface{}{}, "content": nil, "encrypted_content": encrypted,
+				"type": "reasoning", "summary": []interface{}{}, "encrypted_content": encrypted,
 			})
 		}
 	}
@@ -183,6 +183,16 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		return nil, err
 	}
 	if build {
+		// Match Build Chat's summary contract without imposing it on native
+		// Responses or Anthropic requests, or choosing an effort for the caller.
+		if req.sourceOperation == "" && (req.ReasoningEffort == nil || *req.ReasoningEffort != "none") {
+			reasoning, _ := payload["reasoning"].(map[string]interface{})
+			if reasoning == nil {
+				reasoning = map[string]interface{}{}
+			}
+			reasoning["summary"] = "auto"
+			payload["reasoning"] = reasoning
+		}
 		if strings.TrimSpace(req.PromptCacheKey) != "" {
 			payload["prompt_cache_key"] = strings.TrimSpace(req.PromptCacheKey)
 		}
