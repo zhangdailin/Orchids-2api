@@ -34,7 +34,12 @@ async function loadAccounts() {
       window.location.href = "./login.html";
       return;
     }
-    accounts = await res.json();
+    const loadedAccounts = await res.json();
+    accounts = (Array.isArray(loadedAccounts) ? loadedAccounts : []).filter((account) => !(
+      String(account?.account_type || "").trim().toLowerCase() === "grok" &&
+      String(account?.grok_provider || "").trim().toLowerCase() === "console" &&
+      Number(account?.grok_sso_parent_id || 0) > 0
+    ));
     sortAccounts();
     renderPlatformTabs();
     renderAccounts();
@@ -1397,6 +1402,7 @@ function openModal(account = null) {
   const applyValues = () => {
     const modeSelect = document.getElementById("credentialType");
     const providerSelect = document.getElementById("grokProvider");
+    const providerHint = document.getElementById("grokProviderHint");
     if (account) {
       title.textContent = "编辑账号";
       document.getElementById("accountId").value = account.id;
@@ -1405,7 +1411,10 @@ function openModal(account = null) {
       document.getElementById("enabled").checked = account.enabled;
       const isOAuth = String(account.credential_type || "").trim().toLowerCase() === "oauth";
       if (modeSelect) modeSelect.value = isOAuth ? "oauth" : "sso";
-      if (providerSelect) providerSelect.value = String(account.grok_provider || "web").trim().toLowerCase() === "console" ? "console" : "web";
+      if (providerSelect) providerSelect.value = "web";
+      if (providerHint) {
+        providerHint.textContent = "保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。";
+      }
       document.getElementById("oauthAccessToken").value = account.oauth_access_token || "";
       document.getElementById("oauthRefreshToken").value = account.oauth_refresh_token || "";
       document.getElementById("oauthExpiresAt").value = account.oauth_expires_at || "";
@@ -1418,6 +1427,7 @@ function openModal(account = null) {
       document.getElementById("clientCookie").value = "";
       if (modeSelect) modeSelect.value = "sso";
       if (providerSelect) providerSelect.value = "web";
+      if (providerHint) providerHint.textContent = "保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。";
       document.getElementById("oauthAccessToken").value = "";
       document.getElementById("oauthRefreshToken").value = "";
       document.getElementById("oauthExpiresAt").value = "";
@@ -1469,7 +1479,7 @@ async function saveAccount(e) {
   };
   if (type === "grok") {
     data.credential_type = isOAuth ? "oauth" : "";
-    data.grok_provider = isOAuth ? "build" : String(document.getElementById("grokProvider")?.value || "web");
+    data.grok_provider = isOAuth ? "build" : "web";
   }
   if (isOAuth) {
     if (oauthAccess) data.oauth_access_token = oauthAccess;

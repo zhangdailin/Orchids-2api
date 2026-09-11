@@ -50,6 +50,76 @@ test('stream stores interleaved reasoning and partial failure exactly once', asy
   }
 });
 
+function capabilityContext(response) {
+  const start = source.indexOf('  async function loadGrokCapabilities()');
+  const end = source.indexOf('  function formatDateTime(', start);
+  const loadCapabilities = source.slice(start, end);
+  const badges = new Map();
+  const state = { loaded: false, failed: false, counts: { build: 0, web: 0, console: 0 } };
+  const context = vm.createContext({
+    fetch: async () => response,
+    console: { debug() {} },
+    grokCapabilityState: state,
+    handleUnauthorized: () => false,
+    hasGrokCapability(tab) {
+      if (!state.loaded || state.failed) return true;
+      if (tab === 'cache') return true;
+      if (context.chatState.modelsLoaded) return context.chatState.capabilities[tab] === true;
+      if (tab === 'chat') return state.counts.build + state.counts.web + state.counts.console > 0;
+      return Boolean(context.chatState.capabilities[tab]) || state.counts.web + state.counts.console > 0;
+    },
+    applyGrokCapabilityControls() {},
+    updateGrokCapabilityPresentation() {},
+    currentGrokToolTab: () => 'chat',
+    document: {
+      querySelector(selector) {
+        if (selector === '#grokToolsTabs .tab-item.active') return { dataset: { tab: 'chat' } };
+        if (selector.startsWith('[data-capability=')) {
+          if (!badges.has(selector)) badges.set(selector, { textContent: '', classList: { toggle() {} } });
+          return badges.get(selector);
+        }
+        return null;
+      },
+      getElementById() { return null; },
+    },
+    window: { location: {} },
+    chatState: { modelsLoaded: false, capabilities: {} },
+  });
+  vm.runInContext(`${loadCapabilities}\nresult = grokCapabilityState;`, context);
+  context.result = state;
+  return context;
+}
+
+test('Grok capability fallback reads aggregate availability including internal Console capacity', async () => {
+  let requested = '';
+  const context = capabilityContext({
+    ok: true,
+    status: 200,
+    json: async () => ({ counts: { build: 1, web: 0, console: 2 } }),
+  });
+  const originalFetch = context.fetch;
+  context.fetch = async (url) => { requested = url; return originalFetch(url); };
+  await context.loadGrokCapabilities();
+  assert.equal(requested, '/api/grok/availability');
+  assert.deepEqual(JSON.parse(JSON.stringify(context.result.counts)), { build: 1, web: 0, console: 2 });
+  assert.equal(context.result.loaded, true);
+  assert.equal(context.result.failed, false);
+  assert.equal(context.hasGrokCapability('chat'), true);
+  assert.equal(context.hasGrokCapability('video'), true);
+});
+
+test('Grok capability fallback fails open for invalid and failed availability responses', async () => {
+  for (const response of [
+    { ok: true, status: 200, json: async () => ({ counts: { build: 1, web: -1, console: 0 } }) },
+    { ok: false, status: 503, json: async () => ({}) },
+  ]) {
+    const context = capabilityContext(response);
+    await context.loadGrokCapabilities();
+    assert.equal(context.result.loaded, true);
+    assert.equal(context.result.failed, true);
+    assert.equal(context.hasGrokCapability('video'), true);
+  }
+});
 function streamContext(session, body, statuses) {
   const request = source.slice(source.indexOf('  async function requestChatCompletion('), source.indexOf('  async function retryAssistantMessage('));
   const ctx = vm.createContext({ session, AbortController, TextDecoder, fetch:async()=>new Response(body), chatState:{},

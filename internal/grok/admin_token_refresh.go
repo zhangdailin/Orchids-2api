@@ -48,15 +48,8 @@ func collectRefreshTokens(req adminTokenRefreshRequest) []string {
 
 func collectGrokAccountsByToken(accounts []*store.Account) map[string][]*store.Account {
 	result := make(map[string][]*store.Account, len(accounts))
-	for _, acc := range accounts {
-		if !isGrokAccount(acc) {
-			continue
-		}
-		token := grokAccountToken(acc)
-		if token == "" {
-			continue
-		}
-		result[token] = append(result[token], acc)
+	for token, acc := range CollectWebSSOSourcesByToken(accounts, false) {
+		result[token] = []*store.Account{acc}
 	}
 	return result
 }
@@ -77,14 +70,8 @@ func (h *Handler) resolveTokenRefreshRequest(r *http.Request) (adminTokenRefresh
 			if err != nil {
 				return req, nil, fmt.Errorf("failed to list accounts: %w", err)
 			}
-			for _, acc := range accounts {
-				if !isGrokAccount(acc) {
-					continue
-				}
-				token := grokAccountToken(acc)
-				if token != "" {
-					tokens = append(tokens, token)
-				}
+			for _, acc := range CollectWebSSOSourcesByToken(accounts, false) {
+				tokens = append(tokens, grokAccountToken(acc))
 			}
 			tokens = uniqueStrings(tokens)
 		}
@@ -129,8 +116,9 @@ func (h *Handler) runTokenRefreshBatch(ctx context.Context, tokens []string, mod
 				if acc == nil {
 					continue
 				}
-				updateGrokUsageAccount(acc, info, status)
-				if err := h.lb.Store.UpdateAccount(callCtx, acc); err != nil {
+				updated := *acc
+				updateGrokUsageAccount(&updated, info, status)
+				if err := h.lb.Store.UpdateAccount(callCtx, &updated); err != nil {
 					slog.Warn("update grok usage account failed", "account_id", acc.ID, "error", err)
 				}
 			}

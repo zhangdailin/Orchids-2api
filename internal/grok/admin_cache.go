@@ -159,19 +159,8 @@ func (h *Handler) listCacheOnlineAccounts(r *http.Request) []map[string]interfac
 	}
 
 	out := make([]map[string]interface{}, 0, len(accounts))
-	seen := map[string]struct{}{}
-	for _, acc := range accounts {
-		if !isGrokAccount(acc) || !acc.Enabled {
-			continue
-		}
+	for _, acc := range CollectWebSSOSourcesByToken(accounts, true) {
 		token := grokAccountToken(acc)
-		if token == "" {
-			continue
-		}
-		if _, exists := seen[token]; exists {
-			continue
-		}
-		seen[token] = struct{}{}
 		out = append(out, map[string]interface{}{
 			"token":               token,
 			"raw_token":           token,

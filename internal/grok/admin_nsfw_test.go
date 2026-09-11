@@ -6,27 +6,40 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestCollectNSFWTargets_DefaultAllGrok(t *testing.T) {
+func TestCollectNSFWTargets_DefaultVisibleWebSources(t *testing.T) {
 	accounts := []*store.Account{
-		{ID: 1, Name: "g1", AccountType: "grok", ClientCookie: "sso=token-a; Path=/"},
-		{ID: 2, Name: "w1", AccountType: "warp", ClientCookie: "token-w"},
-		{ID: 3, Name: "g2", AccountType: "grok", RefreshToken: "token-b"},
-		{ID: 4, Name: "g3", AgentMode: "grok", ClientCookie: "token-a"},
+		{ID: 1, Name: "web-a", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=token-a; Path=/"},
+		{ID: 2, Name: "hidden-console", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderConsole, GrokSSOParentID: 1, ClientCookie: "sso=token-a"},
+		{ID: 3, Name: "standalone-console", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderConsole, ClientCookie: "sso=token-b"},
+		{ID: 4, Name: "build", AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, OAuthAccessToken: "access"},
+		{ID: 5, Name: "warp", AccountType: "warp", ClientCookie: "token-w"},
 	}
 
 	targets := collectNSFWTargets(adminNSFWEnableRequest{}, accounts)
-	if len(targets) != 2 {
-		t.Fatalf("targets len=%d want=2", len(targets))
+	if len(targets) != 1 {
+		t.Fatalf("targets len=%d want=1", len(targets))
 	}
-	if targets[0].Token != "token-a" || targets[1].Token != "token-b" {
-		t.Fatalf("unexpected tokens: %+v", targets)
+	if targets[0].Token != "token-a" || targets[0].AccountID != 1 || targets[0].AccountName != "web-a" {
+		t.Fatalf("unexpected targets: %+v", targets)
+	}
+}
+
+func TestCollectNSFWTargets_HiddenConsoleIDIsIgnored(t *testing.T) {
+	accounts := []*store.Account{
+		{ID: 10, Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=web"},
+		{ID: 11, Name: "hidden-console", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderConsole, GrokSSOParentID: 10, ClientCookie: "sso=web"},
+	}
+
+	targets := collectNSFWTargets(adminNSFWEnableRequest{AccountIDs: []int64{11}}, accounts)
+	if len(targets) != 0 {
+		t.Fatalf("hidden Console ID produced targets: %+v", targets)
 	}
 }
 
 func TestCollectNSFWTargets_ByAccountIDs(t *testing.T) {
 	accounts := []*store.Account{
-		{ID: 10, Name: "g10", AccountType: "grok", ClientCookie: "sso=t10"},
-		{ID: 11, Name: "g11", AccountType: "grok", ClientCookie: "sso=t11"},
+		{ID: 10, Name: "g10", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=t10"},
+		{ID: 11, Name: "g11", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=t11"},
 		{ID: 12, Name: "w12", AccountType: "warp", ClientCookie: "sso=t12"},
 	}
 	req := adminNSFWEnableRequest{AccountIDs: []int64{11, 12}}
@@ -41,7 +54,7 @@ func TestCollectNSFWTargets_ByAccountIDs(t *testing.T) {
 
 func TestCollectNSFWTargets_ExplicitTokens(t *testing.T) {
 	accounts := []*store.Account{
-		{ID: 20, Name: "g20", AccountType: "grok", ClientCookie: "sso=t20"},
+		{ID: 20, Name: "g20", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=t20"},
 	}
 	req := adminNSFWEnableRequest{
 		Token:  "sso=t0; Path=/",

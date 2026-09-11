@@ -74,6 +74,45 @@ test('Warp save cannot submit a manual creation request', async () => {
   assert.match(notices[0], /官方网页登录/);
 });
 
+test('linked Console rows are filtered and SSO saves target the Web source', async () => {
+  const { context, node } = loadUI();
+  node('accountModal').classList = { add() {}, remove() {} };
+  node('accountModal').style = {};
+  context.stopWarpDeviceLogin = () => {};
+  context.resetWarpDeviceLoginStatus = () => {};
+  context.stopGrokDeviceLogin = () => {};
+  context.resetGrokDeviceLoginStatus = () => {};
+  context.clearAccountImportStatus = () => {};
+  context.sortAccounts = () => {};
+  context.renderPlatformTabs = () => {};
+  context.renderAccounts = () => {};
+  context.updateStats = () => {};
+  context.autoRefreshWarpAccounts = () => {};
+  context.fetch = async () => ({ status: 200, json: async () => [
+    { id: 42, account_type: 'grok', credential_type: 'sso', grok_provider: 'console', grok_sso_parent_id: 7, client_cookie: 'sso=internal', enabled: true },
+    { id: 7, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', client_cookie: 'sso=visible', enabled: true, weight: 2 },
+  ] });
+  await context.loadAccounts();
+  assert.equal(vm.runInContext('accounts.length', context), 1);
+  assert.equal(vm.runInContext('accounts[0].id', context), 7);
+
+  const account = vm.runInContext('accounts[0]', context);
+  context.openModal(account);
+  assert.equal(node('grokProvider').value, 'web');
+  assert.match(node('grokProviderHint').textContent, /内部维护 Console/);
+
+  let sent;
+  context.fetch = async (url, options) => { sent = { url, options }; return { ok: true }; };
+  context.closeModal = () => {};
+  context.loadAccounts = () => {};
+  context.showToast = () => {};
+  await context.saveAccount({ preventDefault() {} });
+
+  assert.equal(sent.url, '/api/accounts/7');
+  assert.equal(sent.options.method, 'PUT');
+  assert.equal(JSON.parse(sent.options.body).grok_provider, 'web');
+});
+
 test('Warp settings save succeeds without submitting credentials', async () => {
   const { context, node } = loadUI();
   node('accountType').value = 'warp';

@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"github.com/goccy/go-json"
 	"net/http"
@@ -14,7 +15,40 @@ import (
 	"time"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/store"
 )
+
+func TestListCacheOnlineAccountsUsesOnlyCanonicalVisibleWebSource(t *testing.T) {
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	webHighID := &store.Account{ID: 9, Name: "web-high", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=shared", Enabled: true, Subscription: "basic"}
+	webLowID := &store.Account{ID: 3, Name: "web-low", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=shared", Enabled: true, Subscription: "super", StatusCode: "429"}
+	if err := s.CreateAccount(context.Background(), webLowID); err != nil {
+		t.Fatalf("CreateAccount(web low) error = %v", err)
+	}
+	if err := s.CreateAccount(context.Background(), webHighID); err != nil {
+		t.Fatalf("CreateAccount(web high) error = %v", err)
+	}
+	hiddenConsole := &store.Account{Name: "hidden-console", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderConsole, GrokSSOParentID: webLowID.ID, ClientCookie: "sso=shared", Enabled: true, Subscription: "heavy", StatusCode: "401"}
+	standaloneConsole := &store.Account{Name: "standalone-console", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderConsole, ClientCookie: "sso=standalone", Enabled: true}
+	for _, acc := range []*store.Account{hiddenConsole, standaloneConsole} {
+		if err := s.CreateAccount(context.Background(), acc); err != nil {
+			t.Fatalf("CreateAccount(%s) error = %v", acc.Name, err)
+		}
+	}
+
+	accounts := h.listCacheOnlineAccounts(httptest.NewRequest(http.MethodGet, "/api/v1/admin/cache", nil))
+	if len(accounts) != 1 {
+		t.Fatalf("online accounts=%#v want one Web source", accounts)
+	}
+	if accounts[0]["token"] != "shared" || accounts[0]["pool"] != "ssoSuper" || accounts[0]["status"] != "cooling" {
+		t.Fatalf("online account leaked non-canonical/Console state: %#v", accounts[0])
+	}
+}
 
 func TestHandleAdminCacheEndpoints(t *testing.T) {
 	oldBase := cacheBaseDir

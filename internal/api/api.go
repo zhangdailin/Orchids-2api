@@ -360,6 +360,31 @@ func preserveGrokOAuthCredentials(acc, existing *store.Account) {
 	}
 }
 
+// preserveGrokRuntimeStateOnAdminEdit keeps provider-observed state out of the
+// generic account edit surface. The management modal only changes credential
+// and operator configuration; a partial PUT must not erase a linked Console
+// account's independent catalog, quota, health, or recovery state.
+func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
+	if acc == nil || existing == nil || !strings.EqualFold(acc.AccountType, "grok") {
+		return
+	}
+	acc.Token = existing.Token
+	acc.Subscription = existing.Subscription
+	acc.UsageCurrent = existing.UsageCurrent
+	acc.UsageTotal = existing.UsageTotal
+	acc.UsageLimit = existing.UsageLimit
+	acc.StatusCode = existing.StatusCode
+	acc.LastAttempt = existing.LastAttempt
+	acc.QuotaResetAt = existing.QuotaResetAt
+	acc.MissingThinkingStrikes = existing.MissingThinkingStrikes
+	acc.MissingThinkingLastAt = existing.MissingThinkingLastAt
+	acc.GrokModels = append([]string(nil), existing.GrokModels...)
+	acc.GrokModelsSyncedAt = existing.GrokModelsSyncedAt
+	acc.GrokBilling = existing.GrokBilling
+	acc.GrokRateLimits = existing.GrokRateLimits
+	acc.GrokWebQuota = existing.GrokWebQuota
+}
+
 type accountOutput struct {
 	*store.Account
 	WarpAuthenticated bool `json:"warp_authenticated,omitempty"`
@@ -447,6 +472,9 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 			continue
 		}
 		if normalizedAccountCredentialKey(existing) == key {
+			if grokSSOViewsAreLinked(acc, existing) {
+				continue
+			}
 			return existing, nil
 		}
 	}
@@ -1020,7 +1048,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		normalized := make([]*accountOutput, 0, len(accounts))
 		for _, acc := range accounts {
-			if acc == nil {
+			if acc == nil || isLinkedGrokConsoleAccount(acc) {
 				continue
 			}
 			normalized = append(normalized, normalizeAccountOutput(acc))
@@ -1034,6 +1062,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
+		acc.GrokSSOParentID = 0
 		if strings.TrimSpace(acc.AccountType) == "" {
 			http.Error(w, "account_type is required", http.StatusBadRequest)
 			return
@@ -1047,6 +1076,9 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			return
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
+			if !grokAccountIsOAuth(&acc) {
+				acc.GrokProvider = grok.ProviderWeb
+			}
 			acc.NSFWEnabled = true
 			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {
 				http.Error(w, "missing oauth token", http.StatusBadRequest)
@@ -1055,6 +1087,13 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			if !grokAccountIsOAuth(&acc) && grok.NormalizeSSOToken(util.FirstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token)) == "" {
 				http.Error(w, "missing sso token", http.StatusBadRequest)
 				return
+			}
+			if !grokAccountIsOAuth(&acc) {
+				if err := a.reconcileGrokSSOProviderCredential(r.Context(), &acc); err != nil {
+					slog.Error("Failed to repair linked Grok Console SSO account before create", "error", err)
+					http.Error(w, "failed to repair linked Grok Console SSO account", http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 		if existing, err := a.findDuplicateAccountByCredential(r.Context(), &acc, 0); err != nil {
@@ -1069,6 +1108,14 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		if err := a.store.CreateAccount(r.Context(), &acc); err != nil {
 			slog.Error("Failed to create account", "error", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.syncGrokSSOProviderView(r.Context(), &acc); err != nil {
+			slog.Error("Failed to create linked Grok Console SSO account", "account_id", acc.ID, "error", err)
+			if cleanupErr := a.deleteGrokSSOSourceAndLinkedConsoleAccounts(r.Context(), acc.ID); cleanupErr != nil {
+				slog.Error("Failed to compensate incomplete Grok SSO pair creation", "account_id", acc.ID, "error", cleanupErr)
+			}
+			http.Error(w, "failed to create linked Grok Console SSO account", http.StatusInternalServerError)
 			return
 		}
 
@@ -1545,11 +1592,20 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid ID", http.StatusBadRequest)
 		return
 	}
+	account, err := a.store.GetAccount(r.Context(), id)
+	if err != nil || isLinkedGrokConsoleAccount(account) {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
 
 	isRefresh := len(parts) > 1 && parts[1] == "refresh"
 	isVerify := len(parts) > 1 && parts[1] == "verify"
 	isCheck := len(parts) > 1 && parts[1] == "check"
 	isUsage := len(parts) > 1 && parts[1] == "usage"
+	if len(parts) > 2 || (len(parts) > 1 && !(isRefresh || isVerify || isCheck || isUsage)) {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodGet:
@@ -1558,22 +1614,17 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if isUsage {
-			acc, err := a.store.GetAccount(r.Context(), id)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusNotFound)
-				return
-			}
 			resp := map[string]interface{}{
-				"account_id":     acc.ID,
-				"name":           acc.Name,
-				"account_type":   acc.AccountType,
-				"subscription":   acc.Subscription,
-				"usage_current":  acc.UsageCurrent,
-				"usage_limit":    acc.UsageLimit,
-				"usage_total":    acc.UsageTotal,
-				"quota_reset_at": acc.QuotaResetAt,
+				"account_id":     account.ID,
+				"name":           account.Name,
+				"account_type":   account.AccountType,
+				"subscription":   account.Subscription,
+				"usage_current":  account.UsageCurrent,
+				"usage_limit":    account.UsageLimit,
+				"usage_total":    account.UsageTotal,
+				"quota_reset_at": account.QuotaResetAt,
 			}
-			for k, v := range buildQuotaResponseFields(acc) {
+			for k, v := range buildQuotaResponseFields(account) {
 				resp[k] = v
 			}
 			json.NewEncoder(w).Encode(resp)
@@ -1611,12 +1662,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			a.checkSem <- struct{}{}
 			defer func() { <-a.checkSem }()
 
-			acc, err := a.store.GetAccount(r.Context(), id)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusNotFound)
-				return
-			}
-
+			acc := account
 			checkOK := false
 			checkErrStatus := ""
 			defer func() {
@@ -1670,19 +1716,10 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(normalizeAccountOutput(acc))
 			return
 		}
-		acc, err := a.store.GetAccount(r.Context(), id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
-		json.NewEncoder(w).Encode(normalizeAccountOutput(acc))
+		json.NewEncoder(w).Encode(normalizeAccountOutput(account))
 
 	case http.MethodPut:
-		existing, err := a.store.GetAccount(r.Context(), id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
-		}
+		existing := account
 
 		var acc store.Account
 		if err := json.NewDecoder(r.Body).Decode(&acc); err != nil {
@@ -1690,6 +1727,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		acc.ID = id
+		acc.GrokSSOParentID = existing.GrokSSOParentID
 		if strings.TrimSpace(acc.AccountType) == "" {
 			acc.AccountType = existing.AccountType
 		}
@@ -1706,6 +1744,17 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "unsupported account type", http.StatusBadRequest)
 			return
 		}
+		if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
+			hasChild, err := a.hasLinkedGrokConsoleCompanion(r.Context(), existing.ID)
+			if err != nil {
+				http.Error(w, "failed to inspect linked Grok Console account", http.StatusInternalServerError)
+				return
+			}
+			if hasChild && acc.AccountType != "grok" {
+				http.Error(w, "linked Grok Web SSO sources cannot change account type; delete the source before creating a replacement", http.StatusConflict)
+				return
+			}
+		}
 		if strings.EqualFold(acc.AccountType, "warp") {
 			if !strings.EqualFold(strings.TrimSpace(existing.AccountType), "warp") ||
 				acc.RefreshToken != "" || acc.Token != "" || acc.ClientCookie != "" ||
@@ -1717,9 +1766,25 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
+			if grokAccountIsOAuth(&acc) && isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
+				hasChild, err := a.hasLinkedGrokConsoleCompanion(r.Context(), existing.ID)
+				if err != nil {
+					http.Error(w, "failed to inspect linked Grok Console account", http.StatusInternalServerError)
+					return
+				}
+				if hasChild {
+					http.Error(w, "linked Grok Web SSO sources cannot change credential mode; delete the source before creating a replacement", http.StatusConflict)
+					return
+				}
+			}
+			if !grokAccountIsOAuth(&acc) {
+				// Editing an SSO source keeps it on its Web provider.
+				acc.GrokProvider = grok.ProviderWeb
+			}
 			// Admin UI redacts OAuth secrets on read; empty inbound fields mean
 			// "keep existing", not "clear credentials".
 			preserveGrokOAuthCredentials(&acc, existing)
+			preserveGrokRuntimeStateOnAdminEdit(&acc, existing)
 			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {
 				http.Error(w, "missing oauth token", http.StatusBadRequest)
 				return
@@ -1775,9 +1840,27 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if err := a.syncGrokSSOProviderView(r.Context(), &acc); err != nil {
+			slog.Error("Failed to synchronize linked Grok Console SSO account", "account_id", acc.ID, "error", err)
+			if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
+				if rollbackErr := a.store.UpdateAccount(r.Context(), existing); rollbackErr != nil {
+					slog.Error("Failed to restore Grok Web SSO source after synchronization error", "account_id", existing.ID, "error", rollbackErr)
+				}
+			}
+			http.Error(w, "failed to synchronize linked Grok Console SSO account", http.StatusInternalServerError)
+			return
+		}
 		json.NewEncoder(w).Encode(normalizeAccountOutput(&acc))
 
 	case http.MethodDelete:
+		if strings.EqualFold(account.AccountType, "grok") && !grokAccountIsOAuth(account) {
+			if err := a.deleteGrokSSOSourceAndLinkedConsoleAccounts(r.Context(), account.ID); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if err := a.store.DeleteAccount(r.Context(), id); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1787,6 +1870,36 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (a *API) HandleGrokAvailability(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	counts := map[string]int{
+		grok.ProviderBuild:   0,
+		grok.ProviderWeb:     0,
+		grok.ProviderConsole: 0,
+	}
+	accounts, err := a.store.ListAccounts(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, acc := range accounts {
+		if acc == nil || !acc.Enabled {
+			continue
+		}
+		if provider := grok.ProviderForAccount(acc); provider != "" {
+			if _, ok := counts[provider]; ok {
+				counts[provider]++
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"counts": counts})
 }
 
 func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
@@ -1807,6 +1920,12 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 		Accounts: make([]store.Account, 0, len(accounts)),
 	}
 	for _, acc := range accounts {
+		// Linked accounts intentionally share a credential but represent two
+		// provider-specific runtime records. Export the Web source only; import
+		// reconciliation rebuilds or links its Console companion.
+		if isLinkedGrokConsoleAccount(acc) {
+			continue
+		}
 		// Warp sessions are not portable credentials. Log in again on the target
 		// server; exporting them would recreate the removed token-import path.
 		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
@@ -1846,9 +1965,14 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 	result := ImportResult{Total: len(exportData.Accounts)}
 
 	for _, acc := range exportData.Accounts {
+		if grok.IsLinkedConsoleSSOCompanion(&acc) {
+			result.Skipped++
+			continue
+		}
 		acc.ID = 0
 		acc.RequestCount = 0
 		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
+		acc.GrokSSOParentID = 0
 		if strings.TrimSpace(acc.AccountType) == "" {
 			result.Skipped++
 			continue
@@ -1862,8 +1986,29 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 			continue
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
+			if !grokAccountIsOAuth(&acc) {
+				// Imports own one visible Web source; reconciliation creates or
+				// restores its linked Console account.
+				acc.GrokProvider = grok.ProviderWeb
+				acc.GrokSSOParentID = 0
+			}
 			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {
 				slog.Warn("Skipped grok oauth import without credentials", "name", acc.Name)
+				result.Skipped++
+				continue
+			}
+		}
+		if strings.EqualFold(acc.AccountType, "grok") && !grokAccountIsOAuth(&acc) {
+			if err := a.reconcileGrokSSOProviderCredential(r.Context(), &acc); err != nil {
+				slog.Warn("Failed to repair linked Grok Console SSO account before import", "name", acc.Name, "error", err)
+				result.Skipped++
+				continue
+			}
+			if existing, err := a.findDuplicateAccountByCredential(r.Context(), &acc, 0); err != nil {
+				slog.Warn("Failed to detect duplicate imported Grok SSO account", "name", acc.Name, "error", err)
+				result.Skipped++
+				continue
+			} else if existing != nil {
 				result.Skipped++
 				continue
 			}
@@ -1872,6 +2017,16 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("Failed to import account", "name", acc.Name, "error", err)
 			result.Skipped++
 		} else {
+			if strings.EqualFold(acc.AccountType, "grok") && !grokAccountIsOAuth(&acc) {
+				if err := a.syncGrokSSOProviderView(r.Context(), &acc); err != nil {
+					slog.Warn("Failed to link imported Grok Console SSO account", "account_id", acc.ID, "error", err)
+					if cleanupErr := a.deleteGrokSSOSourceAndLinkedConsoleAccounts(r.Context(), acc.ID); cleanupErr != nil {
+						slog.Error("Failed to compensate incomplete imported Grok SSO pair", "account_id", acc.ID, "error", cleanupErr)
+					}
+					result.Skipped++
+					continue
+				}
+			}
 			result.Imported++
 		}
 	}

@@ -1,12 +1,16 @@
 package grok
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/goccy/go-json"
+
+	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 )
 
@@ -50,6 +54,68 @@ func TestHandleAdminTokensRefreshAsync_MethodNotAllowed(t *testing.T) {
 	h.HandleAdminTokensRefreshAsync(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status=%d want=%d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestCollectGrokAccountsByTokenUsesCanonicalVisibleWebSource(t *testing.T) {
+	webHighID := &store.Account{ID: 9, Name: "web-high", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=shared"}
+	webLowID := &store.Account{ID: 3, Name: "web-low", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=shared"}
+	hiddenConsole := &store.Account{ID: 1, Name: "hidden-console", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderConsole, GrokSSOParentID: webLowID.ID, ClientCookie: "sso=shared", StatusCode: "429", UsageCurrent: 7}
+	standaloneConsole := &store.Account{ID: 2, Name: "standalone-console", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderConsole, ClientCookie: "sso=standalone"}
+	build := &store.Account{ID: 4, Name: "build", AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, OAuthAccessToken: "access"}
+
+	groups := collectGrokAccountsByToken([]*store.Account{hiddenConsole, standaloneConsole, webHighID, build, webLowID})
+	if len(groups) != 1 || len(groups["shared"]) != 1 || groups["shared"][0].ID != webLowID.ID {
+		t.Fatalf("groups=%#v want canonical visible Web source only", groups)
+	}
+}
+
+func TestRunTokenRefreshBatchUpdatesOnlyWebSource(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != defaultRateLimitsPath {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"remainingQueries": 20, "totalQueries": 50})
+	}))
+	defer upstream.Close()
+
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+	h.client = New(&config.Config{GrokAPIBaseURL: upstream.URL})
+
+	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderWeb, ClientCookie: "sso=shared", Enabled: true, UsageLimit: 50, UsageCurrent: 12}
+	if err := s.CreateAccount(context.Background(), web); err != nil {
+		t.Fatalf("CreateAccount(web) error = %v", err)
+	}
+	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: ProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true, StatusCode: "429", UsageLimit: 90, UsageCurrent: 7, RequestCount: 4, GrokModels: []string{"console/grok-4.20"}}
+	if err := s.CreateAccount(context.Background(), console); err != nil {
+		t.Fatalf("CreateAccount(console) error = %v", err)
+	}
+
+	groups := collectGrokAccountsByToken([]*store.Account{console, web})
+	results := h.runTokenRefreshBatch(context.Background(), []string{"shared"}, "", groups, 1, nil)
+	if !results["shared"] {
+		t.Fatalf("refresh result=%#v want success", results)
+	}
+
+	gotWeb, err := s.GetAccount(context.Background(), web.ID)
+	if err != nil {
+		t.Fatalf("GetAccount(web) error = %v", err)
+	}
+	if gotWeb.StatusCode != "" || gotWeb.UsageLimit != 50 || gotWeb.UsageCurrent != 20 {
+		t.Fatalf("Web refresh was not persisted: %#v", gotWeb)
+	}
+	gotConsole, err := s.GetAccount(context.Background(), console.ID)
+	if err != nil {
+		t.Fatalf("GetAccount(console) error = %v", err)
+	}
+	if gotConsole.StatusCode != "429" || gotConsole.UsageLimit != 90 || gotConsole.UsageCurrent != 7 || gotConsole.RequestCount != 4 || len(gotConsole.GrokModels) != 1 {
+		t.Fatalf("refresh changed internal Console runtime state: %#v", gotConsole)
 	}
 }
 

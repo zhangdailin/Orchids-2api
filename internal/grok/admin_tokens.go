@@ -268,20 +268,8 @@ func (h *Handler) handleAdminTokensList(w http.ResponseWriter, r *http.Request) 
 	}
 
 	pools := map[string][]map[string]interface{}{}
-	seen := map[string]struct{}{}
-	for _, acc := range accounts {
-		if !isGrokAccount(acc) || !acc.Enabled {
-			continue
-		}
+	for _, acc := range CollectWebSSOSourcesByToken(accounts, true) {
 		token := grokAccountToken(acc)
-		if token == "" {
-			continue
-		}
-		if _, ok := seen[token]; ok {
-			continue
-		}
-		seen[token] = struct{}{}
-
 		pool := inferTokenPool(acc)
 		remaining := acc.UsageCurrent
 		if remaining < 0 {
@@ -342,20 +330,31 @@ func (h *Handler) handleAdminTokensUpdate(w http.ResponseWriter, r *http.Request
 				http.Error(w, "failed to update token", http.StatusInternalServerError)
 				return
 			}
+			if err := EnsureWebSSOConsoleCompanion(r.Context(), h.lb.Store, &acc); err != nil {
+				http.Error(w, "failed to synchronize linked token", http.StatusInternalServerError)
+				return
+			}
 			continue
 		}
 
 		acc := &store.Account{
-			Name:         strings.TrimSpace(entry.Note),
-			AccountType:  "grok",
-			AgentMode:    "grok",
-			ClientCookie: "sso=" + token,
-			Enabled:      true,
-			Weight:       1,
+			Name:           strings.TrimSpace(entry.Note),
+			AccountType:    "grok",
+			CredentialType: "sso",
+			GrokProvider:   ProviderWeb,
+			AgentMode:      "grok",
+			ClientCookie:   "sso=" + token,
+			Enabled:        true,
+			Weight:         1,
 		}
 		applyTokenEntryToAccount(acc, entry)
 		if err := h.lb.Store.CreateAccount(r.Context(), acc); err != nil {
 			http.Error(w, "failed to create token", http.StatusInternalServerError)
+			return
+		}
+		if err := EnsureWebSSOConsoleCompanion(r.Context(), h.lb.Store, acc); err != nil {
+			_ = h.lb.Store.DeleteAccount(r.Context(), acc.ID)
+			http.Error(w, "failed to create linked token", http.StatusInternalServerError)
 			return
 		}
 	}
@@ -372,6 +371,10 @@ func (h *Handler) handleAdminTokensUpdate(w http.ResponseWriter, r *http.Request
 			disableGrokAccount(&acc)
 			if err := h.lb.Store.UpdateAccount(r.Context(), &acc); err != nil {
 				http.Error(w, "failed to disable token", http.StatusInternalServerError)
+				return
+			}
+			if err := EnsureWebSSOConsoleCompanion(r.Context(), h.lb.Store, &acc); err != nil {
+				http.Error(w, "failed to synchronize linked token", http.StatusInternalServerError)
 				return
 			}
 		}

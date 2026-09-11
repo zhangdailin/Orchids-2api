@@ -22,11 +22,8 @@
       </div>
       <div class="form-group" id="grokProviderGroup" hidden>
         <label class="form-label">SSO 产品入口</label>
-        <select class="form-input" id="grokProvider">
-          <option value="web">Grok Web</option>
-          <option value="console">xAI Console</option>
-        </select>
-        <small class="helper-text">Web 与 Console 的 Cookie、模型和额度互不通用。</small>
+        <input class="form-input" id="grokProvider" value="web" readonly />
+        <small class="helper-text" id="grokProviderHint">保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。</small>
       </div>
        <div class="form-group" id="ssoCredentialGroup">
          <label class="form-label" id="tokenLabel">__session</label>

@@ -214,16 +214,19 @@
 
   async function loadGrokCapabilities() {
     try {
-      const res = await fetch("/api/accounts");
+      const res = await fetch("/api/grok/availability");
       if (handleUnauthorized(res)) return;
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const accounts = await res.json();
-      const counts = { build: 0, web: 0, console: 0 };
-      (Array.isArray(accounts) ? accounts : []).forEach((account) => {
-        if (!account || String(account.account_type || "").toLowerCase() !== "grok" || account.enabled === false) return;
-        const provider = String(account.grok_provider || (account.credential_type === "oauth" ? "build" : "web")).toLowerCase();
-        if (Object.prototype.hasOwnProperty.call(counts, provider)) counts[provider] += 1;
-      });
+      const payload = await res.json();
+      const rawCounts = payload && payload.counts;
+      const counts = {};
+      for (const provider of ["build", "web", "console"]) {
+        const count = Number(rawCounts && rawCounts[provider]);
+        if (!Number.isFinite(count) || count < 0 || !Number.isInteger(count)) {
+          throw new Error(`invalid ${provider} account count`);
+        }
+        counts[provider] = count;
+      }
       grokCapabilityState.counts = counts;
       grokCapabilityState.failed = false;
     } catch (err) {

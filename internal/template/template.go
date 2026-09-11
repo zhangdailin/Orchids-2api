@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
 	"orchids-api/web"
 )
@@ -66,8 +67,11 @@ func (r *Renderer) RenderIndex(w http.ResponseWriter, req *http.Request, cfg *co
 		ctx := req.Context()
 		accounts, err := s.ListAccounts(ctx)
 		if err == nil {
-			stats.TotalAccounts = len(accounts)
 			for _, acc := range accounts {
+				if acc == nil || grok.IsLinkedConsoleSSOCompanion(acc) {
+					continue
+				}
+				stats.TotalAccounts++
 				if acc.Enabled {
 					stats.NormalAccounts++
 				} else {

@@ -64,6 +64,12 @@ func buildGrokRefreshCandidates(accounts []*store.Account) []grokRefreshCandidat
 		if acc == nil || !strings.EqualFold(acc.AccountType, "grok") {
 			continue
 		}
+		// This loop can only collect Web SSO identity/quota. Linked Console
+		// records require their own provider-specific health lifecycle and must
+		// never inherit Web quota/status snapshots.
+		if grok.ProviderForAccount(acc) != grok.ProviderWeb {
+			continue
+		}
 		// Build CLI OAuth accounts refresh through their own token lifecycle
 		// (refreshCLIAccounts) and must not be verified as SSO cookies here.
 		if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {

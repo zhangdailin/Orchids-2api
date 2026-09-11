@@ -93,7 +93,7 @@ func grokAccountToken(acc *store.Account) string {
 func collectNSFWTargets(req adminNSFWEnableRequest, accounts []*store.Account) []nsfwTarget {
 	accountByID := make(map[int64]*store.Account, len(accounts))
 	for _, acc := range accounts {
-		if acc == nil {
+		if !IsGrokWebSSOSource(acc) {
 			continue
 		}
 		accountByID[acc.ID] = acc
@@ -125,15 +125,15 @@ func collectNSFWTargets(req adminNSFWEnableRequest, accounts []*store.Account) [
 	if len(req.AccountIDs) > 0 {
 		for _, id := range req.AccountIDs {
 			acc := accountByID[id]
-			if !isGrokAccount(acc) {
+			if !IsGrokWebSSOSource(acc) {
 				continue
 			}
 			add(grokAccountToken(acc), acc)
 		}
 	} else if strings.TrimSpace(req.Token) == "" && len(req.Tokens) == 0 {
-		// No explicit target: default to all grok accounts.
+		// No explicit target: default to visible Web SSO sources.
 		for _, acc := range accounts {
-			if !isGrokAccount(acc) {
+			if !IsGrokWebSSOSource(acc) {
 				continue
 			}
 			add(grokAccountToken(acc), acc)
@@ -198,9 +198,14 @@ func (h *Handler) runNSFWEnableBatch(ctx context.Context, targets []nsfwTarget, 
 					if acc == nil || acc.NSFWEnabled {
 						continue
 					}
-					acc.NSFWEnabled = true
-					if err := h.lb.Store.UpdateAccount(callCtx, acc); err != nil {
+					updated := *acc
+					updated.NSFWEnabled = true
+					if err := h.lb.Store.UpdateAccount(callCtx, &updated); err != nil {
 						slog.Warn("persist nsfw account state failed", "account_id", acc.ID, "error", err)
+						continue
+					}
+					if err := EnsureWebSSOConsoleCompanion(callCtx, h.lb.Store, &updated); err != nil {
+						slog.Warn("synchronize linked nsfw account state failed", "account_id", acc.ID, "error", err)
 					}
 				}
 			}

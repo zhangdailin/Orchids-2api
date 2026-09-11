@@ -98,6 +98,9 @@ func main() {
 	}
 
 	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
+	if err := apiHandler.EnsureGrokSSOProviderViews(context.Background()); err != nil {
+		slog.Error("Failed to reconcile linked Grok SSO provider accounts", "error", err)
+	}
 	h := handler.NewWithLoadBalancer(cfg, lb)
 	defer h.Close()
 	grokHandler := grok.NewHandler(cfg, lb)

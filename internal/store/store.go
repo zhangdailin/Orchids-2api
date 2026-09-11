@@ -72,6 +72,10 @@ type Account struct {
 	// and failure semantics; they must not be treated as interchangeable.
 	// Legacy accounts are normalized on read/write from CredentialType.
 	GrokProvider string `json:"grok_provider,omitempty"`
+	// GrokSSOParentID links an internal Console SSO runtime child to its visible
+	// Web SSO source. The child inherits credential/source scheduling settings
+	// but keeps independent model cache, quota, health and request state.
+	GrokSSOParentID int64 `json:"grok_sso_parent_id,omitempty"`
 	// GrokModels is the last successful account-specific upstream /v1/models
 	// capability snapshot. An empty snapshot means not synced yet, not that the
 	// account supports every model.

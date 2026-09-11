@@ -234,6 +234,7 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	updated.AgentMode = acc.AgentMode
 	updated.Email = acc.Email
 	updated.Weight = acc.Weight
+	updated.MaxConcurrent = acc.MaxConcurrent
 	updated.Enabled = acc.Enabled
 	updated.Token = acc.Token
 	updated.Subscription = acc.Subscription
@@ -272,6 +273,11 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		updated.GrokProvider = existing.GrokProvider
 	} else {
 		updated.GrokProvider = acc.GrokProvider
+	}
+	if acc.GrokSSOParentID == 0 {
+		updated.GrokSSOParentID = existing.GrokSSOParentID
+	} else {
+		updated.GrokSSOParentID = acc.GrokSSOParentID
 	}
 	// Account updates are often partial (for example request counters and
 	// credential rotation). Provider snapshots are refreshed independently, so

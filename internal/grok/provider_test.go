@@ -8,6 +8,28 @@ import (
 	"orchids-api/internal/store"
 )
 
+func TestIsLinkedConsoleSSOCompanion(t *testing.T) {
+	tests := []struct {
+		name string
+		acc  *store.Account
+		want bool
+	}{
+		{"linked console", &store.Account{AccountType: "grok", GrokProvider: ProviderConsole, GrokSSOParentID: 7}, true},
+		{"linked console without cookie", &store.Account{AccountType: "grok", GrokProvider: ProviderConsole, GrokSSOParentID: 7}, true},
+		{"web source", &store.Account{AccountType: "grok", GrokProvider: ProviderWeb}, false},
+		{"standalone console", &store.Account{AccountType: "grok", GrokProvider: ProviderConsole}, false},
+		{"build oauth", &store.Account{AccountType: "grok", CredentialType: "oauth", GrokSSOParentID: 7}, false},
+		{"non grok", &store.Account{AccountType: "warp", GrokProvider: ProviderConsole, GrokSSOParentID: 7}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsLinkedConsoleSSOCompanion(tt.acc); got != tt.want {
+				t.Fatalf("IsLinkedConsoleSSOCompanion()=%t want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProviderForAccountSeparatesLegacyAndExplicitProviders(t *testing.T) {
 	tests := []struct {
 		name string

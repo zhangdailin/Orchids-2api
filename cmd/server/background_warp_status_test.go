@@ -83,6 +83,22 @@ func TestBuildGrokRefreshCandidates_DeduplicatesByToken(t *testing.T) {
 	}
 }
 
+func TestBuildGrokRefreshCandidates_ExcludesLinkedConsoleAccounts(t *testing.T) {
+	accounts := []*store.Account{
+		{ID: 1, AccountType: "grok", CredentialType: "sso", GrokProvider: "web", ClientCookie: "sso=shared-token"},
+		{ID: 2, AccountType: "grok", CredentialType: "sso", GrokProvider: "console", GrokSSOParentID: 1, ClientCookie: "sso=shared-token"},
+		{ID: 3, AccountType: "grok", CredentialType: "sso", GrokProvider: "console", ClientCookie: "sso=standalone-console"},
+	}
+
+	got := buildGrokRefreshCandidates(accounts)
+	if len(got) != 1 {
+		t.Fatalf("candidate count=%d want 1", len(got))
+	}
+	if got[0].token != "shared-token" || len(got[0].accounts) != 1 || got[0].accounts[0].ID != 1 {
+		t.Fatalf("Web refresh candidates=%+v want only Web account", got)
+	}
+}
+
 func TestNextGrokRefreshBatch_RotatesAndCapsBatch(t *testing.T) {
 	grokRefreshMu.Lock()
 	oldOffset := grokRefreshOffset
