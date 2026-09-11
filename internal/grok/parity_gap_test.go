@@ -166,14 +166,22 @@ func TestAnthropicAdvancedFieldsAndReasoningReplayArePreserved(t *testing.T) {
 
 func TestReasoningReplayIsModelAndSessionIsolated(t *testing.T) {
 	h := &Handler{affinity: map[string]sessionAffinityEntry{}, replay: map[string]reasoningReplayEntry{}}
+	replayCipher := func(model, key string) string {
+		items := h.loadReasoningReplayItems(model, key)
+		if len(items) != 1 {
+			return ""
+		}
+		item, _ := items[0].(map[string]interface{})
+		return interfaceString(item["encrypted_content"])
+	}
 	h.storeReasoningReplay("grok-4.6", "session-a", validTestReplayCipher())
-	if got := h.loadReasoningReplay("grok-4.6", "session-a"); got != validTestReplayCipher() {
+	if got := replayCipher("grok-4.6", "session-a"); got != validTestReplayCipher() {
 		t.Fatalf("replay=%q want cipher-a", got)
 	}
-	if got := h.loadReasoningReplay("grok-4.5", "session-a"); got != "" {
+	if got := replayCipher("grok-4.5", "session-a"); got != "" {
 		t.Fatalf("cross-model replay leak: %q", got)
 	}
-	if got := h.loadReasoningReplay("grok-4.6", "session-b"); got != "" {
+	if got := replayCipher("grok-4.6", "session-b"); got != "" {
 		t.Fatalf("cross-session replay leak: %q", got)
 	}
 

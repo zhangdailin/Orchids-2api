@@ -18,6 +18,7 @@ type ChatCompletionsRequest struct {
 	StreamProvided      bool                     `json:"-"`
 	Thinking            *string                  `json:"thinking,omitempty"`
 	ReasoningEffort     *string                  `json:"reasoning_effort,omitempty"`
+	ReasoningSummary    *string                  `json:"reasoning_summary,omitempty"`
 	Temperature         *float64                 `json:"temperature,omitempty"`
 	TopP                *float64                 `json:"top_p,omitempty"`
 	MaxTokens           *int                     `json:"max_tokens,omitempty"`
@@ -324,6 +325,7 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 		Stream              interface{}              `json:"stream"`
 		Thinking            *string                  `json:"thinking,omitempty"`
 		ReasoningEffort     *string                  `json:"reasoning_effort,omitempty"`
+		ReasoningSummary    *string                  `json:"reasoning_summary,omitempty"`
 		Temperature         interface{}              `json:"temperature,omitempty"`
 		TopP                interface{}              `json:"top_p,omitempty"`
 		MaxTokens           interface{}              `json:"max_tokens,omitempty"`
@@ -390,6 +392,7 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	r.StreamProvided = streamProvided
 	r.Thinking = raw.Thinking
 	r.ReasoningEffort = raw.ReasoningEffort
+	r.ReasoningSummary = raw.ReasoningSummary
 	r.Temperature = temp
 	r.TopP = topP
 	if _, ok := rawMap["max_tokens"]; ok {
@@ -467,6 +470,12 @@ func (r *ImagesGenerationsRequest) UnmarshalJSON(data []byte) error {
 	n, err := parseLooseIntAny(raw.N)
 	if err != nil {
 		return err
+	}
+	if raw.N == nil {
+		// An omitted (or null) n defaults to 1, matching OpenAI and grok2api.
+		// Only an explicit out-of-range value is an error, and every caller
+		// downstream relies on n >= 1.
+		n = 1
 	}
 	var partialImages *int
 	if raw.PartialImages != nil {

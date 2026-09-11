@@ -65,6 +65,37 @@ func TestValidateTTSRequest(t *testing.T) {
 	}
 }
 
+// output_format is rebuilt into the canonical Console shape: a bare
+// sample_rate/bit_rate request defaults to mp3, unknown keys never reach
+// upstream, and an empty object is omitted entirely.
+func TestValidateTTSRequestNormalizesOutputFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input map[string]interface{}
+		want  map[string]interface{}
+	}{
+		{"bare sample rate defaults to mp3", map[string]interface{}{"sample_rate": float64(24000)}, map[string]interface{}{"codec": "mp3", "sample_rate": 24000}},
+		{"bare bit rate defaults to mp3", map[string]interface{}{"bit_rate": float64(128000)}, map[string]interface{}{"codec": "mp3", "bit_rate": 128000}},
+		{"unknown keys dropped", map[string]interface{}{"codec": "wav", "format": "ignored"}, map[string]interface{}{"codec": "wav"}},
+		{"empty object omitted", map[string]interface{}{}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &ttsAPIRequest{Text: "x", Language: "en", OutputFormat: tc.input}
+			if err := validateTTSRequest(req); err != nil {
+				t.Fatalf("validateTTSRequest() error = %v", err)
+			}
+			if len(req.OutputFormat) != len(tc.want) {
+				t.Fatalf("output_format = %#v want %#v", req.OutputFormat, tc.want)
+			}
+			for key, want := range tc.want {
+				if req.OutputFormat[key] != want {
+					t.Fatalf("output_format[%q] = %#v want %#v", key, req.OutputFormat[key], want)
+				}
+			}
+		})
+	}
+}
+
 func TestPrepareSTTJSONBuildsConsoleMultipart(t *testing.T) {
 	model, hasInput, body, contentType, err := prepareSTTRequest([]byte(`{
 		"model":"grok-stt","url":"https://example.com/audio.wav","language":"en",

@@ -604,6 +604,32 @@ func TestImagesGenerationsRequest_UnmarshalLooseTypes(t *testing.T) {
 	}
 }
 
+// An omitted n defaults to 1, matching OpenAI and grok2api. An explicit
+// out-of-range value stays out of range so the handler can still reject it.
+func TestImagesGenerationsRequest_OmittedNDefaultsToOne(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"absent", `{"model":"grok-imagine-image","prompt":"hello"}`, 1},
+		{"null", `{"model":"grok-imagine-image","prompt":"hello","n":null}`, 1},
+		{"explicit", `{"model":"grok-imagine-image","prompt":"hello","n":3}`, 3},
+		{"explicit zero", `{"model":"grok-imagine-image","prompt":"hello","n":0}`, 0},
+		{"explicit eleven", `{"model":"grok-imagine-image","prompt":"hello","n":11}`, 11},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var req ImagesGenerationsRequest
+			if err := json.Unmarshal([]byte(tc.body), &req); err != nil {
+				t.Fatalf("unmarshal failed: %v", err)
+			}
+			if req.N != tc.want {
+				t.Fatalf("n=%d want=%d", req.N, tc.want)
+			}
+		})
+	}
+}
+
 func TestHandlePublicVideoStart_DefaultPresetNormal(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/public/video/start", strings.NewReader(`{"prompt":"hello"}`))

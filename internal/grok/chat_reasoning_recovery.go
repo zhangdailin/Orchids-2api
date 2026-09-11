@@ -3,9 +3,10 @@ package grok
 import "net/http"
 
 // recoverChatReasoning runs only after a recognized pre-generation decode 400.
-// Native Responses and client compaction remain outside this recovery path.
+// A genuine compaction rejection is client-held upstream state and is never
+// rewritten; every other recognized decode failure is recoverable.
 func recoverChatReasoning(payload map[string]interface{}, initial error, call func(string) (*http.Response, error)) (*http.Response, error) {
-	if payloadHasCompactionInput(payload) {
+	if preservesClientCompaction(payload, initial) {
 		return nil, initial
 	}
 	var response *http.Response

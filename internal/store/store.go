@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -176,10 +177,14 @@ type StoredResponse struct {
 // lets later turns resume on another replica without storing plaintext chain
 // of thought.
 type StoredReasoningReplay struct {
-	Model            string    `json:"model"`
-	SessionKey       string    `json:"session_key"`
-	EncryptedContent string    `json:"encrypted_content"`
-	ExpiresAt        time.Time `json:"expires_at"`
+	Model      string    `json:"model"`
+	SessionKey string    `json:"session_key"`
+	// EncryptedContent is the legacy single-cipher form. It is still written by
+	// paths that only observe one opaque reasoning item, and is always read for
+	// compatibility; Items takes precedence when present.
+	EncryptedContent string            `json:"encrypted_content,omitempty"`
+	Items            []json.RawMessage `json:"items,omitempty"`
+	ExpiresAt        time.Time         `json:"expires_at"`
 }
 
 // StoredPuterReasoningReplay keeps the reasoning associated with an emitted

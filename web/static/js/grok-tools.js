@@ -1520,8 +1520,8 @@
     };
 
     try {
-      const payload = buildChatPayload();
-      const res = await fetch("/grok/v1/chat/completions", {
+      const payload = buildResponsesPayload();
+      const res = await fetch("/grok/v1/responses", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1539,68 +1539,85 @@
       let carry = "";
       const pendingData = [];
       let finishReason = "";
+      const finishReasonSweep = (finalFinish) => {
+        finishReason = finalFinish;
+        streamCompleted = true;
+        for (const tool of toolActivities.values()) {
+          if (tool.status !== "failed") tool.status = finalFinish === "tool_calls" ? "awaiting_result" : "completed";
+        }
+      };
       const dispatchData = (data) => {
         if (!data || data === "[DONE]") {
           if (data === "[DONE]") streamCompleted = true;
           return;
         }
-        let payloadChunk = null;
+        let event = null;
         try {
-          payloadChunk = JSON.parse(data);
+          event = JSON.parse(data);
         } catch (err) {
           throw new Error("服务端返回了无效的流数据");
         }
-        if (payloadChunk?.error) {
-          throw new Error(payloadChunk.error.message || String(payloadChunk.error));
+        if (event?.error) {
+          throw new Error(event.error.message || String(event.error));
         }
-        const choice = payloadChunk?.choices?.[0];
-        const finish = choice?.finish_reason || "";
-        if (finish) {
-          finishReason = finish;
-          streamCompleted = true;
+        const kind = String(event?.type || "");
+        if (kind === "response.failed" || kind === "error") {
+          throw new Error(event?.response?.error?.message || event?.message || "上游返回失败");
         }
-        const reasoning = typeof choice?.delta?.reasoning_content === "string" ? choice.delta.reasoning_content : "";
-        const delta = typeof choice?.delta?.content === "string" ? choice.delta.content : "";
-        const finalContent = typeof choice?.message?.content === "string" ? choice.message.content : "";
-        const refusal = typeof choice?.delta?.refusal === "string" ? choice.delta.refusal : "";
-        if (reasoning) {
-          reasoningText += reasoning;
+        if (kind === "response.completed" || kind === "response.incomplete") {
+          const hasCalls = Array.from(toolActivities.values()).some((tool) => tool.status !== "failed");
+          finishReasonSweep(kind === "response.incomplete" ? "length" : hasCalls ? "tool_calls" : "stop");
+          scheduleAssistantView();
+          return;
+        }
+        const item = event?.item;
+        if (item && (kind === "response.output_item.added" || kind === "response.output_item.done")) {
+          const itemType = String(item.type || "");
+          const done = kind === "response.output_item.done";
+          if (itemType === "web_search_call" || itemType === "x_search_call") {
+            const id = String(item.id || item.call_id || itemType);
+            const itemStatus = String(item.status || "").toLowerCase();
+            const status = itemStatus === "failed" || itemStatus === "incomplete" ? "failed" : done ? "completed" : "in_progress";
+            toolActivities.set(id, { id, name: itemType, status, detail: item.action?.query || "" });
+          } else if (itemType === "function_call") {
+            const id = String(item.call_id || item.id || "tool");
+            const previous = toolActivities.get(id) || { id, name: "工具", detail: "", status: "in_progress" };
+            if (item.name) previous.name = item.name;
+            if (typeof item.arguments === "string" && item.arguments) previous.detail = item.arguments;
+            if (done) previous.status = "awaiting_result";
+            toolActivities.set(id, previous);
+          }
+          scheduleAssistantView();
+          return;
+        }
+        if (kind === "response.function_call_arguments.delta" && typeof event.delta === "string") {
+          const id = String(event.item_id || "tool");
+          const previous = toolActivities.get(id) || { id, name: "工具", detail: "", status: "in_progress" };
+          previous.detail += event.delta;
+          toolActivities.set(id, previous);
+          scheduleAssistantView();
+          return;
+        }
+        const delta = typeof event?.delta === "string" ? event.delta : "";
+        if (!delta) return;
+        if (kind === "response.reasoning_summary_text.delta" || kind === "response.reasoning_text.delta") {
+          reasoningText += delta;
           if (!reasoningOpen) {
             assistantText += "<think>";
             reasoningOpen = true;
           }
-          assistantText += reasoning;
+          assistantText += delta;
           updateChatStatus("思考中...", "connecting");
-        }
-        if (reasoningOpen && (choice?.delta?.reasoning_done || delta || refusal || finish)) {
-          assistantText += "</think>";
-          reasoningOpen = false;
-        }
-        if (delta) {
+        } else if (kind === "response.output_text.delta" || kind === "response.refusal.delta") {
+          if (reasoningOpen) {
+            assistantText += "</think>";
+            reasoningOpen = false;
+          }
           answerText += delta;
           assistantText += delta;
           updateChatStatus("生成中...", "connecting");
-        } else if (finalContent) {
-          answerText = finalContent;
-          assistantText = finalContent;
-        }
-        if (refusal) { assistantText += refusal; answerText += refusal; }
-        const search = choice?.delta?.x_grok_search;
-        if (search) {
-          const id = search.id || search.call_id || search.type || "search";
-          const itemStatus = String(search.status || "").toLowerCase();
-          const status = itemStatus === "failed" || itemStatus === "incomplete" ? "failed" : choice.delta.x_grok_search_done ? "completed" : "in_progress";
-          toolActivities.set(id, { id, name: search.type || "搜索", status, detail: search.action?.query || "" });
-        }
-        for (const call of choice?.delta?.tool_calls || []) {
-          const key = String(call.index ?? call.id ?? toolActivities.size);
-          const previous = toolActivities.get(key) || { id: call.id || key, name: "工具", detail: "", status: "in_progress" };
-          if (call.function?.name) previous.name = call.function.name;
-          if (call.function?.arguments) previous.detail += call.function.arguments;
-          toolActivities.set(key, previous);
-        }
-        if (finish) for (const tool of toolActivities.values()) {
-          if (tool.status !== "failed") tool.status = finish === "tool_calls" ? "awaiting_result" : "completed";
+        } else {
+          return;
         }
         if (!hasThink && assistantText.includes("<think>")) {
           hasThink = true;
@@ -1953,49 +1970,55 @@
     updateChatStatus("就绪");
   }
 
-  function buildChatPayload() {
+  function buildResponsesPayload() {
     const session = activeChatSession();
     if (!session) {
       throw new Error("missing chat session");
     }
-    const systemPrompt = String(document.getElementById("grokSystemInput")?.value || "").trim();
-    const messages = [];
-    if (systemPrompt) {
-      messages.push({ role: "system", content: systemPrompt });
-    }
+    const input = [];
     session.messages.forEach((msg) => {
-      if (msg.role !== "user" || !msg.attachment?.dataUrl) {
-        messages.push({ role: msg.role, content: msg.content });
-        return;
-      }
+      const role = msg.role === "assistant" ? "assistant" : "user";
       const parts = [];
       if (msg.content) {
-        parts.push({ type: "text", text: String(msg.content || "") });
+        parts.push({ type: role === "assistant" ? "output_text" : "input_text", text: String(msg.content || "") });
       }
-      parts.push({
-        type: "file",
-        file: {
-          file_data: msg.attachment.dataUrl,
-        },
-      });
-      messages.push({ role: msg.role, content: parts });
+      if (role === "user" && msg.attachment?.dataUrl) {
+        parts.push({ type: "input_file", file: { data: msg.attachment.dataUrl } });
+      }
+      if (parts.length === 0) return;
+      input.push({ type: "message", role, content: parts });
     });
     const payload = {
       model: chatState.model,
+      input,
       stream: true,
-      temperature: Number(document.getElementById("grokTempRange")?.value || 0.8),
-      top_p: Number(document.getElementById("grokTopPRange")?.value || 0.95),
-      messages,
+      store: false,
     };
-    const effort = String(session.reasoningEffort || "").trim();
+    const systemPrompt = String(document.getElementById("grokSystemInput")?.value || "").trim();
+    if (systemPrompt) payload.instructions = systemPrompt;
     const route = chatState.routes?.find((item) => item.id === chatState.model);
+    // The Responses API defines no sampling controls. Console maps them onto its
+    // chat payload; Build would forward them upstream verbatim, so only send
+    // them where the backend is known to accept them.
+    if (route?.provider === "console") {
+      payload.temperature = Number(document.getElementById("grokTempRange")?.value || 0.8);
+      payload.top_p = Number(document.getElementById("grokTopPRange")?.value || 0.95);
+    }
+    // The fixed-reasoning console model only accepts its built-in level: the
+    // upstream page pins it to auto and never sends an effort for it.
+    const fixedReasoning = route?.provider === "console" && route.upstream_model === "grok-4.20-0309-reasoning";
+    const effort = fixedReasoning ? "" : String(session.reasoningEffort || "").trim();
     if (effort === "none" && (route?.upstream_model || chatState.model) === "grok-4.6") throw new Error("Grok 4.6 不支持关闭推理，请选择自动或其他推理强度");
-    if (effort && !(route?.provider === "console" && route.upstream_model === "grok-4.20-0309-reasoning")) payload.reasoning_effort = effort;
+    const reasoning = {};
+    if (effort) reasoning.effort = effort;
+    // Every reasoning request is paired with a summary; only "none" must not ask for one.
+    if (effort !== "none") reasoning.summary = "auto";
+    if (Object.keys(reasoning).length) payload.reasoning = reasoning;
     if (session.promptCacheKey) payload.prompt_cache_key = session.promptCacheKey;
     const tools = [];
     if (session.webSearch) tools.push({ type: "web_search" });
     if (session.xSearch) tools.push({ type: "x_search" });
-    if (tools.length) payload.x_responses_tools = tools;
+    if (tools.length) payload.tools = tools;
     return payload;
   }
 

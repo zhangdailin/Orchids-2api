@@ -575,12 +575,15 @@ func normalizeResponsesMessageContent(content interface{}) interface{} {
 				out = append(out, map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": url}})
 			}
 		case "input_file", "file":
-			url := responsesPartURL(part, []string{"file", "file_url", "source"}, []string{"url", "file_url", "data"})
+			url := responsesPartURL(part, []string{"file", "file_url", "source", "file_data"}, []string{"url", "file_url", "data", "file_data"})
 			if url == "" {
 				url = parseLooseStringAny(part["file_id"])
 			}
 			if url != "" {
-				out = append(out, map[string]interface{}{"type": "file", "file": map[string]interface{}{"url": url}})
+				// The chat layer validates the portable file shape, so carry the
+				// resolved reference as file_data instead of a nested url. This
+				// also makes the chat->Responses->chat round trip lossless.
+				out = append(out, map[string]interface{}{"type": "file", "file": map[string]interface{}{"file_data": url}})
 			}
 		default:
 			out = append(out, part)

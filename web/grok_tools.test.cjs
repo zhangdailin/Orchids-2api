@@ -34,12 +34,19 @@ test('legacy reasoning migrates all blocks without dropping answers or history',
 test('stream stores interleaved reasoning and partial failure exactly once', async () => {
   const request = source.slice(source.indexOf('  async function requestChatCompletion('), source.indexOf('  async function retryAssistantMessage('));
   for (const failed of [false,true]) {
-    const deltas = [{reasoning_content:'first'},{content:'answer'},{reasoning_content:'second'},{content:'end'}, {x_grok_search:{id:'s',type:'x_search_call'},x_grok_search_done:true}];
-    let body = deltas.map(delta => 'data: '+JSON.stringify({choices:[{delta}]})+'\n\n').join('');
-    body += failed ? 'data: {"error":{"message":"interrupted"}}\n\n' : 'data: [DONE]\n\n';
+    const events = [
+      {type:'response.reasoning_summary_text.delta',delta:'first'},
+      {type:'response.output_text.delta',delta:'answer'},
+      {type:'response.reasoning_summary_text.delta',delta:'second'},
+      {type:'response.output_text.delta',delta:'end'},
+      {type:'response.output_item.added',item:{type:'x_search_call',id:'s',status:'in_progress',action:{query:'q'}}},
+      {type:'response.output_item.done',item:{type:'x_search_call',id:'s',status:'completed',action:{query:'q'}}},
+    ];
+    let body = events.map(event => 'data: '+JSON.stringify(event)+'\n\n').join('');
+    body += failed ? 'data: {"type":"response.failed","response":{"error":{"message":"interrupted"}}}\n\n' : 'data: [DONE]\n\n';
     const session = {messages:[]};
     const ctx = vm.createContext({ session, AbortController,TextDecoder,fetch:async()=>new Response(body), chatState:{},
-      setChatSendButtonState(){},updateChatStatus(){},buildChatPayload:()=>({}),handleUnauthorized:()=>false,
+      setChatSendButtonState(){},updateChatStatus(){},buildResponsesPayload:()=>({}),handleUnauthorized:()=>false,
       requestAnimationFrame:()=>1,cancelAnimationFrame(){},trimChatSessionMessages:()=>0,saveChatSessions(){},renderChatSessions(){},
     });
     vm.runInContext(request,ctx); await ctx.requestChatCompletion(session,null);
@@ -123,7 +130,7 @@ test('Grok capability fallback fails open for invalid and failed availability re
 function streamContext(session, body, statuses) {
   const request = source.slice(source.indexOf('  async function requestChatCompletion('), source.indexOf('  async function retryAssistantMessage('));
   const ctx = vm.createContext({ session, AbortController, TextDecoder, fetch:async()=>new Response(body), chatState:{},
-    setChatSendButtonState(){}, updateChatStatus:(text,type)=>statuses.push([text,type]), buildChatPayload:()=>({}), handleUnauthorized:()=>false,
+    setChatSendButtonState(){}, updateChatStatus:(text,type)=>statuses.push([text,type]), buildResponsesPayload:()=>({}), handleUnauthorized:()=>false,
     requestAnimationFrame:()=>1, cancelAnimationFrame(){}, trimChatSessionMessages:()=>0, saveChatSessions(){}, renderChatSessions(){} });
   vm.runInContext(request, ctx);
   return ctx;
@@ -132,9 +139,9 @@ function streamContext(session, body, statuses) {
 test('failed search keeps its failure status after the finish sweep', async () => {
   const statuses = [];
   const frames = [
-    {choices:[{delta:{x_grok_search:{id:'s1',type:'web_search_call',status:'in_progress',action:{query:'q'}}}}]},
-    {choices:[{delta:{x_grok_search:{id:'s1',type:'web_search_call',status:'failed',action:{query:'q'}}},x_grok_search_done:true}]},
-    {choices:[{delta:{},finish_reason:'stop'}]},
+    {type:'response.output_item.added',item:{type:'web_search_call',id:'s1',status:'in_progress',action:{query:'q'}}},
+    {type:'response.output_item.done',item:{type:'web_search_call',id:'s1',status:'failed',action:{query:'q'}}},
+    {type:'response.completed',response:{output:[]}},
   ];
   const body = frames.map(f=>'data: '+JSON.stringify(f)+'\n\n').join('')+'data: [DONE]\n\n';
   const session = {messages:[]};
@@ -146,8 +153,8 @@ test('failed search keeps its failure status after the finish sweep', async () =
 test('search status follows the item status and done flag', async () => {
   const statuses = [];
   const frames = [
-    {choices:[{delta:{x_grok_search:{id:'a',type:'x_search_call',action:{query:'q1'}}}}]},
-    {choices:[{delta:{x_grok_search:{id:'b',type:'x_search_call',status:'completed',action:{query:'q2'}},x_grok_search_done:true}}]},
+    {type:'response.output_item.added',item:{type:'x_search_call',id:'a',action:{query:'q1'}}},
+    {type:'response.output_item.done',item:{type:'x_search_call',id:'b',status:'completed',action:{query:'q2'}}},
   ];
   const body = frames.map(f=>'data: '+JSON.stringify(f)+'\n\n').join('')+'data: [DONE]\n\n';
   const session = {messages:[]};
@@ -159,8 +166,8 @@ test('search status follows the item status and done flag', async () => {
 test('length-truncated replies are flagged instead of reported as done', async () => {
   const statuses = [];
   const frames = [
-    {choices:[{delta:{content:'partial'}}]},
-    {choices:[{delta:{},finish_reason:'length'}]},
+    {type:'response.output_text.delta',delta:'partial'},
+    {type:'response.incomplete',response:{output:[]}},
   ];
   const body = frames.map(f=>'data: '+JSON.stringify(f)+'\n\n').join('')+'data: [DONE]\n\n';
   const session = {messages:[]};
@@ -175,8 +182,8 @@ test('length-truncated replies are flagged instead of reported as done', async (
 
 test('CRLF SSE frames are parsed end to end', async () => {
   const statuses = [];
-  const deltas = [{reasoning_content:'first'},{content:'answer'},{reasoning_content:'second'},{content:'end'}];
-  const body = deltas.map(d=>'data: '+JSON.stringify({choices:[{delta:d}]})+'\r\n\r\n').join('')+'data: [DONE]\r\n\r\n';
+  const events = [{type:'response.reasoning_summary_text.delta',delta:'first'},{type:'response.output_text.delta',delta:'answer'},{type:'response.reasoning_summary_text.delta',delta:'second'},{type:'response.output_text.delta',delta:'end'}];
+  const body = events.map(e=>'data: '+JSON.stringify(e)+'\r\n\r\n').join('')+'data: [DONE]\r\n\r\n';
   const session = {messages:[]};
   await streamContext(session, body, statuses).requestChatCompletion(session, null);
   assert.equal(session.messages.length,1);
@@ -187,7 +194,7 @@ test('CRLF SSE frames are parsed end to end', async () => {
 
 test('trailing DONE without a blank line still completes', async () => {
   const statuses = [];
-  const body = 'data: '+JSON.stringify({choices:[{delta:{content:'hi'}}]})+'\n\ndata: [DONE]\n';
+  const body = 'data: '+JSON.stringify({type:'response.output_text.delta',delta:'hi'})+'\n\ndata: [DONE]\n';
   const session = {messages:[]};
   await streamContext(session, body, statuses).requestChatCompletion(session, null);
   assert.equal(session.messages.length,1);
@@ -240,23 +247,67 @@ test('Grok startup tolerates a missing session container', () => {
   assert.doesNotThrow(() => vm.runInContext(render + '\nrenderChatSessions();', context));
 });
 
-test('Grok chat payload carries per-session reasoning, search, and cache settings', () => {
-  const start = source.indexOf('  function buildChatPayload()');
-  const end = source.indexOf('  function syncChatSessionSettings(', start);
-  const buildPayload = source.slice(start, end);
+test('Grok responses payload carries per-session reasoning, search, and cache settings', () => {
   const session = {
     promptCacheKey: 'grok-tools-test', reasoningEffort: 'low', webSearch: true, xSearch: true,
     messages: [{ role: 'user', content: 'hello' }],
   };
+  const result = buildPayloadContext({ model: 'grok-4.6' }, session);
+  assert.equal(result.model, 'grok-4.6');
+  assert.equal(result.stream, true);
+  assert.equal(result.store, false);
+  // The upstream page always pairs a reasoning request with a summary request.
+  assert.deepEqual(JSON.parse(JSON.stringify(result.reasoning)), { effort: 'low', summary: 'auto' });
+  assert.equal(result.prompt_cache_key, 'grok-tools-test');
+  assert.deepEqual(JSON.parse(JSON.stringify(result.tools)), [{ type: 'web_search' }, { type: 'x_search' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.input)), [
+    { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+  ]);
+});
+
+function buildPayloadContext(chatState, session) {
+  const start = source.indexOf('  function buildResponsesPayload()');
+  const end = source.indexOf('  function syncChatSessionSettings(', start);
   const context = vm.createContext({
-    chatState: { model: 'grok-4.6' },
+    chatState,
     activeChatSession: () => session,
     document: { getElementById(id) {
       return { value: id === 'grokTempRange' ? '0.8' : id === 'grokTopPRange' ? '0.95' : '' };
     } },
   });
-  vm.runInContext(`${buildPayload}\nresult = buildChatPayload();`, context);
-  assert.equal(context.result.reasoning_effort, 'low');
-  assert.equal(context.result.prompt_cache_key, 'grok-tools-test');
-  assert.deepEqual(JSON.parse(JSON.stringify(context.result.x_responses_tools)), [{ type: 'web_search' }, { type: 'x_search' }]);
+  vm.runInContext(`${source.slice(start, end)}\nresult = buildResponsesPayload();`, context);
+  return context.result;
+}
+
+test('Grok responses payload pins the fixed-reasoning console model to summary only', () => {
+  const route = { id: 'grok-4.20-0309-reasoning', provider: 'console', upstream_model: 'grok-4.20-0309-reasoning' };
+  const result = buildPayloadContext(
+    { model: route.id, routes: [route] },
+    { reasoningEffort: 'high', messages: [{ role: 'user', content: 'hello' }] },
+  );
+  // The model owns its reasoning level, so no effort is sent; the summary is.
+  assert.equal(result.reasoning.effort, undefined);
+  assert.equal(result.reasoning.summary, 'auto');
+});
+
+test('Grok responses payload never asks for a summary when reasoning is disabled', () => {
+  const result = buildPayloadContext(
+    { model: 'grok-4.5' },
+    { reasoningEffort: 'none', messages: [{ role: 'user', content: 'hello' }] },
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(result.reasoning)), { effort: 'none' });
+});
+
+test('Grok responses payload only sends sampling where the backend accepts it', () => {
+  const route = { id: 'console/grok-4.5', provider: 'console', upstream_model: 'grok-4.5' };
+  const consoleResult = buildPayloadContext(
+    { model: route.id, routes: [route] },
+    { messages: [{ role: 'user', content: 'hi' }] },
+  );
+  assert.equal(consoleResult.temperature, 0.8);
+  assert.equal(consoleResult.top_p, 0.95);
+  // Build forwards unknown fields upstream verbatim, so sampling stays off.
+  const buildResult = buildPayloadContext({ model: 'grok-4.6' }, { messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(buildResult.temperature, undefined);
+  assert.equal(buildResult.top_p, undefined);
 });

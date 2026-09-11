@@ -91,22 +91,32 @@ func TestRestrictionsToolNamesRemainCaseSensitiveAndRoundTrip(t *testing.T) {
 	}
 }
 
+// validatePayloadReasoning only checks structure and never rewrites the caller's
+// value. The wire normalization that follows maps client aliases onto the levels
+// each model actually accepts.
 func TestRestrictionsReasoningAliasesReachWire(t *testing.T) {
-	for _, test := range []struct{ model, effort, want string }{{"grok-4.6", "max", "max"}, {"grok-4.5", "max", "max"}, {"grok-4.5", "xhigh", "xhigh"}, {"grok-3-mini", "medium", "medium"}, {"grok-3-mini-fast", "minimal", "minimal"}} {
+	for _, test := range []struct{ model, effort, wire string }{
+		{"grok-4.6", "max", "xhigh"},
+		{"grok-4.5", "max", "high"},
+		{"grok-4.5", "xhigh", "high"},
+		{"grok-3-mini", "medium", "medium"},
+		{"grok-3-mini-fast", "minimal", "low"},
+	} {
 		spec := ModelSpec{ID: test.model, UpstreamModel: test.model, Upstream: UpstreamCLI}
 		payload := map[string]interface{}{"reasoning": map[string]interface{}{"effort": test.effort, "summary": "auto"}}
 		if err := validatePayloadReasoning(payload); err != nil {
 			t.Fatal(test, err)
 		}
-		if payload["reasoning"].(map[string]interface{})["effort"] != test.want {
+		if payload["reasoning"].(map[string]interface{})["effort"] != test.effort {
 			t.Fatal(test, payload)
 		}
-		request := &ChatCompletionsRequest{Model: test.model, Messages: []ChatMessage{{Role: "user", Content: "hi"}}, ReasoningEffort: &test.effort}
+		effort := test.effort
+		request := &ChatCompletionsRequest{Model: test.model, Messages: []ChatMessage{{Role: "user", Content: "hi"}}, ReasoningEffort: &effort}
 		if err := request.Validate(); err != nil {
 			t.Fatal(test, err)
 		}
 		chat, err := (&Handler{}).responsesPayloadFromChat(spec, request, true)
-		if err != nil || chat["reasoning"].(map[string]interface{})["effort"] != test.want {
+		if err != nil || chat["reasoning"].(map[string]interface{})["effort"] != test.wire {
 			t.Fatal(test, chat, err)
 		}
 	}

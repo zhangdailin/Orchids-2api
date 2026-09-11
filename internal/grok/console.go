@@ -64,34 +64,6 @@ func (h *Handler) consolePayload(spec ModelSpec, req *ChatCompletionsRequest) (m
 	return h.responsesPayloadFromChat(spec, req, false)
 }
 
-func consoleInputHasEncryptedReasoning(input []interface{}) bool {
-	for _, raw := range input {
-		item, _ := raw.(map[string]interface{})
-		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
-			continue
-		}
-		if value := strings.TrimSpace(fmt.Sprint(item["encrypted_content"])); value != "" && value != "<nil>" {
-			return true
-		}
-	}
-	return false
-}
-
-func insertConsoleReplayBeforeLastUser(input []interface{}, replay map[string]interface{}) []interface{} {
-	insertAt := len(input)
-	for index := len(input) - 1; index >= 0; index-- {
-		if item, ok := input[index].(map[string]interface{}); ok && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["role"])), "user") {
-			insertAt = index
-			break
-		}
-	}
-	out := make([]interface{}, 0, len(input)+1)
-	out = append(out, input[:insertAt]...)
-	out = append(out, replay)
-	out = append(out, input[insertAt:]...)
-	return out
-}
-
 func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
 	if len(tools) == 0 {
 		return nil
@@ -449,7 +421,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		if build {
 			attemptStarted := time.Now()
 			resp, requestErr := h.cliClient.doResponsesAt(ctx, sess.acc, "/responses", payload)
-			if requestErr == nil || !req.ReasoningReplay || payloadHasCompactionInput(payload) || !isReasoningReplayDecodeError(requestErr) {
+			if requestErr == nil || !req.ReasoningReplay || !isReasoningReplayDecodeError(requestErr) || preservesClientCompaction(payload, requestErr) {
 				return resp, requestErr
 			}
 			h.auditAttempt(ctx, sess.acc, ProviderBuild, 1, attemptStarted, requestErr, "reasoning_replay_recovery")
@@ -657,8 +629,8 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 		outcome.Finish = "error"
 		return
 	}
-	if req.ReasoningReplay && encryptedReasoning != "" {
-		h.storeReasoningReplay(req.Model, req.PromptCacheKey, encryptedReasoning)
+	if req.ReasoningReplay {
+		h.captureReasoningReplayFromMap(context.Background(), req.Model, req.PromptCacheKey, raw)
 	}
 	return
 }

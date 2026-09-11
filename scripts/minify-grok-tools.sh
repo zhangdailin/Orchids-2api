@@ -4,7 +4,9 @@ set -eu
 # The generated minified asset is committed because the embedded admin UI is
 # built without requiring Node.js. Regenerate it whenever grok-tools.js changes.
 
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+# Resolve to a native absolute path: a POSIX-style "/d/..." path is mangled when
+# it is handed to the Windows node binary, so prefer Git Bash's `pwd -W`.
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && { pwd -W 2>/dev/null || pwd; })"
 SRC="$ROOT/web/static/js/grok-tools.js"
 OUT="$ROOT/web/static/js/grok-tools.min.js"
 

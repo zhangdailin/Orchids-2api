@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -116,6 +117,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 	terminal := false
 	sawText := false
 	lastSignature := ""
+	var replayItems []interface{}
 	activeReasoning := "anonymous"
 	searchDone := map[string]bool{}
 	finish := "stop"
@@ -259,6 +261,14 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 			outcome.Usage = usage
 		}
 		item, _ := ev["item"].(map[string]interface{})
+		if kind == "response.output_item.done" && item != nil {
+			// Accumulate the portable items so the next turn can replay the whole
+			// completed turn, not just its opaque reasoning cipher.
+			switch interfaceString(item["type"]) {
+			case "reasoning", "message", "function_call", "custom_tool_call":
+				replayItems = append(replayItems, item)
+			}
+		}
 		if kind == "response.output_item.added" || kind == "response.output_item.done" {
 			switch interfaceString(item["type"]) {
 			case "function_call":
@@ -462,8 +472,12 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 	}
 	flusher.Flush()
 	outcome.Finish = finish
-	if req.ReasoningReplay && lastSignature != "" {
-		h.storeReasoningReplay(req.Model, req.PromptCacheKey, lastSignature)
+	if req.ReasoningReplay {
+		if len(replayItems) > 0 {
+			h.captureReasoningReplayItems(context.Background(), req.Model, req.PromptCacheKey, replayItems)
+		} else if lastSignature != "" {
+			h.storeReasoningReplay(req.Model, req.PromptCacheKey, lastSignature)
+		}
 	}
 	return
 }

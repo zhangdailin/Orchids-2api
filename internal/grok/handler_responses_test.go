@@ -337,3 +337,39 @@ func TestWriteResponsesStreamFromChatPreservesReasoningEvents(t *testing.T) {
 		t.Fatalf("answer events missing: %q", out)
 	}
 }
+
+// A Responses input_file must survive conversion into the chat layer, which
+// validates the portable file shape. A nested url was rejected downstream, so
+// the round trip has to carry the resolved reference as file_data.
+//
+// A bare file_id is intentionally not covered: the chat layer only accepts a URL
+// or data URI, so an opaque asset id is not representable on this path.
+func TestResponsesInputFileRoundTripsIntoChatMessages(t *testing.T) {
+	for _, part := range []map[string]interface{}{
+		{"type": "input_file", "file": map[string]interface{}{"data": "data:application/pdf;base64,QUFB"}},
+		{"type": "input_file", "file_url": "https://example.com/a.pdf"},
+		{"type": "input_file", "file_data": "data:application/pdf;base64,QUFB"},
+		{"type": "input_file", "file": map[string]interface{}{"url": "https://example.com/b.pdf"}},
+	} {
+		input := []interface{}{map[string]interface{}{
+			"type": "message", "role": "user",
+			"content": []interface{}{map[string]interface{}{"type": "input_text", "text": "see attached"}, part},
+		}}
+		messages, err := responsesInputToMessages(input)
+		if err != nil {
+			t.Fatalf("%v: %v", part, err)
+		}
+		if err := validateChatMessages(messages); err != nil {
+			t.Fatalf("%v: chat validation rejected the converted message: %v", part, err)
+		}
+		parts, ok := messages[0].Content.([]interface{})
+		if !ok || len(parts) != 2 {
+			t.Fatalf("%v: converted content=%#v", part, messages[0].Content)
+		}
+		filePart, _ := parts[1].(map[string]interface{})
+		file, _ := filePart["file"].(map[string]interface{})
+		if data, _ := file["file_data"].(string); data == "" {
+			t.Fatalf("%v: file_data missing after conversion: %#v", part, filePart)
+		}
+	}
+}

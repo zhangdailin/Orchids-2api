@@ -125,16 +125,31 @@ func validateTTSRequest(req *ttsAPIRequest) error {
 		return fmt.Errorf("speed must be between 0.25 and 4.0")
 	}
 	if format := req.OutputFormat; format != nil {
-		if codec, ok := format["codec"].(string); ok {
-			format["codec"] = strings.ToLower(strings.TrimSpace(codec))
+		codec := ""
+		if value, ok := format["codec"].(string); ok {
+			codec = strings.ToLower(strings.TrimSpace(value))
 		}
+		// Rebuild the canonical shape so unknown keys never reach Console.
+		normalized := map[string]interface{}{}
 		for _, key := range []string{"sample_rate", "bit_rate"} {
 			if value, exists := format[key]; exists {
 				number, ok := numericValue(value)
 				if !ok || number <= 0 || math.Trunc(number) != number {
 					return fmt.Errorf("output_format.%s must be a positive integer", key)
 				}
+				normalized[key] = int(number)
 			}
+		}
+		if codec == "" && len(normalized) == 0 {
+			// Nothing was requested, so omit output_format entirely.
+			req.OutputFormat = nil
+		} else {
+			if codec == "" {
+				// A bare sample_rate/bit_rate request defaults to mp3.
+				codec = "mp3"
+			}
+			normalized["codec"] = codec
+			req.OutputFormat = normalized
 		}
 	}
 	if req.OptimizeStreamingLatency != nil {

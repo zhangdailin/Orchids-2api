@@ -25,8 +25,8 @@ type sessionAffinityEntry struct {
 }
 
 type reasoningReplayEntry struct {
-	EncryptedContent string
-	ExpiresAt        time.Time
+	Items     []interface{}
+	ExpiresAt time.Time
 }
 
 type grokSessionContext struct {
@@ -153,56 +153,104 @@ func replayMapKey(model, key string) string {
 	return normalizeModelID(model) + "\x00" + strings.TrimSpace(key)
 }
 
-func (h *Handler) loadReasoningReplay(model, key string) string {
+// loadReasoningReplayItems returns the normalized replay items for a session.
+func (h *Handler) loadReasoningReplayItems(model, key string) []interface{} {
 	if h == nil || strings.TrimSpace(key) == "" {
-		return ""
+		return nil
 	}
 	h.sessionMu.Lock()
 	defer h.sessionMu.Unlock()
 	mapKey := replayMapKey(model, key)
 	entry, ok := h.replay[mapKey]
 	if ok && time.Now().Before(entry.ExpiresAt) {
-		return entry.EncryptedContent
+		return entry.Items
 	}
 	if ok {
 		delete(h.replay, mapKey)
 	}
 	if h.lb == nil || h.lb.Store == nil {
-		return ""
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	persisted, err := h.lb.Store.GetReasoningReplay(ctx, model, key)
-	if err != nil || persisted == nil || !validReplayCipher(persisted.EncryptedContent) {
-		return ""
+	if err != nil || persisted == nil {
+		return nil
+	}
+	items := replayItemsFromStored(persisted)
+	if len(items) == 0 {
+		return nil
 	}
 	if latest, ok := h.replay[mapKey]; ok && time.Now().Before(latest.ExpiresAt) {
-		return latest.EncryptedContent
+		return latest.Items
 	}
 	if h.replay == nil {
 		h.replay = map[string]reasoningReplayEntry{}
 	}
-	h.replay[mapKey] = reasoningReplayEntry{EncryptedContent: persisted.EncryptedContent, ExpiresAt: persisted.ExpiresAt}
-	return persisted.EncryptedContent
+	h.replay[mapKey] = reasoningReplayEntry{Items: items, ExpiresAt: persisted.ExpiresAt}
+	return items
 }
 
-func (h *Handler) storeReasoningReplay(model, key, encrypted string) {
-	if h == nil || strings.TrimSpace(key) == "" || !validReplayCipher(encrypted) {
+// replayItemsFromStored reads the normalized item list, falling back to the
+// legacy single cipher so state written by an older build still replays.
+func replayItemsFromStored(persisted *store.StoredReasoningReplay) []interface{} {
+	if len(persisted.Items) > 0 {
+		items := make([]interface{}, 0, len(persisted.Items))
+		for _, raw := range persisted.Items {
+			var item map[string]interface{}
+			if json.Unmarshal(raw, &item) == nil && item != nil {
+				items = append(items, item)
+			}
+		}
+		if len(items) > 0 {
+			return items
+		}
+	}
+	if !validReplayCipher(persisted.EncryptedContent) {
+		return nil
+	}
+	return []interface{}{reasoningReplayItem(persisted.EncryptedContent)}
+}
+
+func reasoningReplayItem(encrypted string) map[string]interface{} {
+	return map[string]interface{}{"type": "reasoning", "summary": []interface{}{}, "encrypted_content": encrypted}
+}
+
+// storeReasoningReplayItems persists a normalized item list for a session.
+func (h *Handler) storeReasoningReplayItems(model, key string, items []interface{}) {
+	if h == nil || strings.TrimSpace(key) == "" || len(items) == 0 {
 		return
+	}
+	raw := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return
+		}
+		raw = append(raw, encoded)
 	}
 	h.sessionMu.Lock()
 	defer h.sessionMu.Unlock()
 	if h.replay == nil {
 		h.replay = map[string]reasoningReplayEntry{}
 	}
-	h.replay[replayMapKey(model, key)] = reasoningReplayEntry{EncryptedContent: encrypted, ExpiresAt: time.Now().Add(grokSessionStateTTL)}
+	h.replay[replayMapKey(model, key)] = reasoningReplayEntry{Items: items, ExpiresAt: time.Now().Add(grokSessionStateTTL)}
 	// Serialize persistence with invalidation. A detached save must not resurrect
 	// a rejected ciphertext after a later request has already cleared it.
 	if h.lb != nil && h.lb.Store != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-		_ = h.lb.Store.SaveReasoningReplay(ctx, &store.StoredReasoningReplay{Model: model, SessionKey: key, EncryptedContent: encrypted}, grokSessionStateTTL)
+		_ = h.lb.Store.SaveReasoningReplay(ctx, &store.StoredReasoningReplay{Model: model, SessionKey: key, Items: raw}, grokSessionStateTTL)
 	}
+}
+
+// storeReasoningReplay is the single-cipher convenience used by paths that only
+// observe one opaque reasoning item.
+func (h *Handler) storeReasoningReplay(model, key, encrypted string) {
+	if !validReplayCipher(encrypted) {
+		return
+	}
+	h.storeReasoningReplayItems(model, key, []interface{}{reasoningReplayItem(encrypted)})
 }
 
 func validReplayCipher(value string) bool {
@@ -231,8 +279,8 @@ func (h *Handler) applyNativeReasoningReplay(model, key string, payload map[stri
 	if h == nil || payload == nil || strings.TrimSpace(parseLooseStringAny(payload["previous_response_id"])) != "" {
 		return
 	}
-	encrypted := h.loadReasoningReplay(model, key)
-	if encrypted == "" {
+	items := h.loadReasoningReplayItems(model, key)
+	if len(items) == 0 {
 		return
 	}
 	input, ok := payload["input"].([]interface{})
@@ -245,34 +293,27 @@ func (h *Handler) applyNativeReasoningReplay(model, key string, payload map[stri
 			return
 		}
 	}
-	if len(input) == 0 || nativeInputHasEncryptedReasoning(input) {
+	if len(input) == 0 {
 		return
 	}
-	replay := map[string]interface{}{"type": "reasoning", "summary": []interface{}{}, "encrypted_content": encrypted}
-	insertAt := len(input)
-	for index := len(input) - 1; index >= 0; index-- {
-		item, _ := input[index].(map[string]interface{})
-		if item != nil && strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["role"])), "user") {
-			insertAt = index
-			break
-		}
+	// Filtering already drops anything the request itself carries, so a client
+	// that resends its own history is never duplicated.
+	filtered := filterReplayItemsForInput(input, items)
+	if len(filtered) == 0 {
+		return
 	}
-	next := make([]interface{}, 0, len(input)+1)
-	next = append(next, input[:insertAt]...)
-	next = append(next, replay)
-	next = append(next, input[insertAt:]...)
-	payload["input"] = next
+	payload["input"] = insertReplayItems(input, filtered)
+	ensureReasoningEncryptedInclude(payload)
+}
+
+func ensureReasoningEncryptedInclude(payload map[string]interface{}) {
 	includes := interfaceSlice(payload["include"])
-	found := false
 	for _, value := range includes {
 		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(value)), "reasoning.encrypted_content") {
-			found = true
+			return
 		}
 	}
-	if !found {
-		includes = append(includes, "reasoning.encrypted_content")
-		payload["include"] = includes
-	}
+	payload["include"] = append(includes, "reasoning.encrypted_content")
 }
 
 func (h *Handler) clearReasoningReplay(ctx context.Context, model, key string) {
@@ -333,6 +374,25 @@ func isReasoningReplayDecodeError(err error) bool {
 		strings.Contains(text, "could not decode the compaction blob")
 }
 
+// isCompactionBlobDecodeError reports whether the rejection used Build's
+// compaction-decode wording.
+func isCompactionBlobDecodeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "could not decode the compaction blob")
+}
+
+// preservesClientCompaction reports whether a recognized decode failure must be
+// left untouched. Build historically reused the compaction-decode wording for
+// opaque reasoning and session failures, so that wording only means a real
+// compaction rejection when the request actually carried a compaction item.
+// A plain encrypted-content rejection stays recoverable even then, because the
+// recovery only rewrites reasoning items and never compaction state.
+func preservesClientCompaction(payload map[string]interface{}, err error) bool {
+	return payloadHasCompactionInput(payload) && isCompactionBlobDecodeError(err)
+}
+
 func payloadHasCompactionInput(payload map[string]interface{}) bool {
 	input, ok := payload["input"].([]interface{})
 	if !ok {
@@ -340,19 +400,6 @@ func payloadHasCompactionInput(payload map[string]interface{}) bool {
 	}
 	for _, raw := range input {
 		if item, ok := raw.(map[string]interface{}); ok && strings.EqualFold(interfaceString(item["type"]), "compaction") {
-			return true
-		}
-	}
-	return false
-}
-
-func nativeInputHasEncryptedReasoning(input []interface{}) bool {
-	for _, raw := range input {
-		item, _ := raw.(map[string]interface{})
-		if item == nil || !strings.EqualFold(strings.TrimSpace(fmt.Sprint(item["type"])), "reasoning") {
-			continue
-		}
-		if value := strings.TrimSpace(fmt.Sprint(item["encrypted_content"])); value != "" && value != "<nil>" {
 			return true
 		}
 	}

@@ -69,11 +69,29 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	defer sess.Close()
 
 	payload["model"] = spec.UpstreamModel
-	var resp *http.Response
-	if pinned {
-		resp, err = h.cliClient.doResponsesAt(r.Context(), sess.acc, upstreamPath, payload)
-	} else {
-		resp, err = h.doCLIWithAutoSwitchAt(r.Context(), sess, payload, spec.UpstreamModel, upstreamPath)
+	call := func() (*http.Response, error) {
+		if pinned {
+			return h.cliClient.doResponsesAt(r.Context(), sess.acc, upstreamPath, payload)
+		}
+		return h.doCLIWithAutoSwitchAt(r.Context(), sess, payload, spec.UpstreamModel, upstreamPath)
+	}
+	resp, err := call()
+	if err != nil && isReasoningReplayDecodeError(err) && !preservesClientCompaction(payload, err) {
+		// Upstream rejected opaque reasoning it could not decode. Recovery stays
+		// on the same account and plane: drop only the undecodable ciphers while
+		// keeping readable summaries, and clear the server-side replay first so
+		// the same stale cipher is never injected again. Client-held compaction
+		// state is never rewritten.
+		if session := sessionFromContext(r.Context()); session.Key != "" {
+			h.clearReasoningReplay(r.Context(), modelID, session.Key)
+		}
+		if stripInjectedReasoningReplay(payload) {
+			retryResp, retryErr := call()
+			if retryErr == nil && retryResp != nil {
+				retryResp.Header.Set("X-Grok2API-Reasoning-Recovery", "reasoning_encrypted_content_retry")
+			}
+			resp, err = retryResp, retryErr
+		}
 	}
 	if err != nil {
 		if markAllGrokAccountStatuses(err) {
@@ -99,9 +117,7 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	responseID, captured, result := copyNativeCLIResponseAndCaptureModel(w, responseBody, resp.Header.Get("Content-Type"), modelID)
 	h.auditChatOutcome(r.Context(), sess.acc, &ChatCompletionsRequest{Model: modelID, startedAt: started}, result)
 	if session := sessionFromContext(r.Context()); session.Replay && len(captured) > 0 && result.Err == nil {
-		if encrypted := encryptedReasoningFromResponse(captured); encrypted != "" {
-			h.storeReasoningReplay(modelID, session.Key, encrypted)
-		}
+		h.captureReasoningReplay(r.Context(), modelID, session.Key, captured)
 	}
 
 	if !saveOwnership || ownerHash == "" || responseID == "" || resp.StatusCode < 200 || resp.StatusCode >= 300 || result.Err != nil {

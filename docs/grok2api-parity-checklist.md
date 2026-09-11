@@ -1,8 +1,13 @@
 # Grok 与 grok2api 对齐清单
 
-本文以当前实现为准，用于跟踪与 `chenyme/grok2api` 的主要能力差异。最近一次逐文件复核基线为上游提交 `62d2775cb3cd5196cc885dd98e323c90afeda023`（2026-08-25）。
+本文以当前实现为准，用于跟踪与 `chenyme/grok2api` 的主要能力差异。
 
-2026-09-08 补充：接口覆盖不代表行为完全等价。最新行为复核和本轮协议修复分别见 [差异报告](D:/Code/Orchids-2api/docs/grok2api-deep-comparison-2026-09-08.md) 与 [修复说明](D:/Code/Orchids-2api/docs/grok-fixes-2026-09-08.md)。质量重试现需显式设置 `grok_quality_enabled=true`；Console 不再无条件注入搜索工具。
+**最近一次复核基线（2026-09-12）**：上游 `chenyme/grok2api` **v3.1.5**，提交 `8913b53`（2026-09-09），`git fetch` 后与 `origin/main` 一致。复核结论、逐项代码证据与本轮修复见 [2026-09-12 对比复核报告](D:/Code/Orchids-2api/docs/grok2api-parity-audit-2026-09-12.md)。该轮覆盖对话/推理回放、图片、视频、语音四条链路，未做真实上游端到端调用。
+
+2026-09-08 补充：接口覆盖不代表行为完全等价。历史行为复核和协议修复分别见 [差异报告](D:/Code/Orchids-2api/docs/grok2api-deep-comparison-2026-09-08.md) 与 [修复说明](D:/Code/Orchids-2api/docs/grok-fixes-2026-09-08.md)。质量重试现需显式设置 `grok_quality_enabled=true`；Console 不再无条件注入搜索工具。
+
+> 注意：`docs/grok2api-current-differences-2026-09-09.md` 与当次修复是同一次提交落库的，描述的是**修复前**状态，不应作为当前缺陷证据。
+
 
 ## 已完成
 

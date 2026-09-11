@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/modelpolicy"
 )
 
 var buildToolAliasInvalid = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
@@ -118,10 +120,12 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		input = append([]interface{}(nil), req.ResponsesInput...)
 	}
 	if req.ReasoningReplay && strings.TrimSpace(req.PromptCacheKey) != "" {
-		if encrypted := h.loadReasoningReplay(req.Model, req.PromptCacheKey); encrypted != "" && !consoleInputHasEncryptedReasoning(input) {
-			input = insertConsoleReplayBeforeLastUser(input, map[string]interface{}{
-				"type": "reasoning", "summary": []interface{}{}, "encrypted_content": encrypted,
-			})
+		if items := h.loadReasoningReplayItems(req.Model, req.PromptCacheKey); len(items) > 0 {
+			// Filtering drops anything the caller already sent, so a client that
+			// resends its own history is never duplicated.
+			if filtered := filterReplayItemsForInput(input, items); len(filtered) > 0 {
+				input = insertReplayItems(input, filtered)
+			}
 		}
 	}
 	if len(input) == 0 && instructions == "" {
@@ -147,8 +151,10 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	if req.MaxTokens != nil && *req.MaxTokens > 0 {
 		payload["max_output_tokens"] = *req.MaxTokens
 	}
-	if req.ReasoningEffort != nil {
-		payload["reasoning"] = map[string]interface{}{"effort": *req.ReasoningEffort}
+	// Chat Completions has no native reasoning object; rebuild the Responses
+	// shape from the relay's reasoning_effort / reasoning_summary extensions.
+	if reasoning := chatReasoningControls(req); len(reasoning) > 0 {
+		payload["reasoning"] = reasoning
 	}
 	if len(req.Stop) > 0 {
 		payload["stop"] = append([]string(nil), req.Stop...)
@@ -161,10 +167,11 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	} else if len(req.ResponseFormat) > 0 {
 		payload["text"] = map[string]interface{}{"format": normalizeChatResponseFormat(req.ResponseFormat)}
 	}
+	// Both planes return opaque reasoning only when it is explicitly requested.
+	// Without it the replay cache is never populated, so a default (auto) turn
+	// would silently lose multi-turn reasoning continuity.
 	include := uniqueStrings(append([]string(nil), req.Include...))
-	if req.ReasoningEffort != nil && !strings.EqualFold(strings.TrimSpace(*req.ReasoningEffort), "none") {
-		include = uniqueStrings(append(include, "reasoning.encrypted_content"))
-	}
+	include = uniqueStrings(append(include, "reasoning.encrypted_content"))
 	if len(include) > 0 {
 		payload["include"] = include
 	}
@@ -183,14 +190,19 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		return nil, err
 	}
 	if build {
-		// Match Build Chat's summary contract without imposing it on native
-		// Responses or Anthropic requests, or choosing an effort for the caller.
+		// The official Grok Build client always asks its Responses backend for a
+		// reasoning summary, even at the model's default effort. Chat Completions
+		// has no summary parameter, so make that Build-specific default explicit —
+		// without overriding a summary the caller already asked for, and without
+		// imposing it on native Responses or Anthropic requests.
 		if req.sourceOperation == "" && (req.ReasoningEffort == nil || *req.ReasoningEffort != "none") {
 			reasoning, _ := payload["reasoning"].(map[string]interface{})
 			if reasoning == nil {
 				reasoning = map[string]interface{}{}
 			}
-			reasoning["summary"] = "auto"
+			if _, exists := reasoning["summary"]; !exists {
+				reasoning["summary"] = "concise"
+			}
 			payload["reasoning"] = reasoning
 		}
 		if strings.TrimSpace(req.PromptCacheKey) != "" {
@@ -199,11 +211,13 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		if err := normalizeBuildResponsesPayload(payload); err != nil {
 			return nil, err
 		}
+		normalizeBuildReasoningEffort(payload, model)
 		return payload, nil
 	}
 	// Console is stateless and rejects these client-side state hints.
 	payload["store"] = false
 	delete(payload, "prompt_cache_key")
+	normalizeConsoleReasoningEffort(payload, model)
 	if len(interfaceMaps(payload["tools"])) == 0 {
 		delete(payload, "tools")
 		delete(payload, "tool_choice")
@@ -639,6 +653,85 @@ func mapsEqualJSON(left, right map[string]interface{}) bool {
 	return errA == nil && errB == nil && string(a) == string(b)
 }
 
+// Chat Completions has no native reasoning object. Accept the relay's
+// reasoning_effort / reasoning_summary extensions and rebuild the Responses
+// shape from them. A control the caller omitted stays omitted rather than being
+// guessed here; plane-specific defaults are applied later.
+func chatReasoningControls(req *ChatCompletionsRequest) map[string]interface{} {
+	if req == nil {
+		return nil
+	}
+	reasoning := map[string]interface{}{}
+	if req.ReasoningEffort != nil {
+		if effort := strings.TrimSpace(*req.ReasoningEffort); effort != "" {
+			reasoning["effort"] = effort
+		}
+	}
+	if req.ReasoningSummary != nil {
+		if summary := strings.TrimSpace(*req.ReasoningSummary); summary != "" {
+			reasoning["summary"] = summary
+		}
+	}
+	return reasoning
+}
+
+// normalizeBuildReasoningEffort maps client effort aliases onto levels the
+// selected model actually accepts. Grok 4.5 and other models without an xhigh
+// wire contract take the proven defensive xhigh/max -> high mapping; models
+// that do advertise xhigh keep it. Composer never receives an effort at all,
+// but keeps its other reasoning controls such as summary.
+func normalizeBuildReasoningEffort(payload map[string]interface{}, model string) {
+	reasoning, _ := payload["reasoning"].(map[string]interface{})
+	if reasoning == nil {
+		return
+	}
+	effort := strings.ToLower(strings.TrimSpace(interfaceString(reasoning["effort"])))
+	if effort == "" {
+		return
+	}
+	if modelpolicy.IsGrokComposerModel(model) {
+		delete(reasoning, "effort")
+		if len(reasoning) == 0 {
+			delete(payload, "reasoning")
+		}
+		return
+	}
+	var normalized string
+	switch effort {
+	case "minimal":
+		normalized = "low"
+	case "xhigh", "max":
+		if modelpolicy.SupportsReasoningEffort(model, "xhigh") {
+			normalized = "xhigh"
+		} else {
+			normalized = "high"
+		}
+	default:
+		return
+	}
+	reasoning["effort"] = normalized
+}
+
+// normalizeConsoleReasoningEffort applies the Console wire aliases: minimal
+// collapses to low, and both xhigh and the client-only max alias become xhigh.
+// Any other value is forwarded unchanged rather than silently downgraded.
+func normalizeConsoleReasoningEffort(payload map[string]interface{}, model string) {
+	reasoning, _ := payload["reasoning"].(map[string]interface{})
+	if reasoning == nil {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(interfaceString(reasoning["effort"]))) {
+	case "minimal", "low":
+		reasoning["effort"] = "low"
+	case "medium":
+		reasoning["effort"] = "medium"
+	case "high":
+		reasoning["effort"] = "high"
+	case "xhigh", "max":
+		reasoning["effort"] = "xhigh"
+	}
+}
+
 // Validate structure only. Upstreams, not the relay's model catalog, decide
 // which reasoning effort values are supported. Never downgrade client values.
 func validatePayloadReasoning(payload map[string]interface{}) error {
@@ -650,6 +743,11 @@ func validatePayloadReasoning(payload map[string]interface{}) error {
 		if raw, exists := reasoning["effort"]; exists {
 			if effort, ok := raw.(string); !ok || strings.TrimSpace(effort) == "" {
 				return fmt.Errorf("reasoning.effort must be a non-empty string")
+			}
+		}
+		if raw, exists := reasoning["summary"]; exists {
+			if summary, ok := raw.(string); !ok || strings.TrimSpace(summary) == "" {
+				return fmt.Errorf("reasoning.summary must be a non-empty string")
 			}
 		}
 	}

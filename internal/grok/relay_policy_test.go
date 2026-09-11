@@ -40,7 +40,10 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 		status           int
 	}{
 		{"answer_without_reasoning", "/responses", `{"id":"resp_plain","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"A complete answer does not have to contain any reasoning."}]}]}`, 200},
-		{"invalid_reasoning", "/responses", `{"error":{"code":"invalid_encrypted_content","message":"preserve this rejection"}}`, 400},
+		// Build reuses the compaction wording for opaque reasoning and session
+		// failures, so only this wording combined with a real compaction item is
+		// a genuine compaction rejection and passed through untouched.
+		{"compaction_blob_rejected", "/responses", `{"error":{"message":"could not decode the compaction blob"}}`, 400},
 		{"native_compact", "/responses/compact", `{"object":"response.compaction","output":[{"type":"compaction","encrypted_content":"native-opaque-result"}]}`, 200},
 		{"unsupported_compact", "/responses/compact", `{"error":{"code":"not_found"}}`, 404},
 	} {
@@ -117,6 +120,66 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 	}
 }
 
+// An opaque-reasoning rejection stays recoverable even when the request also
+// carries a client compaction item: recovery rewrites only the reasoning item's
+// cipher and never the client-held compaction state.
+func TestRelayNativeResponsesRecoversOpaqueReasoning(t *testing.T) {
+	var bodies []map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var received map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&received)
+		bodies = append(bodies, received)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"code":"invalid_encrypted_content","message":"could not decrypt the provided encrypted_content"}}`)
+	}))
+	defer server.Close()
+	h, acc := parityBuildHandler(t, server)
+	acc.ID, acc.GrokModels, acc.GrokModelsSyncedAt = 0, []string{"grok-4.6"}, time.Now()
+	if err := h.lb.Store.CreateAccount(context.Background(), acc); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.lb.Store.CreateModel(context.Background(), &store.Model{Channel: "Grok", ModelID: "grok-4.6", Name: "Grok 4.6", Status: store.ModelStatusAvailable, Verified: true}); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]interface{}{
+		"model": "grok-4.6", "stream": false, "prompt_cache_key": "client-session",
+		"input": []interface{}{
+			map[string]interface{}{"type": "reasoning", "encrypted_content": "client-reasoning"},
+			map[string]interface{}{"type": "compaction", "encrypted_content": "client-native-compaction"},
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
+	}
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	h.HandleResponses(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body)))
+
+	if len(bodies) < 2 {
+		t.Fatalf("expected a recovery retry, calls=%d", len(bodies))
+	}
+	for index, received := range bodies[1:] {
+		items, _ := received["input"].([]interface{})
+		reasoningSeen := false
+		for _, raw := range items {
+			item, _ := raw.(map[string]interface{})
+			switch interfaceString(item["type"]) {
+			case "reasoning":
+				reasoningSeen = true
+				if interfaceString(item["encrypted_content"]) != "" {
+					t.Fatalf("retry %d still carried opaque reasoning: %v", index, item)
+				}
+			case "compaction":
+				if interfaceString(item["encrypted_content"]) != "client-native-compaction" {
+					t.Fatalf("retry %d rewrote client compaction state: %v", index, item)
+				}
+			}
+		}
+		if reasoningSeen {
+			t.Fatalf("retry %d kept an empty reasoning item instead of dropping it: %v", index, items)
+		}
+	}
+}
+
 func TestRelayImageRetriesPreservePrompt(t *testing.T) {
 	calls := 0
 	h := &Handler{client: &Client{cfg: &config.Config{}, httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -138,8 +201,18 @@ func TestRelayImageRetriesPreservePrompt(t *testing.T) {
 	}
 }
 
+// Sampling stays client-owned. Effort is normalized to the levels the selected
+// model actually accepts: grok-4.5 has no xhigh wire contract, so both xhigh and
+// the client-only max alias land on high, while unknown values pass through.
 func TestRelayChatSamplingAndEffortAreClientOwned(t *testing.T) {
-	for _, effort := range []string{"max", "xhigh", "future-effort"} {
+	for _, tc := range []struct{ effort, want string }{
+		{"max", "high"},
+		{"xhigh", "high"},
+		{"minimal", "low"},
+		{"low", "low"},
+		{"future-effort", "future-effort"},
+	} {
+		effort := tc.effort
 		temperature, topP := 3.0, 1.5
 		req := &ChatCompletionsRequest{Model: "grok-4.5", Messages: []ChatMessage{{Role: "user", Content: "original"}}, ReasoningEffort: &effort, Temperature: &temperature, TopP: &topP}
 		if err := req.Validate(); err != nil {
@@ -149,8 +222,39 @@ func TestRelayChatSamplingAndEffortAreClientOwned(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if payload["reasoning"].(map[string]interface{})["effort"] != effort || payload["temperature"] != temperature || payload["top_p"] != topP {
-			t.Fatal(payload)
+		if payload["reasoning"].(map[string]interface{})["effort"] != tc.want || payload["temperature"] != temperature || payload["top_p"] != topP {
+			t.Fatalf("effort=%q payload=%v", tc.effort, payload)
+		}
+	}
+}
+
+// A model that does advertise xhigh keeps it, and the client-only max alias
+// maps onto it. Composer never receives an effort but keeps its summary.
+func TestRelayBuildEffortAliasesFollowModelContract(t *testing.T) {
+	for _, tc := range []struct{ model, effort, want string }{
+		{"grok-4.6", "max", "xhigh"},
+		{"grok-4.6", "xhigh", "xhigh"},
+		{"grok-4.5", "minimal", "low"},
+		{"grok-composer-2.5-fast", "high", ""},
+	} {
+		effort := tc.effort
+		req := &ChatCompletionsRequest{Model: tc.model, Messages: []ChatMessage{{Role: "user", Content: "hi"}}, ReasoningEffort: &effort}
+		payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ID: tc.model, UpstreamModel: tc.model, Upstream: UpstreamCLI}, req, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reasoning, _ := payload["reasoning"].(map[string]interface{})
+		if tc.want == "" {
+			if _, exists := reasoning["effort"]; exists {
+				t.Fatalf("%s kept effort %v", tc.model, reasoning)
+			}
+			if reasoning["summary"] != "concise" {
+				t.Fatalf("%s dropped its summary: %v", tc.model, reasoning)
+			}
+			continue
+		}
+		if reasoning["effort"] != tc.want {
+			t.Fatalf("%s effort=%v want %s", tc.model, reasoning["effort"], tc.want)
 		}
 	}
 }

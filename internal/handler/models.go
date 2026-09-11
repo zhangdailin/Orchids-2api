@@ -151,6 +151,13 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		publicModels = append(publicModels, entry)
 	}
 
+	// Codex-family clients ask for a richer catalog that carries the context
+	// window, input modalities and reasoning levels the OpenAI list omits.
+	if strings.TrimSpace(r.URL.Query().Get("client_version")) != "" {
+		writeCodexModelCatalog(w, r, newCodexModelCatalog(publicModels))
+		return
+	}
+
 	resp := PublicModelsListResponse{
 		Object: "list",
 		Data:   publicModels,
