@@ -259,7 +259,10 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	subReq := r.Clone(context.WithValue(r.Context(), chatSourceOperationKey{}, "responses"))
 	subReq.Method = http.MethodPost
 	subReq.URL.Path = "/v1/chat/completions"
-	subReq.Header = make(http.Header)
+	// Preserve the inbound headers: the bridge must not drop the credential that
+	// authorized the request (the Anthropic Messages bridge clones them too), and
+	// keeping them lets downstream code observe the same request identity.
+	subReq.Header = r.Header.Clone()
 	subReq.Header.Set("Content-Type", "application/json")
 	subReq.Body = io.NopCloser(bytes.NewReader(raw))
 	subReq.ContentLength = int64(len(raw))

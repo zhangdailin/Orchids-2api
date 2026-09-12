@@ -44,7 +44,8 @@ async function loadAccounts() {
     renderPlatformTabs();
     renderAccounts();
     updateStats();
-    autoRefreshWarpAccounts();
+    // Fire-and-forget: the table renders immediately, refreshed rows stream in.
+    autoSyncStaleAccounts();
   } catch (err) {
     console.error("Failed to load accounts:", err);
     showToast("加载账号失败", "error");
@@ -261,12 +262,23 @@ function applyTokenLabels(type) {
     warpDeviceLoginGroup.hidden = type !== "warp" || Boolean(accountId);
   }
   const saveButton = document.querySelector('#accountForm button[type="submit"]');
-  if (saveButton) saveButton.hidden = type === "warp" && !accountId;
+  if (saveButton) {
+    // Warp and WorkBuddy are created by their official login flows, so the form
+    // has nothing to submit for a new account of either type.
+    saveButton.hidden = (type === "warp" || type === "workbuddy") && !accountId;
+  }
   applyCredentialModeUI(type);
   if (!label || !input || !hint) return;
   if (type === 'warp') {
     input.value = "";
     input.required = false;
+  } else if (type === 'workbuddy') {
+    // OAuth-only channel: no manual credential field is exposed.
+    input.value = "";
+    input.required = false;
+    label.textContent = "WorkBuddy 凭证";
+    input.placeholder = "";
+    hint.textContent = "该渠道只支持官方登录";
   } else if (type === 'grok') {
     label.textContent = "SSO Token";
     input.placeholder = "每行一个 sso token（或包含 sso= 的 Cookie）";
@@ -280,13 +292,6 @@ function applyTokenLabels(type) {
         ? "Puter 编辑时仅保存第一行 auth_token。可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取"
         : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
       input.required = true;
-    } else if (type === 'workbuddy') {
-      label.textContent = "WorkBuddy 凭证（可选）";
-      input.placeholder = "留空即可，推荐用上方官方登录；也可粘贴 refreshToken / 会话 JSON / accessToken";
-      hint.textContent = accountId
-        ? "该渠道以官方登录为主。留空即保留服务器上已有的凭证；填写则以新凭证覆盖。"
-        : "该渠道以官方登录为主：点上方「使用 WorkBuddy 官方网页登录」即可自动保存账号并同步额度。此处留空即可；仅在批量导入或迁移时，才需要手填桌面端会话 refreshToken（约 1 年有效，服务器自动轮换）。";
-      input.required = false;
     } else {
     label.textContent = "Cookie / __client / __session";
     input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
@@ -495,6 +500,12 @@ async function pollWarpDeviceLogin() {
 }
 
 // Grok credential mode: SSO cookie vs Build CLI OAuth.
+//
+// SSO is created by pasting the cookie; the internal Console companion is
+// plumbing the operator never chooses, so its picker is never exposed.
+// Build CLI OAuth is only ever obtained through the official xAI device login:
+// the access/refresh tokens are redacted server-side on read, so manual token
+// inputs would be unusable anyway.
 function applyCredentialModeUI(type) {
   const modeGroup = document.getElementById("credentialModeGroup");
   const modeSelect = document.getElementById("credentialType");
@@ -503,13 +514,19 @@ function applyCredentialModeUI(type) {
   modeGroup.hidden = !isGrok;
   const mode = String(modeSelect?.value || "sso").trim().toLowerCase();
   const isOAuth = isGrok && mode === "oauth";
-  const showToken = type !== "warp" && !isOAuth;
+  // The credential textarea is hidden for the channels that only accept official
+  // login (Warp) and for WorkBuddy, which is OAuth-only by product decision.
+  const showToken = type !== "warp" && type !== "workbuddy" && !isOAuth;
   const providerGroup = document.getElementById("grokProviderGroup");
-  if (providerGroup) providerGroup.hidden = !isGrok || mode !== "sso";
+  if (providerGroup) providerGroup.hidden = true;
   document.getElementById("ssoCredentialGroup").hidden = !showToken;
-  document.getElementById("oauthCredentialGroup").hidden = !isOAuth;
-  document.getElementById("oauthRefreshGroup").hidden = !isOAuth;
-  document.getElementById("oauthExpiresGroup").hidden = !isOAuth;
+  // No manual OAuth credential inputs: the device login owns them.
+  const oauthCredentialGroup = document.getElementById("oauthCredentialGroup");
+  if (oauthCredentialGroup) oauthCredentialGroup.hidden = true;
+  const oauthRefreshGroup = document.getElementById("oauthRefreshGroup");
+  if (oauthRefreshGroup) oauthRefreshGroup.hidden = true;
+  const oauthExpiresGroup = document.getElementById("oauthExpiresGroup");
+  if (oauthExpiresGroup) oauthExpiresGroup.hidden = true;
   const grokDeviceLoginGroup = document.getElementById("grokDeviceLoginGroup");
   const accountId = String(document.getElementById("accountId")?.value || "");
   if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = !isOAuth || Boolean(accountId);
@@ -827,6 +844,9 @@ function evaluateAccountStatus(acc) {
     return { normal: false, text: '禁用', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '账号已禁用' };
   }
   const statusCode = normalizeSidebarStatusCode(acc.status_code);
+  // A bare "401" or "429" hides the actionable cause (retired grant vs. a
+  // partial write vs. upstream throttling), so the server's reason wins.
+  const statusReason = String(acc.status_message || "").trim();
   if (isQuotaOnlyStatus(acc)) {
     const quota = getQuotaStats(acc);
     const limitText = quota && quota.limit > 0 ? quota.limit.toLocaleString() : '未知';
@@ -842,17 +862,20 @@ function evaluateAccountStatus(acc) {
     };
   }
   if (statusCode) {
+    // When the server recorded a reason, it is the actionable text; the generic
+    // per-code wording is only the fallback.
+    const withReason = (fallback) => statusReason || fallback;
     switch (statusCode) {
       case '429':
-        return { normal: false, text: '限流', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '请求过于频繁 (429)' };
+        return { normal: false, text: '限流', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: withReason('请求过于频繁 (429)') };
       case '401':
-        return { normal: false, text: '未授权', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '认证失败 (401)' };
+        return { normal: false, text: '未授权', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: withReason('认证失败 (401)') };
       case '403':
-        return { normal: false, text: '禁止访问', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '访问被拒绝 (403)' };
+        return { normal: false, text: '禁止访问', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: withReason('访问被拒绝 (403)') };
       case '404':
-        return { normal: false, text: '不存在', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '资源不存在 (404)' };
+        return { normal: false, text: '不存在', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: withReason('资源不存在 (404)') };
       default:
-        return { normal: false, text: '异常', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '状态异常: ' + statusCode };
+        return { normal: false, text: '异常', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: withReason('状态异常: ' + statusCode) };
     }
   }
 
@@ -913,9 +936,12 @@ function statusBadge(acc) {
   return evaluateAccountStatus(acc);
 }
 
-// Refresh single account via the shared check endpoint.
+// Refresh single account via the shared check endpoint. Returns true when the
+// sync succeeded, so callers (auto-sync in particular) can tell a refreshed row
+// from a failed attempt.
 async function checkAccount(id, silent = false, actionText = "刷新") {
   const action = "check";
+  let succeeded = false;
   try {
     const res = await fetch(`/api/accounts/${id}/${action}`);
     if (!res.ok) {
@@ -924,6 +950,7 @@ async function checkAccount(id, silent = false, actionText = "刷新") {
     const updated = await res.json();
     accounts = accounts.map(a => (a.id === id ? updated : a));
     updateAccountHealth(id, true);
+    succeeded = true;
     if (!silent) showToast(`账号 ${updated.name || updated.email || id} ${actionText}完成`, "success");
   } catch (err) {
     try {
@@ -943,15 +970,122 @@ async function checkAccount(id, silent = false, actionText = "刷新") {
     renderAccounts();
     updateStats();
   }
+  return succeeded;
 }
 
-async function autoRefreshWarpAccounts() {
-  const warpAccounts = accounts.filter(acc => normalizeAccountType(acc) === 'warp');
-  if (!warpAccounts.length) return;
-  for (const acc of warpAccounts) {
-    if (acc.token) continue;
-    await checkAccount(acc.id, true);
+// Refresh-on-load: the account table is only as fresh as the last sync, and most
+// channels do NOT report when their quota snapshot was taken (Warp and Puter have
+// no timestamp at all). A page-session ledger plus a persisted one therefore
+// drives auto-sync, with the channel's own snapshot timestamp used when present.
+const ACCOUNT_SYNC_MAX_AGE_MS = 30 * 60 * 1000;
+const ACCOUNT_SYNC_LEDGER_KEY = 'orchids_account_sync_v1';
+const ACCOUNT_AUTO_SYNC_PACE_MS = 200;
+
+function parseAccountTime(value) {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+// accountSyncTimestamp resolves when this account's displayed numbers were last
+// obtained from the upstream. 0 means "this channel does not report one".
+function accountSyncTimestamp(acc) {
+  if (!acc) return 0;
+  const type = normalizeAccountType(acc);
+  if (type === "workbuddy") {
+    return parseAccountTime(acc?.workbuddy_quota?.synced_at) || parseAccountTime(acc?.workbuddy_models_synced_at);
   }
+  if (type === "grok") {
+    if (isSidebarGrokOAuthAccount(acc)) {
+      // Build OAuth: billing windows carry the weekly/monthly allowance the
+      // 配额 column renders.
+      return parseAccountTime(acc?.grok_billing?.synced_at) || parseAccountTime(acc?.grok_models_synced_at);
+    }
+    return parseAccountTime(acc?.grok_web_quota?.synced_at) || parseAccountTime(acc?.grok_models_synced_at);
+  }
+  return 0;
+}
+
+// The ledger survives reloads so a channel without timestamps is refreshed at
+// most once per ACCOUNT_SYNC_MAX_AGE_MS instead of on every page view.
+const accountSyncLedger = {
+  entries: {},
+  loaded: false,
+  load() {
+    if (this.loaded) return;
+    this.loaded = true;
+    try {
+      const raw = window.localStorage?.getItem(ACCOUNT_SYNC_LEDGER_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && typeof parsed === "object") this.entries = parsed;
+    } catch (_) {
+      this.entries = {};
+    }
+  },
+  get(id) {
+    this.load();
+    const value = Number(this.entries[String(id)]);
+    return Number.isFinite(value) ? value : 0;
+  },
+  set(id, at) {
+    this.load();
+    this.entries[String(id)] = at;
+    try {
+      window.localStorage?.setItem(ACCOUNT_SYNC_LEDGER_KEY, JSON.stringify(this.entries));
+    } catch (_) {
+      /* storage may be unavailable; the in-memory copy still applies */
+    }
+  },
+};
+
+const accountAutoSyncState = { attemptedThisLoad: false, inFlight: new Set() };
+
+function accountLastSyncAt(acc) {
+  if (!acc) return 0;
+  return Math.max(accountSyncTimestamp(acc), accountSyncLedger.get(acc.id));
+}
+
+function shouldAutoSyncAccount(acc) {
+  if (!acc || !acc.enabled || !acc.id) return false;
+  if (accountAutoSyncState.inFlight.has(String(acc.id))) return false;
+  // Warp credentials are never submitted by the UI, but a loaded account with no
+  // settings snapshot still needs one official sync.
+  if (normalizeAccountType(acc) === "warp" && acc.token) return false;
+
+  const lastSync = accountLastSyncAt(acc);
+  if (!lastSync) return true;
+  return Date.now() - lastSync >= ACCOUNT_SYNC_MAX_AGE_MS;
+}
+
+function sleepForPace(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// autoSyncStaleAccounts refreshes, at most once per page load, every enabled
+// account whose last successful sync is older than the TTL. Sequential and paced
+// on purpose: a channel may rate limit per account pool, and the table
+// re-renders as results arrive.
+async function autoSyncStaleAccounts() {
+  if (accountAutoSyncState.attemptedThisLoad) return;
+  accountAutoSyncState.attemptedThisLoad = true;
+  let synced = 0;
+  for (const acc of accounts) {
+    if (!shouldAutoSyncAccount(acc)) continue;
+    const id = String(acc.id);
+    accountAutoSyncState.inFlight.add(id);
+    const ok = await checkAccount(acc.id, true);
+    accountAutoSyncState.inFlight.delete(id);
+    if (ok) {
+      accountSyncLedger.set(id, Date.now());
+      synced += 1;
+    }
+    await sleepForPace(ACCOUNT_AUTO_SYNC_PACE_MS);
+  }
+  return synced;
+}
+
+// resetAutoSyncLoadGuard simulates a fresh page load for the per-load guard.
+function resetAutoSyncLoadGuard() {
+  accountAutoSyncState.attemptedThisLoad = false;
 }
 
 // Clear abnormal accounts
@@ -1031,9 +1165,9 @@ function renderAccounts() {
   const headers = [
     { label: "", style: "width: 40px;" },
     { label: "ID", style: "width: 60px;" },
-    { label: "Token" },
-    { label: "等级", style: "width: 90px;" },
-    { label: "配额", style: "width: 140px;" },
+    { label: "账号 / 邮箱" },
+    { label: "等级", style: "width: 130px;" },
+    { label: "配额", style: "width: 150px;" },
     { label: "状态" },
     { label: "调用" },
     { label: "最后调用" },
@@ -1042,7 +1176,7 @@ function renderAccounts() {
   headers.forEach((h, idx) => {
     const th = document.createElement("th");
     if (h.style) th.style.cssText = h.style;
-    if (h.label === "Token") th.classList.add("col-token");
+    if (h.label === "账号 / 邮箱") th.classList.add("col-token");
     if (idx === 0) {
       const selectAll = document.createElement("input");
       selectAll.type = "checkbox";
@@ -1097,39 +1231,20 @@ function renderAccounts() {
 
     const tdQuota = document.createElement("td");
     tdQuota.style.fontSize = "0.85rem";
+    // One shared renderer for the desktop table and the mobile cards.
+    tdQuota.innerHTML = buildQuotaMarkup(acc);
     const quota = getQuotaStats(acc);
-    if (quota && quota.workbuddy) {
-      const pct = quota.pctRemaining;
-      const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
-      const resetText = quota.resetAt ? ` · ${formatQuotaReset(quota.resetAt)}` : "";
-      const packageText = quota.packageRemaining > 0 && quota.packageRemaining !== quota.limit
-        ? `<div style="color:#64748b;font-size:0.75rem">套餐共剩 ${formatCredit(quota.packageRemaining)}${resetText}</div>`
-        : resetText
-          ? `<div style="color:#64748b;font-size:0.75rem">${resetText.replace(' · ', '')}</div>`
-          : "";
-      tdQuota.innerHTML = `<span style="color:${color}">${formatCredit(quota.remaining)}</span> <span style="color:#64748b;font-size:0.75rem">/ ${formatCredit(quota.limit)} (剩余)</span>${packageText}`;
-    } else if (quota && quota.quotaUnavailable) {
-      tdQuota.style.color = "#94a3b8";
-      tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(xAI 未下发 Build 数值配额)</span>`;
-    } else if (quota && quota.unknown) {
-      tdQuota.style.color = "#64748b";
-      const hint = normalizeAccountType(acc) === "workbuddy"
-        ? "WorkBuddy 计量接口未返回数据，点 Sync 重试"
-        : "Puter 暂无稳定额度接口";
-      tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(${hint})</span>`;
-    } else if (quota) {
-      const pct = quota.pctRemaining;
-      const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
-      if (normalizeAccountType(acc) === "warp" && quota.splitBonus) {
-        tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span><div style="color:#64748b;font-size:0.75rem">${quota.monthlyRemaining.toLocaleString()} 月度 + ${quota.bonusRemaining.toLocaleString()} 赠送</div>`;
-      } else if (quota.weeklyPercent) {
-        tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()}%</span> <span style="color:#64748b;font-size:0.75rem">/ 100% (周度剩余)</span>`;
+    if (normalizeAccountType(acc) === "workbuddy") {
+      if (quota && quota.workbuddy) {
+        tdQuota.title = [
+          quota.plan ? `计量包: ${quota.plan}` : "",
+          `单位: ${quota.unit || "credit"}`,
+          "口径: 当前周期剩余 / 周期上限",
+          quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
+        ].filter(Boolean).join(" · ");
       } else {
-        tdQuota.innerHTML = `<span style="color:${color}">${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>`;
+        tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点 Sync 立即刷新";
       }
-    } else {
-      tdQuota.style.color = "#64748b";
-      tdQuota.textContent = "-";
     }
     tr.appendChild(tdQuota);
 
@@ -1285,12 +1400,13 @@ function accountUsageCounter(acc) {
 // buildMobileEmailMarkup surfaces the signed-in address, which is how operators
 // actually recognise a WorkBuddy account (the nickname is the email).
 function buildMobileEmailMarkup(acc) {
-  const email = String(acc?.email || "").trim();
-  if (!email) return "";
+  const identity = normalizeAccountType(acc) === "workbuddy" ? workBuddyIdentityLabel(acc) : String(acc?.email || "").trim();
+  if (!identity || identity === "-") return "";
+  const label = normalizeAccountType(acc) === "workbuddy" ? "账号 / 邮箱" : "邮箱";
   return `
         <div class="account-mobile-item" style="grid-column: 1 / -1;">
-          <span class="account-mobile-label">邮箱</span>
-          <span class="account-mobile-value" style="word-break: break-all;">${escapeHtml(email)}</span>
+          <span class="account-mobile-label">${label}</span>
+          <span class="account-mobile-value" style="word-break: break-all;">${escapeHtml(identity)}</span>
         </div>`;
 }
 
@@ -1568,9 +1684,6 @@ function openModal(account = null) {
       if (providerHint) {
         providerHint.textContent = "保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。";
       }
-      document.getElementById("oauthAccessToken").value = account.oauth_access_token || "";
-      document.getElementById("oauthRefreshToken").value = account.oauth_refresh_token || "";
-      document.getElementById("oauthExpiresAt").value = account.oauth_expires_at || "";
     } else {
       title.textContent = "添加账号";
       form.reset();
@@ -1583,9 +1696,6 @@ function openModal(account = null) {
       if (modeSelect) modeSelect.value = "sso";
       if (providerSelect) providerSelect.value = "web";
       if (providerHint) providerHint.textContent = "保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。";
-      document.getElementById("oauthAccessToken").value = "";
-      document.getElementById("oauthRefreshToken").value = "";
-      document.getElementById("oauthExpiresAt").value = "";
     }
     applyCredentialModeUI(account ? normalizeAccountType(account) : getActiveAccountType());
   };
@@ -1635,12 +1745,22 @@ async function saveAccount(e) {
     showToast("请使用 Warp 官方网页登录添加账号", "error");
     return;
   }
+  // WorkBuddy is OAuth-only: the official login flow creates and re-authorizes
+  // the account, so the form must never submit a manually typed credential.
+  if (type === "workbuddy" && !id) {
+    showToast("请使用「使用 WorkBuddy 官方网页登录」添加账号", "error");
+    return;
+  }
   const token = document.getElementById("clientCookie").value;
   const mode = currentCredentialMode();
   const isOAuth = type === "grok" && mode === "oauth";
-  const oauthAccess = String(document.getElementById("oauthAccessToken")?.value || "").trim();
-  const oauthRefresh = String(document.getElementById("oauthRefreshToken")?.value || "").trim();
-  const oauthExpires = String(document.getElementById("oauthExpiresAt")?.value || "").trim();
+  // Build CLI OAuth has no manual inputs: it is created and renewed by the
+  // official device login, which saves the account server-side. Submitting the
+  // mode without the login would only produce an account without credentials.
+  if (isOAuth && !id) {
+    showToast("请使用「使用 Grok 官方网页登录」添加 Build CLI OAuth 账号", "error");
+    return;
+  }
 
   const splitCredentials = splitBatchCredentialInput(token);
   const { unique: dedupedCredentials, duplicates: duplicateInputs } = dedupeCredentialInputs(type, splitCredentials);
@@ -1654,11 +1774,6 @@ async function saveAccount(e) {
   if (type === "grok") {
     data.credential_type = isOAuth ? "oauth" : "";
     data.grok_provider = isOAuth ? "build" : "web";
-  }
-  if (isOAuth) {
-    if (oauthAccess) data.oauth_access_token = oauthAccess;
-    if (oauthRefresh) data.oauth_refresh_token = oauthRefresh;
-    if (oauthExpires) data.oauth_expires_at = oauthExpires;
   }
 
   // A WorkBuddy edit may legitimately keep the stored credential: the refresh
@@ -1803,24 +1918,28 @@ function formatTokenDisplay(acc) {
     return token.length > 24 ? token.substring(0, 8) + '...' + token.substring(token.length - 8) : token;
   }
   if (type === 'workbuddy') {
-    // The signed-in address is what identifies a WorkBuddy account; fall back to
-    // the truncated access token when the profile was not fetched.
-    const email = String(acc.email || "").trim();
-    const uid = String(acc.workbuddy_uid || "").trim();
-    const label = email || (uid ? `uid ${uid.substring(0, 8)}` : "");
-    const token = getAccountToken(acc);
-    const tokenTail = token
-      ? (token.length > 16 ? `${token.substring(0, 6)}...${token.substring(token.length - 6)}` : token)
-      : "";
-    if (label && tokenTail) return `${label} · ${tokenTail}`;
-    if (label) return label;
-    if (tokenTail) return tokenTail;
-    return '-';
+    // The signed-in address identifies both the account and the login; the token
+    // itself is deliberately not shown for this channel.
+    return workBuddyIdentityLabel(acc);
   }
   if (acc.session_id) {
     return acc.session_id.substring(0, 30) + '...';
   }
   return '-';
+}
+
+// workBuddyIdentityLabel renders the account identity: the signed-in address when
+// the profile was fetched, otherwise a short uid, otherwise the access token tail.
+function workBuddyIdentityLabel(acc) {
+  const email = String(acc?.email || "").trim();
+  if (email) return email;
+  const uid = String(acc?.workbuddy_uid || "").trim();
+  if (uid) return uid.length > 20 ? `uid ${uid.substring(0, 8)}...${uid.substring(uid.length - 4)}` : `uid ${uid}`;
+  const token = String(acc?.workbuddy_access_token || "").trim();
+  if (token) {
+    return token.length > 16 ? `token ${token.substring(0, 6)}...${token.substring(token.length - 6)}` : token;
+  }
+  return "-";
 }
 
 

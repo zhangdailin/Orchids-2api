@@ -98,6 +98,14 @@ func rateLimitIdentity(ctx context.Context, token string) string {
 	return "token:" + dpopCacheKey(token)
 }
 
+// waitScopedRateLimit blocks while a scope+identity+model cooldown is active and
+// then consumes one pacing token.
+//
+// The identity is the one carried by withRateLimitAccount (team when known,
+// otherwise the account) so that noteScopedRateLimit and the wait consult the
+// SAME key. Note that this makes a team-scoped cooldown intentionally apply to
+// every sibling account on that team: xAI meters those limits per team, so
+// retrying the same model from a sibling would hit the same wall.
 func waitScopedRateLimit(ctx context.Context, provider, token, model string, rate float64) error {
 	identity := provider + ":" + rateLimitIdentity(ctx, token)
 	for _, scope := range []RateLimitScope{RateLimitScopeRPS, RateLimitScopeRPM} {

@@ -399,6 +399,29 @@ func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
 type accountOutput struct {
 	*store.Account
 	WarpAuthenticated bool `json:"warp_authenticated,omitempty"`
+	// Quota holds the provider-specific quota projection. It is merged into every
+	// account response so the management table can render 等级/配额 consistently
+	// without re-deriving each channel's semantics on the client.
+	Quota map[string]interface{} `json:"-"`
+}
+
+// MarshalJSON flattens the quota projection into the account object itself.
+func (o accountOutput) MarshalJSON() ([]byte, error) {
+	merged := map[string]interface{}{}
+	if o.Account != nil {
+		raw, err := json.Marshal(o.Account)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &merged); err != nil {
+			return nil, err
+		}
+	}
+	merged["warp_authenticated"] = o.WarpAuthenticated
+	for key, value := range o.Quota {
+		merged[key] = value
+	}
+	return json.Marshal(merged)
 }
 
 func normalizeAccountOutput(acc *store.Account) *accountOutput {
@@ -428,6 +451,7 @@ func normalizeAccountOutput(acc *store.Account) *accountOutput {
 	return &accountOutput{
 		Account:           out,
 		WarpAuthenticated: strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
+		Quota:             buildQuotaResponseFields(out),
 	}
 }
 
@@ -1216,6 +1240,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 					slog.Warn("Initial account sync failed", "account_id", acc.ID, "type", acc.AccountType, "error", syncErr)
 					if accountStatus != "" {
 						acc.StatusCode = accountStatus
+						acc.StatusMessage = strings.TrimSpace(syncErr.Error())
 						acc.LastAttempt = time.Now()
 					}
 				} else {
@@ -1779,6 +1804,10 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				checkErrStatus = accountStatus
 				if accountStatus != "" {
 					acc.StatusCode = accountStatus
+					// The reason matters: a bare "401" cannot tell an operator
+					// whether the credential was retired upstream or the record
+					// lost it.
+					acc.StatusMessage = strings.TrimSpace(refreshErr.Error())
 					acc.LastAttempt = time.Now()
 					if updateErr := a.store.UpdateAccount(r.Context(), acc); updateErr != nil {
 						slog.Warn("Failed to persist account refresh status", "account_id", acc.ID, "error", updateErr)
@@ -2622,6 +2651,7 @@ func (a *API) syncAccountAfterCreate(acc store.Account) {
 			slog.Warn("Initial account sync failed", "account_id", account.ID, "type", account.AccountType, "error", syncErr)
 			if accountStatus != "" {
 				account.StatusCode = accountStatus
+				account.StatusMessage = strings.TrimSpace(syncErr.Error())
 				account.LastAttempt = time.Now()
 			}
 		} else {
@@ -2641,6 +2671,7 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 	status = strings.TrimSpace(status)
 	if status == "" {
 		acc.StatusCode = ""
+		acc.StatusMessage = ""
 		acc.LastAttempt = time.Time{}
 		return
 	}

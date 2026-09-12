@@ -16,9 +16,9 @@
         <label class="form-label">凭据模式</label>
         <select class="form-input" id="credentialType" onchange="applyCredentialModeUI(document.getElementById('accountType').value)">
           <option value="sso">SSO Cookie</option>
-          <option value="oauth">Build CLI OAuth</option>
+          <option value="oauth">Build CLI OAuth（官方登录）</option>
         </select>
-        <small class="helper-text">Build CLI OAuth 走 cli-chat-proxy.grok.com；模型能力由官方 /models 同步。</small>
+        <small class="helper-text">SSO Cookie 直接粘贴；Build CLI OAuth 只能通过 xAI 官方设备登录获取（access/refresh token 由服务端保存且不回显），因此凭证模式选 OAuth 后点下方按钮授权即可，无需手填 token。</small>
       </div>
       <div class="form-group" id="grokProviderGroup" hidden>
         <label class="form-label">SSO 产品入口</label>
@@ -39,7 +39,7 @@
        <div class="form-group" id="workbuddyLoginGroup" hidden>
          <label class="form-label">官方 WorkBuddy 登录（国际版）</label>
          <button class="btn btn-secondary" id="workbuddyLoginButton" type="button" onclick="WorkBuddyLogin.start()">使用 WorkBuddy 官方网页登录</button>
-         <small class="helper-text">在 www.workbuddy.ai 完成登录并授权本管理站点；服务端只保存 access/refresh token，读取不到密码。授权完成后自动保存账号并同步模型目录与额度，refreshToken 由服务端自动轮换。仅在点击按钮后才会开始登录；编辑已有账号时也可用它重新授权。</small>
+         <small class="helper-text">在 www.workbuddy.ai 完成登录并授权本管理站点；服务端只保存 access/refresh token，读取不到密码。授权完成后自动保存账号并同步模型目录与额度，refreshToken 由服务端自动轮换。登录只在点击按钮后开始；编辑已有账号时也可用它重新授权。该渠道只支持官方登录，不提供手填凭证。</small>
          <div class="account-import-status" id="workbuddyLoginStatus" hidden></div>
        </div>
        <div class="form-group" id="warpDeviceLoginGroup" hidden>
@@ -49,11 +49,13 @@
          <div class="account-import-status" id="warpDeviceLoginStatus" hidden></div>
        </div>
        <div class="form-group" id="grokDeviceLoginGroup" hidden>
-         <label class="form-label">官方 Grok 登录</label>
+         <label class="form-label">官方 Grok 登录（Build CLI OAuth）</label>
          <button class="btn btn-secondary" id="grokDeviceLoginButton" type="button" onclick="startGrokDeviceLogin()">使用 Grok 官方网页登录</button>
-         <small class="helper-text">浏览器将在 xAI 官方页面完成授权；本服务只保存 OAuth access/refresh token，不读取本地文件、Cookie 或密码，也不保存 id_token。</small>
+         <small class="helper-text">浏览器将在 xAI 官方页面完成授权；本服务只保存 OAuth access/refresh token（且不回显），不读取本地文件、Cookie 或密码，也不保存 id_token。授权完成会自动保存账号。</small>
          <div class="account-import-status" id="grokDeviceLoginStatus" hidden></div>
        </div>
+       <!-- Manual OAuth token inputs are intentionally not shown: the device login
+            owns these credentials and the server redacts them on read. -->
        <div class="form-group" id="oauthCredentialGroup" hidden>
         <label class="form-label">OAuth Access Token</label>
         <input class="form-input" id="oauthAccessToken" type="text" spellcheck="false" placeholder="access_token" />

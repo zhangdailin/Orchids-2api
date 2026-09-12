@@ -54,11 +54,15 @@ func (c Credentials) Token(now time.Time) (string, bool) {
 // forms, in priority order:
 //
 //  1. a WorkBuddy auth JSON document ({auth:{accessToken,refreshToken},account:{uid}})
-//  2. a raw access token (JWT) or refresh token
-//  3. `key=value` pairs separated by newlines, commas or semicolons
+//  2. `key=value` pairs separated by newlines, commas or semicolons
+//  3. a raw access token (JWT) or refresh token
 //
 // The long-lived refresh token is the preferred credential; the access token is
 // accepted because it is what the desktop session exposes most visibly.
+//
+// The identity (UID/E-mail) is proven whenever a decodable access-token JWT is
+// available: the token embeds the Keycloak claims, so a pasted session document
+// never needs a separate identity lookup.
 func ResolveCredentials(acc *store.Account) Credentials {
 	if acc == nil {
 		return Credentials{}
@@ -94,7 +98,9 @@ func ResolveCredentials(acc *store.Account) Credentials {
 		}
 	}
 
-	// Fill what the token itself can prove.
+	// Fill what the token itself can prove. The stored expiry is intentionally
+	// overridden when the token is decodable: a stale stored value would make the
+	// client refresh on every request.
 	accessClaims := DecodeClaims(creds.AccessToken)
 	if creds.UID == "" {
 		creds.UID = accessClaims.Sub
@@ -102,10 +108,27 @@ func ResolveCredentials(acc *store.Account) Credentials {
 	if creds.Email == "" {
 		creds.Email = accessClaims.Email
 	}
-	if creds.ExpiresAt.IsZero() && accessClaims.ExpiresAt > 0 {
+	if accessClaims.ExpiresAt > 0 {
 		creds.ExpiresAt = time.Unix(accessClaims.ExpiresAt, 0)
 	}
 	return creds
+}
+
+// Fields projects the credentials onto the account fields that own them. It is
+// the single mapping used by both the client and the admin API, so a credential
+// added through any path (OAuth login, manual paste, import) stores the same
+// values in the same places.
+func (c Credentials) Fields() (accessToken, refreshToken, uid, email string, expiresAt time.Time) {
+	return strings.TrimSpace(c.AccessToken),
+		strings.TrimSpace(c.RefreshToken),
+		strings.TrimSpace(c.UID),
+		strings.TrimSpace(c.Email),
+		c.ExpiresAt
+}
+
+// HasCredential reports whether anything usable was supplied.
+func (c Credentials) HasCredential() bool {
+	return strings.TrimSpace(c.AccessToken) != "" || strings.TrimSpace(c.RefreshToken) != ""
 }
 
 // parseCredentialBlob understands one pasted credential value.

@@ -275,10 +275,11 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 
 ### 5.0 WorkBuddy 国际版
 
-推荐直接用管理页面的 **WorkBuddy 官方网页登录**（详见 §6）。也可以手填凭证：账号（`account_type: "workbuddy"`）至少需要一个
-`refreshToken` 或 `accessToken`，可以从桌面端会话文件
-`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info` 取得；也可以整段 JSON 直接粘贴到管理页面的凭证输入框，
-服务端会自动解析 `auth.accessToken` / `auth.refreshToken` / `account.uid`。
+推荐直接用管理页面的 **WorkBuddy 官方网页登录**（详见 §6）。该通道在管理界面**只支持官方登录**，不提供手填凭证：添加与重新授权都走登录按钮。账号创建/导入接口仍接受凭证（用于迁移与脚本化），字段解析规则见下。
+
+账号（`account_type: "workbuddy"`）至少需要一个 `refreshToken` 或 `accessToken`，可以从桌面端会话文件
+`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info` 取得；也可以整段 JSON 直接提交，
+服务端会自动解析 `auth.accessToken` / `auth.refreshToken` / `account.uid`，并从 accessToken 的 Keycloak claims 推导 `uid` 与登录邮箱。
 
 ```bash
 curl -s http://127.0.0.1:3002/workbuddy/v1/messages \
@@ -309,6 +310,8 @@ curl -s http://127.0.0.1:3002/workbuddy/v1/messages \
 | `CapacityUnit` | `quota_unit` | 通常 `credit` |
 
 计量接口是可选路径：读取失败不会让账号变成错误状态，只是 `quota_supported=false`（表格显示「未知」），点 Sync 重试即可。
+
+这些 `quota_*` 字段会合并进**每一个账号响应**（列表、创建、编辑、检查），前端表格的「等级 / 配额」列直接读取；同时保留嵌套的 `workbuddy_quota` 快照（含 `package_name` / `synced_at` / `last_consumed_units`）。账号身份（`email` / `name` / `workbuddy_uid`）由 accessToken 里的 Keycloak claims 推导，因此手填会话 JSON 或走官方登录都能得到同样的账号标识。
 
 ### 5.1 Puter Claude Messages 工具首轮
 

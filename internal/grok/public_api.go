@@ -266,7 +266,9 @@ func (h *Handler) HandlePublicVideoSSE(w http.ResponseWriter, r *http.Request) {
 	subReq := r.Clone(r.Context())
 	subReq.Method = http.MethodPost
 	subReq.URL.Path = "/v1/chat/completions"
-	subReq.Header = make(http.Header)
+	// Preserve the inbound headers so the forwarded call keeps the caller's
+	// identity (the Responses and Messages bridges clone them as well).
+	subReq.Header = r.Header.Clone()
 	subReq.Header.Set("Content-Type", "application/json")
 	subReq.Body = io.NopCloser(bytes.NewReader(raw))
 	subReq.ContentLength = int64(len(raw))

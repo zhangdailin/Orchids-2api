@@ -44,12 +44,10 @@
           Puter 账号当前只需要填写 <code class="doc-inline-code doc-inline-code-amber">auth_token</code>。
           <br />
           <span class="doc-strong doc-strong-amber">WorkBuddy 账号说明:</span>
-          国际版（<code class="doc-inline-code doc-inline-code-amber">www.workbuddy.ai</code>）以官方登录为主：在账号页面
-          <span class="doc-strong doc-strong-amber">手动点击</span>「使用 WorkBuddy 官方网页登录」，在官方页面完成授权后账号会自动保存，
+          国际版（<code class="doc-inline-code doc-inline-code-amber">www.workbuddy.ai</code>）<span class="doc-strong doc-strong-amber">只支持官方登录</span>：
+          在账号页面手动点击「使用 WorkBuddy 官方网页登录」，在官方页面完成授权后账号会自动保存，
           服务端不接触密码，并会自动同步该账号的模型目录与额度；编辑已有账号时也可用它重新授权。
-          手填凭证仅在批量导入或迁移时需要（桌面端会话
-          <code class="doc-inline-code doc-inline-code-amber">refreshToken</code>、整段会话 JSON 或
-          <code class="doc-inline-code doc-inline-code-amber">accessToken</code>），留空即保留服务器上已有凭证。
+          该渠道不提供手填凭证（批量导入仍可通过 API 使用会话 refreshToken）。
         </div>
       </div>
 

@@ -68,6 +68,11 @@ type Config struct {
 	GrokDisableMemory       *bool  `json:"grok_disable_memory,omitempty"`
 	GrokCustomInstruction   string `json:"grok_custom_instruction,omitempty"`
 
+	// ── WorkBuddy international backend (www.workbuddy.ai) ──
+	// Overridable for self-hosted regional deployments and for tests that need a
+	// stubbed upstream. Empty means the production international host.
+	WorkBuddyBaseURL string `json:"workbuddy_base_url,omitempty"`
+
 	// ── Grok Build CLI (cli-chat-proxy.grok.com) OAuth upstream ──
 	// These fields are configurable via config.json / Redis and are deliberately
 	// NOT written into ApplyHardcoded, so they survive a persistConfig round trip.

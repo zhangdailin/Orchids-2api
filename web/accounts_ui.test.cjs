@@ -7,6 +7,7 @@ const vm = require('node:vm');
 
 function loadUI() {
   const timers = [];
+  const storage = new Map();
   // Minimal element/DOM surface: enough for tab rendering and modal wiring.
   const makeElement = (tag) => {
     const classes = new Set();
@@ -50,6 +51,7 @@ function loadUI() {
       getElementById: node,
       querySelector: node,
       createElement: makeElement,
+      createDocumentFragment: () => makeElement('fragment'),
       querySelectorAll: () => [],
       addEventListener() {},
     },
@@ -57,12 +59,21 @@ function loadUI() {
       setInterval: (fn) => { timers.push(fn); return timers.length; },
       clearInterval: () => {},
       addEventListener() {},
+      matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+      innerWidth: 1440,
+      localStorage: {
+        getItem: (key) => (storage.has(key) ? storage.get(key) : null),
+        setItem: (key, value) => storage.set(key, String(value)),
+        removeItem: (key) => storage.delete(key),
+      },
     },
+    // Immediate pacing so the auto-sync loop settles synchronously in tests.
+    setTimeout: (fn) => { fn(); return 0; },
   });
   for (const file of ['common.js', 'accounts.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/js', file), 'utf8'), context);
   }
-  return { context, node };
+  return { context, node, storage };
 }
 
 function workBuddyAccount(overrides = {}) {
@@ -77,11 +88,50 @@ function workBuddyAccount(overrides = {}) {
   };
 }
 
+test('Grok credential modes expose only their own inputs', () => {
+  const { context, node } = loadUI();
+
+  // SSO Cookie mode: paste the cookie, keep the internal Console picker hidden.
+  node('credentialType').value = 'sso';
+  context.applyTokenLabels('grok');
+  assert.equal(node('ssoCredentialGroup').hidden, false, 'SSO cookie input must be available');
+  assert.equal(node('clientCookie').required, true);
+  assert.equal(node('grokProviderGroup').hidden, true, 'the Console product entry must not be exposed');
+  assert.equal(node('grokDeviceLoginGroup').hidden, true);
+  assert.equal(node('oauthCredentialGroup').hidden, true);
+  assert.equal(node('oauthRefreshGroup').hidden, true);
+  assert.equal(node('oauthExpiresGroup').hidden, true);
+
+  // Build CLI OAuth mode: official device login only, no manual token fields.
+  node('credentialType').value = 'oauth';
+  node('accountId').value = '';
+  context.applyTokenLabels('grok');
+  assert.equal(node('grokDeviceLoginGroup').hidden, false, 'device login must be offered');
+  assert.equal(node('ssoCredentialGroup').hidden, true);
+  assert.equal(node('oauthCredentialGroup').hidden, true, 'OAuth Access Token input must be gone');
+  assert.equal(node('oauthRefreshGroup').hidden, true, 'OAuth Refresh Token input must be gone');
+  assert.equal(node('oauthExpiresGroup').hidden, true, 'expiry input must be gone');
+  assert.equal(node('grokProviderGroup').hidden, true);
+  assert.equal(node('clientCookie').required, false);
+});
+
+test('Grok Build CLI OAuth cannot be created from the form', async () => {
+  const { context, node } = loadUI();
+  node('accountType').value = 'grok';
+  node('accountId').value = '';
+  node('credentialType').value = 'oauth';
+  const notices = [];
+  context.showToast = (message) => notices.push(message);
+  context.fetch = () => { throw new Error('manual OAuth creation must not send a request'); };
+  await context.saveAccount({ preventDefault() {} });
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /官方网页登录/);
+});
+
 test('Warp exposes only official login and preserves settings editing', () => {
   const { context, node } = loadUI();
   node('credentialType').value = 'oauth';
   context.applyTokenLabels('grok');
-  assert.equal(node('oauthCredentialGroup').hidden, false);
   node('clientCookie').value = 'old-input';
   context.applyTokenLabels('warp');
   for (const id of ['ssoCredentialGroup', 'oauthCredentialGroup', 'oauthRefreshGroup', 'oauthExpiresGroup', 'grokDeviceLoginGroup', 'grokProviderGroup']) {
@@ -131,6 +181,96 @@ test('Warp save cannot submit a manual creation request', async () => {
   assert.match(notices[0], /官方网页登录/);
 });
 
+test('auto-sync refreshes stale accounts on every channel, once per page load', async () => {
+  const { context } = loadUI();
+  const stale = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+  const fresh = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+  vm.runInContext(`accounts = ${JSON.stringify([
+    // WorkBuddy: stale credit-meter snapshot.
+    { id: 1, account_type: 'workbuddy', enabled: true, email: 'wb@example.com', quota_supported: true, quota_limit: 350, quota_remaining: 100, workbuddy_quota: { synced_at: stale } },
+    // WorkBuddy: fresh snapshot, must not be re-fetched.
+    { id: 2, account_type: 'workbuddy', enabled: true, quota_supported: true, quota_limit: 350, quota_remaining: 100, workbuddy_quota: { synced_at: fresh } },
+    // Grok SSO: stale web quota window.
+    { id: 3, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', enabled: true, client_cookie: 'sso=x', grok_web_quota: { synced_at: stale } },
+    // Grok Build: stale billing snapshot.
+    { id: 4, account_type: 'grok', credential_type: 'oauth', grok_provider: 'build', enabled: true, oauth_access_token: 'a', grok_billing: { synced_at: stale } },
+    // Grok Build: fresh billing snapshot.
+    { id: 5, account_type: 'grok', credential_type: 'oauth', grok_provider: 'build', enabled: true, oauth_access_token: 'a', grok_billing: { synced_at: fresh } },
+    // Warp: no settings snapshot at all.
+    { id: 6, account_type: 'warp', enabled: true, warp_authenticated: true },
+    // Puter: no quota snapshot timestamp exists for this channel.
+    { id: 7, account_type: 'puter', enabled: true, client_cookie: 'puter-token', usage_limit: 500, usage_current: 400 },
+    // Disabled accounts are never auto-synced.
+    { id: 8, account_type: 'workbuddy', enabled: false },
+  ])}`, context);
+
+  const checked = [];
+  // Exercise the real checkAccount path with a stubbed transport: a successful
+  // sync returns the account with a fresh snapshot timestamp.
+  context.fetch = async (url) => {
+    const parts = String(url).split('/');
+    const id = Number(parts[3]);
+    if (parts[4] !== 'check') {
+      return { ok: true, status: 200, json: async () => vm.runInContext(`accounts.find(a => a.id === ${id})`, context) };
+    }
+    checked.push(id);
+    const syncedAt = new Date().toISOString();
+    const account = vm.runInContext(`accounts.find(a => a.id === ${id})`, context);
+    const updated = { ...account };
+    if (updated.account_type === 'workbuddy') updated.workbuddy_quota = { synced_at: syncedAt };
+    if (updated.account_type === 'grok') {
+      if (updated.credential_type === 'oauth') updated.grok_billing = { synced_at: syncedAt };
+      else updated.grok_web_quota = { synced_at: syncedAt };
+    }
+    return { ok: true, status: 200, json: async () => updated };
+  };
+  context.showToast = () => {};
+
+  await vm.runInContext('autoSyncStaleAccounts()', context);
+
+  // Channels with a server-side snapshot use it; the timestamp-less channels
+  // (Warp / Puter) are covered by the ledger.
+  assert.deepEqual(checked, [1, 3, 4, 6, 7]);
+
+  // A second call inside the same page load must not re-check anything.
+  checked.length = 0;
+  await vm.runInContext('autoSyncStaleAccounts()', context);
+  assert.deepEqual(checked, []);
+
+  // A reload right after a successful sync must not re-check either: the fresh
+  // snapshot timestamps and the persisted ledger both say "up to date".
+  vm.runInContext('resetAutoSyncLoadGuard()', context);
+  checked.length = 0;
+  await vm.runInContext('autoSyncStaleAccounts()', context);
+  assert.deepEqual(checked, [], 'a reload right after a sync must not re-check anything');
+
+  // Once a timestamp-less channel ages out, only that one is refreshed again.
+  vm.runInContext('accountSyncLedger.set(7, Date.now() - 31 * 60 * 1000); resetAutoSyncLoadGuard()', context);
+  checked.length = 0;
+  await vm.runInContext('autoSyncStaleAccounts()', context);
+  assert.deepEqual(checked, [7], 'only the aged-out timestamp-less account may refresh after a reload');
+});
+
+test('auto-sync retries an account whose previous attempt failed', async () => {
+  const { context } = loadUI();
+  vm.runInContext(`accounts = ${JSON.stringify([
+    { id: 1, account_type: 'workbuddy', enabled: true, quota_supported: true, quota_limit: 10, quota_remaining: 5 },
+  ])}`, context);
+
+  vm.runInContext(`globalThis.__attempts = 0;
+    globalThis.checkAccount = () => { globalThis.__attempts += 1; return Promise.resolve(globalThis.__attempts > 1); }`, context);
+
+  await vm.runInContext('autoSyncStaleAccounts()', context);
+  assert.equal(vm.runInContext('globalThis.__attempts', context), 1);
+  // A failed attempt must be retried on the next page load, not remembered as done.
+  await vm.runInContext('resetAutoSyncLoadGuard(); autoSyncStaleAccounts()', context);
+  assert.equal(vm.runInContext('globalThis.__attempts', context), 2);
+  // After it succeeds, the ledger keeps the next load from repeating it.
+  await vm.runInContext('resetAutoSyncLoadGuard(); autoSyncStaleAccounts()', context);
+  assert.equal(vm.runInContext('globalThis.__attempts', context), 2);
+});
+
 test('linked Console rows are filtered and SSO saves target the Web source', async () => {
   const { context, node } = loadUI();
   node('accountModal').classList = { add() {}, remove() {} };
@@ -144,7 +284,7 @@ test('linked Console rows are filtered and SSO saves target the Web source', asy
   context.renderPlatformTabs = () => {};
   context.renderAccounts = () => {};
   context.updateStats = () => {};
-  context.autoRefreshWarpAccounts = () => {};
+  context.autoSyncStaleAccounts = () => {};
   context.fetch = async () => ({ status: 200, json: async () => [
     { id: 42, account_type: 'grok', credential_type: 'sso', grok_provider: 'console', grok_sso_parent_id: 7, client_cookie: 'sso=internal', enabled: true },
     { id: 7, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', client_cookie: 'sso=visible', enabled: true, weight: 2 },
@@ -188,27 +328,47 @@ test('Warp settings save succeeds without submitting credentials', async () => {
   assert.deepEqual(JSON.parse(sent.options.body), { account_type: 'warp', weight: 2, enabled: true });
 });
 
-test('WorkBuddy exposes official login only for new accounts and keeps manual input optional', () => {
+test('WorkBuddy is OAuth-only in the modal: no manual credential field', () => {
   const { context, node } = loadUI();
   node('accountId').value = '';
   context.applyTokenLabels('workbuddy');
-  assert.equal(node('workbuddyLoginGroup').hidden, false);
-  assert.equal(node('puterWebLoginGroup').hidden, true);
-  assert.equal(node('warpDeviceLoginGroup').hidden, true);
+  assert.equal(node('workbuddyLoginGroup').hidden, false, 'official login must be presented');
+  assert.equal(node('ssoCredentialGroup').hidden, true, 'the manual credential field must be gone');
   assert.equal(node('clientCookie').required, false);
-  assert.match(node('tokenLabel').textContent, /WorkBuddy/);
+  assert.equal(node('clientCookie').value, '');
+  assert.equal(node('#accountForm button[type="submit"]').hidden, true,
+    'a new WorkBuddy account is created by the login flow, not by the form');
+  // Other channels keep their manual credential field.
+  context.applyTokenLabels('puter');
+  assert.equal(node('ssoCredentialGroup').hidden, false);
+  assert.equal(node('#accountForm button[type="submit"]').hidden, false);
 
-  // Editing keeps the login button: an expired authorization is renewed by
-  // signing in again instead of deleting the account.
+  // Editing keeps the login button (re-authorization) and the save button
+  // (settings), but still no credential field.
   node('accountId').value = '11';
   context.applyTokenLabels('workbuddy');
   assert.equal(node('workbuddyLoginGroup').hidden, false);
+  assert.equal(node('ssoCredentialGroup').hidden, true);
+  assert.equal(node('#accountForm button[type="submit"]').hidden, false);
 
   context.applyTokenLabels('puter');
   node('accountId').value = '';
   context.applyTokenLabels('puter');
   assert.equal(node('workbuddyLoginGroup').hidden, true);
   assert.equal(node('puterWebLoginGroup').hidden, false);
+});
+
+test('WorkBuddy creation cannot be submitted from the form', async () => {
+  const { context, node } = loadUI();
+  node('accountType').value = 'workbuddy';
+  node('accountId').value = '';
+  node('clientCookie').value = 'refresh-token-typed-anyway';
+  const notices = [];
+  context.showToast = (message) => notices.push(message);
+  context.fetch = () => { throw new Error('manual WorkBuddy creation must not send a request'); };
+  await context.saveAccount({ preventDefault() {} });
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /官方网页登录/);
 });
 
 test('opening the WorkBuddy modal never starts a login on its own', () => {
@@ -249,6 +409,8 @@ test('WorkBuddy edits may keep the stored credential and never display the refre
   node('accountType').value = 'workbuddy';
   node('accountId').value = '11';
   node('enabled').checked = true;
+  // The credential field is hidden for this channel, so an edit submits no
+  // client_cookie at all.
   node('clientCookie').value = '';
   let sent;
   context.fetch = async (url, options) => { sent = { url, options }; return { ok: true }; };
@@ -381,7 +543,7 @@ test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login, ne
   assert.equal(node('warpDeviceLoginGroup').hidden, true, 'warp login must stay hidden');
   assert.equal(node('grokDeviceLoginGroup').hidden, true, 'grok login must stay hidden');
   assert.equal(node('puterWebLoginGroup').hidden, true, 'puter login must stay hidden');
-  assert.equal(node('ssoCredentialGroup').hidden, false, 'manual credential field must stay available');
+  assert.equal(node('ssoCredentialGroup').hidden, true, 'workbuddy is OAuth-only, no manual field');
 });
 
 test('every platform tab maps to its own provider login surface', () => {
@@ -392,10 +554,10 @@ test('every platform tab maps to its own provider login surface', () => {
   context.renderPlatformTabs();
 
   const expectations = {
-    warp: { warpDeviceLoginGroup: false, workbuddyLoginGroup: true, puterWebLoginGroup: true },
-    puter: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, puterWebLoginGroup: false },
-    workbuddy: { warpDeviceLoginGroup: true, workbuddyLoginGroup: false, puterWebLoginGroup: true },
-    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, puterWebLoginGroup: true },
+    warp: { warpDeviceLoginGroup: false, workbuddyLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
+    puter: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, puterWebLoginGroup: false, ssoCredentialGroup: false },
+    workbuddy: { warpDeviceLoginGroup: true, workbuddyLoginGroup: false, puterWebLoginGroup: true, ssoCredentialGroup: true },
+    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: false },
   };
   for (const [platform, expected] of Object.entries(expectations)) {
     node('accountId').value = '';

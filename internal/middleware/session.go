@@ -166,6 +166,18 @@ func APIKeyAuth(enabled func() bool, validate APIKeyValidator, next http.Handler
 	}
 }
 
+// WithAPIKeyPrincipalForTest attaches a validated principal to a context so tests
+// can exercise allowlist-dependent handlers without running the auth middleware.
+func WithAPIKeyPrincipalForTest(ctx context.Context, principal *APIKeyPrincipal) context.Context {
+	return context.WithValue(ctx, apiKeyPrincipalContextKey{}, principal)
+}
+
+// WithAPIKeyFingerprintForTest attaches a fingerprint the way the middleware
+// would, so ownership checks behave identically in tests.
+func WithAPIKeyFingerprintForTest(ctx context.Context, fingerprint string) context.Context {
+	return context.WithValue(ctx, apiKeyFingerprintContextKey{}, fingerprint)
+}
+
 func writeAPIKeyError(w http.ResponseWriter, status int, message, code string) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	w.Header().Set("Content-Type", "application/json")

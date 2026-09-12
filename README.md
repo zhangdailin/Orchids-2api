@@ -167,8 +167,9 @@ curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 - 业务错误在 200 信封内返回：`6004` 为该模型频率限制（账号其它模型仍可用），`12153` 为会话失效需重新登录
 - 账号凭据只存放于 `workbuddy_access_token` / `workbuddy_refresh_token` 专用字段，refreshToken 不下发到管理页面；Keycloak 每次刷新都会轮换 refreshToken，服务器自动持久化新值
 - **额度（真实计量）**：账号状态同步会调用 `POST /v2/billing/meter/get-user-resource`（`p_tcaca`）。账号表格里的「等级」显示上游计量包名（如 `Free Plan Subscription` / `Bonus Pack`），「配额」显示当前周期剩余/上限（如 `147.28 / 350`，上游支持小数），并给出周期重置时间；「调用」在无请求计数的该通道下显示计量已消耗额度。多个计量包会按同一周期聚合
-- 「Token」列对 WorkBuddy 显示登录邮箱（桌面端昵称即邮箱）+ accessToken 尾部，方便区分账号
-- 手填方式仍保留：可直接粘贴桌面端会话 `refreshToken`，或整段 `<sharedDataPath>/auth/workbuddy-desktop-ai.info` JSON
+- `quota_*` 字段合并进所有账号响应（列表/创建/编辑/检查）
+- **账号页自动同步**：打开/刷新账号管理页时，会对「上次同步超过 30 分钟」的启用账号自动跑一次账号检查（顺序 + 200ms 间隔，结果逐行刷新），**不再需要逐个手点 Sync**。判断依据优先用渠道自带的快照时间（WorkBuddy `workbuddy_quota.synced_at`、Grok `grok_billing.synced_at` / `grok_web_quota.synced_at` / `grok_models_synced_at`）；Warp 与 Puter 这两个渠道不上报快照时间，则用浏览器本地账本（`localStorage` 的 `orchids_account_sync_v1`）记录上次成功同步时间。同步失败不会写入账本，下次打开页面会重试- 「账号 / 邮箱」列对 WorkBuddy 显示登录邮箱（由 accessToken 的 Keycloak claims 推导，官方登录与手填会话 JSON 一致）
+- 手填方式仅保留在 API 层（用于迁移/脚本化导入）：`POST /api/accounts` 仍接受 `client_cookie` 里的会话 `refreshToken` 或整段 auth JSON；管理页面不再暴露该通道的凭证输入框
 
 当前种子型号（`cli` 白名单，20 个）：`default-model`、`fast-model`、`balanced-model`、`primary-model`、`deep-model`、`deepseek-v4.1-flash`、`gpt-6-astra`、`hy4-preview-f`、`hy3`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4`、`gpt-5.3-codex`、`gemini-3.5-flash`、`glm-5.3`、`glm-5.2`、`kimi-k3`、`kimi-k2.6`。
 

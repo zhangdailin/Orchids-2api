@@ -265,22 +265,32 @@ func (a *API) buildWorkBuddyAccountFromCredentials(ctx context.Context, loginID 
 	client := newWorkBuddyLoginClient(acc, a.config.Load())
 	defer client.Close()
 
+	// The access-token JWT already proves the identity; the profile endpoint only
+	// adds the display nickname, so its failure is not fatal.
+	resolved := workbuddy.ResolveCredentials(acc)
 	if uid, nickname, email, err := client.FetchAccountIdentity(ctx, acc.WorkBuddyAccessToken, state); err == nil {
-		if uid != "" {
+		acc.Name = strings.TrimSpace(nickname)
+		if acc.WorkBuddyUID == "" {
 			acc.WorkBuddyUID = uid
 		}
-		if nickname != "" {
-			acc.Name = nickname
-		}
-		if email != "" {
+		if resolved.Email == "" && email != "" {
 			acc.Email = email
 		}
 	}
-	if acc.Name == "" || acc.Name == "workbuddy-login" {
-		if acc.Email != "" {
+	if acc.WorkBuddyUID == "" {
+		acc.WorkBuddyUID = resolved.UID
+	}
+	if strings.TrimSpace(acc.Email) == "" {
+		acc.Email = resolved.Email
+	}
+	if strings.TrimSpace(acc.Name) == "" {
+		switch {
+		case strings.TrimSpace(acc.Email) != "":
 			acc.Name = acc.Email
-		} else if len(acc.WorkBuddyUID) >= 8 {
+		case len(acc.WorkBuddyUID) >= 8:
 			acc.Name = "workbuddy-" + acc.WorkBuddyUID[:8]
+		default:
+			acc.Name = "workbuddy-login"
 		}
 	}
 

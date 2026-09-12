@@ -175,6 +175,9 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
+	if h != nil && h.chatRequestObserver != nil {
+		h.chatRequestObserver(r)
+	}
 	var req ChatCompletionsRequest
 	if !decodeJSONBody(w, r, &req) {
 		return

@@ -40,6 +40,11 @@ type Handler struct {
 	replay       map[string]reasoningReplayEntry
 	instanceID   string
 	auditLogger  audit.Logger
+
+	// chatRequestObserver, when set, observes the request the internal protocol
+	// bridges (Responses / Messages) hand to the chat pipeline. Test-only hook:
+	// nil in production.
+	chatRequestObserver func(*http.Request)
 }
 
 type chatAccountSession struct {

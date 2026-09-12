@@ -78,14 +78,18 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 
 	proxyFunc := http.ProxyFromEnvironment
 	proxyKey := "direct"
+	baseURL := DefaultBaseURL
 	if cfg != nil {
 		proxyFunc = util.ProxyFuncFromConfig(cfg)
 		proxyKey = util.GenerateProxyKeyFromConfig(cfg)
+		if override := strings.TrimSpace(cfg.WorkBuddyBaseURL); override != "" {
+			baseURL = strings.TrimRight(override, "/")
+		}
 	}
 
 	return &Client{
 		httpClient:     util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
-		baseURL:        DefaultBaseURL,
+		baseURL:        baseURL,
 		requestTimeout: timeout,
 		account:        acc,
 		creds:          ResolveCredentials(acc),

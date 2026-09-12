@@ -245,6 +245,13 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	updated.WarpMonthlyRemaining = acc.WarpMonthlyRemaining
 	updated.WarpBonusRemaining = acc.WarpBonusRemaining
 	updated.StatusCode = acc.StatusCode
+	// The reason describes the CURRENT status only. It must never outlive the
+	// status it explains, or a recovered account keeps showing a stale error.
+	if strings.TrimSpace(acc.StatusCode) == "" {
+		updated.StatusMessage = ""
+	} else {
+		updated.StatusMessage = acc.StatusMessage
+	}
 	updated.LastAttempt = acc.LastAttempt
 	updated.QuotaResetAt = acc.QuotaResetAt
 	updated.MissingThinkingStrikes = acc.MissingThinkingStrikes

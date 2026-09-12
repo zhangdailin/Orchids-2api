@@ -151,9 +151,23 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 		if err != nil {
 			if grok.IsCLIPermanentOAuthError(err) {
 				acc.StatusCode = "401"
+				acc.StatusMessage = "上游已不接受该 OAuth 授权（refresh token 被拒绝），需要重新登录"
 				acc.LastAttempt = time.Now()
+				// Distinguish "the upstream invalidated this grant" from "our record
+				// was wiped": both surface as 401, but only the former is expected
+				// when a second login for the same xAI user rotates/retires the old
+				// refresh token.
+				slog.Warn("Grok CLI refresh token was rejected by the upstream; this account needs a new login",
+					"account_id", acc.ID,
+					"account_name", acc.Name,
+					"email", acc.Email,
+					"team_id", acc.TeamID,
+					"has_refresh_token", strings.TrimSpace(acc.OAuthRefreshToken) != "",
+					"token_fingerprint", grok.TokenFingerprint(acc.OAuthRefreshToken),
+					"error", err)
+			} else {
+				slog.Warn("Auto refresh grok cli token failed", "account_id", acc.ID, "error", err)
 			}
-			slog.Warn("Auto refresh grok cli token failed", "account_id", acc.ID, "error", err)
 			if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
 				slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)
 			}
@@ -228,6 +242,7 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 					continue
 				}
 				acc.StatusCode = statusCode
+				acc.StatusMessage = "上游拒绝该 SSO Cookie（会话失效或账号被限制），需要重新登录"
 				acc.LastAttempt = time.Now()
 				if err := s.UpdateAccount(ctx, acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
@@ -259,6 +274,7 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 						continue
 					}
 					acc.StatusCode = statusCode
+					acc.StatusMessage = "上游拒绝该 SSO Cookie（会话失效或账号被限制），需要重新登录"
 					acc.LastAttempt = time.Now()
 					if err := s.UpdateAccount(ctx, acc); err != nil {
 						slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
@@ -275,6 +291,7 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 				}
 				if acc.StatusCode == "500" || acc.StatusCode == "404" {
 					acc.StatusCode = ""
+					acc.StatusMessage = ""
 					acc.LastAttempt = time.Time{}
 					if err := s.UpdateAccount(ctx, acc); err != nil {
 						slog.Warn("Auto refresh token: clear stale grok status failed", "account_id", acc.ID, "error", err)
@@ -304,6 +321,7 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 			grok.ApplyWebQuotaInfo(acc, windows)
 			if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
 				acc.StatusCode = ""
+				acc.StatusMessage = ""
 				acc.LastAttempt = time.Time{}
 				acc.QuotaResetAt = time.Time{}
 			}
