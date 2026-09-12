@@ -175,6 +175,6 @@ func (h *Handler) auditAttemptDiagnostic(ctx context.Context, acc *store.Account
 	if acc != nil {
 		accountID = acc.ID
 	}
-	h.auditLogger.Log(ctx, audit.Event{RequestID: middleware.GetTraceID(ctx), APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Action: "grok_upstream_attempt", Channel: "grok", Provider: provider, Attempt: attempt, Duration: time.Since(started).Milliseconds(), Status: status, Metadata: metadata,
+	h.auditLogger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetTraceID(ctx), APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Action: "grok_upstream_attempt", Channel: "grok", Provider: provider, Attempt: attempt, Duration: time.Since(started).Milliseconds(), Status: status, Metadata: metadata,
 		InputTokens: interfaceToInt(usage["input_tokens"]), OutputTokens: interfaceToInt(usage["output_tokens"]), CachedInputTokens: interfaceToInt(inputDetails["cached_tokens"]), ReasoningTokens: interfaceToInt(outputDetails["reasoning_tokens"])})
 }

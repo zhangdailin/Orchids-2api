@@ -117,6 +117,10 @@ func ClassifyAccountStatus(errStr string) string {
 		strings.Contains(lower, "signed out") ||
 		strings.Contains(lower, "signed_out") ||
 		strings.Contains(lower, "unauthorized") ||
+		// The upstream session endpoint answers {"status":"unauthenticated"}
+		// without a status code; that body is a refused credential, not a
+		// transient failure.
+		strings.Contains(lower, "unauthenticated") ||
 		strings.Contains(lower, "no active sessions found"):
 		return "401"
 	case HasExplicitHTTPStatus(lower, "403") || strings.Contains(lower, "forbidden"):

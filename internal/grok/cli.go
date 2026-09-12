@@ -164,6 +164,10 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 				cooldownUntil := time.Now().Add(meta.RetryAfter)
 				if meta.RetryAfter > 0 && (acc.QuotaResetAt.IsZero() || cooldownUntil.After(acc.QuotaResetAt)) {
 					acc.QuotaResetAt = cooldownUntil
+					// The throttle is scoped to the model that was asked for: the
+					// account's OTHER models stay selectable, so the verdict is
+					// recorded per model instead of on StatusCode.
+					store.RecordModelCooldown(acc, modelID, cooldownUntil)
 					if c.oauth != nil && c.oauth.store != nil && acc.ID != 0 {
 						if err := c.oauth.store.UpdateAccount(ctx, acc); err != nil {
 							slog.Warn("grok cli: failed to persist team cooldown diagnostic", "account_id", acc.ID, "error", err)

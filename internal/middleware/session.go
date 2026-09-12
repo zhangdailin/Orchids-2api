@@ -218,12 +218,16 @@ func writeBearerUnauthorized(w http.ResponseWriter, message string) {
 }
 
 func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next http.HandlerFunc) http.HandlerFunc {
+	// Every admin entrance — browser session, static token, basic auth — passes
+	// through here, which makes it the one place that can journal administrative
+	// changes without each handler remembering to.
+	audited := adminSessionAudit(next)
 	return func(w http.ResponseWriter, r *http.Request) {
 		adminPass, adminToken := credentials()
 
 		cookie, err := r.Cookie("session_token")
 		if err == nil && auth.ValidateSessionToken(cookie.Value) {
-			next(w, r)
+			audited(w, r)
 			return
 		}
 
@@ -233,7 +237,7 @@ func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next 
 		for _, secret := range secrets {
 			if secret != "" && (util.SecureCompare(authHeader, "Bearer "+secret) ||
 				util.SecureCompare(authHeader, secret) || util.SecureCompare(adminHeader, secret)) {
-				next(w, r)
+				audited(w, r)
 				return
 			}
 		}
@@ -248,7 +252,7 @@ func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next 
 			}
 			for _, secret := range secrets {
 				if secret != "" && util.SecureCompare(queryKey, secret) {
-					next(w, r)
+					audited(w, r)
 					return
 				}
 			}
@@ -256,7 +260,7 @@ func SessionAuthDynamic(credentials func() (adminPass, adminToken string), next 
 
 		_, pass, ok := r.BasicAuth()
 		if ok && util.SecureCompare(pass, adminPass) {
-			next(w, r)
+			audited(w, r)
 			return
 		}
 

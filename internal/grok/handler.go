@@ -130,7 +130,7 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 		accountID = acc.ID
 		provider = ProviderForAccount(acc)
 	}
-	h.auditLogger.Log(ctx, audit.Event{RequestID: middleware.GetTraceID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
+	h.auditLogger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetTraceID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
 		AccountID: accountID, Model: req.Model, Channel: "grok", Provider: provider, Status: status, Error: message, Duration: duration, Metadata: metadata,
 		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]),
 		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])})
@@ -513,6 +513,39 @@ func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, 
 	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, poolCandidates, nil)
 }
 
+// modelScopeKey carries the model a request is for, so account selection can
+// skip an account that is cooling down for THAT model while still using it for
+// the account's other models.
+type modelScopeKey struct{}
+
+// WithRequestModel records the model on the request context for account
+// selection. It is threaded through the existing context so no selector
+// signature has to change.
+func WithRequestModel(ctx context.Context, modelID string) context.Context {
+	normalized := normalizeModelID(modelID)
+	if normalized == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, modelScopeKey{}, normalized)
+}
+
+func requestModelFromContext(ctx context.Context) string {
+	model, _ := ctx.Value(modelScopeKey{}).(string)
+	return model
+}
+
+// accountUsableForModel reports whether the account may serve the current
+// request's model. The model-scoped cooldown is the persisted verdict of a
+// per-model failure: a throttled model must not remove the account's other
+// models from the pool.
+func accountUsableForModel(ctx context.Context, acc *store.Account) bool {
+	model := requestModelFromContext(ctx)
+	if model == "" {
+		return true
+	}
+	return store.ModelCooldownRemaining(acc, model, time.Now()) == 0
+}
+
 func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.Context, excludeIDs []int64, poolCandidates []string, extraFilter func(*store.Account) bool) (*chatAccountSession, error) {
 	if h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
@@ -526,6 +559,9 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 	// Console SSO are selected by their own provider-specific selectors.
 	ssoFilter := func(acc *store.Account) bool {
 		if !isGrokWebAccount(acc) {
+			return false
+		}
+		if !accountUsableForModel(ctx, acc) {
 			return false
 		}
 		return extraFilter == nil || extraFilter(acc)

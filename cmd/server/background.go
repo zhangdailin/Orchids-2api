@@ -8,10 +8,12 @@ import (
 	"sync"
 	"time"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -41,8 +43,10 @@ func preserveLatestAccountStatus(ctx context.Context, s *store.Store, acc *store
 
 var (
 	grokRefreshMu           sync.Mutex
-	grokRefreshOffset       int
 	grokRefreshBackoffUntil time.Time
+	// grokRefreshIntervalMin is the freshness window a verdict is expected to
+	// hold for; the refresh loop sets it from the configured cadence.
+	grokRefreshIntervalMin int
 )
 
 const (
@@ -53,7 +57,7 @@ const (
 	// rejected out of the rotation. Re-asking once per tick burns a slot of the
 	// per-cycle budget that a healthy account needs, and the answer cannot change
 	// until the operator installs a new cookie (which resets LastAttempt).
-	grokRefreshDeadCredentialBackoff = 30 * time.Minute
+	grokRefreshDeadCredentialBackoff = accountpolicy.CredentialReverify
 )
 
 // grokRefreshDeadCredential reports whether an account carries a credential the
@@ -62,10 +66,12 @@ func grokRefreshDeadCredential(acc *store.Account, now time.Time) bool {
 	if acc == nil || strings.TrimSpace(acc.StatusCode) != "401" {
 		return false
 	}
+	// A 401 without a verdict stamp has never been checked against a live
+	// session, so it is not quarantined.
 	if acc.VerifiedAt.IsZero() {
 		return false
 	}
-	return now.Sub(acc.VerifiedAt) < grokRefreshDeadCredentialBackoff
+	return !accountpolicy.NeedsReverify(acc, now)
 }
 
 type grokRefreshCandidate struct {
@@ -88,7 +94,18 @@ func isUnverifiedGrokSSOAccount(acc *store.Account) bool {
 	if grok.ProviderForAccount(acc) != grok.ProviderWeb {
 		return false
 	}
-	return strings.TrimSpace(acc.StatusCode) == "" && acc.VerifiedAt.IsZero()
+	return accountpolicy.NeedsFirstVerdict(acc)
+}
+
+// firstCandidateAccount returns a representative account for a credential group,
+// so a verdict can be classified with the right provider context.
+func firstCandidateAccount(candidate grokRefreshCandidate) *store.Account {
+	for _, acc := range candidate.accounts {
+		if acc != nil {
+			return acc
+		}
+	}
+	return nil
 }
 
 // grokCandidateAccountIDs lists the account rows a credential group covers, so
@@ -150,22 +167,75 @@ func buildGrokRefreshCandidates(accounts []*store.Account) []grokRefreshCandidat
 	return candidates
 }
 
-func nextGrokRefreshBatch(candidates []grokRefreshCandidate, max int) []grokRefreshCandidate {
-	if len(candidates) == 0 || max <= 0 {
+// grokRefreshHub hands out one lease per account so the same credential is never
+// refreshed twice at once. A second, older snapshot winning the write-back is
+// what could reinstate a status that had just been cleared.
+var grokRefreshHub = refreshqueue.NewHub()
+
+// planGrokRefreshCycle picks the refresh work for one cycle. It replaces the old
+// global rotation offset: tasks are ordered by how long they have been due, the
+// most overdue first, and an account already being refreshed is never scheduled
+// again. Due time is derived from the verdict stamp — never verified counts as
+// infinitely overdue, so a brand new account cannot sit behind the rotation.
+func planGrokRefreshCycle(candidates []grokRefreshCandidate) []grokRefreshCandidate {
+	if len(candidates) == 0 {
 		return nil
 	}
-	max = min(max, len(candidates))
-
-	grokRefreshMu.Lock()
-	start := grokRefreshOffset % len(candidates)
-	grokRefreshOffset += max
-	grokRefreshMu.Unlock()
-
-	out := make([]grokRefreshCandidate, 0, max)
-	for i := 0; i < max; i++ {
-		out = append(out, candidates[(start+i)%len(candidates)])
+	now := time.Now()
+	tasks := make([]refreshqueue.Task, 0, len(candidates))
+	for _, candidate := range candidates {
+		acc := firstCandidateAccount(candidate)
+		if acc == nil {
+			continue
+		}
+		due := grokRefreshDue(acc, now)
+		tasks = append(tasks, refreshqueue.Task{
+			AccountID: acc.ID,
+			Channel:   "grok",
+			Due:       due,
+			Stale:     acc.VerifiedAt.IsZero(),
+			Payload:   candidate,
+		})
+	}
+	planned := refreshqueue.Plan(tasks, grokRefreshHub, maxGrokRefreshPerCycle)
+	out := make([]grokRefreshCandidate, 0, len(planned))
+	for _, task := range planned {
+		candidate, ok := task.Payload.(grokRefreshCandidate)
+		if !ok {
+			continue
+		}
+		out = append(out, candidate)
 	}
 	return out
+}
+
+// grokRefreshDue reports how overdue an account's refresh is. A larger value is
+// more urgent; an account that has never been verified is the most urgent of all.
+func grokRefreshDue(acc *store.Account, now time.Time) time.Duration {
+	if acc == nil {
+		return 0
+	}
+	if acc.VerifiedAt.IsZero() {
+		// "No verdict" is not a health state: treat it as maximally overdue.
+		return 100 * 365 * 24 * time.Hour
+	}
+	interval := time.Duration(grokRefreshIntervalMinutes()) * time.Minute
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+	return now.Sub(acc.VerifiedAt.Add(interval))
+}
+
+// grokRefreshIntervalMinutes is the freshness window a verdict is expected to
+// hold for. It mirrors the configured refresh cadence, so "due" means "older than
+// one cycle" rather than an arbitrary constant.
+func grokRefreshIntervalMinutes() int {
+	grokRefreshMu.Lock()
+	defer grokRefreshMu.Unlock()
+	if grokRefreshIntervalMin <= 0 {
+		return 30
+	}
+	return grokRefreshIntervalMin
 }
 
 func grokRefreshInBackoff(now time.Time) bool {
@@ -296,7 +366,7 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 		return
 	}
 
-	batch := nextGrokRefreshBatch(buildGrokRefreshCandidates(accounts), maxGrokRefreshPerCycle)
+	batch := planGrokRefreshCycle(buildGrokRefreshCandidates(accounts))
 	if len(batch) == 0 {
 		return
 	}
@@ -308,7 +378,24 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 			return
 		case <-time.After(grokRefreshPause):
 		}
+		refreshGrokCandidate(ctx, cfg, s, grokClient, candidate)
+	}
+}
 
+// refreshGrokCandidate refreshes one credential group while holding the account's
+// lease, so a concurrent manual refresh cannot write an older snapshot over this
+// one and reinstate a status that was just cleared.
+func refreshGrokCandidate(ctx context.Context, cfg *config.Config, s *store.Store, grokClient *grok.Client, candidate grokRefreshCandidate) {
+	leaseID := int64(0)
+	if acc := firstCandidateAccount(candidate); acc != nil {
+		leaseID = acc.ID
+		if !grokRefreshHub.TryAcquire(leaseID) {
+			slog.Debug("Auto refresh grok: account already refreshing; merged task", "account_id", leaseID)
+			return
+		}
+		defer grokRefreshHub.Release(leaseID)
+	}
+	{
 		// Session identity is the authentication check. Quota/model availability
 		// is deliberately handled separately so a retired quota model cannot mark
 		// a valid SSO account as HTTP 500. A single rejection is re-asked before it
@@ -317,28 +404,23 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 		// the pool until an operator notices.
 		identity, identityErr := retryGrokRefreshAttempt(ctx, grokClient, candidate.token)
 		if identityErr != nil && grok.IsAuthenticationFailure(identityErr) {
-			statusCode := apperrors.ClassifyAccountStatus(identityErr.Error())
-			if statusCode == "" {
-				statusCode = "401"
-			}
+			verdict := accountpolicy.Classify(firstCandidateAccount(candidate), identityErr, candidate.model)
 			for _, acc := range candidate.accounts {
 				if acc == nil {
 					continue
 				}
-				acc.StatusCode = statusCode
-				acc.StatusMessage = "上游拒绝该 SSO Cookie（会话已失效，或被同账号的另一次登录替换），请重新登录该 xAI 账号并抓取新的 Cookie"
-				acc.LastAttempt = time.Now()
-				acc.VerifiedAt = acc.LastAttempt
+				verdict.Apply(acc)
 				if err := s.UpdateAccount(ctx, acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 				}
 			}
 			slog.Warn("Auto refresh grok SSO authentication failed",
-				"status", statusCode,
+				"status", verdict.Status,
+				"needs_login", verdict.NeedsLogin,
 				"account_ids", grokCandidateAccountIDs(candidate.accounts),
 				"token_fingerprint", grok.TokenFingerprint(candidate.token),
 				"error", identityErr)
-			continue
+			return
 		}
 		if identityErr != nil {
 			slog.Debug("Auto refresh grok: session identity unavailable; continuing quota sync", "error", identityErr)
@@ -355,27 +437,23 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 				return
 			}
 			if grok.IsAuthenticationFailure(quotaErr) {
-				if statusCode == "" {
-					statusCode = "401"
-				}
+				verdict := accountpolicy.Classify(firstCandidateAccount(candidate), quotaErr, candidate.model)
 				for _, acc := range candidate.accounts {
 					if acc == nil {
 						continue
 					}
-					acc.StatusCode = statusCode
-					acc.StatusMessage = "上游拒绝该 SSO Cookie（会话已失效，或被同账号的另一次登录替换），请重新登录该 xAI 账号并抓取新的 Cookie"
-					acc.LastAttempt = time.Now()
-					acc.VerifiedAt = acc.LastAttempt
+					verdict.Apply(acc)
 					if err := s.UpdateAccount(ctx, acc); err != nil {
 						slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 					}
 				}
 				slog.Warn("Auto refresh grok SSO quota rejected the cookie",
-					"status", statusCode,
+					"status", verdict.Status,
+					"needs_login", verdict.NeedsLogin,
 					"account_ids", grokCandidateAccountIDs(candidate.accounts),
 					"token_fingerprint", grok.TokenFingerprint(candidate.token),
 					"error", quotaErr)
-				continue
+				return
 			}
 			// 404/model-unavailable and malformed quota responses are not auth
 			// failures. Clear stale diagnostic 500/404 markers so a previous
@@ -385,9 +463,7 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 					continue
 				}
 				if acc.StatusCode == "500" || acc.StatusCode == "404" {
-					acc.StatusCode = ""
-					acc.StatusMessage = ""
-					acc.LastAttempt = time.Time{}
+					accountpolicy.Success(time.Now()).Apply(acc)
 					if err := s.UpdateAccount(ctx, acc); err != nil {
 						slog.Warn("Auto refresh token: clear stale grok status failed", "account_id", acc.ID, "error", err)
 					}
@@ -395,7 +471,7 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 			}
 			// Keep the account active and retain its last quota snapshot.
 			slog.Warn("Auto refresh grok: Web quota unavailable; account remains active", "error", quotaErr)
-			continue
+			return
 		}
 
 		for _, acc := range candidate.accounts {
@@ -415,12 +491,14 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 			}
 			grok.ApplyWebQuotaInfo(acc, windows)
 			// The credential answered: record the verdict so the account leaves the
-			// first-verification queue and stops being treated as unknown.
-			acc.VerifiedAt = time.Now()
-			if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
-				acc.StatusCode = ""
-				acc.StatusMessage = ""
-				acc.LastAttempt = time.Time{}
+			// first-verification queue and stops being treated as unknown. A quota
+			// reset window still in the future keeps its reset stamp.
+			keepQuotaReset := !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt)
+			quotaResetAt := acc.QuotaResetAt
+			accountpolicy.Success(time.Now()).Apply(acc)
+			if keepQuotaReset {
+				acc.QuotaResetAt = quotaResetAt
+			} else {
 				acc.QuotaResetAt = time.Time{}
 			}
 			if err := s.UpdateAccount(ctx, acc); err != nil {
@@ -438,6 +516,9 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 	if interval <= 0 {
 		interval = 30 * time.Minute
 	}
+	grokRefreshMu.Lock()
+	grokRefreshIntervalMin = int(interval.Minutes())
+	grokRefreshMu.Unlock()
 	slog.Debug("Auto refresh token enabled", "interval", interval.String())
 
 	refreshAccounts := func() {

@@ -1092,7 +1092,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if !sh.hasReturn {
 		sh.finishResponse("end_turn")
 	}
-
 	if !isStream {
 		stopReason := sh.finalStopReason
 		if stopReason == "" {
@@ -1172,7 +1171,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			status = "error"
 		}
 		h.auditLogger.Log(r.Context(), audit.Event{
+			// One journal schema for every channel: the log centre must be able to
+			// compare a Grok request with a Warp request on the same fields.
+			Kind:      audit.KindRequest,
+			RequestID: middleware.GetTraceID(r.Context()),
 			Action:    "chat_request",
+			APIKeyID:  middleware.APIKeyID(r.Context()),
 			AccountID: accountID,
 			Model:     req.Model,
 			Channel:   channel,
@@ -1181,10 +1185,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			Duration:  time.Since(startTime).Milliseconds(),
 			Status:    status,
 			Metadata: map[string]interface{}{
-				"input_tokens":  sh.inputTokens,
-				"output_tokens": sh.outputTokens,
-				"stream":        isStream,
+				"stream": isStream,
 			},
+			InputTokens:  sh.inputTokens,
+			OutputTokens: sh.outputTokens,
 		})
 	}
 }

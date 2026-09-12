@@ -174,6 +174,68 @@ func (s *redisStore) CreateAccount(ctx context.Context, acc *Account) error {
 	return err
 }
 
+// mergeModelCooldowns combines two per-model cooldown maps, keeping the later
+// deadline for each model and discarding entries that have already expired.
+func mergeModelCooldowns(existing, incoming map[string]time.Time) map[string]time.Time {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	now := time.Now()
+	merged := make(map[string]time.Time, len(existing)+len(incoming))
+	for _, source := range []map[string]time.Time{existing, incoming} {
+		for model, until := range source {
+			name := strings.TrimSpace(model)
+			if name == "" || until.IsZero() || !until.After(now) {
+				continue
+			}
+			if current, ok := merged[name]; !ok || until.After(current) {
+				merged[name] = until
+			}
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
+// RecordModelCooldown marks one model of an account as throttled until the given
+// deadline. Only the named model is affected: the account stays in the pool for
+// its other models, which is the difference between "this model is hot" and
+// "this account is dead".
+func RecordModelCooldown(acc *Account, model string, until time.Time) {
+	if acc == nil || until.IsZero() || !until.After(time.Now()) {
+		return
+	}
+	name := strings.TrimSpace(model)
+	if name == "" {
+		return
+	}
+	if acc.ModelCooldowns == nil {
+		acc.ModelCooldowns = map[string]time.Time{}
+	}
+	if current, ok := acc.ModelCooldowns[name]; !ok || until.After(current) {
+		acc.ModelCooldowns[name] = until
+	}
+}
+
+// ModelCooldownRemaining reports how long the account is throttled for one model,
+// or zero when it may be used. It is the single reader of ModelCooldowns, so the
+// pool and the request path agree on what "cooling down" means.
+func ModelCooldownRemaining(acc *Account, model string, now time.Time) time.Duration {
+	if acc == nil || len(acc.ModelCooldowns) == 0 {
+		return 0
+	}
+	until, ok := acc.ModelCooldowns[strings.TrimSpace(model)]
+	if !ok || until.IsZero() {
+		return 0
+	}
+	if !until.After(now) {
+		return 0
+	}
+	return until.Sub(now)
+}
+
 func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
@@ -315,6 +377,10 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	if !acc.GrokWebQuota.SyncedAt.IsZero() {
 		updated.GrokWebQuota = acc.GrokWebQuota
 	}
+	// Per-model cooldowns are merged rather than replaced: an update written by a
+	// path that did not touch them (a request counter, a quota refresh) must not
+	// drop a cooldown another path just recorded.
+	updated.ModelCooldowns = mergeModelCooldowns(existing.ModelCooldowns, acc.ModelCooldowns)
 	// WorkBuddy credentials are rotated by the upstream (Keycloak rotates the
 	// refresh token on every renewal) and account updates are frequently
 	// partial, so an empty value means "keep what is stored", never "erase".

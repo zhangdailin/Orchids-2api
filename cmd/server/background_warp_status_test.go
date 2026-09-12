@@ -99,34 +99,46 @@ func TestBuildGrokRefreshCandidates_ExcludesLinkedConsoleAccounts(t *testing.T) 
 	}
 }
 
-func TestNextGrokRefreshBatch_RotatesAndCapsBatch(t *testing.T) {
-	grokRefreshMu.Lock()
-	oldOffset := grokRefreshOffset
-	grokRefreshOffset = 0
-	grokRefreshMu.Unlock()
-	t.Cleanup(func() {
-		grokRefreshMu.Lock()
-		grokRefreshOffset = oldOffset
-		grokRefreshMu.Unlock()
-	})
+// TestPlanGrokRefreshCycle_OrdersByDueTimeAndNeverSkipsUnverified replaces the
+// old rotation-offset expectations: urgent work is chosen by due time, and an
+// account with no verdict is the most urgent because "never checked" is not a
+// health state.
+func TestPlanGrokRefreshCycle_OrdersByDueTimeAndNeverSkipsUnverified(t *testing.T) {
+	now := time.Now()
+	fresh := &store.Account{ID: 1, AccountType: "grok", CredentialType: "sso", GrokProvider: "web", ClientCookie: "sso=a", Enabled: true, VerifiedAt: now.Add(-time.Minute)}
+	stale := &store.Account{ID: 2, AccountType: "grok", CredentialType: "sso", GrokProvider: "web", ClientCookie: "sso=b", Enabled: true, VerifiedAt: now.Add(-4 * time.Hour)}
+	never := &store.Account{ID: 3, AccountType: "grok", CredentialType: "sso", GrokProvider: "web", ClientCookie: "sso=c", Enabled: true}
 
-	candidates := []grokRefreshCandidate{
-		{token: "a"},
-		{token: "b"},
-		{token: "c"},
-		{token: "d"},
+	candidates := buildGrokRefreshCandidates([]*store.Account{fresh, stale, never})
+	planned := planGrokRefreshCycle(candidates)
+	if len(planned) != 3 {
+		t.Fatalf("planned = %d, want all three (fresh work is due last, not skipped)", len(planned))
 	}
+	if firstCandidateAccount(planned[0]).ID != 3 {
+		t.Fatalf("first plan = %d, want the never-verified account (id 3)", firstCandidateAccount(planned[0]).ID)
+	}
+	if firstCandidateAccount(planned[1]).ID != 2 {
+		t.Fatalf("second plan = %d, want the most overdue verified account (id 2)", firstCandidateAccount(planned[1]).ID)
+	}
+}
 
-	first := nextGrokRefreshBatch(candidates, 2)
-	if len(first) != 2 || first[0].token != "a" || first[1].token != "b" {
-		t.Fatalf("first batch=%+v want a,b", first)
+// TestPlanGrokRefreshCycle_SkipsAccountHoldingALease covers the write-back
+// guard: an account already refreshing is merged, never scheduled twice.
+func TestPlanGrokRefreshCycle_SkipsAccountHoldingALease(t *testing.T) {
+	now := time.Now()
+	busy := &store.Account{ID: 11, AccountType: "grok", CredentialType: "sso", GrokProvider: "web", ClientCookie: "sso=x", Enabled: true, VerifiedAt: now.Add(-5 * time.Hour)}
+	idle := &store.Account{ID: 12, AccountType: "grok", CredentialType: "sso", GrokProvider: "web", ClientCookie: "sso=y", Enabled: true, VerifiedAt: now.Add(-5 * time.Hour)}
+
+	grokRefreshHub.TryAcquire(11)
+	t.Cleanup(func() { grokRefreshHub.Release(11) })
+
+	planned := planGrokRefreshCycle(buildGrokRefreshCandidates([]*store.Account{busy, idle}))
+	for _, candidate := range planned {
+		if firstCandidateAccount(candidate).ID == 11 {
+			t.Fatal("an account holding a lease must not be scheduled")
+		}
 	}
-	second := nextGrokRefreshBatch(candidates, 2)
-	if len(second) != 2 || second[0].token != "c" || second[1].token != "d" {
-		t.Fatalf("second batch=%+v want c,d", second)
-	}
-	third := nextGrokRefreshBatch(candidates, 3)
-	if len(third) != 3 || third[0].token != "a" || third[1].token != "b" || third[2].token != "c" {
-		t.Fatalf("third batch=%+v want a,b,c", third)
+	if len(planned) != 1 {
+		t.Fatalf("planned = %d, want only the free account", len(planned))
 	}
 }

@@ -370,6 +370,11 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// The request's model travels on the context so account selection can skip an
+	// account that is cooling down for this model only; the account's other models
+	// stay in the pool.
+	r = r.WithContext(WithRequestModel(r.Context(), spec.ID))
+
 	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
 	if err != nil {
 		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)

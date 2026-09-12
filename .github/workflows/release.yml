@@ -1,0 +1,101 @@
+name: Release
+
+# Builds the deployable Linux server from a tag, publishes it with a SHA-256
+# checksum, and records the commit it came from. Deployments pin a version and
+# verify the checksum, so "which code is running on us1" stops being a guess.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for this build (e.g. v1.2.3-manual)'
+        required: true
+        default: 'manual'
+
+permissions:
+  contents: write
+
+env:
+  GOOS_TARGET: linux
+  GOARCH_TARGET: amd64
+
+jobs:
+  build:
+    name: Build linux/amd64
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go (toolchain from go.mod)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      # The embedded web assets ship inside the binary, so the frontend tests are
+      # part of "is this build releasable", not a separate concern.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run web asset tests
+        run: |
+          node --test web/accounts_ui.test.cjs
+          node --test web/puter_auth.test.cjs
+          node --test web/grok_tools.test.cjs
+
+      - name: Run Go tests
+        run: go test ./... -count=1 -p 1
+
+      - name: Resolve version and build metadata
+        id: meta
+        run: |
+          version="${{ github.event.inputs.version }}"
+          if [ -z "$version" ]; then
+            version="${GITHUB_REF_NAME}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Build server
+        run: |
+          CGO_ENABLED=0 GOOS="${GOOS_TARGET}" GOARCH="${GOARCH_TARGET}" \
+            go build -trimpath -ldflags "-s -w" -o "dist/orchids-server-${GOOS_TARGET}-${GOARCH_TARGET}" ./cmd/server
+
+      - name: Checksum and metadata
+        run: |
+          cd dist
+          binary="orchids-server-${GOOS_TARGET}-${GOARCH_TARGET}"
+          sha256sum "$binary" > "$binary.sha256"
+          cat > "$binary.build-info.txt" <<EOF
+version=${{ steps.meta.outputs.version }}
+commit=${{ steps.meta.outputs.commit }}
+built_at=${{ steps.meta.outputs.built_at }}
+goos=${GOOS_TARGET}
+goarch=${GOARCH_TARGET}
+EOF
+          ls -l
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orchids-server-${{ steps.meta.outputs.version }}-linux-amd64
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

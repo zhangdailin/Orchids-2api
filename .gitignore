@@ -6,6 +6,7 @@
 *.dylib
 orchids-api
 orchids-server
+orchids-server-linux-*
 server
 !cmd/server/
 !cmd/server/*.go

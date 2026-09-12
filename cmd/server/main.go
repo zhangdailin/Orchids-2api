@@ -136,6 +136,9 @@ func main() {
 		auditLogger := audit.NewRedisLogger(redisClient, s.RedisPrefix(), 10000)
 		h.SetAuditLogger(auditLogger)
 		grokHandler.SetAuditLogger(auditLogger)
+		// The admin session wrapper journals management changes; wiring the same
+		// logger keeps requests and operations in one searchable journal.
+		middleware.SetOperationAuditLogger(auditLogger)
 		defer auditLogger.Close()
 		slog.Debug("Audit logger initialized", "backend", "redis")
 	}

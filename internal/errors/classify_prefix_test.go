@@ -21,7 +21,11 @@ func TestClassifyAccountStatus_LeadingStatusCodePrefix(t *testing.T) {
 		{"colon no space", "401:signed out", "401"},
 		{"not a prefix", "upstream returned 401 mid-message about a model", ""},
 		{"longer number is not a code", "4040 widgets missing", ""},
-		{"unrelated detail", "grok session unauthenticated", ""},
+		// The upstream session endpoint answers {"status":"unauthenticated"} with
+		// HTTP 200. That body is a refused credential, so it must classify as 401
+		// even without an HTTP status in the text.
+		{"bare unauthenticated body", "grok session unauthenticated", "401"},
+		{"unrelated detail", "the cache is cold", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
