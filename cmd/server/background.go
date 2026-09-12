@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"orchids-api/internal/accountevents"
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
@@ -637,7 +638,18 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				return
 			case <-ticker.C:
 				refreshAccounts()
+			case <-refreshKick.Channel():
+				// An account was created, edited, deleted or rotated: the due set
+				// changed, so waiting out the rest of the tick would be wrong. The
+				// subscriber coalesces bursts, so a multi-field update wakes the
+				// loop once.
+				slog.Debug("Auto refresh token: account change detected; re-evaluating the due set")
+				refreshAccounts()
 			}
 		}
 	}()
 }
+
+// refreshKick wakes the refresh loop when an account changes, so a new account is
+// picked up immediately instead of after up to one full interval.
+var refreshKick = accountevents.NewKick()

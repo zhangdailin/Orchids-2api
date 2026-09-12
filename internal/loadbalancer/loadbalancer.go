@@ -107,6 +107,52 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 	return account, nil
 }
 
+// InvalidateAccounts drops the cached snapshot entries for the given accounts so
+// the next selection reads their current state.
+//
+// This replaces the old "wait for the five-second TTL" behaviour: a change that
+// has been persisted must be visible to the next request, not to the request
+// after next. The whole snapshot is re-read on the next miss, so a removed
+// account cannot linger in the pool.
+func (lb *LoadBalancer) InvalidateAccounts(ids []int64) {
+	if lb == nil || len(ids) == 0 {
+		return
+	}
+	changed := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id != 0 {
+			changed[id] = struct{}{}
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	// A change to the pool always invalidates the TTL as well: keeping the deadline
+	// would let a later read serve the pre-change snapshot from a slice another
+	// caller still holds.
+	lb.cacheExpires = time.Time{}
+	if len(lb.cachedAccounts) == 0 {
+		return
+	}
+	kept := make([]*store.Account, 0, len(lb.cachedAccounts))
+	for _, acc := range lb.cachedAccounts {
+		if acc == nil {
+			continue
+		}
+		if _, dirty := changed[acc.ID]; dirty {
+			continue
+		}
+		kept = append(kept, acc)
+	}
+	lb.cachedAccounts = kept
+}
+
+// AccountChanges implements the account-change subscriber contract.
+func (lb *LoadBalancer) AccountChanges(ids []int64) { lb.InvalidateAccounts(ids) }
+
 func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Account, error) {
 	now := time.Now()
 

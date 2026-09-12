@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"orchids-api/internal/api"
+	"orchids-api/internal/accountevents"
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
@@ -38,6 +39,38 @@ var wiredOps *opsagg.Aggregator
 // alertEngine evaluates the alert rules after startup. A nil engine (no Redis)
 // simply reports no alerts.
 var alertEngine *alerting.Engine
+
+// accountChangeEmitter adapts the store's change description to the notification
+// bus. The store publishes only after a successful write; the bus decides what
+// kind of change it was.
+type accountChangeEmitter struct {
+	bus *accountevents.Bus
+}
+
+// Publish implements store.ChangeEmitter. It resolves the after-state on its own
+// goroutine (the store hands over only the id and the previous state), stamps the
+// change kind, and hands it to the bus.
+func (e accountChangeEmitter) Publish(change store.AccountChange) {
+	if e.bus == nil || change.AccountID == 0 {
+		return
+	}
+	var current *store.Account
+	if wiredStore != nil {
+		if loaded, err := wiredStore.GetAccount(context.Background(), change.AccountID); err == nil {
+			current = loaded
+		}
+	}
+	e.bus.Publish(accountevents.Change{
+		AccountID: change.AccountID,
+		Kind:      accountevents.Classify(change.Previous, current),
+		Previous:  change.Previous,
+		Account:   current,
+	})
+}
+
+// wiredStore is the account store created during startup; the change emitter uses
+// it to resolve the after-state of a mutation it was told about.
+var wiredStore *store.Store
 
 // wiredAuditLogger is the journal created at startup, used by the background
 // loops that record system events.
@@ -167,10 +200,21 @@ func main() {
 		alertEngine = alerting.NewEngine(alerting.DefaultRules(), newAuditAlertRecorder(auditLogger))
 		apiHandler.SetAlertEngine(alertEngine)
 		wiredAuditLogger = auditLogger
+		// One account change, three caches: the pool snapshot, the cached upstream
+		// clients and the refresh scheduler's due set. The store announces a change
+		// only after it has been persisted, and the bus coalesces bursts by account
+		// ID so a multi-field update invalidates each cache once.
+		accountBus := accountevents.NewBus()
+		accountBus.Subscribe(lb)
+		accountBus.Subscribe(h)
+		accountBus.Subscribe(refreshKick)
+		wiredStore = s
+		s.SetChangeEmitter(accountChangeEmitter{bus: accountBus})
 		slog.Info("Operations aggregation wired",
 			"bucket_prefix", s.RedisPrefix()+"ops:agg:",
 			"request_recorder", true,
-			"alert_engine", true)
+			"alert_engine", true,
+			"account_change_bus", "in-process")
 		defer auditLogger.Close()
 		slog.Debug("Audit logger initialized", "backend", "redis")
 	}

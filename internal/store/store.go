@@ -405,6 +405,17 @@ type mediaInputStore interface {
 	DeleteStoredMediaInput(ctx context.Context, id, ownerHash string) error
 }
 
+// SetChangeEmitter wires account-change notifications. Passing nil disables
+// them, which keeps a store used only by tests silent.
+func (s *Store) SetChangeEmitter(emitter ChangeEmitter) {
+	if s == nil {
+		return
+	}
+	if redis, ok := s.accounts.(*redisStore); ok {
+		redis.SetChangeEmitter(emitter)
+	}
+}
+
 func New(opts Options) (*Store, error) {
 	store := &Store{}
 	redisStore, err := newRedisStore(opts.RedisAddr, opts.RedisPassword, opts.RedisDB, opts.RedisPrefix, opts.CredentialEncryptionKey)

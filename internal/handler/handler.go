@@ -123,6 +123,20 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
 		auditLogger:  audit.NewNopLogger(),
 	}
+	h.clientCache.SetConfig(cfg)
+	// The cache re-reads an account when it is told the account changed, so the
+	// decision "is this client still valid?" uses the state that was persisted
+	// rather than the event alone.
+	h.clientCache.SetAccountResolver(func(id int64) *store.Account {
+		if lb == nil || lb.Store == nil || id == 0 {
+			return nil
+		}
+		account, err := lb.Store.GetAccount(context.Background(), id)
+		if err != nil {
+			return nil
+		}
+		return account
+	})
 
 	return h
 }
@@ -525,11 +539,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	failedAccountIDs := []int64{}
 	failedAccountSet := make(map[int64]struct{})
 
-	apiClient, currentAccount, err := h.selectAccountWithOptions(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
+	apiClient, currentAccount, releaseClient, err := h.acquireAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 		ModelID:               upstreamWarpModelID(req.Model),
 		RequireWarpCloudAgent: requireWarpCloudAgent,
 		PreferredAccountID:    warpContinuationState.accountID,
 	})
+	// The client is held for the whole request: a credential change during it
+	// retires the client and closes it here, after the request finished.
+	defer releaseClient()
 	if err != nil {
 		slog.Error("selectAccount failed", "error", err, "channel", targetChannel)
 		logger.LogEarlyExit("select_account_failed", map[string]interface{}{
@@ -1046,11 +1063,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					trackedAccountID = 0
 				}
 
-				nextClient, nextAccount, retryErr := h.selectAccountWithOptions(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
+				nextClient, nextAccount, releaseNext, retryErr := h.acquireAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 					ModelID:               upstreamReq.Model,
 					RequireWarpCloudAgent: requireWarpCloudAgent,
 					PreferredAccountID:    warpContinuationState.accountID,
 				})
+				// A later attempt may replace this client; the deferred release of the
+				// original stays valid because each acquire is independently counted.
+				_ = releaseNext
 				if retryErr == nil {
 					apiClient = nextClient
 					currentAccount = nextAccount

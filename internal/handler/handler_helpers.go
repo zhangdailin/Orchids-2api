@@ -116,6 +116,15 @@ type accountSelectionOptions struct {
 }
 
 func (h *Handler) selectAccountWithOptions(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, opts accountSelectionOptions) (UpstreamClient, *store.Account, error) {
+	client, account, release, err := h.acquireAccountSelection(ctx, targetChannel, channelRequired, failedAccountIDs, opts)
+	_ = release
+	return client, account, err
+}
+
+// acquireAccountSelection is the form the request path uses: it returns the
+// release handle for the account client, so a client evicted mid-request is
+// closed only after that request finishes.
+func (h *Handler) acquireAccountSelection(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, opts accountSelectionOptions) (UpstreamClient, *store.Account, func(), error) {
 	if h.loadBalancer != nil {
 		if targetChannel != "" {
 			slog.Debug("Account channel selection", "channel", targetChannel, "channel_required", channelRequired)
@@ -123,23 +132,23 @@ func (h *Handler) selectAccountWithOptions(ctx context.Context, targetChannel st
 		account, err := h.selectAccountRecordWithOptions(ctx, targetChannel, failedAccountIDs, opts)
 		if err != nil {
 			if channelRequired {
-				return nil, nil, err
+				return nil, nil, func() {}, err
 			}
 			if h.client != nil {
 				slog.Debug("Load balancer: no available accounts for channel, using default config", "channel", targetChannel)
-				return h.client, nil, nil
+				return h.client, nil, func() {}, nil
 			}
-			return nil, nil, err
+			return nil, nil, func() {}, err
 		}
-		client := h.getOrCreateAccountClient(account)
+		client, release := h.acquireAccountClient(account)
 		if client == nil {
-			return nil, nil, errors.New("no client configured")
+			return nil, nil, func() {}, errors.New("no client configured")
 		}
-		return client, account, nil
+		return client, account, release, nil
 	} else if h.client != nil {
-		return h.client, nil, nil
+		return h.client, nil, func() {}, nil
 	}
-	return nil, nil, errors.New("no client configured")
+	return nil, nil, func() {}, errors.New("no client configured")
 }
 
 func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChannel string, failedAccountIDs []int64, opts accountSelectionOptions) (*store.Account, error) {

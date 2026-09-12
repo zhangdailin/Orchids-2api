@@ -1,6 +1,7 @@
 package store
 
 import (
+	"log/slog"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -21,6 +22,59 @@ type redisStore struct {
 	client      *redis.Client
 	prefix      string
 	credentials *credentialCipher
+	// changeEmitter announces persisted account mutations. It is nil when nobody
+	// listens (tests, a store without the notification bus), and a nil emitter is
+	// simply silent rather than an error.
+	changeEmitter ChangeEmitter
+}
+
+// ChangeEmitter receives one notification per persisted account mutation. The
+// store stays unaware of the subscribers behind it.
+type ChangeEmitter interface {
+	Publish(change AccountChange)
+}
+
+// AccountChange is the store's own description of a mutation. It is defined here
+// (rather than imported) so the store keeps no dependency on the notification
+// package; the bus adapts it. Current is left for the emitter to resolve, so the
+// store never blocks a write on a subscriber.
+type AccountChange struct {
+	AccountID int64
+	Previous  *Account
+}
+
+// SetChangeEmitter wires the notification target. Passing nil disables it.
+func (s *redisStore) SetChangeEmitter(emitter ChangeEmitter) {
+	if s == nil {
+		return
+	}
+	s.changeEmitter = emitter
+}
+
+// publishChange announces a persisted mutation. It is deliberately asynchronous:
+// the emitter runs on its own goroutine so a slow or stuck subscriber can never
+// turn a successful write into a slow or failed one. The store hands over the
+// previous state and the id; reading the after-state is the emitter's job, which
+// keeps the store free of subscriber concerns.
+func (s *redisStore) publishChange(previous *Account, id int64) {
+	if s == nil || s.changeEmitter == nil || id == 0 {
+		return
+	}
+	emitter := s.changeEmitter
+	var previousCopy *Account
+	if previous != nil {
+		copied := *previous
+		previousCopy = &copied
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// A bad subscriber must never take down the process that wrote.
+				slog.Error("Account change emitter panicked", "error", r)
+			}
+		}()
+		emitter.Publish(AccountChange{AccountID: id, Previous: previousCopy})
+	}()
 }
 
 const redisBatchParallelThreshold = 32
@@ -170,8 +224,13 @@ func (s *redisStore) CreateAccount(ctx context.Context, acc *Account) error {
 	} else {
 		pipe.SRem(ctx, s.accountsEnabledKey(), id)
 	}
-	_, err = pipe.Exec(ctx)
-	return err
+	if _, err = pipe.Exec(ctx); err != nil {
+		return err
+	}
+	// Only a write that reached Redis is announced: a subscriber must never react
+	// to a change that did not happen.
+	s.publishChange(nil, id)
+	return nil
 }
 
 // mergeModelCooldowns combines two per-model cooldown maps, keeping the later
@@ -420,8 +479,14 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	} else {
 		pipe.SRem(ctx, s.accountsEnabledKey(), acc.ID)
 	}
-	_, err = pipe.Exec(ctx)
-	return err
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	// Announce only after the write landed. The previous state comes from the
+	// copy read at the start of this method, which is what lets a subscriber see
+	// whether the credential actually moved.
+	s.publishChange(existing, acc.ID)
+	return nil
 }
 
 func (s *redisStore) DeleteAccount(ctx context.Context, id int64) error {
@@ -432,12 +497,24 @@ func (s *redisStore) DeleteAccount(ctx context.Context, id int64) error {
 		return nil
 	}
 
+	// Read the row before removing it so the notification can say what was
+	// removed, and so a delete of a non-existent id stays silent.
+	previous, previousErr := s.getAccount(ctx, id)
+	if previousErr != nil && previousErr != ErrNoRows {
+		return previousErr
+	}
+
 	pipe := s.client.Pipeline()
 	pipe.Del(ctx, s.accountsKey(id))
 	pipe.SRem(ctx, s.accountsIDsKey(), id)
 	pipe.SRem(ctx, s.accountsEnabledKey(), id)
-	_, err := pipe.Exec(ctx)
-	return err
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	if previousErr == nil {
+		s.publishChange(previous, id)
+	}
+	return nil
 }
 
 func (s *redisStore) GetAccount(ctx context.Context, id int64) (*Account, error) {
