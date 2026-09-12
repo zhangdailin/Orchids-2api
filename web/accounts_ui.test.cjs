@@ -654,3 +654,29 @@ test('a rejected credential shows the reason, not the raw error envelope', () =>
   );
   assert.equal(vm.runInContext('extractAdminErrorDetail("")', context), '', 'an empty body stays empty');
 });
+
+test('a Warp account shows a session fingerprint instead of a bare label', () => {
+  const { context } = loadUI();
+  // Warp has no email or username: the fingerprint is what tells two logins apart.
+  const withFingerprint = vm.runInContext(
+    "formatTokenDisplay({ account_type: 'warp', refresh_token: 'x', warp_authenticated: true, session_fingerprint: '8f3a2c1b4d5e' })",
+    context,
+  );
+  assert.equal(withFingerprint, '会话 8f3a2c', 'the session fingerprint is not shown');
+  const withoutFingerprint = vm.runInContext(
+    "formatTokenDisplay({ account_type: 'warp', refresh_token: 'x', warp_authenticated: true })",
+    context,
+  );
+  assert.equal(withoutFingerprint, '登录会话已配置', 'the fallback label is missing');
+  const signedOut = vm.runInContext("formatTokenDisplay({ account_type: 'warp' })", context);
+  assert.equal(signedOut, '待官网登录', 'a Warp account with no session must read as pending');
+});
+
+test('the session fingerprint never exposes the credential', () => {
+  const { context } = loadUI();
+  const rendered = vm.runInContext(
+    "formatTokenDisplay({ account_type: 'warp', refresh_token: 'secret-session-token', warp_authenticated: true, session_fingerprint: '8f3a2c1b4d5e' })",
+    context,
+  );
+  assert.ok(!rendered.includes('secret-session-token'), 'the raw session token leaked into the table');
+});

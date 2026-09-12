@@ -738,6 +738,10 @@ func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
 type accountOutput struct {
 	*store.Account
 	WarpAuthenticated bool `json:"warp_authenticated,omitempty"`
+	// SessionFingerprint is a short digest of the credential the account is
+	// authenticated with. It lets the table tell two sessions apart on channels
+	// that carry no email, without returning the secret itself.
+	SessionFingerprint string `json:"session_fingerprint,omitempty"`
 	// Quota holds the provider-specific quota projection. It is merged into every
 	// account response so the management table can render 等级/配额 consistently
 	// without re-deriving each channel's semantics on the client.
@@ -757,6 +761,12 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 		}
 	}
 	merged["warp_authenticated"] = o.WarpAuthenticated
+	// The session fingerprint identifies a login on channels that carry no email
+	// (Warp); it is a digest, never the credential, so it is safe to expose to an
+	// authenticated administrator.
+	if o.SessionFingerprint != "" {
+		merged["session_fingerprint"] = o.SessionFingerprint
+	}
 	for key, value := range o.Quota {
 		merged[key] = value
 	}
@@ -764,6 +774,10 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 }
 
 func normalizeAccountOutput(acc *store.Account) *accountOutput {
+	// The session fingerprint is derived from the live credential before the
+	// redaction below clears it, so the operator can still tell two browser
+	// logins apart without the session token ever leaving the server.
+	sessionFingerprint := accountSessionFingerprint(acc)
 	out := normalizeWarpTokenOutput(acc)
 	if out == nil {
 		return nil
@@ -788,9 +802,44 @@ func normalizeAccountOutput(acc *store.Account) *accountOutput {
 		out = RedactWorkBuddyOutput(out)
 	}
 	return &accountOutput{
-		Account:           out,
-		WarpAuthenticated: strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
-		Quota:             buildQuotaResponseFields(out),
+		Account:            out,
+		WarpAuthenticated:  strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
+		SessionFingerprint: sessionFingerprint,
+		Quota:              buildQuotaResponseFields(out),
+	}
+}
+
+// accountSessionFingerprint returns a short, non-reversible identifier of the
+// credential an account is authenticated with.
+//
+// It exists because some channels authenticate with a session token that carries
+// no identity at all (Warp is the clearest case: there is no email or username to
+// show). The account table then had nothing to display but "登录会话已配置", which
+// made two different browser logins look identical. The fingerprint distinguishes
+// them without ever exposing the secret: 12 hex characters of a SHA-256 digest,
+// the same shape already used for upstream diagnostics.
+func accountSessionFingerprint(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "warp":
+		// Warp stores its browser session in the refresh-token column; the read
+		// path deliberately clears that column, which is exactly why the
+		// fingerprint has to be computed here.
+		return util.Fingerprint(warp.RefreshToken(acc))
+	case "grok":
+		if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+			return util.Fingerprint(util.FirstNonEmpty(acc.OAuthAccessToken, acc.OAuthRefreshToken))
+		}
+		return util.Fingerprint(util.FirstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token))
+	case "workbuddy":
+		creds := resolveWorkBuddyCredentials(acc)
+		return util.Fingerprint(util.FirstNonEmpty(creds.AccessToken, creds.RefreshToken))
+	case "puter":
+		return util.Fingerprint(util.FirstNonEmpty(acc.Token, acc.SessionCookie, acc.ClientCookie))
+	default:
+		return ""
 	}
 }
 

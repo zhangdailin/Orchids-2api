@@ -1922,7 +1922,12 @@ function parseDataId(value) {
 function formatTokenDisplay(acc) {
   const type = normalizeAccountType(acc);
   if (type === 'warp') {
-    return hasSidebarAccountCredential(acc) ? '登录会话已配置' : '待官网登录';
+    // Warp authenticates with a browser session that carries no email or
+    // username, so identity is shown as a short digest of the session. Two
+    // logins then look different instead of both reading 登录会话已配置.
+    const fingerprint = String(acc.session_fingerprint || '').trim();
+    if (!hasSidebarAccountCredential(acc)) return '待官网登录';
+    return fingerprint ? `会话 ${fingerprint.substring(0, 6)}` : '登录会话已配置';
   }
   if (type === 'grok' && isSidebarGrokOAuthAccount(acc)) {
     const accessToken = String(acc.oauth_access_token || "");
