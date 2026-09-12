@@ -78,3 +78,12 @@ test('运维总览 is reachable from the sidebar and is the landing tab', () => 
   assert.match(template, /case "ops":/, 'the ops tab is not routed');
   assert.match(template, /case "logs":/, 'the logs tab is not routed');
 });
+
+test('the matrix renders per-model rows and never paints a traffic-free channel green', () => {
+  const script = read('static/js/ops.js');
+  assert.ok(script.includes('is-model'), 'per-model rows are not distinguished in the matrix');
+  assert.ok(script.includes('row.models'), 'the matrix does not render the per-model rows');
+  // A channel with no samples must read 暂无样本 rather than a healthy 100%.
+  assert.ok(script.includes("formatRate(r, samples)"), 'the success rate is rendered without its sample count');
+  assert.ok(script.includes("ops-empty"), 'the no-sample cell style is missing');
+});

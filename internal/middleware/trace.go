@@ -228,7 +228,6 @@ func RequestModelHint(ctx context.Context) (context.Context, func() string) {
 	return context.WithValue(ctx, requestModelContextKey{}, box), func() string { return box.model }
 }
 
-
 // ProbeHeader marks a request as a synthetic probe. The probe loop sets it; the
 // metric recorder then counts the request apart from real traffic so an injected
 // failure cannot distort the user-facing success rate.

@@ -458,8 +458,7 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 		}
 		for model, entry := range byModel {
 			entry.duration = append(entry.duration, a.listInts(ctx, key+":model:"+model)...)
-		}
-	}
+		}	}
 	stats := make([]ModelStats, 0, len(byModel))
 	for model, entry := range byModel {
 		stat := ModelStats{
