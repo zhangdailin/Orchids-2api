@@ -1,0 +1,148 @@
+/* Operations overview + log centre. Kept in one stylesheet because both pages
+   share the KPI cards, chips and table styling. */
+
+.ops-page { padding-bottom: 48px; }
+
+.ops-subtitle { color: var(--text-secondary, #94a3b8); margin: 4px 0 12px; font-size: 13px; }
+
+.ops-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+
+.ops-filter-group { display: inline-flex; gap: 6px; }
+
+.ops-chip {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: transparent;
+  color: inherit;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ops-chip.is-active { background: rgba(56, 189, 248, 0.18); border-color: rgba(56, 189, 248, 0.6); }
+
+.ops-select { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.ops-select input, .ops-select select {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: inherit;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  min-width: 120px;
+}
+
+.ops-refresh {
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  background: rgba(56, 189, 248, 0.15);
+  color: inherit;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ops-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
+
+.ops-kpi {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.ops-kpi .label { font-size: 12px; color: var(--text-secondary, #94a3b8); }
+.ops-kpi .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+.ops-kpi .note { font-size: 11px; color: var(--text-secondary, #94a3b8); margin-top: 2px; }
+.ops-kpi.is-muted .value { color: var(--text-secondary, #94a3b8); font-size: 16px; font-weight: 500; }
+
+.ops-panels { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+@media (max-width: 980px) { .ops-panels { grid-template-columns: 1fr; } }
+
+.ops-card {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.ops-card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.ops-card-head h2 { font-size: 14px; margin: 0; }
+.ops-hint { font-size: 11px; color: var(--text-secondary, #94a3b8); }
+
+.ops-chart { height: 220px; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; }
+.ops-chart .bar { flex: 0 0 auto; width: 6px; background: rgba(56, 189, 248, 0.75); border-radius: 2px 2px 0 0; position: relative; }
+.ops-chart .bar.is-failed { background: rgba(251, 113, 133, 0.85); }
+.ops-empty { color: var(--text-secondary, #94a3b8); font-size: 12px; padding: 16px 0; }
+
+.ops-alerts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.ops-alert { border-left: 3px solid rgba(148, 163, 184, 0.5); padding: 8px 10px; background: rgba(15, 23, 42, 0.4); border-radius: 4px; }
+.ops-alert.severity-warning { border-left-color: #f59e0b; }
+.ops-alert.severity-critical { border-left-color: #fb7185; }
+.ops-alert .title { font-size: 13px; font-weight: 600; }
+.ops-alert .detail { font-size: 11px; color: var(--text-secondary, #94a3b8); margin-top: 2px; }
+
+.ops-table-wrap { overflow-x: auto; }
+.ops-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ops-table th, .ops-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
+.ops-table th { color: var(--text-secondary, #94a3b8); font-weight: 500; }
+.ops-table tr.is-model td:first-child { padding-left: 26px; color: var(--text-secondary, #94a3b8); }
+.ops-table tr.is-channel td { font-weight: 600; }
+
+.ops-bar { display: inline-block; height: 8px; border-radius: 4px; background: rgba(74, 222, 128, 0.7); min-width: 2px; vertical-align: middle; }
+.ops-bar.is-warn { background: rgba(245, 158, 11, 0.8); }
+.ops-bar.is-bad { background: rgba(251, 113, 133, 0.85); }
+.ops-bar.is-none { background: rgba(148, 163, 184, 0.4); }
+
+.ops-coverage { font-size: 12px; color: var(--text-secondary, #94a3b8); margin: 0; line-height: 1.7; }
+
+.logs-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+.logs-tab {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.logs-tab.is-active { background: rgba(56, 189, 248, 0.18); border-color: rgba(56, 189, 248, 0.6); }
+
+.logs-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.logs-filters .ops-select input { min-width: 110px; }
+
+.logs-layout { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+@media (max-width: 980px) { .logs-layout { grid-template-columns: 1fr; } }
+
+.logs-table tbody tr { cursor: pointer; }
+.logs-table tbody tr.is-selected { background: rgba(56, 189, 248, 0.12); }
+.logs-more { margin-top: 10px; }
+
+.logs-detail { border-left: 1px solid rgba(148, 163, 184, 0.18); padding-left: 14px; font-size: 12px; }
+.logs-detail h2 { font-size: 13px; margin: 0 0 8px; }
+.logs-detail dl { display: grid; grid-template-columns: 96px 1fr; gap: 4px 10px; margin: 0 0 10px; }
+.logs-detail dt { color: var(--text-secondary, #94a3b8); }
+.logs-detail dd { margin: 0; word-break: break-all; }
+.logs-detail pre {
+  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 6px;
+  padding: 8px;
+  overflow-x: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.logs-attempts { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.logs-attempt { border-left: 3px solid rgba(148, 163, 184, 0.4); padding: 6px 8px; background: rgba(15, 23, 42, 0.4); border-radius: 4px; }
+.logs-badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.2);
+  margin-left: 6px;
+}
+.logs-badge.is-ok { background: rgba(74, 222, 128, 0.2); }
+.logs-badge.is-error { background: rgba(251, 113, 133, 0.25); }

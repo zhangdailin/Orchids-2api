@@ -1,0 +1,92 @@
+{{define "page-ops"}}<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}} · 运维总览</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260914-ops1">
+</head>
+
+<body>
+  {{template "sidebar.html" .}}
+
+  <main class="main-content ops-page">
+    <section class="header-section">
+      <h1>运维总览</h1>
+      <p class="ops-subtitle" id="opsWindowLabel">正在读取指标…</p>
+      <div class="ops-toolbar">
+        <div class="ops-filter-group" role="group" aria-label="时间范围">
+          <button class="ops-chip" data-window="60" type="button">1 小时</button>
+          <button class="ops-chip is-active" data-window="180" type="button">3 小时</button>
+          <button class="ops-chip" data-window="720" type="button">12 小时</button>
+          <button class="ops-chip" data-window="1440" type="button">24 小时</button>
+        </div>
+        <label class="ops-select">
+          <span>渠道</span>
+          <select id="opsChannel"><option value="">全部渠道</option></select>
+        </label>
+        <button class="ops-refresh" id="opsRefresh" type="button">刷新</button>
+      </div>
+    </section>
+
+    <section class="ops-kpis" id="opsKpis" aria-live="polite"></section>
+
+    <section class="ops-panels">
+      <div class="ops-card">
+        <div class="ops-card-head">
+          <h2>请求量趋势</h2>
+          <span class="ops-hint">每分钟请求数，悬停查看明细</span>
+        </div>
+        <div class="ops-chart" id="opsTrend"></div>
+      </div>
+
+      <div class="ops-card">
+        <div class="ops-card-head">
+          <h2>当前告警</h2>
+          <span class="ops-hint" id="opsAlertCount">—</span>
+        </div>
+        <ul class="ops-alerts" id="opsAlerts"></ul>
+      </div>
+    </section>
+
+    <section class="ops-card">
+      <div class="ops-card-head">
+        <h2>渠道 × 模型状态</h2>
+        <span class="ops-hint">无流量显示“暂无样本”，不会显示为健康</span>
+      </div>
+      <div class="ops-table-wrap">
+        <table class="ops-table" id="opsMatrix">
+          <thead>
+            <tr>
+              <th>渠道 / 模型</th>
+              <th>可用账号</th>
+              <th>请求</th>
+              <th>成功率</th>
+              <th>首 Token P95</th>
+              <th>总耗时 P95</th>
+              <th>限流</th>
+              <th>历史</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="ops-card">
+      <div class="ops-card-head">
+        <h2>数据覆盖</h2>
+        <span class="ops-hint">为什么这里不是“最近 7 天”</span>
+      </div>
+      <p class="ops-coverage" id="opsCoverage">—</p>
+    </section>
+
+    <script src="{{.AdminPath}}/js/common.js?v=20260914-ops1"></script>
+    <script src="{{.AdminPath}}/js/ops.js?v=20260914-ops1"></script>
+  </main>
+</body>
+
+</html>
+{{end}}

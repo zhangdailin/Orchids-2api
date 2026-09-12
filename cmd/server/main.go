@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"orchids-api/internal/api"
+	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -21,12 +22,26 @@ import (
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/opsagg"
 	"orchids-api/internal/provider"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/workbuddy"
 )
+
+// wiredOps is the per-minute aggregator created during startup. It is what the
+// overview endpoints and the alert evaluator read; it stays nil on a deployment
+// without Redis, and the API reports "no sample" in that case.
+var wiredOps *opsagg.Aggregator
+
+// alertEngine evaluates the alert rules after startup. A nil engine (no Redis)
+// simply reports no alerts.
+var alertEngine *alerting.Engine
+
+// wiredAuditLogger is the journal created at startup, used by the background
+// loops that record system events.
+var wiredAuditLogger audit.Logger
 
 func main() {
 	configPath := flag.String("config", "", "Path to config.json/config.yaml")
@@ -139,6 +154,23 @@ func main() {
 		// The admin session wrapper journals management changes; wiring the same
 		// logger keeps requests and operations in one searchable journal.
 		middleware.SetOperationAuditLogger(auditLogger)
+		// Per-minute buckets back the operations overview. The trace middleware
+		// reports one observation per finished request, so the counters cannot
+		// double count an upstream retry.
+		opsAggregator := opsagg.New(redisClient, s.RedisPrefix())
+		middleware.SetRequestOutcomeRecorder(opsAggregator.ObserveHTTPRequest)
+		wiredOps = opsAggregator
+		apiHandler.SetOpsAggregator(opsAggregator)
+		apiHandler.SetRefreshConcurrencyReporter(grokRefreshHub.Len)
+		// Alert transitions are journalled as system events, which is what makes a
+		// failure and its recovery one traceable pair.
+		alertEngine = alerting.NewEngine(alerting.DefaultRules(), newAuditAlertRecorder(auditLogger))
+		apiHandler.SetAlertEngine(alertEngine)
+		wiredAuditLogger = auditLogger
+		slog.Info("Operations aggregation wired",
+			"bucket_prefix", s.RedisPrefix()+"ops:agg:",
+			"request_recorder", true,
+			"alert_engine", true)
 		defer auditLogger.Close()
 		slog.Debug("Audit logger initialized", "backend", "redis")
 	}
@@ -201,6 +233,12 @@ func main() {
 	defer cancelBackground()
 
 	startTokenRefreshLoop(ctx, cfg, s, lb)
+	// Alert evaluation runs beside the refresh loop: it reads the same metric
+	// buckets the overview shows, so an alert and the page never disagree.
+	startAlertLoop(ctx, wiredOps, s, alertEngine, wiredAuditLogger)
+	// Probes answer "can this channel serve right now?" when there is no real
+	// traffic; their outcomes are counted apart from user requests.
+	startProbeLoop(ctx, s, wiredAuditLogger, cfg.Port)
 	logWorkBuddyReachability(cfg)
 
 	// Graceful shutdown

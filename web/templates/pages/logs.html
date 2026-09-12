@@ -1,0 +1,73 @@
+{{define "page-logs"}}
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}} · 日志中心</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260914-ops1">
+</head>
+
+<body>
+  {{template "sidebar.html" .}}
+
+  <main class="main-content ops-page">
+    <section class="header-section">
+      <h1>日志中心</h1>
+      <p class="ops-subtitle" id="logsCoverage">—</p>
+    </section>
+
+    <section class="ops-card">
+      <div class="logs-tabs" role="tablist" aria-label="日志类型">
+        <button class="logs-tab is-active" role="tab" aria-selected="true" data-kind="request" type="button">请求日志</button>
+        <button class="logs-tab" role="tab" aria-selected="false" data-kind="operation" type="button">操作日志</button>
+        <button class="logs-tab" role="tab" aria-selected="false" data-kind="system" type="button">系统日志</button>
+      </div>
+
+      <form class="logs-filters" id="logsFilters" autocomplete="off">
+        <label class="ops-select"><span>渠道</span><input id="filterChannel" placeholder="grok / warp" /></label>
+        <label class="ops-select"><span>模型</span><input id="filterModel" placeholder="grok-4.6" /></label>
+        <label class="ops-select"><span>状态</span><input id="filterStatus" placeholder="success / error" /></label>
+        <label class="ops-select"><span>操作者</span><input id="filterActor" placeholder="admin-session" /></label>
+        <label class="ops-select"><span>动作</span><input id="filterAction" placeholder="accounts.update" /></label>
+        <button class="ops-refresh" type="submit">筛选</button>
+        <button class="ops-chip" id="logsClear" type="button">清除</button>
+      </form>
+
+      <div class="logs-layout">
+        <div class="logs-list-wrap">
+          <table class="ops-table logs-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>渠道 / 动作</th>
+                <th>对象</th>
+                <th>状态</th>
+                <th>耗时</th>
+              </tr>
+            </thead>
+            <tbody id="logsRows">
+              <tr><td colspan="5" class="ops-empty">正在加载…</td></tr>
+            </tbody>
+          </table>
+          <div class="logs-more">
+            <button class="ops-chip" id="logsMore" type="button" hidden>加载更早的记录</button>
+          </div>
+        </div>
+
+        <aside class="logs-detail" id="logsDetail" aria-live="polite">
+          <h2>详情</h2>
+          <p class="ops-empty">选择左侧一条记录查看详情。</p>
+        </aside>
+      </div>
+    </section>
+
+    <script src="{{.AdminPath}}/js/common.js?v=20260914-ops1"></script>
+    <script src="{{.AdminPath}}/js/logs.js?v=20260914-ops1"></script>
+  </main>
+</body>
+
+</html>
+{{end}}

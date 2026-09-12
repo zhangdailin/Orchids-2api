@@ -23,6 +23,22 @@
   </div>
   <ul class="sidebar-menu">
     <li class="sidebar-item">
+      <a href="#" class="sidebar-link {{if eq .ActiveTab "ops"}}active{{end}}" {{if eq .ActiveTab "ops"}}aria-current="page"{{end}} onclick="switchTab('ops')">
+        <span class="nav-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 3 4-6"/><circle cx="7" cy="15" r="1"/><circle cx="17" cy="8" r="1"/></svg>
+        </span>
+        <span>运维总览</span>
+      </a>
+    </li>
+    <li class="sidebar-item">
+      <a href="#" class="sidebar-link {{if eq .ActiveTab "logs"}}active{{end}}" {{if eq .ActiveTab "logs"}}aria-current="page"{{end}} onclick="switchTab('logs')">
+        <span class="nav-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
+        </span>
+        <span>日志中心</span>
+      </a>
+    </li>
+    <li class="sidebar-item">
       <a href="#" class="sidebar-link {{if eq .ActiveTab "accounts"}}active{{end}}" {{if eq .ActiveTab "accounts"}}aria-current="page"{{end}} onclick="switchTab('accounts')">
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>

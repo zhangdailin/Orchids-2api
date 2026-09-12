@@ -155,6 +155,30 @@ func registerRoutes(
 	mux.HandleFunc("/api/token-cache/stats", sessionAuth(apiHandler.HandleTokenCacheStats))
 	mux.HandleFunc("/api/token-cache/clear", sessionAuth(apiHandler.HandleTokenCacheClear))
 	mux.HandleFunc("/api/audit", sessionAuth(apiHandler.HandleAuditEvents))
+	// Operations monitoring: the overview, the channel × model matrix and the
+	// alert set behind the 运维总览 page.
+	mux.HandleFunc("/api/ops/overview", sessionAuth(apiHandler.HandleOpsOverview))
+	mux.HandleFunc("/api/ops/channels", sessionAuth(apiHandler.HandleOpsChannels))
+	mux.HandleFunc("/api/ops/alerts", sessionAuth(apiHandler.HandleOpsAlerts))
+	// Journal: one endpoint per tab (request / operation / system) with the
+	// upstream attempts of each request joined in.
+	mux.HandleFunc("/api/journal/records", sessionAuth(apiHandler.HandleJournalRecords))
+	mux.HandleFunc("/api/journal/operations", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("kind") == "" {
+			query.Set("kind", "operation")
+			r.URL.RawQuery = query.Encode()
+		}
+		apiHandler.HandleJournalRecords(w, r)
+	}))
+	mux.HandleFunc("/api/journal/system", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("kind") == "" {
+			query.Set("kind", "system")
+			r.URL.RawQuery = query.Encode()
+		}
+		apiHandler.HandleJournalRecords(w, r)
+	}))
 
 	// Admin routes with dual prefix: /api/v1/admin/* and /v1/admin/*
 	adminPrefixes := []string{"/api/v1/admin", "/v1/admin"}

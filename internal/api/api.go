@@ -19,12 +19,14 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/accountpolicy"
+	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/opsagg"
 	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
@@ -62,6 +64,38 @@ type API struct {
 	// credentials until the account is verified and persisted.
 	workbuddyLoginMu sync.Mutex
 	workbuddyLogins  map[string]*workbuddyLogin
+
+	// opsAggregator and alerts back the operations overview. They are optional:
+	// a Redis-less deployment simply reports "no sample" instead of failing.
+	opsAggregator *opsagg.Aggregator
+	alertEngine   *alerting.Engine
+	// refreshConcurrency reports how many accounts are being refreshed right now.
+	refreshConcurrency func() int
+}
+
+// SetRefreshConcurrencyReporter lets the scheduler expose its in-flight count to
+// the overview without the API importing the scheduler.
+func (a *API) SetRefreshConcurrencyReporter(reporter func() int) {
+	if a == nil {
+		return
+	}
+	a.refreshConcurrency = reporter
+}
+
+// SetOpsAggregator wires the per-minute buckets used by the overview endpoints.
+func (a *API) SetOpsAggregator(aggregator *opsagg.Aggregator) {
+	if a == nil {
+		return
+	}
+	a.opsAggregator = aggregator
+}
+
+// SetAlertEngine wires the alert rules evaluated by the overview endpoints.
+func (a *API) SetAlertEngine(engine *alerting.Engine) {
+	if a == nil {
+		return
+	}
+	a.alertEngine = engine
 }
 
 type auditEventRecord struct {

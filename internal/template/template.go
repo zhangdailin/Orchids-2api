@@ -93,6 +93,10 @@ func (r *Renderer) RenderIndex(w http.ResponseWriter, req *http.Request, cfg *co
 	// Render different page templates based on active tab
 	var templateName string
 	switch activeTab {
+	case "ops":
+		templateName = "page-ops"
+	case "logs":
+		templateName = "page-logs"
 	case "tutorial":
 		templateName = "page-tutorial"
 	case "models":
@@ -110,11 +114,13 @@ func (r *Renderer) RenderIndex(w http.ResponseWriter, req *http.Request, cfg *co
 	return r.templates.ExecuteTemplate(w, templateName, data)
 }
 
-// getActiveTab extracts the active tab from the request
+// getActiveTab extracts the active tab from the request. The operations overview
+// is the landing page: an operator opening the panel should see whether anything
+// is on fire before anything else.
 func getActiveTab(req *http.Request) string {
 	tab := req.URL.Query().Get("tab")
 	if tab == "" {
-		tab = "accounts"
+		tab = "ops"
 	}
 	return tab
 }

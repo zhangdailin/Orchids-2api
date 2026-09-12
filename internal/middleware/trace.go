@@ -73,6 +73,10 @@ type TracedResponseWriter struct {
 	http.ResponseWriter
 	StatusCode   int
 	BytesWritten int64
+	// firstWriteAt is when the handler produced its first byte. It is what makes
+	// time-to-first-token measurable, which is how the overview separates a slow
+	// prefill from slow generation.
+	firstWriteAt time.Time
 }
 
 // NewTracedResponseWriter 创建新的 TracedResponseWriter
@@ -83,14 +87,24 @@ func NewTracedResponseWriter(w http.ResponseWriter) *TracedResponseWriter {
 	}
 }
 
+// FirstWriteAt reports when the first response byte was produced, or the zero
+// time when the handler never wrote anything.
+func (w *TracedResponseWriter) FirstWriteAt() time.Time { return w.firstWriteAt }
+
 // WriteHeader 实现 http.ResponseWriter
 func (w *TracedResponseWriter) WriteHeader(code int) {
+	if w.firstWriteAt.IsZero() {
+		w.firstWriteAt = time.Now()
+	}
 	w.StatusCode = code
 	w.ResponseWriter.WriteHeader(code)
 }
 
 // Write 实现 http.ResponseWriter
 func (w *TracedResponseWriter) Write(b []byte) (int, error) {
+	if w.firstWriteAt.IsZero() {
+		w.firstWriteAt = time.Now()
+	}
 	n, err := w.ResponseWriter.Write(b)
 	w.BytesWritten += int64(n)
 	return n, err
@@ -135,6 +149,10 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 
 		// 记录请求完成
 		duration := time.Since(start)
+		// The operations overview counts every finished request, so this record
+		// must happen before the log level decides whether to print a line.
+		recordRequestOutcome(r, wrapped.StatusCode, duration, wrapped.FirstWriteAt())
+
 		level := slog.LevelDebug
 		if wrapped.StatusCode >= 500 {
 			level = slog.LevelError
@@ -158,7 +176,107 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			"remote_ip", ClientIP(r),
 			"user_agent", userAgent,
 		)
+		// One request-finished event per request: a request retried upstream is
+		// still one request, and no handler has to remember to record itself.
+		// (The observation itself is taken above, before the log-level branch.)
 	})
+}
+
+// RequestOutcomeRecorder receives one observation per finished HTTP request.
+type RequestOutcomeRecorder func(channel, model, statusClass string, durationMS, firstTokenMS int64)
+
+var requestOutcomeRecorder RequestOutcomeRecorder
+
+// SetRequestOutcomeRecorder wires the operations overview into the request path.
+func SetRequestOutcomeRecorder(recorder RequestOutcomeRecorder) {
+	requestOutcomeRecorder = recorder
+}
+
+// ProbeHeader marks a request as a synthetic probe. The probe loop sets it; the
+// metric recorder then counts the request apart from real traffic so an injected
+// failure cannot distort the user-facing success rate.
+const ProbeHeader = "X-Orchids-Probe"
+
+func recordRequestOutcome(r *http.Request, status int, duration time.Duration, firstWrite time.Time) {
+	if requestOutcomeRecorder == nil || r == nil {
+		return
+	}
+	durationMS := duration.Milliseconds()
+	firstTokenMS := int64(0)
+	if !firstWrite.IsZero() {
+		firstTokenMS = firstWrite.Sub(requestStartOf(r, duration)).Milliseconds()
+	}
+	if strings.TrimSpace(r.Header.Get(ProbeHeader)) != "" {
+		requestOutcomeRecorder(probeChannel, probeModel, httpStatusClass(status), durationMS, firstTokenMS)
+		return
+	}
+	requestOutcomeRecorder(
+		requestChannel(r.URL.Path),
+		requestModelHint(r),
+		httpStatusClass(status),
+		durationMS,
+		firstTokenMS,
+	)
+}
+
+// Reserved synthetic-traffic labels. They are not routable models, so a client
+// cannot use them to move its own traffic out of the real figures.
+const (
+	probeChannel = "probe"
+	probeModel   = "__probe__"
+)
+
+// requestStartOf reconstructs the request start from the measured duration. The
+// trace middleware owns the clock; keeping the derivation here avoids threading
+// a start time through every wrapper.
+func requestStartOf(_ *http.Request, duration time.Duration) time.Time {
+	return time.Now().Add(-duration)
+}
+
+// requestChannel maps a request path to the channel it belongs to. The pooled
+// prefixes are explicit; everything else belongs to the Grok channel because the
+// unified /v1 routes are served by the Grok handler.
+func requestChannel(path string) string {
+	trimmed := strings.Trim(path, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) == 0 {
+		return "unknown"
+	}
+	switch parts[0] {
+	case "warp", "puter", "workbuddy", "grok":
+		return parts[0]
+	case "v1":
+		return "grok"
+	default:
+		return "http"
+	}
+}
+
+// requestModelHint extracts a model from the request when it is cheap to do so.
+// Request bodies are not re-read here: the log centre shows the model from the
+// handler's own audit event, and the overview counts by channel.
+func requestModelHint(r *http.Request) string {
+	for _, key := range []string{"model", "model_id"} {
+		if value := strings.TrimSpace(r.URL.Query().Get(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func httpStatusClass(status int) string {
+	switch {
+	case status >= 200 && status < 300:
+		return "2xx"
+	case status >= 300 && status < 400:
+		return "3xx"
+	case status >= 400 && status < 500:
+		return "4xx"
+	case status >= 500 && status < 600:
+		return "5xx"
+	default:
+		return "unknown"
+	}
 }
 
 // Chain 链式组合多个中间件
