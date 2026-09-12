@@ -8,16 +8,50 @@ const vm = require('node:vm');
 function loadUI() {
   const elements = new Map();
   const node = (id) => {
-    if (!elements.has(id)) elements.set(id, { value: '', hidden: false, required: false });
+    if (!elements.has(id)) {
+      const classes = new Set();
+      elements.set(id, {
+        value: '',
+        hidden: false,
+        required: false,
+        textContent: '',
+        innerHTML: '',
+        reset() {},
+        classList: {
+          add: (name) => classes.add(name),
+          remove: (name) => classes.delete(name),
+          toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)),
+          contains: (name) => classes.has(name),
+        },
+      });
+    }
     return elements.get(id);
   };
+  const timers = [];
   const context = vm.createContext({
     document: { getElementById: node, querySelector: node, addEventListener() {} },
+    window: {
+      setInterval: (fn) => { timers.push(fn); return timers.length; },
+      clearInterval: () => {},
+      addEventListener() {},
+    },
   });
   for (const file of ['common.js', 'accounts.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/js', file), 'utf8'), context);
   }
   return { context, node };
+}
+
+function workBuddyAccount(overrides = {}) {
+  return {
+    id: 11,
+    account_type: 'workbuddy',
+    workbuddy_access_token: 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1aWQifQ.sig',
+    workbuddy_uid: '07ab88c8-5596-4257-8d21-e9fcbe3a3810',
+    enabled: true,
+    weight: 1,
+    ...overrides,
+  };
 }
 
 test('Warp exposes only official login and preserves settings editing', () => {
@@ -129,4 +163,86 @@ test('Warp settings save succeeds without submitting credentials', async () => {
   assert.equal(sent.url, '/api/accounts/7');
   assert.equal(sent.options.method, 'PUT');
   assert.deepEqual(JSON.parse(sent.options.body), { account_type: 'warp', weight: 2, enabled: true });
+});
+
+test('WorkBuddy exposes official login only for new accounts and keeps manual input optional', () => {
+  const { context, node } = loadUI();
+  node('accountId').value = '';
+  context.applyTokenLabels('workbuddy');
+  assert.equal(node('workbuddyLoginGroup').hidden, false);
+  assert.equal(node('puterWebLoginGroup').hidden, true);
+  assert.equal(node('warpDeviceLoginGroup').hidden, true);
+  assert.equal(node('clientCookie').required, false);
+  assert.match(node('tokenLabel').textContent, /WorkBuddy/);
+
+  node('accountId').value = '11';
+  context.applyTokenLabels('workbuddy');
+  assert.equal(node('workbuddyLoginGroup').hidden, true);
+
+  context.applyTokenLabels('puter');
+  node('accountId').value = '';
+  context.applyTokenLabels('puter');
+  assert.equal(node('workbuddyLoginGroup').hidden, true);
+  assert.equal(node('puterWebLoginGroup').hidden, false);
+});
+
+test('WorkBuddy edits may keep the stored credential and never display the refresh token', async () => {
+  const { context, node } = loadUI();
+  const account = workBuddyAccount();
+  vm.runInContext(`accounts = [${JSON.stringify(account)}]`, context);
+  assert.equal(context.getAccountToken(account), account.workbuddy_access_token);
+  assert.equal(context.hasSidebarAccountCredential(account), true);
+  assert.equal(context.hasSidebarAccountCredential({ account_type: 'workbuddy', enabled: true }), false);
+
+  node('accountType').value = 'workbuddy';
+  node('accountId').value = '11';
+  node('enabled').checked = true;
+  node('clientCookie').value = '';
+  let sent;
+  context.fetch = async (url, options) => { sent = { url, options }; return { ok: true }; };
+  context.clearAccountImportStatus = () => {};
+  context.closeModal = () => {};
+  context.loadAccounts = () => {};
+  context.showToast = () => {};
+  await context.saveAccount({ preventDefault() {} });
+
+  assert.equal(sent.url, '/api/accounts/11');
+  assert.equal(sent.options.method, 'PUT');
+  const body = JSON.parse(sent.options.body);
+  assert.equal(body.account_type, 'workbuddy');
+  // An empty submission must not overwrite the server-side credential.
+  assert.ok(!body.client_cookie || body.client_cookie === '', JSON.stringify(body));
+});
+
+test('WorkBuddy new-account modal starts the official login flow automatically', () => {
+  const { context, node } = loadUI();
+  let started = 0;
+  vm.runInContext(
+    'globalThis.WorkBuddyLogin = { start() { globalThis.__wbStarted = (globalThis.__wbStarted || 0) + 1; }, stop() {} };',
+    context,
+  );
+  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountModal').style = {};
+  node('accountId').value = '';
+  node('enabled').checked = true;
+  // The modal derives its type from the platform tab, which is reflected in the
+  // hidden accountType field.
+  node('accountType').value = 'workbuddy';
+  context.openModal();
+  started = vm.runInContext('globalThis.__wbStarted || 0', context);
+  assert.equal(started, 1);
+
+  // Editing an existing account must not auto-open the login popup.
+  vm.runInContext('globalThis.__wbStarted = 0', context);
+  context.openModal(workBuddyAccount());
+  started = vm.runInContext('globalThis.__wbStarted || 0', context);
+  assert.equal(started, 0);
+});
+
+test('workbuddy-auth module exposes a popup login without persisting tokens', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/workbuddy-auth.js'), 'utf8');
+  assert.match(source, /api\/workbuddy\/login/);
+  assert.match(source, /window\.open\(/);
+  assert.doesNotMatch(source, /localStorage\.setItem\([^)]*token/i);
+  assert.doesNotMatch(source, /document\.cookie/);
 });

@@ -93,6 +93,22 @@ type Account struct {
 	// auto/fast modes. It is intentionally separate from Build billing and
 	// passive request/token rate-limit headers.
 	GrokWebQuota GrokWebQuotaSnapshot `json:"grok_web_quota,omitempty"`
+
+	// WorkBuddyAccessToken is the short-lived Keycloak bearer token of a
+	// WorkBuddy (www.workbuddy.ai) account. WorkBuddyRefreshToken is the
+	// durable credential and is ROTATED by Keycloak on every refresh, so the
+	// rotated value must be written back. The refresh token is kept in its own
+	// field instead of the generic RefreshToken slot so account responses can
+	// redact it without touching other channels.
+	WorkBuddyAccessToken  string    `json:"workbuddy_access_token,omitempty"`
+	WorkBuddyRefreshToken string    `json:"workbuddy_refresh_token,omitempty"`
+	WorkBuddyExpiresAt    time.Time `json:"workbuddy_expires_at,omitempty"`
+	WorkBuddyUID          string    `json:"workbuddy_uid,omitempty"`
+	// WorkBuddyModelIDs is the last successful account-scoped /v3/config `cli`
+	// whitelist snapshot. An empty snapshot means "not synced yet", not "the
+	// account supports every model".
+	WorkBuddyModelIDs       []string  `json:"workbuddy_model_ids,omitempty"`
+	WorkBuddyModelsSyncedAt time.Time `json:"workbuddy_models_synced_at,omitempty"`
 }
 
 // GrokQuotaWindow is one explicit upstream usage or throttling dimension.
@@ -362,6 +378,7 @@ func (s *Store) seedModels() {
 	ctx := context.Background()
 	s.cleanupDeprecatedModelIDs(ctx)
 	s.reconcileLatestPuterModels(ctx)
+	s.reconcileLatestWorkBuddyModels(ctx)
 	existing, err := s.ListModels(ctx)
 	if err == nil && len(existing) > 0 {
 		s.ensureRequiredGrokChatModels(ctx)
@@ -376,6 +393,7 @@ func (s *Store) seedModels() {
 	models := BuildWarpSeedModels()
 	models = append(models, buildGrokSeedModels()...)
 	models = append(models, buildPuterSeedModels()...)
+	models = append(models, buildWorkBuddySeedModels()...)
 
 	for _, m := range models {
 		if _, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID); err == nil {
@@ -390,6 +408,7 @@ func (s *Store) seedModels() {
 
 	s.cleanupDeprecatedModelIDs(ctx)
 	s.reconcileLatestPuterModels(ctx)
+	s.reconcileLatestWorkBuddyModels(ctx)
 
 }
 

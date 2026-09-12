@@ -12,6 +12,7 @@ import (
 	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
+	"orchids-api/internal/workbuddy"
 )
 
 type cachedAccountClient struct {
@@ -94,6 +95,9 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	if strings.EqualFold(acc.AccountType, "puter") {
 		return puter.NewFromAccount(acc, cfg)
 	}
+	if strings.EqualFold(acc.AccountType, "workbuddy") {
+		return workbuddy.NewFromAccount(acc, cfg)
+	}
 	return nil
 }
 
@@ -172,6 +176,9 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 	writeString(acc.AgentMode)
 	writeString(acc.Email)
 	writeString(acc.Token)
+	writeString(acc.WorkBuddyAccessToken)
+	writeString(acc.WorkBuddyRefreshToken)
+	writeString(acc.WorkBuddyUID)
 	// Do not include stats-only timestamps like UpdatedAt here.
 	// Request/usage accounting bumps UpdatedAt on every call, and using it in the
 	// fingerprint would force unnecessary client rebuilds and drop keep-alive pools.

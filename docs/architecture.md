@@ -4,7 +4,7 @@
 
 `Orchids-2api` 当前由两条主处理链组成：
 
-- `internal/handler`：处理 `warp`、`puter`
+- `internal/handler`：处理 `warp`、`puter`、`workbuddy`
 - `internal/grok`：处理 `grok`
 
 整体目标：
@@ -25,7 +25,7 @@ Orchids-2api/
 │   ├── debug/                   # 调试日志
 │   ├── errors/                  # 错误分类
 │   ├── grok/                    # Grok chat/images/files/admin
-│   ├── handler/                 # Warp/Puter 主处理器
+│   ├── handler/                 # Warp/Puter/WorkBuddy 主处理器
 │   ├── loadbalancer/            # 账号选择与状态管理
 │   ├── middleware/              # trace/log/session/concurrency
 │   ├── provider/                # 通道到 client 的注册表
@@ -36,7 +36,8 @@ Orchids-2api/
 │   ├── tokencache/              # token / prompt cache
 │   ├── upstream/                # 统一上游事件结构
 │   ├── util/                    # 通用工具
-│   └── warp/                    # Warp 上游客户端
+│   ├── warp/                    # Warp 上游客户端
+│   └── workbuddy/               # WorkBuddy 国际版上游客户端
 ├── web/                         # 嵌入式前端资源
 └── docs/
 ```

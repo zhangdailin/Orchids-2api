@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
+	"orchids-api/internal/workbuddy"
 )
 
 const (
@@ -156,6 +158,8 @@ func normalizeAdminModelChannel(channel string) string {
 		return "Warp"
 	case "puter":
 		return "Puter"
+	case "workbuddy":
+		return "WorkBuddy"
 	case "grok":
 		return "Grok"
 	default:
@@ -202,10 +206,87 @@ func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config,
 		return discoverWarpModelsConcurrent(ctx, cfg, s, concurrency)
 	case "puter":
 		return discoverPuterModelsConcurrent(ctx, cfg, s, concurrency)
+	case "workbuddy":
+		return discoverWorkBuddyModels(ctx, cfg, s)
 	case "grok":
 		return discoverGrokModelsConcurrent(ctx, cfg, s, concurrency)
 	default:
 		return nil, "", fmt.Errorf("unsupported channel: %s", channel)
+	}
+}
+
+// discoverWorkBuddyModels reads the account-scoped WorkBuddy model catalog.
+// GET /v3/config is an authenticated control-plane endpoint, so a successful
+// read is itself proof that the credential works; no completion probe is sent
+// (the upstream bills per token, unlike Puter's free test_mode).
+func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
+	source := "workbuddy_cli_models"
+	accounts, err := enabledAccountsByType(ctx, s, "workbuddy")
+	if err != nil {
+		return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", err)
+	}
+	if len(accounts) == 0 {
+		return nil, "", fmt.Errorf("workbuddy has no enabled accounts")
+	}
+
+	var lastErr error
+	for _, acc := range accounts {
+		client := workbuddy.NewFromAccount(acc, refreshModelRequestConfig(cfg, "workbuddy"))
+		models, fetchErr := client.FetchModels(ctx)
+		client.Close()
+		if fetchErr != nil {
+			lastErr = fetchErr
+			continue
+		}
+		candidates := workBuddyCatalogToDiscovered(models)
+		if len(candidates) == 0 {
+			lastErr = fmt.Errorf("workbuddy account #%d returned an empty cli catalog", acc.ID)
+			continue
+		}
+		persistWorkBuddyCatalogSnapshot(ctx, s, acc, models)
+		return candidates, source, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("workbuddy model discovery failed")
+	}
+	return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", lastErr)
+}
+
+func workBuddyCatalogToDiscovered(models []workbuddy.WorkBuddyModel) []discoveredModel {
+	out := make([]discoveredModel, 0, len(models))
+	for i, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			continue
+		}
+		name := strings.TrimSpace(model.Name)
+		if name == "" {
+			name = id
+		}
+		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
+	}
+	return out
+}
+
+// persistWorkBuddyCatalogSnapshot records the account-scoped whitelist so model
+// selection can be checked against what this account may actually run.
+func persistWorkBuddyCatalogSnapshot(ctx context.Context, s *store.Store, acc *store.Account, models []workbuddy.WorkBuddyModel) {
+	if acc == nil || acc.ID == 0 {
+		return
+	}
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		if id := strings.TrimSpace(model.ID); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	acc.WorkBuddyModelIDs = ids
+	acc.WorkBuddyModelsSyncedAt = time.Now()
+	if err := s.UpdateAccount(ctx, acc); err != nil {
+		slog.Warn("failed to persist workbuddy model snapshot", "account_id", acc.ID, "error", err)
 	}
 }
 
@@ -927,7 +1008,7 @@ func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Confi
 	}
 
 	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "warp", "puter":
+	case "warp", "puter", "workbuddy":
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
 			cfg.RequestTimeout = 15
 		}
@@ -1050,6 +1131,11 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 	if strings.EqualFold(strings.TrimSpace(channel), "puter") {
 		return strings.HasPrefix(strings.TrimSpace(source), "puter_public_models")
+	}
+	if strings.EqualFold(strings.TrimSpace(channel), "workbuddy") {
+		// GET /v3/config is the authoritative cli whitelist for the account, so
+		// models that disappeared from it must not stay routable.
+		return strings.HasPrefix(strings.TrimSpace(source), "workbuddy_cli_models")
 	}
 	if !strings.EqualFold(strings.TrimSpace(channel), "warp") {
 		return false

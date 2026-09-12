@@ -4,6 +4,7 @@ let warpDeviceLoginId = "";
 let warpDeviceLoginTimer = null;
 let grokDeviceLoginId = "";
 let grokDeviceLoginTimer = null;
+let workbuddyLoginActive = false;
 
 let accounts = [];
 let currentPlatform = '';
@@ -213,6 +214,8 @@ function applyTokenLabels(type) {
   const accountId = String(document.getElementById("accountId")?.value || "");
   const puterWebLoginGroup = document.getElementById("puterWebLoginGroup");
   if (puterWebLoginGroup) puterWebLoginGroup.hidden = type !== "puter" || Boolean(accountId);
+  const workbuddyLoginGroup = document.getElementById("workbuddyLoginGroup");
+  if (workbuddyLoginGroup) workbuddyLoginGroup.hidden = type !== "workbuddy" || Boolean(accountId);
   const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
   if (warpDeviceLoginGroup) {
     warpDeviceLoginGroup.hidden = type !== "warp" || Boolean(accountId);
@@ -237,6 +240,13 @@ function applyTokenLabels(type) {
         ? "Puter 编辑时仅保存第一行 auth_token。可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取"
         : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
       input.required = true;
+    } else if (type === 'workbuddy') {
+      label.textContent = "WorkBuddy 凭证";
+      input.placeholder = "每行一个 refreshToken；也接受会话 JSON 或 accessToken";
+      hint.textContent = accountId
+        ? "WorkBuddy 编辑时留空即保留服务器上已有的凭证；填写则以新凭证覆盖。"
+        : "推荐直接用上方「使用 WorkBuddy 官方网页登录」自动获取凭证。也可以手填或批量粘贴桌面端会话 refreshToken（约 1 年有效，服务器会自动轮换并回写），或整段 auth/account JSON / accessToken。";
+      input.required = false;
     } else {
     label.textContent = "Cookie / __client / __session";
     input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
@@ -622,6 +632,8 @@ function accountTypeLabel(type) {
       return "Puter";
     case "grok":
       return "Grok";
+    case "workbuddy":
+      return "WorkBuddy";
     default:
       return "Warp";
   }
@@ -630,6 +642,14 @@ function accountTypeLabel(type) {
 function getActiveAccountType() {
   const platform = String(currentPlatform || "").trim().toLowerCase();
   return platform || "warp";
+}
+
+// selectedPlatformAccountType resolves the account type for a brand-new account.
+// The hidden field already carries the selected platform; only fall back to the
+// ambient platform when it is empty (for example on a cold page load).
+function selectedPlatformAccountType(typeEl) {
+  const selected = String(typeEl?.value || "").trim().toLowerCase();
+  return selected || getActiveAccountType();
 }
 
 function setAccountModalType(type) {
@@ -708,7 +728,7 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
 function renderPlatformTabs() {
   const container = document.getElementById("platformFilters");
   if (!container) return;
-  const defaultTypes = ["warp", "puter", "grok"];
+  const defaultTypes = ["warp", "puter", "workbuddy", "grok"];
   const types = new Set([...defaultTypes, ...accounts.map(normalizeAccountType)]);
   const sorted = Array.from(types).sort();
   const tabs = [...sorted];
@@ -755,7 +775,7 @@ function evaluateAccountStatus(acc) {
     const quota = getQuotaStats(acc);
     const limitText = quota && quota.limit > 0 ? quota.limit.toLocaleString() : '未知';
     const type = normalizeAccountType(acc);
-    const providerName = type === 'warp' ? 'Warp' : 'Puter';
+    const providerName = accountTypeLabel(type);
     return {
       normal: true,
       text: '额度不足',
@@ -795,6 +815,10 @@ function evaluateAccountStatus(acc) {
     if (!getAccountToken(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Puter auth_token' };
     }
+  } else if (type === 'workbuddy') {
+    if (!getAccountToken(acc)) {
+      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 WorkBuddy 凭证（refreshToken / accessToken）' };
+    }
   } else if (!acc.session_id && !acc.session_cookie) {
     return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少会话信息' };
   }
@@ -802,7 +826,7 @@ function evaluateAccountStatus(acc) {
   const quota = getQuotaStats(acc);
   if (quota && quota.limit > 0 && quota.remaining <= 0) {
     if (normalizeAccountType(acc) === 'puter' || normalizeAccountType(acc) === 'warp') {
-      const providerName = normalizeAccountType(acc) === 'warp' ? 'Warp' : 'Puter';
+      const providerName = accountTypeLabel(normalizeAccountType(acc));
       return {
         normal: true,
         text: '额度不足',
@@ -1383,6 +1407,7 @@ function toggleSelectAll(checked) {
 // Open modal
 function openModal(account = null) {
   globalThis.PuterWebLogin?.stop();
+  stopWorkBuddyLogin();
   const modal = document.getElementById("accountModal");
   const title = document.getElementById("modalTitle");
   const form = document.getElementById("accountForm");
@@ -1422,7 +1447,9 @@ function openModal(account = null) {
       title.textContent = "添加账号";
       form.reset();
       document.getElementById("accountId").value = "";
-      setAccountModalType(getActiveAccountType());
+      // Prefer the platform the operator explicitly selected over the ambient
+      // list default, so "add account" on the WorkBuddy tab creates a WorkBuddy.
+      setAccountModalType(selectedPlatformAccountType(typeEl));
       document.getElementById("enabled").checked = true;
       document.getElementById("clientCookie").value = "";
       if (modeSelect) modeSelect.value = "sso";
@@ -1437,6 +1464,55 @@ function openModal(account = null) {
 
   applyValues();
   finalizeModal();
+  if (!account && normalizeAccountType({ account_type: typeEl ? typeEl.value : getActiveAccountType() }) === "workbuddy") {
+    startWorkBuddyLogin();
+  }
+}
+
+// WorkBuddy official login lifecycle. The popup is opened by workbuddy-auth.js;
+// this module only tracks whether a transaction is running so a later modal
+// close (or a non-WorkBuddy account) can cancel it safely.
+function startWorkBuddyLogin() {
+  if (workbuddyLoginActive) return;
+  const login = globalThis.WorkBuddyLogin;
+  if (!login || typeof login.start !== "function") return;
+  workbuddyLoginActive = true;
+  login.start();
+  // The module owns its own completion path (it closes the modal on success),
+  // so release the guard when the modal is closed or reopened.
+  const watch = window.setInterval(() => {
+    if (!workbuddyLoginActive) {
+      window.clearInterval(watch);
+      return;
+    }
+    const modal = document.getElementById("accountModal");
+    const statusNode = document.getElementById("workbuddyLoginStatus");
+    if (!modal || !modal.classList.contains("active")) {
+      workbuddyLoginActive = false;
+      window.clearInterval(watch);
+      return;
+    }
+    if (statusNode && statusNode.hidden === false && statusNode.classList.contains("is-error")) {
+      workbuddyLoginActive = false;
+      window.clearInterval(watch);
+    }
+  }, 1000);
+}
+
+function stopWorkBuddyLogin() {
+  workbuddyLoginActive = false;
+  const login = globalThis.WorkBuddyLogin;
+  if (login && typeof login.stop === "function") {
+    login.stop();
+  }
+  const statusNode = document.getElementById("workbuddyLoginStatus");
+  if (statusNode) {
+    statusNode.hidden = true;
+    statusNode.textContent = "";
+    if (statusNode.classList) {
+      statusNode.classList.remove("is-active", "is-error");
+    }
+  }
 }
 
 // Close modal
@@ -1446,6 +1522,7 @@ function closeModal() {
   resetWarpDeviceLoginStatus();
   stopGrokDeviceLogin(true);
   resetGrokDeviceLoginStatus();
+  stopWorkBuddyLogin();
   const modal = document.getElementById("accountModal");
   modal.classList.remove("active");
   modal.style.display = "none";
@@ -1487,7 +1564,10 @@ async function saveAccount(e) {
     if (oauthExpires) data.oauth_expires_at = oauthExpires;
   }
 
-  if (type !== "warp" && !isOAuth && credentials.length === 0) {
+  // A WorkBuddy edit may legitimately keep the stored credential: the refresh
+  // token is never returned to the browser, so an empty field means "unchanged".
+  const keepStoredWorkBuddyCredential = Boolean(id) && type === "workbuddy" && splitCredentials.length === 0;
+  if (type !== "warp" && !isOAuth && credentials.length === 0 && !keepStoredWorkBuddyCredential) {
     if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
       const details = []
         .concat(duplicateInputs.slice(0, 4).map((item) => `输入重复: ${item}`))

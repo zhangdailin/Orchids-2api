@@ -36,6 +36,12 @@
          <small class="helper-text">在 puter.com 登录并授权本管理站点，服务器验证后保存为 Puter 账号凭据；不接收密码。仅验证账号和额度，不自动发起付费 AI 请求。原有手填方式仍保留。</small>
          <div class="account-import-status" id="puterWebLoginStatus" hidden></div>
        </div>
+       <div class="form-group" id="workbuddyLoginGroup" hidden>
+         <label class="form-label">官方 WorkBuddy 登录（国际版）</label>
+         <button class="btn btn-secondary" id="workbuddyLoginButton" type="button" onclick="WorkBuddyLogin.start()">使用 WorkBuddy 官方网页登录</button>
+         <small class="helper-text">在 www.workbuddy.ai 完成登录并授权本管理站点；服务端只保存 access/refresh token，读取不到密码。授权完成后会自动同步该账号的模型目录，refreshToken 由服务端自动轮换。原有手填方式仍保留。</small>
+         <div class="account-import-status" id="workbuddyLoginStatus" hidden></div>
+       </div>
        <div class="form-group" id="warpDeviceLoginGroup" hidden>
          <label class="form-label">官方 Warp 登录</label>
          <button class="btn btn-secondary" id="warpDeviceLoginButton" type="button" onclick="startWarpDeviceLogin()">使用 Warp 官方网页登录</button>

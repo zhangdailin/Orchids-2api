@@ -25,6 +25,7 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/internal/tokencache"
+	"orchids-api/internal/workbuddy"
 )
 
 func main() {
@@ -143,9 +144,17 @@ func main() {
 	registry := provider.NewRegistry()
 	registry.Register("warp", provider.NewWarpProvider())
 	registry.Register("puter", provider.NewPuterProvider())
+	registry.Register("workbuddy", provider.NewWorkBuddyProvider())
 	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {
 		if p := registry.Get(acc.AccountType); p != nil {
 			if client, ok := p.NewClient(acc, c).(handler.UpstreamClient); ok {
+				// WorkBuddy rotates its refresh token on every renewal; give the
+				// client the store so the rotated credential survives the call.
+				if wb, ok := client.(interface {
+					SetAccountStore(workbuddy.AccountUpdater)
+				}); ok {
+					wb.SetAccountStore(s)
+				}
 				return client
 			}
 		}

@@ -1,0 +1,357 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/goccy/go-json"
+
+	"orchids-api/internal/config"
+	"orchids-api/internal/store"
+	"orchids-api/internal/workbuddy"
+)
+
+// errWorkBuddyMissingCredential is returned when neither a refresh token nor an
+// access token was supplied.
+var errWorkBuddyMissingCredential = errors.New("workbuddy account is missing credentials")
+
+// The WorkBuddy international channel keeps its durable refresh token out of
+// the generic RefreshToken slot: the admin UI must never receive it, and an
+// ordinary edit that omits the token field must not wipe it.
+
+// workBuddyCredentials mirrors the credential material the client resolves.
+type workBuddyCredentials struct {
+	AccessToken  string
+	RefreshToken string
+	UID          string
+	Email        string
+	ExpiresAt    time.Time
+}
+
+func resolveWorkBuddyCredentials(acc *store.Account) workBuddyCredentials {
+	if acc == nil {
+		return workBuddyCredentials{}
+	}
+
+	creds := workBuddyCredentials{
+		AccessToken:  strings.TrimSpace(acc.WorkBuddyAccessToken),
+		RefreshToken: strings.TrimSpace(acc.WorkBuddyRefreshToken),
+		UID:          strings.TrimSpace(acc.WorkBuddyUID),
+		Email:        strings.TrimSpace(acc.Email),
+		ExpiresAt:    acc.WorkBuddyExpiresAt,
+	}
+
+	for _, raw := range []string{acc.ClientCookie, acc.Token, acc.SessionCookie, acc.RefreshToken} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		parsed := parseWorkBuddyCredentialBlob(raw)
+		if creds.AccessToken == "" {
+			creds.AccessToken = parsed.AccessToken
+		}
+		if creds.RefreshToken == "" {
+			creds.RefreshToken = parsed.RefreshToken
+		}
+		if creds.UID == "" {
+			creds.UID = parsed.UID
+		}
+		if creds.Email == "" {
+			creds.Email = parsed.Email
+		}
+		if creds.ExpiresAt.IsZero() {
+			creds.ExpiresAt = parsed.ExpiresAt
+		}
+	}
+
+	claims := workbuddy.DecodeClaims(creds.AccessToken)
+	if creds.UID == "" && claims.Sub != "" {
+		creds.UID = claims.Sub
+	}
+	if creds.Email == "" && claims.Email != "" {
+		creds.Email = claims.Email
+	}
+	if creds.ExpiresAt.IsZero() && claims.ExpiresAt > 0 {
+		creds.ExpiresAt = time.Unix(claims.ExpiresAt, 0)
+	}
+	return creds
+}
+
+func parseWorkBuddyCredentialBlob(raw string) workBuddyCredentials {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return workBuddyCredentials{}
+	}
+
+	if strings.HasPrefix(raw, "{") {
+		var doc struct {
+			AccessToken  string `json:"accessToken"`
+			RefreshToken string `json:"refreshToken"`
+			ExpiresAt    int64  `json:"expiresAt"`
+			UID          string `json:"uid"`
+			Auth         *struct {
+				AccessToken  string `json:"accessToken"`
+				RefreshToken string `json:"refreshToken"`
+				ExpiresAt    int64  `json:"expiresAt"`
+			} `json:"auth"`
+			Account *struct {
+				UID      string `json:"uid"`
+				Email    string `json:"email"`
+				Nickname string `json:"nickname"`
+			} `json:"account"`
+		}
+		if err := json.Unmarshal([]byte(raw), &doc); err == nil {
+			creds := workBuddyCredentials{
+				AccessToken:  cleanWorkBuddyToken(doc.AccessToken),
+				RefreshToken: cleanWorkBuddyToken(doc.RefreshToken),
+				UID:          strings.TrimSpace(doc.UID),
+			}
+			expiresAt := doc.ExpiresAt
+			if doc.Auth != nil {
+				if creds.AccessToken == "" {
+					creds.AccessToken = cleanWorkBuddyToken(doc.Auth.AccessToken)
+				}
+				if creds.RefreshToken == "" {
+					creds.RefreshToken = cleanWorkBuddyToken(doc.Auth.RefreshToken)
+				}
+				if expiresAt == 0 {
+					expiresAt = doc.Auth.ExpiresAt
+				}
+			}
+			if doc.Account != nil {
+				if creds.UID == "" {
+					creds.UID = strings.TrimSpace(doc.Account.UID)
+				}
+				creds.Email = strings.TrimSpace(doc.Account.Email)
+				if creds.Email == "" && strings.Contains(doc.Account.Nickname, "@") {
+					creds.Email = strings.TrimSpace(doc.Account.Nickname)
+				}
+			}
+			if expiresAt > 0 {
+				// The desktop session file stores milliseconds.
+				if expiresAt > 32503680000 {
+					expiresAt /= 1000
+				}
+				creds.ExpiresAt = time.Unix(expiresAt, 0)
+			}
+			if creds.AccessToken != "" || creds.RefreshToken != "" {
+				return creds
+			}
+		}
+	}
+
+	if strings.Contains(raw, "=") {
+		var creds workBuddyCredentials
+		for _, part := range splitWorkBuddyPairs(raw) {
+			key, value, ok := strings.Cut(part, "=")
+			if !ok {
+				continue
+			}
+			value = cleanWorkBuddyToken(value)
+			if value == "" {
+				continue
+			}
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "accesstoken", "access_token":
+				creds.AccessToken = value
+			case "refreshtoken", "refresh_token":
+				creds.RefreshToken = value
+			case "uid", "sub", "userid", "user_id":
+				creds.UID = value
+			case "email":
+				creds.Email = value
+			}
+		}
+		if creds.AccessToken != "" || creds.RefreshToken != "" {
+			return creds
+		}
+	}
+
+	token := cleanWorkBuddyToken(raw)
+	claims := workbuddy.DecodeClaims(token)
+	if claims.Sub != "" || claims.ExpiresAt > 0 {
+		creds := workBuddyCredentials{AccessToken: token, UID: claims.Sub, Email: claims.Email}
+		if claims.ExpiresAt > 0 {
+			creds.ExpiresAt = time.Unix(claims.ExpiresAt, 0)
+		}
+		return creds
+	}
+	return workBuddyCredentials{RefreshToken: token}
+}
+
+func splitWorkBuddyPairs(raw string) []string {
+	replacer := strings.NewReplacer("\r\n", "\n", ";", "\n", ",", "\n")
+	out := make([]string, 0, 4)
+	for _, line := range strings.Split(replacer.Replace(raw), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func cleanWorkBuddyToken(value string) string {
+	value = strings.Trim(strings.TrimSpace(value), `"'`)
+	if value == "" {
+		return ""
+	}
+	if idx := strings.Index(value, "="); idx > 0 {
+		switch strings.ToLower(strings.TrimSpace(value[:idx])) {
+		case "bearer", "authorization":
+			value = strings.TrimSpace(value[idx+1:])
+		}
+	}
+	value = strings.TrimSpace(value)
+	if len(value) > 7 && strings.EqualFold(value[:7], "bearer ") {
+		value = strings.TrimSpace(value[7:])
+	}
+	return strings.Trim(value, `"'`)
+}
+
+// NormalizeWorkBuddyCredentials stores a newly submitted credential in the
+// WorkBuddy fields and keeps the legacy ClientCookie mirror in sync so the
+// shared credential de-duplication and export paths keep working.
+func NormalizeWorkBuddyCredentials(acc *store.Account) bool {
+	if acc == nil {
+		return false
+	}
+	creds := resolveWorkBuddyCredentials(acc)
+	if creds.AccessToken == "" && creds.RefreshToken == "" {
+		return false
+	}
+	acc.WorkBuddyAccessToken = creds.AccessToken
+	if creds.RefreshToken != "" {
+		acc.WorkBuddyRefreshToken = creds.RefreshToken
+	}
+	if creds.UID != "" {
+		acc.WorkBuddyUID = creds.UID
+	}
+	if creds.Email != "" && strings.TrimSpace(acc.Email) == "" {
+		acc.Email = creds.Email
+	}
+	if !creds.ExpiresAt.IsZero() {
+		acc.WorkBuddyExpiresAt = creds.ExpiresAt
+	}
+	// The WorkBuddy credential lives in its own fields only: the generic slots
+	// are shared with channels whose credentials have different semantics, and
+	// writing a JWT there would leak it through the account list.
+	acc.Token = ""
+	acc.RefreshToken = ""
+	acc.SessionCookie = ""
+	acc.ClientCookie = ""
+	return true
+}
+
+// PreserveWorkBuddyCredentialsOnEdit keeps server-side credentials when the
+// admin UI submits an edit without re-entering the token (secrets are redacted
+// on read, so an empty field means "keep").
+func PreserveWorkBuddyCredentialsOnEdit(acc, existing *store.Account) {
+	if acc == nil || existing == nil {
+		return
+	}
+	if strings.TrimSpace(acc.WorkBuddyAccessToken) == "" {
+		acc.WorkBuddyAccessToken = existing.WorkBuddyAccessToken
+	}
+	if strings.TrimSpace(acc.WorkBuddyRefreshToken) == "" {
+		acc.WorkBuddyRefreshToken = existing.WorkBuddyRefreshToken
+	}
+	if strings.TrimSpace(acc.WorkBuddyUID) == "" {
+		acc.WorkBuddyUID = existing.WorkBuddyUID
+	}
+	if acc.WorkBuddyExpiresAt.IsZero() {
+		acc.WorkBuddyExpiresAt = existing.WorkBuddyExpiresAt
+	}
+	if !isFullWorkBuddyCatalog(acc.WorkBuddyModelIDs) {
+		// An edit must not erase the account-scoped catalog snapshot, and the UI
+		// has no way to submit it.
+		acc.WorkBuddyModelIDs = append([]string(nil), existing.WorkBuddyModelIDs...)
+		acc.WorkBuddyModelsSyncedAt = existing.WorkBuddyModelsSyncedAt
+	}
+}
+
+// isFullWorkBuddyCatalog reports whether a snapshot carries a plausible catalog.
+// The admin API never accepts the snapshot from a client, so this is a guard
+// against an accidental partial overwrite rather than a validation rule.
+func isFullWorkBuddyCatalog(ids []string) bool {
+	return len(ids) >= 4
+}
+
+// RedactWorkBuddyOutput hides the durable refresh token and unrelated legacy
+// secrets while leaving the access token visible (the management UI shows a
+// truncated form so an operator can tell whether a credential is configured).
+func RedactWorkBuddyOutput(acc *store.Account) *store.Account {
+	if acc == nil {
+		return nil
+	}
+	out := *acc
+	out.WorkBuddyRefreshToken = ""
+	out.RefreshToken = ""
+	out.SessionCookie = ""
+	out.Token = ""
+	return &out
+}
+
+// WorkBuddyCredentialKey identifies an account by its durable credential so the
+// duplicate detector can reject the same account twice.
+func WorkBuddyCredentialKey(acc *store.Account) string {
+	creds := resolveWorkBuddyCredentials(acc)
+	for _, candidate := range []string{creds.RefreshToken, creds.AccessToken} {
+		if strings.TrimSpace(candidate) != "" {
+			return "workbuddy:" + candidate
+		}
+	}
+	return ""
+}
+
+// WorkBuddyAccessTokenPreview renders the truncated access token the account
+// table shows. It never returns the refresh token.
+func WorkBuddyAccessTokenPreview(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	token := strings.TrimSpace(acc.WorkBuddyAccessToken)
+	if token == "" {
+		creds := resolveWorkBuddyCredentials(acc)
+		token = strings.TrimSpace(creds.AccessToken)
+	}
+	if token == "" {
+		return ""
+	}
+	if len(token) > 20 {
+		return token[:8] + "..." + token[len(token)-8:]
+	}
+	return token
+}
+
+// verifyWorkBuddyAccount proves the credential works before it is persisted and
+// applies the account-scoped model catalog on the way.
+func verifyWorkBuddyAccount(ctx context.Context, acc *store.Account, cfg *config.Config) (string, int, error) {
+	if acc == nil {
+		return "", 0, nil
+	}
+	creds := resolveWorkBuddyCredentials(acc)
+	if creds.RefreshToken == "" && creds.AccessToken == "" {
+		return "", 400, errWorkBuddyMissingCredential
+	}
+
+	client := workbuddy.NewFromAccount(acc, cfg)
+	defer client.Close()
+
+	models, err := client.FetchModels(ctx)
+	if err != nil {
+		return "", 502, err
+	}
+
+	if len(models) > 0 {
+		ids := make([]string, 0, len(models))
+		for _, model := range models {
+			if id := strings.TrimSpace(model.ID); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		acc.WorkBuddyModelIDs = ids
+		acc.WorkBuddyModelsSyncedAt = time.Now()
+	}
+	return "", 0, nil
+}

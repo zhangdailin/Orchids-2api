@@ -444,7 +444,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	preSelectWarpRequest := strings.EqualFold(targetChannel, "warp")
 	preSelectPuterRequest := strings.EqualFold(targetChannel, "puter")
-	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest
+	preSelectWorkBuddyRequest := strings.EqualFold(targetChannel, "workbuddy")
+	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest || preSelectWorkBuddyRequest
 	warpChatMode := preSelectWarpRequest && isWarpChatModel(req.Model)
 	warpAgentMode := preSelectWarpRequest && isWarpAgentModel(req.Model)
 	suggestionMode := isSuggestionMode(req.Messages)
@@ -550,11 +551,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
 		isPuterRequest = true
 	}
-	isPassthroughRequest := isWarpRequest || isPuterRequest
+	isWorkBuddyRequest := preSelectWorkBuddyRequest
+	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "workbuddy") {
+		isWorkBuddyRequest = true
+	}
+	isPassthroughRequest := isWarpRequest || isPuterRequest || isWorkBuddyRequest
 	if isPassthroughRequest {
 		channel := "warp"
 		if isPuterRequest {
 			channel = "puter"
+		} else if isWorkBuddyRequest {
+			channel = "workbuddy"
 		}
 		// Passthrough channels do not trim history/tool results.
 		if verboseDiagnostics {
@@ -595,15 +602,19 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		mappedModel = upstreamWarpModelID(req.Model)
-	} else if isPuterRequest {
+	} else if isPuterRequest || isWorkBuddyRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
 	var builtPrompt string
-	if isPuterRequest {
+	if isPuterRequest || isWorkBuddyRequest {
 		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
 		if builtPrompt == "" {
-			builtPrompt = "puter request"
+			if isWorkBuddyRequest {
+				builtPrompt = "workbuddy request"
+			} else {
+				builtPrompt = "puter request"
+			}
 		}
 	} else {
 		builtPrompt = warp.PreviewUserQuery("", req.Messages, req.System, chatSessionID)
@@ -660,6 +671,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	breakdownProfile := "warp"
 	if isPuterRequest {
 		breakdownProfile = "puter"
+	}
+	if isWorkBuddyRequest {
+		// WorkBuddy receives raw OpenAI-style messages like Puter does, so the
+		// generic (non-Warp) breakdown is the accurate profile here too.
+		breakdownProfile = "workbuddy"
 	}
 	if isWarpRequest {
 		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, req.System, effectiveTools, gateNoTools, chatSessionID); err == nil {

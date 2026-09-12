@@ -298,6 +298,27 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	if !acc.GrokWebQuota.SyncedAt.IsZero() {
 		updated.GrokWebQuota = acc.GrokWebQuota
 	}
+	// WorkBuddy credentials are rotated by the upstream (Keycloak rotates the
+	// refresh token on every renewal) and account updates are frequently
+	// partial, so an empty value means "keep what is stored", never "erase".
+	if token := strings.TrimSpace(acc.WorkBuddyAccessToken); token != "" {
+		updated.WorkBuddyAccessToken = token
+	}
+	if token := strings.TrimSpace(acc.WorkBuddyRefreshToken); token != "" {
+		updated.WorkBuddyRefreshToken = token
+	}
+	if token := strings.TrimSpace(acc.WorkBuddyUID); token != "" {
+		updated.WorkBuddyUID = token
+	}
+	if !acc.WorkBuddyExpiresAt.IsZero() {
+		updated.WorkBuddyExpiresAt = acc.WorkBuddyExpiresAt
+	}
+	if len(acc.WorkBuddyModelIDs) > 0 {
+		updated.WorkBuddyModelIDs = append([]string(nil), acc.WorkBuddyModelIDs...)
+	}
+	if !acc.WorkBuddyModelsSyncedAt.IsZero() {
+		updated.WorkBuddyModelsSyncedAt = acc.WorkBuddyModelsSyncedAt
+	}
 	updated.UpdatedAt = time.Now()
 
 	data, err := s.marshalAccount(&updated)

@@ -20,6 +20,10 @@ server
 go.work
 go.work.sum
 
+# Local Go build cache (used when the default cache directory is not writable)
+.gocache/
+.gotmp/
+
 # Dependency directories
 vendor/
 node_modules/

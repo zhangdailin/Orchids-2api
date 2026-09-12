@@ -10,6 +10,7 @@
 |---|---|---|
 | `/warp/v1/messages` | POST | Warp 通道 Claude Messages 代理 |
 | `/puter/v1/messages` | POST | Puter 通道 Claude Messages 代理 |
+| `/workbuddy/v1/messages` | POST | WorkBuddy 国际版 Claude Messages 代理 |
 | `/grok/v1/messages` | POST | Grok 通道 Anthropic Messages 兼容入口 |
 | `/v1/messages` | POST | Grok Messages 兼容别名 |
 | `/*/v1/messages/count_tokens` | POST | 输入 token 估算 |
@@ -20,6 +21,7 @@
 |---|---|---|
 | `/warp/v1/chat/completions` | POST | Warp OpenAI 兼容入口 |
 | `/puter/v1/chat/completions` | POST | Puter OpenAI 兼容入口 |
+| `/workbuddy/v1/chat/completions` | POST | WorkBuddy 国际版 OpenAI 兼容入口 |
 | `/grok/v1/chat/completions` | POST | Grok OpenAI 兼容入口 |
 | `/v1/chat/completions` | POST | Grok 兼容别名 |
 
@@ -85,6 +87,7 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/v1/models/{id}` | GET | 查询单个模型 |
 | `/warp/v1/models` | GET | Warp 模型列表 |
 | `/puter/v1/models` | GET | Puter 模型列表 |
+| `/workbuddy/v1/models` | GET | WorkBuddy 国际版模型列表 |
 | `/grok/v1/models` | GET | Grok 模型列表 |
 | `/health` | GET | 健康检查 |
 | `/metrics` | GET | Prometheus 指标 |
@@ -104,6 +107,8 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/api/warp/device-auth` | POST | 启动 Warp 官方网页登录 |
 | `/api/warp/device-auth/{id}` | GET/DELETE | 查询授权状态 / 取消授权 |
 | `/api/puter/web-login` | POST | 试验：验证 Puter 官方弹窗授权并保存账号；需管理认证和同源 JSON 请求 |
+| `/api/workbuddy/login` | POST | 发起 WorkBuddy 国际版官方浏览器登录（返回 `id` 与官方 `verification_uri_complete`） |
+| `/api/workbuddy/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
 | `/api/keys` | GET/POST | API Key 列表 / 创建 |
 | `/api/keys/{id}` | PATCH/DELETE | 更新 API Key 状态或访问策略 / 删除 |
 | `/api/models` | GET/POST | 模型列表 / 创建模型 |
@@ -263,9 +268,34 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 注意：
 
 - 当前刷新是“来源同步”；Puter 会额外使用账号 `test_mode` 逐模型验证
+- WorkBuddy 使用 `GET /v3/config` 的 `cli` 白名单（鉴权成功即视为验证通过，不额外消耗额度），返回 `source=workbuddy_cli_models`
 - 来源拿不到的模型会被删除
 
 ## 5. 常用请求示例
+
+### 5.0 WorkBuddy 国际版
+
+推荐直接用管理页面的 **WorkBuddy 官方网页登录**（详见 §6）。也可以手填凭证：账号（`account_type: "workbuddy"`）至少需要一个
+`refreshToken` 或 `accessToken`，可以从桌面端会话文件
+`%LOCALAPPDATA%\CodeBuddyExtension\Data\Public\auth\workbuddy-desktop-ai.info` 取得；也可以整段 JSON 直接粘贴到管理页面的凭证输入框，
+服务端会自动解析 `auth.accessToken` / `auth.refreshToken` / `account.uid`。
+
+```bash
+curl -s http://127.0.0.1:3002/workbuddy/v1/messages \
+  -H 'Authorization: Bearer sk-...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "hy3",
+    "stream": true,
+    "messages": [{"role":"user","content":"用一段话解释 CAP 定理"}]
+  }'
+```
+
+要点：
+
+- 上游强制 `stream: true`；服务端按此组包，`messages[0]` 缺失时自动补一条最小 system
+- 上游把业务错误放在 200 信封里：`6004` = 该模型频率限制（换模型即可），`12153` = 会话失效需重新登录
+- refreshToken 由 Keycloak 每次刷新轮换，服务端会在过期前自动刷新并回写账号记录；管理页面不会返回 refreshToken
 
 ### 5.1 Puter Claude Messages 工具首轮
 
@@ -303,7 +333,38 @@ curl -s http://127.0.0.1:3002/grok/v1/chat/completions \
   }'
 ```
 
-## 6. 错误约定
+## 6. WorkBuddy 官方浏览器登录
+
+管理页面「添加账号 → WorkBuddy 平台 → 使用 WorkBuddy 官方网页登录」等价于下面这组请求；
+服务端不读取密码，只申请一个上游登录事务并轮询换取 token。
+
+```bash
+# 1) 申请登录事务（同源请求，需管理会话 Cookie）
+curl -s http://127.0.0.1:3002/api/workbuddy/login \
+  -H 'Content-Type: application/json' \
+  -H 'Origin: http://127.0.0.1:3002' \
+  -d '{"enabled":true}'
+# → {"id":"<login-id>","status":"pending","verification_uri_complete":"https://www.workbuddy.ai/login?...","expires_at":"..."}
+
+# 2) 浏览器打开 verification_uri_complete 完成授权，然后轮询
+curl -s http://127.0.0.1:3002/api/workbuddy/login/<login-id>
+# → {"status":"pending"} → ... → {"status":"complete","account_id":12,"message":"WorkBuddy account added"}
+
+# 取消（可选）
+curl -s -X DELETE http://127.0.0.1:3002/api/workbuddy/login/<login-id>
+```
+
+行为说明：
+
+- 事务 TTL 15 分钟，服务端每 2s 轮询上游；上游未授权时返回业务码 `11217`（HTTP 200），服务端归一为「pending」
+- 授权成功后服务端会用新 token 读取一次账号模型目录：**读不到目录就不会落库**，避免存入无法使用的凭证
+- 若上游未返回 refreshToken，会立即做一次刷新以取得长期凭据（Keycloak 每次刷新都会轮换 refreshToken）
+- 同一账号再次登录会更新原账号，不会产生重复记录
+- 重复发起时会复用未完成的登录事务；刷新管理页面后仍可继续等待结果
+- 需要同源（`Origin` 与 Host 一致）且 HTTPS（本地 `localhost`/`127.0.0.1` 例外）；跨站请求一律 403
+- 页面不会把 token 写入 `localStorage`/Cookie，refreshToken 也从不返回给浏览器
+
+## 7. 错误约定
 
 - `400`：请求参数错误、模型错误、方法错误
 - `401` / `403` / `429`：账号状态或鉴权状态错误

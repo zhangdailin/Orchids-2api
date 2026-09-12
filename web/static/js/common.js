@@ -29,6 +29,11 @@ function getSidebarAccountToken(acc) {
   if (type === "puter") {
     return acc.client_cookie || acc.token || acc.session_cookie || "";
   }
+  if (type === "workbuddy") {
+    // The durable refresh token never leaves the server; the access token is
+    // the visible proof that a credential is configured.
+    return acc.workbuddy_access_token || "";
+  }
   return acc.client_cookie || acc.token || "";
 }
 
@@ -107,6 +112,8 @@ function isSidebarAccountAbnormal(acc) {
   } else if (type === "grok") {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (type === "puter") {
+    if (!hasSidebarAccountCredential(acc)) return true;
+  } else if (type === "workbuddy") {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {
     return true;

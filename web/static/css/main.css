@@ -2211,6 +2211,12 @@ tr:hover td {
   border: 1px solid rgba(59, 130, 246, 0.3);
 }
 
+.badge-workbuddy {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
 @media (max-width: 900px) {
   .config-grid-two,
   .estimate-grid {
@@ -3411,6 +3417,7 @@ code {
 .tag-free,
 .badge-warp,
 .badge-grok,
+.badge-workbuddy,
 .badge-puter {
   background: #f7f7f7;
   color: #666;

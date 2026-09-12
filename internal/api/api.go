@@ -56,6 +56,11 @@ type API struct {
 	// credentials can never cross authentication flows.
 	grokDeviceLoginMu sync.Mutex
 	grokDeviceLogins  map[string]*grokDeviceLogin
+
+	// WorkBuddy logins hold an OAuth state transaction plus the resulting
+	// credentials until the account is verified and persisted.
+	workbuddyLoginMu sync.Mutex
+	workbuddyLogins  map[string]*workbuddyLogin
 }
 
 type auditEventRecord struct {
@@ -127,6 +132,11 @@ type deviceLogin struct {
 	status    string
 	message   string
 	accountID int64
+
+	// enabled/enabledKnown carry a provider-specific preference captured at
+	// start time (currently the WorkBuddy account enabled flag).
+	enabled      bool
+	enabledKnown bool
 }
 
 type deviceLoginResponse struct {
@@ -142,6 +152,7 @@ type deviceLoginResponse struct {
 
 type warpDeviceLogin = deviceLogin
 type grokDeviceLogin = deviceLogin
+type workbuddyLogin = deviceLogin
 
 var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 	client := puter.NewFromAccount(acc, cfg)
@@ -409,6 +420,11 @@ func normalizeAccountOutput(acc *store.Account) *accountOutput {
 		// durable refresh token through normal account endpoints.
 		out.OAuthRefreshToken = ""
 	}
+	if strings.EqualFold(out.AccountType, "workbuddy") {
+		// The durable refresh token never leaves the server; the access token
+		// stays visible so the account table can prove a credential exists.
+		out = RedactWorkBuddyOutput(out)
+	}
 	return &accountOutput{
 		Account:           out,
 		WarpAuthenticated: strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
@@ -434,6 +450,8 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 		}
 	case "puter":
 		token = puter.ResolveAuthToken(acc)
+	case "workbuddy":
+		return WorkBuddyCredentialKey(acc)
 	default:
 		token = strings.TrimSpace(util.FirstNonEmpty(acc.RefreshToken, acc.SessionCookie, acc.ClientCookie, acc.Token))
 	}
@@ -446,7 +464,7 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 
 func isSupportedAccountType(accountType string) bool {
 	switch strings.ToLower(strings.TrimSpace(accountType)) {
-	case "warp", "puter", "grok":
+	case "warp", "puter", "grok", "workbuddy":
 		return true
 	default:
 		return false
@@ -786,6 +804,20 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		return usageStatus, httpStatus, fmt.Errorf("failed to fetch puter usage: %w", usageErr)
 	}
 
+	if strings.EqualFold(acc.AccountType, "workbuddy") {
+		status, httpStatus, verifyErr := verifyWorkBuddyAccount(ctx, acc, a.config.Load())
+		if verifyErr != nil {
+			if errors.Is(verifyErr, errWorkBuddyMissingCredential) {
+				return "", http.StatusBadRequest, fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
+			}
+			if classified := apperrors.ClassifyAccountStatus(verifyErr.Error()); classified != "" {
+				return classified, httpStatusFromAccountStatus(classified), fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
+			}
+			return status, httpStatus, fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
+		}
+		return status, httpStatus, nil
+	}
+
 	return "", http.StatusBadRequest, fmt.Errorf("unsupported account type %q", acc.AccountType)
 }
 
@@ -868,6 +900,7 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		checkSem:         make(chan struct{}, 2),
 		warpDeviceLogins: map[string]*warpDeviceLogin{},
 		grokDeviceLogins: map[string]*grokDeviceLogin{},
+		workbuddyLogins:  map[string]*workbuddyLogin{},
 	}
 	if cfg != nil {
 		a.config.Store(cfg)
@@ -1094,6 +1127,11 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "failed to repair linked Grok Console SSO account", http.StatusInternalServerError)
 					return
 				}
+			}
+		} else if strings.EqualFold(acc.AccountType, "workbuddy") {
+			if !NormalizeWorkBuddyCredentials(&acc) {
+				http.Error(w, "missing WorkBuddy credential: paste the access token or refresh token from the WorkBuddy desktop session", http.StatusBadRequest)
+				return
 			}
 		}
 		if existing, err := a.findDuplicateAccountByCredential(r.Context(), &acc, 0); err != nil {
@@ -1789,6 +1827,16 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "missing oauth token", http.StatusBadRequest)
 				return
 			}
+		} else if strings.EqualFold(acc.AccountType, "workbuddy") {
+			// The read path redacts the refresh token, so an ordinary edit
+			// arrives without it; keep the stored credential unless a new one
+			// was actually submitted.
+			PreserveWorkBuddyCredentialsOnEdit(&acc, existing)
+			if resolveWorkBuddyCredentials(&acc).RefreshToken == "" && resolveWorkBuddyCredentials(&acc).AccessToken == "" {
+				http.Error(w, "missing WorkBuddy credential", http.StatusBadRequest)
+				return
+			}
+			NormalizeWorkBuddyCredentials(&acc)
 		}
 
 		isWarpAccount := strings.EqualFold(acc.AccountType, "warp")
