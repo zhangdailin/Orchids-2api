@@ -145,26 +145,6 @@ func WorkBuddyCredentialKey(acc *store.Account) string {
 	return ""
 }
 
-// WorkBuddyAccessTokenPreview renders the truncated access token the account
-// table shows. It never returns the refresh token.
-func WorkBuddyAccessTokenPreview(acc *store.Account) string {
-	if acc == nil {
-		return ""
-	}
-	token := strings.TrimSpace(acc.WorkBuddyAccessToken)
-	if token == "" {
-		creds := resolveWorkBuddyCredentials(acc)
-		token = strings.TrimSpace(creds.AccessToken)
-	}
-	if token == "" {
-		return ""
-	}
-	if len(token) > 20 {
-		return token[:8] + "..." + token[len(token)-8:]
-	}
-	return token
-}
-
 // verifyWorkBuddyAccount proves the credential works before it is persisted and
 // applies the account-scoped model catalog and credit meter on the way.
 func verifyWorkBuddyAccount(ctx context.Context, acc *store.Account, cfg *config.Config) (string, int, error) {

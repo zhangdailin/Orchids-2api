@@ -365,24 +365,6 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 	lb.persistAccountStatus(ctx, acc, "账号状态标记: "+status)
 }
 
-// MarkAccountStatusWithMessage records the status together with the operator-facing
-// reason, so the account table can explain a cooldown instead of showing a bare code.
-func (lb *LoadBalancer) MarkAccountStatusWithMessage(ctx context.Context, acc *store.Account, status, message string) {
-	if acc == nil || lb.Store == nil || status == "" {
-		return
-	}
-	acc.StatusMessage = strings.TrimSpace(message)
-	lb.MarkAccountStatus(ctx, acc, status)
-}
-
-// ClearAccountStatusMessage drops a stale reason after the account recovers.
-func ClearAccountStatusMessage(acc *store.Account) {
-	if acc == nil || acc.StatusMessage == "" {
-		return
-	}
-	acc.StatusMessage = ""
-}
-
 func (lb *LoadBalancer) persistAccountStatus(ctx context.Context, acc *store.Account, reason string) {
 	if lb.Store == nil {
 		return

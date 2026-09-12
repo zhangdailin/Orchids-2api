@@ -54,9 +54,19 @@ type Account struct {
 	// "our record lost the credential", and those need different actions.
 	StatusMessage string    `json:"status_message,omitempty"`
 	LastAttempt   time.Time `json:"last_attempt"`
-	QuotaResetAt  time.Time `json:"quota_reset_at"`
-	RequestCount  int64     `json:"request_count"`
-	LastUsedAt    time.Time `json:"last_used_at"`
+	// VerifiedAt records when the current credential last received a health
+	// verdict from the upstream (any outcome). It is what lets the scheduler
+	// distinguish "never checked" from "checked and healthy": LastAttempt and the
+	// quota snapshot are reset by ordinary quota recovery, so they cannot tell a
+	// newly added account from a verified one.
+	VerifiedAt   time.Time `json:"verified_at,omitempty"`
+	// ClearVerifiedAt asks the store to drop the stored verdict timestamp when a
+	// credential is replaced. It exists because a zero VerifiedAt is
+	// indistinguishable from "this partial update did not touch the field".
+	ClearVerifiedAt bool      `json:"-"`
+	QuotaResetAt    time.Time `json:"quota_reset_at"`
+	RequestCount    int64     `json:"request_count"`
+	LastUsedAt      time.Time `json:"last_used_at"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 

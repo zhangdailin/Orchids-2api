@@ -36,7 +36,6 @@ const (
 	defaultUploadFilePath   = "/rest/app-chat/upload-file"
 	defaultCanvasCreatePath = "/rest/media/canvas/create"
 	defaultMediaConvoPath   = "/rest/media/conversation/create"
-	defaultCreatePostPath   = "/rest/media/post/create"
 	defaultLivekitPath      = "/rest/livekit/tokens"
 	defaultRateLimitsPath   = "/rest/rate-limits"
 	defaultAcceptTOSURL     = "https://accounts.x.ai/auth_mgmt.AuthManagement/SetTosAcceptedVersion"
@@ -1127,48 +1126,6 @@ func (c *Client) uploadFile(ctx context.Context, token, fileName, fileMimeType, 
 		return "", "", fmt.Errorf("grok upload returned empty identifiers")
 	}
 	return strings.TrimSpace(out.FileMetadataID), strings.TrimSpace(out.FileURI), nil
-}
-
-func (c *Client) createMediaPost(ctx context.Context, token, mediaType, prompt, mediaURL string) (string, error) {
-	payload := map[string]string{
-		"mediaType": strings.TrimSpace(mediaType),
-	}
-	if u := strings.TrimSpace(mediaURL); u != "" {
-		payload["mediaUrl"] = u
-	}
-	if p := strings.TrimSpace(prompt); p != "" {
-		payload["prompt"] = p
-	}
-	if payload["mediaType"] == "" {
-		payload["mediaType"] = "MEDIA_POST_TYPE_VIDEO"
-	}
-
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-
-	reqURL := c.baseURL() + defaultCreatePostPath
-	headers := c.headers(token)
-	headers.Set("Referer", "https://grok.com/imagine")
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, headers, false)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	var out struct {
-		Post struct {
-			ID string `json:"id"`
-		} `json:"post"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(out.Post.ID) == "" {
-		return "", fmt.Errorf("grok create post returned empty post id")
-	}
-	return strings.TrimSpace(out.Post.ID), nil
 }
 
 func (c *Client) downloadAsset(ctx context.Context, token, rawURL string) ([]byte, string, error) {

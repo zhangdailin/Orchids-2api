@@ -800,20 +800,6 @@ func validUTF8Prefix(s string) string {
 	return ""
 }
 
-func stripZeroWidth(s string) string {
-	if s == "" {
-		return s
-	}
-	return strings.Map(func(r rune) rune {
-		switch r {
-		case '\u200b', '\u200c', '\u200d', '\ufeff':
-			return -1
-		default:
-			return r
-		}
-	}, s)
-}
-
 func sanitizeUpstreamText(raw string) string {
 	return sanitizeText(stripToolAndRenderMarkup(raw))
 }

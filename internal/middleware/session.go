@@ -172,12 +172,6 @@ func WithAPIKeyPrincipalForTest(ctx context.Context, principal *APIKeyPrincipal)
 	return context.WithValue(ctx, apiKeyPrincipalContextKey{}, principal)
 }
 
-// WithAPIKeyFingerprintForTest attaches a fingerprint the way the middleware
-// would, so ownership checks behave identically in tests.
-func WithAPIKeyFingerprintForTest(ctx context.Context, fingerprint string) context.Context {
-	return context.WithValue(ctx, apiKeyFingerprintContextKey{}, fingerprint)
-}
-
 func writeAPIKeyError(w http.ResponseWriter, status int, message, code string) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	w.Header().Set("Content-Type", "application/json")

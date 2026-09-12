@@ -207,10 +207,8 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	client := grok.New(cfg)
 	// Session identity is the authentication check. Quota availability is a
 	// separate concern and must not be allowed to invalidate a valid cookie.
-	identityCtx, identityCancel := context.WithTimeout(ctx, 15*time.Second)
-	identity, identityErr := client.FetchSessionIdentity(identityCtx, credential)
-	identityCancel()
-	if identityErr != nil && grok.IsAuthenticationFailure(identityErr) {
+	identity, identityErr, authRejected := fetchGrokSSOIdentity(ctx, client, credential)
+	if authRejected {
 		return fmt.Errorf("%s: %w", classifyGrokAuthStatus(identityErr), identityErr)
 	}
 	if identityErr == nil {
@@ -232,16 +230,85 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	quotaCancel()
 	if quotaErr != nil {
 		if grok.IsAuthenticationFailure(quotaErr) {
+			// The quota endpoint is the second witness: require it to reject the
+			// cookie twice as well before the account is declared unauthorized.
+			if second, secondErr := grokWebQuotaWithRetry(client, credential, ctx); secondErr == nil {
+				grok.ApplyWebQuotaInfo(acc, second)
+				return nil
+			} else if grok.IsAuthenticationFailure(secondErr) {
+				quotaErr = secondErr
+			}
 			return fmt.Errorf("%s: %w", classifyGrokAuthStatus(quotaErr), quotaErr)
 		}
 		// A quota read can be rate limited or unsupported; neither means the
 		// credential is invalid. Keep the account usable and let the caller
-		// classify whatever code the error carries.
+		// classify whatever error carries.
 		slog.Warn("Grok SSO quota unavailable; account remains authenticated", "account_id", acc.ID, "error", quotaErr)
 		return nil
 	}
 	grok.ApplyWebQuotaInfo(acc, windows)
 	return nil
+}
+
+// grokSSOAuthRetryDelay is the pause before re-asking a rejected session, giving
+// an upstream hiccup a chance to clear before an account is declared dead.
+// A variable so tests can drive the retry without sleeping.
+var grokSSOAuthRetryDelay = 800 * time.Millisecond
+
+// retryGrokSSOAuthAttempt runs one upstream attempt and, when it reports an
+// authentication rejection, runs it once more. A single rejection is not proof:
+// the upstream answers "unauthenticated" for transient conditions too, and
+// treating one bad answer as final takes a working account out of the pool until
+// an operator notices. Returns whether the credential stands definitively
+// rejected after the retry.
+func retryGrokSSOAuthAttempt(attempt func() (grok.AccountIdentity, error)) (grok.AccountIdentity, error, bool) {
+	identity, err := attempt()
+	if err == nil || !grok.IsAuthenticationFailure(err) {
+		return identity, err, false
+	}
+	firstErr := err
+	time.Sleep(grokSSOAuthRetryDelay)
+	identity, err = attempt()
+	switch {
+	case err == nil:
+		slog.Warn("Grok SSO session rejected once and accepted on retry; keeping the account",
+			"first_error", firstErr)
+		return identity, nil, false
+	case grok.IsAuthenticationFailure(err):
+		return grok.AccountIdentity{}, err, true
+	default:
+		return grok.AccountIdentity{}, err, false
+	}
+}
+
+// fetchGrokSSOIdentity resolves the session identity with the retry policy above.
+func fetchGrokSSOIdentity(ctx context.Context, client *grok.Client, credential string) (grok.AccountIdentity, error, bool) {
+	return retryGrokSSOAuthAttempt(func() (grok.AccountIdentity, error) {
+		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return client.FetchSessionIdentity(attemptCtx, credential)
+	})
+}
+
+// grokWebQuotaWithRetry reads the Web quota, retrying once on an authentication
+// rejection so the second verdict matches the identity check's strictness.
+func grokWebQuotaWithRetry(client *grok.Client, credential string, ctx context.Context) (map[string]*grok.RateLimitInfo, error) {
+	read := func() (map[string]*grok.RateLimitInfo, error) {
+		quotaCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		defer cancel()
+		return client.GetWebQuota(quotaCtx, credential)
+	}
+	if windows, err := read(); err == nil {
+		return windows, nil
+	} else if !grok.IsAuthenticationFailure(err) {
+		return nil, err
+	}
+	time.Sleep(grokSSOAuthRetryDelay)
+	windows, err := read()
+	if err == nil {
+		slog.Warn("Grok SSO quota rejected once and accepted on retry; keeping the account")
+	}
+	return windows, err
 }
 
 // classifyGrokAuthStatus maps a definitive SSO authentication failure to "401".
@@ -421,6 +488,11 @@ func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
 		// it keeps.
 		acc.StatusMessage = existing.StatusMessage
 		acc.LastAttempt = existing.LastAttempt
+		acc.VerifiedAt = existing.VerifiedAt
+	} else {
+		// A new credential has no verdict yet; ask the store to drop the stored one
+		// so the scheduler verifies it instead of trusting the old result.
+		acc.ClearVerifiedAt = true
 	}
 	acc.QuotaResetAt = existing.QuotaResetAt
 	acc.MissingThinkingStrikes = existing.MissingThinkingStrikes
@@ -1278,6 +1350,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 						acc.StatusCode = accountStatus
 						acc.StatusMessage = strings.TrimSpace(syncErr.Error())
 						acc.LastAttempt = time.Now()
+						acc.VerifiedAt = acc.LastAttempt
 					}
 				} else {
 					applySuccessfulAccountRefreshStatus(&acc, accountStatus)
@@ -1860,6 +1933,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 					// lost it.
 					acc.StatusMessage = strings.TrimSpace(refreshErr.Error())
 					acc.LastAttempt = time.Now()
+					acc.VerifiedAt = acc.LastAttempt
 					if updateErr := a.store.UpdateAccount(r.Context(), acc); updateErr != nil {
 						slog.Warn("Failed to persist account refresh status", "account_id", acc.ID, "error", updateErr)
 					}
@@ -2720,6 +2794,9 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 		return
 	}
 	status = strings.TrimSpace(status)
+	// The credentials answered the upstream, whatever the verdict: stamp it so a
+	// scheduler can tell a verified account from one that was never checked.
+	acc.VerifiedAt = time.Now()
 	if status == "" {
 		acc.StatusCode = ""
 		acc.StatusMessage = ""
@@ -2727,7 +2804,7 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 		return
 	}
 	acc.StatusCode = status
-	acc.LastAttempt = time.Now()
+	acc.LastAttempt = acc.VerifiedAt
 }
 
 func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config) error {

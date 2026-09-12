@@ -41,11 +41,12 @@
 ## 文档目录
 
 - [架构设计](docs/architecture.md)
-- [架构复核](docs/architecture-review.md)
 - [API 参考](docs/api-reference.md)
 - [配置说明](docs/configuration.md)
 - [部署指南](docs/deployment.md)
 - [Grok 与 grok2api 对齐清单](docs/grok2api-parity-checklist.md)
+
+历史复核与修复记录统一通过 Git 历史查阅；当前行为以以上专题文档为准。
 
 ## 环境要求
 

@@ -32,3 +32,18 @@ jobs:
 
       - name: Run tests
         run: go test ./... -cover -count=1 -p 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The admin UI ships as embedded assets; these assertions guard the
+      # rendering/credential-surface rules that Go tests cannot see.
+      # Locally under a confined Windows sandbox add --test-isolation=none
+      # (node --test spawns a child per file, which the sandbox blocks with EPERM).
+      - name: Run web asset tests
+        run: |
+          node --test web/accounts_ui.test.cjs
+          node --test web/puter_auth.test.cjs
+          node --test web/grok_tools.test.cjs

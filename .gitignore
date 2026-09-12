@@ -24,8 +24,8 @@ go.work.sum
 .gocache/
 .gotmp/
 
-# Scratch workspace for provider research (upstream checkouts, notes)
-.workbuddy-ai/
+# Local archives of removed material (stale worktree snapshots, dated process docs)
+.cleanup-backup/
 
 # Dependency directories
 vendor/

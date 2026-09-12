@@ -634,18 +634,6 @@ func TestAccountStatusReasonIsExposed(t *testing.T) {
 	}
 }
 
-func TestWorkBuddyAccessTokenPreview_TruncatesWithoutLeakingRefresh(t *testing.T) {
-	t.Parallel()
-
-	preview := WorkBuddyAccessTokenPreview(&store.Account{WorkBuddyAccessToken: "abcdefghijklmnopqrstuvwxyz0123456789"})
-	if preview != "abcdefgh...23456789" {
-		t.Fatalf("preview = %q", preview)
-	}
-	if got := WorkBuddyAccessTokenPreview(&store.Account{WorkBuddyRefreshToken: "refresh-only"}); got != "" {
-		t.Fatalf("preview = %q, want empty when only a refresh token exists", got)
-	}
-}
-
 func TestResolveCredentials_MatchesClientResolution(t *testing.T) {
 	t.Parallel()
 

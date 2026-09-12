@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -39,13 +38,6 @@ type refundingErrorUpstreamEdge struct {
 	conversationIDs []string
 }
 
-type blockingUpstreamEdge struct {
-	events    []upstream.SSEMessage
-	entered   chan struct{}
-	release   chan struct{}
-	enterOnce sync.Once
-}
-
 func (m *mockUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	for _, e := range m.events {
 		onMessage(e)
@@ -67,15 +59,6 @@ func (m *refundingErrorUpstreamEdge) RefundCredits(ctx context.Context, conversa
 	m.conversationIDs = append(m.conversationIDs, conversationID)
 	m.refundIDs = append(m.refundIDs, requestID)
 	return m.refundErr
-}
-
-func (m *blockingUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	m.enterOnce.Do(func() { close(m.entered) })
-	<-m.release
-	for _, e := range m.events {
-		onMessage(e)
-	}
-	return nil
 }
 
 func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {

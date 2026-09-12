@@ -381,7 +381,17 @@ curl -s -X DELETE http://127.0.0.1:3002/api/workbuddy/login/<login-id>
 - 需要同源（`Origin` 与 Host 一致）且 HTTPS（本地 `localhost`/`127.0.0.1` 例外）；跨站请求一律 403
 - 页面不会把 token 写入 `localStorage`/Cookie，refreshToken 也从不返回给浏览器
 
-## 7. 错误约定
+## 7. Puter 官方网页登录
+
+账号管理 → Puter → 添加账号 →「使用 Puter 官方网页登录」；也可手填 Token。
+弹窗使用 Puter 网页授权协议，接收 `puter.token` 后检查官方 origin、弹窗 source 与本轮随机 `msg_id`，再通过同源 JSON 请求提交到 `/api/puter/web-login`。
+后端验证身份和额度后才保存账号，接口只返回账号 ID，不回显 Token。授权得到的是站点应用级凭据，其权限与额度不能视为完整账号权限。
+
+远程管理站点需要 HTTPS，反向代理应保留原始 Host，浏览器需允许弹窗；切断跨源 opener 的隔离页面无法完成授权。授权五分钟超时，可取消后重试。Token 不写入回调 URL、localStorage 或日志。
+
+本地回归覆盖消息来源检查、取消和超时、后端验证及失败不入库；真实官方弹窗授权和后续聊天仍需端到端验证。
+
+## 8. 错误约定
 
 - `400`：请求参数错误、模型错误、方法错误
 - `401` / `403` / `429`：账号状态或鉴权状态错误

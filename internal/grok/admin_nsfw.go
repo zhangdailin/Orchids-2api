@@ -74,15 +74,6 @@ func maskToken(raw string) string {
 	return token[:8] + "..." + token[len(token)-8:]
 }
 
-func isGrokAccount(acc *store.Account) bool {
-	if acc == nil {
-		return false
-	}
-	t := strings.ToLower(strings.TrimSpace(acc.AccountType))
-	mode := strings.ToLower(strings.TrimSpace(acc.AgentMode))
-	return t == "grok" || mode == "grok"
-}
-
 func grokAccountToken(acc *store.Account) string {
 	if acc == nil {
 		return ""

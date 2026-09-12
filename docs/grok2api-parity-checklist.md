@@ -2,16 +2,17 @@
 
 本文以当前实现为准，用于跟踪与 `chenyme/grok2api` 的主要能力差异。
 
-**最近一次复核基线（2026-09-12）**：上游 `chenyme/grok2api` **v3.1.5**，提交 `8913b53`（2026-09-09），`git fetch` 后与 `origin/main` 一致。复核结论、逐项代码证据与本轮修复见 [2026-09-12 对比复核报告](D:/Code/Orchids-2api/docs/grok2api-parity-audit-2026-09-12.md)。该轮覆盖对话/推理回放、图片、视频、语音四条链路，未做真实上游端到端调用。
+**最近一次复核基线（2026-09-12）**：上游 `chenyme/grok2api` **v3.1.5**，提交 `8913b53`（2026-09-09），`git fetch` 后与 `origin/main` 一致。该轮覆盖对话/推理回放、图片、视频、语音四条链路，未做真实上游端到端调用。逐项代码证据与修复过程随
+Git 历史保留，本清单汇总能力状态与未完成项。
 
-2026-09-08 补充：接口覆盖不代表行为完全等价。历史行为复核和协议修复分别见 [差异报告](D:/Code/Orchids-2api/docs/grok2api-deep-comparison-2026-09-08.md) 与 [修复说明](D:/Code/Orchids-2api/docs/grok-fixes-2026-09-08.md)。质量重试现需显式设置 `grok_quality_enabled=true`；Console 不再无条件注入搜索工具。
+2026-09-08 补充：接口覆盖不代表行为完全等价。质量重试现需显式设置 `grok_quality_enabled=true`；Console 不再无条件注入搜索工具。
 
-> 注意：`docs/grok2api-current-differences-2026-09-09.md` 与当次修复是同一次提交落库的，描述的是**修复前**状态，不应作为当前缺陷证据。
+> 注意：描述**修复前**状态的差异报告已归档，不应作为当前缺陷证据。
 
 
 ## 已完成
 
-2026-09-08 实现替换补充：质量分类器、语义空闲计时器及共享 SSE codec 已采用上游 `44a390b8` 对应实现，旧路径与保留差异见 [替换记录](D:/Code/Orchids-2api/docs/grok2api-adoption-2026-09-08.md)。该轮仅覆盖记录中的模块，不表示全量能力等价。
+2026-09-08 实现替换补充：质量分类器、语义空闲计时器及共享 SSE codec 已采用上游 `44a390b8` 对应实现；该轮仅覆盖记录中的模块，不表示全量能力等价。
 
 - [x] Grok Build、Web、Console 凭据边界与账号级模型快照
 - [x] Chat Completions、Responses、Anthropic Messages JSON/SSE
@@ -57,8 +58,6 @@
 - [~] Provider 前缀、动态 Build 路由、持久化 route/capability/account binding 已完成；同一公开模型的多 Provider 自动聚合仍待策略层
 - [~] Web 视频已按当前捕获协议对齐为纯文本生成；图片/参考图视频需显式走 Console/Build，尚未做同一公开模型的 capability 自动选路
 - [~] Console 标准视频链路完整；Build `/videos/generations` 已支持 OAuth 创建、轮询、可信下载、中断恢复、最多 8 张公共参考图、1.5 纯文本 1080p、确认 403 后 XAI fallback 和一次性上传回调；本地参考图仍需先转为公共 HTTPS URL
-- [x] Console 标准图片生成及 multipart 多图编辑已完成，支持 1–3 张输入、模型级比例/分辨率/quality 校验和本地化输出
-- [x] Build namespace 调用、client `tool_search` 参数增量隐藏、延迟工具动态展开及完整可见工具目录恢复已完成
 - [~] 标准视频生成、编辑、延长、查询、内容读取、`file_id`、重启续跑、多实例任务租约及共享文件系统已完成；提交前中断及旧 Web 分段任务不重放，尚无 S3 等对象存储后端
 - [~] 出口支持静态配置、权重、健康冷却和 Voice WebSocket 租约拨号，尚无订阅导入、账号绑定和管理端节点编排
 

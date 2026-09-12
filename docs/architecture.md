@@ -57,11 +57,11 @@ Orchids-2api/
 
 ### 3.2 `internal/handler`
 
-负责 `warp` / `puter`：
+负责 `warp` / `puter` / `workbuddy`：
 
 - 解析 Claude/OpenAI 请求
 - 识别通道与目标模型
-- 维护会话状态、workdir、去重和 token 统计
+- 维护会话状态、workdir 和 token 统计
 - 选择账号、切换失败账号并重试
 - 把上游 SSE / 直出事件转换为 Claude 或 OpenAI 兼容响应
 
@@ -94,13 +94,13 @@ Orchids-2api/
 
 ## 4. 主请求流
 
-### 4.1 `warp` / `puter`
+### 4.1 `warp` / `puter` / `workbuddy`
 
 ```text
 HTTP Request
   -> middleware chain
   -> Handler.HandleMessages
-  -> parse request + dedup
+  -> parse request
   -> resolve channel + model
   -> load session/workdir state
   -> select account from LoadBalancer
@@ -110,6 +110,8 @@ HTTP Request
   -> write Claude/OpenAI compatible response
   -> sync account/session/cache stats
 ```
+
+请求、工具调用与文本输出不按内容去重，`Idempotency-Key` 不触发本地拦截；协议分帧与工具调用 ID 关联仍保留。接口行为见 [API 参考](api-reference.md)。
 
 ### 4.2 `grok`
 
@@ -133,6 +135,7 @@ HTTP Request
 - `warp`：账号 GraphQL 发现结果，失败时回退内置种子
 - `puter`：Puter 官方模型目录与本地当前代策略的交集，再经账号 `test_mode` 验证
 - `grok`：内置支持表 + 现存模型 + 公共文档探测
+- `workbuddy`：已启用账号的 CLI 模型目录，同时保存账号级模型快照
 
 当前策略：
 
@@ -155,7 +158,7 @@ Puter 走 `internal/puter`，特点是：
 
 - 账号、模型、API Key、配置
 - 可选 token cache / prompt cache
-- 在可用时，handler 会优先用 Redis 做会话与去重存储
+- 在可用时，handler 会优先用 Redis 保存会话状态
 
 ### 7.2 本地目录
 

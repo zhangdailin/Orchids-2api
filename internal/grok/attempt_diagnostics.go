@@ -178,31 +178,3 @@ func (h *Handler) auditAttemptDiagnostic(ctx context.Context, acc *store.Account
 	h.auditLogger.Log(ctx, audit.Event{RequestID: middleware.GetTraceID(ctx), APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Action: "grok_upstream_attempt", Channel: "grok", Provider: provider, Attempt: attempt, Duration: time.Since(started).Milliseconds(), Status: status, Metadata: metadata,
 		InputTokens: interfaceToInt(usage["input_tokens"]), OutputTokens: interfaceToInt(usage["output_tokens"]), CachedInputTokens: interfaceToInt(inputDetails["cached_tokens"]), ReasoningTokens: interfaceToInt(outputDetails["reasoning_tokens"])})
 }
-
-// Sum only reported counters; absence remains absent rather than inferred cost.
-func addResponseUsage(total map[string]interface{}, raw interface{}) map[string]interface{} {
-	usage, ok := raw.(map[string]interface{})
-	if !ok {
-		return total
-	}
-	if total == nil {
-		total = map[string]interface{}{}
-	}
-	usage = responsesUsageFromChat(usage)
-	for _, key := range []string{"input_tokens", "output_tokens", "total_tokens"} {
-		total[key] = interfaceToInt(total[key]) + interfaceToInt(usage[key])
-	}
-	for _, key := range []string{"input_tokens_details", "output_tokens_details"} {
-		if details, ok := usage[key].(map[string]interface{}); ok {
-			sum, _ := total[key].(map[string]interface{})
-			if sum == nil {
-				sum = map[string]interface{}{}
-			}
-			for name, value := range details {
-				sum[name] = interfaceToInt(sum[name]) + interfaceToInt(value)
-			}
-			total[key] = sum
-		}
-	}
-	return total
-}

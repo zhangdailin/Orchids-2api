@@ -253,6 +253,16 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		updated.StatusMessage = acc.StatusMessage
 	}
 	updated.LastAttempt = acc.LastAttempt
+	// A verdict timestamp is monotonic per credential: an unrelated partial
+	// update (request counters, quota rotation) must not un-verify an account.
+	// Replacing a credential clears it explicitly via ClearVerifiedAt.
+	switch {
+	case acc.ClearVerifiedAt:
+		updated.VerifiedAt = time.Time{}
+	case !acc.VerifiedAt.IsZero():
+		updated.VerifiedAt = acc.VerifiedAt
+	}
+	updated.ClearVerifiedAt = false
 	updated.QuotaResetAt = acc.QuotaResetAt
 	updated.MissingThinkingStrikes = acc.MissingThinkingStrikes
 	updated.MissingThinkingLastAt = acc.MissingThinkingLastAt

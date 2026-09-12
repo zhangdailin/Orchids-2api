@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
@@ -32,6 +33,7 @@ func TestGrokSSOCredentialUpdateClearsStaleUnauthorizedStatus(t *testing.T) {
 		Weight:         1,
 		StatusCode:     "401",
 		StatusMessage:  "failed to verify grok account: 401: grok session unauthenticated",
+		VerifiedAt:     time.Now().Add(-time.Minute),
 	}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
@@ -64,6 +66,9 @@ func TestGrokSSOCredentialUpdateClearsStaleUnauthorizedStatus(t *testing.T) {
 	if !after.LastAttempt.IsZero() {
 		t.Fatalf("last_attempt = %v, want reset so the new credential is re-verified", after.LastAttempt)
 	}
+	if !after.VerifiedAt.IsZero() {
+		t.Fatalf("verified_at = %v, want cleared so the new credential is verified instead of trusted", after.VerifiedAt)
+	}
 }
 
 // TestGrokSSOUnchangedCredentialEditKeepsObservedStatus is the counterweight: a
@@ -82,6 +87,7 @@ func TestGrokSSOUnchangedCredentialEditKeepsObservedStatus(t *testing.T) {
 		Weight:         1,
 		StatusCode:     "429",
 		StatusMessage:  "quota exceeded",
+		VerifiedAt:     time.Now().Add(-2 * time.Minute),
 	}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
@@ -110,5 +116,8 @@ func TestGrokSSOUnchangedCredentialEditKeepsObservedStatus(t *testing.T) {
 	}
 	if after.StatusCode != "429" || after.StatusMessage != "quota exceeded" {
 		t.Fatalf("settings-only edit erased the observed status: %q / %q", after.StatusCode, after.StatusMessage)
+	}
+	if after.VerifiedAt.IsZero() {
+		t.Fatal("settings-only edit erased the verdict timestamp")
 	}
 }

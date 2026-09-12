@@ -32,11 +32,6 @@ import (
 var gitCPathRegex = regexp.MustCompile(`(?i)git\s+-C\s+((?:"[^"]+"|'[^']+'|[^\s;&|]+))\s+`)
 
 const (
-	fnv64Offset = uint64(14695981039346656037)
-	fnv64Prime  = uint64(1099511628211)
-)
-
-const (
 	sseEventPrefix                 = "event: "
 	sseDataPrefix                  = "data: "
 	sseLineBreak                   = "\n\n"
@@ -754,21 +749,6 @@ func (h *streamHandler) resetRoundState() {
 	h.hasTextOutput = false
 	h.deferredFlushFrames = 0
 	h.deferredFlushBytes = 0
-}
-
-func stringifyToolInput(input interface{}) string {
-	switch v := input.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	default:
-		raw, err := json.Marshal(v)
-		if err != nil {
-			return fmt.Sprintf("%v", v)
-		}
-		return string(raw)
-	}
 }
 
 // sanitizeToolInput normalizes upstream tool input for Claude Code compatibility.

@@ -49,7 +49,24 @@ const (
 	maxGrokRefreshPerCycle = 5
 	grokRefresh429Backoff  = 10 * time.Minute
 	grokRefreshPause       = 500 * time.Millisecond
+	// grokRefreshDeadCredentialBackoff keeps a credential the upstream already
+	// rejected out of the rotation. Re-asking once per tick burns a slot of the
+	// per-cycle budget that a healthy account needs, and the answer cannot change
+	// until the operator installs a new cookie (which resets LastAttempt).
+	grokRefreshDeadCredentialBackoff = 30 * time.Minute
 )
+
+// grokRefreshDeadCredential reports whether an account carries a credential the
+// upstream definitively rejected and that has not been replaced since.
+func grokRefreshDeadCredential(acc *store.Account, now time.Time) bool {
+	if acc == nil || strings.TrimSpace(acc.StatusCode) != "401" {
+		return false
+	}
+	if acc.VerifiedAt.IsZero() {
+		return false
+	}
+	return now.Sub(acc.VerifiedAt) < grokRefreshDeadCredentialBackoff
+}
 
 type grokRefreshCandidate struct {
 	token    string
@@ -57,7 +74,38 @@ type grokRefreshCandidate struct {
 	accounts []*store.Account
 }
 
+// isUnverifiedGrokSSOAccount reports whether the row still has no health verdict:
+// an enabled Web SSO account that has never been checked. "No verdict" is not a
+// health state — scheduling it is what stops a freshly added account from looking
+// fine while the account it was added next to shows the real failure.
+func isUnverifiedGrokSSOAccount(acc *store.Account) bool {
+	if acc == nil || !strings.EqualFold(acc.AccountType, "grok") {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+		return false
+	}
+	if grok.ProviderForAccount(acc) != grok.ProviderWeb {
+		return false
+	}
+	return strings.TrimSpace(acc.StatusCode) == "" && acc.VerifiedAt.IsZero()
+}
+
+// grokCandidateAccountIDs lists the account rows a credential group covers, so
+// an operator log line names the affected accounts instead of only "grok failed".
+func grokCandidateAccountIDs(accounts []*store.Account) []int64 {
+	ids := make([]int64, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc == nil {
+			continue
+		}
+		ids = append(ids, acc.ID)
+	}
+	return ids
+}
+
 func buildGrokRefreshCandidates(accounts []*store.Account) []grokRefreshCandidate {
+	now := time.Now()
 	byToken := make(map[string]int, len(accounts))
 	candidates := make([]grokRefreshCandidate, 0, len(accounts))
 	for _, acc := range accounts {
@@ -73,6 +121,9 @@ func buildGrokRefreshCandidates(accounts []*store.Account) []grokRefreshCandidat
 		// Build CLI OAuth accounts refresh through their own token lifecycle
 		// (refreshCLIAccounts) and must not be verified as SSO cookies here.
 		if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+			continue
+		}
+		if grokRefreshDeadCredential(acc, now) {
 			continue
 		}
 		token := grok.NormalizeSSOToken(acc.ClientCookie)
@@ -203,6 +254,38 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 	}
 }
 
+// grokSSORefreshRetryDelay is the pause before re-asking a rejected session in
+// the background loop. A variable so tests can drive the retry without sleeping.
+var grokSSORefreshRetryDelay = 800 * time.Millisecond
+
+// retryGrokRefreshAttempt reads the SSO session identity, re-asking once when the
+// upstream rejects the cookie, and reports whether the credential stands
+// definitively rejected.
+func retryGrokRefreshAttempt(ctx context.Context, client *grok.Client, token string) (grok.AccountIdentity, error) {
+	attempt := func() (grok.AccountIdentity, error) {
+		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return client.FetchSessionIdentity(attemptCtx, token)
+	}
+	identity, err := attempt()
+	if err == nil || !grok.IsAuthenticationFailure(err) {
+		return identity, err
+	}
+	firstErr := err
+	select {
+	case <-ctx.Done():
+		return grok.AccountIdentity{}, err
+	case <-time.After(grokSSORefreshRetryDelay):
+	}
+	identity, err = attempt()
+	if err == nil {
+		slog.Warn("Auto refresh grok: session rejected once and accepted on retry; keeping the account",
+			"token_fingerprint", grok.TokenFingerprint(token),
+			"first_error", firstErr)
+	}
+	return identity, err
+}
+
 func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store, accounts []*store.Account) {
 	if len(accounts) == 0 || s == nil {
 		return
@@ -228,10 +311,11 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 
 		// Session identity is the authentication check. Quota/model availability
 		// is deliberately handled separately so a retired quota model cannot mark
-		// a valid SSO account as HTTP 500.
-		idCtx, idCancel := context.WithTimeout(ctx, 15*time.Second)
-		identity, identityErr := grokClient.FetchSessionIdentity(idCtx, candidate.token)
-		idCancel()
+		// a valid SSO account as HTTP 500. A single rejection is re-asked before it
+		// is treated as final: the upstream also answers "unauthenticated" for
+		// transient conditions, and a false verdict removes a working account from
+		// the pool until an operator notices.
+		identity, identityErr := retryGrokRefreshAttempt(ctx, grokClient, candidate.token)
 		if identityErr != nil && grok.IsAuthenticationFailure(identityErr) {
 			statusCode := apperrors.ClassifyAccountStatus(identityErr.Error())
 			if statusCode == "" {
@@ -242,13 +326,18 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 					continue
 				}
 				acc.StatusCode = statusCode
-				acc.StatusMessage = "上游拒绝该 SSO Cookie（会话失效或账号被限制），需要重新登录"
+				acc.StatusMessage = "上游拒绝该 SSO Cookie（会话已失效，或被同账号的另一次登录替换），请重新登录该 xAI 账号并抓取新的 Cookie"
 				acc.LastAttempt = time.Now()
+				acc.VerifiedAt = acc.LastAttempt
 				if err := s.UpdateAccount(ctx, acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 				}
 			}
-			slog.Warn("Auto refresh grok SSO authentication failed", "status", statusCode, "error", identityErr)
+			slog.Warn("Auto refresh grok SSO authentication failed",
+				"status", statusCode,
+				"account_ids", grokCandidateAccountIDs(candidate.accounts),
+				"token_fingerprint", grok.TokenFingerprint(candidate.token),
+				"error", identityErr)
 			continue
 		}
 		if identityErr != nil {
@@ -274,12 +363,18 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 						continue
 					}
 					acc.StatusCode = statusCode
-					acc.StatusMessage = "上游拒绝该 SSO Cookie（会话失效或账号被限制），需要重新登录"
+					acc.StatusMessage = "上游拒绝该 SSO Cookie（会话已失效，或被同账号的另一次登录替换），请重新登录该 xAI 账号并抓取新的 Cookie"
 					acc.LastAttempt = time.Now()
+					acc.VerifiedAt = acc.LastAttempt
 					if err := s.UpdateAccount(ctx, acc); err != nil {
 						slog.Warn("Auto refresh token: update account failed", "account_id", acc.ID, "type", "grok", "error", err)
 					}
 				}
+				slog.Warn("Auto refresh grok SSO quota rejected the cookie",
+					"status", statusCode,
+					"account_ids", grokCandidateAccountIDs(candidate.accounts),
+					"token_fingerprint", grok.TokenFingerprint(candidate.token),
+					"error", quotaErr)
 				continue
 			}
 			// 404/model-unavailable and malformed quota responses are not auth
@@ -319,6 +414,9 @@ func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store
 				}
 			}
 			grok.ApplyWebQuotaInfo(acc, windows)
+			// The credential answered: record the verdict so the account leaves the
+			// first-verification queue and stops being treated as unknown.
+			acc.VerifiedAt = time.Now()
 			if acc.QuotaResetAt.IsZero() || time.Now().After(acc.QuotaResetAt) {
 				acc.StatusCode = ""
 				acc.StatusMessage = ""
@@ -349,6 +447,10 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			return
 		}
 		grokRefreshQueue := make([]*store.Account, 0)
+		// SSO accounts that carry no verdict at all. buildGrokRefreshCandidates
+		// skips credentials the upstream already rejected, so these are collected
+		// separately and always verified, newest first.
+		grokPendingVerification := make([]*store.Account, 0)
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "warp") {
 				// nextRefreshTime from Warp's quota GraphQL response is a billing
@@ -401,6 +503,13 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 				}
 				continue
 			}
+			if isUnverifiedGrokSSOAccount(acc) {
+				// Server-side completion for an account the UI submitted with the
+				// async create header (and for any legacy row that never synced): the
+				// admin page is not always open, so without this the row can sit with
+				// no health verdict at all.
+				grokPendingVerification = append(grokPendingVerification, acc)
+			}
 			// Grok accounts: OAuth (Build CLI) refresh via their own token
 			// lifecycle; SSO accounts check once per unique token.
 			if strings.EqualFold(acc.AccountType, "grok") {
@@ -415,6 +524,19 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 			continue
 		}
 		refreshGrokAccounts(context.Background(), cfg, s, grokRefreshQueue)
+		if len(grokPendingVerification) > 0 {
+			// Newest first: the newest row is the account an operator just added and
+			// is waiting on. These bypass the per-cycle rotation cap on purpose —
+			// "no verdict yet" is not a health state, and leaving it unresolved is
+			// what made a freshly added account look fine while an older one showed
+			// the failure.
+			ids := make([]int64, 0, len(grokPendingVerification))
+			for _, acc := range grokPendingVerification {
+				ids = append(ids, acc.ID)
+			}
+			slog.Info("Auto refresh grok: verifying accounts without a health verdict", "account_ids", ids)
+			refreshGrokAccounts(context.Background(), cfg, s, grokPendingVerification)
+		}
 	}
 
 	go func() {

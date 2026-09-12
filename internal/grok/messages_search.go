@@ -45,7 +45,6 @@ func nullableProtocolString(s string) interface{} {
 type messageSearchState struct {
 	index int
 	done  bool
-	query string
 }
 
 func anthropicSearchTool(tool anthropicTool) (map[string]interface{}, error) {
