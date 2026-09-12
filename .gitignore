@@ -70,3 +70,7 @@ tmp_aiclient/
 
 # Test
 test/
+
+# Local staticcheck cache (used when the default cache directory is not writable)
+.sccache/
+

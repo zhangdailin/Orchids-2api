@@ -193,3 +193,108 @@ func TestChannels_IgnoresSideLists(t *testing.T) {
 		t.Fatalf("summary = %+v, want a 120ms p95 sample", summary)
 	}
 }
+// TestSummarizeWith_RateUsesTheWindowNotTheBuckets is the reported RPM bug: a
+// single request inside a sixty-minute window reported an RPM of 1, because the
+// rate was divided by the number of buckets that happened to exist.
+func TestSummarizeWith_RateUsesTheWindowNotTheBuckets(t *testing.T) {
+	agg, _ := newAggregator(t)
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.6", OK: true, DurationMS: 100, At: at})
+
+	buckets, err := agg.Range(ctx, "grok", at.Add(-59*time.Minute), at)
+	if err != nil {
+		t.Fatalf("Range() error = %v", err)
+	}
+	durations, ttfts := agg.SamplesFor(ctx, "grok", buckets)
+
+	summary := agg.SummarizeWith(ctx, SummaryInput{
+		Channel:         "grok",
+		Buckets:         buckets,
+		WindowMinutes:   60,
+		Durations:       durations,
+		FirstTokenMS:    ttfts,
+		SamplesProvided: true,
+	})
+	if summary.Requests != 1 {
+		t.Fatalf("requests = %d, want 1", summary.Requests)
+	}
+	if summary.RPM > 0.02 || summary.RPM < 0.01 {
+		t.Fatalf("rpm = %v, want about 0.0167 for one request in an hour", summary.RPM)
+	}
+}
+
+// TestSummarizeWith_SuccessRateNeverExceedsOne is the reported 200% bug: a probe
+// recorded in the probe channel was subtracted from another scope's request count,
+// so the ratio could exceed one.
+func TestSummarizeWith_SuccessRateNeverExceedsOne(t *testing.T) {
+	agg, _ := newAggregator(t)
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	agg.Observe(ctx, Outcome{Channel: "grok", OK: true, DurationMS: 100, At: at})
+	agg.Observe(ctx, Outcome{Channel: "probe", OK: true, DurationMS: 10, Synthetic: true, At: at})
+
+	// Merging both channels is what the overview's "全部渠道" view does before the
+	// infrastructure aggregates are filtered out.
+	grok, _ := agg.Range(ctx, "grok", at, at)
+	probe, _ := agg.Range(ctx, "probe", at, at)
+	merged := append(append([]Bucket(nil), grok...), probe...)
+	durations, ttfts := agg.SamplesFor(ctx, "grok", grok)
+	probeDurations, probeTTFTs := agg.SamplesFor(ctx, "probe", probe)
+	durations = append(durations, probeDurations...)
+	ttfts = append(ttfts, probeTTFTs...)
+
+	summary := agg.SummarizeWith(ctx, SummaryInput{
+		Channel: "mixed", Buckets: merged, WindowMinutes: 60,
+		Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true,
+	})
+	if summary.SuccessRate > 1 {
+		t.Fatalf("success rate = %v, want at most 1", summary.SuccessRate)
+	}
+	if summary.Requests != 2 {
+		t.Fatalf("requests = %d, want both counted", summary.Requests)
+	}
+}
+
+// TestSummarizeWith_MergedSamplesProducePercentiles is the reported P95 bug: the
+// merged scope had no samples of its own, so both percentiles were flat zero while
+// the trend showed traffic.
+func TestSummarizeWith_MergedSamplesProducePercentiles(t *testing.T) {
+	agg, _ := newAggregator(t)
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	for _, duration := range []int64{100, 200, 300} {
+		agg.Observe(ctx, Outcome{Channel: "grok", OK: true, DurationMS: duration, FirstTokenMS: duration / 2, At: at})
+	}
+	for _, duration := range []int64{400, 500} {
+		agg.Observe(ctx, Outcome{Channel: "warp", OK: true, DurationMS: duration, FirstTokenMS: duration / 2, At: at})
+	}
+
+	grokBuckets, _ := agg.Range(ctx, "grok", at, at)
+	warpBuckets, _ := agg.Range(ctx, "warp", at, at)
+	merged := append(append([]Bucket(nil), grokBuckets...), warpBuckets...)
+	var durations, ttfts []int64
+	for _, pair := range []struct {
+		channel string
+		buckets []Bucket
+	}{{"grok", grokBuckets}, {"warp", warpBuckets}} {
+		d, tt := agg.SamplesFor(ctx, pair.channel, pair.buckets)
+		durations = append(durations, d...)
+		ttfts = append(ttfts, tt...)
+	}
+
+	summary := agg.SummarizeWith(ctx, SummaryInput{
+		Channel: "all", Buckets: merged, WindowMinutes: 60,
+		Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true,
+	})
+	if summary.Samples != 5 {
+		t.Fatalf("samples = %d, want the five merged observations", summary.Samples)
+	}
+	if summary.DurationP95MS == 0 || summary.FirstTokenP95MS == 0 {
+		t.Fatalf("merged percentiles are zero: %+v", summary)
+	}
+	// The merged p95 must reflect the slowest channel, not only the first one.
+	if summary.DurationP95MS <= 300 {
+		t.Fatalf("duration p95 = %d, want it to include the slower channel", summary.DurationP95MS)
+	}
+}

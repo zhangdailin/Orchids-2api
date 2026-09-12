@@ -282,7 +282,7 @@ func main() {
 	startAlertLoop(ctx, wiredOps, s, alertEngine, wiredAuditLogger)
 	// Probes answer "can this channel serve right now?" when there is no real
 	// traffic; their outcomes are counted apart from user requests.
-	startProbeLoop(ctx, s, wiredAuditLogger, cfg.Port)
+	startProbeLoop(ctx, s, cfg, wiredAuditLogger, cfg.Port)
 	logWorkBuddyReachability(cfg)
 
 	// Graceful shutdown

@@ -67,13 +67,13 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 		// Named so the page can explain why some traffic is counted but not shown
 		// as a channel (the http catch-all and our own synthetic probes).
 		"excluded_aggregates": aggregates,
-		"channel":        target,
-		"totals":         opsagg.Summary{},
-		"series":         []map[string]interface{}{},
-		"alerts":         []alerting.Alert{},
-		"coverage":       a.auditCoverage(r.Context()),
-		"aggregation":    "per-minute",
-		"retention_hours": int(opsagg.BucketRetention.Hours()),
+		"channel":             target,
+		"totals":              opsagg.Summary{},
+		"series":              []map[string]interface{}{},
+		"alerts":              []alerting.Alert{},
+		"coverage":            a.auditCoverage(r.Context()),
+		"aggregation":         "per-minute",
+		"retention_hours":     int(opsagg.BucketRetention.Hours()),
 	}
 
 	if a.opsAggregator == nil || !a.opsAggregator.Enabled() {
@@ -88,12 +88,21 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	if scope == "" {
 		scope = "all"
 	}
-	buckets, err := a.opsBuckets(r.Context(), scope, since, until)
+	buckets, durations, ttfts, err := a.opsBucketsWithSamples(r.Context(), scope, since, until)
 	if err != nil {
 		http.Error(w, "failed to read metric buckets", http.StatusInternalServerError)
 		return
 	}
-	payload["totals"] = a.opsAggregator.Summarize(r.Context(), scope, buckets)
+	payload["totals"] = a.opsAggregator.SummarizeWith(r.Context(), opsagg.SummaryInput{
+		Channel:       scope,
+		Buckets:       buckets,
+		WindowMinutes: float64(window),
+		// The samples were collected here, including the merged case, so the
+		// aggregator must not go looking for a per-scope list that does not exist.
+		Durations:       durations,
+		FirstTokenMS:    ttfts,
+		SamplesProvided: true,
+	})
 	payload["series"] = opsSeries(buckets)
 	payload["matrix"] = a.opsMatrix(r.Context(), channels, since, until)
 	payload["alerts"] = a.firingAlerts()
@@ -113,10 +122,10 @@ func (a *API) HandleOpsChannels(w http.ResponseWriter, r *http.Request) {
 	_, since, until := a.parseOpsWindow(r)
 	channels, aggregates, _ := a.opsChannels(r.Context(), r, since, until)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"matrix":  a.opsMatrix(r.Context(), channels, since, until),
+		"matrix":              a.opsMatrix(r.Context(), channels, since, until),
 		"excluded_aggregates": aggregates,
-		"alerts":  a.firingAlerts(),
-		"channels": channels,
+		"alerts":              a.firingAlerts(),
+		"channels":            channels,
 	})
 }
 
@@ -183,24 +192,41 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 	filter := auditFilterFromQuery(r)
 	filter.kind = kind
 
-	records := make([]map[string]interface{}, 0, limit)
+	// Two passes over the same window, because the stream is strictly
+	// newest-first: a request is written when it finishes and its upstream
+	// attempts were written before it, so in reverse order the attempts always
+	// appear AFTER the request that owns them. Attaching them during the scan
+	// therefore left every detail panel empty.
+	//
+	// First pass: collect every upstream attempt in the window, keyed by request.
+	// Second pass: emit the matching records with their attempts already known.
 	attempts := map[string][]audit.Event{}
-	scanned := 0
 	for _, entry := range entries {
 		event, ok := decodeAuditEvent(entry)
 		if !ok {
 			continue
 		}
-		// Collect the upstream attempts of this request even when the request
-		// record itself is outside the page: the detail panel is built from them.
-		if event.Kind == audit.KindRequest && event.Action == "grok_upstream_attempt" && event.RequestID != "" {
-			attempts[event.RequestID] = append(attempts[event.RequestID], event)
+		if event.Action != "grok_upstream_attempt" || event.RequestID == "" {
+			continue
+		}
+		attempts[event.RequestID] = append(attempts[event.RequestID], event)
+	}
+
+	records := make([]map[string]interface{}, 0, limit)
+	matched := 0
+	for _, entry := range entries {
+		event, ok := decodeAuditEvent(entry)
+		if !ok {
+			continue
+		}
+		if event.Action == "grok_upstream_attempt" {
+			// Shown through its request's detail panel, not as its own row.
 			continue
 		}
 		if !filter.matches(event) {
 			continue
 		}
-		scanned++
+		matched++
 		records = append(records, map[string]interface{}{
 			"id":       entry.ID,
 			"event":    event,
@@ -211,16 +237,25 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The cursor must advance past everything that was SCANNED, not past the last
+	// record that matched. Returning the last match as the cursor made an older
+	// page unreachable whenever the window held more non-matching entries than the
+	// page size — the reported "earlier operation logs cannot be found". A window
+	// that produced no matching record at all still has to hand back a cursor, or
+	// the entries behind it can never be reached.
+	scanCap := int64(limit) * 6
 	nextCursor := ""
-	if len(records) == limit {
-		nextCursor = records[len(records)-1]["id"].(string)
+	if len(entries) > 0 && int64(len(entries)) >= scanCap {
+		nextCursor = entries[len(entries)-1].ID
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"data":        records,
 		"next_cursor": nextCursor,
 		"kind":        kind,
-		"scanned":     scanned,
+		"scanned":     len(entries),
+		"matched":     matched,
+		"scan_cap":    scanCap,
 		"coverage":    a.auditCoverage(r.Context()),
 	})
 }
@@ -247,40 +282,62 @@ func decodeAuditEvent(entry redis.XMessage) (audit.Event, bool) {
 	return event, true
 }
 
-// opsBuckets reads the per-channel buckets of one scope. "all" merges every
-// channel that reported traffic in the window.
-func (a *API) opsBuckets(ctx context.Context, scope string, since, until time.Time) ([]opsagg.Bucket, error) {
-	if scope == "all" {
-		channels, err := a.opsAggregator.Channels(ctx, since, until)
+// opsBucketsWithSamples reads one scope's per-minute buckets AND the latency
+// samples behind them.
+//
+// Percentiles are not additive, so a merged view must collect the raw samples of
+// every channel before computing one percentile. The earlier code asked the
+// aggregator to summarise the scope label "all", whose own sample lists do not
+// exist, which is why both P95 figures came back as zero whenever 全部渠道 was
+// selected.
+func (a *API) opsBucketsWithSamples(ctx context.Context, scope string, since, until time.Time) ([]opsagg.Bucket, []int64, []int64, error) {
+	if scope != "all" {
+		buckets, err := a.opsAggregator.Range(ctx, scope, since, until)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
-		merged := map[time.Time]opsagg.Bucket{}
-		for _, channel := range channels {
-			buckets, err := a.opsAggregator.Range(ctx, channel, since, until)
-			if err != nil {
-				return nil, err
-			}
-			for _, bucket := range buckets {
-				combined := merged[bucket.Minute]
-				combined.Minute = bucket.Minute
-				combined.Requests += bucket.Requests
-				combined.Success += bucket.Success
-				combined.Failed += bucket.Failed
-				combined.Probes += bucket.Probes
-				combined.Input += bucket.Input
-				combined.Output += bucket.Output
-				merged[bucket.Minute] = combined
-			}
-		}
-		out := make([]opsagg.Bucket, 0, len(merged))
-		for _, bucket := range merged {
-			out = append(out, bucket)
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Minute.Before(out[j].Minute) })
-		return out, nil
+		durations, ttfts := a.opsAggregator.SamplesFor(ctx, scope, buckets)
+		return buckets, durations, ttfts, nil
 	}
-	return a.opsAggregator.Range(ctx, scope, since, until)
+
+	channels, err := a.opsAggregator.Channels(ctx, since, until)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	merged := map[time.Time]opsagg.Bucket{}
+	var durations, ttfts []int64
+	for _, channel := range channels {
+		// The infrastructure aggregates are not user traffic: the http catch-all
+		// covers the admin UI, health checks and scanners, and probe is synthetic.
+		if !IsProviderChannel(channel) {
+			continue
+		}
+		buckets, err := a.opsAggregator.Range(ctx, channel, since, until)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		channelDurations, channelTTFTs := a.opsAggregator.SamplesFor(ctx, channel, buckets)
+		durations = append(durations, channelDurations...)
+		ttfts = append(ttfts, channelTTFTs...)
+
+		for _, bucket := range buckets {
+			combined := merged[bucket.Minute]
+			combined.Minute = bucket.Minute
+			combined.Requests += bucket.Requests
+			combined.Success += bucket.Success
+			combined.Failed += bucket.Failed
+			combined.Probes += bucket.Probes
+			combined.Input += bucket.Input
+			combined.Output += bucket.Output
+			merged[bucket.Minute] = combined
+		}
+	}
+	out := make([]opsagg.Bucket, 0, len(merged))
+	for _, bucket := range merged {
+		out = append(out, bucket)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Minute.Before(out[j].Minute) })
+	return out, durations, ttfts, nil
 }
 
 func opsSeries(buckets []opsagg.Bucket) []map[string]interface{} {
@@ -302,6 +359,11 @@ func opsSeries(buckets []opsagg.Bucket) []map[string]interface{} {
 func (a *API) opsMatrix(ctx context.Context, channels []string, since, until time.Time) []map[string]interface{} {
 	accounts, _ := a.store.ListAccounts(ctx)
 	now := time.Now()
+	// The rate is per minute of the requested window, not per bucket that exists.
+	windowMinutes := until.Sub(since).Minutes()
+	if windowMinutes <= 0 {
+		windowMinutes = 1
+	}
 
 	rows := make([]map[string]interface{}, 0, len(channels))
 	for _, channel := range channels {
@@ -312,17 +374,25 @@ func (a *API) opsMatrix(ctx context.Context, channels []string, since, until tim
 		}
 		enabled, available, needingLogin, modelCooldowns := poolCounts(accounts, channel, now)
 		row := map[string]interface{}{
-			"channel":               channel,
-			"accounts_enabled":      enabled,
-			"accounts_available":    available,
+			"channel":                channel,
+			"accounts_enabled":       enabled,
+			"accounts_available":     available,
 			"accounts_needing_login": needingLogin,
-			"model_cooldowns":       modelCooldowns,
-			"models":                []opsagg.ModelStats{},
+			"model_cooldowns":        modelCooldowns,
+			"models":                 []opsagg.ModelStats{},
 		}
 		if a.opsAggregator != nil && a.opsAggregator.Enabled() {
 			buckets, err := a.opsAggregator.Range(ctx, channel, since, until)
 			if err == nil {
-				summary := a.opsAggregator.Summarize(ctx, channel, buckets)
+				durations, ttfts := a.opsAggregator.SamplesFor(ctx, channel, buckets)
+				summary := a.opsAggregator.SummarizeWith(ctx, opsagg.SummaryInput{
+					Channel:         channel,
+					Buckets:         buckets,
+					WindowMinutes:   windowMinutes,
+					Durations:       durations,
+					FirstTokenMS:    ttfts,
+					SamplesProvided: true,
+				})
 				row["summary"] = summary
 				row["models"] = a.opsAggregator.ModelStatsFromBuckets(ctx, channel, buckets)
 				row["has_sample"] = summary.Requests > 0

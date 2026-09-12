@@ -317,6 +317,22 @@ func (a *Aggregator) bucket(ctx context.Context, minute time.Time, channel strin
 	return bucketFromFields(minute, channel, fields), nil
 }
 
+// SamplesFor reads the latency samples of one channel, so a merged view can
+// combine them. It returns the raw samples rather than a percentile: percentiles
+// are not additive, so merging has to happen before the percentile is computed.
+func (a *Aggregator) SamplesFor(ctx context.Context, channel string, buckets []Bucket) (durations []int64, ttfts []int64) {
+	if !a.Enabled() {
+		return nil, nil
+	}
+	for _, bucket := range buckets {
+		key := a.key(bucket.Minute, channel)
+		durations = append(durations, a.listInts(ctx, key+":dur")...)
+		ttfts = append(ttfts, a.listInts(ctx, key+":ttft")...)
+	}
+	return durations, ttfts
+}
+
+// bucketFromFields builds a bucket from the stored hash fields.
 func bucketFromFields(minute time.Time, channel string, fields map[string]string) *Bucket {
 	toInt := func(name string) int64 {
 		value, _ := strconv.ParseInt(fields[name], 10, 64)
@@ -335,35 +351,87 @@ func bucketFromFields(minute time.Time, channel string, fields map[string]string
 	}
 }
 
+// SummaryInput carries the two things a summary needs that the buckets alone do
+// not contain: the actual length of the requested window, and (for a merged view)
+// the latency samples gathered from every channel.
+//
+// Without the window the rate was "requests per bucket that happens to exist",
+// which turned one request in a sixty-minute window into an RPM of 1 instead of
+// 1/60.
+type SummaryInput struct {
+	// Channel is the scope label ("grok", or "all").
+	Channel string
+	// Buckets are the per-minute counters, chronological or not.
+	Buckets []Bucket
+	// WindowMinutes is the length of the requested window. Zero means "use the
+	// span covered by the buckets".
+	WindowMinutes float64
+	// Durations and FirstTokenMS are the latency samples to use. When nil, the
+	// samples are read from this channel's own lists; a merged view passes the
+	// samples collected from every channel, because the per-minute list of the
+	// scope label itself does not exist.
+	Durations    []int64
+	FirstTokenMS []int64
+	// SamplesProvided marks Durations/FirstTokenMS as authoritative (possibly
+	// empty) instead of "read the channel's own lists".
+	SamplesProvided bool
+}
+
 // Summarize folds buckets into one summary, computing percentiles from the
 // per-minute sample lists.
 func (a *Aggregator) Summarize(ctx context.Context, channel string, buckets []Bucket) Summary {
-	summary := Summary{Channel: normalizeChannel(channel)}
+	return a.SummarizeWith(ctx, SummaryInput{Channel: channel, Buckets: buckets})
+}
+
+// SummarizeWith is Summarize with the window and sample lists made explicit.
+func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summary {
+	summary := Summary{Channel: normalizeChannel(input.Channel)}
 	var durations, ttfts []int64
-	for _, bucket := range buckets {
+	if input.SamplesProvided {
+		durations = input.Durations
+		ttfts = input.FirstTokenMS
+	}
+	for _, bucket := range input.Buckets {
 		summary.Requests += bucket.Requests
 		summary.Success += bucket.Success
 		summary.Failed += bucket.Failed
 		summary.Probes += bucket.Probes
 		summary.InputTokens += bucket.Input
 		summary.OutputTokens += bucket.Output
-		if a.Enabled() {
-			key := a.key(bucket.Minute, channel)
+		if !input.SamplesProvided && a.Enabled() {
+			key := a.key(bucket.Minute, input.Channel)
 			durations = append(durations, a.listInts(ctx, key+":dur")...)
 			ttfts = append(ttfts, a.listInts(ctx, key+":ttft")...)
 		}
 	}
-	// Real traffic decides the success ratio: probes are listed separately.
-	real := summary.Requests - summary.Probes
+
+	// Probes are counted in their own channel, so a scope's request count is its
+	// real traffic. The probe count is only subtracted when it belongs to the same
+	// scope, otherwise a successful probe could push the ratio above 100%.
+	real := summary.Requests
+	if summary.Probes > 0 {
+		real -= summary.Probes
+	}
+	if real < 0 {
+		real = 0
+	}
 	if real > 0 {
-		summary.SuccessRate = float64(summary.Success) / float64(real)
-	}
-	if len(buckets) > 0 {
-		spanMinutes := float64(len(buckets))
-		if spanMinutes > 0 {
-			summary.RPM = float64(real) / spanMinutes
+		ratio := float64(summary.Success) / float64(real)
+		if ratio > 1 {
+			ratio = 1
 		}
+		summary.SuccessRate = ratio
 	}
+
+	// The rate is per minute of the WINDOW, not per bucket that happens to exist.
+	windowMinutes := input.WindowMinutes
+	if windowMinutes <= 0 {
+		windowMinutes = float64(len(input.Buckets))
+	}
+	if windowMinutes > 0 {
+		summary.RPM = float64(real) / windowMinutes
+	}
+
 	summary.Samples = int64(len(durations))
 	summary.DurationP95MS = percentile(durations, 0.95)
 	summary.FirstTokenP95MS = percentile(ttfts, 0.95)

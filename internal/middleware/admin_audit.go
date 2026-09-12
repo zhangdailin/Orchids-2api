@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -19,32 +20,56 @@ func SetOperationAuditLogger(logger audit.Logger) {
 	operationLogger = logger
 }
 
-// maxAuditBodyBytes bounds how much of a request body is buffered for the
-// change summary. Admin payloads are small; the cap keeps a large import from
-// turning into a large allocation.
+// maxAuditBodyBytes bounds how much of a request body is kept for the change
+// summary. Admin payloads are small; the cap keeps a large import from turning
+// into a large audit entry.
 const maxAuditBodyBytes = 32 << 10
 
-// captureRequestBody replaces r.Body with a re-readable copy and returns the// bytes for summarising. Reads beyond maxAuditBodyBytes stop being captured
-// while the handler still receives the complete body.
-func captureRequestBody(r *http.Request) []byte {
+// maxCapturedBodyBytes is the hard ceiling on how much of a body this middleware
+// will buffer to re-serve to the handler. A batch account import is the largest
+// admin payload in practice; anything beyond this is refused rather than silently
+// truncated, because a truncated JSON body makes the handler answer a confusing
+// "unexpected end of JSON input".
+const maxCapturedBodyBytes = 8 << 20
+
+// captureRequestBody reads the request body once and hands the handler a complete
+// copy of it, returning the prefix used for the change summary.
+//
+// The previous version read only maxAuditBodyBytes+1 from the live body and then
+// stitched the remainder back with a MultiReader. That dropped everything the
+// summary did not capture: a 40 KB import reached the handler as 32 KB and failed
+// mid-parse. The body is therefore read in full (bounded) and re-served verbatim
+// from memory.
+func captureRequestBody(r *http.Request) ([]byte, error) {
 	if r == nil || r.Body == nil {
-		return nil
+		return nil, nil
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxAuditBodyBytes+1))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxCapturedBodyBytes+1))
 	_ = r.Body.Close()
 	if err != nil {
-		// Rebuild an empty body so the handler can still answer 400 itself.
+		// The body could not be read at all: give the handler an empty reader so it
+		// can answer 400 itself, and record nothing.
 		r.Body = io.NopCloser(bytes.NewReader(nil))
-		return nil
+		r.ContentLength = 0
+		return nil, err
 	}
+	if len(raw) > maxCapturedBodyBytes {
+		// Hand back what was read (the handler will reject it as malformed) and
+		// surface the reason instead of pretending the body was complete.
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		r.ContentLength = int64(len(raw))
+		return nil, fmt.Errorf("admin request body exceeds %d bytes", maxCapturedBodyBytes)
+	}
+
+	// The handler receives the whole body, byte for byte.
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	r.ContentLength = int64(len(raw))
+
 	captured := raw
 	if len(captured) > maxAuditBodyBytes {
 		captured = captured[:maxAuditBodyBytes]
 	}
-	// The handler must see every byte, not just the captured prefix.
-	r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(raw), r.Body))
-	r.ContentLength = int64(len(raw))
-	return captured
+	return captured, nil
 }
 
 // operationAction renders the journal action name for an admin request, e.g.
@@ -134,8 +159,9 @@ func adminSessionAudit(next http.HandlerFunc) http.HandlerFunc {
 		// payload.
 		isLogin := strings.HasSuffix(strings.Trim(r.URL.Path, "/"), "/login")
 		var body []byte
+		var captureErr error
 		if !isLogin {
-			body = captureRequestBody(r)
+			body, captureErr = captureRequestBody(r)
 		}
 
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -145,6 +171,16 @@ func adminSessionAudit(next http.HandlerFunc) http.HandlerFunc {
 		status := "success"
 		if recorder.status >= 400 {
 			status = "error"
+		}
+		metadata := map[string]interface{}{
+			"method": r.Method,
+			"path":   r.URL.Path,
+			"code":   recorder.status,
+		}
+		if captureErr != nil {
+			// The reason the handler saw a short body is worth recording: without
+			// it an oversized import looks like a client mistake.
+			metadata["body_capture_error"] = captureErr.Error()
 		}
 		operationLogger.Log(r.Context(), audit.Event{
 			Kind:      audit.KindOperation,
@@ -156,11 +192,7 @@ func adminSessionAudit(next http.HandlerFunc) http.HandlerFunc {
 			Status:    status,
 			Details:   details,
 			Redacted:  redacted,
-			Metadata: map[string]interface{}{
-				"method": r.Method,
-				"path":   r.URL.Path,
-				"code":   recorder.status,
-			},
+			Metadata:  metadata,
 		})
 	}
 }

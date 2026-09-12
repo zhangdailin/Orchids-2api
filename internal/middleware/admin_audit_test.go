@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -154,5 +155,73 @@ func TestOperationTarget(t *testing.T) {
 	}
 	if got := operationTarget("/api/config", nil); got != "" {
 		t.Fatalf("target = %q, want empty for a singleton resource", got)
+	}
+}
+
+// TestAdminSessionAudit_LargeBodyReachesTheHandler is the regression the operator
+// hit with a batch import: a 40 KB payload arrived at the handler as 32 KB and
+// failed mid-parse, because the middleware read only its summary prefix from the
+// live body and stitched the rest back.
+func TestAdminSessionAudit_LargeBodyReachesTheHandler(t *testing.T) {
+	logger := &recordingAuditLogger{}
+	SetOperationAuditLogger(logger)
+	t.Cleanup(func() { SetOperationAuditLogger(nil) })
+
+	payload := strings.Repeat("x", 40_000)
+	body := `{"data":"` + payload + `"}`
+
+	var received int
+	var readErr error
+	handler := adminSessionAudit(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		received = len(raw)
+		readErr = err
+		if r.ContentLength != int64(len(body)) {
+			t.Errorf("ContentLength = %d, want %d", r.ContentLength, len(body))
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/accounts/import", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler(httptest.NewRecorder(), req)
+
+	if readErr != nil {
+		t.Fatalf("handler failed to read the body: %v", readErr)
+	}
+	if received != len(body) {
+		t.Fatalf("handler received %d bytes, want the full %d", received, len(body))
+	}
+	// The summary is still bounded, and still a valid prefix of the body.
+	events := logger.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if len(events[0].Details) > 2100 {
+		t.Fatalf("summary = %d bytes, want it bounded", len(events[0].Details))
+	}
+}
+
+// TestAdminSessionAudit_OversizedBodyIsReported keeps a body past the hard ceiling
+// from looking like a client mistake: the audit entry says what happened.
+func TestAdminSessionAudit_OversizedBodyIsReported(t *testing.T) {
+	logger := &recordingAuditLogger{}
+	SetOperationAuditLogger(logger)
+	t.Cleanup(func() { SetOperationAuditLogger(nil) })
+
+	handler := adminSessionAudit(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	})
+	oversized := strings.NewReader(`{"data":"` + strings.Repeat("y", maxCapturedBodyBytes+16) + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/accounts/import", oversized)
+	handler(httptest.NewRecorder(), req)
+
+	events := logger.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if _, ok := events[0].Metadata["body_capture_error"]; !ok {
+		t.Fatalf("oversized body not reported: %+v", events[0].Metadata)
 	}
 }

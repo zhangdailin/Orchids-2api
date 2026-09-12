@@ -84,3 +84,52 @@ func TestEventKindsAreDeclared(t *testing.T) {
 		}
 	}
 }
+
+// TestSummarizeChange_MasksConfigSecrets is the reported leak: a config save with
+// redis_password, proxy_pass and a password embedded in a URL reached the journal
+// in clear text, because the redaction matched exact key names only.
+func TestSummarizeChange_MasksConfigSecrets(t *testing.T) {
+	body := []byte(`{
+		"redis_password": "redis-secret-1",
+		"proxy_pass": "proxy-secret-2",
+		"proxy_url": "http://proxyuser:proxy-secret-3@proxy.internal:8080",
+		"public_api_key": "public-secret-4",
+		"admin_pass": "admin-secret-5",
+		"upstream_token": "upstream-secret-6",
+		"port": "3002",
+		"debug_enabled": true
+	}`)
+	summary, redacted := SummarizeChange(body)
+
+	for _, secret := range []string{
+		"redis-secret-1", "proxy-secret-2", "proxy-secret-3",
+		"public-secret-4", "admin-secret-5", "upstream-secret-6",
+	} {
+		if strings.Contains(summary, secret) {
+			t.Fatalf("summary leaked %q: %s", secret, summary)
+		}
+	}
+	// The non-secret settings still describe the change.
+	if !strings.Contains(summary, "3002") || !strings.Contains(summary, "debug_enabled") {
+		t.Fatalf("summary lost the non-secret settings: %s", summary)
+	}
+	if len(redacted) < 5 {
+		t.Fatalf("redacted = %v, want every secret field named", redacted)
+	}
+	// The URL keeps its shape so the reader sees that a proxied URL was set.
+	if !strings.Contains(summary, "proxy.internal") {
+		t.Fatalf("summary lost the URL host: %s", summary)
+	}
+}
+
+// TestSummarizeChange_MasksNestedURLPassword covers the same leak one level down.
+func TestSummarizeChange_MasksNestedURLPassword(t *testing.T) {
+	body := []byte(`{"databases":{"primary":{"dsn":"postgres://user:nested-secret@db:5432/app"}}}`)
+	summary, redacted := SummarizeChange(body)
+	if strings.Contains(summary, "nested-secret") {
+		t.Fatalf("nested URL password leaked: %s", summary)
+	}
+	if len(redacted) == 0 {
+		t.Fatal("the masked path was not reported")
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
+	"orchids-api/internal/config"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/store"
@@ -172,7 +173,7 @@ type probeTarget struct {
 // probeTargets returns the channels worth probing: those with at least one
 // usable account. A channel with no accounts is reported by the pool rule, not
 // by a probe that could only ever fail.
-func probeTargets(accounts []*store.Account) []probeTarget {
+func probeTargets(accounts []*store.Account, cfg *config.Config) []probeTarget {
 	now := time.Now()
 	channels := map[string]string{}
 	for _, acc := range accounts {
@@ -188,18 +189,24 @@ func probeTargets(accounts []*store.Account) []probeTarget {
 		}
 	}
 
+	probeModel := strings.TrimSpace(cfg.GrokProbeModel)
+	if probeModel == "" {
+		// A cheap, widely available model: the probe measures reachability, not
+		// capability, and must not consume a frontier quota.
+		probeModel = defaultProbeModel
+	}
+
 	targets := make([]probeTarget, 0, len(channels))
 	for channel := range channels {
 		switch channel {
 		case "grok":
 			targets = append(targets, probeTarget{
 				Channel: "grok",
-				// The reserved model name marks the traffic as synthetic, so the
-				// overview counts it apart from real requests. It is not a
-				// routable model, so a client cannot use it to hide its own traffic.
+				// The reserved label marks the traffic as synthetic, so the overview
+				// counts it apart from real requests.
 				Model:   probeModelLabel,
 				Path:    "/v1/responses",
-				Payload: `{"model":"grok-4.6","input":"ping","stream":false,"max_output_tokens":16}`,
+				Payload: `{"model":"` + probeModel + `","input":"ping","stream":false,"max_output_tokens":16}`,
 			})
 		default:
 			// Other channels are covered by their refresh loops; probing them here
@@ -210,61 +217,106 @@ func probeTargets(accounts []*store.Account) []probeTarget {
 	return targets
 }
 
+// defaultProbeModel is the model a probe asks for unless one is configured.
+const defaultProbeModel = "grok-4.6"
+
+// resolveProbeAPIKey finds a credential the probe can authenticate with.
+//
+// With inference auth enabled every /v1 route requires a managed API key, so a
+// probe without one was rejected by our own middleware and measured nothing about
+// the upstream. The public key is the supported source: managed keys are stored
+// hashed, so their plaintext cannot be recovered. When no key is configured,
+// probing is skipped instead of generating a stream of local 401s.
+func resolveProbeAPIKey(cfg *config.Config) string {
+	if cfg == nil || !cfg.InferenceAuthEnabled() {
+		return ""
+	}
+	return cfg.PublicAPIKey()
+}
+
+// probeStartDelay is how long after startup the first probe runs. The listener
+// is bound after this loop starts, so an immediate probe would measure our own
+// absent socket rather than the upstream.
+const probeStartDelay = 90 * time.Second
+
+// probeOnce runs one round of probes and returns how many were recorded. It is
+// the testable core of the loop: the timing lives in startProbeLoop.
+//
+// Probe results never decide account health: a synthetic failure must not
+// disable a credential that real traffic is using successfully.
+func probeOnce(ctx context.Context, s *store.Store, cfg *config.Config, logger audit.Logger, base string, client *http.Client) int {
+	if s == nil || cfg == nil || strings.TrimSpace(base) == "" {
+		return 0
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 45 * time.Second}
+	}
+	accounts, err := s.ListAccounts(ctx)
+	if err != nil {
+		return 0
+	}
+	apiKey := resolveProbeAPIKey(cfg)
+	if apiKey == "" && cfg.InferenceAuthEnabled() {
+		// Without a key every probe would be rejected by our own auth middleware,
+		// so the result would describe the middleware, not the upstream.
+		slog.Debug("Channel probes skipped: inference auth is enabled but no public API key is configured")
+		return 0
+	}
+	recorded := 0
+	for _, target := range probeTargets(accounts, cfg) {
+		started := time.Now()
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+target.Path, strings.NewReader(target.Payload))
+		if err != nil {
+			continue
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set(middleware.ProbeHeader, "1")
+		if apiKey != "" {
+			request.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		response, err := client.Do(request)
+		status := "error"
+		detail := ""
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+			_ = response.Body.Close()
+			if response.StatusCode >= 200 && response.StatusCode < 300 {
+				status = "ok"
+			} else {
+				detail = response.Status
+			}
+		} else {
+			detail = err.Error()
+		}
+		recorded++
+		if logger == nil {
+			continue
+		}
+		logger.Log(ctx, audit.Event{
+			Kind:   audit.KindSystem,
+			Action: "channel_probe",
+			// A probe is not the probed channel's traffic: it is recorded as
+			// synthetic so it can never be mistaken for a real request, and the
+			// probed channel is named in Provider instead.
+			Channel:  middleware.ProbeChannel,
+			Provider: target.Channel,
+			Model:    target.Model,
+			Status:   status,
+			Error:    detail,
+			Duration: time.Since(started).Milliseconds(),
+		})
+	}
+	return recorded
+}
+
 // startProbeLoop issues periodic probes and records their outcome in the journal
-// as a system event. Probe results never decide account health: a synthetic
-// failure must not disable a credential that real traffic is using successfully.
-func startProbeLoop(ctx context.Context, s *store.Store, logger audit.Logger, port string) {
-	if s == nil || strings.TrimSpace(port) == "" {
+// as a system event.
+func startProbeLoop(ctx context.Context, s *store.Store, cfg *config.Config, logger audit.Logger, port string) {
+	if s == nil || cfg == nil || strings.TrimSpace(port) == "" {
 		return
 	}
 	base := "http://127.0.0.1:" + strings.TrimSpace(port)
 	client := &http.Client{Timeout: 45 * time.Second}
-
-	run := func() {
-		accounts, err := s.ListAccounts(ctx)
-		if err != nil {
-			return
-		}
-		for _, target := range probeTargets(accounts) {
-			started := time.Now()
-			request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+target.Path, strings.NewReader(target.Payload))
-			if err != nil {
-				continue
-			}
-			request.Header.Set("Content-Type", "application/json")
-			request.Header.Set(middleware.ProbeHeader, "1")
-			response, err := client.Do(request)
-			status := "error"
-			detail := ""
-			if err == nil {
-				_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-				_ = response.Body.Close()
-				if response.StatusCode >= 200 && response.StatusCode < 300 {
-					status = "ok"
-				} else {
-					detail = response.Status
-				}
-			} else {
-				detail = err.Error()
-			}
-			if logger == nil {
-				continue
-			}
-			logger.Log(ctx, audit.Event{
-				Kind:   audit.KindSystem,
-				Action: "channel_probe",
-				// A probe is not the probed channel's traffic: it is recorded as
-				// synthetic so it can never be mistaken for a real request, and the
-				// probed channel is named in Provider instead.
-				Channel:  middleware.ProbeChannel,
-				Provider: target.Channel,
-				Model:    target.Model,
-				Status:   status,
-				Error:    detail,
-				Duration: time.Since(started).Milliseconds(),
-			})
-		}
-	}
 
 	go func() {
 		defer func() {
@@ -272,6 +324,14 @@ func startProbeLoop(ctx context.Context, s *store.Store, logger audit.Logger, po
 				slog.Error("Panic in probe loop", "error", r)
 			}
 		}()
+		timer := time.NewTimer(probeStartDelay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			probeOnce(ctx, s, cfg, logger, base, client)
+		}
 		ticker := time.NewTicker(probeEvery)
 		defer ticker.Stop()
 		for {
@@ -279,7 +339,7 @@ func startProbeLoop(ctx context.Context, s *store.Store, logger audit.Logger, po
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				run()
+				probeOnce(ctx, s, cfg, logger, base, client)
 			}
 		}
 	}()

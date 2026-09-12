@@ -73,10 +73,16 @@ type TracedResponseWriter struct {
 	http.ResponseWriter
 	StatusCode   int
 	BytesWritten int64
-	// firstWriteAt is when the handler produced its first byte. It is what makes
-	// time-to-first-token measurable, which is how the overview separates a slow
-	// prefill from slow generation.
+	// firstWriteAt is when the handler produced its first byte.
 	firstWriteAt time.Time
+	// contentWriteAt is when the first payload byte was produced, ignoring SSE
+	// comment lines. A streaming handler commits its headers and may emit
+	// keepalives long before a token exists, so measuring time-to-first-token
+	// from the header write reported a prefill that never happened.
+	contentWriteAt time.Time
+	// streamFailed records that the handler already committed a 2xx status and
+	// then failed mid-stream, where the HTTP status can no longer say so.
+	streamFailed bool
 }
 
 // NewTracedResponseWriter 创建新的 TracedResponseWriter
@@ -91,6 +97,52 @@ func NewTracedResponseWriter(w http.ResponseWriter) *TracedResponseWriter {
 // time when the handler never wrote anything.
 func (w *TracedResponseWriter) FirstWriteAt() time.Time { return w.firstWriteAt }
 
+// ContentWriteAt reports when the first payload byte was produced. It is the
+// honest time-to-first-token: response headers and SSE keepalive comments do not
+// count. When nothing but headers was ever written the value is zero and the
+// caller should fall back to FirstWriteAt.
+func (w *TracedResponseWriter) ContentWriteAt() time.Time { return w.contentWriteAt }
+
+// MarkStreamFailure lets a streaming handler report a failure it found after the
+// status line was already sent. The metric recorder reads it through
+// StreamFailed(); the HTTP status stays whatever was committed, because it
+// cannot be changed at that point.
+func (w *TracedResponseWriter) MarkStreamFailure() { w.streamFailed = true }
+
+// StreamFailed reports whether the response failed after committing a 2xx status.
+func (w *TracedResponseWriter) StreamFailed() bool { return w.streamFailed }
+
+// streamFailureMarker is the capability a response writer exposes so a handler
+// can flag a mid-stream failure without importing the concrete writer type.
+type streamFailureMarker interface{ MarkStreamFailure() }
+
+// MarkStreamFailure flags a mid-stream failure on whichever response writer the
+// handler was given. It is a no-op for writers that do not support it (a test
+// recorder, a direct call), so calling it is always safe.
+func MarkStreamFailure(w http.ResponseWriter) {
+	if marker, ok := w.(streamFailureMarker); ok && marker != nil {
+		marker.MarkStreamFailure()
+	}
+}
+
+// isPayloadWrite reports whether a write carries response payload rather than an
+// SSE comment/keepalive ("": keepalive"). An empty or whitespace-only write is
+// not payload either.
+func isPayloadWrite(b []byte) bool {
+	for _, c := range b {
+		switch c {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case ':':
+			// An SSE comment line (keepalive). Not payload.
+			return false
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // WriteHeader 实现 http.ResponseWriter
 func (w *TracedResponseWriter) WriteHeader(code int) {
 	if w.firstWriteAt.IsZero() {
@@ -102,8 +154,12 @@ func (w *TracedResponseWriter) WriteHeader(code int) {
 
 // Write 实现 http.ResponseWriter
 func (w *TracedResponseWriter) Write(b []byte) (int, error) {
+	now := time.Now()
 	if w.firstWriteAt.IsZero() {
-		w.firstWriteAt = time.Now()
+		w.firstWriteAt = now
+	}
+	if w.contentWriteAt.IsZero() && isPayloadWrite(b) {
+		w.contentWriteAt = now
 	}
 	n, err := w.ResponseWriter.Write(b)
 	w.BytesWritten += int64(n)
@@ -156,7 +212,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		duration := time.Since(start)
 		// The operations overview counts every finished request, so this record
 		// must happen before the log level decides whether to print a line.
-		recordRequestOutcome(r, wrapped.StatusCode, duration, wrapped.FirstWriteAt(), readModel())
+		recordRequestOutcome(r, wrapped, duration, readModel())
 
 		level := slog.LevelDebug
 		if wrapped.StatusCode >= 500 {
@@ -233,23 +289,39 @@ func RequestModelHint(ctx context.Context) (context.Context, func() string) {
 // failure cannot distort the user-facing success rate.
 const ProbeHeader = "X-Orchids-Probe"
 
-func recordRequestOutcome(r *http.Request, status int, duration time.Duration, firstWrite time.Time, model string) {
-	if requestOutcomeRecorder == nil || r == nil {
+func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, duration time.Duration, model string) {
+	if requestOutcomeRecorder == nil || r == nil || wrapped == nil {
 		return
 	}
 	durationMS := duration.Milliseconds()
+	// Time-to-first-token is measured from the first payload byte, not from the
+	// headers: a stream commits its status line (and may send keepalives) before
+	// any token exists.
+	firstWrite := wrapped.ContentWriteAt()
+	if firstWrite.IsZero() {
+		firstWrite = wrapped.FirstWriteAt()
+	}
 	firstTokenMS := int64(0)
 	if !firstWrite.IsZero() {
 		firstTokenMS = firstWrite.Sub(requestStartOf(r, duration)).Milliseconds()
+		if firstTokenMS < 0 {
+			firstTokenMS = 0
+		}
+	}
+	statusClass := httpStatusClass(wrapped.StatusCode)
+	if wrapped.StreamFailed() && statusClass == "2xx" {
+		// The status line is already committed, so the only honest record of a
+		// stream that died after it is a failure class of its own.
+		statusClass = streamFailureClass
 	}
 	if strings.TrimSpace(r.Header.Get(ProbeHeader)) != "" {
-		requestOutcomeRecorder(ProbeChannel, probeModel, httpStatusClass(status), durationMS, firstTokenMS)
+		requestOutcomeRecorder(ProbeChannel, probeModel, statusClass, durationMS, firstTokenMS)
 		return
 	}
 	requestOutcomeRecorder(
 		requestChannel(r.URL.Path),
 		model,
-		httpStatusClass(status),
+		statusClass,
 		durationMS,
 		firstTokenMS,
 	)
@@ -267,6 +339,11 @@ const (
 
 	probeModel = "__probe__"
 )
+
+// streamFailureClass is the status class recorded for a response that committed
+// a 2xx status and then failed mid-stream. It counts as a failure and is kept
+// distinct from a real 5xx, because the client saw an HTTP 200.
+const streamFailureClass = "stream_error"
 
 // requestStartOf reconstructs the request start from the measured duration. The
 // trace middleware owns the clock; keeping the derivation here avoids threading

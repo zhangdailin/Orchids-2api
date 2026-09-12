@@ -32,6 +32,7 @@
   "grok_cli_oauth_client_id": "b1a00492-073a-47ea-816f-4c329264a828",
   "grok_cli_oauth_token_url": "https://auth.x.ai/oauth2/token",
   "grok_cli_model_ids": [],
+  "grok_probe_model": "grok-4.6",
 
   "egress_comment": "Egress proxy pool + FlareSolverr + Cloudflare clearance auto-refresh. Disabled by default; keep grok_egress_enabled=false unless you run multiple exit nodes.",
   "grok_egress_enabled": false,

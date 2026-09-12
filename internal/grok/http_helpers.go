@@ -127,7 +127,13 @@ func writeSSEBytes(w http.ResponseWriter, event string, data []byte) {
 }
 
 // writeSSEError sends an OpenAI-style SSE error event (no flush, no [DONE]).
+//
+// An SSE error is written after the 200 status line is already committed, so the
+// HTTP status can no longer describe the outcome. The response writer is told
+// about it instead, which is how the operations overview counts a stream that
+// died after starting as a failure rather than a success.
 func writeSSEError(w http.ResponseWriter, message, errType, code string) {
+	middleware.MarkStreamFailure(w)
 	payload := map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": strings.TrimSpace(message),

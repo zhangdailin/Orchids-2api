@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -158,19 +159,39 @@ func NewNopLogger() *NopLogger                      { return &NopLogger{} }
 func (l *NopLogger) Log(_ context.Context, _ Event) {}
 
 // redactedKeys are request-body fields whose value must never reach the log:
-// they are live credentials or secrets. The key stays visible (name and type)
-// so a reader still sees WHAT was changed, just not the secret itself.
-var redactedKeys = map[string]bool{
-	"password": true, "admin_pass": true, "admin_token": true, "secret": true,
-	"token": true, "api_key": true, "apikey": true, "authorization": true,
-	"client_cookie": true, "session_cookie": true, "refresh_token": true,
-	"oauth_access_token": true, "oauth_refresh_token": true, "access_token": true,
-	"client_uat": true, "device_id": true, "session_id": true,
-	"workbuddy_access_token": true, "workbuddy_refresh_token": true,
-	"public_key": true, "app_key": true,
+// they are live credentials or secrets. The key stays visible (name and type) so
+// a reader still sees WHAT was changed, just not the secret itself.
+//
+// The list is matched by substring rather than exactly, because the config
+// endpoints use prefixed names (redis_password, proxy_pass, public_api_key) that
+// an exact-match list kept missing.
+var redactedKeys = []string{
+	"password", "passwd", "pass", "secret", "token", "apikey", "api_key",
+	"authorization", "bearer", "credential", "cookie", "private_key", "privatekey",
+	"webhook", "signature", "salt", "nonce", "dsn", "connection_string",
+	"public_key", "app_key", "admin_token", "session", "sso",
 }
 
 const redactedPlaceholder = "<redacted>"
+
+// urlCredentials matches "scheme://user:password@host" inside a URL-valued field.
+var urlCredentials = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)([^/@:\s]+):([^/@\s]+)@`)
+
+// sensitiveKey reports whether a key name carries a secret. Matching is
+// case-insensitive and substring-based so "redis_password" and "proxy_pass" are
+// covered without enumerating every channel's field names.
+func sensitiveKey(key string) bool {
+	name := strings.ToLower(strings.TrimSpace(key))
+	if name == "" {
+		return false
+	}
+	for _, needle := range redactedKeys {
+		if strings.Contains(name, needle) {
+			return true
+		}
+	}
+	return false
+}
 
 // Redact sanitises a parsed request body for the operation journal. Credential
 // fields are replaced, not dropped, so the summary still shows which knob moved.
@@ -188,7 +209,7 @@ func redactValue(value interface{}, prefix string) (interface{}, []string) {
 			if prefix != "" {
 				path = prefix + "." + key
 			}
-			if redactedKeys[strings.ToLower(strings.TrimSpace(key))] {
+			if sensitiveKey(key) {
 				out[key] = redactedPlaceholder
 				redacted = append(redacted, path)
 				continue
@@ -201,16 +222,35 @@ func redactValue(value interface{}, prefix string) (interface{}, []string) {
 	case []interface{}:
 		out := make([]interface{}, 0, len(typed))
 		redacted := make([]string, 0)
-		for index, item := range typed {
+		for _, item := range typed {
 			clean, nested := redactValue(item, prefix)
 			out = append(out, clean)
 			redacted = append(redacted, nested...)
-			_ = index
 		}
 		return out, redacted
+	case string:
+		return redactString(typed, prefix)
 	default:
 		return value, nil
 	}
+}
+
+// redactString masks a password embedded in a URL, which a key-name check cannot
+// see: "redis://user:secret@host" must not reach the journal intact.
+func redactString(value string, path string) (interface{}, []string) {
+	if !strings.Contains(value, "://") {
+		return value, nil
+	}
+	matches := urlCredentials.FindStringSubmatch(value)
+	if matches == nil {
+		return value, nil
+	}
+	masked := urlCredentials.ReplaceAllString(value, "${1}${2}:"+redactedPlaceholder+"@")
+	label := path
+	if label == "" {
+		label = "url"
+	}
+	return masked, []string{label + " (embedded password)"}
 }
 
 // SummarizeChange renders a redacted, size-bounded change summary for the
