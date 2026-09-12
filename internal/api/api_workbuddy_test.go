@@ -161,6 +161,67 @@ func TestPreserveWorkBuddyCredentialsOnEdit_KeepsServerSideState(t *testing.T) {
 	}
 }
 
+func TestBuildQuotaResponseFields_WorkBuddyKeepsRemainingSemantics(t *testing.T) {
+	t.Parallel()
+
+	acc := &store.Account{
+		AccountType:  "workbuddy",
+		UsageLimit:   350,
+		UsageCurrent: 147.28,
+		WorkBuddyQuota: store.WorkBuddyQuotaSnapshot{
+			Limit:             350,
+			Remaining:         147.28,
+			Used:              202.72,
+			PackageRemaining:  147.28,
+			LastConsumedUnits: 52,
+			PackageName:       "Free Plan Subscription",
+			Unit:              "credit",
+			ResetAt:           time.Date(2026, 9, 26, 0, 13, 42, 0, time.UTC),
+			SyncedAt:          time.Now(),
+		},
+	}
+
+	fields := buildQuotaResponseFields(acc)
+	if fields["quota_limit"] != 350.0 {
+		t.Fatalf("quota_limit = %v, want 350", fields["quota_limit"])
+	}
+	if fields["quota_remaining"] != 147.28 {
+		t.Fatalf("quota_remaining = %v, want 147.28", fields["quota_remaining"])
+	}
+	// UsageCurrent stores REMAINING for this channel; "used" must come from the
+	// meter snapshot, never from reading UsageCurrent as used.
+	if fields["quota_used"] != 202.72 {
+		t.Fatalf("quota_used = %v, want 202.72", fields["quota_used"])
+	}
+	if fields["quota_supported"] != true {
+		t.Fatalf("quota_supported = %v, want true", fields["quota_supported"])
+	}
+	if fields["quota_plan"] != "Free Plan Subscription" {
+		t.Fatalf("quota_plan = %v", fields["quota_plan"])
+	}
+	if fields["quota_unit"] != "credit" {
+		t.Fatalf("quota_unit = %v", fields["quota_unit"])
+	}
+	if fields["quota_consumed_units"] != 52 {
+		t.Fatalf("quota_consumed_units = %v", fields["quota_consumed_units"])
+	}
+	if _, ok := fields["quota_reset_at"]; !ok {
+		t.Fatal("quota_reset_at is missing")
+	}
+}
+
+func TestBuildQuotaResponseFields_WorkBuddyWithoutMeterIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	fields := buildQuotaResponseFields(&store.Account{AccountType: "workbuddy"})
+	if fields["quota_supported"] != false {
+		t.Fatalf("quota_supported = %v, want false before the first meter sync", fields["quota_supported"])
+	}
+	if fields["quota_mode"] != "unknown" {
+		t.Fatalf("quota_mode = %v, want unknown", fields["quota_mode"])
+	}
+}
+
 func TestWorkBuddyAccessTokenPreview_TruncatesWithoutLeakingRefresh(t *testing.T) {
 	t.Parallel()
 

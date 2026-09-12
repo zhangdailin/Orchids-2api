@@ -4,7 +4,6 @@ let warpDeviceLoginId = "";
 let warpDeviceLoginTimer = null;
 let grokDeviceLoginId = "";
 let grokDeviceLoginTimer = null;
-let workbuddyLoginActive = false;
 
 let accounts = [];
 let currentPlatform = '';
@@ -65,6 +64,27 @@ function normalizeAccountType(acc) {
 function getQuotaStats(acc) {
   if (!acc) return null;
   const type = normalizeAccountType(acc);
+  if (type === "workbuddy") {
+    const base = getSidebarQuotaStats(acc);
+    if (!base) {
+      return { supported: false, unknown: true, limit: 0, remaining: 0, used: 0, pctRemaining: 0 };
+    }
+    const limit = Math.max(0, base.limit || 0);
+    const remaining = Math.max(0, base.remaining || 0);
+    const used = Math.max(0, limit - remaining);
+    const pctRemaining = limit > 0 ? Math.min(100, Math.round((remaining / limit) * 100)) : 0;
+    return {
+      ...base,
+      limit,
+      remaining,
+      used,
+      pctRemaining,
+      workbuddy: true,
+      unit: base.unit || "credits",
+      resetAt: base.resetAt || "",
+      packageRemaining: base.packageRemaining || 0,
+    };
+  }
   // Build billing and response throttling are different xAI products. Never
   // use request/token rate-limit headers as a paid-plan balance.
   if (type === "grok" && isSidebarGrokOAuthAccount(acc)) {
@@ -146,6 +166,24 @@ function normalizeAccountSubscription(acc) {
 
 function subscriptionBadge(acc) {
   const type = normalizeAccountType(acc);
+  if (type === "workbuddy") {
+    const plan = String(acc?.quota_plan || "").trim();
+    if (plan) {
+      return {
+        text: plan,
+        bg: "rgba(52, 211, 153, 0.16)",
+        color: "#34d399",
+        tip: `WorkBuddy 计量包: ${plan}${acc?.quota_unit ? `（单位 ${acc.quota_unit}）` : ""}`,
+      };
+    }
+    // No meter snapshot yet: say so instead of showing a made-up level.
+    return {
+      text: "未同步",
+      bg: "rgba(100, 116, 139, 0.12)",
+      color: "#94a3b8",
+      tip: "尚未读取到 WorkBuddy 计量包；点 Sync 刷新账号状态后重试",
+    };
+  }
   const level = normalizeAccountSubscription(acc);
   if (!level) {
     return { text: "-", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "暂无订阅等级" };
@@ -214,8 +252,10 @@ function applyTokenLabels(type) {
   const accountId = String(document.getElementById("accountId")?.value || "");
   const puterWebLoginGroup = document.getElementById("puterWebLoginGroup");
   if (puterWebLoginGroup) puterWebLoginGroup.hidden = type !== "puter" || Boolean(accountId);
+  // WorkBuddy login stays available while editing so an expired authorization can
+  // be renewed by signing in again instead of deleting the account.
   const workbuddyLoginGroup = document.getElementById("workbuddyLoginGroup");
-  if (workbuddyLoginGroup) workbuddyLoginGroup.hidden = type !== "workbuddy" || Boolean(accountId);
+  if (workbuddyLoginGroup) workbuddyLoginGroup.hidden = type !== "workbuddy";
   const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
   if (warpDeviceLoginGroup) {
     warpDeviceLoginGroup.hidden = type !== "warp" || Boolean(accountId);
@@ -241,11 +281,11 @@ function applyTokenLabels(type) {
         : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
       input.required = true;
     } else if (type === 'workbuddy') {
-      label.textContent = "WorkBuddy 凭证";
-      input.placeholder = "每行一个 refreshToken；也接受会话 JSON 或 accessToken";
+      label.textContent = "WorkBuddy 凭证（可选）";
+      input.placeholder = "留空即可，推荐用上方官方登录；也可粘贴 refreshToken / 会话 JSON / accessToken";
       hint.textContent = accountId
-        ? "WorkBuddy 编辑时留空即保留服务器上已有的凭证；填写则以新凭证覆盖。"
-        : "推荐直接用上方「使用 WorkBuddy 官方网页登录」自动获取凭证。也可以手填或批量粘贴桌面端会话 refreshToken（约 1 年有效，服务器会自动轮换并回写），或整段 auth/account JSON / accessToken。";
+        ? "该渠道以官方登录为主。留空即保留服务器上已有的凭证；填写则以新凭证覆盖。"
+        : "该渠道以官方登录为主：点上方「使用 WorkBuddy 官方网页登录」即可自动保存账号并同步额度。此处留空即可；仅在批量导入或迁移时，才需要手填桌面端会话 refreshToken（约 1 年有效，服务器自动轮换）。";
       input.required = false;
     } else {
     label.textContent = "Cookie / __client / __session";
@@ -1058,12 +1098,25 @@ function renderAccounts() {
     const tdQuota = document.createElement("td");
     tdQuota.style.fontSize = "0.85rem";
     const quota = getQuotaStats(acc);
-    if (quota && quota.quotaUnavailable) {
+    if (quota && quota.workbuddy) {
+      const pct = quota.pctRemaining;
+      const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
+      const resetText = quota.resetAt ? ` · ${formatQuotaReset(quota.resetAt)}` : "";
+      const packageText = quota.packageRemaining > 0 && quota.packageRemaining !== quota.limit
+        ? `<div style="color:#64748b;font-size:0.75rem">套餐共剩 ${formatCredit(quota.packageRemaining)}${resetText}</div>`
+        : resetText
+          ? `<div style="color:#64748b;font-size:0.75rem">${resetText.replace(' · ', '')}</div>`
+          : "";
+      tdQuota.innerHTML = `<span style="color:${color}">${formatCredit(quota.remaining)}</span> <span style="color:#64748b;font-size:0.75rem">/ ${formatCredit(quota.limit)} (剩余)</span>${packageText}`;
+    } else if (quota && quota.quotaUnavailable) {
       tdQuota.style.color = "#94a3b8";
       tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(xAI 未下发 Build 数值配额)</span>`;
     } else if (quota && quota.unknown) {
       tdQuota.style.color = "#64748b";
-      tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(Puter 暂无稳定额度接口)</span>`;
+      const hint = normalizeAccountType(acc) === "workbuddy"
+        ? "WorkBuddy 计量接口未返回数据，点 Sync 重试"
+        : "Puter 暂无稳定额度接口";
+      tdQuota.innerHTML = `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(${hint})</span>`;
     } else if (quota) {
       const pct = quota.pctRemaining;
       const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
@@ -1113,7 +1166,10 @@ function renderAccounts() {
     tdCount.style.fontSize = "0.9rem";
     tdCount.style.color = "#e2e8f0";
     tdCount.style.fontWeight = "500";
-    tdCount.textContent = String(acc.request_count || 0);
+    tdCount.textContent = String(accountUsageCounter(acc));
+    if (normalizeAccountType(acc) === "workbuddy") {
+      tdCount.title = "WorkBuddy 按计量口径统计的已消耗额度（点 Sync 刷新）";
+    }
     tr.appendChild(tdCount);
 
     const tdLast = document.createElement("td");
@@ -1196,13 +1252,64 @@ function renderAccounts() {
   };
 }
 
+// formatCredit renders meter values that the upstream reports with fractions.
+function formatCredit(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "0";
+  return Number.isInteger(number) ? number.toLocaleString() : number.toFixed(2);
+}
+
+// formatQuotaReset renders a reset timestamp as a compact remaining time.
+function formatQuotaReset(iso) {
+  const resetAt = Date.parse(String(iso || ""));
+  if (!Number.isFinite(resetAt)) return "";
+  const remaining = resetAt - Date.now();
+  if (remaining <= 0) return "待重置";
+  const hours = Math.floor(remaining / 3600000);
+  if (hours < 24) return `${Math.max(1, hours)} 小时后重置`;
+  return `${Math.floor(hours / 24)} 天后重置`;
+}
+
+// accountUsageCounter is the value the 调用 column shows. WorkBuddy accounts have
+// no request counter of their own, so the credit meter's consumed units are the
+// honest equivalent.
+function accountUsageCounter(acc) {
+  const type = normalizeAccountType(acc);
+  if (type === "workbuddy") {
+    const consumed = Number(acc?.quota_consumed_units);
+    if (Number.isFinite(consumed) && consumed > 0) return consumed;
+  }
+  return Number(acc?.request_count || 0);
+}
+
+// buildMobileEmailMarkup surfaces the signed-in address, which is how operators
+// actually recognise a WorkBuddy account (the nickname is the email).
+function buildMobileEmailMarkup(acc) {
+  const email = String(acc?.email || "").trim();
+  if (!email) return "";
+  return `
+        <div class="account-mobile-item" style="grid-column: 1 / -1;">
+          <span class="account-mobile-label">邮箱</span>
+          <span class="account-mobile-value" style="word-break: break-all;">${escapeHtml(email)}</span>
+        </div>`;
+}
+
 function buildQuotaMarkup(acc) {
   const quota = getQuotaStats(acc);
   if (quota && quota.quotaUnavailable) {
     return `<span style="color:#94a3b8">未知</span> <span style="color:#64748b;font-size:0.75rem">(xAI 未下发 Build 数值配额)</span>`;
   }
   if (quota && quota.unknown) {
-    return `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(Puter 暂无稳定额度接口)</span>`;
+    const hint = normalizeAccountType(acc) === "workbuddy"
+      ? "WorkBuddy 计量接口未返回数据"
+      : "Puter 暂无稳定额度接口";
+    return `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(${hint})</span>`;
+  }
+  if (quota && quota.workbuddy) {
+    const pct = quota.pctRemaining;
+    const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
+    const resetText = quota.resetAt ? `<div style="color:#64748b;font-size:0.75rem">${formatQuotaReset(quota.resetAt)}</div>` : "";
+    return `<span style="color:${color}">${formatCredit(quota.remaining)} / ${formatCredit(quota.limit)}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span>${resetText}`;
   }
   if (quota) {
     const pct = quota.pctRemaining;
@@ -1263,12 +1370,13 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
         </div>
         <div class="account-mobile-item">
           <span class="account-mobile-label">调用</span>
-          <span class="account-mobile-value">${escapeHtml(String(acc.request_count || 0))}</span>
+          <span class="account-mobile-value">${escapeHtml(String(accountUsageCounter(acc)))}</span>
         </div>
         <div class="account-mobile-item">
           <span class="account-mobile-label">最后调用</span>
           <span class="account-mobile-value">${escapeHtml(acc.last_used_at && !acc.last_used_at.startsWith("0001") ? formatTime(acc.last_used_at) : "-")}</span>
         </div>
+        ${buildMobileEmailMarkup(acc)}
       </div>
     `;
     fragment.appendChild(card);
@@ -1484,43 +1592,12 @@ function openModal(account = null) {
 
   applyValues();
   finalizeModal();
-  if (!account && normalizeAccountType({ account_type: typeEl ? typeEl.value : getActiveAccountType() }) === "workbuddy") {
-    startWorkBuddyLogin();
-  }
 }
 
-// WorkBuddy official login lifecycle. The popup is opened by workbuddy-auth.js;
-// this module only tracks whether a transaction is running so a later modal
-// close (or a non-WorkBuddy account) can cancel it safely.
-function startWorkBuddyLogin() {
-  if (workbuddyLoginActive) return;
-  const login = globalThis.WorkBuddyLogin;
-  if (!login || typeof login.start !== "function") return;
-  workbuddyLoginActive = true;
-  login.start();
-  // The module owns its own completion path (it closes the modal on success),
-  // so release the guard when the modal is closed or reopened.
-  const watch = window.setInterval(() => {
-    if (!workbuddyLoginActive) {
-      window.clearInterval(watch);
-      return;
-    }
-    const modal = document.getElementById("accountModal");
-    const statusNode = document.getElementById("workbuddyLoginStatus");
-    if (!modal || !modal.classList.contains("active")) {
-      workbuddyLoginActive = false;
-      window.clearInterval(watch);
-      return;
-    }
-    if (statusNode && statusNode.hidden === false && statusNode.classList.contains("is-error")) {
-      workbuddyLoginActive = false;
-      window.clearInterval(watch);
-    }
-  }, 1000);
-}
-
+// WorkBuddy official login lifecycle. The login only ever starts from an
+// explicit click on "使用 WorkBuddy 官方网页登录" (workbuddy-auth.js owns the
+// popup); opening the modal must never navigate the operator anywhere.
 function stopWorkBuddyLogin() {
-  workbuddyLoginActive = false;
   const login = globalThis.WorkBuddyLogin;
   if (login && typeof login.stop === "function") {
     login.stop();
@@ -1724,6 +1801,21 @@ function formatTokenDisplay(acc) {
   if (type === 'puter' && getAccountToken(acc)) {
     const token = getAccountToken(acc);
     return token.length > 24 ? token.substring(0, 8) + '...' + token.substring(token.length - 8) : token;
+  }
+  if (type === 'workbuddy') {
+    // The signed-in address is what identifies a WorkBuddy account; fall back to
+    // the truncated access token when the profile was not fetched.
+    const email = String(acc.email || "").trim();
+    const uid = String(acc.workbuddy_uid || "").trim();
+    const label = email || (uid ? `uid ${uid.substring(0, 8)}` : "");
+    const token = getAccountToken(acc);
+    const tokenTail = token
+      ? (token.length > 16 ? `${token.substring(0, 6)}...${token.substring(token.length - 6)}` : token)
+      : "";
+    if (label && tokenTail) return `${label} · ${tokenTail}`;
+    if (label) return label;
+    if (tokenTail) return tokenTail;
+    return '-';
   }
   if (acc.session_id) {
     return acc.session_id.substring(0, 30) + '...';

@@ -39,7 +39,7 @@
        <div class="form-group" id="workbuddyLoginGroup" hidden>
          <label class="form-label">官方 WorkBuddy 登录（国际版）</label>
          <button class="btn btn-secondary" id="workbuddyLoginButton" type="button" onclick="WorkBuddyLogin.start()">使用 WorkBuddy 官方网页登录</button>
-         <small class="helper-text">在 www.workbuddy.ai 完成登录并授权本管理站点；服务端只保存 access/refresh token，读取不到密码。授权完成后会自动同步该账号的模型目录，refreshToken 由服务端自动轮换。原有手填方式仍保留。</small>
+         <small class="helper-text">在 www.workbuddy.ai 完成登录并授权本管理站点；服务端只保存 access/refresh token，读取不到密码。授权完成后自动保存账号并同步模型目录与额度，refreshToken 由服务端自动轮换。仅在点击按钮后才会开始登录；编辑已有账号时也可用它重新授权。</small>
          <div class="account-import-status" id="workbuddyLoginStatus" hidden></div>
        </div>
        <div class="form-group" id="warpDeviceLoginGroup" hidden>

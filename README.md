@@ -161,11 +161,13 @@ curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 ## WorkBuddy 当前对齐点
 
 - 对接国际版 `www.workbuddy.ai`（`isOversea=true`），基址 `/v2/chat/completions`
-- **官方浏览器登录**：管理页面 WorkBuddy 平台 → 添加账号 → 「使用 WorkBuddy 官方网页登录」，服务端只申请上游登录事务并轮询换取 token，不接触密码；授权后自动同步该账号模型目录，读不到目录就不落库
+- **官方浏览器登录**：管理页面 WorkBuddy 平台 → 添加账号 → **手动点击**「使用 WorkBuddy 官方网页登录」。打开弹窗不会自动发起登录，也不会自动跳转；编辑已有账号时同样保留该按钮，用于重新授权（无需删除账号）。服务端只申请上游登录事务并轮询换取 token，不接触密码；授权后自动同步该账号模型目录与额度，读不到目录就不落库
 - 上游强制 `stream: true`，且要求 `messages[0]` 为 system（否则 `400 code=11128`）；客户端会自动按此组包，并把 `developer` 归一到 `system`
 - `tool_choice` 只接受字符串，工具调用以 OpenAI 增量 `tool_calls` 形式回流并聚合为完整调用
 - 业务错误在 200 信封内返回：`6004` 为该模型频率限制（账号其它模型仍可用），`12153` 为会话失效需重新登录
 - 账号凭据只存放于 `workbuddy_access_token` / `workbuddy_refresh_token` 专用字段，refreshToken 不下发到管理页面；Keycloak 每次刷新都会轮换 refreshToken，服务器自动持久化新值
+- **额度（真实计量）**：账号状态同步会调用 `POST /v2/billing/meter/get-user-resource`（`p_tcaca`）。账号表格里的「等级」显示上游计量包名（如 `Free Plan Subscription` / `Bonus Pack`），「配额」显示当前周期剩余/上限（如 `147.28 / 350`，上游支持小数），并给出周期重置时间；「调用」在无请求计数的该通道下显示计量已消耗额度。多个计量包会按同一周期聚合
+- 「Token」列对 WorkBuddy 显示登录邮箱（桌面端昵称即邮箱）+ accessToken 尾部，方便区分账号
 - 手填方式仍保留：可直接粘贴桌面端会话 `refreshToken`，或整段 `<sharedDataPath>/auth/workbuddy-desktop-ai.info` JSON
 
 当前种子型号（`cli` 白名单，20 个）：`default-model`、`fast-model`、`balanced-model`、`primary-model`、`deep-model`、`deepseek-v4.1-flash`、`gpt-6-astra`、`hy4-preview-f`、`hy3`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4`、`gpt-5.3-codex`、`gemini-3.5-flash`、`glm-5.3`、`glm-5.2`、`kimi-k3`、`kimi-k2.6`。

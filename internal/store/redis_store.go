@@ -319,6 +319,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	if !acc.WorkBuddyModelsSyncedAt.IsZero() {
 		updated.WorkBuddyModelsSyncedAt = acc.WorkBuddyModelsSyncedAt
 	}
+	if !acc.WorkBuddyQuota.SyncedAt.IsZero() {
+		updated.WorkBuddyQuota = acc.WorkBuddyQuota
+	}
 	updated.UpdatedAt = time.Now()
 
 	data, err := s.marshalAccount(&updated)

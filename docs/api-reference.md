@@ -296,6 +296,19 @@ curl -s http://127.0.0.1:3002/workbuddy/v1/messages \
 - 上游强制 `stream: true`；服务端按此组包，`messages[0]` 缺失时自动补一条最小 system
 - 上游把业务错误放在 200 信封里：`6004` = 该模型频率限制（换模型即可），`12153` = 会话失效需重新登录
 - refreshToken 由 Keycloak 每次刷新轮换，服务端会在过期前自动刷新并回写账号记录；管理页面不会返回 refreshToken
+- 账号列表的额度来自 `POST /v2/billing/meter/get-user-resource`（`ProductCode=p_tcaca`）：
+
+| 上游字段 | 映射 | 说明 |
+|---|---|---|
+| `CycleCapacitySizePrecise` / `CycleCapacitySize` | `quota_limit` / `usage_limit` | 当前周期上限，多包累加 |
+| `CycleCapacityRemainPrecise` / `CycleCapacityRemain` | `quota_remaining` / `usage_current` | 当前周期剩余（该通道 `usage_current` 存的是**剩余**） |
+| `Limit - Remaining` | `quota_used` | 已用额度（派生，不读 `usage_current`） |
+| `CycleEndTime` | `quota_reset_at` / `quota_reset_at` | 周期重置时间 |
+| `CapacityRemainPrecise` | `quota_package_remaining` | 整个套餐剩余 |
+| `PackageName` | `quota_plan` | 计量包名，账号表格「等级」列显示 |
+| `CapacityUnit` | `quota_unit` | 通常 `credit` |
+
+计量接口是可选路径：读取失败不会让账号变成错误状态，只是 `quota_supported=false`（表格显示「未知」），点 Sync 重试即可。
 
 ### 5.1 Puter Claude Messages 工具首轮
 
@@ -356,6 +369,7 @@ curl -s -X DELETE http://127.0.0.1:3002/api/workbuddy/login/<login-id>
 
 行为说明：
 
+- **登录只由用户操作触发**：管理页面打开添加/编辑账号弹窗时不会发起任何登录请求，也不会跳转；只有点击「使用 WorkBuddy 官方网页登录」才会调用本接口
 - 事务 TTL 15 分钟，服务端每 2s 轮询上游；上游未授权时返回业务码 `11217`（HTTP 200），服务端归一为「pending」
 - 授权成功后服务端会用新 token 读取一次账号模型目录：**读不到目录就不会落库**，避免存入无法使用的凭证
 - 若上游未返回 refreshToken，会立即做一次刷新以取得长期凭据（Keycloak 每次刷新都会轮换 refreshToken）

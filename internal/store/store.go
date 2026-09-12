@@ -109,6 +109,40 @@ type Account struct {
 	// account supports every model".
 	WorkBuddyModelIDs       []string  `json:"workbuddy_model_ids,omitempty"`
 	WorkBuddyModelsSyncedAt time.Time `json:"workbuddy_models_synced_at,omitempty"`
+	// WorkBuddyQuota is the last successful credit-meter snapshot. The generic
+	// UsageLimit/UsageCurrent fields stay authoritative for scheduling; this
+	// keeps the extra detail the meter reports (cycle reset, package label and
+	// the consumption delta the account table shows).
+	WorkBuddyQuota WorkBuddyQuotaSnapshot `json:"workbuddy_quota,omitempty"`
+}
+
+// WorkBuddyQuotaSnapshot is the WorkBuddy credit-meter snapshot. Remaining/Limit
+// describe the current cycle; Used/LastConsumedUnits are whole-credit figures
+// derived from the meter, because the upstream also reports fractions.
+type WorkBuddyQuotaSnapshot struct {
+	Limit             float64   `json:"limit,omitempty"`
+	Remaining         float64   `json:"remaining,omitempty"`
+	Used              float64   `json:"used,omitempty"`
+	PackageRemaining  float64   `json:"package_remaining,omitempty"`
+	LastConsumedUnits int       `json:"last_consumed_units,omitempty"`
+	ResetAt           time.Time `json:"reset_at,omitempty"`
+	PeriodEnd         time.Time `json:"period_end,omitempty"`
+	PackageName       string    `json:"package_name,omitempty"`
+	Unit              string    `json:"unit,omitempty"`
+	SyncedAt          time.Time `json:"synced_at,omitempty"`
+}
+
+// ResyncAt reports when the quota snapshot needs refreshing. The cycle reset is
+// the hard deadline: the allowance is re-armed then, but the console also wants
+// the displayed number to stay current between resets.
+func (s WorkBuddyQuotaSnapshot) ResyncAt() time.Time {
+	if s.SyncedAt.IsZero() {
+		return time.Time{}
+	}
+	if s.ResetAt.IsZero() {
+		return s.SyncedAt
+	}
+	return s.ResetAt
 }
 
 // GrokQuotaWindow is one explicit upstream usage or throttling dimension.
@@ -193,8 +227,8 @@ type StoredResponse struct {
 // lets later turns resume on another replica without storing plaintext chain
 // of thought.
 type StoredReasoningReplay struct {
-	Model      string    `json:"model"`
-	SessionKey string    `json:"session_key"`
+	Model      string `json:"model"`
+	SessionKey string `json:"session_key"`
 	// EncryptedContent is the legacy single-cipher form. It is still written by
 	// paths that only observe one opaque reasoning item, and is always read for
 	// compatibility; Items takes precedence when present.

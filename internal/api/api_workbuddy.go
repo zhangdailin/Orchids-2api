@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -268,6 +269,23 @@ func PreserveWorkBuddyCredentialsOnEdit(acc, existing *store.Account) {
 		acc.WorkBuddyModelIDs = append([]string(nil), existing.WorkBuddyModelIDs...)
 		acc.WorkBuddyModelsSyncedAt = existing.WorkBuddyModelsSyncedAt
 	}
+	if acc.WorkBuddyQuota.SyncedAt.IsZero() {
+		acc.WorkBuddyQuota = existing.WorkBuddyQuota
+	}
+	// Provider-observed usage and health are not editable through the account
+	// form; a partial PUT must not zero the credit meter the table displays.
+	acc.UsageLimit = existing.UsageLimit
+	acc.UsageCurrent = existing.UsageCurrent
+	acc.UsageTotal = existing.UsageTotal
+	if acc.QuotaResetAt.IsZero() {
+		acc.QuotaResetAt = existing.QuotaResetAt
+	}
+	if strings.TrimSpace(acc.StatusCode) == "" {
+		acc.StatusCode = existing.StatusCode
+	}
+	if acc.LastAttempt.IsZero() {
+		acc.LastAttempt = existing.LastAttempt
+	}
 }
 
 // isFullWorkBuddyCatalog reports whether a snapshot carries a plausible catalog.
@@ -325,7 +343,7 @@ func WorkBuddyAccessTokenPreview(acc *store.Account) string {
 }
 
 // verifyWorkBuddyAccount proves the credential works before it is persisted and
-// applies the account-scoped model catalog on the way.
+// applies the account-scoped model catalog and credit meter on the way.
 func verifyWorkBuddyAccount(ctx context.Context, acc *store.Account, cfg *config.Config) (string, int, error) {
 	if acc == nil {
 		return "", 0, nil
@@ -343,15 +361,31 @@ func verifyWorkBuddyAccount(ctx context.Context, acc *store.Account, cfg *config
 		return "", 502, err
 	}
 
-	if len(models) > 0 {
-		ids := make([]string, 0, len(models))
-		for _, model := range models {
-			if id := strings.TrimSpace(model.ID); id != "" {
-				ids = append(ids, id)
-			}
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		if id := strings.TrimSpace(model.ID); id != "" {
+			ids = append(ids, id)
 		}
+	}
+	if len(ids) > 0 {
 		acc.WorkBuddyModelIDs = ids
 		acc.WorkBuddyModelsSyncedAt = time.Now()
 	}
-	return "", 0, nil
+
+	// The credit meter is a separate, optional endpoint. A failure must not turn
+	// an otherwise usable account into an error; it only leaves the quota
+	// unavailable until the next sync.
+	quotaStatus := ""
+	if quota, quotaErr := client.FetchQuota(ctx); quotaErr != nil {
+		slog.Warn("WorkBuddy credit meter sync failed; leaving quota unavailable",
+			"account_id", acc.ID, "error", quotaErr)
+	} else {
+		workbuddy.ApplyQuota(acc, quota)
+		if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
+			// The plan is exhausted: keep the account but mark it so the
+			// scheduler backs off instead of hammering a dead allowance.
+			quotaStatus = "402"
+		}
+	}
+	return quotaStatus, 0, nil
 }

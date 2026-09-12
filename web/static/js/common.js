@@ -69,6 +69,25 @@ function getSidebarQuotaStats(acc) {
       };
     }
   }
+  if (type === "workbuddy") {
+    // The credit meter reports the remaining share of the current cycle, so the
+    // explicit quota_* fields are authoritative and usage_current must not be
+    // read as "used".
+    const limit = Math.max(0, Number(acc.quota_limit || 0));
+    const remaining = Math.max(0, Number(acc.quota_remaining || 0));
+    if (acc.quota_supported === true && limit > 0) {
+      return {
+        supported: true,
+        limit,
+        remaining,
+        unit: acc.quota_unit || "credits",
+        plan: acc.quota_plan || "",
+        resetAt: acc.quota_reset_at || "",
+        packageRemaining: Math.max(0, Number(acc.quota_package_remaining || 0)),
+      };
+    }
+    return null;
+  }
   const explicitLimit = Math.floor(acc.quota_limit || 0);
   const hasExplicitRemaining = acc.quota_remaining !== undefined && acc.quota_remaining !== null;
   if (explicitLimit > 0 && hasExplicitRemaining) {
@@ -85,11 +104,14 @@ function getSidebarQuotaStats(acc) {
 function isQuotaOnlyStatus(acc) {
   if (!acc) return false;
   const type = normalizeSidebarAccountType(acc);
-  if (type !== "puter" && type !== "warp") return false;
+  if (type !== "puter" && type !== "warp" && type !== "workbuddy") return false;
   const quota = getSidebarQuotaStats(acc);
   const statusCode = normalizeSidebarStatusCode(acc.status_code);
   if (statusCode === "402") return true;
   if (type === "puter") {
+    return Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
+  }
+  if (type === "workbuddy") {
     return Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
   }
   return statusCode === "429" && Boolean(quota && quota.limit > 0 && quota.remaining <= 0);

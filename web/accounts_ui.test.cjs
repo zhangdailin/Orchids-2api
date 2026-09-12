@@ -12,7 +12,7 @@ function loadUI() {
     const classes = new Set();
     const children = [];
     const listeners = {};
-    return {
+    const element = {
       tagName: tag,
       value: '',
       hidden: false,
@@ -20,7 +20,10 @@ function loadUI() {
       disabled: false,
       checked: false,
       textContent: '',
-      innerHTML: '',
+      // escapeHtml() renders through a detached div, so the stub must mirror
+      // textContent into innerHTML the way the DOM does.
+      get innerHTML() { return this.__innerHTML !== undefined ? this.__innerHTML : this.textContent; },
+      set innerHTML(value) { this.__innerHTML = value; },
       style: {},
       dataset: {},
       children,
@@ -35,6 +38,7 @@ function loadUI() {
         contains: (name) => classes.has(name),
       },
     };
+    return element;
   };
   const elements = new Map();
   const node = (id) => {
@@ -194,15 +198,44 @@ test('WorkBuddy exposes official login only for new accounts and keeps manual in
   assert.equal(node('clientCookie').required, false);
   assert.match(node('tokenLabel').textContent, /WorkBuddy/);
 
+  // Editing keeps the login button: an expired authorization is renewed by
+  // signing in again instead of deleting the account.
   node('accountId').value = '11';
   context.applyTokenLabels('workbuddy');
-  assert.equal(node('workbuddyLoginGroup').hidden, true);
+  assert.equal(node('workbuddyLoginGroup').hidden, false);
 
   context.applyTokenLabels('puter');
   node('accountId').value = '';
   context.applyTokenLabels('puter');
   assert.equal(node('workbuddyLoginGroup').hidden, true);
   assert.equal(node('puterWebLoginGroup').hidden, false);
+});
+
+test('opening the WorkBuddy modal never starts a login on its own', () => {
+  const { context, node } = loadUI();
+  vm.runInContext(
+    'globalThis.WorkBuddyLogin = { start() { globalThis.__wbStarted = (globalThis.__wbStarted || 0) + 1; }, stop() {} };',
+    context,
+  );
+  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountType').value = 'workbuddy';
+  node('accountId').value = '';
+  node('enabled').checked = true;
+
+  context.openModal();
+  assert.equal(vm.runInContext('globalThis.__wbStarted || 0', context), 0,
+    'opening the add-account modal must not open the login page');
+  assert.equal(node('workbuddyLoginGroup').hidden, false, 'the login button must be presented');
+  assert.equal(node('workbuddyLoginStatus').hidden, true, 'no status should be shown before a click');
+
+  // Editing an existing account must not navigate either.
+  context.openModal(workBuddyAccount());
+  assert.equal(vm.runInContext('globalThis.__wbStarted || 0', context), 0,
+    'opening the edit modal must not open the login page');
+
+  // Only an explicit click on the login button starts the flow.
+  vm.runInContext('globalThis.WorkBuddyLogin.start()', context);
+  assert.equal(vm.runInContext('globalThis.__wbStarted || 0', context), 1);
 });
 
 test('WorkBuddy edits may keep the stored credential and never display the refresh token', async () => {
@@ -233,29 +266,61 @@ test('WorkBuddy edits may keep the stored credential and never display the refre
   assert.ok(!body.client_cookie || body.client_cookie === '', JSON.stringify(body));
 });
 
-test('WorkBuddy new-account modal starts the official login flow automatically', () => {
-  const { context, node } = loadUI();
-  let started = 0;
-  vm.runInContext(
-    'globalThis.WorkBuddyLogin = { start() { globalThis.__wbStarted = (globalThis.__wbStarted || 0) + 1; }, stop() {} };',
-    context,
-  );
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
-  node('accountModal').style = {};
-  node('accountId').value = '';
-  node('enabled').checked = true;
-  // The modal derives its type from the platform tab, which is reflected in the
-  // hidden accountType field.
-  node('accountType').value = 'workbuddy';
-  context.openModal();
-  started = vm.runInContext('globalThis.__wbStarted || 0', context);
-  assert.equal(started, 1);
+test('WorkBuddy rows show the metered credits, plan label and signed-in email', () => {
+  const { context } = loadUI();
+  const account = workBuddyAccount({
+    email: 'operator@example.com',
+    workbuddy_uid: '07ab88c8-5596-4257-8d21-e9fcbe3a3810',
+    quota_supported: true,
+    quota_limit: 350,
+    quota_remaining: 147.28,
+    quota_used: 202.72,
+    quota_unit: 'credit',
+    quota_plan: 'Free Plan Subscription',
+    quota_consumed_units: 202,
+    quota_reset_at: new Date(Date.now() + 12 * 86400000).toISOString(),
+    usage_limit: 350,
+    usage_current: 147.28,
+    request_count: 0,
+  });
 
-  // Editing an existing account must not auto-open the login popup.
-  vm.runInContext('globalThis.__wbStarted = 0', context);
-  context.openModal(workBuddyAccount());
-  started = vm.runInContext('globalThis.__wbStarted || 0', context);
-  assert.equal(started, 0);
+  // The meter reports REMAINING; reading usage_current as "used" would invert it.
+  const quota = context.getQuotaStats(account);
+  assert.equal(quota.workbuddy, true);
+  assert.equal(quota.limit, 350);
+  assert.equal(quota.remaining, 147.28);
+  assert.equal(quota.used, 350 - 147.28, 'used must be derived from the meter');
+  assert.ok(quota.pctRemaining > 40 && quota.pctRemaining < 43, `pctRemaining=${quota.pctRemaining}`);
+
+  const markup = context.buildQuotaMarkup(account);
+  assert.match(markup, /147\.28 \/ 350/);
+  assert.match(markup, /剩余/);
+  assert.match(markup, /天后重置/);
+
+  // 等级 shows the upstream plan label, not a guessed subscription tier.
+  assert.match(context.buildSubscriptionMarkup(account), /Free Plan Subscription/);
+
+  // 调用 falls back to meter consumption because this channel has no request counter.
+  assert.equal(context.accountUsageCounter(account), 202);
+  assert.equal(context.accountUsageCounter({ account_type: 'puter', request_count: 7 }), 7);
+
+  // The token column identifies the account by its signed-in address.
+  const tokenCell = context.formatTokenDisplay(account);
+  assert.match(tokenCell, /operator@example\.com/);
+  assert.doesNotMatch(tokenCell, /workbuddy_refresh_token/);
+});
+
+test('WorkBuddy without a meter snapshot says so instead of showing a fake quota', () => {
+  const { context } = loadUI();
+  const account = workBuddyAccount({ email: 'operator@example.com' });
+  assert.equal(context.getSidebarQuotaStats(account), null);
+  const quota = context.getQuotaStats(account);
+  assert.equal(quota.unknown, true);
+  assert.match(context.buildQuotaMarkup(account), /WorkBuddy 计量接口未返回数据/);
+  assert.match(context.buildSubscriptionMarkup(account), /未同步/);
+  // usage_current must never be interpreted as a remaining balance without the
+  // explicit quota_* fields the server sends.
+  assert.equal(context.getQuotaStats({ account_type: 'workbuddy', usage_limit: 350, usage_current: 147.28 }).unknown, true);
 });
 
 test('workbuddy-auth module exposes a popup login without persisting tokens', () => {

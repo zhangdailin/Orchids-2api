@@ -533,6 +533,54 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "workbuddy":
+		// The meter reports the remaining credits of the current cycle; the
+		// generic UsageCurrent slot stores that remaining value for this channel,
+		// so "used" must be derived rather than read from UsageCurrent.
+		snapshot := acc.WorkBuddyQuota
+		quotaLimit := limit
+		if snapshot.Limit > 0 {
+			quotaLimit = snapshot.Limit
+		}
+		quotaRemaining := current
+		if !snapshot.SyncedAt.IsZero() {
+			quotaRemaining = snapshot.Remaining
+		}
+		if quotaLimit <= 0 {
+			fields["quota_limit"] = 0.0
+			fields["quota_used"] = 0.0
+			fields["quota_remaining"] = 0.0
+			fields["quota_mode"] = "unknown"
+			fields["quota_unit"] = "credits"
+			fields["quota_supported"] = false
+			fields["quota_plan"] = snapshot.PackageName
+			break
+		}
+		if quotaRemaining < 0 {
+			quotaRemaining = 0
+		}
+		if quotaRemaining > quotaLimit {
+			quotaRemaining = quotaLimit
+		}
+		used := snapshot.Used
+		if snapshot.SyncedAt.IsZero() {
+			used = quotaLimit - quotaRemaining
+		}
+		if used < 0 {
+			used = 0
+		}
+		fields["quota_limit"] = quotaLimit
+		fields["quota_used"] = used
+		fields["quota_remaining"] = quotaRemaining
+		fields["quota_mode"] = "remaining"
+		fields["quota_unit"] = util.FirstNonEmpty(snapshot.Unit, "credits")
+		fields["quota_supported"] = !snapshot.SyncedAt.IsZero()
+		fields["quota_plan"] = snapshot.PackageName
+		fields["quota_consumed_units"] = snapshot.LastConsumedUnits
+		fields["quota_package_remaining"] = snapshot.PackageRemaining
+		if !snapshot.ResyncAt().IsZero() {
+			fields["quota_reset_at"] = snapshot.ResyncAt().UTC().Format(time.RFC3339)
+		}
 	case "grok":
 		if grok.ProviderForAccount(acc) == grok.ProviderBuild {
 			weekly := acc.GrokBilling.Weekly
