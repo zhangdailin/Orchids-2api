@@ -652,6 +652,22 @@ function selectedPlatformAccountType(typeEl) {
   return selected || getActiveAccountType();
 }
 
+// platformAccountType maps a platform tab key to the account type it creates.
+// Tab keys are account types (the tab list is built from `accounts[].account_type`),
+// so an unrecognised value must not silently create a Warp account.
+function platformAccountType(platform) {
+  const key = String(platform || "").trim().toLowerCase();
+  switch (key) {
+    case "warp":
+    case "grok":
+    case "puter":
+    case "workbuddy":
+      return key;
+    default:
+      return getActiveAccountType();
+  }
+}
+
 function setAccountModalType(type) {
   const normalized = String(type || "warp").trim().toLowerCase() || "warp";
   const typeEl = document.getElementById("accountType");
@@ -1344,6 +1360,10 @@ function goToPage(page) {
 function filterByPlatform(platform) {
   currentPlatform = platform;
   currentPage = 1; // Reset to first page
+  // Keep the modal's account type in step with the selected tab. The hidden
+  // field is the only source of truth for "which provider am I adding", and it
+  // must never silently fall back to Warp when a platform tab is selected.
+  setAccountModalType(platformAccountType(platform));
   document.querySelectorAll("#platformFilters .tab-item").forEach(btn => {
     btn.classList.toggle("active", btn.textContent === platform);
   });
