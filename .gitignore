@@ -24,6 +24,9 @@ go.work.sum
 .gocache/
 .gotmp/
 
+# Scratch workspace for provider research (upstream checkouts, notes)
+.workbuddy-ai/
+
 # Dependency directories
 vendor/
 node_modules/

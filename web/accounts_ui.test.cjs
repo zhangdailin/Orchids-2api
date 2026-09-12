@@ -88,6 +88,71 @@ function workBuddyAccount(overrides = {}) {
   };
 }
 
+test('clicking a platform tab makes 添加账号 open in that platform', () => {
+  const { context, node } = loadUI();
+  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
+  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountId').value = '';
+  node('enabled').checked = true;
+  context.renderPlatformTabs();
+
+  const tabs = node('platformFilters').children;
+  for (const platform of ['grok', 'puter', 'warp', 'workbuddy']) {
+    const tab = tabs.find((candidate) => candidate.textContent === platform);
+    assert.ok(tab, `no ${platform} tab among ${tabs.map((candidate) => candidate.textContent).join(',')}`);
+    tab.click();
+    node('accountId').value = '';
+    context.openModal();
+    assert.equal(node('accountType').value, platform, `${platform}: openModal type`);
+    const expectedLabel = platform === 'workbuddy' ? 'WorkBuddy' : platform.charAt(0).toUpperCase() + platform.slice(1);
+    assert.equal(node('accountTypeDisplay').value, expectedLabel, `${platform}: displayed label`);
+  }
+});
+
+test('the active platform tab wins over a stale account-type field', () => {
+  const { context, node } = loadUI();
+  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
+  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('enabled').checked = true;
+  context.renderPlatformTabs();
+  context.filterByPlatform('grok');
+  // A previous modal interaction must not leak its type into the next open.
+  context.setAccountModalType('warp');
+  node('accountId').value = '';
+  context.openModal();
+  assert.equal(node('accountType').value, 'grok', 'the active platform tab wins over a stale field');
+});
+
+test('editing a Grok account keeps its credential UI while another tab is active', () => {
+  const { context, node } = loadUI();
+  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
+  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('enabled').checked = true;
+  context.renderPlatformTabs();
+  // The operator is looking at another channel while editing a Grok account.
+  context.filterByPlatform('puter');
+
+  const oauthAccount = {
+    id: 12,
+    account_type: 'grok',
+    credential_type: 'oauth',
+    grok_provider: 'build',
+    oauth_access_token: 'access',
+    enabled: true,
+    weight: 1,
+  };
+  context.openModal(oauthAccount);
+  assert.equal(node('accountType').value, 'grok', 'the edited account owns the modal type');
+  assert.equal(node('credentialModeGroup').hidden, false, 'Grok credential mode must be shown');
+  assert.equal(node('grokDeviceLoginGroup').hidden, false, 'the OAuth mode must offer device login');
+
+  const ssoAccount = { ...oauthAccount, id: 13, credential_type: 'sso', client_cookie: 'sso=x' };
+  context.openModal(ssoAccount);
+  assert.equal(node('accountType').value, 'grok');
+  assert.equal(node('ssoCredentialGroup').hidden, false, 'SSO mode must offer the cookie input');
+  assert.equal(node('grokDeviceLoginGroup').hidden, true);
+});
+
 test('Grok credential modes expose only their own inputs', () => {
   const { context, node } = loadUI();
 
@@ -568,4 +633,24 @@ test('every platform tab maps to its own provider login surface', () => {
       assert.equal(node(id).hidden, hidden, `${platform}: ${id} hidden`);
     }
   }
+});
+
+test('a rejected credential shows the reason, not the raw error envelope', () => {
+  const { context } = loadUI();
+  // The server answers rejected credentials with the standard admin envelope.
+  const envelope = JSON.stringify({
+    error: { type: 'authentication_error', message: 'account was rejected by the upstream and was not saved: 401 unauthorized' },
+    type: 'error',
+  });
+  assert.equal(
+    vm.runInContext(`extractAdminErrorDetail(${JSON.stringify(envelope)})`, context),
+    'account was rejected by the upstream and was not saved: 401 unauthorized',
+    'JSON envelope must be unwrapped to its message',
+  );
+  assert.equal(
+    vm.runInContext('extractAdminErrorDetail("missing sso token")', context),
+    'missing sso token',
+    'a plain-text body is already the detail',
+  );
+  assert.equal(vm.runInContext('extractAdminErrorDetail("")', context), '', 'an empty body stays empty');
 });

@@ -211,7 +211,7 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	identity, identityErr := client.FetchSessionIdentity(identityCtx, credential)
 	identityCancel()
 	if identityErr != nil && grok.IsAuthenticationFailure(identityErr) {
-		return identityErr
+		return fmt.Errorf("%s: %w", classifyGrokAuthStatus(identityErr), identityErr)
 	}
 	if identityErr == nil {
 		if identity.UserID != "" {
@@ -232,13 +232,27 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	quotaCancel()
 	if quotaErr != nil {
 		if grok.IsAuthenticationFailure(quotaErr) {
-			return quotaErr
+			return fmt.Errorf("%s: %w", classifyGrokAuthStatus(quotaErr), quotaErr)
 		}
+		// A quota read can be rate limited or unsupported; neither means the
+		// credential is invalid. Keep the account usable and let the caller
+		// classify whatever code the error carries.
 		slog.Warn("Grok SSO quota unavailable; account remains authenticated", "account_id", acc.ID, "error", quotaErr)
 		return nil
 	}
 	grok.ApplyWebQuotaInfo(acc, windows)
 	return nil
+}
+
+// classifyGrokAuthStatus maps a definitive SSO authentication failure to "401".
+func classifyGrokAuthStatus(err error) string {
+	if err == nil {
+		return ""
+	}
+	if status := apperrors.ClassifyAccountStatus(err.Error()); status != "" {
+		return status
+	}
+	return "401"
 }
 
 func normalizeWarpTokenInput(acc *store.Account) {
@@ -371,21 +385,43 @@ func preserveGrokOAuthCredentials(acc, existing *store.Account) {
 	}
 }
 
+// grokSSOCookieValue normalizes the SSO cookie an account carries, so a
+// credential comparison ignores decoration and field placement.
+func grokSSOCookieValue(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	return grok.NormalizeSSOToken(util.FirstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token))
+}
+
 // preserveGrokRuntimeStateOnAdminEdit keeps provider-observed state out of the
 // generic account edit surface. The management modal only changes credential
 // and operator configuration; a partial PUT must not erase a linked Console
 // account's independent catalog, quota, health, or recovery state.
+//
+// One state pair is credential-scoped rather than runtime-scoped: the recorded
+// status and its reason describe the credential they were observed with. A PUT
+// that installs a DIFFERENT SSO cookie supersedes them, so they are reset and the
+// next sync re-verifies. Keeping them made a repaired account display the old
+// 未授权 badge until a manual Sync or the auto-sync TTL expired.
 func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
 	if acc == nil || existing == nil || !strings.EqualFold(acc.AccountType, "grok") {
 		return
 	}
+	credentialReplaced := grokSSOCookieValue(acc) != grokSSOCookieValue(existing)
 	acc.Token = existing.Token
 	acc.Subscription = existing.Subscription
 	acc.UsageCurrent = existing.UsageCurrent
 	acc.UsageTotal = existing.UsageTotal
 	acc.UsageLimit = existing.UsageLimit
-	acc.StatusCode = existing.StatusCode
-	acc.LastAttempt = existing.LastAttempt
+	if !credentialReplaced {
+		acc.StatusCode = existing.StatusCode
+		// The reason is server-observed, not operator input: an edit form that
+		// carries no status fields must not blank the explanation of the status
+		// it keeps.
+		acc.StatusMessage = existing.StatusMessage
+		acc.LastAttempt = existing.LastAttempt
+	}
 	acc.QuotaResetAt = existing.QuotaResetAt
 	acc.MissingThinkingStrikes = existing.MissingThinkingStrikes
 	acc.MissingThinkingLastAt = existing.MissingThinkingLastAt
@@ -1245,6 +1281,21 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 					}
 				} else {
 					applySuccessfulAccountRefreshStatus(&acc, accountStatus)
+				}
+				// A credential the upstream definitively rejects must not be
+				// persisted as a healthy account: it would sit in the pool looking
+				// 正常 while every request routed to it fails.
+				if acc.StatusCode == "401" {
+					if deleteErr := a.store.DeleteAccount(r.Context(), acc.ID); deleteErr != nil {
+						slog.Error("Failed to roll back rejected account", "account_id", acc.ID, "type", acc.AccountType, "error", deleteErr)
+					} else {
+						slog.Warn("Rejected account was not saved (upstream refused the credential)",
+							"account_id", acc.ID, "type", acc.AccountType, "reason", acc.StatusMessage)
+					}
+					apperrors.New("authentication_error",
+						"account was rejected by the upstream and was not saved: "+strings.TrimSpace(acc.StatusMessage),
+						http.StatusUnauthorized).WriteResponse(w)
+					return
 				}
 				if updateErr := a.store.UpdateAccount(r.Context(), &acc); updateErr != nil {
 					slog.Warn("Failed to persist initial account sync", "account_id", acc.ID, "type", acc.AccountType, "error", updateErr)

@@ -33,6 +33,68 @@ func HasExplicitHTTPStatus(lower string, code string) bool {
 	return false
 }
 
+// statusCodePrefixes lists the account-level codes that callers sometimes encode
+// as a bare "<code>" delimiter token on an error message.
+var statusCodePrefixes = []string{"401", "402", "403", "404", "429"}
+
+// codeAtDelimiter returns the status code starting at offset start of the
+// already-lowercased string, when the code is followed by a delimiter (":"),
+// whitespace, or the end of the string. The delimiter requirement keeps longer
+// numbers ("4040 widgets") from matching.
+func codeAtDelimiter(lower string, start int) (string, bool) {
+	if start < 0 || start >= len(lower) {
+		return "", false
+	}
+	for _, code := range statusCodePrefixes {
+		if !strings.HasPrefix(lower[start:], code) {
+			continue
+		}
+		rest := lower[start+len(code):]
+		if rest == "" || strings.HasPrefix(rest, ":") || strings.HasPrefix(rest, " ") {
+			return code, true
+		}
+	}
+	return "", false
+}
+
+// scanStatusCode finds a delimiter-bounded status code in the already-lowercased
+// string, preferring the leftmost occurrence. Provider layers concatenate the
+// upstream status into the error text, so either the leading "<code>: <detail>"
+// form or the wrapped "context: <code>: <detail>" form must stay recognised.
+func scanStatusCode(lower string) string {
+	search := lower
+	offset := 0
+	for {
+		index := strings.Index(search, ":")
+		if index < 0 {
+			return ""
+		}
+		position := offset + index + 1
+		trimmed := position
+		for trimmed < len(lower) && lower[trimmed] == ' ' {
+			trimmed++
+		}
+		if code, ok := codeAtDelimiter(lower, trimmed); ok {
+			return code
+		}
+		offset = position
+		search = lower[offset:]
+	}
+}
+
+// LeadingStatusCode returns the status code encoded in a leading "<code>:<detail>"
+// prefix (also "HTTP 401", "status=401" is handled by HasExplicitHTTPStatus), or
+// "" when the string carries no such prefix. A bare leading code such as "401"
+// counts as well.
+func LeadingStatusCode(errStr string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(errStr))
+	code, ok := codeAtDelimiter(trimmed, 0)
+	if !ok {
+		return ""
+	}
+	return code
+}
+
 // ClassifyAccountStatus maps an error string to an HTTP status code string
 // ("401", "403", "404", "429") or returns "" if the error does not indicate
 // a recognisable account-level issue.
@@ -41,6 +103,14 @@ func ClassifyAccountStatus(errStr string) string {
 	// Model name/mapping errors should not poison account status.
 	if strings.Contains(lower, "model is not found") || strings.Contains(lower, "model not found") {
 		return ""
+	}
+	// A status reason persisted by an admin handler is the wrapped error string,
+	// so recognise the code that sits inside the wrap chain as well.
+	if code := LeadingStatusCode(lower); code != "" {
+		return code
+	}
+	if code := scanStatusCode(lower); code != "" {
+		return code
 	}
 	switch {
 	case HasExplicitHTTPStatus(lower, "401") ||

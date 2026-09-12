@@ -528,8 +528,9 @@ function applyCredentialModeUI(type) {
   const oauthExpiresGroup = document.getElementById("oauthExpiresGroup");
   if (oauthExpiresGroup) oauthExpiresGroup.hidden = true;
   const grokDeviceLoginGroup = document.getElementById("grokDeviceLoginGroup");
-  const accountId = String(document.getElementById("accountId")?.value || "");
-  if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = !isOAuth || Boolean(accountId);
+  // Kept in edit mode too: re-authorizing an account whose grant the upstream
+  // retired (the 未授权 case) must not require deleting and re-adding it.
+  if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = !isOAuth;
   const clientCookie = document.getElementById("clientCookie");
   if (clientCookie) clientCookie.required = showToken;
 }
@@ -702,9 +703,15 @@ function getActiveAccountType() {
 }
 
 // selectedPlatformAccountType resolves the account type for a brand-new account.
-// The hidden field already carries the selected platform; only fall back to the
-// ambient platform when it is empty (for example on a cold page load).
+//
+// The active platform tab is the source of truth: it is what the operator is
+// looking at when they press 添加账号. The hidden field is only a fallback for the
+// cold-load case (no tab rendered yet) — reading it first let a stale value from
+// a previous modal interaction (or the HTML default "warp") silently win, which
+// made the Grok tab open a Warp form.
 function selectedPlatformAccountType(typeEl) {
+  const active = String(currentPlatform || "").trim().toLowerCase();
+  if (active) return platformAccountType(active);
   const selected = String(typeEl?.value || "").trim().toLowerCase();
   return selected || getActiveAccountType();
 }
@@ -734,6 +741,26 @@ function setAccountModalType(type) {
   applyTokenLabels(normalized);
 }
 
+// extractAdminErrorDetail turns an admin API error body into the sentence an
+// operator should read. Create/update endpoints answer with the standard
+// {"error":{"type":...,"message":...}} envelope, and showing that JSON verbatim
+// hides the actionable part ("upstream rejected this credential") behind braces.
+function extractAdminErrorDetail(raw) {
+  const text = String(raw == null ? "" : raw).trim();
+  if (!text) return "";
+  try {
+    const parsed = JSON.parse(text);
+    const message = parsed && typeof parsed === "object"
+      ? (parsed.error && typeof parsed.error === "object" ? parsed.error.message : parsed.error)
+      : null;
+    const detail = typeof message === "string" ? message.trim() : "";
+    if (detail) return detail;
+  } catch (_) {
+    /* a plain-text error body is already the detail */
+  }
+  return text;
+}
+
 async function createAccount(payload) {
   const res = await fetch("/api/accounts", {
     method: "POST",
@@ -744,7 +771,7 @@ async function createAccount(payload) {
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new Error(await res.text());
+    throw new Error(extractAdminErrorDetail(await res.text()));
   }
   return res.json();
 }
@@ -1672,10 +1699,16 @@ function openModal(account = null) {
     const modeSelect = document.getElementById("credentialType");
     const providerSelect = document.getElementById("grokProvider");
     const providerHint = document.getElementById("grokProviderHint");
+    // Every branch below sets the modal type via setAccountModalType; the
+    // credential-mode UI must follow THAT type, never the ambient platform tab.
+    // (Reading the tab here left a Grok edit without its device-login button when
+    // the list was showing another channel.)
+    let modalType = "";
     if (account) {
       title.textContent = "编辑账号";
       document.getElementById("accountId").value = account.id;
-      setAccountModalType(normalizeAccountType(account));
+      modalType = normalizeAccountType(account);
+      setAccountModalType(modalType);
       document.getElementById("clientCookie").value = getAccountToken(account);
       document.getElementById("enabled").checked = account.enabled;
       const isOAuth = String(account.credential_type || "").trim().toLowerCase() === "oauth";
@@ -1688,16 +1721,17 @@ function openModal(account = null) {
       title.textContent = "添加账号";
       form.reset();
       document.getElementById("accountId").value = "";
-      // Prefer the platform the operator explicitly selected over the ambient
-      // list default, so "add account" on the WorkBuddy tab creates a WorkBuddy.
-      setAccountModalType(selectedPlatformAccountType(typeEl));
+      // The platform the operator explicitly selected wins over the ambient list
+      // default and over any stale hidden field.
+      modalType = selectedPlatformAccountType(typeEl);
+      setAccountModalType(modalType);
       document.getElementById("enabled").checked = true;
       document.getElementById("clientCookie").value = "";
       if (modeSelect) modeSelect.value = "sso";
       if (providerSelect) providerSelect.value = "web";
       if (providerHint) providerHint.textContent = "保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。";
     }
-    applyCredentialModeUI(account ? normalizeAccountType(account) : getActiveAccountType());
+    applyCredentialModeUI(modalType || normalizeAccountType({ account_type: typeEl?.value || getActiveAccountType() }));
   };
 
   applyValues();
@@ -1810,7 +1844,7 @@ async function saveAccount(e) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(extractAdminErrorDetail(await res.text()));
       closeModal();
       loadAccounts();
       showToast("保存成功");
