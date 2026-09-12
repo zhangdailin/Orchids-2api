@@ -855,6 +855,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		retryDelay := time.Duration(h.config.RetryDelay) * time.Millisecond
 		retriesRemaining := maxRetries
 
+		// Publish the model this request resolved to, so the per-minute
+		// aggregation can attribute the outcome to a model rather than only to a
+		// channel. The middleware cannot read the body itself.
+		r = r.WithContext(middleware.WithRequestModel(r.Context(), mappedModel))
+
 		payloadMessages := upstreamMessages
 		payloadSystem := req.System
 

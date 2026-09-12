@@ -89,6 +89,28 @@ func DefaultRules() Rules {
 }
 
 // Evaluate compares a snapshot with the previously firing set and returns the
+// nonAlertableChannels are aggregates that must never raise an alert.
+//
+// "http" collects every request whose path matched no provider prefix: the admin
+// UI's own redirects, health checks, and whatever a public scanner tries. Its
+// failure ratio therefore measures exposure to the internet rather than upstream
+// health, so alerting on it meant a page visit could page the operator.
+// "probe" is synthetic by definition and is judged by its own channel outcome,
+// not by the request-outcome ratio.
+var nonAlertableChannels = map[string]bool{
+	"http":  true,
+	"probe": true,
+}
+
+// IsAlertableChannel reports whether a channel takes part in alerting.
+func IsAlertableChannel(channel string) bool {
+	name := strings.ToLower(strings.TrimSpace(channel))
+	if name == "" {
+		return false
+	}
+	return !nonAlertableChannels[name]
+}
+
 // transitions. previous is keyed by Alert.Key.
 func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transition {
 	if rules.MinRequests <= 0 {
@@ -102,7 +124,10 @@ func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transit
 
 	for _, channel := range snapshot.Channels {
 		name := strings.TrimSpace(channel.Channel)
-		if name == "" {
+		// Infrastructure aggregates are counted in the overview but never alerted
+		// on: their failures belong to the internet, not to the upstream, and a
+		// public scanner must not be able to raise a channel alert.
+		if name == "" || !IsAlertableChannel(name) {
 			continue
 		}
 

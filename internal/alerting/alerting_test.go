@@ -153,3 +153,54 @@ func TestEvaluate_SeverityOrdering(t *testing.T) {
 		t.Fatalf("critical alert must sort first: %+v", transition.Firing)
 	}
 }
+
+// TestEvaluate_IgnoresInfrastructureAggregates keeps the public-facing request
+// aggregate out of alerting: /admin redirects and scanner 404s are not upstream
+// health, and a visitor must not be able to page an operator.
+func TestEvaluate_IgnoresInfrastructureAggregates(t *testing.T) {
+	if IsAlertableChannel("http") || IsAlertableChannel("probe") {
+		t.Fatal("the http and probe aggregates must not be alertable")
+	}
+	for _, channel := range []string{"grok", "warp", "puter", "workbuddy", "GROK"} {
+		if !IsAlertableChannel(channel) {
+			t.Fatalf("%s must remain alertable", channel)
+		}
+	}
+
+	transition := Evaluate(Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
+		channel("http", func(c *ChannelSnapshot) {
+			// All failing, and enough traffic: without the exclusion this fires.
+			c.Requests = 200
+			c.Success = 20
+			c.Failed = 180
+			c.SuccessRate = 0.1
+		}),
+		channel("probe", func(c *ChannelSnapshot) {
+			c.Requests = 50
+			c.Success = 0
+			c.Failed = 50
+			c.SuccessRate = 0
+		}),
+		channel("grok", nil),
+	}}, nil, DefaultRules())
+
+	if len(transition.Firing) != 0 {
+		t.Fatalf("infrastructure aggregates fired alerts: %+v", transition.Firing)
+	}
+}
+
+// TestEvaluate_StillAlertsOnRealChannels is the counterweight: excluding the
+// aggregates must not silence a provider channel.
+func TestEvaluate_StillAlertsOnRealChannels(t *testing.T) {
+	transition := Evaluate(Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
+		channel("warp", func(c *ChannelSnapshot) {
+			c.Requests = 40
+			c.Success = 4
+			c.Failed = 36
+			c.SuccessRate = 0.1
+		}),
+	}}, nil, DefaultRules())
+	if len(transition.Firing) != 1 || transition.Firing[0].Key != "success-rate:warp" {
+		t.Fatalf("a real channel must still alert: %+v", transition.Firing)
+	}
+}

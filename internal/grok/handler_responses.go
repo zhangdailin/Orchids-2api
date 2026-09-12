@@ -177,6 +177,9 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Model = normalizeModelID(req.Model)
+	// Publish the resolved model so the per-minute aggregation can attribute this
+	// request to a model; the latency middleware never re-reads the body.
+	r = r.WithContext(middleware.WithRequestModel(r.Context(), req.Model))
 	if !requireAPIKeyModel(w, r, req.Model) {
 		return
 	}

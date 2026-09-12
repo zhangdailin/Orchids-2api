@@ -135,6 +135,11 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		// 包装 ResponseWriter
 		wrapped := NewTracedResponseWriter(w)
 
+		// The handler will publish the model it resolved; the hint must exist
+		// before the handler runs because the request context is already cloned.
+		requestCtx, readModel := RequestModelHint(r.Context())
+		r = r.WithContext(requestCtx)
+
 		if logutil.VerboseDiagnosticsEnabled() {
 			slog.Debug("Request started",
 				"trace_id", traceID,
@@ -151,7 +156,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		duration := time.Since(start)
 		// The operations overview counts every finished request, so this record
 		// must happen before the log level decides whether to print a line.
-		recordRequestOutcome(r, wrapped.StatusCode, duration, wrapped.FirstWriteAt())
+		recordRequestOutcome(r, wrapped.StatusCode, duration, wrapped.FirstWriteAt(), readModel())
 
 		level := slog.LevelDebug
 		if wrapped.StatusCode >= 500 {
@@ -192,12 +197,44 @@ func SetRequestOutcomeRecorder(recorder RequestOutcomeRecorder) {
 	requestOutcomeRecorder = recorder
 }
 
+// requestModelContextKey carries the model a handler resolved for this request.
+// The request path cannot know the model before the body is parsed (and the
+// middleware must not re-read the body), so the handler publishes it on the
+// context and the latency recorder picks it up when the request finishes.
+type requestModelContextKey struct{}
+
+// requestModelHintBox is a mutable slot: the handler runs after the middleware
+// cloned the request context, so a plain context value would not be visible.
+type requestModelHintBox struct {
+	model string
+}
+
+// WithRequestModel publishes the resolved model for outcome recording. It is the
+// only way the per-model figures in the operations overview get a name.
+func WithRequestModel(ctx context.Context, model string) context.Context {
+	if ctx == nil || strings.TrimSpace(model) == "" {
+		return ctx
+	}
+	if box, ok := ctx.Value(requestModelContextKey{}).(*requestModelHintBox); ok && box != nil {
+		box.model = strings.TrimSpace(model)
+	}
+	return ctx
+}
+
+// RequestModelHint returns a context that lets the wrapped handler publish its
+// model, plus a reader for the value once the handler has run.
+func RequestModelHint(ctx context.Context) (context.Context, func() string) {
+	box := &requestModelHintBox{}
+	return context.WithValue(ctx, requestModelContextKey{}, box), func() string { return box.model }
+}
+
+
 // ProbeHeader marks a request as a synthetic probe. The probe loop sets it; the
 // metric recorder then counts the request apart from real traffic so an injected
 // failure cannot distort the user-facing success rate.
 const ProbeHeader = "X-Orchids-Probe"
 
-func recordRequestOutcome(r *http.Request, status int, duration time.Duration, firstWrite time.Time) {
+func recordRequestOutcome(r *http.Request, status int, duration time.Duration, firstWrite time.Time, model string) {
 	if requestOutcomeRecorder == nil || r == nil {
 		return
 	}
@@ -212,7 +249,7 @@ func recordRequestOutcome(r *http.Request, status int, duration time.Duration, f
 	}
 	requestOutcomeRecorder(
 		requestChannel(r.URL.Path),
-		requestModelHint(r),
+		model,
 		httpStatusClass(status),
 		durationMS,
 		firstTokenMS,
@@ -255,15 +292,6 @@ func requestChannel(path string) string {
 // requestModelHint extracts a model from the request when it is cheap to do so.
 // Request bodies are not re-read here: the log centre shows the model from the
 // handler's own audit event, and the overview counts by channel.
-func requestModelHint(r *http.Request) string {
-	for _, key := range []string{"model", "model_id"} {
-		if value := strings.TrimSpace(r.URL.Query().Get(key)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func httpStatusClass(status int) string {
 	switch {
 	case status >= 200 && status < 300:
