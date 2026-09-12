@@ -137,9 +137,9 @@ func TestEvaluate_NoSampleIsNotHealthy(t *testing.T) {
 func TestEvaluate_SeverityOrdering(t *testing.T) {
 	transition := Evaluate(Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
 		channel("grok", func(c *ChannelSnapshot) {
-			c.Success = 8
-			c.Failed = 2
-			c.SuccessRate = 0.8 // warning band
+			c.Success = 7
+			c.Failed = 3
+			c.SuccessRate = 0.7 // warning band, with enough failures to count
 		}),
 		channel("warp", func(c *ChannelSnapshot) {
 			c.AccountsNeedingLogin = 1 // critical
@@ -204,8 +204,8 @@ func TestEvaluate_StillAlertsOnRealChannels(t *testing.T) {
 		t.Fatalf("a real channel must still alert: %+v", transition.Firing)
 	}
 }
-// TestEvaluate_HysteresisStopsFlapping is the fix for what production showed:
-// workbuddy hovered at 89% around the 90% line, so the alert fired and cleared on
+
+// TestEvaluate_HysteresisStopsFlapping is the fix for what production showed:// workbuddy hovered at 89% around the 90% line, so the alert fired and cleared on
 // every evaluation and became noise. The alert must hold until the rate clears
 // the threshold plus the margin.
 func TestEvaluate_HysteresisStopsFlapping(t *testing.T) {
@@ -252,5 +252,92 @@ func TestEvaluate_HysteresisStopsFlapping(t *testing.T) {
 	// Without an existing alert, 91% raises nothing (no flapping on the way up).
 	if len(Evaluate(degraded(0.91), nil, rules).Firing) != 0 {
 		t.Fatal("91% must not raise a new alert")
+	}
+}
+
+// TestEvaluate_WarningBandNeedsEnoughFailures pins the noise production showed:
+// "窗口内 9 次请求，失败 1 次（阈值 <90%）" fired and cleared every few minutes.
+// One failure is not evidence that a channel is degraded — nine requests carry no
+// statistical weight — so the warning band waits for MinFailures.
+func TestEvaluate_WarningBandNeedsEnoughFailures(t *testing.T) {
+	rules := DefaultRules()
+
+	// The exact live case: 8 of 9 good, 1 bad. Above the sample floor, below the
+	// warning line, and still not alertable.
+	quiet := Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
+		channel("grok", func(c *ChannelSnapshot) {
+			c.Requests = 9
+			c.Success = 8
+			c.Failed = 1
+			c.SuccessRate = 8.0 / 9.0
+			c.Samples = 9
+		}),
+	}}
+	if firing := Evaluate(quiet, nil, rules).Firing; len(firing) != 0 {
+		t.Fatalf("a single failure in a quiet window fired: %+v", firing)
+	}
+
+	// The same ratio with enough failures behind it does fire.
+	noisy := Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
+		channel("grok", func(c *ChannelSnapshot) {
+			c.Requests = 30
+			c.Success = 26
+			c.Failed = 4
+			c.SuccessRate = 26.0 / 30.0
+			c.Samples = 30
+		}),
+	}}
+	if firing := Evaluate(noisy, nil, rules).Firing; len(firing) != 1 {
+		t.Fatalf("4 failures in 30 requests (87%%) must fire: %+v", firing)
+	}
+}
+
+// TestEvaluate_SevereOutageIgnoresTheFailureFloor is the counterweight to the rule
+// above: a channel that answers correctly for almost nobody is broken whatever the
+// count, so the critical band must not be gated by MinFailures. (With the shipped
+// defaults the two thresholds overlap; the valve matters as soon as an operator
+// raises MinFailures without raising the critical line with it.)
+func TestEvaluate_SevereOutageIgnoresTheFailureFloor(t *testing.T) {
+	rules := DefaultRules()
+	rules.MinFailures = 5 // an operator who wants five failures before a warning
+
+	severe := Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
+		channel("warp", func(c *ChannelSnapshot) {
+			c.Requests = 5
+			c.Success = 2
+			c.Failed = 3 // below the configured failure floor, but only 40% success
+			c.SuccessRate = 0.4
+			c.Samples = 5
+		}),
+	}}
+	firing := Evaluate(severe, nil, rules).Firing
+	if len(firing) != 1 || firing[0].Severity != SeverityCritical {
+		t.Fatalf("a 40%% success rate must fire as critical: %+v", firing)
+	}
+}
+
+// TestEvaluate_FailureFloorDoesNotReleaseAFiringAlert keeps the interaction with
+// hysteresis honest: once an alert is firing, a window that dips back under the
+// failure floor is still inside the hold band, so it neither re-announces nor
+// clears early.
+func TestEvaluate_FailureFloorDoesNotReleaseAFiringAlert(t *testing.T) {
+	rules := DefaultRules()
+	at := time.Now()
+	previous := map[string]Alert{"success-rate:grok": {Key: "success-rate:grok", Channel: "grok"}}
+	held := Snapshot{At: at, Channels: []ChannelSnapshot{
+		channel("grok", func(c *ChannelSnapshot) {
+			c.Requests = 20
+			c.Success = 18
+			c.Failed = 2
+			c.SuccessRate = 0.9 // exactly on the line: inside the hold band
+			c.Samples = 20
+		}),
+	}}
+	transition := Evaluate(held, previous, rules)
+	if len(transition.Firing) != 0 {
+		t.Fatalf("a held alert re-announced: %+v", transition.Firing)
+	}
+	if len(transition.Recovered) != 0 {
+		t.Fatalf("a held alert cleared although the rate had not recovered: %+v", transition.Recovered)
 	}
 }

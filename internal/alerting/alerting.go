@@ -26,10 +26,10 @@ const (
 type ChannelSnapshot struct {
 	Channel string `json:"channel"`
 	// Requests counts real (non-probe) requests in the window.
-	Requests int64   `json:"requests"`
-	Success  int64   `json:"success"`
-	Failed   int64   `json:"failed"`
-	Samples  int64   `json:"samples"`
+	Requests    int64   `json:"requests"`
+	Success     int64   `json:"success"`
+	Failed      int64   `json:"failed"`
+	Samples     int64   `json:"samples"`
 	SuccessRate float64 `json:"success_rate"`
 	// AccountsEnabled / AccountsAvailable describe the pool for this channel.
 	AccountsEnabled   int `json:"accounts_enabled"`
@@ -70,6 +70,13 @@ type Rules struct {
 	// rule is allowed to fire. Without it a single failed request would raise an
 	// alert on a quiet channel.
 	MinRequests int64
+	// MinFailures is how many failures a window needs before the WARNING band is
+	// allowed to fire. A ratio alone is not evidence on a quiet channel: one
+	// failure out of nine requests is normal operation, and announcing it made
+	// the journal alternate between firing and recovered every few minutes.
+	// Severe outages (below SuccessRateCritical) are not gated by this: a channel
+	// that answers correctly for almost nobody is broken whatever the count.
+	MinFailures int64
 	// SuccessRateWarning / SuccessRateCritical are ratios (0..1).
 	SuccessRateWarning  float64
 	SuccessRateCritical float64
@@ -87,6 +94,7 @@ type Rules struct {
 func DefaultRules() Rules {
 	return Rules{
 		MinRequests:                5,
+		MinFailures:                3,
 		SuccessRateWarning:         0.9,
 		SuccessRateCritical:        0.5,
 		ClearMargin:                0.03,
@@ -121,6 +129,9 @@ func IsAlertableChannel(channel string) bool {
 func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transition {
 	if rules.MinRequests <= 0 {
 		rules.MinRequests = 1
+	}
+	if rules.MinFailures <= 0 {
+		rules.MinFailures = 1
 	}
 	now := snapshot.At
 	if now.IsZero() {
@@ -170,12 +181,17 @@ func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transit
 			if margin < 0 {
 				margin = 0
 			}
+			severe := rate < rules.SuccessRateCritical
+			// The warning band needs evidence, not just a ratio: fewer failures than
+			// MinFailures is noise on a quiet channel. An already-firing alert is
+			// exempt so the hysteresis below can still hold it until it truly clears.
+			enoughFailures := severe || alreadyFiring || channel.Failed >= rules.MinFailures
 			// Hysteresis: while the alert is firing, the rate must climb above the
 			// threshold plus the margin before it clears. A channel sitting exactly
 			// on the line then neither re-announces nor re-clears every minute.
 			held := alreadyFiring && rate < rules.SuccessRateWarning+margin
 			switch {
-			case rate < rules.SuccessRateCritical:
+			case severe:
 				current[key] = Alert{
 					Key:      key,
 					Severity: SeverityCritical,
@@ -183,7 +199,7 @@ func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transit
 					Title:    fmt.Sprintf("%s 成功率 %.0f%%", name, rate*100),
 					Detail:   fmt.Sprintf("窗口内 %d 次请求，失败 %d 次（阈值 <%.0f%%）。", channel.Requests, channel.Failed, rules.SuccessRateCritical*100),
 				}
-			case rate < rules.SuccessRateWarning || held:
+			case enoughFailures && (rate < rules.SuccessRateWarning || held):
 				current[key] = Alert{
 					Key:      key,
 					Severity: SeverityWarning,
