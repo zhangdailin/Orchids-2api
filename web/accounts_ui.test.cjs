@@ -266,6 +266,30 @@ test('workbuddy-auth module exposes a popup login without persisting tokens', ()
   assert.doesNotMatch(source, /document\.cookie/);
 });
 
+test('workbuddy-auth reports the server error code instead of blaming the network', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/workbuddy-auth.js'), 'utf8');
+  // Every server-side failure code must have an operator-facing message.
+  for (const code of [
+    'upstream_unreachable',
+    'upstream_rejected',
+    'origin_mismatch',
+    'insecure_origin',
+    'store_unavailable',
+    'too_many_logins',
+  ]) {
+    assert.match(source, new RegExp(`${code}:`), `no message for ${code}`);
+  }
+  // The response body must be read, not discarded behind a generic message.
+  assert.match(source, /readErrorPayload\(/);
+  // The popup is reserved during the click, before any await, so the browser
+  // does not treat it as a blocked script-initiated window.
+  const startIndex = source.indexOf('function start()');
+  const reserveIndex = source.indexOf("window.open('about:blank'", startIndex);
+  const awaitIndex = source.indexOf('await begin(', startIndex);
+  assert.ok(reserveIndex > startIndex, 'popup is not reserved in start()');
+  assert.ok(awaitIndex === -1 || reserveIndex < awaitIndex, 'popup must be reserved before the first await');
+});
+
 test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login, never Warp', () => {
   const { context, node } = loadUI();
   vm.runInContext(

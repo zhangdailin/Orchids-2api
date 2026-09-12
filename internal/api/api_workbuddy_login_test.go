@@ -106,6 +106,27 @@ func startWorkBuddyLoginRequest(t *testing.T, method, path, body string) *http.R
 	return req
 }
 
+// decodeLoginError returns the machine-readable code the admin UI uses to
+// explain a failed login attempt.
+func decodeLoginError(t *testing.T, body string) string {
+	t.Helper()
+	var payload struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("login error is not JSON: %v (body=%q)", err, body)
+	}
+	if payload.Error == "" {
+		t.Fatalf("login error carried no message: %q", body)
+	}
+	if payload.Code == "" {
+		// A code-less error cannot be translated by the UI.
+		t.Fatalf("login error carried no code: %q", body)
+	}
+	return payload.Code
+}
+
 func TestHandleWorkBuddyLogin_RejectsCrossOriginStart(t *testing.T) {
 	t.Parallel()
 
@@ -119,8 +140,75 @@ func TestHandleWorkBuddyLogin_RejectsCrossOriginStart(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
+	if code := decodeLoginError(t, rec.Body.String()); code != "origin_mismatch" {
+		t.Fatalf("code = %q, want origin_mismatch", code)
+	}
 	if strings.Contains(rec.Body.String(), "state") {
 		t.Fatalf("body leaked login state: %q", rec.Body.String())
+	}
+}
+
+func TestHandleWorkBuddyLogin_RejectsInsecureOrigin(t *testing.T) {
+	t.Parallel()
+
+	s, _ := newTestStore(t, "wb-login:")
+	a := New(s, "", "", &config.Config{})
+	req := startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", "")
+	req.Host = "admin.example.com"
+	req.Header.Set("Origin", "http://admin.example.com")
+	rec := httptest.NewRecorder()
+
+	a.HandleWorkBuddyLogin(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if code := decodeLoginError(t, rec.Body.String()); code != "insecure_origin" {
+		t.Fatalf("code = %q, want insecure_origin", code)
+	}
+}
+
+func TestHandleWorkBuddyLogin_ReportsUnreachableUpstream(t *testing.T) {
+	s, _ := newTestStore(t, "wb-login:")
+	// A closed listener stands in for a blocked or unreachable upstream.
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close()
+	stubWorkBuddyLoginClient(t, deadURL)
+
+	a := New(s, "", "", &config.Config{})
+	rec := httptest.NewRecorder()
+	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	if code := decodeLoginError(t, rec.Body.String()); code != "upstream_unreachable" {
+		t.Fatalf("code = %q, want upstream_unreachable (body=%q)", code, rec.Body.String())
+	}
+}
+
+func TestHandleWorkBuddyLogin_ReportsUpstreamRejection(t *testing.T) {
+	s, _ := newTestStore(t, "wb-login:")
+	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":40301,"msg":"forbidden"}`))
+	}))
+	defer auth.Close()
+	stubWorkBuddyLoginClient(t, auth.URL)
+
+	a := New(s, "", "", &config.Config{})
+	rec := httptest.NewRecorder()
+	a.HandleWorkBuddyLogin(rec, startWorkBuddyLoginRequest(t, http.MethodPost, "/api/workbuddy/login", ""))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	if code := decodeLoginError(t, rec.Body.String()); code != "upstream_rejected" {
+		t.Fatalf("code = %q, want upstream_rejected (body=%q)", code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "40301") {
+		t.Fatalf("upstream business code leaked to the client: %q", rec.Body.String())
 	}
 }
 

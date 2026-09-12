@@ -198,6 +198,7 @@ func main() {
 	defer cancelBackground()
 
 	startTokenRefreshLoop(ctx, cfg, s, lb)
+	logWorkBuddyReachability(cfg)
 
 	// Graceful shutdown
 	idleConnsClosed := make(chan struct{})
@@ -228,6 +229,27 @@ func main() {
 
 	<-idleConnsClosed
 	slog.Info("Server shutdown gracefully")
+}
+
+// logWorkBuddyReachability reports at startup whether this process can reach the
+// WorkBuddy international backend. A blocked egress path breaks both the OAuth
+// login and every inference request, so the cause should be visible in the boot
+// log instead of surfacing as a per-request 502.
+func logWorkBuddyReachability(cfg *config.Config) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		client := workbuddy.NewFromAccount(nil, cfg)
+		defer client.Close()
+		if err := client.ProbeReachability(ctx); err != nil {
+			slog.Warn("WorkBuddy backend is not reachable; the workbuddy channel will fail until egress is fixed",
+				"endpoint", workbuddy.DefaultBaseURL, "error", err,
+				"hint", "configure HTTP_PROXY/HTTPS_PROXY or the proxy settings in config.json if this host needs one")
+			return
+		}
+		slog.Info("WorkBuddy backend reachable", "endpoint", workbuddy.DefaultBaseURL)
+	}()
 }
 
 func configureRuntimeLogging(cfg *config.Config) {

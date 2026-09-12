@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -58,7 +59,8 @@ func (a *API) HandleWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 	if a == nil || a.store == nil {
-		http.Error(w, "account store is not configured", http.StatusServiceUnavailable)
+		writeWorkBuddyLoginError(w, http.StatusServiceUnavailable, "store_unavailable",
+			"account store is not configured")
 		return
 	}
 	if !sameOriginAdminRequest(w, r, "WorkBuddy") {
@@ -82,14 +84,30 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 	defer client.Close()
 	state, authURL, err := client.StartAuthLogin(ctx, workbuddyClientVersion)
 	if err != nil {
-		// Upstream failures can echo request material; never relay them.
-		http.Error(w, "failed to start WorkBuddy authorization", http.StatusBadGateway)
+		// Upstream failures can echo request material, so only the classified
+		// cause reaches the browser; the detail goes to the server log.
+		switch {
+		case errors.Is(err, workbuddy.ErrAuthUnavailable):
+			slog.Warn("WorkBuddy authorization endpoint is unreachable", "error", err)
+			writeWorkBuddyLoginError(w, http.StatusBadGateway, "upstream_unreachable",
+				"the server cannot reach www.workbuddy.ai")
+		case errors.Is(err, workbuddy.ErrAuthRejected):
+			slog.Warn("WorkBuddy authorization was rejected by the upstream", "error", err)
+			writeWorkBuddyLoginError(w, http.StatusBadGateway, "upstream_rejected",
+				"www.workbuddy.ai refused to start a login transaction")
+		default:
+			slog.Warn("WorkBuddy authorization could not be started", "error", err)
+			writeWorkBuddyLoginError(w, http.StatusBadGateway, "upstream_error",
+				"failed to start WorkBuddy authorization")
+		}
 		return
 	}
+	slog.Debug("WorkBuddy authorization started", "login_state_host", "www.workbuddy.ai")
 
 	id, err := newDeviceLoginID()
 	if err != nil {
-		http.Error(w, "failed to create login transaction", http.StatusInternalServerError)
+		writeWorkBuddyLoginError(w, http.StatusInternalServerError, "transaction_failed",
+			"failed to create login transaction")
 		return
 	}
 	pollContext, pollCancel := context.WithCancel(context.Background())
@@ -111,7 +129,8 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 	if len(a.workbuddyLogins) >= maxDeviceLogins {
 		a.workbuddyLoginMu.Unlock()
 		pollCancel()
-		http.Error(w, "too many pending WorkBuddy logins", http.StatusTooManyRequests)
+		writeWorkBuddyLoginError(w, http.StatusTooManyRequests, "too_many_logins",
+			"too many pending WorkBuddy logins; finish or cancel one first")
 		return
 	}
 	a.workbuddyLogins[id] = login
@@ -130,7 +149,8 @@ func (a *API) getWorkBuddyLogin(w http.ResponseWriter, id string) {
 	response := newDeviceLoginResponse(id, login)
 	a.workbuddyLoginMu.Unlock()
 	if login == nil {
-		http.Error(w, "WorkBuddy login not found", http.StatusNotFound)
+		writeWorkBuddyLoginError(w, http.StatusNotFound, "login_not_found",
+			"WorkBuddy login session not found or already finished")
 		return
 	}
 	_ = json.NewEncoder(w).Encode(response)
@@ -141,7 +161,8 @@ func (a *API) cancelWorkBuddyLogin(w http.ResponseWriter, id string) {
 	login := a.workbuddyLogins[id]
 	if login == nil {
 		a.workbuddyLoginMu.Unlock()
-		http.Error(w, "WorkBuddy login not found", http.StatusNotFound)
+		writeWorkBuddyLoginError(w, http.StatusNotFound, "login_not_found",
+			"WorkBuddy login session not found or already finished")
 		return
 	}
 	delete(a.workbuddyLogins, id)
@@ -183,12 +204,14 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 			}
 			// Authorization itself failed (state consumed, cancelled, or the
 			// upstream rejected it). Report it without echoing upstream text.
+			slog.Warn("WorkBuddy authorization failed", "login_id", id, "error", err)
 			a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization failed; start again", 0)
 			return
 		}
 
 		account, err := a.buildWorkBuddyAccountFromCredentials(ctx, id, creds)
 		if err != nil {
+			slog.Warn("WorkBuddy authorization succeeded but verification failed", "login_id", id, "error", err)
 			a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization succeeded but the account could not be verified", 0)
 			return
 		}
@@ -329,27 +352,44 @@ func (a *API) cleanupWorkBuddyLogins(now time.Time) {
 	cleanupDeviceLogins(a.workbuddyLogins, now, "WorkBuddy authorization timed out; start again")
 }
 
+// writeWorkBuddyLoginError reports a failure with a stable machine-readable code
+// so the admin UI can explain the actual cause instead of guessing. The message
+// is operator-facing and never contains credentials or upstream error text.
+func writeWorkBuddyLoginError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "error": message})
+}
+
 // sameOriginAdminRequest enforces that a credential-mutating login attempt came
-// from this admin origin over a secure context. It writes the rejection itself.
-// Any request body is the caller's concern; this helper never reads it.
+// from this admin origin over a secure context. It writes the rejection itself,
+// and logs the observed origin so a reverse-proxy mismatch can be diagnosed
+// from the server log instead of guessed at.
 func sameOriginAdminRequest(w http.ResponseWriter, r *http.Request, provider string) bool {
-	origin, err := url.Parse(r.Header.Get("Origin"))
+	rawOrigin := r.Header.Get("Origin")
+	origin, err := url.Parse(rawOrigin)
 	if err != nil || origin == nil || (origin.Scheme != "http" && origin.Scheme != "https") ||
 		!strings.EqualFold(origin.Host, r.Host) || origin.User != nil || origin.Path != "" ||
 		origin.RawQuery != "" || origin.Fragment != "" ||
 		r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-		http.Error(w, "same-origin browser login required", http.StatusForbidden)
+		slog.Warn(provider+" login rejected: origin is not this admin origin",
+			"origin", rawOrigin, "host", r.Host, "sec_fetch_site", r.Header.Get("Sec-Fetch-Site"))
+		writeWorkBuddyLoginError(w, http.StatusForbidden, "origin_mismatch",
+			"the login request must come from this admin page (same origin)")
 		return false
 	}
 	if origin.Scheme != "https" && origin.Hostname() != "localhost" && origin.Hostname() != "127.0.0.1" && origin.Hostname() != "::1" {
-		http.Error(w, "HTTPS required for "+provider+" login", http.StatusForbidden)
+		slog.Warn(provider+" login rejected: insecure origin", "origin", rawOrigin)
+		writeWorkBuddyLoginError(w, http.StatusForbidden, "insecure_origin",
+			"HTTPS is required to sign in to "+provider+" (localhost is exempt)")
 		return false
 	}
 	// A body is optional for the popup flow, but reject a type we do not parse
 	// instead of silently ignoring whatever was sent.
 	if rawType := strings.TrimSpace(r.Header.Get("Content-Type")); rawType != "" {
 		if mediaType, _, _ := mime.ParseMediaType(rawType); mediaType != "application/json" {
-			http.Error(w, "application/json required", http.StatusUnsupportedMediaType)
+			writeWorkBuddyLoginError(w, http.StatusUnsupportedMediaType, "unsupported_media_type",
+				"application/json is required")
 			return false
 		}
 	}

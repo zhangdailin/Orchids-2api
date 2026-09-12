@@ -17,6 +17,15 @@ import (
 // The upstream reports it as business code 11217 ("login ing...") on HTTP 200.
 var ErrAuthPending = errors.New("workbuddy authorization is still pending")
 
+// ErrAuthUnavailable means the authorization endpoint could not be reached at
+// all (DNS, TCP, TLS, proxy or timeout). It is deliberately distinct from an
+// upstream rejection so operators are not sent chasing the wrong cause.
+var ErrAuthUnavailable = errors.New("workbuddy authorization endpoint is unreachable")
+
+// ErrAuthRejected means the endpoint answered but refused the transaction. The
+// wrapped error carries the status and the upstream business code.
+var ErrAuthRejected = errors.New("workbuddy authorization was rejected")
+
 // authPollTimeout bounds one token poll request.
 const authPollTimeout = 20 * time.Second
 
@@ -39,13 +48,13 @@ func (c *Client) StartAuthLogin(ctx context.Context, clientVersion string) (stat
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to start workbuddy authorization: %w", err)
+		return "", "", fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	data, err := unwrapEnvelope(resp.StatusCode, raw)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("%w: %v", ErrAuthRejected, err)
 	}
 
 	var payload struct {
@@ -53,12 +62,12 @@ func (c *Client) StartAuthLogin(ctx context.Context, clientVersion string) (stat
 		AuthURL string `json:"authUrl"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return "", "", fmt.Errorf("failed to decode workbuddy auth response: %w", err)
+		return "", "", fmt.Errorf("%w: undecodable auth response: %v", ErrAuthRejected, err)
 	}
 	state = strings.TrimSpace(payload.State)
 	authURL = strings.TrimSpace(payload.AuthURL)
 	if state == "" || authURL == "" {
-		return "", "", fmt.Errorf("workbuddy auth response is missing state or authUrl")
+		return "", "", fmt.Errorf("%w: auth response is missing state or authUrl", ErrAuthRejected)
 	}
 	if clientVersion != "" {
 		if parsed, parseErr := url.Parse(authURL); parseErr == nil && parsed.Query().Get("version") == "" {
@@ -70,7 +79,7 @@ func (c *Client) StartAuthLogin(ctx context.Context, clientVersion string) (stat
 	}
 	// Only the official login page may ever be handed to a browser.
 	if host := authHost(authURL); host != "" && !strings.EqualFold(host, hostOf(c.baseURL)) && !strings.EqualFold(host, "www.workbuddy.ai") {
-		return "", "", fmt.Errorf("workbuddy auth response pointed at an unexpected host %q", host)
+		return "", "", fmt.Errorf("%w: auth response pointed at an unexpected host %q", ErrAuthRejected, host)
 	}
 	return state, authURL, nil
 }
@@ -97,7 +106,7 @@ func (c *Client) PollAuthLogin(ctx context.Context, state string) (Credentials, 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return Credentials{}, fmt.Errorf("failed to poll workbuddy authorization: %w", err)
+		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -110,7 +119,7 @@ func (c *Client) PollAuthLogin(ctx context.Context, state string) (Credentials, 
 		if errors.Is(err, ErrAuthPending) {
 			return Credentials{}, ErrAuthPending
 		}
-		return Credentials{}, err
+		return Credentials{}, fmt.Errorf("%w: %v", ErrAuthRejected, err)
 	}
 
 	var payload struct {
@@ -211,6 +220,33 @@ func hostOf(base string) string {
 		return ""
 	}
 	return parsed.Hostname()
+}
+
+// ProbeReachability verifies that this process can actually open a connection to
+// the WorkBuddy backend. It is a cheap control-plane read with no credentials,
+// intended for startup diagnostics: a blocked egress path makes both the OAuth
+// login and every inference request fail, and reporting that at boot is far
+// cheaper to act on than debugging a per-request timeout later.
+func (c *Client) ProbeReachability(ctx context.Context) error {
+	if c == nil {
+		return fmt.Errorf("workbuddy client is nil")
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.baseURL+"/v3/config", nil)
+	if err != nil {
+		return err
+	}
+	applyHeaders(req, "", "", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	return nil
 }
 
 // SetBaseURLForTest points the client at a stub server. It exists so handler

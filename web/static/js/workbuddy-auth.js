@@ -139,16 +139,50 @@ globalThis.WorkBuddyLogin = (() => {
     }
   }
 
-  async function begin(enabled) {
-    if (active) return;
-    const response = await fetch('/api/workbuddy/login', {
+  // Server error codes map to operator-actionable messages. The server never
+  // echoes credentials, so these strings are safe to surface verbatim.
+  const ERROR_MESSAGES = {
+    upstream_unreachable: '服务器无法访问 www.workbuddy.ai。请检查服务器的出网/代理设置后重试。',
+    upstream_rejected: 'www.workbuddy.ai 拒绝了本次登录会话，请稍后重试。',
+    origin_mismatch: '登录请求必须来自本管理页面（同源）。若通过反向代理访问，请确认主机名一致后重试。',
+    insecure_origin: '请使用 HTTPS 打开管理页面后再登录（localhost 除外）。',
+    store_unavailable: '服务端账号存储不可用，请检查 Redis 配置后重试。',
+    too_many_logins: '待处理的 WorkBuddy 登录过多，请先完成或取消其中一个。',
+    unsupported_media_type: '请求格式不被接受，请刷新页面后重试。',
+    transaction_failed: '服务端创建登录事务失败，请重试。',
+  };
+
+  function messageForError(payload, fallback) {
+    const code = String((payload && payload.code) || '').trim();
+    if (code && ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
+    const detail = String((payload && (payload.error || payload.message)) || '').trim();
+    if (detail) return `${fallback}（${detail}）`;
+    return fallback;
+  }
+
+  async function readErrorPayload(response) {
+    try {
+      const text = await response.text();
+      if (!text) return null;
+      try {
+        return JSON.parse(text);
+      } catch (_) {
+        return { error: text.slice(0, 200) };
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function begin(enabled) {
+    // The fetch is issued synchronously inside the click gesture so the popup
+    // below is still treated as user-initiated by the browser.
+    return fetch('/api/workbuddy/login', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: enabled !== false }),
     });
-    if (!response.ok) throw new Error('start_failed');
-    return response.json();
   }
 
   function start() {
@@ -170,17 +204,30 @@ globalThis.WorkBuddyLogin = (() => {
     };
     active = login;
 
+    // Reserve the popup window during the click gesture; it is navigated once
+    // the server returns the official login URL.
+    try {
+      login.popup = window.open('about:blank', 'workbuddy-login', 'popup,width=560,height=760');
+    } catch (_) {
+      login.popup = null;
+    }
+    if (!login.popup) {
+      fail('WorkBuddy 登录弹窗被拦截，请允许本站弹窗后重试。');
+      return;
+    }
+
     const openPopup = (authURL) => {
       try {
-        login.popup = window.open(authURL, 'workbuddy-login', 'popup,width=560,height=760');
+        login.popup.location.replace(authURL);
+        return true;
       } catch (_) {
-        login.popup = null;
+        try {
+          login.popup.location.href = authURL;
+          return true;
+        } catch (_) {
+          return false;
+        }
       }
-      if (!login.popup) {
-        fail('WorkBuddy 登录弹窗被拦截，请允许弹窗后重试。');
-        return false;
-      }
-      return true;
     };
 
     (async () => {
@@ -190,7 +237,14 @@ globalThis.WorkBuddyLogin = (() => {
         let session = readStoredLogin();
         login.resumed = Boolean(session);
         if (!session) {
-          session = await begin(document.getElementById('enabled')?.checked !== false);
+          const response = await begin(document.getElementById('enabled')?.checked !== false);
+          if (!response.ok) {
+            const payload = await readErrorPayload(response);
+            if (active !== login) return;
+            fail(messageForError(payload, `发起 WorkBuddy 登录失败（HTTP ${response.status}）`));
+            return;
+          }
+          session = await response.json();
         }
         if (active !== login) return;
         const loginId = String(session?.id || session?.loginId || '').trim();
@@ -200,7 +254,10 @@ globalThis.WorkBuddyLogin = (() => {
         login.expiresAt = Date.parse(String(session.expires_at || '')) || Date.now() + 15 * 60 * 1000;
         storeLogin(login);
         if (authURL) {
-          if (!openPopup(authURL)) return;
+          if (!openPopup(authURL)) {
+            fail('无法打开 WorkBuddy 官方登录页面，请允许弹窗后重试。');
+            return;
+          }
           status('请在 WorkBuddy 官方页面完成登录与授权，本窗口会自动接管。');
         } else {
           // A resumed transaction cannot re-open the original tab, but the
@@ -216,9 +273,12 @@ globalThis.WorkBuddyLogin = (() => {
           poll(login);
         }, 2000);
         poll(login);
-      } catch (_) {
+      } catch (err) {
         if (active !== login) return;
-        fail('无法发起 WorkBuddy 登录；请检查服务器到 www.workbuddy.ai 的网络连通性后重试。');
+        const offline = err instanceof TypeError;
+        fail(offline
+          ? '无法连接本服务的登录接口，请确认服务正在运行且页面未被反向代理拦截。'
+          : '发起 WorkBuddy 登录时发生异常，请刷新页面后重试。');
       }
     })();
   }
