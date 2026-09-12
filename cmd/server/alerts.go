@@ -195,8 +195,9 @@ func probeTargets(accounts []*store.Account) []probeTarget {
 			targets = append(targets, probeTarget{
 				Channel: "grok",
 				// The reserved model name marks the traffic as synthetic, so the
-				// overview counts it apart from real requests.
-				Model:   probeModelLabel + channel,
+				// overview counts it apart from real requests. It is not a
+				// routable model, so a client cannot use it to hide its own traffic.
+				Model:   probeModelLabel,
 				Path:    "/v1/responses",
 				Payload: `{"model":"grok-4.6","input":"ping","stream":false,"max_output_tokens":16}`,
 			})
@@ -250,12 +251,16 @@ func startProbeLoop(ctx context.Context, s *store.Store, logger audit.Logger, po
 				continue
 			}
 			logger.Log(ctx, audit.Event{
-				Kind:    audit.KindSystem,
-				Action:  "channel_probe",
-				Channel: target.Channel,
-				Model:   target.Model,
-				Status:  status,
-				Error:   detail,
+				Kind:   audit.KindSystem,
+				Action: "channel_probe",
+				// A probe is not the probed channel's traffic: it is recorded as
+				// synthetic so it can never be mistaken for a real request, and the
+				// probed channel is named in Provider instead.
+				Channel:  middleware.ProbeChannel,
+				Provider: target.Channel,
+				Model:    target.Model,
+				Status:   status,
+				Error:    detail,
 				Duration: time.Since(started).Milliseconds(),
 			})
 		}

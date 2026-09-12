@@ -243,7 +243,7 @@ func recordRequestOutcome(r *http.Request, status int, duration time.Duration, f
 		firstTokenMS = firstWrite.Sub(requestStartOf(r, duration)).Milliseconds()
 	}
 	if strings.TrimSpace(r.Header.Get(ProbeHeader)) != "" {
-		requestOutcomeRecorder(probeChannel, probeModel, httpStatusClass(status), durationMS, firstTokenMS)
+		requestOutcomeRecorder(ProbeChannel, probeModel, httpStatusClass(status), durationMS, firstTokenMS)
 		return
 	}
 	requestOutcomeRecorder(
@@ -258,8 +258,14 @@ func recordRequestOutcome(r *http.Request, status int, duration time.Duration, f
 // Reserved synthetic-traffic labels. They are not routable models, so a client
 // cannot use them to move its own traffic out of the real figures.
 const (
-	probeChannel = "probe"
-	probeModel   = "__probe__"
+	// ProbeChannel is the label synthetic probes are recorded under. The probe
+	// loop journals the same value, so the overview and the log centre name the
+	// same thing.
+	ProbeChannel = "probe"
+	// HTTPChannel is the label for requests that are not inference traffic.
+	HTTPChannel = "http"
+
+	probeModel = "__probe__"
 )
 
 // requestStartOf reconstructs the request start from the measured duration. The
@@ -269,22 +275,26 @@ func requestStartOf(_ *http.Request, duration time.Duration) time.Time {
 	return time.Now().Add(-duration)
 }
 
-// requestChannel maps a request path to the channel it belongs to. The pooled
-// prefixes are explicit; everything else belongs to the Grok channel because the
-// unified /v1 routes are served by the Grok handler.
+// requestChannel maps a request path to the channel it belongs to. The mapping
+// mirrors how handlers journal the same request, so the overview's channel and
+// the log centre's channel always agree. Anything that is not inference traffic
+// (the admin UI, health checks, a public scanner probing paths) is labelled
+// "http" and is kept out of the channel matrix: it is not a provider.
 func requestChannel(path string) string {
 	trimmed := strings.Trim(path, "/")
 	parts := strings.Split(trimmed, "/")
 	if len(parts) == 0 {
-		return "unknown"
+		return "http"
 	}
 	switch parts[0] {
 	case "warp", "puter", "workbuddy", "grok":
 		return parts[0]
 	case "v1":
+		// The unified /v1 routes are served by the Grok handler. Keep the id
+		// stable across both prefixes so one model's figures do not split in two.
 		return "grok"
 	default:
-		return "http"
+		return HTTPChannel
 	}
 }
 

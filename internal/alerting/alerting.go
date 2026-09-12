@@ -73,6 +73,11 @@ type Rules struct {
 	// SuccessRateWarning / SuccessRateCritical are ratios (0..1).
 	SuccessRateWarning  float64
 	SuccessRateCritical float64
+	// ClearMargin is the hysteresis band: a firing rate alert only clears once the
+	// rate is back above the threshold plus this margin. Without it a channel
+	// hovering on the line re-announces and re-clears on every evaluation, which
+	// is noise an operator learns to ignore.
+	ClearMargin float64
 	// RequireNoAvailableAccounts fires when a channel has enabled accounts but
 	// none usable.
 	RequireNoAvailableAccounts bool
@@ -84,6 +89,7 @@ func DefaultRules() Rules {
 		MinRequests:                5,
 		SuccessRateWarning:         0.9,
 		SuccessRateCritical:        0.5,
+		ClearMargin:                0.03,
 		RequireNoAvailableAccounts: true,
 	}
 }
@@ -158,9 +164,18 @@ func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transit
 		// Success rate, only with enough real traffic to mean something.
 		if channel.Requests >= rules.MinRequests && channel.Samples > 0 {
 			rate := channel.SuccessRate
+			key := "success-rate:" + name
+			_, alreadyFiring := previous[key]
+			margin := rules.ClearMargin
+			if margin < 0 {
+				margin = 0
+			}
+			// Hysteresis: while the alert is firing, the rate must climb above the
+			// threshold plus the margin before it clears. A channel sitting exactly
+			// on the line then neither re-announces nor re-clears every minute.
+			held := alreadyFiring && rate < rules.SuccessRateWarning+margin
 			switch {
 			case rate < rules.SuccessRateCritical:
-				key := "success-rate:" + name
 				current[key] = Alert{
 					Key:      key,
 					Severity: SeverityCritical,
@@ -168,14 +183,13 @@ func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transit
 					Title:    fmt.Sprintf("%s 成功率 %.0f%%", name, rate*100),
 					Detail:   fmt.Sprintf("窗口内 %d 次请求，失败 %d 次（阈值 <%.0f%%）。", channel.Requests, channel.Failed, rules.SuccessRateCritical*100),
 				}
-			case rate < rules.SuccessRateWarning:
-				key := "success-rate:" + name
+			case rate < rules.SuccessRateWarning || held:
 				current[key] = Alert{
 					Key:      key,
 					Severity: SeverityWarning,
 					Channel:  name,
 					Title:    fmt.Sprintf("%s 成功率 %.0f%%", name, rate*100),
-					Detail:   fmt.Sprintf("窗口内 %d 次请求，失败 %d 次（阈值 <%.0f%%）。", channel.Requests, channel.Failed, rules.SuccessRateWarning*100),
+					Detail:   fmt.Sprintf("窗口内 %d 次请求，失败 %d 次（阈值 <%.0f%%，恢复线 %.0f%%）。", channel.Requests, channel.Failed, rules.SuccessRateWarning*100, (rules.SuccessRateWarning+margin)*100),
 				}
 			}
 		}

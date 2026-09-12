@@ -21,6 +21,30 @@ import (
 // defaultOpsWindowMinutes is the window the overview opens with.
 const defaultOpsWindowMinutes = 180
 
+// nonProviderChannels are aggregates that are counted but must not be presented
+// as provider channels in the matrix or the channel picker:
+//
+//   - "http" is every request whose path matched no provider prefix: the admin
+//     UI, health checks, and whatever a public scanner asks for. It has no
+//     accounts and no models, so it cannot be "healthy" or "unhealthy".
+//   - "probe" is our own synthetic traffic, recorded with the reserved model
+//     "__probe__" so it can never be confused with a real request. It is shown as
+//     the "探测量" KPI instead.
+var nonProviderChannels = map[string]bool{
+	"http":  true,
+	"probe": true,
+}
+
+// IsProviderChannel reports whether a channel is one an operator can add an
+// account to and route a model through.
+func IsProviderChannel(channel string) bool {
+	name := strings.ToLower(strings.TrimSpace(channel))
+	if name == "" {
+		return false
+	}
+	return !nonProviderChannels[name]
+}
+
 // HandleOpsOverview answers the operations overview: KPI totals, a per-minute
 // trend and the current alert set. Every number states its sample count, so the
 // UI can show "暂无样本" instead of a healthy-looking zero.
@@ -32,7 +56,7 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	window, since, until := a.parseOpsWindow(r)
-	channels, _ := a.opsChannels(r.Context(), r, since, until)
+	channels, aggregates, _ := a.opsChannels(r.Context(), r, since, until)
 	target := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("channel")))
 
 	payload := map[string]interface{}{
@@ -40,6 +64,9 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 		"since":          since.UTC().Format(time.RFC3339),
 		"until":          until.UTC().Format(time.RFC3339),
 		"channels":       channels,
+		// Named so the page can explain why some traffic is counted but not shown
+		// as a channel (the http catch-all and our own synthetic probes).
+		"excluded_aggregates": aggregates,
 		"channel":        target,
 		"totals":         opsagg.Summary{},
 		"series":         []map[string]interface{}{},
@@ -84,9 +111,10 @@ func (a *API) HandleOpsChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, since, until := a.parseOpsWindow(r)
-	channels, _ := a.opsChannels(r.Context(), r, since, until)
+	channels, aggregates, _ := a.opsChannels(r.Context(), r, since, until)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"matrix":  a.opsMatrix(r.Context(), channels, since, until),
+		"excluded_aggregates": aggregates,
 		"alerts":  a.firingAlerts(),
 		"channels": channels,
 	})
@@ -277,6 +305,11 @@ func (a *API) opsMatrix(ctx context.Context, channels []string, since, until tim
 
 	rows := make([]map[string]interface{}, 0, len(channels))
 	for _, channel := range channels {
+		// The matrix answers "which provider channel × model is healthy", so the
+		// infrastructure aggregates are not rows in it.
+		if !IsProviderChannel(channel) {
+			continue
+		}
 		enabled, available, needingLogin, modelCooldowns := poolCounts(accounts, channel, now)
 		row := map[string]interface{}{
 			"channel":               channel,
@@ -377,14 +410,15 @@ func (a *API) parseOpsWindow(r *http.Request) (int, time.Time, time.Time) {
 	return minutes, until.Add(-time.Duration(minutes) * time.Minute), until
 }
 
-// opsChannels lists the channels the page may filter by: the ones in the metric
-// buckets plus the ones that have accounts configured.
-func (a *API) opsChannels(ctx context.Context, r *http.Request, since, until time.Time) ([]string, error) {
+// opsChannels lists the provider channels the page may filter by, plus the
+// infrastructure aggregates that were counted but left out, so the page can say
+// what it excluded instead of silently dropping traffic from the picker.
+func (a *API) opsChannels(ctx context.Context, r *http.Request, since, until time.Time) ([]string, []string, error) {
 	seen := map[string]bool{}
 	if a.opsAggregator != nil && a.opsAggregator.Enabled() {
 		observed, err := a.opsAggregator.Channels(ctx, since, until)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, channel := range observed {
 			seen[channel] = true
@@ -404,9 +438,15 @@ func (a *API) opsChannels(ctx context.Context, r *http.Request, since, until tim
 		}
 	}
 	channels := make([]string, 0, len(seen))
+	aggregates := make([]string, 0, 2)
 	for channel := range seen {
-		channels = append(channels, channel)
+		if IsProviderChannel(channel) {
+			channels = append(channels, channel)
+			continue
+		}
+		aggregates = append(aggregates, channel)
 	}
 	sort.Strings(channels)
-	return channels, nil
+	sort.Strings(aggregates)
+	return channels, aggregates, nil
 }

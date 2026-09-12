@@ -222,6 +222,18 @@
       if (counts) parts.push(`采样计数：${counts}`);
     }
     parts.push('因此页面只承诺“保留窗口内”的结论，不承诺固定天数。');
+
+    // Say what is counted but deliberately not shown as a channel, instead of
+    // letting http / probe look like missing or broken channels.
+    const excluded = payload.excluded_aggregates || [];
+    if (excluded.length) {
+      const labels = excluded.map((name) => {
+        if (name === 'http') return 'http（非推理路径：管理页、健康检查、公网扫描）';
+        if (name === 'probe') return 'probe（本系统主动探测的合成流量）';
+        return name;
+      });
+      parts.push('已计数但不在渠道矩阵中显示：' + labels.join('；'));
+    }
     node.textContent = parts.join('；');
   }
 

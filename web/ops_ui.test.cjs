@@ -87,3 +87,9 @@ test('the matrix renders per-model rows and never paints a traffic-free channel 
   assert.ok(script.includes("formatRate(r, samples)"), 'the success rate is rendered without its sample count');
   assert.ok(script.includes("ops-empty"), 'the no-sample cell style is missing');
 });
+test('the overview explains the aggregates it leaves out of the matrix', () => {
+  const script = read('static/js/ops.js');
+  // The http catch-all and synthetic probes are counted but are not channels.
+  assert.ok(script.includes('excluded_aggregates'), 'the page never reads the excluded aggregates');
+  assert.ok(script.includes('合成流量') || script.includes('探测量'), 'the probe KPI label is missing');
+});

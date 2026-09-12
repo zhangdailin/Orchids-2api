@@ -204,3 +204,53 @@ func TestEvaluate_StillAlertsOnRealChannels(t *testing.T) {
 		t.Fatalf("a real channel must still alert: %+v", transition.Firing)
 	}
 }
+// TestEvaluate_HysteresisStopsFlapping is the fix for what production showed:
+// workbuddy hovered at 89% around the 90% line, so the alert fired and cleared on
+// every evaluation and became noise. The alert must hold until the rate clears
+// the threshold plus the margin.
+func TestEvaluate_HysteresisStopsFlapping(t *testing.T) {
+	rules := DefaultRules()
+	at := time.Now()
+	degraded := func(rate float64) Snapshot {
+		return Snapshot{At: at, Channels: []ChannelSnapshot{
+			channel("workbuddy", func(c *ChannelSnapshot) {
+				c.Requests = 20
+				c.SuccessRate = rate
+				c.Samples = 20
+				c.Success = int64(rate * 20)
+				c.Failed = 20 - c.Success
+			}),
+		}}
+	}
+
+	// 89% is below the 90% warning line: fires.
+	first := Evaluate(degraded(0.89), nil, rules)
+	if len(first.Firing) != 1 {
+		t.Fatalf("expected a warning at 89%%: %+v", first)
+	}
+	firing := map[string]Alert{}
+	for _, alert := range first.Firing {
+		firing[alert.Key] = alert
+	}
+
+	// 91% is above the line but inside the margin: the alert must stay, and must
+	// not be re-announced (a re-announcement means "fired" again).
+	still := Evaluate(degraded(0.91), firing, rules)
+	if len(still.Firing) != 0 {
+		t.Fatalf("a held alert must not re-announce: %+v", still.Firing)
+	}
+	if len(still.Recovered) != 0 {
+		t.Fatalf("91%% is inside the hysteresis band and must not clear: %+v", still.Recovered)
+	}
+
+	// 95% is above the line plus the margin: it clears.
+	cleared := Evaluate(degraded(0.95), firing, rules)
+	if len(cleared.Recovered) != 1 {
+		t.Fatalf("95%% must clear the alert: %+v", cleared.Recovered)
+	}
+
+	// Without an existing alert, 91% raises nothing (no flapping on the way up).
+	if len(Evaluate(degraded(0.91), nil, rules).Firing) != 0 {
+		t.Fatal("91% must not raise a new alert")
+	}
+}
