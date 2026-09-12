@@ -209,14 +209,23 @@
     if (label) {
       const since = payload.since || '';
       const until = payload.until || '';
-      label.textContent = `窗口 ${payload.window_minutes} 分钟（${since} → ${until}）；指标按分钟聚合，保留 ${payload.retention_hours || 0} 小时。`;
+      const window = payload.window_minutes ? `窗口 ${payload.window_minutes} 分钟` : '窗口读取中';
+      const retention = payload.retention_hours ? `；保留 ${payload.retention_hours} 小时` : '';
+      label.textContent = [window, since && until ? `（${since} → ${until}）` : '', retention].join('') + '。';
     }
     if (!node) return;
-    const coverage = payload.coverage || {};
+
+    // The card must never be blank: a blank card is indistinguishable from a
+    // broken page. Every path below states what is known and what is missing.
     const parts = [];
-    parts.push(`审计日志保留 ${coverage.entries || 0} 条`);
-    if (coverage.oldest) parts.push(`最早 ${coverage.oldest}`);
-    if (coverage.newest) parts.push(`最新 ${coverage.newest}`);
+    const coverage = payload.coverage || {};
+    if (typeof coverage.entries === 'number') {
+      parts.push(`审计日志保留 ${coverage.entries} 条`);
+      if (coverage.oldest) parts.push(`最早 ${coverage.oldest}`);
+      if (coverage.newest) parts.push(`最新 ${coverage.newest}`);
+    } else {
+      parts.push('审计日志覆盖范围未能读取（接口未返回 coverage）');
+    }
     if (coverage.counts) {
       const counts = Object.keys(coverage.counts).map((key) => `${key}=${coverage.counts[key]}`).join('、');
       if (counts) parts.push(`采样计数：${counts}`);
@@ -258,12 +267,26 @@
       renderTrend(payload.series);
       renderAlerts(payload.alerts || []);
       renderMatrix(payload.matrix);
+      // Coverage is rendered on every successful response, including the
+      // "aggregation disabled" one, so the card always says what the numbers rest
+      // on instead of staying at its placeholder.
       renderCoverage(payload);
       updateChannelOptions(payload.channels, state.channel);
+      if (payload.available === false && payload.note) {
+        const coverage = el('opsCoverage');
+        if (coverage) coverage.textContent = payload.note;
+      }
     } catch (error) {
       const container = el('opsKpis');
       if (container) {
         container.replaceChildren(kpi('读取失败', '—', String(error.message || error), true));
+      }
+      // An empty card is indistinguishable from a broken page, and the most
+      // common cause here is an expired session.
+      renderCoverage({ window_minutes: state.window, coverage: {}, excluded_aggregates: [] });
+      const coverage = el('opsCoverage');
+      if (coverage) {
+        coverage.textContent = `指标读取失败：${String(error.message || error)}。会话可能已过期，请重新登录后刷新。`;
       }
     }
   }

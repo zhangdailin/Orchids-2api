@@ -53,6 +53,7 @@ jobs:
           node --test web/puter_auth.test.cjs
           node --test web/grok_tools.test.cjs
           node --test web/ops_ui.test.cjs
+          node --test web/ops_render.test.cjs
 
       - name: Run Go tests
         run: go test ./... -count=1 -p 1
