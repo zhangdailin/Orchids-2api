@@ -31,6 +31,29 @@ type Task struct {
 	Payload interface{}
 }
 
+// defaultHub is the process-wide refresh lease set. Every refresh entrance —
+// the background scheduler, the admin "check" button, a per-channel refresh —
+// takes a lease here, so "one refresh per account at a time" is a property of the
+// process rather than of one loop.
+var defaultHub = NewHub()
+
+// Default returns the process-wide hub.
+func Default() *Hub { return defaultHub }
+
+// WithLease runs fn while holding the account's lease. It reports false without
+// running fn when another refresh of the same account is already in flight,
+// which is what stops an older snapshot from overwriting a newer one.
+func WithLease(accountID int64, fn func()) bool {
+	if !defaultHub.TryAcquire(accountID) {
+		return false
+	}
+	defer defaultHub.Release(accountID)
+	if fn != nil {
+		fn()
+	}
+	return true
+}
+
 // Hub tracks which accounts are currently being refreshed and orders pending
 // work by due time.
 type Hub struct {

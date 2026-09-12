@@ -141,6 +141,29 @@ func ScopeForStatus(status string) Scope {
 	}
 }
 
+// Retryable derives whether the same request may be attempted again from the
+// shared upstream-error classification. It exists so the request path and the
+// scheduler read one rule instead of two: before this, the handler decided
+// retries from category strings while the scheduler decided state from the
+// policy, and the two could disagree about the same error.
+func Retryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return apperrors.ClassifyUpstreamError(err.Error()).Retryable
+}
+
+// Cancelled reports whether the failure was the caller going away. A cancelled
+// request must not be retried, must not cool the account down, and must not be
+// reported as an upstream fault.
+func Cancelled(err error) bool {
+	if err == nil {
+		return false
+	}
+	class := apperrors.ClassifyUpstreamError(err.Error())
+	return class.Category == "canceled"
+}
+
 // Classify turns an upstream error into a verdict.
 func Classify(acc *store.Account, err error, model string) Verdict {
 	if err == nil {
@@ -157,7 +180,7 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 			Scope:         ScopeModel,
 			Message:       message,
 			Model:         model,
-			Retryable:     true,
+			Retryable:     Retryable(err),
 			SwitchAccount: true,
 			Cooldown:      CooldownRateLimit,
 			At:            now,
@@ -170,7 +193,7 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 			Status:     "401",
 			Message:    credentialMessage(acc, message),
 			Scope:      ScopeCredential,
-			Retryable:  true,
+			Retryable:  Retryable(err),
 			NeedsLogin: true,
 			Cooldown:   CredentialReverify,
 			At:         now,
@@ -183,7 +206,7 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 		}
 		return Verdict{
 			Status: apperrors.ClassifyAccountStatus(message), Message: message,
-			Scope: ScopeAccount, Retryable: true, SwitchAccount: true,
+			Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
 			Cooldown: cooldown, At: now,
 		}
 	case "402":
@@ -193,13 +216,13 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 		}
 		return Verdict{
 			Status: "402", Message: message,
-			Scope: ScopeAccount, Retryable: true, SwitchAccount: true,
+			Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
 			Cooldown: cooldown, At: now,
 		}
 	case "429":
 		return Verdict{
 			Status: "429", Message: message,
-			Scope: ScopeAccount, Retryable: true, SwitchAccount: true,
+			Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
 			Cooldown: CooldownRateLimit, At: now,
 		}
 	}
@@ -207,7 +230,7 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 	// Everything else is transient: keep the account, retry elsewhere.
 	return Verdict{
 		Status: "", Message: "",
-		Scope: ScopeNone, Retryable: true, SwitchAccount: true,
+		Scope: ScopeNone, Retryable: Retryable(err), SwitchAccount: true,
 		At: now,
 	}
 }

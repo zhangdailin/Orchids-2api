@@ -70,6 +70,10 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 	if h == nil || h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
+	// The model travels on the context so the pool filters every provider with one
+	// rule; a caller that already set it (the responses handler) is not overridden
+	// because the value is identical.
+	ctx = WithRequestModel(ctx, modelID)
 	if pinnedID := h.affinityAccount(ctx, ProviderBuild); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) {
 		if pinned, err := h.openCLIAccountSessionByID(ctx, pinnedID, modelID); err == nil {
 			if accountAffinityUsable(pinned.acc) {
@@ -79,7 +83,10 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 		}
 	}
 	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
-		return acc != nil && ProviderForAccount(acc) == ProviderBuild && AccountSupportsModel(acc, modelID) && h.routeAllowsAccount(ctx, modelID, acc.ID)
+		// A model this credential is cooling down for must not be retried on the
+		// same account; the account's other models stay eligible.
+		return acc != nil && ProviderForAccount(acc) == ProviderBuild && AccountSupportsModel(acc, modelID) &&
+			accountUsableForModel(ctx, acc) && h.routeAllowsAccount(ctx, modelID, acc.ID)
 	})
 	if err != nil {
 		return nil, err
@@ -115,8 +122,11 @@ func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []in
 	if len(modelIDs) > 0 {
 		modelID = strings.TrimSpace(modelIDs[0])
 	}
+	ctx = WithRequestModel(ctx, modelID)
 	allowed := func(acc *store.Account) bool {
-		return isGrokConsoleAccount(acc) && (modelID == "" || h.routeAllowsAccount(ctx, modelID, acc.ID))
+		// Console sessions are throttled per model like Build; apply the same
+		// model-scoped cooldown filter so a hot model does not retire the account.
+		return isGrokConsoleAccount(acc) && (modelID == "" || h.routeAllowsAccount(ctx, modelID, acc.ID)) && accountUsableForModel(ctx, acc)
 	}
 	if pinnedID := h.affinityAccount(ctx, ProviderConsole); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) && h.lb.Store != nil {
 		if pinned, err := h.lb.Store.GetAccount(ctx, pinnedID); err == nil && pinned != nil && pinned.Enabled && allowed(pinned) && accountAffinityUsable(pinned) && h.accountCapacityAvailable(pinned) {

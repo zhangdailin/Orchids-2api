@@ -17,6 +17,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
@@ -945,31 +946,44 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 			// Check for non-retriable errors
 			slog.Error("Request error", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err, "category", errClass.Category, "retryable", errClass.Retryable)
+			// One decision for both questions this error raises: whether the
+			// account keeps its place in the pool, and whether the request may be
+			// retried. The scheduler reads the same policy, so a failure cannot be
+			// "cooling down" for one entrance and "retryable" for the other.
+			verdict := accountpolicy.Classify(currentAccount, err, req.Model)
 			// 标记账号状态（auth 类错误始终标记，无论是否可重试）
 			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-				if status := apperrors.ClassifyAccountStatus(errStr); status != "" {
-					// Mark status if it's auth-related OR a quota/rate-limit style cooldown.
-					if !errClass.Retryable || errClass.Category == "auth" || errClass.Category == "auth_blocked" || status == "403" || status == "429" || status == "402" {
-						skipAccountStatusMark := isWarpRequest && status == "403" && warpCloudAgentForbidden
-						if skipAccountStatusMark {
-							if verboseDiagnostics {
-								slog.Debug("跳过账号全局 403 标记: Warp cloud agent 能力不足", "account_id", currentAccount.ID, "category", errClass.Category)
-							}
-						} else if verboseDiagnostics {
-							slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", status, "category", errClass.Category)
+				if verdict.Status != "" {
+					skipAccountStatusMark := isWarpRequest && verdict.Status == "403" && warpCloudAgentForbidden
+					if skipAccountStatusMark {
+						if verboseDiagnostics {
+							slog.Debug("跳过账号全局 403 标记: Warp cloud agent 能力不足", "account_id", currentAccount.ID, "category", errClass.Category)
 						}
-						if !skipAccountStatusMark {
-							if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
-								markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
-							} else {
-								h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, status)
+					} else if verboseDiagnostics {
+						slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", verdict.Status, "scope", string(verdict.Scope), "category", errClass.Category)
+					}
+					if !skipAccountStatusMark {
+						if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
+							markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
+						} else {
+							// Apply keeps the status and its operator-facing reason
+							// together, so the account table can explain the cooldown.
+							verdict.Apply(currentAccount)
+							// A model-scoped failure is recorded per model: the
+							// account's other models stay in the pool. Persisting it
+							// here means the cooldown survives a restart and is
+							// honoured by every provider's selector, not only by the
+							// client that happened to notice the 429.
+							if verdict.Scope == accountpolicy.ScopeModel && verdict.Model != "" && verdict.Cooldown > 0 {
+								store.RecordModelCooldown(currentAccount, verdict.Model, time.Now().Add(verdict.Cooldown))
 							}
+							h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, verdict.Status)
 						}
 					}
 				}
 			}
 
-			if !errClass.Retryable {
+			if !verdict.Retryable {
 				slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.Category)
 				if errClass.Category == "auth_blocked" || errClass.Category == "auth" {
 					sh.InjectAuthError(errStr)

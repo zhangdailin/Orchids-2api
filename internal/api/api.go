@@ -28,6 +28,7 @@ import (
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/puter"
+	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/util"
@@ -113,6 +114,19 @@ const auditScanCap = 2000
 // filtered by kind (request/operation/system) plus the fields the log centre
 // offers. Credentials never appear: whether they do is enforced at write time by
 // audit.SummarizeChange.
+// writeAccountCheckBusy tells the caller that a refresh of this account is already
+// running, so the click was merged instead of racing a second refresh.
+func writeAccountCheckBusy(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"error": map[string]interface{}{
+			"type":    "check_in_progress",
+			"message": "this account is already being refreshed; the request was merged",
+		},
+	})
+}
+
 func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -2140,7 +2154,23 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				a.checkNextAllowed[id] = time.Now().Add(d)
 			}()
 
-			accountStatus, httpStatus, refreshErr := a.refreshAccountState(r.Context(), acc)
+			// The manual check takes the same process-wide lease as the background
+			// scheduler: two refreshes of one account must never run at once, or the
+			// slower writer would persist an older snapshot over a newer verdict.
+			var accountStatus string
+			var httpStatus int
+			var refreshErr error
+			if !refreshqueue.WithLease(acc.ID, func() {
+				accountStatus, httpStatus, refreshErr = a.refreshAccountState(r.Context(), acc)
+			}) {
+				slog.Info("Account check skipped: a refresh of this account is already running", "account_id", acc.ID)
+				checkErrStatus = ""
+				a.checkMu.Lock()
+				a.checkInFlight[id] = false
+				a.checkMu.Unlock()
+				writeAccountCheckBusy(w)
+				return
+			}
 			if refreshErr != nil {
 				checkErrStatus = accountStatus
 				if accountStatus != "" {

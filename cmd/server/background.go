@@ -168,9 +168,11 @@ func buildGrokRefreshCandidates(accounts []*store.Account) []grokRefreshCandidat
 }
 
 // grokRefreshHub hands out one lease per account so the same credential is never
-// refreshed twice at once. A second, older snapshot winning the write-back is
-// what could reinstate a status that had just been cleared.
-var grokRefreshHub = refreshqueue.NewHub()
+// refreshed twice at once. It is the process-wide hub, shared with the admin
+// "check" path, so a manual check and the scheduler cannot race: a second, older
+// snapshot winning the write-back is what could reinstate a status that had just
+// been cleared.
+var grokRefreshHub = refreshqueue.Default()
 
 // planGrokRefreshCycle picks the refresh work for one cycle. It replaces the old
 // global rotation offset: tasks are ordered by how long they have been due, the

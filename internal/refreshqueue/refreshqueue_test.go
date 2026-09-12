@@ -137,3 +137,53 @@ func TestHub_ConcurrentAcquire(t *testing.T) {
 		t.Fatalf("leases granted = %d, want exactly 1", count)
 	}
 }
+
+// TestWithLease_MergesConcurrentRefreshes pins the process-wide lease shared by
+// the scheduler and the manual "check" path: the second caller must not run, so
+// an older snapshot cannot be written over a newer verdict.
+func TestWithLease_MergesConcurrentRefreshes(t *testing.T) {
+	ran := make(chan struct{}, 4)
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		WithLease(4242, func() {
+			ran <- struct{}{}
+			close(started)
+			<-release
+		})
+	}()
+	<-started
+
+	if WithLease(4242, func() { ran <- struct{}{} }) {
+		t.Fatal("a second lease for the same account must be refused")
+	}
+	close(release)
+	<-done
+
+	if len(ran) != 1 {
+		t.Fatalf("lease body ran %d times, want exactly 1", len(ran))
+	}
+	// After the first lease is released the account is refreshable again.
+	if !WithLease(4242, func() { ran <- struct{}{} }) {
+		t.Fatal("the lease must be reusable once released")
+	}
+	if len(ran) != 2 {
+		t.Fatalf("lease body ran %d times, want 2 after release", len(ran))
+	}
+}
+
+// TestDefault_IsSharedAcrossCallers guards the wiring: the scheduler and the API
+// must observe the same set, which is only true if Default() is a singleton.
+func TestDefault_IsSharedAcrossCallers(t *testing.T) {
+	if Default() != Default() {
+		t.Fatal("Default() must return one process-wide hub")
+	}
+	Default().TryAcquire(99)
+	t.Cleanup(func() { Default().Release(99) })
+	if !Default().InFlight(99) {
+		t.Fatal("a lease taken on Default() must be visible to every caller")
+	}
+}
