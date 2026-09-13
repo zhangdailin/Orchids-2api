@@ -144,6 +144,12 @@
   padding: 0;
 }
 
+/* Author-level display rules such as .form-group { display:block } override the
+   browser's built-in [hidden] rule. Keep hidden state authoritative everywhere. */
+[hidden] {
+  display: none !important;
+}
+
 html {
   -webkit-text-size-adjust: 100%;
 }

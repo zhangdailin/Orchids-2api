@@ -5,6 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('hidden provider sections cannot be made visible by component display rules', () => {
+  const css = fs.readFileSync(path.join(__dirname, 'static/css/main.css'), 'utf8');
+  assert.match(css, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
+});
+
 function loadUI() {
   const timers = [];
   const storage = new Map();
