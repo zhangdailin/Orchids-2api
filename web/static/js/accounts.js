@@ -304,7 +304,10 @@ function normalizeAccountSubscription(acc) {
   if (raw.includes("supergrok")) return "supergrok";
   if (raw.includes("super") || raw.includes("pro")) return "super";
   if (raw.includes("lite")) return "lite";
-  if (raw.includes("basic") || raw.includes("free")) return "basic";
+  // "free" must stay its own level: folding it into "basic" made the server's
+  // Free verdict render as "basic", which is a different product tier.
+  if (raw.includes("free")) return "free";
+  if (raw.includes("basic")) return "basic";
   return raw;
 }
 
@@ -399,6 +402,11 @@ function subscriptionBadge(acc) {
   switch (level) {
     case "unknown":
       return { text: "未知", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "xAI 未返回可验证的 Grok 套餐等级" };
+    case "free":
+      // The server only emits this when its own Free inference fired (the plan
+      // endpoint reported Free, the billing profile came back empty, or the
+      // upstream refused a request for having spent the included free usage).
+      return { text: "Free", bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: "Grok Free（上游未下发数值额度；配额列显示估算或实报的 Free 窗口）" };
     case "x_premium_plus":
       return { text: "X Premium+", bg: "rgba(251, 191, 36, 0.16)", color: "#fbbf24", tip: "xAI 官方 X Premium+ 套餐" };
     case "x_premium":

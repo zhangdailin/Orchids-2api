@@ -1031,6 +1031,17 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 	}
 	if strings.EqualFold(out.AccountType, "grok") {
 		grok.NormalizeProvider(out)
+		// The tier column must agree with the quota column. A Build Free account
+		// has no plan name from the identity endpoint (recorded as "unknown"), yet
+		// the same Free inference that produces its quota window already proves it
+		// is Free — and only Free. Reporting "未知" there told an operator nothing
+		// about an account the gateway had already characterised.
+		if verdict := grok.InferFreeProfile(out); verdict.Inferred {
+			switch strings.ToLower(strings.TrimSpace(out.Subscription)) {
+			case "", "unknown", "free":
+				out.Subscription = "free"
+			}
+		}
 		out.RefreshToken = ""
 		out.SessionCookie = ""
 		// The administrator explicitly opted in to seeing the short-lived OAuth

@@ -995,3 +995,117 @@ test('the live Qoder account payloads render 等级 / 配额 / 状态 / 能力',
     assert.equal(context.shouldShowNSFWBadge(account), false);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Channel enumeration drift.
+//
+// Adding a channel means touching several places that are plain markup: the
+// tutorial's quick-reference table, and every form that picks a channel. Qoder
+// shipped without any of them, so the tutorial page listed four channels and the
+// model form could not create a Qoder model at all. These cases read the real
+// templates and fail when a channel in the tutorial's own list is missing.
+// ---------------------------------------------------------------------------
+
+const CHANNEL_TEMPLATES = [
+  'templates/pages/tutorial.html',
+  'templates/pages/models.html',
+  'templates/pages/config.html',
+  'templates/components/modals/model-modal.html',
+];
+
+test('every channel in the tutorial list appears in the tutorial quick-reference table', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/tutorial.js'), 'utf8');
+  const keys = [...source.matchAll(/key:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1]);
+  assert.ok(keys.length >= 5, `parsed only ${keys.length} channels: ${keys}`);
+
+  const template = fs.readFileSync(path.join(__dirname, 'templates/pages/tutorial.html'), 'utf8');
+  for (const key of keys) {
+    assert.match(
+      template,
+      new RegExp(`badge-${key}\\b`),
+      `the tutorial quick-reference table has no row for ${key}`,
+    );
+    // Each row also has to expose a copyable base URL for that channel.
+    assert.match(
+      template,
+      new RegExp(`data-api-path="/${key}/v1"`),
+      `the tutorial table has no address cell for ${key}`,
+    );
+  }
+});
+
+test('every channel is selectable in the forms that pick a channel', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/tutorial.js'), 'utf8');
+  const keys = [...source.matchAll(/key:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1]);
+
+  for (const relative of CHANNEL_TEMPLATES) {
+    const template = fs.readFileSync(path.join(__dirname, relative), 'utf8');
+    for (const key of keys) {
+      const option = new RegExp(`<option value="${key}">`, 'i');
+      assert.match(template, option, `${relative} cannot select the ${key} channel`);
+    }
+  }
+});
+
+test('every channel has a badge style, so the tutorial row is not unstyled', () => {
+  const css = fs.readFileSync(path.join(__dirname, 'static/css/main.css'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/tutorial.js'), 'utf8');
+  const keys = [...source.matchAll(/key:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1]);
+  for (const key of keys) {
+    assert.match(css, new RegExp(`\\.badge-${key}\\b`), `no CSS rule for .badge-${key}`);
+  }
+});
+
+
+// Renders the live Grok OAuth payloads (exported from the running server) so the
+// 等级 / 配额 columns can be checked against what the operator actually sees.
+test('the live Grok OAuth payloads render a tier and a quota', () => {
+  const fixtures = JSON.parse(fs.readFileSync('/tmp/grok_oauth.json', 'utf8'));
+  const { context } = loadUI();
+  const strip = (html) => String(html).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+  for (const account of fixtures) {
+    const q = context.getQuotaStats(account);
+    console.log(`id ${account.id} sub=${JSON.stringify(account.subscription)} `
+      + `conf=${JSON.stringify(account.quota_confidence)} limit=${account.quota_limit} `
+      + `=> 等级="${strip(context.buildSubscriptionMarkup(account))}" `
+      + `配额="${strip(context.buildQuotaMarkup(account))}" `
+      + `quotaStats=${JSON.stringify(q && { limit: q.limit, remaining: q.remaining, estimated: q.estimated, confirmedFree: q.confirmedFree, unknown: q.unknown, quotaUnavailable: q.quotaUnavailable })}`);
+  }
+});
+
+// A Grok Build Free account has no plan name from the identity endpoint, so the
+// server records "unknown" — and the tier column showed 未知 while the quota
+// column already knew the account was Free. The server now emits "free" once its
+// own Free inference fires, and the badge must render that as a tier.
+test('a Grok Free account shows the Free tier instead of 未知', () => {
+  const { context } = loadUI();
+  const strip = (html) => String(html).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+
+  const free = {
+    id: 142,
+    account_type: 'grok',
+    credential_type: 'oauth',
+    grok_provider: 'build',
+    subscription: 'free',
+    enabled: true,
+    quota_supported: true,
+    quota_type: 'free',
+    quota_source: 'upstreamExhaustion',
+    quota_confidence: 'confirmed',
+    quota_limit: 500000,
+    quota_used: 500000,
+    quota_unit: 'tokens',
+    quota_window_hours: 24,
+  };
+  assert.equal(strip(context.buildSubscriptionMarkup(free)), 'Free');
+
+  const estimated = { ...free, subscription: 'free', quota_source: 'billingProfile', quota_confidence: 'estimated', quota_limit_known: false };
+  assert.equal(strip(context.buildSubscriptionMarkup(estimated)), 'Free');
+  assert.match(strip(context.buildQuotaMarkup(estimated)), /^≈/);
+
+  // An account the server could not characterise stays honest.
+  const unknown = { ...free, subscription: 'unknown' };
+  assert.equal(strip(context.buildSubscriptionMarkup(unknown)), '未知');
+  // A paid plan is never relabelled.
+  assert.equal(strip(context.buildSubscriptionMarkup({ ...free, subscription: 'XPremium' })), 'X Premium');
+});

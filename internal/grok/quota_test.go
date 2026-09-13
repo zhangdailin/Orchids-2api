@@ -119,3 +119,34 @@ func TestApplyFreeQuotaExhaustionIgnoresEverythingElse(t *testing.T) {
 		}
 	}
 }
+
+// TestInferFreeProfileDoesNotClaimPaidAccountsAsFree guards the tier projection:
+// the Free verdict is what lets the account list label a Build account "Free", so
+// it must never fire for an account whose plan string names a paid tier or whose
+// billing profile shows a real window.
+func TestInferFreeProfileDoesNotClaimPaidAccountsAsFree(t *testing.T) {
+	t.Parallel()
+
+	paid := []string{"supergrok", "XPremium", "x_premium_plus", "heavy", "lite", "Pro", "team", "enterprise"}
+	for _, plan := range paid {
+		acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: plan}
+		if verdict := InferFreeProfile(acc); verdict.Inferred {
+			t.Errorf("plan %q was inferred Free", plan)
+		}
+	}
+
+	// A billing profile with a real window is a paid/entitled account even when
+	// the plan string is absent.
+	entitled := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: "unknown"}
+	entitled.GrokBilling.SyncedAt = time.Now()
+	entitled.GrokBilling.Weekly.HasUsage = true
+	if verdict := InferFreeProfile(entitled); verdict.Inferred {
+		t.Error("an account with a reported weekly window was inferred Free")
+	}
+
+	// No evidence at all stays unknown rather than being guessed at.
+	unsynced := &store.Account{AccountType: "grok", CredentialType: "oauth"}
+	if verdict := InferFreeProfile(unsynced); verdict.Inferred {
+		t.Error("an unsynced account was inferred Free")
+	}
+}
