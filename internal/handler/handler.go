@@ -460,7 +460,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	preSelectWarpRequest := strings.EqualFold(targetChannel, "warp")
 	preSelectPuterRequest := strings.EqualFold(targetChannel, "puter")
 	preSelectWorkBuddyRequest := strings.EqualFold(targetChannel, "workbuddy")
-	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest || preSelectWorkBuddyRequest
+	// Qoder forwards raw OpenAI-style messages like Puter and WorkBuddy do, so it
+	// belongs to the same passthrough family: no Warp history trimming, and the
+	// request verbatim as the caller sent it.
+	preSelectQoderRequest := strings.EqualFold(targetChannel, "qoder")
+	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest || preSelectWorkBuddyRequest || preSelectQoderRequest
 	warpChatMode := preSelectWarpRequest && isWarpChatModel(req.Model)
 	warpAgentMode := preSelectWarpRequest && isWarpAgentModel(req.Model)
 	suggestionMode := isSuggestionMode(req.Messages)
@@ -573,13 +577,19 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "workbuddy") {
 		isWorkBuddyRequest = true
 	}
-	isPassthroughRequest := isWarpRequest || isPuterRequest || isWorkBuddyRequest
+	isQoderRequest := preSelectQoderRequest
+	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "qoder") {
+		isQoderRequest = true
+	}
+	isPassthroughRequest := isWarpRequest || isPuterRequest || isWorkBuddyRequest || isQoderRequest
 	if isPassthroughRequest {
 		channel := "warp"
 		if isPuterRequest {
 			channel = "puter"
 		} else if isWorkBuddyRequest {
 			channel = "workbuddy"
+		} else if isQoderRequest {
+			channel = "qoder"
 		}
 		// Passthrough channels do not trim history/tool results.
 		if verboseDiagnostics {
@@ -620,17 +630,20 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		mappedModel = upstreamWarpModelID(req.Model)
-	} else if isPuterRequest || isWorkBuddyRequest {
+	} else if isPuterRequest || isWorkBuddyRequest || isQoderRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
 	var builtPrompt string
-	if isPuterRequest || isWorkBuddyRequest {
+	if isPuterRequest || isWorkBuddyRequest || isQoderRequest {
 		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
 		if builtPrompt == "" {
-			if isWorkBuddyRequest {
+			switch {
+			case isWorkBuddyRequest:
 				builtPrompt = "workbuddy request"
-			} else {
+			case isQoderRequest:
+				builtPrompt = "qoder request"
+			default:
 				builtPrompt = "puter request"
 			}
 		}
@@ -694,6 +707,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		// WorkBuddy receives raw OpenAI-style messages like Puter does, so the
 		// generic (non-Warp) breakdown is the accurate profile here too.
 		breakdownProfile = "workbuddy"
+	}
+	if isQoderRequest {
+		breakdownProfile = "qoder"
 	}
 	if isWarpRequest {
 		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, req.System, effectiveTools, gateNoTools, chatSessionID); err == nil {
@@ -833,6 +849,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// KeepAlive
+	//
+	// The watchdog captures its cancellation channel before the goroutine starts.
+	// Reading it inside the loop would race with the request value reassigned
+	// later in this handler (`r = r.WithContext(...)`), and a cancellation that
+	// arrived during that window could be missed — leaving the watchdog to
+	// outlive the client.
+	keepAliveDone := r.Context().Done()
 	var keepAliveStop chan struct{}
 	if isStream {
 		keepAliveStop = make(chan struct{})
@@ -852,7 +875,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					sh.writeKeepAlive()
 				case <-keepAliveStop:
 					return
-				case <-r.Context().Done():
+				case <-keepAliveDone:
 					return
 				}
 			}

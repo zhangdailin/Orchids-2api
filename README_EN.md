@@ -2,14 +2,15 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across three upstream channels: `warp`, `puter`, and `grok`.
+A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across five upstream channels: `warp`, `puter`, `workbuddy`, `qoder`, and `grok`.
 
 ## Current Status
 
-- `internal/handler` serves `warp` / `puter` for both `/v1/messages` and `/v1/chat/completions`
+- `internal/handler` serves `warp` / `puter` / `workbuddy` / `qoder` for both `/v1/messages` and `/v1/chat/completions`
 - `internal/grok` handles Grok Messages, Responses, Chat, image, video, speech, and local media endpoints
 - per-channel model sync is available through `POST /api/models/refresh`
 - Puter non-stream Claude Messages regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long-context, and multi-round `tool_result`
+- The Qoder channel is OAuth-only: accounts come exclusively from the official `qoder.com` device authorization flow, and it accepts no pasted personal access token
 
 ## Core Features
 

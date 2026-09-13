@@ -30,6 +30,7 @@ import (
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/puter"
+	"orchids-api/internal/qoder"
 	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
@@ -69,6 +70,11 @@ type API struct {
 	// credentials until the account is verified and persisted.
 	workbuddyLoginMu sync.Mutex
 	workbuddyLogins  map[string]*workbuddyLogin
+
+	// Qoder logins hold a device authorization transaction plus its private
+	// verifier until the browser step completes and the account is persisted.
+	qoderLoginMu sync.Mutex
+	qoderLogins  map[string]*qoderLoginTransaction
 
 	// opsAggregator and alerts back the operations overview. They are optional:
 	// a Redis-less deployment simply reports "no sample" instead of failing.
@@ -978,12 +984,12 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 	// Credentials are write-only. The account API exposes only their presence,
 	// including for create, update and refresh responses.
 	merged["has_credential"] = o.SessionFingerprint != "" || o.WarpAuthenticated
-	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "session_fingerprint", "warp_authenticated"} {
+	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "qoder_job_token", "session_fingerprint", "warp_authenticated"} {
 		delete(merged, field)
 	}
 	if o.Account != nil {
 		message := o.Account.StatusMessage
-		for _, secret := range []string{o.Account.Token, o.Account.ClientCookie, o.Account.RefreshToken, o.Account.SessionCookie, o.Account.OAuthAccessToken, o.Account.OAuthRefreshToken, o.Account.WorkBuddyAccessToken, o.Account.WorkBuddyRefreshToken} {
+		for _, secret := range []string{o.Account.Token, o.Account.ClientCookie, o.Account.RefreshToken, o.Account.SessionCookie, o.Account.OAuthAccessToken, o.Account.OAuthRefreshToken, o.Account.WorkBuddyAccessToken, o.Account.WorkBuddyRefreshToken, o.Account.QoderAccessToken, o.Account.QoderRefreshToken, o.Account.QoderJobToken} {
 			if secret != "" {
 				message = strings.ReplaceAll(message, secret, "[REDACTED]")
 			}
@@ -1013,7 +1019,7 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 	}
 	// Redact before the provider-specific output normalization removes secrets.
 	out.StatusMessage = acc.StatusMessage
-	for _, secret := range []string{acc.Token, acc.ClientCookie, acc.RefreshToken, acc.SessionCookie, acc.SessionID, acc.ClientUat, acc.OAuthAccessToken, acc.OAuthRefreshToken, acc.WorkBuddyAccessToken, acc.WorkBuddyRefreshToken} {
+	for _, secret := range []string{acc.Token, acc.ClientCookie, acc.RefreshToken, acc.SessionCookie, acc.SessionID, acc.ClientUat, acc.OAuthAccessToken, acc.OAuthRefreshToken, acc.WorkBuddyAccessToken, acc.WorkBuddyRefreshToken, acc.QoderAccessToken, acc.QoderRefreshToken, acc.QoderJobToken} {
 		if secret != "" {
 			out.StatusMessage = strings.ReplaceAll(out.StatusMessage, secret, "[REDACTED]")
 		}
@@ -1036,6 +1042,12 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 		// The durable refresh token never leaves the server; the access token
 		// stays visible so the account table can prove a credential exists.
 		out = RedactWorkBuddyOutput(out)
+	}
+	if strings.EqualFold(out.AccountType, "qoder") {
+		// The durable refresh token and the derived runtime material never leave
+		// the server; the access token stays visible so the account table can
+		// prove a credential exists.
+		out = RedactQoderOutput(out)
 	}
 	return &accountOutput{
 		Account:            out,
@@ -1117,6 +1129,9 @@ func accountSessionFingerprint(acc *store.Account) string {
 	case "workbuddy":
 		creds := resolveWorkBuddyCredentials(acc)
 		return util.Fingerprint(util.FirstNonEmpty(creds.AccessToken, creds.RefreshToken))
+	case "qoder":
+		creds := qoder.ResolveCredentials(acc)
+		return util.Fingerprint(util.FirstNonEmpty(creds.RefreshToken, creds.AccessToken))
 	case "puter":
 		return util.Fingerprint(util.FirstNonEmpty(acc.Token, acc.SessionCookie, acc.ClientCookie))
 	default:
@@ -1145,6 +1160,8 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 		token = puter.ResolveAuthToken(acc)
 	case "workbuddy":
 		return WorkBuddyCredentialKey(acc)
+	case "qoder":
+		return QoderCredentialKey(acc)
 	default:
 		token = strings.TrimSpace(util.FirstNonEmpty(acc.RefreshToken, acc.SessionCookie, acc.ClientCookie, acc.Token))
 	}
@@ -1157,7 +1174,7 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 
 func isSupportedAccountType(accountType string) bool {
 	switch strings.ToLower(strings.TrimSpace(accountType)) {
-	case "warp", "puter", "grok", "workbuddy":
+	case "warp", "puter", "grok", "workbuddy", "qoder":
 		return true
 	default:
 		return false
@@ -1688,6 +1705,19 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		return usageStatus, httpStatus, fmt.Errorf("failed to fetch puter usage: %w", usageErr)
 	}
 
+	if strings.EqualFold(acc.AccountType, "qoder") {
+		status, httpStatus, verifyErr := verifyQoderAccount(ctx, acc, a.config.Load())
+		if verifyErr != nil {
+			if errors.Is(verifyErr, errQoderMissingCredential) {
+				return "", http.StatusBadRequest, fmt.Errorf("failed to verify qoder account: %w", verifyErr)
+			}
+			if classified := apperrors.ClassifyAccountStatus(verifyErr.Error()); classified != "" {
+				return classified, httpStatusFromAccountStatus(classified), fmt.Errorf("failed to verify qoder account: %w", verifyErr)
+			}
+			return status, httpStatus, fmt.Errorf("failed to verify qoder account: %w", verifyErr)
+		}
+		return status, httpStatus, nil
+	}
 	if strings.EqualFold(acc.AccountType, "workbuddy") {
 		status, httpStatus, verifyErr := verifyWorkBuddyAccount(ctx, acc, a.config.Load())
 		if verifyErr != nil {
@@ -1785,6 +1815,7 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		warpDeviceLogins: map[string]*warpDeviceLogin{},
 		grokDeviceLogins: map[string]*grokDeviceLogin{},
 		workbuddyLogins:  map[string]*workbuddyLogin{},
+		qoderLogins:      map[string]*qoderLoginTransaction{},
 	}
 	if cfg != nil {
 		a.config.Store(cfg)
@@ -2030,6 +2061,11 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "missing WorkBuddy credential: paste the access token or refresh token from the WorkBuddy desktop session", http.StatusBadRequest)
 				return
 			}
+		} else if strings.EqualFold(acc.AccountType, "qoder") {
+			// Qoder is OAuth-only: an account is created by the browser device
+			// flow (/api/qoder/login), never by pasting a personal access token.
+			http.Error(w, "Qoder accounts must be added using the official browser login (/api/qoder/login)", http.StatusBadRequest)
+			return
 		}
 		if existing, err := a.findDuplicateAccountByCredential(r.Context(), &acc, 0); err != nil {
 			slog.Error("Failed to detect duplicate account token", "error", err)
@@ -2772,6 +2808,16 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			NormalizeWorkBuddyCredentials(&acc)
+		} else if strings.EqualFold(acc.AccountType, "qoder") {
+			PreserveQoderCredentialsOnEdit(&acc, existing)
+			if !NormalizeQoderCredentials(&acc) {
+				http.Error(w, "missing Qoder credential: sign in again with the browser login", http.StatusBadRequest)
+				return
+			}
+			if strings.TrimSpace(acc.QoderMachineID) == "" {
+				http.Error(w, "missing Qoder device identity: sign in again", http.StatusBadRequest)
+				return
+			}
 		} else if strings.EqualFold(acc.AccountType, "puter") && strings.EqualFold(existing.AccountType, "puter") && strings.TrimSpace(acc.ClientCookie) == "" && strings.TrimSpace(acc.Token) == "" {
 			acc.ClientCookie = existing.ClientCookie
 			acc.Token = existing.Token

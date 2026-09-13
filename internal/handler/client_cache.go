@@ -10,6 +10,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/puter"
+	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
@@ -142,7 +143,6 @@ func (c *accountClientCache) release(accountID int64, client UpstreamClient) {
 		return
 	}
 }
-
 
 // evictAccounts is the subscriber entry point. It resolves each account's current
 // state and keeps a client whose credential has not actually moved.
@@ -296,6 +296,9 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	}
 	if strings.EqualFold(acc.AccountType, "workbuddy") {
 		return workbuddy.NewFromAccount(acc, cfg)
+	}
+	if strings.EqualFold(acc.AccountType, "qoder") {
+		return qoder.NewFromAccount(acc, cfg)
 	}
 	return nil
 }

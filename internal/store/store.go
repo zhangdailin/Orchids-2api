@@ -137,6 +137,52 @@ type Account struct {
 	// keeps the extra detail the meter reports (cycle reset, package label and
 	// the consumption delta the account table shows).
 	WorkBuddyQuota WorkBuddyQuotaSnapshot `json:"workbuddy_quota,omitempty"`
+
+	// ── Qoder (qoder.com / openapi.qoder.sh) OAuth channel ──
+	//
+	// A Qoder account is created only through the official CLI device
+	// authorization flow: there is no pasted personal access token. The device
+	// access token is short lived, the device refresh token is the durable
+	// credential and is rotated by the upstream on every refresh, so the rotated
+	// value must be written back. They live in their own fields rather than the
+	// generic Token/RefreshToken slots so account responses can redact them
+	// without touching another channel's credential.
+	QoderAccessToken  string    `json:"qoder_access_token,omitempty"`
+	QoderRefreshToken string    `json:"qoder_refresh_token,omitempty"`
+	QoderExpiresAt    time.Time `json:"qoder_expires_at,omitempty"`
+	// QoderMachineID is the 36-character device identity the CLI sends as
+	// Cosy-MachineId / Cosy-MachineToken. It is bound to the credential: the
+	// upstream rejects a request whose machine id does not match the one that
+	// performed the login.
+	QoderMachineID string `json:"qoder_machine_id,omitempty"`
+	QoderUserID    string `json:"qoder_user_id,omitempty"`
+	QoderUserName  string `json:"qoder_user_name,omitempty"`
+	// QoderOrganizationID and QoderOrganizationTags come from the post-login
+	// userinfo enrichment. They are optional headers: an empty value omits the
+	// corresponding Cosy-Organization-* header entirely.
+	QoderOrganizationID   string   `json:"qoder_organization_id,omitempty"`
+	QoderOrganizationTags []string `json:"qoder_organization_tags,omitempty"`
+	// QoderDataPolicy is the data-policy agreement the CLI recorded. Empty means
+	// "not observed"; the client then reports `disagree`.
+	QoderDataPolicy bool `json:"qoder_data_policy,omitempty"`
+	// QoderRuntimeInfo and QoderRuntimeKey are the derived authentication pair
+	// the gateway requires (the COSY payload's `info` and the Cosy-Key header).
+	// They are derived from the credential and the identity, not supplied by the
+	// operator, and they are reused across requests exactly as the CLI reuses
+	// the pair it derived at login.
+	QoderRuntimeInfo string `json:"qoder_runtime_info,omitempty"`
+	QoderRuntimeKey  string `json:"qoder_runtime_key,omitempty"`
+	// QoderModelIDs is the last successful account-scoped model catalog
+	// snapshot. An empty snapshot means "not synced yet", not that the account
+	// supports every model.
+	QoderModelIDs       []string  `json:"qoder_model_ids,omitempty"`
+	QoderModelsSyncedAt time.Time `json:"qoder_models_synced_at,omitempty"`
+	// QoderJobToken is the short-lived gateway credential the device access
+	// token is exchanged for. It is a derived secret: the durable credential is
+	// still the device refresh token, so this field is redacted on read and is
+	// never required to be present.
+	QoderJobToken       string    `json:"qoder_job_token,omitempty"`
+	QoderJobTokenExpiry time.Time `json:"qoder_job_token_expiry,omitempty"`
 }
 
 // WorkBuddyQuotaSnapshot is the WorkBuddy credit-meter snapshot. Remaining/Limit
@@ -475,6 +521,7 @@ func (s *Store) seedModels() {
 	models = append(models, buildGrokSeedModels()...)
 	models = append(models, buildPuterSeedModels()...)
 	models = append(models, buildWorkBuddySeedModels()...)
+	models = append(models, buildQoderSeedModels()...)
 
 	for _, m := range models {
 		if _, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID); err == nil {

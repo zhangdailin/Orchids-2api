@@ -67,9 +67,11 @@ func registerRoutes(
 	mux.HandleFunc("/puter/v1/messages/count_tokens", inferenceAuth(limiter.Limit(h.HandleCountTokens)))
 	mux.HandleFunc("/workbuddy/v1/messages", inferenceAuth(limiter.Limit(h.HandleMessages)))
 	mux.HandleFunc("/workbuddy/v1/messages/count_tokens", inferenceAuth(limiter.Limit(h.HandleCountTokens)))
+	mux.HandleFunc("/qoder/v1/messages", inferenceAuth(limiter.Limit(h.HandleMessages)))
+	mux.HandleFunc("/qoder/v1/messages/count_tokens", inferenceAuth(limiter.Limit(h.HandleCountTokens)))
 
 	// --- Model routes (channel prefixes → same handlers) ---
-	modelPrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/grok/v1", "/v1"}
+	modelPrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1", "/grok/v1", "/v1"}
 	registerWithPrefixes(mux, modelPrefixes, "/models", inferenceAuth(h.HandleModels))
 	registerWithPrefixes(mux, modelPrefixes, "/models/", inferenceAuth(h.HandleModelByID))
 
@@ -77,6 +79,7 @@ func registerRoutes(
 	mux.HandleFunc("/warp/v1/chat/completions", inferenceAuth(limiter.Limit(h.HandleMessages)))
 	mux.HandleFunc("/puter/v1/chat/completions", inferenceAuth(limiter.Limit(h.HandleMessages)))
 	mux.HandleFunc("/workbuddy/v1/chat/completions", inferenceAuth(limiter.Limit(h.HandleMessages)))
+	mux.HandleFunc("/qoder/v1/chat/completions", inferenceAuth(limiter.Limit(h.HandleMessages)))
 
 	grokPrefixes := []string{"/grok/v1", "/v1"}
 	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", inferenceAuth(limiter.Limit(grokHandler.HandleChatCompletions)))
@@ -138,6 +141,8 @@ func registerRoutes(
 	mux.HandleFunc("/api/puter/web-login", sessionAuth(apiHandler.HandlePuterWebLogin))
 	mux.HandleFunc("/api/workbuddy/login", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/workbuddy/login/", sessionAuth(apiHandler.HandleWorkBuddyLogin))
+	mux.HandleFunc("/api/qoder/login", sessionAuth(apiHandler.HandleQoderLogin))
+	mux.HandleFunc("/api/qoder/login/", sessionAuth(apiHandler.HandleQoderLogin))
 	mux.HandleFunc("/api/warp/device-auth", sessionAuth(apiHandler.HandleWarpDeviceAuthorization))
 	mux.HandleFunc("/api/warp/device-auth/", sessionAuth(apiHandler.HandleWarpDeviceAuthorization))
 	mux.HandleFunc("/api/grok/device-auth", sessionAuth(apiHandler.HandleGrokDeviceAuthorization))

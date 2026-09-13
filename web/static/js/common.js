@@ -34,6 +34,11 @@ function getSidebarAccountToken(acc) {
     // the visible proof that a credential is configured.
     return acc.workbuddy_access_token || "";
   }
+  if (type === "qoder") {
+    // Same contract as WorkBuddy: only the derived access token is exposed, and
+    // only so the table can show that a credential exists.
+    return acc.qoder_access_token || "";
+  }
   return acc.client_cookie || acc.token || "";
 }
 
@@ -87,6 +92,12 @@ function getSidebarQuotaStats(acc) {
         packageRemaining: Math.max(0, Number(acc.quota_package_remaining || 0)),
       };
     }
+    return null;
+  }
+  if (type === "qoder") {
+    // Qoder has no credit meter API in this integration, so a quota must not be
+    // fabricated from generic usage columns: saying "unknown" is the honest
+    // answer and keeps the sidebar from implying a balance nobody measured.
     return null;
   }
   const explicitLimit = Math.floor(acc.quota_limit || 0);
@@ -146,6 +157,8 @@ function isSidebarAccountAbnormal(acc) {
   } else if (type === "puter") {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (type === "workbuddy") {
+    if (!hasSidebarAccountCredential(acc)) return true;
+  } else if (type === "qoder") {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {
     return true;

@@ -106,7 +106,7 @@ var (
 		if acc.account_type ~= nil then
 			acc_type = string.lower(tostring(acc.account_type))
 		end
-		if acc_type ~= "warp" and acc_type ~= "puter" and acc_type ~= "grok" then
+		if acc_type ~= "warp" and acc_type ~= "puter" and acc_type ~= "grok" and acc_type ~= "qoder" then
 			acc.usage_current = (acc.usage_current or 0) + usage
 		end
 		acc.usage_total = (acc.usage_total or 0) + usage
@@ -466,6 +466,56 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	}
 	if !acc.WorkBuddyQuota.SyncedAt.IsZero() {
 		updated.WorkBuddyQuota = acc.WorkBuddyQuota
+	}
+	// Qoder credentials are rotated by the upstream and account updates are
+	// frequently partial (a request counter, a quota refresh), so an empty value
+	// means "keep what is stored", never "erase". The derived runtime pair is
+	// written once at login and then reused, which is why it follows the same
+	// keep-on-empty rule instead of being regenerated per request.
+	if token := strings.TrimSpace(acc.QoderAccessToken); token != "" {
+		updated.QoderAccessToken = token
+	}
+	if token := strings.TrimSpace(acc.QoderRefreshToken); token != "" {
+		updated.QoderRefreshToken = token
+	}
+	if token := strings.TrimSpace(acc.QoderMachineID); token != "" {
+		updated.QoderMachineID = token
+	}
+	if token := strings.TrimSpace(acc.QoderUserID); token != "" {
+		updated.QoderUserID = token
+	}
+	if token := strings.TrimSpace(acc.QoderUserName); token != "" {
+		updated.QoderUserName = token
+	}
+	if token := strings.TrimSpace(acc.QoderOrganizationID); token != "" {
+		updated.QoderOrganizationID = token
+	}
+	if len(acc.QoderOrganizationTags) > 0 {
+		updated.QoderOrganizationTags = append([]string(nil), acc.QoderOrganizationTags...)
+	}
+	if acc.QoderDataPolicy {
+		updated.QoderDataPolicy = true
+	}
+	if !acc.QoderExpiresAt.IsZero() {
+		updated.QoderExpiresAt = acc.QoderExpiresAt
+	}
+	if token := strings.TrimSpace(acc.QoderRuntimeInfo); token != "" {
+		updated.QoderRuntimeInfo = token
+	}
+	if token := strings.TrimSpace(acc.QoderRuntimeKey); token != "" {
+		updated.QoderRuntimeKey = token
+	}
+	if len(acc.QoderModelIDs) > 0 {
+		updated.QoderModelIDs = append([]string(nil), acc.QoderModelIDs...)
+	}
+	if !acc.QoderModelsSyncedAt.IsZero() {
+		updated.QoderModelsSyncedAt = acc.QoderModelsSyncedAt
+	}
+	if token := strings.TrimSpace(acc.QoderJobToken); token != "" {
+		updated.QoderJobToken = token
+	}
+	if !acc.QoderJobTokenExpiry.IsZero() {
+		updated.QoderJobTokenExpiry = acc.QoderJobTokenExpiry
 	}
 	updated.UpdatedAt = time.Now()
 

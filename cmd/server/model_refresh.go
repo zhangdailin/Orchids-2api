@@ -16,6 +16,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/puter"
+	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 	"orchids-api/internal/warp"
@@ -160,6 +161,8 @@ func normalizeAdminModelChannel(channel string) string {
 		return "Puter"
 	case "workbuddy":
 		return "WorkBuddy"
+	case "qoder":
+		return "Qoder"
 	case "grok":
 		return "Grok"
 	default:
@@ -208,6 +211,8 @@ func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config,
 		return discoverPuterModelsConcurrent(ctx, cfg, s, concurrency)
 	case "workbuddy":
 		return discoverWorkBuddyModels(ctx, cfg, s)
+	case "qoder":
+		return discoverQoderModels(ctx, cfg, s)
 	case "grok":
 		return discoverGrokModelsConcurrent(ctx, cfg, s, concurrency)
 	default:
@@ -250,6 +255,89 @@ func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.S
 		lastErr = fmt.Errorf("workbuddy model discovery failed")
 	}
 	return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", lastErr)
+}
+
+// discoverQoderModels reads the account-scoped Qoder model catalog.
+// GET /algo/api/v2/model/list is an authenticated, signed control-plane read, so
+// a successful answer is itself proof that the credential works; no completion
+// probe is sent because the upstream bills per token.
+func discoverQoderModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
+	source := "qoder_model_list"
+	accounts, err := enabledAccountsByType(ctx, s, "qoder")
+	if err != nil {
+		return nil, "", fmt.Errorf("qoder model discovery failed: %w", err)
+	}
+	if len(accounts) == 0 {
+		return nil, "", fmt.Errorf("qoder has no enabled accounts")
+	}
+
+	var lastErr error
+	for _, acc := range accounts {
+		client := qoder.NewFromAccount(acc, refreshModelRequestConfig(cfg, "qoder"))
+		catalog, fetchErr := client.FetchModels(ctx)
+		client.Close()
+		if fetchErr != nil {
+			lastErr = fetchErr
+			continue
+		}
+		candidates := qoderCatalogToDiscovered(catalog)
+		if len(candidates) == 0 {
+			lastErr = fmt.Errorf("qoder account #%d returned an empty catalog", acc.ID)
+			continue
+		}
+		persistQoderCatalogSnapshot(ctx, s, acc, catalog)
+		return candidates, source, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("qoder model discovery failed")
+	}
+	return nil, "", fmt.Errorf("qoder model discovery failed: %w", lastErr)
+}
+
+// qoderCatalogToDiscovered maps the account catalog onto the channel's public
+// model records.
+//
+// The public identifier is the display name, not the internal gateway key: the
+// channel resolves either form, and a client that saw "Qwen3.7-Max" in
+// /v1/models must be able to ask for it by that name. The internal key stays in
+// the account snapshot, which is what the client resolves against.
+func qoderCatalogToDiscovered(catalog *qoder.Catalog) []discoveredModel {
+	entries := catalog.Entries()
+	out := make([]discoveredModel, 0, len(entries))
+	for i, entry := range entries {
+		key := strings.TrimSpace(entry.Key)
+		if key == "" {
+			continue
+		}
+		id := strings.TrimSpace(entry.Name)
+		if id == "" {
+			id = key
+		}
+		// Model lookup is lowercased before it reaches the store index, so the
+		// public identifier is stored in lowercase. The upstream key and the
+		// display name are both still accepted at request time, because the
+		// catalog resolves case-insensitively.
+		id = strings.ToLower(id)
+		out = append(out, discoveredModel{ID: id, Name: id, SortOrder: i})
+	}
+	return out
+}
+
+// persistQoderCatalogSnapshot records the account-scoped catalog so model
+// selection can be checked against what this account may actually run.
+func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store.Account, catalog *qoder.Catalog) {
+	if acc == nil || acc.ID == 0 {
+		return
+	}
+	ids := qoder.CatalogSnapshot(catalog)
+	if len(ids) == 0 {
+		return
+	}
+	acc.QoderModelIDs = ids
+	acc.QoderModelsSyncedAt = time.Now()
+	if err := s.UpdateAccount(ctx, acc); err != nil {
+		slog.Warn("failed to persist qoder model snapshot", "account_id", acc.ID, "error", err)
+	}
 }
 
 func workBuddyCatalogToDiscovered(models []workbuddy.WorkBuddyModel) []discoveredModel {
@@ -1008,7 +1096,7 @@ func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Confi
 	}
 
 	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "warp", "puter", "workbuddy":
+	case "warp", "puter", "workbuddy", "qoder":
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
 			cfg.RequestTimeout = 15
 		}
@@ -1136,6 +1224,11 @@ func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 		// GET /v3/config is the authoritative cli whitelist for the account, so
 		// models that disappeared from it must not stay routable.
 		return strings.HasPrefix(strings.TrimSpace(source), "workbuddy_cli_models")
+	}
+	if strings.EqualFold(strings.TrimSpace(channel), "qoder") {
+		// GET /algo/api/v2/model/list is the authoritative account catalog, so a
+		// model that disappeared from it must not stay routable.
+		return strings.HasPrefix(strings.TrimSpace(source), "qoder_model_list")
 	}
 	if !strings.EqualFold(strings.TrimSpace(channel), "warp") {
 		return false

@@ -48,6 +48,16 @@
       accountCredential: '只支持官方网页登录；批量导入仍可通过 API 使用会话 refreshToken。'
     },
     {
+      key: 'qoder',
+      label: 'Qoder',
+      badge: 'badge-qoder',
+      path: '/qoder/v1',
+      models: ['Qwen3.7-Max', 'DeepSeek-V4-Pro'],
+      protocols: ['claude', 'openai'],
+      claudeCode: true,
+      accountCredential: '只支持官方设备授权登录（qoder.com）；不提供 PAT 入口。'
+    },
+    {
       key: 'grok',
       label: 'Grok',
       badge: 'badge-grok',
@@ -122,6 +132,21 @@
             ]
           }
         ];
+      case 'qoder':
+        return [
+          {
+            title: 'Qoder 账号说明',
+            parts: [
+              '该渠道',
+              { strong: '只支持 OAuth 设备授权登录', tone: 'amber' },
+              '：在账号页面点击「使用 Qoder 官方网页登录」，在 ',
+              { code: 'qoder.com', tone: 'amber' },
+              ' 完成授权后账号会自动保存，服务端不接触密码，并会自动同步该账号的模型目录。',
+              { strong: '该渠道不提供 PAT（个人访问令牌）入口', tone: 'amber' },
+              '，也不接受手填凭证。'
+            ]
+          }
+        ];
       case 'grok':
         return [
           {
@@ -141,6 +166,8 @@
         return '账号只需要填写 auth_token。';
       case 'workbuddy':
         return '账号走「使用 WorkBuddy 官方网页登录」，不提供手填凭证。';
+      case 'qoder':
+        return '账号走「使用 Qoder 官方网页登录」（OAuth 设备授权），不提供 PAT 入口。';
       case 'grok':
         return '与其他渠道保持一致，使用 /grok/v1 前缀。';
       case 'warp':

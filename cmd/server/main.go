@@ -25,6 +25,7 @@ import (
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/provider"
+	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/internal/tokencache"
@@ -223,6 +224,7 @@ func main() {
 	registry.Register("warp", provider.NewWarpProvider())
 	registry.Register("puter", provider.NewPuterProvider())
 	registry.Register("workbuddy", provider.NewWorkBuddyProvider())
+	registry.Register("qoder", provider.NewQoderProvider())
 	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {
 		if p := registry.Get(acc.AccountType); p != nil {
 			if client, ok := p.NewClient(acc, c).(handler.UpstreamClient); ok {
@@ -232,6 +234,13 @@ func main() {
 					SetAccountStore(workbuddy.AccountUpdater)
 				}); ok {
 					wb.SetAccountStore(s)
+				}
+				// Qoder also rotates its refresh token upstream; give the client
+				// the store so the rotated credential survives the call.
+				if qd, ok := client.(interface {
+					SetAccountStore(qoder.AccountUpdater)
+				}); ok {
+					qd.SetAccountStore(s)
 				}
 				return client
 			}
@@ -284,6 +293,7 @@ func main() {
 	// traffic; their outcomes are counted apart from user requests.
 	startProbeLoop(ctx, s, cfg, wiredAuditLogger, cfg.Port)
 	logWorkBuddyReachability(cfg)
+	logQoderReachability(cfg)
 
 	// Graceful shutdown
 	idleConnsClosed := make(chan struct{})
@@ -334,6 +344,27 @@ func logWorkBuddyReachability(cfg *config.Config) {
 			return
 		}
 		slog.Info("WorkBuddy backend reachable", "endpoint", workbuddy.DefaultBaseURL)
+	}()
+}
+
+// logQoderReachability reports at startup whether this process can reach the
+// Qoder control plane. A blocked egress path breaks both the device login and
+// every inference request, so the cause should be visible in the boot log
+// instead of surfacing as a per-request 502.
+func logQoderReachability(cfg *config.Config) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		client := qoder.NewFromAccount(nil, cfg)
+		defer client.Close()
+		if err := client.ProbeReachability(ctx); err != nil {
+			slog.Warn("Qoder control plane is not reachable; the qoder channel will fail until egress is fixed",
+				"endpoint", qoder.DefaultOpenAPIBaseURL, "error", err,
+				"hint", "configure HTTP_PROXY/HTTPS_PROXY or the proxy settings in config.json if this host needs one")
+			return
+		}
+		slog.Info("Qoder control plane reachable", "endpoint", qoder.DefaultOpenAPIBaseURL)
 	}()
 }
 

@@ -2,15 +2,16 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `warp`、`puter`、`workbuddy`、`grok` 四类通道。
+一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `warp`、`puter`、`workbuddy`、`qoder`、`grok` 五类通道。
 
 ## 当前状态
 
-- `internal/handler` 统一处理 `warp` / `puter` / `workbuddy` 的 `/v1/messages` 与 `/v1/chat/completions`
+- `internal/handler` 统一处理 `warp` / `puter` / `workbuddy` / `qoder` 的 `/v1/messages` 与 `/v1/chat/completions`
 - `internal/grok` 独立处理 `grok` 的 Messages、Responses、Chat、图片、视频和本地媒体接口
 - 模型管理支持按通道刷新：`/api/models/refresh`
 - Puter 非流式 Claude Messages 已覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归
 - WorkBuddy 通道对接国际版 `www.workbuddy.ai`，账号级模型目录从 `GET /v3/config` 同步，refreshToken 自动轮换并回写
+- Qoder 通道对接 `qoder.com` CLI 设备授权流（**只支持 OAuth 登录，不提供 PAT 入口**），账号级模型目录从签名接口 `GET /algo/api/v2/model/list` 同步，设备 refreshToken 自动轮换并回写
 
 ## 核心能力
 
@@ -31,6 +32,7 @@
 | `warp` | `/warp/v1/messages`、`/warp/v1/chat/completions` |
 | `puter` | `/puter/v1/messages`、`/puter/v1/chat/completions` |
 | `workbuddy` | `/workbuddy/v1/messages`、`/workbuddy/v1/chat/completions` |
+| `qoder` | `/qoder/v1/messages`、`/qoder/v1/chat/completions` |
 | `grok` | `/grok/v1/messages`、`/grok/v1/responses`、`/grok/v1/chat/completions`、图片、视频与文件接口 |
 
 统一模型查询入口：

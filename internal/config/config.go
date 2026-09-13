@@ -73,6 +73,30 @@ type Config struct {
 	// stubbed upstream. Empty means the production international host.
 	WorkBuddyBaseURL string `json:"workbuddy_base_url,omitempty"`
 
+	// ── Qoder (qoder.com CLI device authorization) ──
+	// The Qoder CLI talks to three hosts. They are configurable so a deployment
+	// can point at a regional endpoint (for example the CN gateway) and so tests
+	// can stub the upstream.
+	//
+	//   QoderOAuthBaseURL   browser authorization page   (default https://qoder.com)
+	//   QoderOpenAPIBaseURL device token + profile API   (default https://openapi.qoder.sh)
+	//   QoderInferenceURL   chat completion endpoint     (default https://api2.qoder.sh)
+	QoderOAuthBaseURL   string `json:"qoder_oauth_base_url,omitempty"`
+	QoderOpenAPIBaseURL string `json:"qoder_openapi_base_url,omitempty"`
+	QoderInferenceURL   string `json:"qoder_inference_base_url,omitempty"`
+	// QoderAuthBaseURL answers the optional, PAT-shaped jobToken handshake. It is
+	// auxiliary: the request credential is derived locally, so a deployment that
+	// cannot reach this host still logs in and chats. The operator never supplies
+	// a PAT.
+	QoderAuthBaseURL string `json:"qoder_auth_base_url,omitempty"`
+	// QoderClientID is the public OAuth client id of the Qoder CLI. It is not a
+	// secret, and it is configurable so a future CLI build can be followed
+	// without a code change.
+	QoderClientID string `json:"qoder_client_id,omitempty"`
+	// QoderClientVersion is sent as the user agent / Cosy-Version family value
+	// and appended to the login URL.
+	QoderClientVersion string `json:"qoder_client_version,omitempty"`
+
 	// ── Grok Build CLI (cli-chat-proxy.grok.com) OAuth upstream ──
 	// These fields are configurable via config.json / Redis and are deliberately
 	// NOT written into ApplyHardcoded, so they survive a persistConfig round trip.

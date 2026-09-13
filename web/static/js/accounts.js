@@ -390,15 +390,19 @@ function applyTokenLabels(type) {
   // be renewed by signing in again instead of deleting the account.
   const workbuddyLoginGroup = document.getElementById("workbuddyLoginGroup");
   if (workbuddyLoginGroup) workbuddyLoginGroup.hidden = normalized !== "workbuddy";
+  // Qoder is OAuth-only as well: an existing account can be re-authorized
+  // through the same browser flow, so the group stays visible while editing.
+  const qoderLoginGroup = document.getElementById("qoderLoginGroup");
+  if (qoderLoginGroup) qoderLoginGroup.hidden = normalized !== "qoder";
   const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
   if (warpDeviceLoginGroup) {
     warpDeviceLoginGroup.hidden = normalized !== "warp" || Boolean(accountId);
   }
   const saveButton = document.querySelector('#accountForm button[type="submit"]');
   if (saveButton) {
-    // Warp and WorkBuddy are created by their official login flows, so the form
-    // has nothing to submit for a new account of either type.
-    saveButton.hidden = (normalized === "warp" || normalized === "workbuddy") && !accountId;
+    // Warp, WorkBuddy and Qoder are created by their official login flows, so
+    // the form has nothing to submit for a new account of any of those types.
+    saveButton.hidden = (normalized === "warp" || normalized === "workbuddy" || normalized === "qoder") && !accountId;
   }
   applyCredentialModeUI(normalized);
   if (!label || !input || !hint) return;
@@ -416,6 +420,13 @@ function applyTokenLabels(type) {
     label.textContent = "WorkBuddy 凭证";
     input.placeholder = "";
     hint.textContent = "该渠道只支持官方登录";
+  } else if (normalized === 'qoder') {
+    // OAuth-only channel: there is deliberately no PAT field to fill in.
+    input.value = "";
+    input.required = false;
+    label.textContent = "Qoder 凭证";
+    input.placeholder = "";
+    hint.textContent = "该渠道只支持官方设备授权登录";
   } else if (normalized === 'grok') {
     label.textContent = "SSO Token";
     input.placeholder = "每行一个 sso token（或包含 sso= 的 Cookie）";
@@ -653,8 +664,10 @@ function applyCredentialModeUI(type) {
   const mode = String(modeSelect?.value || "sso").trim().toLowerCase();
   const isOAuth = isGrok && mode === "oauth";
   // The credential textarea is hidden for the channels that only accept official
-  // login (Warp) and for WorkBuddy, which is OAuth-only by product decision.
-  const showToken = type !== "warp" && type !== "workbuddy" && !isOAuth;
+  // login (Warp) and for the OAuth-only channels (WorkBuddy, Qoder).
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const oauthOnlyChannel = normalizedType === "warp" || normalizedType === "workbuddy" || normalizedType === "qoder";
+  const showToken = !oauthOnlyChannel && !isOAuth;
   const providerGroup = document.getElementById("grokProviderGroup");
   if (providerGroup) providerGroup.hidden = true;
   document.getElementById("ssoCredentialGroup").hidden = !showToken;
@@ -814,6 +827,11 @@ function buildAccountPayload(type, baseData, credential) {
     // Warp edits contain settings only; credentials belong to web login.
     delete payload.refresh_token;
     delete payload.client_cookie;
+  } else if (type === "qoder") {
+    // Qoder is OAuth-only: the credential belongs to the browser device flow
+    // and there is no manual field, so the form only carries settings.
+    delete payload.refresh_token;
+    delete payload.client_cookie;
   } else {
     payload.client_cookie = credential;
   }
@@ -830,6 +848,8 @@ function accountTypeLabel(type) {
       return "Grok";
     case "workbuddy":
       return "WorkBuddy";
+    case "qoder":
+      return "Qoder";
     default:
       return "Warp";
   }
@@ -869,6 +889,7 @@ function platformAccountType(platform) {
     case "grok":
     case "puter":
     case "workbuddy":
+    case "qoder":
       return key;
     default:
       return getActiveAccountType();
@@ -972,8 +993,8 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
 // the strip reorder under them. It used to be sorted alphabetically here (grok, puter,
 // warp, workbuddy, all lower case) while the models page listed Warp, Puter, WorkBuddy,
 // Grok — the same channels in a different order, under different names.
-const ACCOUNT_PLATFORM_ORDER = ["warp", "puter", "workbuddy", "grok"];
-const ACCOUNT_TYPE_NAMES = { warp: "Warp", puter: "Puter", workbuddy: "WorkBuddy", grok: "Grok" };
+const ACCOUNT_PLATFORM_ORDER = ["warp", "puter", "workbuddy", "qoder", "grok"];
+const ACCOUNT_TYPE_NAMES = { warp: "Warp", puter: "Puter", workbuddy: "WorkBuddy", qoder: "Qoder", grok: "Grok" };
 
 // One name for the selected channel, used by the strip, the subtitle, the toasts and the
 // empty state. currentPlatform stays the lower-case key the API stores; nothing shows it.
@@ -1914,6 +1935,7 @@ function toggleSelectAll(checked) {
 function openModal(account = null) {
   globalThis.PuterWebLogin?.stop();
   stopWorkBuddyLogin();
+  stopQoderLogin();
   const modal = document.getElementById("accountModal");
   const title = document.getElementById("modalTitle");
   const form = document.getElementById("accountForm");
@@ -1994,6 +2016,27 @@ function stopWorkBuddyLogin() {
   }
 }
 
+// Qoder official login lifecycle. Like WorkBuddy, the flow only starts from an
+// explicit click; opening the modal never navigates the operator anywhere.
+function stopQoderLogin() {
+  const login = globalThis.QoderLogin;
+  if (login && typeof login.stop === "function") {
+    login.stop();
+  }
+  const statusNode = document.getElementById("qoderLoginStatus");
+  if (statusNode) {
+    statusNode.hidden = true;
+    statusNode.textContent = "";
+    if (statusNode.classList) {
+      statusNode.classList.remove("is-active", "is-error");
+    }
+  }
+  const linkNode = document.getElementById("qoderLoginLink");
+  if (linkNode) {
+    linkNode.hidden = true;
+  }
+}
+
 // Close modal
 function closeModal() {
   globalThis.PuterWebLogin?.stop();
@@ -2002,6 +2045,7 @@ function closeModal() {
   stopGrokDeviceLogin(true);
   resetGrokDeviceLoginStatus();
   stopWorkBuddyLogin();
+  stopQoderLogin();
   const modal = document.getElementById("accountModal");
   modal.classList.remove("active");
   modal.style.display = "none";
@@ -2021,6 +2065,12 @@ async function saveAccount(e) {
   // the account, so the form must never submit a manually typed credential.
   if (type === "workbuddy" && !id) {
     showToast("请使用「使用 WorkBuddy 官方网页登录」添加账号", "error");
+    return;
+  }
+  // Qoder is OAuth-only as well: the official device login creates and
+  // re-authorizes the account, and there is no PAT field to submit.
+  if (type === "qoder" && !id) {
+    showToast("请使用「使用 Qoder 官方网页登录」添加账号", "error");
     return;
   }
   const token = document.getElementById("clientCookie").value;
@@ -2200,6 +2250,11 @@ function formatTokenDisplay(acc) {
     // itself is deliberately not shown for this channel.
     return workBuddyIdentityLabel(acc);
   }
+  if (type === 'qoder') {
+    // Same contract as WorkBuddy: the signed-in identity is what tells two
+    // Qoder logins apart, and the device credential is never shown.
+    return qoderIdentityLabel(acc);
+  }
   if (acc.session_id) {
     return acc.session_id.substring(0, 30) + '...';
   }
@@ -2220,6 +2275,18 @@ function workBuddyIdentityLabel(acc) {
   return "-";
 }
 
+
+// qoderIdentityLabel renders the account identity: the signed-in address when
+// the profile was fetched, otherwise the display name, otherwise a short uid.
+function qoderIdentityLabel(acc) {
+  const email = String(acc?.email || "").trim();
+  if (email) return email;
+  const name = String(acc?.name || "").trim();
+  if (name && name !== "qoder-login") return name;
+  const uid = String(acc?.qoder_user_id || "").trim();
+  if (uid) return uid.length > 20 ? `uid ${uid.substring(0, 8)}...${uid.substring(uid.length - 4)}` : `uid ${uid}`;
+  return "-";
+}
 
 // Export accounts
 function exportAccounts() {

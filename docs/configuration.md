@@ -109,6 +109,12 @@ cp config.example.json config.json
 | `max_retries` | `3` | 单次 HTTP 请求最大重试次数，上限 20 |
 | `retry_delay` | `1000` | 重试基准延迟，毫秒，上限 60000 |
 | `account_switch_count` | `5` | Grok 账号尝试次数，包含首轮，上限 20；不再误作秒数 |
+| `qoder_oauth_base_url` | `https://qoder.com` | Qoder 设备授权页面地址；配置的 host 会自动加入授权页允许列表 |
+| `qoder_openapi_base_url` | `https://openapi.qoder.sh` | Qoder 设备 token 与 userinfo 控制面地址 |
+| `qoder_inference_base_url` | `https://api2.qoder.sh` | Qoder 聊天 SSE 与模型目录地址（CN 网关可用 `https://gateway.qoder.com.cn`） |
+| `qoder_auth_base_url` | `https://gateway.qoder.com.cn` | Qoder `jobToken` 辅助握手地址（不参与推理鉴权） |
+| `qoder_client_id` | 内置 CLI 公共 client id | 设备授权 client id；非机密，可随 CLI 升级替换 |
+| `qoder_client_version` | `1.1.34` | 发送的 `Cosy-Version` / `User-Agent` 版本号 |
 | `request_timeout` | `600` | 通用请求超时，秒，上限 86400 |
 | `concurrency_timeout` | 跟随 `request_timeout` | 入口请求执行超时，秒，上限 86400；不是单纯排队等待时间 |
 | `retry_429_interval` | `60` | 无精确 reset 信息时的 Web 429 重试间隔，秒，上限 3600 |

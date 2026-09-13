@@ -42,6 +42,15 @@
          <small class="helper-text">在 www.workbuddy.ai 完成登录并授权本管理站点；服务端只保存 access/refresh token，读取不到密码。授权完成后自动保存账号并同步模型目录与额度，refreshToken 由服务端自动轮换。登录只在点击按钮后开始；编辑已有账号时也可用它重新授权。该渠道只支持官方登录，不提供手填凭证。</small>
          <div class="account-import-status" id="workbuddyLoginStatus" hidden></div>
        </div>
+       <div class="form-group" id="qoderLoginGroup" hidden>
+         <label class="form-label">官方 Qoder 登录（设备授权流）</label>
+         <button class="btn btn-secondary" id="qoderLoginButton" type="button" onclick="QoderLogin.start()">使用 Qoder 官方网页登录</button>
+         <small class="helper-text">在 qoder.com 完成官方设备授权；服务端只保存 device access/refresh token，读取不到密码。授权完成后自动保存账号并同步模型目录，refreshToken 由服务端自动轮换。该渠道只支持官方登录，不提供 PAT（个人访问令牌）入口。</small>
+         <div class="account-import-status" id="qoderLoginStatus" hidden></div>
+         <div class="account-import-status" id="qoderLoginLink" hidden>
+           <a id="qoderLoginLinkText" href="#" target="_blank" rel="noopener noreferrer"></a>
+         </div>
+       </div>
        <div class="form-group" id="warpDeviceLoginGroup" hidden>
          <label class="form-label">官方 Warp 登录</label>
          <button class="btn btn-secondary" id="warpDeviceLoginButton" type="button" onclick="startWarpDeviceLogin()">使用 Warp 官方网页登录</button>

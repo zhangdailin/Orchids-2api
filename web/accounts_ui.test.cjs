@@ -688,15 +688,17 @@ test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login, ne
 test('every platform tab maps to its own provider login surface', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
+  vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
   node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
   node('enabled').checked = true;
   context.renderPlatformTabs();
 
   const expectations = {
-    warp: { warpDeviceLoginGroup: false, workbuddyLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
-    puter: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, puterWebLoginGroup: false, ssoCredentialGroup: false },
-    workbuddy: { warpDeviceLoginGroup: true, workbuddyLoginGroup: false, puterWebLoginGroup: true, ssoCredentialGroup: true },
-    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: false },
+    warp: { warpDeviceLoginGroup: false, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
+    puter: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: false, ssoCredentialGroup: false },
+    workbuddy: { warpDeviceLoginGroup: true, workbuddyLoginGroup: false, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
+    qoder: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: false, puterWebLoginGroup: true, ssoCredentialGroup: true },
+    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: false },
   };
   for (const [platform, expected] of Object.entries(expectations)) {
     node('accountId').value = '';
@@ -707,6 +709,64 @@ test('every platform tab maps to its own provider login surface', () => {
       assert.equal(node(id).hidden, hidden, `${platform}: ${id} hidden`);
     }
   }
+});
+
+test('Qoder is OAuth-only in the modal: no manual credential field and no PAT entry', () => {
+  const { context, node } = loadUI();
+  vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
+  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('accountId').value = '';
+  node('enabled').checked = true;
+  context.filterByPlatform('qoder');
+  context.openModal();
+
+  assert.equal(node('accountType').value, 'qoder', 'modal type');
+  assert.equal(node('accountTypeDisplay').value, 'Qoder', 'modal type label');
+  assert.equal(node('qoderLoginGroup').hidden, false, 'the qoder login must be visible');
+  assert.equal(node('workbuddyLoginGroup').hidden, true, 'the workbuddy login must stay hidden');
+  // The channel is OAuth-only: there must be no credential field to type a PAT
+  // into, and no submit button for a new account.
+  assert.equal(node('ssoCredentialGroup').hidden, true, 'qoder has no manual credential field');
+  assert.equal(node('clientCookie').required, false, 'the hidden credential field must not be required');
+  assert.equal(node('clientCookie').value, '', 'the hidden credential field must be empty');
+  assert.match(node('tokenLabel').textContent, /Qoder/);
+});
+
+test('Qoder creation cannot be submitted from the form', () => {
+  const { context, node } = loadUI();
+  vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
+  context.accounts = [];
+  node('accountId').value = '';
+  node('accountType').value = 'qoder';
+  node('clientCookie').value = 'not-a-pat';
+  let toast = '';
+  vm.runInContext('globalThis.showToast = (message) => { globalThis.__lastToast = message; };', context);
+  context.saveAccount({ preventDefault() {} });
+  toast = vm.runInContext('globalThis.__lastToast || ""', context);
+  assert.match(toast, /Qoder 官方网页登录/, 'the form must point at the official login');
+});
+
+test('the qoder-auth module drives the server flow without carrying credentials', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/qoder-auth.js'), 'utf8');
+  assert.match(source, /api\/qoder\/login/);
+  assert.match(source, /DeviceAuthLogin/);
+  assert.match(source, /qoder_login_v1/);
+  // The channel is OAuth-only: no PAT field, no token persistence, no cookies.
+  assert.doesNotMatch(source, /personal_token/i);
+  assert.doesNotMatch(source, /localStorage\.setItem\([^)]*token/i);
+  assert.doesNotMatch(source, /document\.cookie/);
+});
+
+test('the shared device-auth driver reserves the popup before its first await', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/device-auth.js'), 'utf8');
+  const startIndex = source.indexOf('function start()');
+  const reserveIndex = source.indexOf("window.open('about:blank'", startIndex);
+  const awaitIndex = source.indexOf('await begin(', startIndex);
+  assert.ok(reserveIndex > startIndex, 'popup is not reserved in start()');
+  assert.ok(awaitIndex === -1 || reserveIndex < awaitIndex, 'popup must be reserved before the first await');
+  // The authorization URL must be surfaced so a blocked popup or a remote
+  // session can still complete the flow.
+  assert.match(source, /setLink\(authURL\)/);
 });
 
 test('a rejected credential shows the reason, not the raw error envelope', () => {

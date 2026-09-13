@@ -4,7 +4,7 @@
 
 `Orchids-2api` 当前由两条主处理链组成：
 
-- `internal/handler`：处理 `warp`、`puter`、`workbuddy`
+- `internal/handler`：处理 `warp`、`puter`、`workbuddy`、`qoder`
 - `internal/grok`：处理 `grok`
 
 整体目标：
@@ -37,7 +37,8 @@ Orchids-2api/
 │   ├── upstream/                # 统一上游事件结构
 │   ├── util/                    # 通用工具
 │   ├── warp/                    # Warp 上游客户端
-│   └── workbuddy/               # WorkBuddy 国际版上游客户端
+│   ├── workbuddy/               # WorkBuddy 国际版上游客户端
+│   └── qoder/                   # Qoder（qoder.com）OAuth 设备授权上游客户端
 ├── web/                         # 嵌入式前端资源
 └── docs/
 ```
@@ -57,7 +58,7 @@ Orchids-2api/
 
 ### 3.2 `internal/handler`
 
-负责 `warp` / `puter` / `workbuddy`：
+负责 `warp` / `puter` / `workbuddy` / `qoder`：
 
 - 解析 Claude/OpenAI 请求
 - 识别通道与目标模型
@@ -94,7 +95,7 @@ Orchids-2api/
 
 ## 4. 主请求流
 
-### 4.1 `warp` / `puter` / `workbuddy`
+### 4.1 `warp` / `puter` / `workbuddy` / `qoder`
 
 ```text
 HTTP Request
@@ -136,6 +137,7 @@ HTTP Request
 - `puter`：Puter 官方模型目录与本地当前代策略的交集，再经账号 `test_mode` 验证
 - `grok`：内置支持表 + 现存模型 + 公共文档探测
 - `workbuddy`：已启用账号的 CLI 模型目录，同时保存账号级模型快照
+- `qoder`：已启用账号的签名模型目录（`GET /algo/api/v2/model/list`），同时保存账号级模型快照；对外模型 ID 为小写显示名，内部 key 由该通道的 resolver 映射
 
 当前策略：
 
@@ -165,6 +167,17 @@ Puter 走 `internal/puter`，特点是：
 - `debug-logs/`：调试日志
 - `data/tmp/image`：Grok 图片缓存
 - `data/tmp/video`：Grok 视频缓存
+
+## 7.3 Qoder 当前实现要点
+
+Qoder 通道走 `internal/qoder`，特点是：
+
+- **只支持 OAuth**：账号只能由 `qoder.com` 的官方设备授权流创建，不暴露 PAT 入口，账号创建接口直接拒绝手填凭证
+- CREDENTIAL 分三层：设备 access/refresh token（真实凭据）、`/api/v1/userinfo` 的身份与组织信息、服务端派生的 runtime 认证对（`Cosy-Key` + COSY payload）
+- 请求体使用上游私有 Base64 字母表并交换外侧三段，COSY 签名覆盖编码后的字节；签名路径去掉 `/algo` 且不含 query
+- `event:finish` 是权威结束标记；结束标记前的 EOF 判为截断错误，不会伪装成成功
+- 设备 refreshToken 由上游轮换，客户端刷新后回写账号；runtime 认证对在登录时派生并复用（与 CLI 行为一致），不按请求重算
+- `POST /algo/api/v3/user/jobToken` 只是可选的辅助握手，不参与推理鉴权
 
 ## 8. 当前已知设计边界
 

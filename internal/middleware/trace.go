@@ -408,7 +408,7 @@ const streamFailureClass = "stream_error"
 // token counting, administration, resource polling and downloads are HTTP traffic.
 func requestChannel(path string) string {
 	channel, endpoint := "", ""
-	for _, candidate := range []string{"warp", "puter", "workbuddy", "grok"} {
+	for _, candidate := range []string{"warp", "puter", "workbuddy", "qoder", "grok"} {
 		if rest, ok := strings.CutPrefix(path, "/"+candidate+"/v1/"); ok {
 			channel, endpoint = candidate, rest
 			break
