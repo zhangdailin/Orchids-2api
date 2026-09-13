@@ -272,7 +272,17 @@ func DefaultCatalog() *Catalog {
 	return newCatalog(seedModels())
 }
 
+// ErrCatalogUnavailable means the gateway did not answer the model list read with
+// a usable catalog. It is a classification, not a credential verdict: device
+// authorization does not depend on this read, so a caller may legitimately fall
+// back to the built-in catalog.
+var ErrCatalogUnavailable = fmt.Errorf("qoder model catalog is unavailable")
+
 // FetchModels reads the account's model catalog from the gateway.
+//
+// A failure here is deliberately strict: model refresh must report a real
+// problem instead of silently installing a stale list. Callers that only need
+// *some* catalog — most importantly the login flow — use FetchModelsLenient.
 func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
 	if c == nil {
 		return nil, fmt.Errorf("qoder client is nil")
@@ -311,34 +321,80 @@ func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, apiError(http.MethodGet, url, resp.StatusCode, raw)
+		return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, apiError(http.MethodGet, url, resp.StatusCode, raw))
 	}
 
 	catalog, err := parseCatalog(raw)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, err)
 	}
 	if catalog.Len() == 0 {
-		return nil, fmt.Errorf("qoder catalog response carried no usable models")
+		return nil, fmt.Errorf("%w: the response carried no usable chat models", ErrCatalogUnavailable)
 	}
 	return catalog, nil
+}
+
+// FetchModelsLenient returns the account catalog when the gateway answers and
+// the built-in catalog otherwise.
+//
+// The device authorization flow does not depend on the model list read: the CLI
+// carries its own catalog and Qoder-2API-Go reads it from a local cache, so a
+// gateway that does not serve this path (a CN-region account, a plan without the
+// CLI surface, or an endpoint that moved) must not cause a successfully issued
+// credential to be thrown away. The failure is returned alongside the fallback so
+// the caller can record why the snapshot is missing instead of pretending the
+// seed list was observed.
+func (c *Client) FetchModelsLenient(ctx context.Context) (*Catalog, error) {
+	catalog, err := c.FetchModels(ctx)
+	if err == nil {
+		return catalog, nil
+	}
+	return DefaultCatalog(), err
 }
 
 // parseCatalog reads the scene map the gateway answers with. The `chat` scene is
 // the only one this channel serves; the enterprise scenes carry models the
 // account may not run through the CLI surface.
+//
+// The scene may arrive at the top level or wrapped one level deep, because two
+// gateway deployments answer this path with different envelopes. Both shapes are
+// accepted so a deployment difference does not present as a broken credential.
 func parseCatalog(raw []byte) (*Catalog, error) {
-	var envelope struct {
-		Chat json.RawMessage `json:"chat"`
+	// Top level, or the envelope the service surface adds around a payload.
+	var immediate struct {
+		Chat           json.RawMessage `json:"chat"`
+		Data           json.RawMessage `json:"data"`
+		Result         json.RawMessage `json:"result"`
+		StatusCode     string          `json:"statusCode"`
+		StatusCodeValu int             `json:"statusCodeValue"`
 	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	if err := json.Unmarshal(raw, &immediate); err != nil {
 		return nil, fmt.Errorf("decode catalog response: %w", err)
 	}
-	if len(envelope.Chat) == 0 {
-		return nil, fmt.Errorf("qoder catalog response has no chat scene")
+	if len(immediate.Chat) > 0 {
+		return catalogFromScene(immediate.Chat)
 	}
+	// A 200 envelope can still carry a business failure in its body.
+	if immediate.StatusCodeValu >= 400 {
+		return nil, fmt.Errorf("catalog envelope carries status %d", immediate.StatusCodeValu)
+	}
+	for _, nested := range []json.RawMessage{immediate.Data, immediate.Result} {
+		if len(nested) == 0 {
+			continue
+		}
+		var inner struct {
+			Chat json.RawMessage `json:"chat"`
+		}
+		if err := json.Unmarshal(nested, &inner); err == nil && len(inner.Chat) > 0 {
+			return catalogFromScene(inner.Chat)
+		}
+	}
+	return nil, fmt.Errorf("qoder catalog response has no chat scene")
+}
+
+func catalogFromScene(scene json.RawMessage) (*Catalog, error) {
 	var rows []modelEntry
-	if err := json.Unmarshal(envelope.Chat, &rows); err != nil {
+	if err := json.Unmarshal(scene, &rows); err != nil {
 		return nil, fmt.Errorf("decode chat scene: %w", err)
 	}
 	if len(rows) == 0 {

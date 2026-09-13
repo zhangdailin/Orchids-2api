@@ -177,6 +177,7 @@ Qoder 通道走 `internal/qoder`，特点是：
 - 请求体使用上游私有 Base64 字母表并交换外侧三段，COSY 签名覆盖编码后的字节；签名路径去掉 `/algo` 且不含 query
 - `event:finish` 是权威结束标记；结束标记前的 EOF 判为截断错误，不会伪装成成功
 - 设备 refreshToken 由上游轮换，客户端刷新后回写账号；runtime 认证对在登录时派生并复用（与 CLI 行为一致），不按请求重算
+- 登录落库只要求「上游签发凭据 + 解析出身份」；模型目录读取是增强项，失败时回退内置清单并记录原因（`FetchModelsLenient`），而模型刷新仍走严格路径（`FetchModels`）
 - `POST /algo/api/v3/user/jobToken` 只是可选的辅助握手，不参与推理鉴权
 
 ## 8. 当前已知设计边界

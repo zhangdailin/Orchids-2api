@@ -273,9 +273,78 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	}
 }
 
-// TestHandleQoderLogin_ReportsVerificationFailure proves a credential that
-// cannot read the account catalog is not persisted as a broken pool entry.
-func TestHandleQoderLogin_ReportsVerificationFailure(t *testing.T) {
+// TestHandleQoderLogin_SurvivesAnUnavailableCatalog proves an issued credential
+// is not thrown away when the gateway does not serve the model list path.
+//
+// Device authorization does not depend on that read: the Qoder CLI carries its
+// own catalog and the Qoder-2API-Go reference reads a local cache, so a
+// deployment whose gateway answers 404/403 there (for example a CN-region
+// account) must still end up with a usable account.
+func TestHandleQoderLogin_SurvivesAnUnavailableCatalog(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			s, _ := newTestStore(t, "qd-login:")
+			auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/":
+					w.WriteHeader(http.StatusOK)
+				case "/api/v1/deviceToken/poll":
+					_, _ = w.Write([]byte(`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400,"user_id":"uid-qoder","user_name":"operator"}`))
+				case "/api/v1/userinfo":
+					_, _ = w.Write([]byte(`{"uid":"uid-qoder","name":"operator","email":"operator@example.com"}`))
+				case "/algo/api/v2/model/list":
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(`{"message":"not served here"}`))
+				case "/algo/api/v3/user/jobToken":
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(`{"message":"not served here"}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer auth.Close()
+			stubQoderLoginClient(t, auth.URL)
+
+			a := New(s, "", "", qoderLoginConfig(auth.URL))
+			final := runQoderLoginToCompletion(t, a, s, 15*time.Second)
+			if final.Status != "complete" {
+				t.Fatalf("status = %q message = %q, want complete", final.Status, final.Message)
+			}
+			if final.AccountID == 0 {
+				t.Fatal("the login reported no account id")
+			}
+
+			acc, err := s.GetAccount(t.Context(), final.AccountID)
+			if err != nil {
+				t.Fatalf("GetAccount: %v", err)
+			}
+			if acc.QoderAccessToken == "" || acc.QoderRefreshToken == "" {
+				t.Fatalf("credential = %q/%q, want a stored pair", acc.QoderAccessToken, acc.QoderRefreshToken)
+			}
+			if acc.QoderRuntimeInfo == "" || acc.QoderRuntimeKey == "" {
+				t.Fatal("the derived runtime pair was not stored")
+			}
+			if acc.QoderUserID != "uid-qoder" {
+				t.Fatalf("user id = %q", acc.QoderUserID)
+			}
+			// The fallback catalog is installed, but the snapshot must stay
+			// un-stamped so "not synced yet" is still distinguishable from
+			// "synced".
+			if len(acc.QoderModelIDs) == 0 {
+				t.Fatal("no model list was installed as a fallback")
+			}
+			if !acc.QoderModelsSyncedAt.IsZero() {
+				t.Fatal("a fallback catalog was stamped as if it had been observed upstream")
+			}
+		})
+	}
+}
+
+// TestHandleQoderLogin_ReportsUnusableCredential proves a login whose credential
+// cannot be resolved to an identity is still refused, and that the reason — not
+// just "could not be verified" — reaches the operator.
+func TestHandleQoderLogin_ReportsUnusableCredential(t *testing.T) {
 	s, _ := newTestStore(t, "qd-login:")
 	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -283,15 +352,15 @@ func TestHandleQoderLogin_ReportsVerificationFailure(t *testing.T) {
 		case "/":
 			w.WriteHeader(http.StatusOK)
 		case "/api/v1/deviceToken/poll":
-			_, _ = w.Write([]byte(`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400,"user_id":"uid-qoder"}`))
+			// No user_id, and userinfo will also refuse, so no identity can be
+			// established and the account must not be stored.
+			_, _ = w.Write([]byte(`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400}`))
 		case "/api/v1/userinfo":
-			_, _ = w.Write([]byte(`{"uid":"uid-qoder"}`))
-		case "/algo/api/v2/model/list":
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"message":"forbidden"}`))
-		case "/algo/api/v3/user/jobToken":
+			_, _ = w.Write([]byte(`{"message":"token rejected"}`))
+		case "/algo/api/v2/model/list", "/algo/api/v3/user/jobToken":
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"message":"forbidden"}`))
+			_, _ = w.Write([]byte(`{"message":"token rejected"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -300,6 +369,31 @@ func TestHandleQoderLogin_ReportsVerificationFailure(t *testing.T) {
 	stubQoderLoginClient(t, auth.URL)
 
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
+	final := runQoderLoginToCompletion(t, a, s, 15*time.Second)
+	if final.Status != "failed" {
+		t.Fatalf("status = %q, want failed", final.Status)
+	}
+	// The reason must name the actual problem instead of only saying that
+	// verification failed.
+	if !strings.Contains(final.Message, "user id") {
+		t.Fatalf("message = %q, want the underlying reason", final.Message)
+	}
+
+	accounts, err := s.ListAccounts(t.Context())
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	for _, acc := range accounts {
+		if strings.EqualFold(acc.AccountType, "qoder") {
+			t.Fatalf("an unusable Qoder account was persisted: %+v", acc)
+		}
+	}
+}
+
+// runQoderLoginToCompletion starts a login, polls it to a terminal state and
+// reports the final transaction.
+func runQoderLoginToCompletion(t *testing.T, a *API, s *store.Store, timeout time.Duration) deviceLoginResponse {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
 	var started struct {
@@ -309,35 +403,24 @@ func TestHandleQoderLogin_ReportsVerificationFailure(t *testing.T) {
 		t.Fatalf("start response = %q", rec.Body.String())
 	}
 
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(timeout)
 	var final deviceLoginResponse
 	for time.Now().Before(deadline) {
 		pollRec := httptest.NewRecorder()
 		a.HandleQoderLogin(pollRec, qoderLoginRequest(t, http.MethodGet, "/api/qoder/login/"+started.ID, ""))
 		if pollRec.Code != http.StatusOK {
-			t.Fatalf("poll status = %d", pollRec.Code)
+			t.Fatalf("poll status = %d body=%s", pollRec.Code, pollRec.Body.String())
 		}
 		if err := json.Unmarshal(pollRec.Body.Bytes(), &final); err != nil {
 			t.Fatalf("decode poll: %v", err)
 		}
-		if final.Status == "complete" || final.Status == "failed" {
-			break
+		if final.Status == "complete" || final.Status == "failed" || final.Status == "expired" {
+			return final
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if final.Status != "failed" {
-		t.Fatalf("final status = %q, want failed", final.Status)
-	}
-
-	accounts, err := s.ListAccounts(t.Context())
-	if err != nil {
-		t.Fatalf("ListAccounts: %v", err)
-	}
-	for _, acc := range accounts {
-		if strings.EqualFold(acc.AccountType, "qoder") {
-			t.Fatalf("a Qoder account was persisted despite failed verification: %+v", acc)
-		}
-	}
+	t.Fatalf("login did not reach a terminal state: %+v", final)
+	return final
 }
 
 // TestHandleQoderLogin_RequiresStoreAndRejectsBadMethods covers the guard rails.

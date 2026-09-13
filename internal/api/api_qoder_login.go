@@ -250,8 +250,14 @@ func (a *API) pollQoderLogin(id string) {
 
 		account, err := a.buildQoderAccountFromCredentials(ctx, id, login.machineID, creds)
 		if err != nil {
-			slog.Warn("Qoder authorization succeeded but verification failed", "login_id", id, "error", err)
-			a.finishQoderLogin(id, "failed", "Qoder authorization succeeded but the account could not be verified", 0)
+			// The reason is carried to the operator because a credential that
+			// arrived but could not be persisted needs one specific action, and
+			// "could not be verified" alone does not say which. The error text is
+			// built from upstream status/path/business code only; no credential,
+			// verifier or nonce ever enters it.
+			slog.Warn("Qoder authorization succeeded but the account could not be stored", "login_id", id, "error", err)
+			a.finishQoderLogin(id, "failed",
+				"Qoder authorization succeeded but the account could not be saved: "+truncateLoginReason(err), 0)
 			return
 		}
 		existing, err := a.findDuplicateAccountByCredential(ctx, account, 0)
@@ -278,12 +284,15 @@ func (a *API) pollQoderLogin(id string) {
 	}
 }
 
-// buildQoderAccountFromCredentials turns a completed login into a verified
-// account record.
+// buildQoderAccountFromCredentials turns a completed login into an account record.
 //
-// The catalog read doubles as the credential check: an account whose token
-// cannot list the account's models is never persisted, which is what keeps a
-// half-authorized transaction from becoming a permanently broken pool entry.
+// What makes a login succeed is the device credential plus a resolved identity:
+// the upstream issued the token and named the account, and both are durable. The
+// model list read is enrichment, not a credential check — neither the Qoder CLI
+// nor the Qoder-2API-Go reference fetches it over the network (the CLI carries
+// its own catalog, the reference reads a local cache), so a gateway that does not
+// serve that path must not cost the operator a valid credential. When the read
+// fails the built-in catalog is installed and the real reason is logged.
 func (a *API) buildQoderAccountFromCredentials(ctx context.Context, loginID, machineID string, creds qoder.Credentials) (*store.Account, error) {
 	normalized := qoder.NormalizeLoginResult(creds, machineID)
 	acc := &store.Account{
@@ -359,16 +368,20 @@ func (a *API) buildQoderAccountFromCredentials(ctx context.Context, loginID, mac
 	acc.QoderRuntimeInfo = client.RuntimeFields().EncryptUserInfo
 	acc.QoderRuntimeKey = client.RuntimeFields().Key
 
-	models, err := client.FetchModels(ctx)
-	if err != nil {
-		return nil, err
+	models, catalogErr := client.FetchModelsLenient(ctx)
+	if catalogErr != nil {
+		// Recorded, not fatal. A snapshot is only stamped with a sync time when
+		// it was actually observed, so the account table can still tell "not
+		// synced yet" from "synced".
+		slog.Warn("Qoder catalog read failed; the account was saved with the built-in model list",
+			"login_id", loginID, "error", catalogErr)
+	} else {
+		acc.QoderModelIDs = qoder.CatalogSnapshot(models)
+		acc.QoderModelsSyncedAt = time.Now()
 	}
-	ids := qoder.CatalogSnapshot(models)
-	if len(ids) == 0 {
-		return nil, errors.New("qoder catalog was empty")
+	if len(acc.QoderModelIDs) == 0 {
+		acc.QoderModelIDs = qoder.CatalogSnapshot(qoder.DefaultCatalog())
 	}
-	acc.QoderModelIDs = ids
-	acc.QoderModelsSyncedAt = time.Now()
 
 	if strings.TrimSpace(acc.QoderRefreshToken) == "" {
 		// Without a refresh token the account cannot survive its first token
@@ -429,6 +442,23 @@ func qoderVerifyURI(cfg *config.Config) string {
 		}
 	}
 	return qoder.DefaultOAuthBaseURL + "/device/selectAccounts"
+}
+
+// truncateLoginReason bounds the reason shown in the console. It is deliberately
+// short: the full detail is already in the server log.
+func truncateLoginReason(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	reason := strings.TrimSpace(err.Error())
+	if reason == "" {
+		return "unknown error"
+	}
+	const limit = 200
+	if len(reason) > limit {
+		reason = reason[:limit] + "..."
+	}
+	return reason
 }
 
 // qoderLoginOptions parses the optional start body.

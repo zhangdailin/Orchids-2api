@@ -460,8 +460,10 @@ curl -s -X DELETE http://127.0.0.1:3002/api/qoder/login/<login-id>
 - 授权 URL 的 host 必须在允许列表内（`qoder.com`、`www.qoder.com`、`openapi.qoder.sh`、本部署配置的 OAuth 基址，以及 loopback）；其他 host 一律拒绝，避免把登录页重定向到第三方
 - PKCE verifier、nonce 与设备 `machine_id` 只保存在服务端；轮询响应里不会出现它们（`user_code` 恒为空）
 - 上游在浏览器步骤完成前对 `GET /api/v1/deviceToken/poll` 返回 **404**，服务端归一为「pending」并按 2s 节奏轮询
-- 授权成功后服务端会做一次**签名模型目录读取**：读不到目录就不会落库。这一步同时验证设备 token、派生的 runtime 字段与 COSY 签名三层，比单看 token 端点更能证明凭证可用
-- 服务端会派生并保存该账号的 runtime 认证对（`qoder_runtime_info` / `qoder_runtime_key`），登录时即完成，避免第一次聊天才暴露失败
+- 授权成功后服务端会派生并保存该账号的 runtime 认证对（`qoder_runtime_info` / `qoder_runtime_key`），登录时即完成，避免第一次聊天才暴露失败
+- **落库条件是「上游签发了设备凭据」+「解析出账号身份」**，不依赖模型目录读取：Qoder CLI 自带模型清单、Qoder-2API-Go 参考实现读本地缓存，都不通过网络拉取。因此当 `/algo/api/v2/model/list` 返回 404/403 或不可达（例如 CN 区账号、未开通 CLI 面、端点变更）时，账号仍会保存并装入内置模型清单，真实的读取失败原因写入服务端日志
+- 只有确实不可用的凭据才会被拒绝：解析不出账号身份（`userinfo` 被拒且设备 token 未带 `user_id`）或未签发 refreshToken 时，账号不落库，且失败消息会带上具体原因（而不只是「could not be verified」）
+- `/api/models/refresh?channel=qoder` 仍然严格：读不到账号目录时会报错，而不会把内置清单伪装成「上游已同步」
 - 设备 refreshToken 由上游轮换，服务端在过期前自动刷新并回写账号记录；管理页面不会返回 refreshToken、runtime 字段或 jobToken
 - 触发了 `POST /algo/api/v3/user/jobToken`（PAT 形态网关握手）时结果只作为辅助字段保存，**不是**推理凭据；握手失败只记日志，不影响登录或推理
 - 同一账号再次登录会更新原账号，不会产生重复记录
