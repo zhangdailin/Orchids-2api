@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/goccy/go-json"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +26,7 @@ var debugLoggerCreateCount atomic.Uint64
 // Logger 调试日志记录器
 type Logger struct {
 	capture    *Capture
+	attempt    *UpstreamAttempt
 	enabled    bool
 	sseEnabled bool
 	dir        string
@@ -154,6 +156,14 @@ func (l *Logger) LogUpstreamRequest(url string, headers map[string]string, body 
 		"headers": safeHeaders,
 		"body":    body,
 	}
+	if l.capture != nil {
+		h := http.Header{}
+		for k, v := range safeHeaders {
+			h.Set(k, v)
+		}
+		l.UseUpstreamAttempt(beginUpstream(l.capture, "", url, h, body))
+		return
+	}
 	l.writeJSON("3_upstream_request.json", data)
 }
 
@@ -171,6 +181,18 @@ func (l *Logger) LogUpstreamHTTPError(url string, status int, body string, err e
 	if err != nil {
 		payload["error"] = err.Error()
 	}
+	if l.capture != nil {
+		l.mu.Lock()
+		a := l.attempt
+		l.mu.Unlock()
+		if a != nil {
+			a.writeJSON("error.json", payload)
+			return
+		}
+		raw, _ := json.Marshal(payload)
+		l.capture.Append("3_upstream_http_error.json", string(raw)+"\n")
+		return
+	}
 	l.writeJSON("3_upstream_http_error.json", payload)
 }
 
@@ -180,6 +202,13 @@ func (l *Logger) LogUpstreamSSE(eventType string, data string) {
 		return
 	}
 	elapsed := time.Since(l.startTime).Milliseconds()
+	l.mu.Lock()
+	a := l.attempt
+	l.mu.Unlock()
+	if a != nil {
+		a.Append(fmt.Sprintf("[%dms] %s: %s\n", elapsed, eventType, data))
+		return
+	}
 	l.appendStream(&l.rawFile, &l.rawBytes, "4_upstream_sse.jsonl", fmt.Sprintf("[%dms] %s: %s\n", elapsed, eventType, data))
 }
 
@@ -289,3 +318,15 @@ func (l *Logger) writeFile(filename string, content string) {
 	}
 	os.WriteFile(filepath.Join(l.dir, filename), []byte(content), 0600)
 }
+
+func (l *Logger) Capturing() bool { return l != nil && l.capture != nil }
+func (l *Logger) UseUpstreamAttempt(a *UpstreamAttempt) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.attempt = a
+}
+
+func (l *Logger) SSEEnabled() bool { return l != nil && l.enabled && l.sseEnabled }

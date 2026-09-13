@@ -92,7 +92,16 @@ function getSidebarQuotaStats(acc) {
   const explicitLimit = Math.floor(acc.quota_limit || 0);
   const hasExplicitRemaining = acc.quota_remaining !== undefined && acc.quota_remaining !== null;
   if (explicitLimit > 0 && hasExplicitRemaining) {
-    return { supported: true, limit: explicitLimit, remaining: Math.max(0, Math.floor(acc.quota_remaining || 0)) };
+    return {
+      supported: true,
+      limit: explicitLimit,
+      remaining: Math.max(0, Math.floor(acc.quota_remaining || 0)),
+      // The server labels an inferred window. Carrying the label here as well keeps a
+      // caller from rendering an estimate as a balance just because it took this
+      // shortcut instead of the channel-specific branch.
+      estimated: acc.quota_confidence === "estimated",
+      limitKnown: acc.quota_limit_known === true,
+    };
   }
 
   const limit = Math.floor(acc.usage_limit || 0);
@@ -143,7 +152,9 @@ function isSidebarAccountAbnormal(acc) {
   }
 
   const quota = getSidebarQuotaStats(acc);
-  if (quota && quota.limit > 0 && quota.remaining <= 0 && !isQuotaOnlyStatus(acc)) {
+  // An exhausted ESTIMATE is not an account fault: the window is inferred, so it must
+  // not turn the sidebar's 正常/异常 counter into a verdict about the credential.
+  if (quota && quota.limit > 0 && quota.remaining <= 0 && !quota.estimated && !isQuotaOnlyStatus(acc)) {
     return true;
   }
 

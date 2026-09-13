@@ -107,6 +107,10 @@ type Account struct {
 	// auto/fast modes. It is intentionally separate from Build billing and
 	// passive request/token rate-limit headers.
 	GrokWebQuota GrokWebQuotaSnapshot `json:"grok_web_quota,omitempty"`
+	// GrokFreeQuota stores the Free window the upstream itself reported when it
+	// refused a request for having spent the included free usage. Confirmed numbers
+	// take precedence over an estimated Free window.
+	GrokFreeQuota GrokFreeQuotaSnapshot `json:"grok_free_quota,omitempty"`
 	// ModelCooldowns records a per-model, per-account cooldown. A model the
 	// upstream throttled must not take the whole account out of the pool: the
 	// other models of the same account are still usable, so the verdict is scoped
@@ -202,6 +206,19 @@ type GrokWebQuotaSnapshot struct {
 	Fast     GrokQuotaWindow `json:"fast,omitempty"`
 	SyncedAt time.Time       `json:"synced_at,omitempty"`
 	Source   string          `json:"source,omitempty"`
+}
+
+// GrokFreeQuotaSnapshot is the Free allowance window the upstream CONFIRMED by
+// refusing a request ("subscription:free-usage-exhausted ... tokens (actual/limit):
+// N/M"). It is the one place a Free limit becomes a fact rather than an estimate, so
+// it is kept apart from GrokBilling (a paid window this account never returned) and
+// from the estimate derived from an inferred Free profile.
+type GrokFreeQuotaSnapshot struct {
+	Used        float64   `json:"used,omitempty"`
+	Limit       float64   `json:"limit,omitempty"`
+	HasLimit    bool      `json:"has_limit,omitempty"`
+	ResetAt     time.Time `json:"reset_at,omitempty"`
+	ConfirmedAt time.Time `json:"confirmed_at,omitempty"`
 }
 
 // AccountStatusWarpQuotaExhausted records a Warp credit exhaustion separately

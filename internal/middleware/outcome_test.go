@@ -47,7 +47,7 @@ func TestObservedOutcome_TimeToFirstTokenSkipsKeepalives(t *testing.T) {
 			flusher.Flush()
 		}
 		time.Sleep(60 * time.Millisecond)
-		_, _ = w.Write([]byte("data: {\"choices\":[]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
 	}))
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)

@@ -1,0 +1,275 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/redis/go-redis/v9"
+
+	"orchids-api/internal/audit"
+)
+
+// requestEvent builds an inference record the way the request middleware writes it:
+// the HTTP status lives in metadata, not in a column of its own.
+func requestEvent(id string, status string, httpStatus int) audit.Event {
+	event := audit.Event{
+		Kind:      audit.KindRequest,
+		Action:    "grok_request",
+		RequestID: id,
+		Channel:   "grok",
+		Model:     "grok-4.6",
+		Status:    status,
+		Timestamp: time.Now(),
+	}
+	if httpStatus != 0 {
+		event.Metadata = map[string]interface{}{"http_status": float64(httpStatus)}
+	}
+	return event
+}
+
+// seedJournalAt writes entries whose stream ids follow their timestamps, the way the
+// real writer does. A time filter bounds the scan by stream id, so a fixture with
+// wall-clock ids would hide exactly the behaviour under test.
+func seedJournalAt(t *testing.T, a *API, events []audit.Event) {
+	t.Helper()
+	client := a.store.RedisClient()
+	key := a.store.RedisPrefix() + "audit:log"
+	sequence := 0
+	for _, event := range events {
+		if event.Timestamp.IsZero() {
+			event.Timestamp = time.Now()
+		}
+		raw, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("marshal event: %v", err)
+		}
+		id := fmt.Sprintf("%d-%d", event.Timestamp.UnixMilli(), sequence)
+		sequence++
+		if _, err := client.XAdd(context.Background(), &redis.XAddArgs{
+			Stream: key,
+			ID:     id,
+			Values: map[string]interface{}{"data": string(raw), "action": event.Action, "status": event.Status, "kind": string(event.Kind)},
+		}).Result(); err != nil {
+			t.Fatalf("XAdd: %v", err)
+		}
+	}
+}
+
+// TestJournalRecordsPagingReturnsEveryRecord pins the reported defect that a full
+// page threw away everything between its last row and the end of the scan window:
+// with 120 stored requests and a page size of 50 the list stopped at 50, and with
+// 600 it stopped at 100.
+func TestJournalRecordsPagingReturnsEveryRecord(t *testing.T) {
+	s, _ := newTestStore(t, "journal-paging:")
+	t.Cleanup(func() { _ = s.Close() })
+	a := &API{store: s}
+
+	const total = 120
+	events := make([]audit.Event, 0, total)
+	for i := 0; i < total; i++ {
+		events = append(events, requestEvent(fmt.Sprintf("req-%03d", i), "success", 200))
+	}
+	seedJournal(t, a, events)
+
+	seen := map[string]int{}
+	cursor := ""
+	for page := 0; page < 10; page++ {
+		query := "?kind=request&limit=50"
+		if cursor != "" {
+			query += "&before=" + cursor
+		}
+		payload := journalRequest(t, a, query)
+		rows, _ := payload["data"].([]interface{})
+		for _, raw := range rows {
+			row, _ := raw.(map[string]interface{})
+			event, _ := row["event"].(map[string]interface{})
+			seen[fmt.Sprint(event["request_id"])]++
+		}
+		cursor, _ = payload["next_cursor"].(string)
+		if cursor == "" {
+			break
+		}
+	}
+
+	if len(seen) != total {
+		t.Fatalf("paging reached %d of %d stored requests: matches are skipped by the cursor", len(seen), total)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Fatalf("request %s was listed %d times: the cursor re-reads rows", id, count)
+		}
+	}
+}
+
+// TestJournalRecordsAppliesTimeAndOutcomeFilters pins the second reported defect:
+// since/until and outcome were never parsed, so "最近失败" still listed old and
+// successful requests.
+func TestJournalRecordsAppliesTimeAndOutcomeFilters(t *testing.T) {
+	s, _ := newTestStore(t, "journal-filters:")
+	t.Cleanup(func() { _ = s.Close() })
+	a := &API{store: s}
+
+	now := time.Now()
+	rateLimited := requestEvent("req-429", "error", 429)
+	rateLimited.Timestamp = now.Add(-3 * time.Minute)
+	ok := requestEvent("req-ok", "success", 200)
+	ok.Timestamp = now.Add(-2 * time.Minute)
+	upstream := requestEvent("req-500", "error", 502)
+	upstream.Timestamp = now.Add(-time.Minute)
+	streamErr := requestEvent("req-stream", "stream_error", 200)
+	streamErr.Timestamp = now.Add(-30 * time.Second)
+	operation := audit.Event{Kind: audit.KindOperation, Action: "config_update", Status: "ok", Timestamp: now}
+	seedJournalAt(t, a, []audit.Event{rateLimited, ok, upstream, streamErr, operation})
+
+	ids := func(query string) []string {
+		t.Helper()
+		payload := journalRequest(t, a, query)
+		rows, _ := payload["data"].([]interface{})
+		found := make([]string, 0, len(rows))
+		for _, raw := range rows {
+			row, _ := raw.(map[string]interface{})
+			event, _ := row["event"].(map[string]interface{})
+			found = append(found, fmt.Sprint(event["request_id"]))
+		}
+		return found
+	}
+
+	if got := ids("?kind=request&outcome=rate_limited"); len(got) != 1 || got[0] != "req-429" {
+		t.Fatalf("outcome=rate_limited listed %v, want only req-429", got)
+	}
+	if got := ids("?kind=request&outcome=failed"); len(got) != 3 {
+		t.Fatalf("outcome=failed listed %v, want the three failing requests", got)
+	}
+	if got := ids("?kind=request&outcome=success"); len(got) != 1 || got[0] != "req-ok" {
+		t.Fatalf("outcome=success listed %v, want only req-ok", got)
+	}
+	boundary := now.Add(-90 * time.Second).UTC().Format(time.RFC3339)
+	// since cuts the two oldest records; the operation is not inference traffic.
+	if got := ids("?kind=request&since=" + boundary); len(got) != 2 {
+		t.Fatalf("since=90s ago listed %v, want the two newest requests", got)
+	}
+	// until bounds the scan itself, so a window that ended in the past must still be
+	// listed from the same boundary.
+	if got := ids("?kind=request&until=" + boundary); len(got) != 2 {
+		t.Fatalf("until=90s ago listed %v, want the two oldest requests", got)
+	}
+	if got := ids("?kind=request&since=" + boundary + "&outcome=failed"); len(got) != 2 {
+		t.Fatalf("since+failing listed %v, want the two newest failing requests", got)
+	}
+
+	// The page must state which result class it was narrowed to, or the reader
+	// cannot tell a filtered list from an empty one.
+	payload := journalRequest(t, a, "?kind=request&outcome=failed&since="+boundary)
+	used, _ := payload["filter_used"].(map[string]interface{})
+	if used["outcome_label"] != "失败（全部失败类型）" {
+		t.Fatalf("filter_used.outcome_label = %v", used["outcome_label"])
+	}
+	if used["since"] == nil {
+		t.Fatal("filter_used.since is missing: the coverage note cannot warn about the retention edge")
+	}
+}
+
+// TestJournalRecordsOutcomeClassMatchesOverview pins that each row carries the
+// result class the operations overview counts, which the row badge and the
+// drill-down both name.
+func TestJournalRecordsOutcomeClassMatchesOverview(t *testing.T) {
+	s, _ := newTestStore(t, "journal-class:")
+	t.Cleanup(func() { _ = s.Close() })
+	a := &API{store: s}
+
+	seedJournal(t, a, []audit.Event{
+		requestEvent("req-429", "error", 429),
+		requestEvent("req-402", "error", 402),
+		requestEvent("req-401", "error", 401),
+		requestEvent("req-500", "error", 503),
+		requestEvent("req-400", "error", 400),
+		requestEvent("req-ok", "success", 200),
+	})
+
+	payload := journalRequest(t, a, "?kind=request&limit=50")
+	rows, _ := payload["data"].([]interface{})
+	classes := map[string]string{}
+	for _, raw := range rows {
+		row, _ := raw.(map[string]interface{})
+		event, _ := row["event"].(map[string]interface{})
+		classes[fmt.Sprint(event["request_id"])] = fmt.Sprint(row["outcome_class"])
+	}
+	want := map[string]string{
+		"req-429": "rate_limited",
+		"req-402": "quota_exhausted",
+		"req-401": "upstream_auth",
+		"req-500": "server_error",
+		"req-400": "client_error",
+		"req-ok":  "success",
+	}
+	for id, class := range want {
+		if classes[id] != class {
+			t.Fatalf("%s outcome_class = %q, want %q", id, classes[id], class)
+		}
+	}
+}
+
+// TestJournalRecordsRejectsUnparseableTimeFilter pins that a filter the server
+// cannot honour is refused instead of silently ignored.
+func TestJournalRecordsRejectsUnparseableTimeFilter(t *testing.T) {
+	s, _ := newTestStore(t, "journal-bad-time:")
+	t.Cleanup(func() { _ = s.Close() })
+	a := &API{store: s}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/journal/records?since=yesterday", nil)
+	recorder := httptest.NewRecorder()
+	a.HandleJournalRecords(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an unparseable since", recorder.Code)
+	}
+	if recorder.Body.String() == "" {
+		t.Fatal("a refused filter must say what was wrong")
+	}
+}
+
+// TestJournalRecordsRecoversAttemptsBehindThePageWindow pins the fifth reported
+// defect: attempts were only joined from inside the page window, so a request that
+// ran while other traffic was journalled came back with an empty detail panel even
+// though its attempts were still retained.
+func TestJournalRecordsRecoversAttemptsBehindThePageWindow(t *testing.T) {
+	s, _ := newTestStore(t, "journal-attempt-lookback:")
+	t.Cleanup(func() { _ = s.Close() })
+	a := &API{store: s}
+
+	events := []audit.Event{
+		{Kind: audit.KindRequest, Action: "grok_upstream_attempt", RequestID: "req-old", Status: "error", Channel: "grok", Attempt: 1, Metadata: map[string]interface{}{"http_status": float64(429)}},
+	}
+	// Traffic that finished while the request above was still running.
+	for i := 0; i < 40; i++ {
+		events = append(events, audit.Event{Kind: audit.KindOperation, Action: "config_update", Status: "ok"})
+	}
+	events = append(events, requestEvent("req-old", "error", 429))
+	seedJournal(t, a, events)
+
+	// limit=1 makes the scan window six entries: the attempt stays far outside it.
+	payload := journalRequest(t, a, "?kind=request&limit=1")
+	rows, _ := payload["data"].([]interface{})
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want the single request", len(rows))
+	}
+	row, _ := rows[0].(map[string]interface{})
+	attempts, _ := row["attempts"].([]interface{})
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want the retained upstream attempt", len(attempts))
+	}
+	attempt, _ := attempts[0].(map[string]interface{})
+	if attempt["request_id"] != "req-old" {
+		t.Fatalf("attached attempt = %v, want req-old", attempt["request_id"])
+	}
+
+	// The lookback must not move the cursor: the next page still starts before the
+	// last row shown, so no record behind it is skipped.
+	if cursor, _ := payload["next_cursor"].(string); cursor == "" {
+		t.Fatal("next_cursor is empty on a full page")
+	}
+}

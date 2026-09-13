@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"orchids-api/internal/debug"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/opsagg"
 )
@@ -25,6 +26,9 @@ const RequestIDHeader = "X-Request-ID"
 
 // traceIDKey 是 context 中存储 trace ID 的 key
 type traceIDKey struct{}
+type requestIDKey struct{}
+
+const DiagnosticRequestIDHeader = "X-Orchids-Request-ID"
 
 // GenerateTraceID 生成一个新的 trace ID
 func GenerateTraceID() string {
@@ -40,13 +44,16 @@ func GenerateTraceID() string {
 // 从请求头获取 trace ID，如果没有则生成新的
 func TraceMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := GenerateTraceID()
+		// Client trace IDs may span retries; the server request ID never does.
+		w.Header().Set(DiagnosticRequestIDHeader, requestID)
 		// 尝试从请求头获取 trace ID
 		traceID := r.Header.Get(TraceIDHeader)
 		if traceID == "" {
 			traceID = r.Header.Get(RequestIDHeader)
 		}
 		if traceID == "" {
-			traceID = GenerateTraceID()
+			traceID = requestID
 		}
 
 		// 将 trace ID 添加到响应头
@@ -54,6 +61,7 @@ func TraceMiddleware(next http.Handler) http.Handler {
 
 		// 将 trace ID 添加到 context
 		ctx := context.WithValue(r.Context(), traceIDKey{}, traceID)
+		ctx = context.WithValue(ctx, requestIDKey{}, requestID)
 
 		// 继续处理请求
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -69,6 +77,18 @@ func GetTraceID(ctx context.Context) string {
 	return traceID
 }
 
+// GetRequestID is the per-HTTP-request journal and diagnostic identity.
+func GetRequestID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	if id == "" {
+		return GetTraceID(ctx)
+	}
+	return id
+}
+
 // TracedResponseWriter 包装 ResponseWriter 以记录响应状态
 type TracedResponseWriter struct {
 	http.ResponseWriter
@@ -76,11 +96,11 @@ type TracedResponseWriter struct {
 	BytesWritten int64
 	// firstWriteAt is when the handler produced its first byte.
 	firstWriteAt time.Time
-	// contentWriteAt is when the first payload byte was produced, ignoring SSE
-	// comment lines. A streaming handler commits its headers and may emit
-	// keepalives long before a token exists, so measuring time-to-first-token
-	// from the header write reported a prefill that never happened.
+	// contentWriteAt ignores SSE control events, empty deltas and keepalives.
+	// Non-streaming responses use the first body write as a TTFB approximation.
 	contentWriteAt time.Time
+	startedAt      time.Time
+	tokenDetector  tokenSSEDetector
 	// streamFailed records that the handler already committed a 2xx status and
 	// then failed mid-stream, where the HTTP status can no longer say so.
 	streamFailed bool
@@ -91,6 +111,7 @@ func NewTracedResponseWriter(w http.ResponseWriter) *TracedResponseWriter {
 	return &TracedResponseWriter{
 		ResponseWriter: w,
 		StatusCode:     http.StatusOK,
+		startedAt:      time.Now(),
 	}
 }
 
@@ -98,10 +119,8 @@ func NewTracedResponseWriter(w http.ResponseWriter) *TracedResponseWriter {
 // time when the handler never wrote anything.
 func (w *TracedResponseWriter) FirstWriteAt() time.Time { return w.firstWriteAt }
 
-// ContentWriteAt reports when the first payload byte was produced. It is the
-// honest time-to-first-token: response headers and SSE keepalive comments do not
-// count. When nothing but headers was ever written the value is zero and the
-// caller should fall back to FirstWriteAt.
+// ContentWriteAt reports the first generated SSE content, or the first body
+// write for non-streaming responses. A stream without generated output stays zero.
 func (w *TracedResponseWriter) ContentWriteAt() time.Time { return w.contentWriteAt }
 
 // MarkStreamFailure lets a streaming handler report a failure it found after the
@@ -162,10 +181,18 @@ func (w *TracedResponseWriter) Write(b []byte) (int, error) {
 	if w.firstWriteAt.IsZero() {
 		w.firstWriteAt = now
 	}
-	if w.contentWriteAt.IsZero() && isPayloadWrite(b) {
-		w.contentWriteAt = now
-	}
 	n, err := w.ResponseWriter.Write(b)
+	if w.contentWriteAt.IsZero() && n > 0 {
+		payload := false
+		if w.isSSE() {
+			payload = w.tokenDetector.observe(b[:n])
+		} else {
+			payload = isPayloadWrite(b[:n])
+		}
+		if payload {
+			w.contentWriteAt = now
+		}
+	}
 	w.BytesWritten += int64(n)
 	return n, err
 }
@@ -194,6 +221,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 
 		// 包装 ResponseWriter
 		wrapped := NewTracedResponseWriter(w)
+		wrapped.startedAt = start
 
 		// The handler will publish the model it resolved; the hint must exist
 		// before the handler runs because the request context is already cloned.
@@ -214,6 +242,10 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 
 		// 记录请求完成
 		duration := time.Since(start)
+		if capture := debug.FromContext(r.Context()); capture != nil {
+			capture.Finish(duration)
+		}
+		finishRequestJournal(r, wrapped, duration, readModel())
 		// The operations overview counts every finished request, so this record
 		// must happen before the log level decides whether to print a line.
 		recordRequestOutcome(r, wrapped, duration, readModel())
@@ -298,16 +330,15 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 		return
 	}
 	durationMS := duration.Milliseconds()
-	// Time-to-first-token is measured from the first payload byte, not from the
-	// headers: a stream commits its status line (and may send keepalives) before
-	// any token exists.
+	// Only generated SSE output supplies TTFT. A failed or empty stream must
+	// not fall back to headers and invent a first-token sample.
 	firstWrite := wrapped.ContentWriteAt()
-	if firstWrite.IsZero() {
+	if firstWrite.IsZero() && !wrapped.isSSE() {
 		firstWrite = wrapped.FirstWriteAt()
 	}
 	firstTokenMS := int64(0)
 	if !firstWrite.IsZero() {
-		firstTokenMS = firstWrite.Sub(requestStartOf(r, duration)).Milliseconds()
+		firstTokenMS = firstWrite.Sub(wrapped.startedAt).Milliseconds()
 		if firstTokenMS < 0 {
 			firstTokenMS = 0
 		}
@@ -319,7 +350,7 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 		statusClass = streamFailureClass
 	}
 	if detailedOutcomeRecorder != nil {
-		outcome := opsagg.Outcome{Channel: requestChannel(r.URL.Path), Model: model, Status: statusClass, HTTPStatus: wrapped.StatusCode, OK: statusClass == "2xx", DurationMS: durationMS, FirstTokenMS: firstTokenMS, At: time.Now(), Detailed: true}
+		outcome := opsagg.Outcome{Channel: inferenceRequestChannel(r), Model: model, Status: statusClass, HTTPStatus: wrapped.StatusCode, OK: statusClass == "2xx", DurationMS: durationMS, FirstTokenMS: firstTokenMS, At: time.Now(), Detailed: true}
 		if box, ok := r.Context().Value(requestObservationKey{}).(*requestObservation); ok {
 			box.mu.Lock()
 			outcome.InputTokens = box.input
@@ -347,7 +378,7 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 		return
 	}
 	requestOutcomeRecorder(
-		requestChannel(r.URL.Path),
+		inferenceRequestChannel(r),
 		model,
 		statusClass,
 		durationMS,
@@ -373,34 +404,48 @@ const (
 // distinct from a real 5xx, because the client saw an HTTP 200.
 const streamFailureClass = "stream_error"
 
-// requestStartOf reconstructs the request start from the measured duration. The
-// trace middleware owns the clock; keeping the derivation here avoids threading
-// a start time through every wrapper.
-func requestStartOf(_ *http.Request, duration time.Duration) time.Time {
-	return time.Now().Add(-duration)
+// requestChannel includes only routes that perform inference. Model discovery,
+// token counting, administration, resource polling and downloads are HTTP traffic.
+func requestChannel(path string) string {
+	channel, endpoint := "", ""
+	for _, candidate := range []string{"warp", "puter", "workbuddy", "grok"} {
+		if rest, ok := strings.CutPrefix(path, "/"+candidate+"/v1/"); ok {
+			channel, endpoint = candidate, rest
+			break
+		}
+	}
+	if channel == "" {
+		if rest, ok := strings.CutPrefix(path, "/v1/"); ok {
+			channel, endpoint = "grok", rest
+		}
+	}
+	switch endpoint {
+	case "messages", "chat/completions":
+		if channel != "" {
+			return channel
+		}
+	}
+	if channel == "grok" {
+		switch endpoint {
+		case "responses", "responses/compact", "images/generations", "images/edits",
+			"videos", "videos/generations", "videos/edits", "videos/extensions",
+			"tts", "stt", "audio/speech", "audio/tasks", "audio/transcriptions", "realtime":
+			return channel
+		}
+	}
+	return HTTPChannel
 }
 
-// requestChannel maps a request path to the channel it belongs to. The mapping
-// mirrors how handlers journal the same request, so the overview's channel and
-// the log centre's channel always agree. Anything that is not inference traffic
-// (the admin UI, health checks, a public scanner probing paths) is labelled
-// "http" and is kept out of the channel matrix: it is not a provider.
-func requestChannel(path string) string {
-	trimmed := strings.Trim(path, "/")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) == 0 {
-		return "http"
+func inferenceRequestChannel(r *http.Request) string {
+	channel := requestChannel(r.URL.Path)
+	if r.Method == http.MethodPost {
+		return channel
 	}
-	switch parts[0] {
-	case "warp", "puter", "workbuddy", "grok":
-		return parts[0]
-	case "v1":
-		// The unified /v1 routes are served by the Grok handler. Keep the id
-		// stable across both prefixes so one model's figures do not split in two.
-		return "grok"
-	default:
-		return HTTPChannel
+	if r.Method == http.MethodGet && channel == "grok" &&
+		(strings.HasSuffix(r.URL.Path, "/stt") || strings.HasSuffix(r.URL.Path, "/realtime")) {
+		return channel
 	}
+	return HTTPChannel
 }
 
 // requestModelHint extracts a model from the request when it is cheap to do so.

@@ -133,7 +133,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 	}
 
 	url := c.baseURL + "/v2/chat/completions"
-	if logger != nil {
+	if logger != nil && !logger.Capturing() {
 		logger.LogUpstreamRequest(url, map[string]string{"provider": "workbuddy"}, body)
 	}
 
@@ -145,7 +145,12 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 	}
 	applyHeaders(httpReq, accessToken, c.creds.UID, "text/event-stream")
 
+	attempt := debug.BeginUpstream(ctx, httpReq.Method, httpReq.URL.String(), httpReq.Header, body)
 	resp, err := c.httpClient.Do(httpReq)
+	attempt.Response(resp, err)
+	if resp != nil {
+		resp.Body = attempt.CaptureBody(resp.Body)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to send workbuddy request: %w", err)
 	}
@@ -156,7 +161,6 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 		return apiError(resp.StatusCode, raw)
 	}
 
-	resp.Body = debug.CaptureBody(ctx, resp.Body)
 	result, err := consumeStream(resp.Body, onMessage)
 	if err != nil {
 		return err

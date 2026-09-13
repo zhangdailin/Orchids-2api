@@ -130,7 +130,7 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 		accountID = acc.ID
 		provider = ProviderForAccount(acc)
 	}
-	h.auditLogger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetTraceID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
+	h.auditLogger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
 		AccountID: accountID, Model: req.Model, Channel: "grok", Provider: provider, Status: status, Error: message, Duration: duration, Metadata: metadata,
 		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]),
 		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])})

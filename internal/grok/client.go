@@ -623,9 +623,6 @@ func (c *Client) doAppChatRequest(ctx context.Context, reqURL string, body []byt
 }
 
 func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.Client, reqURL string, method string, body []byte, headers http.Header, okStatus int, retry429 bool) (*http.Response, error) {
-	if capture := debug.FromContext(ctx); capture != nil {
-		capture.Append("3_upstream_request.json", string(body)+"\n")
-	}
 	if okStatus == 0 {
 		okStatus = http.StatusOK
 	}
@@ -687,7 +684,9 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 		if lease != nil {
 			do = lease.Do
 		}
+		diagnosticAttempt := debug.BeginUpstream(ctx, method, reqURL, req.Header, body)
 		resp, err = doUpstreamHTTP(req, do, 0)
+		diagnosticAttempt.Response(resp, err)
 		if err != nil {
 			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
 				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeTransportError)
@@ -703,7 +702,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			}
 			continue
 		}
-		resp.Body = debug.CaptureBody(ctx, resp.Body)
+		resp.Body = diagnosticAttempt.CaptureBody(resp.Body)
 		if resp.StatusCode == okStatus {
 			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
 				c.egress.FeedbackOutcome(leaseNodeID, egress.OutcomeSuccess)

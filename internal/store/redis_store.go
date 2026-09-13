@@ -436,6 +436,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	if !acc.GrokWebQuota.SyncedAt.IsZero() {
 		updated.GrokWebQuota = acc.GrokWebQuota
 	}
+	if !acc.GrokFreeQuota.ConfirmedAt.IsZero() {
+		updated.GrokFreeQuota = acc.GrokFreeQuota
+	}
 	// Per-model cooldowns are merged rather than replaced: an update written by a
 	// path that did not touch them (a request counter, a quota refresh) must not
 	// drop a cooldown another path just recorded.

@@ -12,6 +12,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/goccy/go-json"
+	warpapi "github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/store"
@@ -187,7 +192,7 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Header.Set("Content-Length", fmt.Sprintf("%d", len(payload)))
 
-	if logger != nil {
+	if logger != nil && !logger.Capturing() {
 		headers := map[string]string{}
 		for k, v := range req.Header {
 			headers[k] = strings.Join(v, ", ")
@@ -195,7 +200,23 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 		logger.LogUpstreamRequest(warpAIURL, headers, payload)
 	}
 
-	return c.httpClient.Do(req)
+	var diagnosticBody interface{}
+	if debug.FromContext(ctx) != nil {
+		var decoded warpapi.Request
+		diagnosticBody = "Protobuf request could not be decoded"
+		if proto.Unmarshal(payload, &decoded) == nil {
+			if raw, err := protojson.Marshal(&decoded); err == nil {
+				diagnosticBody = json.RawMessage(raw)
+			}
+		}
+	}
+	attempt := debug.BeginUpstream(ctx, req.Method, warpAIURL, req.Header, diagnosticBody)
+	if logger != nil {
+		logger.UseUpstreamAttempt(attempt)
+	}
+	resp, err := c.httpClient.Do(req)
+	attempt.Response(resp, err)
+	return resp, err
 }
 
 func (c *Client) streamWithRetry(ctx context.Context, payload []byte, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger, refresh func() error) error {
@@ -206,6 +227,10 @@ func (c *Client) streamWithRetry(ctx context.Context, payload []byte, req upstre
 		return err
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
+		if logger != nil && logger.Capturing() {
+			body, _ := readLimitedBody(resp, 4096)
+			logger.LogUpstreamHTTPError(warpAIURL, resp.StatusCode, string(body), nil)
+		}
 		c.session.clearToken()
 		_ = resp.Body.Close()
 

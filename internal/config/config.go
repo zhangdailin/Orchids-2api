@@ -265,10 +265,11 @@ func ApplyDefaults(cfg *Config) {
 // retry/deadline settings. Configured runtime values survive file/Redis/API
 // round trips; protocol constants remain non-configurable.
 func ApplyHardcoded(cfg *Config) {
-	if cfg != nil {
-		enabled := true
-		cfg.InferenceAuth = &enabled
-	}
+	// inference_auth_enabled is deliberately NOT hardcoded: a trusted upstream
+	// gateway may opt out with inference_auth_enabled=false, and a hardcoded
+	// true here silently overrode that choice on every file/Redis/API round
+	// trip. The default stays "enabled" through InferenceAuthEnabled() when the
+	// field is absent.
 	cfg.UpstreamMode = "ws"
 	cfg.ContextMaxTokens = 100000
 	cfg.ContextSummaryMaxTokens = 800

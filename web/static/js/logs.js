@@ -4,7 +4,10 @@
 // redacted summary the server produced; a diagnostic entry renders the captured
 // chain of the request — the per-request files that used to live under debug-logs/.
 (function () {
-  const state = { kind: 'request', cursor: '', records: [], selected: null, back: '' };
+  // loadSeq numbers the page loads. A filter change can be answered out of order —
+  // switching to 操作日志 while the request list is still in flight — and the older
+  // answer must not overwrite the newer one.
+  const state = { kind: 'request', cursor: '', records: [], selected: null, back: '', loadSeq: 0 };
 
   // RESULT_LABELS names the classes the overview counts with, so the chip the log
   // centre shows and the chart that opened it use the same words.
@@ -59,7 +62,7 @@
     '2_converted_prompt.md': '2 · 转换后提示词',
     '3_upstream_request.json': '3 · 上游请求',
     '3_upstream_http_error.json': '3 · 上游错误',
-    '4_upstream_sse.jsonl': '4 · 上游原始 SSE',
+    '4_upstream_sse.jsonl': '4 · 上游响应（SSE / Protobuf 解码）',
     '5_client_sse.jsonl': '5 · 返回客户端 SSE',
     '6_input_token_breakdown.json': '6 · 输入 token 分解',
     '6_summary.json': '6 · 请求摘要',
@@ -67,6 +70,11 @@
 
   function sectionLabel(section) {
     const name = String(section.name || '');
+    const attempt = /^upstream_(\d+)_(request\.json|response\.txt|result\.json|error\.json|read_error\.json)$/.exec(name);
+    if (attempt) {
+      const labels = { 'request.json': '请求', 'response.txt': '响应内容', 'result.json': 'HTTP 状态', 'error.json': '错误', 'read_error.json': '响应读取错误' };
+      return '上游尝试 ' + Number(attempt[1]) + ' · ' + labels[attempt[2]];
+    }
     return SECTION_LABELS[name] || (section.title || name || '记录');
   }
 
@@ -74,6 +82,7 @@
   const KIND_LABELS = { request: '请求', operation: '操作', system: '系统', debug: '诊断', http: 'HTTP', probe: '探测', grok: 'Grok', warp: 'Warp', puter: 'Puter', workbuddy: 'WorkBuddy' };
   const ACTION_LABELS = {
     debug_bundle: '请求诊断包',
+    http_request: '推理请求',
     // The synthetic probe written by the alert engine's own loop. Its channel is the
     // placeholder "probe" and its model is "__probe__": both are machine labels, so
     // the row must not print them as if they described a real request.
@@ -369,7 +378,15 @@
       body.appendChild(tr);
       return;
     }
-    const start = append ? body.querySelectorAll('tr').length : 0;
+    if (append) {
+      // The "no matching records" placeholder is a row but carries no record. Counting
+      // it as one made the FIRST record of the appended page look like an extra row, so
+      // it was never drawn: "加载更多" returned data and the list stayed empty.
+      body.querySelectorAll('tr').forEach((tr) => {
+        if (!tr.dataset || tr.dataset.index === undefined) tr.remove();
+      });
+    }
+    const start = append ? body.querySelectorAll('tr[data-index]').length : 0;
     state.records.slice(start).forEach((record, index) => {
       const event = record.event || {};
       const tr = document.createElement('tr');
@@ -563,10 +580,16 @@
       raw.textContent = '上游状态：' + rawStatus;
       outcomeRow.appendChild(raw);
     }
-    if (event.http_status) {
+    // The HTTP status and the first-token latency are not columns of a journal row:
+    // the request middleware keeps them in metadata (http_status, first_token_ms),
+    // which is where the attempt list below reads them from too. Reading only the
+    // top-level fields meant a recorded 429 and a measured 135 ms were both dropped.
+    const meta = event.metadata || {};
+    const httpStatus = event.http_status || meta.http_status;
+    if (httpStatus) {
       const http = document.createElement('span');
       http.className = 'logs-detail-raw';
-      http.textContent = 'HTTP ' + event.http_status;
+      http.textContent = 'HTTP ' + httpStatus;
       outcomeRow.appendChild(http);
     }
     panel.appendChild(outcomeRow);
@@ -633,7 +656,10 @@
     // --- usage and latency --------------------------------------------------------
     const usageFacts = [];
     if (event.duration_ms) usageFacts.push(fact('总耗时', event.duration_ms + ' ms'));
-    if (event.first_token_ms) usageFacts.push(fact('首 Token', event.first_token_ms + ' ms'));
+    // Same metadata contract as http_status above: the measured first-token latency
+    // lives in metadata, so the row has to look there or the figure is never shown.
+    const firstTokenMS = event.first_token_ms || meta.first_token_ms;
+    if (firstTokenMS) usageFacts.push(fact('首 Token', firstTokenMS + ' ms'));
     const reportedTokens = (event.input_tokens || 0) + (event.output_tokens || 0);
     if (reportedTokens > 0) {
       usageFacts.push(fact('Token', (event.input_tokens || 0) + ' in / ' + (event.output_tokens || 0) + ' out'));
@@ -826,7 +852,7 @@
       details.className = 'logs-section';
       // A failure artifact is what an operator came for; everything else starts
       // collapsed so a 16 KiB SSE dump does not bury it.
-      if (section.name === '3_upstream_http_error.json' || section.name === '1_early_exit.json') {
+      if (section.name === '3_upstream_http_error.json' || section.name === '1_early_exit.json' || /^upstream_\d+_(error|read_error)\.json$/.test(section.name)) {
         details.open = true;
       }
       const summary = document.createElement('summary');
@@ -894,10 +920,15 @@
     params.set('kind', state.kind);
     params.set('limit', '50');
     if (append && state.cursor) params.set('before', state.cursor);
+    // This load owns the list from here on. Anything still in flight answers an older
+    // question (a previous tab, or a previous filter) and is dropped when it lands.
+    const seq = ++state.loadSeq;
     try {
       const response = await fetch('/api/journal/records?' + params.toString(), { credentials: 'same-origin' });
+      if (seq !== state.loadSeq) return;
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
+      if (seq !== state.loadSeq) return;
       state.cursor = payload.next_cursor || '';
       state.records = append ? state.records.concat(payload.data || []) : payload.data || [];
       renderRows(append);
@@ -935,6 +966,9 @@
       if (more) more.hidden = !state.cursor;
       if (!append) renderDetail(null);
     } catch (error) {
+      // A failure that belongs to a superseded load must not replace the newer list
+      // with an error row either.
+      if (seq !== state.loadSeq) return;
       const body = el('logsRows');
       if (body) {
         body.replaceChildren();

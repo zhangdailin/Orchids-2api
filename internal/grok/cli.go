@@ -13,6 +13,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/debug"
 	"orchids-api/internal/grok/egress"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
@@ -157,6 +158,11 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {
+			// A 429 is also how the upstream announces a spent Free allowance, and that
+			// refusal is the only place the real actual/limit pair appears. Record it
+			// before the throttle bookkeeping, which would otherwise be the only thing
+			// this refusal leaves behind.
+			c.noteConfirmedFreeQuota(ctx, acc, raw)
 			if meta := noteScopedRateLimit(ctx, ProviderBuild, acc.OAuthAccessToken, modelID, resp.StatusCode, resp.Header, raw); meta != nil {
 				// Keep the selected account's durable diagnostic state in sync. The
 				// in-memory team/model registry remains authoritative for waiting;
@@ -196,8 +202,29 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 			recordGenericForbidden()
 		}
 
+		// A spent Free allowance is not always reported as a 429: the same refusal can
+		// arrive as a 402/403, and it is the only place the real actual/limit pair
+		// appears.
+		c.noteConfirmedFreeQuota(ctx, acc, raw)
 		recordCLIUpstreamStatus(resp.StatusCode)
 		return nil, newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
+	}
+}
+
+// noteConfirmedFreeQuota persists the Free window the upstream reported in a refusal.
+//
+// It is deliberately fire-and-forget: a refusal that cannot be written back must not
+// turn into a request failure, and it must not overwrite anything when the response
+// was not a Free refusal at all.
+func (c *CLIClient) noteConfirmedFreeQuota(ctx context.Context, acc *store.Account, body []byte) {
+	if c == nil || c.oauth == nil || c.oauth.store == nil || acc == nil || acc.ID == 0 {
+		return
+	}
+	if !ApplyFreeQuotaExhaustion(acc, body) {
+		return
+	}
+	if err := c.oauth.store.UpdateAccount(ctx, acc); err != nil {
+		slog.Warn("grok cli: failed to persist the confirmed free quota window", "account_id", acc.ID, "error", err)
 	}
 }
 
@@ -393,9 +420,15 @@ func (c *CLIClient) request(ctx context.Context, acc *store.Account, method, end
 	for key, values := range headers {
 		req.Header[key] = append([]string(nil), values...)
 	}
-	return doUpstreamHTTP(req, func(req *http.Request) (*http.Response, error) {
+	attempt := debug.BeginUpstream(ctx, method, endpoint, req.Header, body)
+	resp, err := doUpstreamHTTP(req, func(req *http.Request) (*http.Response, error) {
 		return c.doCLIRequest(ctx, req)
 	}, c.cfg.GrokStreamIdleTimeout())
+	attempt.Response(resp, err)
+	if resp != nil {
+		resp.Body = attempt.CaptureBody(resp.Body)
+	}
+	return resp, err
 }
 
 // doCLIRequest is the fail-closed egress adapter. A successful response owns

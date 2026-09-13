@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"orchids-api/internal/debug"
 )
 
 const (
@@ -301,7 +302,12 @@ func (c *Client) doConsoleDPoPRequestWithHeaders(ctx context.Context, token, met
 		}
 		client := *c.httpClient
 		client.Timeout = c.cfg.GrokRequestTimeout(ProviderConsole)
+		diagnosticAttempt := debug.BeginUpstream(ctx, method, endpoint, req.Header, body)
 		resp, err := doUpstreamHTTP(req, client.Do, c.cfg.GrokStreamIdleTimeout())
+		diagnosticAttempt.Response(resp, err)
+		if resp != nil {
+			resp.Body = diagnosticAttempt.CaptureBody(resp.Body)
+		}
 		if err != nil {
 			return nil, err
 		}

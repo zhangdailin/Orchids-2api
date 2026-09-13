@@ -168,7 +168,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 	if err != nil {
 		return fmt.Errorf("failed to marshal puter request: %w", err)
 	}
-	if logger != nil {
+	if logger != nil && !logger.Capturing() {
 		logger.LogUpstreamRequest(puterAPIURL, map[string]string{"provider": "puter"}, body)
 	}
 
@@ -180,7 +180,6 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 	}
 	defer resp.Body.Close()
 
-	resp.Body = debug.CaptureBody(ctx, resp.Body)
 	result, err := consumePuterStream(resp.Body, onMessage)
 	if err != nil {
 		return err
@@ -209,7 +208,12 @@ func (c *Client) doChatRequest(ctx context.Context, body []byte) (*http.Response
 	httpReq.Header.Set("Accept", "application/x-ndjson, application/json")
 	httpReq.Header.Set("Content-Type", "text/plain;actually=json")
 
+	attempt := debug.BeginUpstream(ctx, httpReq.Method, httpReq.URL.String(), httpReq.Header, body)
 	resp, err := c.httpClient.Do(httpReq)
+	attempt.Response(resp, err)
+	if resp != nil {
+		resp.Body = attempt.CaptureBody(resp.Body)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to send puter request: %w", err)
 	}

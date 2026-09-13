@@ -56,7 +56,9 @@ func (h *Handler) runVideoSegment(
 		return videoSegmentResult{}, fmt.Errorf("grok client not configured")
 	}
 	if logger != nil {
-		logger.LogUpstreamRequest(h.client.baseURL()+defaultChatPath, debugHeaderMap(h.client.headers(sess.token)), payload)
+		if !logger.Capturing() {
+			logger.LogUpstreamRequest(h.client.baseURL()+defaultChatPath, debugHeaderMap(h.client.headers(sess.token)), payload)
+		}
 	}
 	resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, &payload, rebuild)
 	if err != nil {

@@ -119,3 +119,30 @@ func TestApplyDefaultsPreservesConfigurableFields(t *testing.T) {
 		t.Fatalf("deployment fields were not preserved: %+v", cfg)
 	}
 }
+
+// TestInferenceAuthOptOutSurvivesApplyDefaults pins the revert that restored
+// legacy API key authentication: an explicit inference_auth_enabled=false is a
+// deliberate operator choice and must not be overwritten by the hardcoded
+// defaults applied on every file/Redis/API round trip. An absent field keeps
+// the historical default of "enabled".
+func TestInferenceAuthOptOutSurvivesApplyDefaults(t *testing.T) {
+	disabled := false
+	cfg := Config{InferenceAuth: &disabled}
+	ApplyDefaults(&cfg)
+
+	if cfg.InferenceAuth == nil {
+		t.Fatal("ApplyDefaults dropped inference_auth_enabled")
+	}
+	if *cfg.InferenceAuth {
+		t.Fatal("ApplyDefaults forced inference_auth_enabled back to true")
+	}
+	if cfg.InferenceAuthEnabled() {
+		t.Fatal("InferenceAuthEnabled()=true want=false for inference_auth_enabled=false")
+	}
+
+	var unset Config
+	ApplyDefaults(&unset)
+	if !unset.InferenceAuthEnabled() {
+		t.Fatal("InferenceAuthEnabled()=false want=true when inference_auth_enabled is absent")
+	}
+}

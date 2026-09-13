@@ -178,6 +178,7 @@ func main() {
 		// The admin session wrapper journals management changes; wiring the same
 		// logger keeps requests and operations in one searchable journal.
 		middleware.SetOperationAuditLogger(auditLogger)
+		middleware.SetRequestAuditLogger(auditLogger)
 		// Per-minute buckets back the operations overview. The trace middleware
 		// reports one observation per finished request, so the counters cannot
 		// double count an upstream retry.

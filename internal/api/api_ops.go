@@ -231,6 +231,13 @@ func (a *API) HandleOpsAlertRules(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"rules": rules, "defaults": defaults, "editable": true})
 }
 
+// journalAttemptLookback bounds the extra scan that recovers upstream attempts whose
+// request sits at the edge of a page window. Attempts are written before the request,
+// so they can sit arbitrarily far behind it when other traffic is journalled
+// concurrently; the bound keeps a page load bounded, at the price of an honestly
+// incomplete detail panel for a request that waited behind more entries than this.
+const journalAttemptLookback = 1000
+
 // HandleJournalRecords answers one journal tab. It is the modern counterpart of
 // /api/audit: same ledger, but filtered by kind and joined with the upstream
 // attempts its request produced.
@@ -268,20 +275,31 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = string(audit.KindRequest)
 	}
+	filter, err := auditFilterFromQuery(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	filter.kind = kind
+
 	maxID := "+"
 	if before := strings.TrimSpace(r.URL.Query().Get("before")); before != "" {
 		maxID = "(" + before
+	} else if !filter.until.IsZero() {
+		// Stream ids are time-ordered, so a window that ends in the past ("the minute
+		// this chart spike happened") starts its scan inside the window instead of
+		// walking the newest entries that the filter would discard.
+		maxID = "(" + strconv.FormatInt(filter.until.UnixMilli()+1, 10)
 	}
 
 	client := a.store.RedisClient()
 	key := a.store.RedisPrefix() + "audit:log"
-	entries, err := client.XRevRangeN(r.Context(), key, maxID, "-", int64(limit)*6).Result()
+	scanCap := int64(limit) * 6
+	entries, err := client.XRevRangeN(r.Context(), key, maxID, "-", scanCap).Result()
 	if err != nil {
 		http.Error(w, "failed to read journal", http.StatusInternalServerError)
 		return
 	}
-	filter := auditFilterFromQuery(r)
-	filter.kind = kind
 
 	// Two passes over the same window, because the stream is strictly
 	// newest-first: a request is written when it finishes and its upstream
@@ -323,8 +341,47 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 			"event":    event,
 			"attempts": attempts[event.RequestID],
 		})
+		if class := auditOutcomeClass(event); class != "" {
+			// The result class travels with the record: it is what the row's badge and
+			// the drill-down that opened the list both talk about.
+			records[len(records)-1]["outcome_class"] = class
+			records[len(records)-1]["outcome_label"] = auditOutcomeLabel(class)
+		}
 		if len(records) >= limit {
 			break
+		}
+	}
+
+	// Attempts are written BEFORE their request, so the attempts of the oldest record
+	// on the page can sit behind the page window: a request that ran while other
+	// traffic was journalled would come back without its detail panel. One extra
+	// bounded scan, started just past everything already read, recovers them. It
+	// never moves the cursor, so nothing it reads is skipped by the next page.
+	if len(records) > 0 && len(entries) > 0 {
+		missing := map[string]bool{}
+		for _, record := range records {
+			event := record["event"].(audit.Event)
+			if event.RequestID != "" && len(attempts[event.RequestID]) == 0 {
+				missing[event.RequestID] = true
+			}
+		}
+		if len(missing) > 0 {
+			older, readErr := client.XRevRangeN(r.Context(), key, "("+entries[len(entries)-1].ID, "-", journalAttemptLookback).Result()
+			if readErr == nil {
+				for _, entry := range older {
+					event, ok := decodeAuditEvent(entry)
+					if !ok || event.Action != "grok_upstream_attempt" || !missing[event.RequestID] {
+						continue
+					}
+					attempts[event.RequestID] = append(attempts[event.RequestID], event)
+				}
+				for _, record := range records {
+					event := record["event"].(audit.Event)
+					if list := attempts[event.RequestID]; len(list) > 0 {
+						record["attempts"] = list
+					}
+				}
+			}
 		}
 	}
 
@@ -347,15 +404,19 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// The cursor must advance past everything that was SCANNED, not past the last
-	// record that matched. Returning the last match as the cursor made an older
-	// page unreachable whenever the window held more non-matching entries than the
-	// page size — the reported "earlier operation logs cannot be found". A window
-	// that produced no matching record at all still has to hand back a cursor, or
-	// the entries behind it can never be reached.
-	scanCap := int64(limit) * 6
+	// The cursor must never skip a record. A FULL page resumes strictly before the
+	// last row shown: everything newer was scanned, so no match is left behind — and
+	// pointing the cursor at the end of the scan window instead (as this used to) threw
+	// away every match between the page's last row and the window's edge, which is why
+	// 600 stored requests only ever yielded 100 in the list. A SHORT page resumes past
+	// everything it scanned, because the scan budget ran out before the ledger did;
+	// that keeps the entries behind it reachable, which is the "earlier operation logs
+	// cannot be found" case. An empty cursor means the ledger itself ended.
 	nextCursor := ""
-	if len(entries) > 0 && int64(len(entries)) >= scanCap {
+	switch {
+	case len(records) >= limit:
+		nextCursor = records[len(records)-1]["id"].(string)
+	case int64(len(entries)) >= scanCap && len(entries) > 0:
 		nextCursor = entries[len(entries)-1].ID
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -366,6 +427,9 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 		"scanned":     len(entries),
 		"matched":     matched,
 		"scan_cap":    scanCap,
+		// What the filters actually did, so the page can name the result class it was
+		// narrowed to instead of leaving the reader to guess.
+		"filter_used": filter.describe(),
 		"coverage":    a.auditCoverage(r.Context()),
 	})
 }
@@ -552,11 +616,9 @@ func poolCounts(accounts []*store.Account, channel string, now time.Time) (enabl
 			continue
 		}
 		enabled++
-		if accountpolicy.AccountHeld(acc, now) {
-			continue
-		}
-		available++
-		if accountpolicy.NeedsReverify(acc, now) {
+		// A refused credential needs attention even while it is cooling down.
+		// NeedsReverify is a scheduler deadline, not a login status.
+		if strings.TrimSpace(acc.StatusCode) == "401" {
 			needingLogin++
 		}
 		for model, until := range acc.ModelCooldowns {
@@ -564,6 +626,10 @@ func poolCounts(accounts []*store.Account, channel string, now time.Time) (enabl
 				modelCooldowns++
 			}
 		}
+		if accountpolicy.AccountHeld(acc, now) {
+			continue
+		}
+		available++
 	}
 	return enabled, available, needingLogin, modelCooldowns
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/goccy/go-json"
 	warpapi "github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"orchids-api/internal/debug"
@@ -191,8 +192,13 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 			return err
 		}
 		sawFrame = true
-		if logger != nil {
-			logger.LogUpstreamSSE("warp_frame", fmt.Sprintf("bytes=%d", len(frame)))
+		if logger.SSEEnabled() {
+			var event warpapi.ResponseEvent
+			if decodeErr := proto.Unmarshal(frame, &event); decodeErr != nil {
+				logger.LogUpstreamSSE("warp_decode_error", fmt.Sprintf("bytes=%d error=%v", len(frame), decodeErr))
+			} else if raw, marshalErr := protojson.Marshal(&event); marshalErr == nil {
+				logger.LogUpstreamSSE("warp_protobuf_decoded", string(raw))
+			}
 		}
 		handled, done, err := emitWarpPayload(frame, onMessage, state)
 		if err != nil {

@@ -129,6 +129,27 @@ Warp 账号只能通过官方网页登录添加。`POST /api/accounts` 拒绝创
 `/api/import` 跳过 Warp 并计入 `skipped`；`/api/export` 不包含 Warp 账号。
 迁移服务器后需重新进行 Warp 官方网页登录。已有账号及内部自动续期机制保留。
 
+每个账号响应都带一组额度来源字段，用来区分「上游真的报了数值」「按画像推断为 Free」「尚未同步」：
+
+| 字段 | 取值 | 说明 |
+|---|---|---|
+| `quota_type` | `paid` / `free` / `unknown` | 套餐类型判定 |
+| `quota_source` | `upstreamBilling` / `upstreamExhaustion` / `planMetadata` / `billingProfile` / `subscription` / `upstreamRateLimit` / `unknown` | 判定依据 |
+| `quota_confidence` | `confirmed` / `observed` / `estimated` / `""` | 该数值的可信度 |
+| `quota_limit_known` | bool | `false` 表示上限是估算，上游未确认 |
+| `quota_observed` | bool | 用量是否由本网关实测（窗口内的审计 token 累计） |
+| `quota_window_hours` | number | 估算窗口长度（Free 为滚动 24 小时） |
+| `quota_note` | string | 面向运维的一句话解释 |
+
+Grok Build（OAuth）账号的上游常常不下发套餐名与数值额度，此时不再只回「未知」：
+
+- 账单同步成功且无任何窗口、或官方身份接口报 `free` → 判定 Free，`quota_mode=estimated_free`，`quota_limit` 为估算的 50 万 tokens / 24 小时，`quota_limit_known=false`，前端显示 `≈ 用量 / 上限 (Free 估算 · 滚动 24h)`；
+- 上游因免费额度耗尽而拒绝请求时，若响应含 `tokens (actual/limit): N/M`，则记录真实窗口：`quota_mode=confirmed_free`、`quota_source=upstreamExhaustion`、`quota_confidence=confirmed`，此时按余额渲染且不带 `≈`；
+- 付费套餐但上游不下发数值额度 → `quota_type=paid` / `quota_source=planMetadata`，**不编造任何额度**；
+- 从未同步或无法判定 → `quota_type=unknown`，保持「未知」。
+
+估算只用于展示，不参与调度判定；`quota_observed=false` 表示窗口内没有实测用量，前端显示「未统计」而不是把它当成 0。
+
 ### 2.2 `/api/v1/admin/*` 和 `/v1/admin/*`
 
 这些路径是 Grok 管理能力和 grok2api 对齐别名，两个前缀都可用。

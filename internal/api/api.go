@@ -154,11 +154,20 @@ func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 	if limit > 500 {
 		limit = 500
 	}
+	filter, err := auditFilterFromQuery(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	maxID := "+"
 	if before := strings.TrimSpace(r.URL.Query().Get("before")); before != "" {
 		maxID = "(" + before
+	} else if !filter.until.IsZero() {
+		// Stream ids are time-ordered, so a window that ends in the past starts the
+		// scan inside itself instead of walking the newest entries it would filter
+		// all out anyway.
+		maxID = "(" + strconv.FormatInt(filter.until.UnixMilli()+1, 10)
 	}
-	filter := auditFilterFromQuery(r)
 
 	scanCount := int64(limit) * 5
 	if scanCount > auditScanCap {
@@ -186,9 +195,15 @@ func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// The cursor must never skip a record: a full page resumes before the last row
+	// shown, and a short page that ran out of scan budget resumes before everything
+	// that was scanned. An empty cursor means the ledger itself ended.
 	nextCursor := ""
-	if len(records) == limit && len(messages) > 0 {
+	switch {
+	case len(records) >= limit:
 		nextCursor = records[len(records)-1].ID
+	case int64(len(messages)) >= scanCount && len(messages) > 0:
+		nextCursor = messages[len(messages)-1].ID
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -212,11 +227,66 @@ type auditQueryFilter struct {
 	action    string
 	actor     string
 	model     string
+	outcome   string
+	since     time.Time
+	until     time.Time
 	accountID int64
 	apiKeyID  int64
 }
 
-func auditFilterFromQuery(r *http.Request) auditQueryFilter {
+// auditOutcomeLabels names the result classes the operations overview counts, so a
+// drill-down chip and the chart that opened it use the same words. The ids are the
+// ones the log centre's select offers.
+var auditOutcomeLabels = map[string]string{
+	"failed":          "失败（全部失败类型）",
+	"success":         "成功",
+	"rate_limited":    "限流 429/529",
+	"client_error":    "客户端错误 4xx",
+	"server_error":    "上游错误 5xx",
+	"stream_error":    "流中断",
+	"upstream_auth":   "上游认证失败 401/403",
+	"rejected":        "网关拒绝 401/403",
+	"quota_exhausted": "额度用尽 402",
+}
+
+// auditTimeFormats are the spellings a time filter accepts. The log centre's form
+// asks for RFC3339, but an operator copying a timestamp out of a log, or a
+// bookmark written by hand, must not silently lose the filter.
+var auditTimeFormats = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02T15:04:05",
+	"2006-01-02T15:04",
+	"2006-01-02 15:04:05",
+	"2006-01-02",
+}
+
+// parseAuditTime reads one boundary of the time range. An empty value means "not
+// filtered" and comes back as a zero time; an unparseable value is an error, because
+// ignoring it is indistinguishable from a filter that does not work.
+func parseAuditTime(name, raw string) (time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	for _, layout := range auditTimeFormats {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	// Epoch seconds or milliseconds: what a script or an export hands over.
+	if epoch, err := strconv.ParseInt(value, 10, 64); err == nil {
+		switch {
+		case epoch > 1e12:
+			return time.UnixMilli(epoch), nil
+		case epoch > 1e9:
+			return time.Unix(epoch, 0), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid %s: %q (expected RFC3339, e.g. 2026-09-13T00:00:00Z)", name, value)
+}
+
+func auditFilterFromQuery(r *http.Request) (auditQueryFilter, error) {
 	query := r.URL.Query()
 	parse := func(name string) int64 {
 		parsed, err := strconv.ParseInt(strings.TrimSpace(query.Get(name)), 10, 64)
@@ -225,6 +295,17 @@ func auditFilterFromQuery(r *http.Request) auditQueryFilter {
 		}
 		return parsed
 	}
+	since, err := parseAuditTime("since", query.Get("since"))
+	if err != nil {
+		return auditQueryFilter{}, err
+	}
+	until, err := parseAuditTime("until", query.Get("until"))
+	if err != nil {
+		return auditQueryFilter{}, err
+	}
+	if !since.IsZero() && !until.IsZero() && until.Before(since) {
+		return auditQueryFilter{}, fmt.Errorf("until %s is before since %s", until.Format(time.RFC3339), since.Format(time.RFC3339))
+	}
 	return auditQueryFilter{
 		kind:      strings.ToLower(strings.TrimSpace(query.Get("kind"))),
 		channel:   strings.ToLower(strings.TrimSpace(query.Get("channel"))),
@@ -232,9 +313,99 @@ func auditFilterFromQuery(r *http.Request) auditQueryFilter {
 		action:    strings.ToLower(strings.TrimSpace(query.Get("action"))),
 		actor:     strings.ToLower(strings.TrimSpace(query.Get("actor"))),
 		model:     strings.ToLower(strings.TrimSpace(query.Get("model"))),
+		outcome:   strings.ToLower(strings.TrimSpace(query.Get("outcome"))),
+		since:     since,
+		until:     until,
 		accountID: parse("account_id"),
 		apiKeyID:  parse("api_key_id"),
+	}, nil
+}
+
+// auditMetadataInt reads an integer the journal kept under metadata. The request
+// record's HTTP status and first-token latency live there, not in a column of
+// their own.
+func auditMetadataInt(event audit.Event, key string) int {
+	if event.Metadata == nil {
+		return 0
 	}
+	switch value := event.Metadata[key].(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(value))
+		return parsed
+	case json.Number:
+		parsed, _ := value.Int64()
+		return int(parsed)
+	}
+	return 0
+}
+
+// auditOutcomeClass names a record's result the way the operations overview counts
+// a request (see opsagg's observeDetails), so "结果 = 限流" in the log centre lists
+// the requests the chart counted as rate limited. An operation has no HTTP class:
+// it either happened or it did not.
+func auditOutcomeClass(event audit.Event) string {
+	status := strings.ToLower(strings.TrimSpace(event.Status))
+	if event.Kind != audit.KindRequest {
+		switch status {
+		case "":
+			return ""
+		case "ok", "success":
+			return "success"
+		default:
+			return "failed"
+		}
+	}
+	httpStatus := auditMetadataInt(event, "http_status")
+	switch status {
+	case "success", "ok":
+		return "success"
+	case "stream_error":
+		// The status line was already committed: a class of its own, exactly as the
+		// overview records it.
+		return "stream_error"
+	}
+	if status == "" {
+		// Older records have no status column; the HTTP status is all there is.
+		if httpStatus >= 200 && httpStatus < 300 {
+			return "success"
+		}
+		if httpStatus == 0 {
+			return ""
+		}
+	}
+	switch {
+	case httpStatus == 429 || httpStatus == 529:
+		return "rate_limited"
+	case httpStatus == 402:
+		return "quota_exhausted"
+	case httpStatus == 401 || httpStatus == 403:
+		// A refusal on a provider channel is the provider rejecting our credential;
+		// a record with no channel never reached a provider, so the gate refused the
+		// caller. The overview separates the two the same way.
+		if strings.TrimSpace(event.Channel) == "" {
+			return "rejected"
+		}
+		return "upstream_auth"
+	case httpStatus >= 500:
+		return "server_error"
+	case httpStatus >= 400:
+		return "client_error"
+	}
+	// A failure with no HTTP class (a transport error before any status line).
+	return "failed"
+}
+
+func auditOutcomeLabel(class string) string {
+	if label, ok := auditOutcomeLabels[class]; ok {
+		return label
+	}
+	return class
 }
 
 func (f auditQueryFilter) matches(event audit.Event) bool {
@@ -255,6 +426,24 @@ func (f auditQueryFilter) matches(event audit.Event) bool {
 	}
 	if f.model != "" && !strings.Contains(strings.ToLower(event.Model), f.model) {
 		return false
+	}
+	// The time range is the filter a drill-down always carries: the overview counted
+	// one window, so a list that ignores it shows records the chart never saw.
+	if !f.since.IsZero() && event.Timestamp.Before(f.since) {
+		return false
+	}
+	if !f.until.IsZero() && event.Timestamp.After(f.until) {
+		return false
+	}
+	if f.outcome != "" {
+		class := auditOutcomeClass(event)
+		if f.outcome == "failed" {
+			if class == "" || class == "success" {
+				return false
+			}
+		} else if class != f.outcome {
+			return false
+		}
 	}
 	if f.accountID != 0 && event.AccountID != f.accountID {
 		return false
@@ -284,6 +473,16 @@ func (f auditQueryFilter) describe() map[string]interface{} {
 	}
 	if f.model != "" {
 		described["model"] = f.model
+	}
+	if f.outcome != "" {
+		described["outcome"] = f.outcome
+		described["outcome_label"] = auditOutcomeLabel(f.outcome)
+	}
+	if !f.since.IsZero() {
+		described["since"] = f.since.UTC().Format(time.RFC3339)
+	}
+	if !f.until.IsZero() {
+		described["until"] = f.until.UTC().Format(time.RFC3339)
 	}
 	if f.accountID != 0 {
 		described["account_id"] = f.accountID
@@ -795,6 +994,15 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 }
 
 func normalizeAccountOutput(acc *store.Account) *accountOutput {
+	return normalizeAccountOutputWithUsage(acc, nil)
+}
+
+// normalizeAccountOutputWithUsage renders one account for the management API.
+//
+// usage carries the tokens this gateway observed per account inside the Free window;
+// a nil map means "not measured", which the quota projection reports honestly instead
+// of presenting zero usage as a measurement.
+func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) *accountOutput {
 	// The session fingerprint is derived from the live credential before the
 	// redaction below clears it, so the operator can still tell two browser
 	// logins apart without the session token ever leaving the server.
@@ -833,8 +1041,53 @@ func normalizeAccountOutput(acc *store.Account) *accountOutput {
 		Account:            out,
 		WarpAuthenticated:  strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
 		SessionFingerprint: sessionFingerprint,
-		Quota:              buildQuotaResponseFields(out),
+		Quota:              buildQuotaResponseFieldsWithUsage(out, usage[out.ID], usage != nil),
 	}
+}
+
+// normalizeAccountOutputObserved renders one account together with the Free-window
+// usage this gateway measured for it, so a single-account response carries the same
+// estimate as the list. A failed measurement falls back to the plain projection
+// rather than reporting zero usage as if it had been counted.
+func (a *API) normalizeAccountOutputObserved(ctx context.Context, acc *store.Account) *accountOutput {
+	observed, ok := a.observedTokensByAccount(ctx, time.Now().Add(-grok.FreeBuildUsageWindow))
+	if !ok {
+		return normalizeAccountOutput(acc)
+	}
+	return normalizeAccountOutputWithUsage(acc, observed)
+}
+
+// observedTokensByAccount sums the tokens the journal recorded for each account
+// inside the Free window.
+//
+// A Build Free allowance is a rolling token window that the upstream only reveals
+// once it is exhausted, so the only honest usage figure available to the admin UI is
+// what this gateway itself saw. The scan is bounded (auditScanCap newest entries),
+// which makes the sum a floor rather than a total: it travels with quota_observed so
+// an estimate is never mistaken for a complete count. A failed scan returns ok=false,
+// and callers must then leave the usage unmeasured.
+func (a *API) observedTokensByAccount(ctx context.Context, since time.Time) (map[int64]int64, bool) {
+	if a == nil || a.store == nil || a.store.RedisClient() == nil {
+		return nil, false
+	}
+	entries, err := a.store.RedisClient().XRevRangeN(ctx, a.store.RedisPrefix()+"audit:log", "+", "-", auditScanCap).Result()
+	if err != nil {
+		return nil, false
+	}
+	usage := make(map[int64]int64, len(entries))
+	for _, entry := range entries {
+		event, ok := decodeAuditEvent(entry)
+		if !ok || event.AccountID == 0 {
+			continue
+		}
+		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+		if tokens := event.InputTokens + event.OutputTokens; tokens > 0 {
+			usage[event.AccountID] += int64(tokens)
+		}
+	}
+	return usage, true
 }
 
 // accountSessionFingerprint returns a short, non-reversible identifier of the
@@ -951,6 +1204,34 @@ func duplicateAccountError(existing *store.Account) error {
 }
 
 func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
+	return buildQuotaResponseFieldsWithUsage(acc, 0, false)
+}
+
+// applyQuotaProvenance records where a quota number came from and how far it should
+// be trusted, next to the number itself.
+//
+// Without it a table can only say "未知", which conflates three different facts — a
+// paid account whose numeric window upstream does not publish, a Free account whose
+// window has to be estimated, and an account that was never synced. quota_type is
+// paid/free/unknown, quota_source names the signal, quota_confidence is
+// confirmed/observed/estimated, and quota_limit_known is false whenever the limit is
+// an estimate that the upstream has not confirmed.
+func applyQuotaProvenance(fields map[string]interface{}, quotaType, source, confidence, note string, limitKnown, observed bool) {
+	fields["quota_type"] = quotaType
+	fields["quota_source"] = source
+	fields["quota_confidence"] = confidence
+	fields["quota_limit_known"] = limitKnown
+	fields["quota_observed"] = observed
+	if note != "" {
+		fields["quota_note"] = note
+	}
+}
+
+// buildQuotaResponseFieldsWithUsage projects an account's allowance. observedTokens
+// is the usage this gateway measured inside grok.FreeBuildUsageWindow and
+// usageObserved says whether that measurement actually ran; both are used only by the
+// Free estimate, which must never present unmeasured usage as if it were measured.
+func buildQuotaResponseFieldsWithUsage(acc *store.Account, observedTokens int64, usageObserved bool) map[string]interface{} {
 	fields := map[string]interface{}{
 		"quota_limit":     0.0,
 		"quota_used":      0.0,
@@ -959,6 +1240,7 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		"quota_unit":      "credits",
 		"quota_supported": true,
 	}
+	applyQuotaProvenance(fields, "unknown", "unknown", "", "", false, false)
 	if acc == nil {
 		return fields
 	}
@@ -994,6 +1276,8 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 			fields["quota_unit"] = "credits"
 			fields["quota_supported"] = false
 			fields["quota_plan"] = snapshot.PackageName
+			applyQuotaProvenance(fields, "unknown", "upstreamBilling", "",
+				"WorkBuddy 计量接口未返回额度", false, !snapshot.SyncedAt.IsZero())
 			break
 		}
 		if quotaRemaining < 0 {
@@ -1018,35 +1302,18 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		fields["quota_plan"] = snapshot.PackageName
 		fields["quota_consumed_units"] = snapshot.LastConsumedUnits
 		fields["quota_package_remaining"] = snapshot.PackageRemaining
+		workBuddyConfidence := ""
+		if !snapshot.SyncedAt.IsZero() {
+			workBuddyConfidence = "confirmed"
+		}
+		applyQuotaProvenance(fields, "paid", "upstreamBilling", workBuddyConfidence,
+			"WorkBuddy 计量包返回的周期额度", quotaLimit > 0, !snapshot.SyncedAt.IsZero())
 		if !snapshot.ResyncAt().IsZero() {
 			fields["quota_reset_at"] = snapshot.ResyncAt().UTC().Format(time.RFC3339)
 		}
 	case "grok":
 		if grok.ProviderForAccount(acc) == grok.ProviderBuild {
-			weekly := acc.GrokBilling.Weekly
-			monthly := acc.GrokBilling.Monthly
-			fields["quota_mode"] = "unknown"
-			fields["quota_unit"] = "build_credits"
-			fields["quota_supported"] = false
-			if weekly.HasUsage {
-				fields["quota_limit"] = 100.0
-				fields["quota_used"] = weekly.UsagePercent
-				fields["quota_remaining"] = max(0, 100-weekly.UsagePercent)
-				fields["quota_mode"] = "weekly_percent"
-				fields["quota_unit"] = "percent"
-				fields["quota_supported"] = true
-				fields["quota_reset_at"] = weekly.ResetAt
-			}
-			if monthly.HasLimit {
-				fields["quota_monthly_limit"] = monthly.Limit
-				fields["quota_monthly_remaining"] = monthly.Remaining
-			}
-			if acc.GrokRateLimits.Requests.HasLimit || acc.GrokRateLimits.Requests.HasRemaining {
-				fields["rate_limit_requests"] = acc.GrokRateLimits.Requests
-			}
-			if acc.GrokRateLimits.Tokens.HasLimit || acc.GrokRateLimits.Tokens.HasRemaining {
-				fields["rate_limit_tokens"] = acc.GrokRateLimits.Tokens
-			}
+			buildGrokBuildQuotaFields(fields, acc, observedTokens, usageObserved)
 			break
 		}
 		web := acc.GrokWebQuota
@@ -1073,6 +1340,8 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 			fields["quota_supported"] = true
 			fields["quota_reset_at"] = preferred.ResetAt
 			fields["quota_windows"] = map[string]interface{}{"auto": web.Auto, "fast": web.Fast}
+			applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
+				"Grok Web 上游返回的 auto/fast 额度窗口", true, false)
 		} else {
 			// No successful Web quota snapshot is different from zero credits.
 			// Keep the account active while telling the UI that the value is
@@ -1083,6 +1352,8 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 			fields["quota_mode"] = "unavailable"
 			fields["quota_unit"] = "requests"
 			fields["quota_supported"] = false
+			applyQuotaProvenance(fields, "unknown", "upstreamBilling", "",
+				"尚未同步到 Grok Web 额度窗口", false, false)
 		}
 	case "warp":
 		baseLimit := limit
@@ -1113,6 +1384,8 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		fields["quota_base_limit"] = baseLimit
 		fields["quota_base_remaining"] = baseRemaining
 		fields["quota_bonus_remaining"] = bonusRemaining
+		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
+			"Warp 官方接口返回的月度额度与赠送额度", baseLimit > 0, false)
 	case "puter":
 		if limit <= 0 {
 			fields["quota_limit"] = 0.0
@@ -1121,6 +1394,8 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 			fields["quota_mode"] = "unknown"
 			fields["quota_unit"] = "credits"
 			fields["quota_supported"] = false
+			applyQuotaProvenance(fields, "unknown", "upstreamBilling", "",
+				"Puter 额度接口未返回数据", false, false)
 			break
 		}
 		remaining := current
@@ -1136,6 +1411,8 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		fields["quota_remaining"] = remaining
 		fields["quota_mode"] = "remaining"
 		fields["quota_unit"] = "credits"
+		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
+			"Puter 官方接口返回的月度额度", limit > 0, false)
 	default:
 		fields["quota_limit"] = limit
 		remaining := current
@@ -1148,9 +1425,128 @@ func buildQuotaResponseFields(acc *store.Account) map[string]interface{} {
 		}
 		fields["quota_used"] = used
 		fields["quota_remaining"] = remaining
+		// A legacy account's numbers come from passive upstream headers, which are a
+		// short-lived throttle window rather than a subscription balance.
+		quotaType := "unknown"
+		if limit > 0 {
+			quotaType = "paid"
+		}
+		applyQuotaProvenance(fields, quotaType, "upstreamRateLimit", "observed",
+			"来自上游限流响应头，不是套餐余额", limit > 0, false)
 	}
 
 	return fields
+}
+
+// buildGrokBuildQuotaFields projects one Build account's allowance.
+//
+// Upstream billing wins whenever it exists. When it does not, the account is not left
+// as a bare "未知": the projection says whether the plan is known to be paid, can be
+// inferred as Free, or is genuinely unknown — and a Free inference gets the estimated
+// window plus the usage this gateway observed inside it. The estimate is marked
+// estimated / limitKnown=false, so the number is a sense of scale rather than an
+// official balance, and rate-limit headers stay where they belong (throttling, never
+// a subscription balance).
+func buildGrokBuildQuotaFields(fields map[string]interface{}, acc *store.Account, observedTokens int64, usageObserved bool) {
+	weekly := acc.GrokBilling.Weekly
+	monthly := acc.GrokBilling.Monthly
+	fields["quota_mode"] = "unknown"
+	fields["quota_unit"] = "build_credits"
+	fields["quota_supported"] = false
+	if weekly.HasUsage {
+		fields["quota_limit"] = 100.0
+		fields["quota_used"] = weekly.UsagePercent
+		fields["quota_remaining"] = max(0, 100-weekly.UsagePercent)
+		fields["quota_mode"] = "weekly_percent"
+		fields["quota_unit"] = "percent"
+		fields["quota_supported"] = true
+		fields["quota_reset_at"] = weekly.ResetAt
+		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
+			"上游 Build 账单返回的周度窗口", true, false)
+	}
+	if monthly.HasLimit {
+		fields["quota_monthly_limit"] = monthly.Limit
+		fields["quota_monthly_remaining"] = monthly.Remaining
+		if !weekly.HasUsage {
+			fields["quota_limit"] = monthly.Limit
+			fields["quota_used"] = max(0, monthly.Limit-monthly.Remaining)
+			fields["quota_remaining"] = max(0, monthly.Remaining)
+			fields["quota_mode"] = "monthly"
+			fields["quota_unit"] = "build_credits"
+			fields["quota_supported"] = true
+			applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
+				"上游 Build 账单返回的月度额度", true, false)
+		}
+	}
+	// Passive response headers are a minute-scale throttle, not a subscription
+	// balance, so they are published separately and never folded into quota_limit.
+	if acc.GrokRateLimits.Requests.HasLimit || acc.GrokRateLimits.Requests.HasRemaining {
+		fields["rate_limit_requests"] = acc.GrokRateLimits.Requests
+	}
+	if acc.GrokRateLimits.Tokens.HasLimit || acc.GrokRateLimits.Tokens.HasRemaining {
+		fields["rate_limit_tokens"] = acc.GrokRateLimits.Tokens
+	}
+	if weekly.HasUsage || monthly.HasLimit {
+		return
+	}
+	// A Free window the upstream itself reported outranks every inference: it carries
+	// the account's real actual/limit pair instead of a scale reference. It only does so
+	// while the window is still current — once the rolling window has passed, those
+	// numbers describe a window that no longer exists, and the account falls back to the
+	// estimate (still Free, because the refusal proved it) instead of showing a stale 0.
+	confirmed := acc.GrokFreeQuota
+	confirmedCurrent := !confirmed.ResetAt.IsZero() && time.Now().Before(confirmed.ResetAt)
+	if confirmed.HasLimit && !confirmed.ConfirmedAt.IsZero() && confirmedCurrent {
+		limit := confirmed.Limit
+		used := confirmed.Used
+		if used < 0 {
+			used = 0
+		}
+		if used > limit {
+			used = limit
+		}
+		fields["quota_limit"] = limit
+		fields["quota_used"] = used
+		fields["quota_remaining"] = max(0, limit-used)
+		fields["quota_mode"] = "confirmed_free"
+		fields["quota_unit"] = "tokens"
+		fields["quota_supported"] = true
+		fields["quota_window_hours"] = int(grok.FreeBuildUsageWindow / time.Hour)
+		if !confirmed.ResetAt.IsZero() {
+			fields["quota_reset_at"] = confirmed.ResetAt
+		}
+		applyQuotaProvenance(fields, "free", "upstreamExhaustion", "confirmed",
+			"上游额度耗尽时返回的真实 Free 窗口（tokens actual/limit）", true, true)
+		return
+	}
+	switch verdict := grok.InferFreeProfile(acc); {
+	case verdict.Inferred:
+		limit := float64(grok.EstimatedFreeBuildTokenLimit)
+		used := float64(0)
+		if usageObserved && observedTokens > 0 {
+			used = float64(observedTokens)
+		}
+		if used > limit {
+			used = limit
+		}
+		fields["quota_limit"] = limit
+		fields["quota_used"] = used
+		fields["quota_remaining"] = max(0, limit-used)
+		fields["quota_mode"] = "estimated_free"
+		fields["quota_unit"] = "tokens"
+		fields["quota_supported"] = true
+		fields["quota_window_hours"] = int(grok.FreeBuildUsageWindow / time.Hour)
+		applyQuotaProvenance(fields, "free", verdict.Source, "estimated",
+			"上游未下发数值额度；按 Free 画像估算，用量为本网关在窗口内观测到的 token", false, usageObserved)
+	case grok.BuildPlanIsPaid(acc.Subscription):
+		applyQuotaProvenance(fields, "paid", "planMetadata", "confirmed",
+			"官方身份接口报告为付费套餐，但未下发数值额度窗口", false, false)
+	default:
+		// Never synced, or the upstream has not said anything yet. Saying anything
+		// more here would be an invention.
+		applyQuotaProvenance(fields, "unknown", "unknown", "",
+			"尚未同步到上游套餐或额度信息；点刷新立即同步", false, false)
+	}
 }
 
 func applyPuterMonthlyUsage(acc *store.Account, usage *puter.MonthlyUsage) {
@@ -1571,12 +1967,21 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		if accounts == nil {
 			accounts = []*store.Account{}
 		}
+		// The Free estimate needs the usage this gateway observed; the scan is one
+		// bounded read shared by the whole page, and it is skipped entirely when there
+		// is nothing to describe.
+		var observed map[int64]int64
+		if len(accounts) > 0 {
+			if measured, ok := a.observedTokensByAccount(r.Context(), time.Now().Add(-grok.FreeBuildUsageWindow)); ok {
+				observed = measured
+			}
+		}
 		normalized := make([]*accountOutput, 0, len(accounts))
 		for _, acc := range accounts {
 			if acc == nil || isLinkedGrokConsoleAccount(acc) {
 				continue
 			}
-			normalized = append(normalized, normalizeAccountOutput(acc))
+			normalized = append(normalized, normalizeAccountOutputWithUsage(acc, observed))
 		}
 		json.NewEncoder(w).Encode(normalized)
 
@@ -2281,10 +2686,10 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Failed to save checked account: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
-			json.NewEncoder(w).Encode(normalizeAccountOutput(acc))
+			json.NewEncoder(w).Encode(a.normalizeAccountOutputObserved(r.Context(), acc))
 			return
 		}
-		json.NewEncoder(w).Encode(normalizeAccountOutput(account))
+		json.NewEncoder(w).Encode(a.normalizeAccountOutputObserved(r.Context(), account))
 
 	case http.MethodPut:
 		existing := account

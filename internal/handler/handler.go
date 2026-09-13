@@ -1216,7 +1216,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			// One journal schema for every channel: the log centre must be able to
 			// compare a Grok request with a Warp request on the same fields.
 			Kind:      audit.KindRequest,
-			RequestID: middleware.GetTraceID(r.Context()),
+			RequestID: middleware.GetRequestID(r.Context()),
 			Action:    "chat_request",
 			APIKeyID:  middleware.APIKeyID(r.Context()),
 			AccountID: accountID,

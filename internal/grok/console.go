@@ -379,7 +379,9 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		w.Header().Set("X-Grok2API-Reasoning-Recovery", recovery)
 	}
 	if logger != nil {
-		logger.LogUpstreamRequest(url, debugHeaderMap(headers()), payload)
+		if !logger.Capturing() {
+			logger.LogUpstreamRequest(url, debugHeaderMap(headers()), payload)
+		}
 	}
 	h.syncGrokQuota(sess.acc, resp.Header)
 	if req.Stream {

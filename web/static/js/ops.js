@@ -191,7 +191,7 @@
   function lineChart(container, options) {
     container.replaceChildren();
     const points = options.points || [];
-    if (points.length < 2) {
+    if (!points.length || !points.some(p => p.value != null)) {
       emptyChart(container, options.emptyText || '这段时间没有样本。');
       return;
     }
@@ -230,8 +230,14 @@
       }));
     }
 
-    const line = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
+    const line = coords.map((c, i) => points[i].value == null ? '' : `${i === 0 || points[i - 1].value == null ? 'M' : 'L'}${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
     svg.appendChild(svgEl('path', { d: line, class: options.className || 'series-qps' }));
+    coords.forEach((c, i) => {
+      if (points[i].value != null && (i === 0 || points[i - 1].value == null) &&
+          (i === points.length - 1 || points[i + 1].value == null)) {
+        svg.appendChild(svgEl('circle', { cx: c.x, cy: c.y, r: 3, fill: 'var(--accent)' }));
+      }
+    });
 
     // Second series on its own scale: QPS and TPS differ by orders of magnitude,
     // so sharing one axis would flatten one of them into the baseline.
@@ -283,7 +289,8 @@
     const maxValue = Math.max(1, ...points.map((p) => p.value), ...overlay.map((p) => p.value));
     const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none' });
     svg.appendChild(svgEl('line', { x1: padLeft, y1: 8, x2: padLeft, y2: 8 + plotH, class: 'grid-line' }));
-    const barW = Math.max(2, plotW / points.length - 2);
+    const barStep = plotW / points.length;
+    const barW = Math.max(0.2, barStep - Math.min(2, barStep * 0.2));
     points.forEach((point, index) => {
       const barH = Math.max(point.value > 0 ? 3 : 0.6, (point.value / maxValue) * plotH);
       const x = padLeft + (plotW / points.length) * index;
@@ -505,6 +512,7 @@
       { label: '平均 QPS', value: (totals.qps != null ? Number(totals.qps) : Number(totals.rpm || 0) / 60).toFixed(2) + ' 次/秒' },
       { label: '平均 TPS', value: totals.usage_samples > 0 || totals.input_tokens > 0 || totals.output_tokens > 0 || real === 0 ? Number(totals.tps || 0).toFixed(1) + ' token/秒' : '未采集' },
     ]);
+    if (real > 0) rowList(requests, [{ label: '用量覆盖', value: fmtInt(totals.usage_samples || 0) + ' / ' + fmtInt(real) + ' 次请求' }]);
     if (real > 0 && Number(totals.detailed_requests || 0) < real) rowList(requests, [{ label: '数据覆盖', value: '窗口含旧数据，部分用量和错误分类未采集' }]);
     container.appendChild(requests);
 
@@ -558,6 +566,7 @@
       samples: totals.samples || 0,
     } : {});
     const ttftCard = kpiCard('TTFT', '口径：' + tab.label);
+    ttftCard.title = '流式：首次文本、思考或工具内容；非流式：首响应字节。未产生流内容的请求不计入 TTFT 样本。';
     bigValue(ttftCard, fmtMs(firstToken.p99_ms ?? firstToken.p95_ms, firstToken.samples), firstToken.p99_ms == null ? 'P95' : 'P99', firstToken.samples ? '' : 'is-muted');
     rowList(ttftCard, percentileRows(firstToken).filter((row) => row.label !== 'P99'));
     container.appendChild(ttftCard);
@@ -573,7 +582,7 @@
       { label: '流中断（已提交 2xx）', value: fmtInt(totals.stream_errors || 0) },
       { label: '上游认证失败（账号被上游拒绝）', value: fmtInt(totals.upstream_auth || 0) },
       { label: '4xx（客户端，非限流）', value: fmtInt(totals.client_errors || 0) },
-      { label: '429 / 529 限流', value: fmtInt(limited) },
+      { label: '429 / 529 限流', value: fmtInt(totals.rate_limited || 0) },
       { label: '网关拒绝 401/403（我方拒绝，非上游故障）', value: fmtInt(totals.rejected || 0) },
       { label: '额度用尽 402', value: fmtInt(totals.quota_exhausted || 0) },
     ]);
@@ -593,6 +602,17 @@
       return { minute: new Date(minute).toISOString(), requests: 0, input_tokens: 0, output_tokens: 0,
         ...(byMinute.get(minute) || {}), seconds: minute === lastMinute ? Math.max(1, (until - minute) / 1000) : 60 };
     });
+  }
+
+  function trendBuckets() {
+    const payload = state.overview;
+    if (!payload || payload.available === false) return [];
+    const until = Date.parse(payload.until || '');
+    const since = Date.parse(payload.since || '');
+    const minutes = Number.isFinite(since) && Number.isFinite(until)
+      ? Math.floor(until / 60000) - Math.floor(since / 60000) + 1
+      : Number(payload.window_minutes || state.window) + 1;
+    return liveBuckets(Math.max(1, Math.min(1440, minutes)));
   }
 
   function seriesWindowPoints(minutes, pick) {
@@ -772,13 +792,13 @@
     const throughput = el('opsThroughput');
     const switchTrend = el('opsSwitchTrend');
     const errorTrend = el('opsErrorTrend');
-    const points = state.series;
+    const points = trendBuckets();
 
     if (throughput) {
-      const qps = points.map((p) => ({ label: fmtMinute(p.minute), value: (p.requests || 0) / 60 }));
+      const qps = points.map((p) => ({ label: fmtMinute(p.minute), value: (p.requests || 0) / p.seconds }));
       const tps = points.map((p) => ({
         label: fmtMinute(p.minute),
-        value: ((p.input_tokens || 0) + (p.output_tokens || 0)) / 60,
+        value: ((p.input_tokens || 0) + (p.output_tokens || 0)) / p.seconds,
       }));
       const hasTokens = tps.some((point) => point.value > 0);
       lineChart(throughput, {
@@ -791,13 +811,13 @@
         emptyText: '这段时间没有流量样本。',
       });
       setText('opsThroughputHint', hasTokens
-        ? '左轴 QPS（次/秒） · 右轴 TPS（token/秒）'
+        ? '左轴 QPS（次/秒） · 右轴 TPS（token/秒） · 当前分钟按已过时间计算'
         : '左轴 QPS（次/秒） · 窗口内请求未上报用量，TPS 暂不绘制');
     }
     if (switchTrend) {
-      const average = points.filter(p => p.account_switch_count > 0).map((p) => ({
+      const average = points.map((p) => ({
         label: fmtMinute(p.minute),
-        value: p.account_switch_count ? (p.account_switch_sum || 0) / p.account_switch_count : 0,
+        value: p.account_switch_count ? (p.account_switch_sum || 0) / p.account_switch_count : null,
       }));
       lineChart(switchTrend, {
         points: average,
@@ -1319,7 +1339,7 @@
     if (download) {
       download.addEventListener('click', () => {
         const header = 'minute,requests,success,failed,input_tokens,output_tokens\n';
-        const rows = state.series.map((point) => [
+        const rows = trendBuckets().map((point) => [
           point.minute, point.requests || 0, point.success || 0, point.failed || 0,
           point.input_tokens || 0, point.output_tokens || 0,
         ].join(',')).join('\n');

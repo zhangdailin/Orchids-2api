@@ -70,7 +70,7 @@ func TestCaptureBoundsAndRawJSON(t *testing.T) {
 		if s.Bytes > maxCaptureBytes {
 			t.Fatal("unbounded section")
 		}
-		if s.Name == "3_upstream_request.json" && !strings.Contains(s.Payload, "human-readable") {
+		if s.Name == "upstream_001_request.json" && !strings.Contains(s.Payload, "human-readable") {
 			t.Fatal("request body encoded as base64")
 		}
 	}

@@ -18,7 +18,8 @@ import (
 
 const DiagnosticRetention = 24 * time.Hour
 const maxCaptureBytes = 64 << 10
-const maxCaptureSections = 16
+const maxCaptureSections = 96
+const maxBundleBytes = 1 << 20
 const maxDiagnosticBundles = 512
 
 type Section struct {
@@ -39,6 +40,10 @@ type Capture struct {
 	sections  map[string]*Section
 	started   time.Time
 	requestID string
+	duration  *time.Duration
+	bytes     int
+	truncated bool
+	attempts  int
 }
 type captureKey struct{}
 
@@ -65,29 +70,37 @@ func (c *Capture) Append(name, text string) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.appendLocked(name, text)
+}
+func (c *Capture) appendLocked(name, text string) {
 	s := c.sections[name]
 	if s == nil {
 		if len(c.sections) >= maxCaptureSections {
+			c.truncated = true
 			return
 		}
 		s = &Section{Name: name}
 		c.sections[name] = s
 	}
-	remaining := maxCaptureBytes - len(s.Payload)
+	remaining := min(maxCaptureBytes-len(s.Payload), maxBundleBytes-c.bytes)
 	if len(text) > remaining {
 		text = text[:remaining]
 		s.Truncated = true
 	}
 	s.Payload += text
+	c.bytes += len(text)
 }
 func (c *Capture) Set(name, text string) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old := c.sections[name]; old != nil {
+		c.bytes -= len(old.Payload)
+	}
 	delete(c.sections, name)
-	c.mu.Unlock()
-	c.Append(name, text)
+	c.appendLocked(name, text)
 }
 
 // Preserve prompts and token counts while masking credential fields and bearer
@@ -106,7 +119,10 @@ func sanitizeCapture(text string) string {
 func (c *Capture) Bundle() Bundle {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	b := Bundle{RequestID: c.requestID, DurationMS: time.Since(c.started).Milliseconds(), Sections: []Section{}}
+	b := Bundle{RequestID: c.requestID, DurationMS: time.Since(c.started).Milliseconds(), Sections: []Section{}, Truncated: c.truncated}
+	if c.duration != nil {
+		b.DurationMS = c.duration.Milliseconds()
+	}
 	for _, s := range c.sections {
 		copy := *s
 		copy.Payload = sanitizeCapture(strings.ToValidUTF8(copy.Payload, "�"))
@@ -117,6 +133,18 @@ func (c *Capture) Bundle() Bundle {
 	}
 	sort.Slice(b.Sections, func(i, j int) bool { return b.Sections[i].Name < b.Sections[j].Name })
 	return b
+}
+
+// Finish freezes request time before metric/journal persistence.
+func (c *Capture) Finish(duration time.Duration) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.duration == nil {
+		c.duration = &duration
+	}
 }
 
 type DiagnosticStore struct {
