@@ -95,9 +95,22 @@ function getSidebarQuotaStats(acc) {
     return null;
   }
   if (type === "qoder") {
-    // Qoder has no credit meter API in this integration, so a quota must not be
-    // fabricated from generic usage columns: saying "unknown" is the honest
-    // answer and keeps the sidebar from implying a balance nobody measured.
+    // The channel reads the credit window from the gateway's own quota endpoint,
+    // so the explicit quota_* fields are authoritative and usage_current must not
+    // be read as a balance. Without a snapshot the answer is "unknown" rather
+    // than a fabricated zero.
+    const limit = Math.max(0, Number(acc.quota_limit || 0));
+    const remaining = Math.max(0, Number(acc.quota_remaining || 0));
+    if (acc.quota_supported === true) {
+      return {
+        supported: true,
+        limit,
+        remaining,
+        unit: acc.quota_unit || "credits",
+        plan: acc.quota_plan || "",
+        resetAt: acc.quota_reset_at || "",
+      };
+    }
     return null;
   }
   const explicitLimit = Math.floor(acc.quota_limit || 0);
@@ -125,10 +138,16 @@ function getSidebarQuotaStats(acc) {
 function isQuotaOnlyStatus(acc) {
   if (!acc) return false;
   const type = normalizeSidebarAccountType(acc);
-  if (type !== "puter" && type !== "warp" && type !== "workbuddy") return false;
+  if (type !== "puter" && type !== "warp" && type !== "workbuddy" && type !== "qoder") return false;
   const quota = getSidebarQuotaStats(acc);
   const statusCode = normalizeSidebarStatusCode(acc.status_code);
   if (statusCode === "402") return true;
+  if (type === "qoder") {
+    // Qoder's window share is reported directly, and the gateway's exhausted
+    // verdict is authoritative. The limit may legitimately be 0 while credits
+    // remain, so the verdict must not be gated on limit > 0.
+    return Boolean(acc.quota_exhausted === true || (quota && quota.remaining <= 0 && acc.quota_supported === true));
+  }
   if (type === "puter") {
     return Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
   }

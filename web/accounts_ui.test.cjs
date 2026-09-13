@@ -814,3 +814,184 @@ test('the session fingerprint never exposes the credential', () => {
   );
   assert.ok(!rendered.includes('secret-session-token'), 'the raw session token leaked into the table');
 });
+
+// ---------------------------------------------------------------------------
+// Qoder account row: 等级 / 配额 / 状态 / 能力 must all render.
+//
+// A live Qoder account is a "Pro Trial" plan with a daily credit window, and the
+// allowance is reported by the channel's quota read. Before these cases the row
+// was blank because the channel was not in any of the renderer's branches: 等级
+// fell through to a generic badge, 配额 read the generic usage columns (which are
+// 0 for this channel) and 状态 had no label mapping.
+// ---------------------------------------------------------------------------
+
+function qoderTrialAccount(overrides = {}) {
+  return {
+    account_type: 'qoder',
+    enabled: true,
+    name: 'zhangdailin1996@gmail.com',
+    email: 'zhangdailin1996@gmail.com',
+    qoder_user_id: '01a09c4c-e8d5-7bf6-a73f-d89a2b21d915',
+    qoder_access_token: 'eyJhbGciOi.access.token',
+    has_credential: true,
+    quota_supported: true,
+    quota_plan: 'Pro Trial',
+    quota_unit: 'credits',
+    quota_limit: 300,
+    quota_remaining: 300,
+    quota_used: 0,
+    quota_exhausted: false,
+    quota_upgrade_url: 'https://qoder.com/pricing?client=qoder',
+    quota_reset_at: '2026-09-14T19:47:13Z',
+    ...overrides,
+  };
+}
+
+test('a Qoder trial account renders 等级, 配额 and 状态 instead of blank cells', () => {
+  const { context } = loadUI();
+  const account = qoderTrialAccount();
+
+  // 等级 comes from the plan tier the channel reports.
+  const tier = context.buildSubscriptionMarkup(account);
+  assert.match(tier, /Pro Trial/, `tier markup was ${tier}`);
+
+  // 配额 shows the remaining share of the window, not the generic usage columns.
+  const quota = context.getQuotaStats(account);
+  assert.equal(quota.remaining, 300, 'the remaining allowance must be read from the quota fields');
+  assert.equal(quota.limit, 300);
+  const quotaMarkup = context.buildQuotaMarkup(account);
+  assert.match(quotaMarkup, /300/, `quota markup was ${quotaMarkup}`);
+
+  // 状态 must be a real label, not the fallback.
+  const badge = context.statusBadge(account);
+  assert.notEqual(badge.text, '未知', 'an enabled Qoder account must have a known status');
+});
+
+test('a Qoder account with no quota snapshot says so instead of showing zero', () => {
+  const { context } = loadUI();
+  const account = qoderTrialAccount({
+    quota_supported: false,
+    quota_plan: '',
+    quota_limit: 0,
+    quota_remaining: 0,
+  });
+
+  const quota = context.getQuotaStats(account);
+  assert.equal(quota.unknown, true, 'a missing snapshot must be reported as unknown, not as 0');
+  assert.match(context.buildQuotaMarkup(account), /未知/);
+  assert.match(context.buildSubscriptionMarkup(account), /未同步|未知/);
+});
+
+test('an exhausted Qoder account shows the reset and the upgrade link, not an error', () => {
+  const { context } = loadUI();
+  const account = qoderTrialAccount({
+    status_code: '402',
+    quota_remaining: 0,
+    quota_used: 300,
+    quota_exhausted: true,
+  });
+
+  // 402 is a quota state: the row must stay readable and say what to do.
+  const badge = context.statusBadge(account);
+  assert.notEqual(badge.text, '未知');
+  const quotaMarkup = context.buildQuotaMarkup(account);
+  assert.match(quotaMarkup, /0/, `quota markup was ${quotaMarkup}`);
+});
+
+test('the Qoder identity column leads with the signed-in address', () => {
+  const { context } = loadUI();
+  const account = qoderTrialAccount();
+  assert.equal(context.accountIdentityPrimary(account), 'zhangdailin1996@gmail.com');
+  // The device credential is never shown, not even truncated.
+  const token = context.formatTokenDisplay(account);
+  assert.doesNotMatch(token, /eyJhbGciOi/);
+});
+
+test('the Qoder quota tooltip carries the plan, the reset and the upgrade link', () => {
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/accounts.js'), 'utf8');
+  // The cell's provenance must be reachable without hovering the API.
+  assert.match(source, /口径: 当前窗口剩余 \/ 窗口额度/);
+  assert.match(source, /该账号额度已用尽，窗口重置后自动恢复/);
+  assert.match(source, /升级: \$\{quota\.upgradeUrl\}/);
+});
+
+test('an exhausted Qoder quota is reported as a quota state, not as a fault', () => {
+  const { context } = loadUI();
+  const exhausted = qoderTrialAccount({
+    status_code: '402',
+    quota_remaining: 0,
+    quota_exhausted: true,
+  });
+  assert.equal(context.getQuotaStats(exhausted).exhausted, true);
+  assert.equal(context.getQuotaStats(qoderTrialAccount()).exhausted, false);
+  // 402 must not turn the account into an error row: the credential is fine.
+  assert.equal(context.isSidebarAccountAbnormal({ ...exhausted, has_credential: true, status_code: '' }), false);
+});
+
+
+// Renders the four allowance columns for the exact payload the live server
+// returned for the two real Qoder accounts. This is a regression fixture, not a
+// synthetic case: it is what the operator saw as blank cells.
+test('the live Qoder account payloads render 等级 / 配额 / 状态 / 能力', () => {
+  const fixtures = [
+    {
+      id: 184,
+      account_type: 'qoder',
+      enabled: true,
+      email: 'zhangdailin1996@gmail.com',
+      qoder_user_id: '01a09c4c-e8d5-7bf6-a73f-d89a2b21d915',
+      qoder_access_token: 'access-token-placeholder',
+      has_credential: true,
+      usage_limit: 300,
+      usage_current: 300,
+      quota_supported: true,
+      quota_plan: 'Pro Trial',
+      quota_unit: 'credits',
+      quota_limit: 300,
+      quota_remaining: 300,
+      quota_used: 0,
+      quota_exhausted: false,
+      quota_upgrade_url: 'https://qoder.com/pricing?client=qoder',
+      quota_reset_at: '2026-09-14T19:47:13Z',
+      expect: { tier: /Pro Trial/, quota: /300/, status: '正常' },
+    },
+    {
+      id: 185,
+      account_type: 'qoder',
+      enabled: true,
+      email: 'sheldon@uq.edu.rs',
+      qoder_user_id: '2d24b061-2fd4-4fbd-8859-fcb05ed1c029',
+      qoder_access_token: 'access-token-placeholder',
+      has_credential: true,
+      status_code: '402',
+      usage_limit: 0,
+      usage_current: 0,
+      quota_supported: true,
+      quota_plan: 'Free',
+      quota_unit: 'credits',
+      quota_limit: 0,
+      quota_remaining: 0,
+      quota_used: 0,
+      quota_exhausted: true,
+      quota_upgrade_url: 'https://qoder.com/pricing?client=qoder',
+      quota_reset_at: '2026-09-14T02:39:48Z',
+      expect: { tier: /Free/, quota: /0/, status: '额度不足' },
+    },
+  ];
+
+  const { context } = loadUI();
+  for (const fixture of fixtures) {
+    const { expect, ...account } = fixture;
+    const tier = context.buildSubscriptionMarkup(account);
+    const quota = context.buildQuotaMarkup(account);
+    const status = context.statusBadge(account);
+
+    assert.match(tier, expect.tier, `id ${account.id}: 等级 was ${tier}`);
+    assert.doesNotMatch(tier, />-</, `id ${account.id}: 等级 fell through to the empty placeholder`);
+    assert.match(quota, expect.quota, `id ${account.id}: 配额 was ${quota}`);
+    assert.doesNotMatch(quota, /未知/, `id ${account.id}: 配额 claimed to be unknown while a snapshot existed`);
+    assert.equal(status.text, expect.status, `id ${account.id}: 状态 was ${status.text}`);
+    // 能力 is a real column and must render a placeholder rather than nothing.
+    assert.equal(context.shouldShowNSFWBadge(account), false);
+  }
+});

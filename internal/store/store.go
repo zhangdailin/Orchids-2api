@@ -183,6 +183,46 @@ type Account struct {
 	// never required to be present.
 	QoderJobToken       string    `json:"qoder_job_token,omitempty"`
 	QoderJobTokenExpiry time.Time `json:"qoder_job_token_expiry,omitempty"`
+	// QoderQuota is the last successful credit/plan snapshot. The generic
+	// UsageLimit/UsageCurrent fields stay authoritative for scheduling; this keeps
+	// the extra detail the gateway reports (plan tier, the exhausted verdict and
+	// the upgrade link) so the console can explain an account instead of showing
+	// it as broken.
+	QoderQuota QoderQuotaSnapshot `json:"qoder_quota,omitempty"`
+}
+
+// QoderQuotaSnapshot is one Qoder credit/plan observation.
+//
+// Exhausted is the gateway's own verdict and is authoritative over the
+// arithmetic: an account whose counters have not refreshed can still be flagged
+// spent, which is what makes it usable as a scheduling signal.
+type QoderQuotaSnapshot struct {
+	Limit          float64   `json:"limit,omitempty"`
+	Remaining      float64   `json:"remaining,omitempty"`
+	Used           float64   `json:"used,omitempty"`
+	Exhausted      bool      `json:"exhausted,omitempty"`
+	PlanTier       string    `json:"plan_tier,omitempty"`
+	UserType       string    `json:"user_type,omitempty"`
+	PaidPlan       bool      `json:"paid_plan,omitempty"`
+	Unit           string    `json:"unit,omitempty"`
+	UpgradeURL     string    `json:"upgrade_url,omitempty"`
+	ResetAt        time.Time `json:"reset_at,omitempty"`
+	PeriodEnd      time.Time `json:"period_end,omitempty"`
+	LastKnownLimit float64   `json:"last_known_limit,omitempty"`
+	SyncedAt       time.Time `json:"synced_at,omitempty"`
+}
+
+// ResyncAt reports when the snapshot should be refreshed again. A quota that is
+// spent is the interesting case: the reset is the only moment it can recover, so
+// the snapshot is worth re-reading then.
+func (s QoderQuotaSnapshot) ResyncAt() time.Time {
+	if s.SyncedAt.IsZero() {
+		return time.Time{}
+	}
+	if !s.ResetAt.IsZero() {
+		return s.ResetAt
+	}
+	return s.SyncedAt
 }
 
 // WorkBuddyQuotaSnapshot is the WorkBuddy credit-meter snapshot. Remaining/Limit

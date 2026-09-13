@@ -607,3 +607,74 @@ func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
 		t.Fatal("a local catalog was stamped as synced")
 	}
 }
+
+// TestQoderQuotaResponseFieldsAreAuthoritative proves the account payload reports
+// the gateway's own credit window as a known, observed balance.
+//
+// The generic projection reads usage_limit/usage_current and marks the window as
+// an estimate unless a channel says otherwise, which for Qoder would present a
+// reported window as guesswork — and left the console's quota column blank.
+func TestQoderQuotaResponseFieldsAreAuthoritative(t *testing.T) {
+	t.Parallel()
+
+	trial := &store.Account{
+		ID:           184,
+		AccountType:  "qoder",
+		UsageLimit:   300,
+		UsageCurrent: 300,
+		QoderQuota: store.QoderQuotaSnapshot{
+			Limit:      300,
+			Remaining:  300,
+			PlanTier:   "Pro Trial",
+			Unit:       "credits",
+			UpgradeURL: "https://qoder.com/pricing?client=qoder",
+			SyncedAt:   time.Now(),
+		},
+	}
+	fields := buildQuotaResponseFields(trial)
+	if got := fields["quota_limit"]; got != float64(300) {
+		t.Fatalf("quota_limit = %v, want 300", got)
+	}
+	if got := fields["quota_remaining"]; got != float64(300) {
+		t.Fatalf("quota_remaining = %v, want 300", got)
+	}
+	if got := fields["quota_plan"]; got != "Pro Trial" {
+		t.Fatalf("quota_plan = %v, want Pro Trial", got)
+	}
+	if fields["quota_limit_known"] != true {
+		t.Fatal("quota_limit_known = false for a window the gateway reported")
+	}
+	if fields["quota_observed"] != true {
+		t.Fatal("quota_observed = false for a window the gateway reported")
+	}
+	if fields["quota_exhausted"] != false {
+		t.Fatalf("quota_exhausted = %v, want false", fields["quota_exhausted"])
+	}
+
+	exhausted := &store.Account{
+		ID:          185,
+		AccountType: "qoder",
+		QoderQuota: store.QoderQuotaSnapshot{
+			Exhausted:  true,
+			PlanTier:   "Free",
+			Unit:       "credits",
+			UpgradeURL: "https://qoder.com/pricing?client=qoder",
+			ResetAt:    time.Now().Add(12 * time.Hour),
+			SyncedAt:   time.Now(),
+		},
+	}
+	exhaustedFields := buildQuotaResponseFields(exhausted)
+	if exhaustedFields["quota_exhausted"] != true {
+		t.Fatal("quota_exhausted = false for an account the gateway flagged")
+	}
+	if got := exhaustedFields["quota_plan"]; got != "Free" {
+		t.Fatalf("quota_plan = %v, want Free", got)
+	}
+	// A zero limit is a known zero, not an unknown window.
+	if exhaustedFields["quota_limit_known"] != true {
+		t.Fatal("quota_limit_known = false for a reported Free window")
+	}
+	if got := exhaustedFields["quota_upgrade_url"]; got == "" {
+		t.Fatal("quota_upgrade_url is empty, so the operator gets no next step")
+	}
+}

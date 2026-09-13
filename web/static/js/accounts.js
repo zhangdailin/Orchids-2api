@@ -151,6 +151,35 @@ function getQuotaStats(acc) {
       packageRemaining: base.packageRemaining || 0,
     };
   }
+  if (type === "qoder") {
+    // The channel reads the credit window and the plan tier from the gateway's
+    // own quota endpoints. Both are reported as quota_* fields; the generic
+    // usage columns are 0 for this channel, so reading them would show a fake
+    // empty balance for an account that has credits.
+    const base = getSidebarQuotaStats(acc);
+    if (!base) {
+      return { supported: false, unknown: true, limit: 0, remaining: 0, used: 0, pctRemaining: 0 };
+    }
+    const limit = Math.max(0, base.limit || 0);
+    const remaining = Math.max(0, base.remaining || 0);
+    const used = Math.max(0, Number(acc.quota_used || 0));
+    const pctRemaining = limit > 0 ? Math.min(100, Math.round((remaining / limit) * 100)) : 0;
+    return {
+      ...base,
+      limit,
+      remaining,
+      used,
+      pctRemaining,
+      qoder: true,
+      // An exhausted window has nothing left even when the counters have not
+      // refreshed yet, because the gateway's verdict is authoritative.
+      exhausted: acc.quota_exhausted === true,
+      plan: base.plan || "",
+      unit: base.unit || "credits",
+      resetAt: base.resetAt || "",
+      upgradeUrl: String(acc.quota_upgrade_url || "").trim(),
+    };
+  }
   // Build billing and response throttling are different xAI products. Never
   // use request/token rate-limit headers as a paid-plan balance.
   if (type === "grok" && isSidebarGrokOAuthAccount(acc)) {
@@ -281,6 +310,33 @@ function normalizeAccountSubscription(acc) {
 
 function subscriptionBadge(acc) {
   const type = normalizeAccountType(acc);
+  if (type === "qoder") {
+    const plan = String(acc?.quota_plan || "").trim();
+    if (!acc?.quota_supported) {
+      // No snapshot yet: say so instead of showing a made-up level.
+      return {
+        text: "未同步",
+        bg: "rgba(100, 116, 139, 0.12)",
+        color: "#94a3b8",
+        tip: "尚未读取到 Qoder 计划与额度；点「检查」立即同步",
+      };
+    }
+    if (plan) {
+      const paid = acc?.quota_used !== undefined && plan.toLowerCase().indexOf("free") === -1;
+      return {
+        text: plan,
+        bg: paid ? "rgba(251, 191, 36, 0.16)" : "rgba(100, 116, 139, 0.12)",
+        color: paid ? "#fbbf24" : "#cbd5e1",
+        tip: `Qoder 计划: ${plan}${acc?.quota_unit ? `（单位 ${acc.quota_unit}）` : ""}`,
+      };
+    }
+    return {
+      text: "未知",
+      bg: "rgba(100, 116, 139, 0.12)",
+      color: "#94a3b8",
+      tip: "Qoder 未返回计划档位",
+    };
+  }
   if (type === "workbuddy") {
     const plan = String(acc?.quota_plan || "").trim();
     if (plan) {
@@ -367,6 +423,13 @@ function subscriptionBadge(acc) {
 function buildSubscriptionMarkup(acc) {
   const badge = subscriptionBadge(acc);
   return `<span class="tag account-tier-tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>`;
+}
+
+// qoderQuotaExhausted reports whether the channel's own verdict says the account
+// has nothing left in its window. It is separate from the credential verdict, so
+// the row can say "额度用尽" instead of implying the account is broken.
+function qoderQuotaExhausted(acc) {
+  return normalizeAccountType(acc) === "qoder" && acc?.quota_exhausted === true;
 }
 
 function shouldShowNSFWBadge(acc) {
@@ -1117,6 +1180,14 @@ function evaluateAccountStatus(acc) {
     if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 WorkBuddy 凭证（refreshToken / accessToken）' };
     }
+  } else if (type === 'qoder') {
+    // Qoder is OAuth-only too, and the device credential never leaves the
+    // server: has_credential is the indicator the API provides. Falling through
+    // to the generic branch read its empty session columns as "no credential",
+    // so a working account was shown as 待补全 (缺少会话信息).
+    if (!hasSidebarAccountCredential(acc)) {
+      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Qoder 设备凭据，请重新使用官方网页登录' };
+    }
   } else if (!acc.session_id && !acc.session_cookie) {
     return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少会话信息' };
   }
@@ -1484,6 +1555,19 @@ function renderAccounts() {
         ].filter(Boolean).join(" · ");
       } else {
         tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
+      }
+    } else if (normalizeAccountType(acc) === "qoder") {
+      if (quota && quota.supported) {
+        tdQuota.title = [
+          quota.plan ? `计划: ${quota.plan}` : "",
+          `单位: ${quota.unit || "credits"}`,
+          "口径: 当前窗口剩余 / 窗口额度",
+          quota.exhausted ? "该账号额度已用尽，窗口重置后自动恢复" : "",
+          quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
+          quota.upgradeUrl ? `升级: ${quota.upgradeUrl}` : "",
+        ].filter(Boolean).join(" · ");
+      } else {
+        tdQuota.title = "尚未读取到 Qoder 计划与额度；点「检查」立即同步";
       }
     } else if (quota && (quota.estimated || quota.quotaUnavailable)) {
       // Every number in this cell carries its provenance, so an estimate is never

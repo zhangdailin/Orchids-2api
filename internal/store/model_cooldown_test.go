@@ -15,9 +15,9 @@ func TestModelCooldown_ScopedToModelNotAccount(t *testing.T) {
 	acc := &Account{
 		AccountType: "grok",
 		ModelCooldowns: map[string]time.Time{
-			"grok-4.6":      now.Add(90 * time.Second),
-			"grok-heavy":    now.Add(time.Hour),
-			"grok-expired":  now.Add(-time.Minute),
+			"grok-4.6":     now.Add(90 * time.Second),
+			"grok-heavy":   now.Add(time.Hour),
+			"grok-expired": now.Add(-time.Minute),
 		},
 	}
 
@@ -85,9 +85,9 @@ func TestMergeModelCooldowns_KeepsLatestAndDropsExpired(t *testing.T) {
 			"grok-stale": now.Add(-time.Hour),
 		},
 		map[string]time.Time{
-			"grok-4.6":  now.Add(5 * time.Minute),
-			"grok-4.5":  now.Add(time.Minute),
-			"":          now.Add(time.Hour),
+			"grok-4.6": now.Add(5 * time.Minute),
+			"grok-4.5": now.Add(time.Minute),
+			"":         now.Add(time.Hour),
 		},
 	)
 	if len(merged) != 2 {

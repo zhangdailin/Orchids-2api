@@ -380,6 +380,16 @@ func (a *API) buildQoderAccountFromCredentials(ctx context.Context, loginID, mac
 		acc.QoderModelIDs = qoder.CatalogSnapshot(qoder.DefaultCatalog())
 	}
 
+	// Record the allowance at login so the account table can show the plan and
+	// the operator learns immediately whether this account can actually spend.
+	// A failure here is informational: the credential is already good.
+	if quota, quotaErr := client.FetchQuota(ctx); quotaErr != nil {
+		slog.Warn("Qoder quota read failed at login; leaving the allowance unknown",
+			"login_id", loginID, "error", quotaErr)
+	} else {
+		qoder.ApplyQuota(acc, quota)
+	}
+
 	if strings.TrimSpace(acc.QoderRefreshToken) == "" {
 		// Without a refresh token the account cannot survive its first token
 		// expiry, and the login would look successful until it silently dies.

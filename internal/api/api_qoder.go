@@ -227,5 +227,22 @@ func verifyQoderAccount(ctx context.Context, acc *store.Account, cfg *config.Con
 	if ids := qoder.CatalogSnapshot(qoder.DefaultCatalog()); len(acc.QoderModelIDs) == 0 && len(ids) > 0 {
 		acc.QoderModelIDs = ids
 	}
+
+	// The credit/plan read is what distinguishes "this credential is broken" from
+	// "this account has nothing left to spend". It is a separate OpenAPI call, so
+	// a failure only leaves the quota unavailable.
+	if quota, quotaErr := client.FetchQuota(ctx); quotaErr != nil {
+		slog.Warn("Qoder quota sync failed; leaving the allowance unknown",
+			"account_id", acc.ID, "error", quotaErr)
+	} else {
+		qoder.ApplyQuota(acc, quota)
+		if quota.Exhausted {
+			// Quota exhausted is a scheduling fact, not a credential fault: the
+			// account stays valid and the status is the one the rest of the
+			// gateway uses for "no allowance left", so the pool alarm does not
+			// blame a channel that is working.
+			return "402", 0, nil
+		}
+	}
 	return "", 0, nil
 }

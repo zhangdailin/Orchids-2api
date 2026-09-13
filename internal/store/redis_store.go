@@ -1,11 +1,11 @@
 package store
 
 import (
-	"log/slog"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -516,6 +516,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 	}
 	if !acc.QoderJobTokenExpiry.IsZero() {
 		updated.QoderJobTokenExpiry = acc.QoderJobTokenExpiry
+	}
+	if !acc.QoderQuota.SyncedAt.IsZero() {
+		updated.QoderQuota = acc.QoderQuota
 	}
 	updated.UpdatedAt = time.Now()
 

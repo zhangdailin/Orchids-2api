@@ -9,9 +9,9 @@ import (
 )
 
 type recordingSubscriber struct {
-	mu     sync.Mutex
+	mu      sync.Mutex
 	batches [][]int64
-	block  chan struct{}
+	block   chan struct{}
 	panicOn bool
 }
 

@@ -466,9 +466,31 @@ curl -s -X DELETE http://127.0.0.1:3002/api/qoder/login/<login-id>
 - 只有确实不可用的凭据才会被拒绝：解析不出账号身份（`userinfo` 被拒且设备 token 未带 `user_id`）或未签发 refreshToken 时，账号不落库，且失败消息会带上具体原因（而不只是「could not be verified」）
 - 模型清单是**本地**的，因此 `POST /api/models/refresh?channel=qoder` 不会因上游不可达而失败，也不会因为某个模型「不在账号目录里」而删除它（`source=qoder_builtin_catalog`）；账号快照不带同步时间戳，因为不存在可观测的上游目录
 
-### 9.2 套餐与额度（`403` + `pricingUrl`）
+### 9.2 套餐与额度（`Free` 计划 / 每日额度）
 
-Qoder 侧没有可用套餐/额度时，上游**接受鉴权**但返回业务拒绝：
+Qoder 的免费额度是**按账号的每日窗口**发放和重置的，与是否安装 IDE/CLI **无关**（官方 CLI 包的 npm postinstall 只配置 PATH，不发起任何注册或领取请求；CLI 自身的 HTTP 面也没有任何「领取试用」接口）。已用官方 CLI 包（`@qoder-ai/qodercli@1.1.51`）逐个接口核对。
+
+本通道会读取 CLI 使用、而参考实现未使用的两个 OpenAPI 接口，把「账号坏了」变成「账号这一轮没额度了」：
+
+| 接口 | 用途 |
+|---|---|
+| `GET /api/v2/quota/usage` | 额度窗口：total / used / remaining / `isQuotaExceeded` / `expiresAt` / `upgradeUrl` |
+| `GET /api/v2/user/plan` | 计划档位（如 `Free`）、`is_paid_plan`、起始时间 |
+| `GET /api/v3/user/status` | 计划标签与 `nextResetAt`（上面两个失败时的回退） |
+
+账号响应会带上：`quota_plan`、`quota_limit`、`quota_remaining`、`quota_used`、`quota_exhausted`、`quota_upgrade_url`、`quota_reset_at`，且 `quota_limit_known=true`（窗口总额由上游自己给出，不是估算），管理页「等级 / 配额 / 状态 / 能力」四列因此都有内容。
+
+实测到的活动形态是 **`Pro Trial`**（例如 300 credits、有效期到 `period_end`），随后按日窗口重置；额度耗尽后记为 `402` 并在上游给出的重置时间后自动恢复。除付费外，Qoder 官网的 `https://qoder.com/activities` 是活动入口（实测桌面端登录会触发试用发放；是否为安装/桌面端专属由 Qoder 侧策略决定，代码层面无需做任何事）。
+
+额度用尽时的行为：
+
+- 账号状态记为 **`402`**（额度类状态，不是凭据错误），调度器会**按上游给出的 reset 时间**把它挂起，reset 后自动恢复——既不会空跑请求，也不会误报「没有可用账号」
+- 请求不会再去撞一个确定没额度的账号，因此不再出现 4 次重试
+- `quota_exhausted=true` + `quota_upgrade_url` 直接告诉操作者下一步做什么
+
+### 9.2.1 `403` + `pricingUrl` 的含义
+
+上游**接受鉴权**但返回业务拒绝时（账号额度耗尽）：
 
 ```json
 {"code":"112","message":"{"pricingUrl":"https://qoder.com/pricing?client=qoder"}"}

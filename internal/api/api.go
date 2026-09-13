@@ -1272,6 +1272,52 @@ func buildQuotaResponseFieldsWithUsage(acc *store.Account, observedTokens int64,
 	}
 
 	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "qoder":
+		// The gateway reports the credit window directly, including its own
+		// exhausted verdict. The numbers are authoritative when a snapshot exists,
+		// and the verdict decides whether the account can spend at all — so the
+		// console can say "Free, 0 credits left, upgrade here" instead of showing
+		// a broken account.
+		snapshot := acc.QoderQuota
+		limit := snapshot.Limit
+		if limit <= 0 {
+			limit = snapshot.LastKnownLimit
+		}
+		remaining := snapshot.Remaining
+		if remaining < 0 {
+			remaining = 0
+		}
+		used := snapshot.Used
+		if used < 0 {
+			used = 0
+		}
+		fields["quota_limit"] = limit
+		fields["quota_used"] = used
+		fields["quota_remaining"] = remaining
+		fields["quota_mode"] = "remaining"
+		fields["quota_unit"] = util.FirstNonEmpty(snapshot.Unit, "credits")
+		fields["quota_supported"] = !snapshot.SyncedAt.IsZero()
+		fields["quota_plan"] = snapshot.PlanTier
+		fields["quota_exhausted"] = snapshot.Exhausted
+		fields["quota_upgrade_url"] = snapshot.UpgradeURL
+		fields["quota_reset_at"] = snapshot.ResetAt
+		// The gateway reports the window total itself, so a snapshot's limit is
+		// known even when it is zero (a Free plan with nothing left). Passing
+		// limitKnown=false here would make consumers treat a reported window as an
+		// estimate.
+		if snapshot.Exhausted {
+			// The allowance is spent: the credit window is the reason, and the
+			// numbers are still reported rather than hidden.
+			applyQuotaProvenance(fields, "upstreamQuota", "upstreamUsage", "", "", true, true)
+			break
+		}
+		if snapshot.SyncedAt.IsZero() {
+			applyQuotaProvenance(fields, "unknown", "upstreamUsage", "",
+				"Qoder 额度接口未返回数据", false, false)
+			break
+		}
+		applyQuotaProvenance(fields, "upstreamQuota", "upstreamUsage", "", "", true, true)
+		return fields
 	case "workbuddy":
 		// The meter reports the remaining credits of the current cycle; the
 		// generic UsageCurrent slot stores that remaining value for this channel,
