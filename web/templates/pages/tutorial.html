@@ -1,139 +1,467 @@
 {{define "page-tutorial"}}
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260913-ui10">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/tutorial.css?v=20260912-ui1">
 </head>
+
 <body>
   {{template "sidebar.html" .}}
 
-  <main class="main-content">
+
+  <main class="main-content tut-page">
     <section class="header-section" id="tutorialHeader">
-      <h1>使用教程</h1>
-      <p>快速理解接入地址、路由区别、模型说明和渠道配置要求。</p>
+      <div>
+        <h1>使用教程</h1>
+        <p>快速理解接入地址、路由区别、模型说明和渠道配置要求。</p>
+      </div>
+      <nav class="tut-toc" id="tutorialToc" aria-label="本页目录">
+        <span class="tut-toc-label">本页</span>
+        <a href="#basic">基础信息</a>
+        <span class="tut-toc-sep" aria-hidden="true">·</span>
+        <a href="#quickstart">快速开始</a>
+        <span class="tut-toc-sep" aria-hidden="true">·</span>
+        <a href="#channels">各渠道</a>
+        <span class="tut-toc-sep" aria-hidden="true">·</span>
+        <a href="#errors">常见错误</a>
+      </nav>
     </section>
 
-    <div class="content-card doc-shell">
-      <div class="doc-callout doc-callout-cyan">
-        <div class="doc-callout-head">
-          <div class="doc-mark doc-mark-cyan">API</div>
-          <h3 class="doc-title">API 地址格式</h3>
-        </div>
-        <div class="doc-code-block">
-          Warp/Puter/WorkBuddy: <span data-api-base></span>/{渠道}/v1
-          <br />
-          Grok: <span data-api-base></span>/grok/v1
-        </div>
+    <section class="content-card tut-section" id="basic">
+      <div class="tut-section-head">
+        <h2>基础信息</h2>
+        <span class="tut-section-hint">地址格式与后缀规则，配置客户端前先看这里</span>
       </div>
+      <div class="tut-section-body">
+        <div class="doc-callout doc-callout-cyan">
+          <div class="doc-callout-head">
+            <div class="doc-mark doc-mark-cyan">API</div>
+            <h3 class="doc-title">API 地址格式</h3>
+          </div>
+          <div class="doc-code-block">
+            Warp/Puter/WorkBuddy: <span data-api-base></span>/{渠道}/v1
+            <br />
+            Grok: <span data-api-base></span>/grok/v1
+          </div>
+        </div>
 
-      <div class="doc-callout doc-callout-amber doc-callout-inline">
-        <span class="doc-mark doc-mark-amber">NOTE</span>
-        <div>
-          <span class="doc-strong doc-strong-amber">Claude Code 用户注意:</span> 配置 API 地址时请使用
-          <code class="doc-inline-code doc-inline-code-amber"><span data-api-base></span>/{渠道}</code>，
-          <span class="doc-strong doc-strong-red">不要</span>添加
-          <code class="doc-inline-code doc-inline-code-red">/v1</code> 后缀
-          <br />
-          <span class="doc-strong doc-strong-amber">Grok 路由说明:</span>
-          Grok 与其他渠道保持一致，使用 <code class="doc-inline-code doc-inline-code-amber">/grok/v1</code> 前缀。
-          <br />
-          <span class="doc-strong doc-strong-amber">Puter 账号说明:</span>
-          Puter 账号当前只需要填写 <code class="doc-inline-code doc-inline-code-amber">auth_token</code>。
-          <br />
-          <span class="doc-strong doc-strong-amber">WorkBuddy 账号说明:</span>
-          国际版（<code class="doc-inline-code doc-inline-code-amber">www.workbuddy.ai</code>）<span class="doc-strong doc-strong-amber">只支持官方登录</span>：
-          在账号页面手动点击「使用 WorkBuddy 官方网页登录」，在官方页面完成授权后账号会自动保存，
-          服务端不接触密码，并会自动同步该账号的模型目录与额度；编辑已有账号时也可用它重新授权。
-          该渠道不提供手填凭证（批量导入仍可通过 API 使用会话 refreshToken）。
+        <div class="doc-callout doc-callout-amber doc-callout-inline">
+          <span class="doc-mark doc-mark-amber">NOTE</span>
+          <div>
+            <span class="doc-strong doc-strong-amber">Claude Code 用户注意:</span> 配置 API 地址时请使用
+            <code class="doc-inline-code doc-inline-code-amber"><span data-api-base></span>/{渠道}</code>，
+            <span class="doc-strong doc-strong-red">不要</span>添加
+            <code class="doc-inline-code doc-inline-code-red">/v1</code> 后缀
+          </div>
         </div>
       </div>
+    </section>
 
-      <div class="doc-callout doc-callout-green doc-callout-inline">
-        <span class="doc-mark doc-mark-green">INFO</span>
-        <div>
-          <span class="doc-strong doc-strong-green">Puter 模型说明:</span>
-          Puter 当前采用参考仓库里的“无前缀主模型”清单，已包含 Claude / OpenAI / Gemini / Grok / DeepSeek / Mistral 等主模型族；
-          但像 <code class="doc-inline-code doc-inline-code-green">openrouter:</code>、
-          <code class="doc-inline-code doc-inline-code-green">togetherai:</code>
-          这类聚合源前缀模型暂时不直接暴露到模型管理里。
+    <section class="content-card tut-section" id="quickstart">
+      <div class="tut-section-head">
+        <h2>快速开始</h2>
+        <span class="tut-section-hint">选渠道 → 复制地址 → 复制示例配置</span>
+      </div>
+      <div class="tut-section-body tut-quick">
+        <div class="tut-step">
+          <div class="tut-step-no" aria-hidden="true">1</div>
+          <div>
+            <div class="tut-step-title" id="tutPickerLabel">选择渠道</div>
+            <div class="tut-picker" id="tutPicker" role="group" aria-labelledby="tutPickerLabel"></div>
+          </div>
+        </div>
+
+        <div class="tut-step">
+          <div class="tut-step-no" aria-hidden="true">2</div>
+          <div>
+            <div class="tut-step-title">复制接入地址</div>
+            <div class="tut-copy-row">
+              <code class="tut-url" id="tutQuickUrl"></code>
+              <button class="tut-copy" type="button" data-copy-target="tutQuickUrl">
+                <span class="tut-copy-label">复制地址</span><span class="tut-copy-flag" aria-live="polite"></span>
+              </button>
+            </div>
+            <p class="tut-step-note" id="tutQuickNote"></p>
+            <div class="tut-copy-row tut-quick-claude" id="tutQuickClaudeRow" hidden>
+              <span class="tut-row-label">Claude Code 地址</span>
+              <code class="tut-url" id="tutQuickClaudeUrl"></code>
+              <button class="tut-copy" type="button" data-copy-target="tutQuickClaudeUrl">
+                <span class="tut-copy-label">复制地址</span><span class="tut-copy-flag" aria-live="polite"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tut-step">
+          <div class="tut-step-no" aria-hidden="true">3</div>
+          <div>
+            <div class="tut-step-title">复制示例配置</div>
+            <div class="tut-config">
+              <pre class="tut-code" id="tutQuickConfig"></pre>
+              <button class="tut-copy" type="button" data-copy-target="tutQuickConfig">
+                <span class="tut-copy-label">复制配置</span><span class="tut-copy-flag" aria-live="polite"></span>
+              </button>
+            </div>
+            <p class="tut-step-note">
+              凭据使用面板 API Key：<code class="doc-inline-code">Authorization: Bearer sk-...</code>；
+              Anthropic Messages 客户端也可发送 <code class="doc-inline-code">x-api-key: sk-...</code>。
+            </p>
+          </div>
         </div>
       </div>
+    </section>
 
-      <div class="table-wrap doc-table-wrap">
-        <table>
-          <thead>
-<tr>
-              <td><span class="tag badge-warp">Warp</span></td>
-              <td><code class="doc-link-code" data-api-path="/warp/v1"></code></td>
-              <td><code class="doc-model-code">claude-4-5-sonnet</code> <span class="tag badge-warp tag-mini">Warp</span></td>
-              <td>
-                <span class="tag protocol-tag protocol-tag-claude">Claude</span>
-                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
-              </td>
-            </tr>
-            <tr>
-              <td><span class="tag badge-grok">Grok</span></td>
-              <td><code class="doc-link-code" data-api-path="/grok/v1"></code></td>
-              <td><code class="doc-model-code">grok-3</code> <span class="tag badge-grok tag-mini">Grok</span></td>
-              <td>
-                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
-              </td>
-            </tr>
-            <tr>
-              <td><span class="tag badge-workbuddy">WorkBuddy</span></td>
-              <td><code class="doc-link-code" data-api-path="/workbuddy/v1"></code></td>
-              <td>
-                <code class="doc-model-code">default-model</code> / <code class="doc-model-code">hy3</code>
-                <span class="tag badge-workbuddy tag-mini">WorkBuddy</span>
-              </td>
-              <td>
-                <span class="tag protocol-tag protocol-tag-claude">Claude</span>
-                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
-              </td>
-            </tr>
-            <tr>
-              <td><span class="tag badge-puter">Puter</span></td>
-              <td><code class="doc-link-code" data-api-path="/puter/v1"></code></td>
-              <td>
-                <code class="doc-model-code">claude-opus-4-5</code>
-                <span class="tag badge-puter tag-mini">Puter</span>
-              </td>
-              <td>
-                <span class="tag protocol-tag protocol-tag-claude">Claude</span>
-                <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+    <section class="content-card tut-section" id="channels">
+      <div class="tut-section-head">
+        <h2>各渠道</h2>
+        <span class="tut-section-hint">速查表在上，每张卡片含地址、协议、凭据、示例配置与注意事项</span>
       </div>
-    </div>
+      <div class="tut-section-body">
+        <div class="table-wrap doc-table-wrap">
+          <table class="tut-table" id="tutChannelTable">
+            <thead>
+              <tr>
+                <th scope="col">渠道</th>
+                <th scope="col">接入地址</th>
+                <th scope="col">模型示例</th>
+                <th scope="col">协议</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td data-label="渠道"><span class="tag badge-warp">Warp</span></td>
+                <td data-label="接入地址">
+                  <span class="tut-url-cell">
+                    <code class="doc-link-code" id="tutTableUrlWarp" data-api-path="/warp/v1"></code>
+                    <button class="tut-copy tut-copy-mini" type="button" data-copy-target="tutTableUrlWarp">
+                      <span class="tut-copy-label">复制</span><span class="tut-copy-flag" aria-live="polite"></span>
+                    </button>
+                  </span>
+                </td>
+                <td data-label="模型示例"><code class="doc-model-code">claude-4-5-sonnet</code> <span class="tag badge-warp tag-mini">Warp</span></td>
+                <td data-label="协议">
+                  <span class="tag protocol-tag protocol-tag-claude">Claude</span>
+                  <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
+                </td>
+              </tr>
+              <tr>
+                <td data-label="渠道"><span class="tag badge-grok">Grok</span></td>
+                <td data-label="接入地址">
+                  <span class="tut-url-cell">
+                    <code class="doc-link-code" id="tutTableUrlGrok" data-api-path="/grok/v1"></code>
+                    <button class="tut-copy tut-copy-mini" type="button" data-copy-target="tutTableUrlGrok">
+                      <span class="tut-copy-label">复制</span><span class="tut-copy-flag" aria-live="polite"></span>
+                    </button>
+                  </span>
+                </td>
+                <td data-label="模型示例"><code class="doc-model-code">grok-3</code> <span class="tag badge-grok tag-mini">Grok</span></td>
+                <td data-label="协议">
+                  <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
+                </td>
+              </tr>
+              <tr>
+                <td data-label="渠道"><span class="tag badge-workbuddy">WorkBuddy</span></td>
+                <td data-label="接入地址">
+                  <span class="tut-url-cell">
+                    <code class="doc-link-code" id="tutTableUrlWorkBuddy" data-api-path="/workbuddy/v1"></code>
+                    <button class="tut-copy tut-copy-mini" type="button" data-copy-target="tutTableUrlWorkBuddy">
+                      <span class="tut-copy-label">复制</span><span class="tut-copy-flag" aria-live="polite"></span>
+                    </button>
+                  </span>
+                </td>
+                <td data-label="模型示例">
+                  <code class="doc-model-code">default-model</code> / <code class="doc-model-code">hy3</code>
+                  <span class="tag badge-workbuddy tag-mini">WorkBuddy</span>
+                </td>
+                <td data-label="协议">
+                  <span class="tag protocol-tag protocol-tag-claude">Claude</span>
+                  <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
+                </td>
+              </tr>
+              <tr>
+                <td data-label="渠道"><span class="tag badge-puter">Puter</span></td>
+                <td data-label="接入地址">
+                  <span class="tut-url-cell">
+                    <code class="doc-link-code" id="tutTableUrlPuter" data-api-path="/puter/v1"></code>
+                    <button class="tut-copy tut-copy-mini" type="button" data-copy-target="tutTableUrlPuter">
+                      <span class="tut-copy-label">复制</span><span class="tut-copy-flag" aria-live="polite"></span>
+                    </button>
+                  </span>
+                </td>
+                <td data-label="模型示例">
+                  <code class="doc-model-code">claude-opus-4-5</code>
+                  <span class="tag badge-puter tag-mini">Puter</span>
+                </td>
+                <td data-label="协议">
+                  <span class="tag protocol-tag protocol-tag-claude">Claude</span>
+                  <span class="tag protocol-tag protocol-tag-openai">OpenAI</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="tut-cards" id="tutChannels"></div>
+      </div>
+    </section>
+
+    <section class="content-card tut-section" id="errors">
+      <div class="tut-section-head">
+        <h2>常见错误</h2>
+        <span class="tut-section-hint">症状 → 原因 → 处理</span>
+      </div>
+      <div class="tut-section-body">
+        <div class="table-wrap doc-table-wrap">
+          <table class="tut-table tut-errors" id="tutErrorTable">
+            <thead>
+              <tr>
+                <th scope="col">症状</th>
+                <th scope="col">原因</th>
+                <th scope="col">处理</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td data-label="症状">Claude Code 里请求打不通，地址像是多了一层</td>
+                <td data-label="原因">API 地址后面多加了 <code class="doc-inline-code doc-inline-code-red">/v1</code> 后缀</td>
+                <td data-label="处理">
+                  地址写成
+                  <code class="doc-inline-code doc-inline-code-amber"><span data-api-base></span>/{渠道}</code>
+                  （例如 <code class="doc-inline-code">/warp</code>），
+                  <span class="doc-strong doc-strong-red">不要</span>添加 <code class="doc-inline-code doc-inline-code-red">/v1</code> 后缀。
+                </td>
+              </tr>
+              <tr>
+                <td data-label="症状">Grok 请求落到别的路由上</td>
+                <td data-label="原因">把 Grok 当成了与其他渠道不同的写法</td>
+                <td data-label="处理">
+                  Grok 与其他渠道保持一致，使用 <code class="doc-inline-code doc-inline-code-amber">/grok/v1</code> 前缀。
+                </td>
+              </tr>
+              <tr>
+                <td data-label="症状">Puter 账号保存时报缺凭据或字段不对</td>
+                <td data-label="原因">按其他渠道的习惯填了多余字段</td>
+                <td data-label="处理">
+                  Puter 账号当前只需要填写 <code class="doc-inline-code doc-inline-code-amber">auth_token</code>。
+                </td>
+              </tr>
+              <tr>
+                <td data-label="症状">WorkBuddy 无法新增账号，或保存后不可用</td>
+                <td data-label="原因">该渠道<span class="doc-strong doc-strong-amber">不提供手填凭证</span>，手填无法生效</td>
+                <td data-label="处理">
+                  在账号页面手动点击「使用 WorkBuddy 官方网页登录」，在官方页面完成授权后账号会自动保存，
+                  服务端不接触密码；编辑已有账号时也可用它重新授权。批量导入仍可通过 API 使用会话
+                  <code class="doc-inline-code">refreshToken</code>。
+                </td>
+              </tr>
+              <tr>
+                <td data-label="症状">模型列表里找不到 <code class="doc-inline-code">openrouter:</code>、<code class="doc-inline-code">togetherai:</code> 这类模型</td>
+                <td data-label="原因">聚合源前缀模型暂时不直接暴露到模型管理里</td>
+                <td data-label="处理">
+                  使用 Puter 的“无前缀主模型”清单，已包含 Claude / OpenAI / Gemini / Grok / DeepSeek /
+                  Mistral 等主模型族。
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
 
-  {{template "model-modal.html"}}
-  {{template "key-modals.html"}}
 
-  <!-- Toast Container -->
+<div class="modal" id="modelModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modelModalTitle">添加模型</h3>
+      <button class="modal-close" onclick="closeModelModal()">&times;</button>
+    </div>
+    <form id="modelForm" onsubmit="saveModel(event)">
+      <input type="hidden" id="modelId" />
+      <div class="form-group">
+        <label class="form-label">渠道</label>
+        <select class="form-input" id="modelChannel">
+          <option value="Warp">Warp</option>
+          <option value="Puter">Puter</option>
+          <option value="WorkBuddy">WorkBuddy</option>
+          <option value="Grok">Grok</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">模型 ID</label>
+        <input type="text" class="form-input" id="modelModelId" required placeholder="e.g. claude-3-opus-20240229" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">显示名称</label>
+        <input type="text" class="form-input" id="modelName" required placeholder="e.g. Claude 3 Opus" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">排序权重</label>
+          <input type="number" class="form-input" id="modelSortOrder" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">状态</label>
+          <select class="form-input" id="modelStatus">
+            <option value="available">可用 (Available)</option>
+            <option value="maintenance">维护 (Maintenance)</option>
+            <option value="offline">下线 (Offline)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <label class="toggle">
+            <input type="checkbox" id="modelIsDefault" />
+            <span class="toggle-slider"></span>
+          </label>
+          &nbsp;&nbsp;设为默认模型
+        </label>
+        <div class="helper-text" style="margin-top:8px;line-height:1.5;">
+          同一渠道只会保留一个默认模型，保存后会自动替换当前默认项。
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px">
+        保存
+      </button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="createKeyModal">
+  <div class="modal-content modal-content-md">
+    <div class="modal-header">
+      <h3 class="modal-title">创建 API Key</h3>
+      <button class="modal-close" onclick="closeCreateKeyModal()">
+        &times;
+      </button>
+    </div>
+    <form onsubmit="createApiKey(event)">
+      <div class="form-group">
+        <label class="form-label">名称 / 备注（支持换行批量创建）</label>
+        <textarea class="form-input" id="keyName" required placeholder="每行一个名称，例如：&#10;生产环境&#10;测试用&#10;开发者-张三"
+          rows="4" style="resize: vertical;"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">允许模型（可选，每行或逗号分隔）</label>
+        <textarea class="form-input" id="keyAllowedModels" placeholder="留空表示全部模型，例如：&#10;grok-4.6&#10;grok-imagine-image" rows="3"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">每分钟请求数（RPM）</label>
+          <input class="form-input" id="keyRPMLimit" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">到期时间（可选）</label>
+          <input class="form-input" id="keyExpiresAt" type="datetime-local" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">
+        创建
+      </button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="editKeyModal">
+  <div class="modal-content modal-content-md">
+    <div class="modal-header">
+      <h3 class="modal-title">编辑 API Key 策略</h3>
+      <button class="modal-close" onclick="closeEditKeyModal()">&times;</button>
+    </div>
+    <form onsubmit="saveKeyPolicy(event)">
+      <input type="hidden" id="editKeyId" />
+      <div class="form-group">
+        <label class="form-label">允许模型（每行或逗号分隔）</label>
+        <textarea class="form-input" id="editKeyAllowedModels" placeholder="留空表示全部模型" rows="4"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">每分钟请求数（0 表示不限）</label>
+          <input class="form-input" id="editKeyRPMLimit" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">到期时间（留空表示永不过期）</label>
+          <input class="form-input" id="editKeyExpiresAt" type="datetime-local" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">保存策略</button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="showKeyModal">
+  <div class="modal-content modal-content-lg">
+    <div class="modal-header">
+      <h3 class="modal-title">API Key 已创建</h3>
+    </div>
+    <div class="modal-body">
+    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+      请立即复制并保存您的 API Key：
+    </p>
+    <div id="fullKeyDisplay" class="modal-scroll">
+    </div>
+    <div class="warning-box">
+      <strong>请妥善保存</strong><br />
+      关闭此窗口后将无法再次查看完整 Key
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="copyAllKeys()">
+        复制全部
+      </button>
+      <button class="btn btn-neutral"
+        onclick="closeShowKeyModal()">
+        我已保存，关闭
+      </button>
+    </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="modal" id="deleteKeyModal">
+  <div class="modal-content modal-content-sm">
+    <div class="modal-header">
+      <h3 class="modal-title">删除 API Key</h3>
+      <button class="modal-close" onclick="closeDeleteKeyModal()">
+        &times;
+      </button>
+    </div>
+    <div class="modal-body">
+    <p style="margin-bottom: 20px;">
+      确定要删除 Key「<strong id="deleteKeyName"></strong>」吗？<br />
+      <span class="warning-text">此操作不可撤销，使用此 Key 的应用将无法访问。</span>
+    </p>
+    <input type="hidden" id="deleteKeyId" />
+    <div class="modal-actions">
+      <button class="btn btn-neutral"
+        onclick="closeDeleteKeyModal()">
+        取消
+      </button>
+      <button class="btn btn-danger" onclick="confirmDeleteKey()">
+        删除
+      </button>
+    </div>
+    </div>
+  </div>
+</div>
+
+
+
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v=20260605-2"></script>
-  <script>
-    (function () {
-      const base = window.location.origin.replace(/\/$/, "");
-      document.querySelectorAll("[data-api-base]").forEach((el) => {
-        el.textContent = base;
-      });
-      document.querySelectorAll("[data-api-path]").forEach((el) => {
-        const path = el.getAttribute("data-api-path") || "";
-        const url = base + path;
-        el.textContent = url;
-        el.style.cursor = "pointer";
-        el.addEventListener("click", () => copyToClipboard(url));
-      });
-    })();
-  </script>
+  <script src="{{.AdminPath}}/js/common.js?v=20260913-ui2"></script>
+  <script src="{{.AdminPath}}/js/tutorial.js?v=20260912-ui1"></script>
 </body>
+
 </html>
+
 {{end}}

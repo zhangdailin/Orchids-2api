@@ -1,0 +1,85 @@
+{{define "page-alerts"}}
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260913-ui10">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260913-ops11">
+</head>
+
+<body>
+  {{template "sidebar.html" .}}
+
+
+  <main class="main-content ops-page">
+    <section class="header-section">
+      <div>
+        <h1>告警配置</h1>
+        <p class="page-sub">这里的阈值就是运维总览“告警事件”的判定依据：同一份规则、同一个引擎，改完立即生效并持久化。</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="alertsReload" type="button">重新读取</button>
+        <button class="btn" id="alertsResetDefaults" type="button">恢复默认</button>
+        <button class="btn-primary" id="alertsSave" type="button">保存规则</button>
+      </div>
+    </section>
+
+    <section class="ops-card">
+      <div class="ops-card-head">
+        <h2>当前规则</h2>
+        <span class="ops-hint" id="alertsState">—</span>
+      </div>
+      <form class="alerts-form" id="alertsForm" autocomplete="off">
+        <div class="alerts-grid" id="alertsFields"></div>
+        <p class="logs-filter-note" id="alertsNote"></p>
+        <div class="alerts-preview" id="alertsPreview"></div>
+      </form>
+    </section>
+
+    <section class="ops-card">
+      <div class="ops-card-head">
+        <div>
+          <h2>规则说明</h2>
+          <p class="hint">规则是纯函数：同样的快照与阈值总是得到同样的告警，重启不会凭空产生或丢失一条告警。</p>
+        </div>
+      </div>
+      <div class="alerts-help" id="alertsHelp"></div>
+    </section>
+
+    <section class="ops-card">
+      <div class="ops-card-head">
+        <div>
+          <h2>规则触发记录</h2>
+          <p class="hint">最近 20 条触发 / 恢复事件，与运维总览的告警表是同一本账。</p>
+        </div>
+        <div class="ops-card-tools">
+          <button class="btn btn-sm" id="alertsEventsReload" type="button">刷新</button>
+        </div>
+      </div>
+      <div class="ops-table-wrap">
+        <table class="ops-table" id="alertsEvents">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>状态</th>
+              <th>级别</th>
+              <th>渠道</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <script src="{{.AdminPath}}/js/common.js?v=20260913-ui2"></script>
+    <script src="{{.AdminPath}}/js/alerts.js?v=20260913-alerts2"></script>
+  </main>
+</body>
+
+</html>
+
+{{end}}

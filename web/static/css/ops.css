@@ -1,201 +1,828 @@
-/* Operations overview + log centre. Kept in one stylesheet because both pages
-   share the KPI cards, chips and table styling. */
+/* Operations monitoring dashboard + log centre.
+   Loaded after main.css; all tokens come from there.
 
-.ops-page { padding-bottom: 48px; }
+   Sections: 1 header · 2 hero gauge · 3 KPI cards · 4 resource row
+   5 concurrency & trends · 6 distributions · 7 alerts · 8 matrix
+   9 log centre · 10 responsive */
 
-/* Light theme note: the deployment runs the light :root from main.css, where
-   --text-secondary is #666666, so every muted colour here falls back to a
-   value that stays readable on the light surface. */
-.ops-subtitle { color: var(--text-secondary, #4a5160); margin: 4px 0 12px; font-size: 13px; }
+.ops-page { padding-bottom: var(--space-10); }
 
-.ops-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-
-.ops-filter-group { display: inline-flex; gap: 6px; }
-
-.ops-chip {
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: transparent;
-  color: inherit;
-  border-radius: 999px;
-  padding: 5px 12px;
-  font-size: 12px;
-  cursor: pointer;
+/* -----------------------------------------------------------------------------
+   1. Header: title block + status line, filters on the right
+   -------------------------------------------------------------------------- */
+.ops-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
 }
 
-.ops-chip.is-active { background: rgba(56, 189, 248, 0.18); border-color: rgba(56, 189, 248, 0.6); }
+.ops-head-title { display: flex; align-items: center; gap: var(--space-3); }
 
-.ops-select { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
-.ops-select input, .ops-select select {
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(148, 163, 184, 0.3);
-  color: inherit;
-  border-radius: 6px;
-  padding: 5px 8px;
-  font-size: 12px;
-  min-width: 120px;
+.ops-head-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--accent);
 }
 
-.ops-refresh {
-  border: 1px solid rgba(56, 189, 248, 0.5);
-  background: rgba(56, 189, 248, 0.15);
-  color: inherit;
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 12px;
-  cursor: pointer;
+.ops-head-mark svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-/* Narrow viewports (the admin window is often ~736px wide): auto-fit with a
-   150px floor leaves an orphan card on the last row, so pin the column count. */
-.ops-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
-@media (max-width: 760px) { .ops-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 420px) { .ops-kpis { grid-template-columns: 1fr; } }
+.ops-head h1 { font-size: 1.35rem; font-weight: 700; white-space: nowrap; }
 
-.ops-kpi {
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 10px;
-  padding: 10px 12px;
-  min-width: 0;
+.ops-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
 }
 
-.ops-kpi .label { font-size: 12px; color: var(--text-secondary, #4a5160); line-height: 1.35; }
-.ops-kpi .value { font-size: 20px; font-weight: 600; margin-top: 4px; line-height: 1.2; }
-.ops-kpi .note { font-size: 11.5px; color: var(--text-secondary, #4a5160); margin-top: 3px; line-height: 1.45; }
-.ops-kpi.is-muted .value { color: var(--text-secondary, #4a5160); font-size: 16px; font-weight: 500; }
-/* Success rate below the configured alerting target: flag it on the card. */
-.ops-kpi.is-below-target { border-color: rgba(200, 70, 60, 0.5); }
-.ops-kpi.is-below-target .value { color: #c0392b; }
-.ops-kpi.is-below-target .note { color: #a8443a; }
+.ops-status-sep { color: var(--text-faint); }
 
-.ops-panels { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
-@media (max-width: 980px) { .ops-panels { grid-template-columns: 1fr; } }
+.ops-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+
+.ops-dot.is-warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.ops-dot.is-error { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+
+.ops-head-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.ops-head-filters .compact-select { min-width: 108px; }
+.ops-head-filters .btn-icon { width: var(--control-h); height: var(--control-h); }
+
+/* -----------------------------------------------------------------------------
+   2. Hero: health gauge + live QPS/TPS + sparkline
+   -------------------------------------------------------------------------- */
+.ops-top {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(0, 2fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  align-items: stretch;
+}
 
 .ops-card {
-  background: rgba(15, 23, 42, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 10px;
-  padding: 14px 16px;
-  margin-bottom: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
-.ops-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
-.ops-card-head h2 { font-size: 14px; margin: 0; white-space: nowrap; }
-.ops-hint { font-size: 11.5px; color: var(--text-secondary, #4a5160); flex: 1 1 260px; text-align: right; line-height: 1.5; }
+.ops-card-wide { grid-column: span 1; }
 
-.ops-chart { height: 220px; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; }
-.ops-chart .bar { flex: 0 0 auto; width: 6px; background: rgba(56, 189, 248, 0.75); border-radius: 2px 2px 0 0; position: relative; }
-.ops-chart .bar.is-failed { background: rgba(251, 113, 133, 0.85); }
-.ops-empty { color: var(--text-secondary, #4a5160); font-size: 12px; padding: 16px 0; }
+/* The hero card is the tallest element of the top row, so it stretches. */
+.ops-hero { min-height: 220px; }
+.ops-hero .ops-card-head { margin-bottom: var(--space-3); }
 
-.ops-alerts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.ops-alert { border-left: 3px solid rgba(148, 163, 184, 0.5); padding: 8px 10px; background: rgba(15, 23, 42, 0.4); border-radius: 4px; }
-.ops-alert.severity-warning { border-left-color: #f59e0b; }
-.ops-alert.severity-critical { border-left-color: #fb7185; }
-.ops-alert .title { font-size: 13px; font-weight: 600; }
-.ops-alert .detail { font-size: 11.5px; color: var(--text-secondary, #4a5160); margin-top: 2px; }
+.ops-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
 
-/* The wrap is a safety net only: at 736px the matrix must fit without it, so
-   the cells are tightened and the sparkline column is capped. */
-.ops-table-wrap { overflow-x: auto; }
-.ops-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-.ops-table th, .ops-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(148, 163, 184, 0.14); }
-.ops-table th { color: var(--text-secondary, #4a5160); font-weight: 500; white-space: nowrap; }
-.ops-table tr.is-model td:first-child { padding-left: 22px; color: var(--text-secondary, #4a5160); }
-.ops-table tr.is-channel td { font-weight: 600; }
-/* Durations read best when the digits line up and never wrap mid-value. */
-.ops-table td.ops-duration { white-space: nowrap; font-variant-numeric: tabular-nums; }
-/* 40 mini bars × 6px would blow the row out on a narrow window. */
-.ops-table td.ops-history { max-width: 180px; white-space: nowrap; overflow: hidden; }
+.ops-card-head h2 { font-size: 0.95rem; font-weight: 650; }
+.ops-hint { color: var(--text-secondary); font-size: 0.78rem; }
+.ops-card-tools { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 
-.ops-bar { display: inline-block; height: 8px; border-radius: 4px; background: rgba(74, 222, 128, 0.7); min-width: 2px; vertical-align: middle; }
-.ops-bar.is-warn { background: rgba(245, 158, 11, 0.8); }
+.ops-hero-body {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: center;
+}
+
+.ops-gauge { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); }
+
+/* The ring is a conic gradient painted from the health score, so the gauge needs
+   no chart library and prints the same way everywhere. */
+.ops-gauge-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  background: conic-gradient(var(--idle) 0%, var(--surface-3) 0);
+}
+
+.ops-gauge-ring::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border-radius: 50%;
+  background: var(--surface-1);
+}
+
+.ops-gauge-value,
+.ops-gauge-label { position: relative; z-index: 1; }
+.ops-gauge-value { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ops-gauge-label { color: var(--text-secondary); font-size: 0.78rem; }
+
+.ops-gauge-state { margin: 0; color: var(--text-main); font-size: 0.86rem; font-weight: 650; }
+.ops-gauge-sub {
+  /* The sub-line carries four separate figures; laying them out as a wrapping row
+     keeps them legible in the narrow hero column instead of overlapping. */
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-3);
+  justify-content: center;
+  margin: 0;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+.ops-gauge-sub > span { white-space: nowrap; }
+.ops-gauge-sub > span + span::before {
+  content: '·';
+  margin-right: var(--space-3);
+  color: var(--text-faint);
+}
+
+.ops-hero-live { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+
+.ops-hero-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--bg-inset); width: fit-content; }
+.ops-hero-tabs .ops-chip { border-color: transparent; background: transparent; }
+.ops-hero-tabs .ops-chip.is-active { background: var(--accent-soft); border-color: var(--accent-line); }
+
+.ops-live-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.ops-live-col { display: flex; flex-direction: column; gap: var(--space-1); }
+.ops-live-label { color: var(--text-secondary); font-size: 0.76rem; }
+.ops-live-values { display: flex; flex-wrap: wrap; gap: var(--space-2); color: var(--text-secondary); font-size: 0.74rem; }
+.ops-live-values strong { color: var(--text-main); font-size: 1rem; font-variant-numeric: tabular-nums; }
+
+.ops-spark { height: 72px; position: relative; }
+
+/* -----------------------------------------------------------------------------
+   3. KPI cards: six, in a 3x2 grid beside the hero
+   -------------------------------------------------------------------------- */
+.ops-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.ops-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+}
+
+.ops-kpi-card.is-loading { min-height: 132px; }
+
+.ops-kpi-head {
+  display: flex;
+  /* The 请求时长 card carries the cohort selector in this head. Without wrapping, the
+     219px selector inside a 205px head squeezed the title and the sample count to their
+     min-content width — one character per line — so the card read as a vertical column of
+     single characters. The selector takes its own line now. */
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* A card's own name never breaks: CJK text can break between any two characters, so a
+   squeezed flex item becomes a one-character-wide column instead of wrapping sensibly. */
+.ops-kpi-head > span:first-child,
+.ops-kpi-title { flex: none; white-space: nowrap; }
+
+.ops-kpi-head > .ops-hint { flex: none; white-space: nowrap; }
+
+/* The selector is wider than one KPI column: full width, chips wrapping inside it. */
+.ops-kpi-head .ops-tabs {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  margin-left: 0;
+}
+
+.ops-kpi-big {
+  color: var(--text-main);
+  font-size: 1.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.ops-kpi-big.is-ok { color: var(--ok); }
+.ops-kpi-big.is-warn { color: var(--warn); }
+.ops-kpi-big.is-error { color: var(--bad); }
+.ops-kpi-big.is-muted { color: var(--text-muted); font-size: 1.1rem; font-weight: 550; }
+.ops-kpi-unit { margin-left: 4px; color: var(--text-muted); font-size: 0.8rem; font-weight: 500; }
+
+.ops-kpi-rows { display: flex; flex-direction: column; gap: 2px; }
+/* The KPI rows are the densest text on the page: they carry the label, so they are one
+   step larger than a hint and use the brighter secondary tone rather than the muted one. */
+.ops-kpi-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); font-size: 0.8rem; }
+.ops-kpi-row span:first-child { color: var(--text-secondary); }
+.ops-kpi-row span:last-child { color: var(--text-soft); font-variant-numeric: tabular-nums; }
+.ops-kpi-row.is-strong span:last-child { color: var(--text-main); font-weight: 650; }
+
+.ops-kpi-note { color: var(--text-secondary); font-size: 0.76rem; }
+
+.ops-kpi-meter { height: 6px; border-radius: var(--radius-pill); background: var(--bg-inset); overflow: hidden; }
+.ops-kpi-meter > span { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--ok); }
+.ops-kpi-meter > span.is-warn { background: var(--warn); }
+.ops-kpi-meter > span.is-error { background: var(--bad); }
+
+/* -----------------------------------------------------------------------------
+   4. Resource row
+   -------------------------------------------------------------------------- */
+.ops-resources {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.ops-resource {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.ops-resource-head { display: flex; align-items: center; gap: var(--space-1); color: var(--text-secondary); font-size: 0.76rem; }
+.ops-resource-value { font-size: 1.2rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ops-resource.is-ok .ops-resource-value { color: var(--ok); }
+.ops-resource.is-warn .ops-resource-value { color: var(--warn); }
+.ops-resource.is-critical .ops-resource-value { color: var(--bad); }
+.ops-resource.is-unknown .ops-resource-value { color: var(--text-muted); font-size: 0.9rem; font-weight: 550; }
+.ops-resource-detail { color: var(--text-muted); font-size: 0.7rem; line-height: 1.45; }
+
+/* -----------------------------------------------------------------------------
+   5. Concurrency, trends
+   -------------------------------------------------------------------------- */
+.ops-grid { margin-bottom: var(--space-4); }
+.ops-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.ops-grid-3 > .ops-card:last-child { grid-column: span 1; }
+
+.ops-concurrency { display: flex; flex-direction: column; gap: var(--space-3); }
+
+.ops-platform-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.ops-platform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.ops-platform-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.ops-platform-name { color: var(--text-main); font-size: 0.82rem; font-weight: 650; }
+.ops-platform-rate { color: var(--text-secondary); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.ops-platform-badges { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.ops-platform-empty { color: var(--text-muted); font-size: 0.78rem; }
+
+.ops-chart { position: relative; height: 150px; }
+.ops-chart-tall { height: 190px; }
+.ops-chart svg { width: 100%; height: 100%; display: block; }
+.ops-chart .grid-line { stroke: var(--border-color); stroke-width: 1; }
+.ops-chart .axis-text { fill: var(--text-faint); font-size: 9px; font-family: var(--font-sans); }
+.ops-chart .series-qps { fill: none; stroke: var(--info); stroke-width: 1.6; }
+.ops-chart .series-tps { fill: none; stroke: var(--ok); stroke-width: 1.6; }
+.ops-chart .series-switch { fill: none; stroke: var(--accent-purple); stroke-width: 1.6; }
+.ops-chart .series-error { fill: none; stroke: var(--bad); stroke-width: 1.6; }
+.ops-chart .series-area { fill: rgba(108, 182, 255, 0.14); stroke: none; }
+.ops-chart .bar { fill: var(--info); }
+.ops-chart .bar.is-error { fill: var(--bad); }
+/* The "no samples yet" label fills its chart box. Two things are load bearing:
+   the box must be positioned, or the label escapes to the nearest positioned
+   ancestor and covers the controls above it, and the label must never take a click —
+   it is text, not a control. Both were wrong for the hero sparkline: with an empty
+   spark, the 1min / 5min / 30min / 1h window chips were covered by this paragraph and
+   could not be clicked at all. */
+.ops-chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.ops-legend { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: 0.76rem; }
+.ops-legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.ops-legend-dot.is-qps { background: var(--info); }
+.ops-legend-dot.is-tps { background: var(--ok); }
+
+/* -----------------------------------------------------------------------------
+   6. Distributions
+   -------------------------------------------------------------------------- */
+.ops-histogram { display: flex; align-items: flex-end; gap: var(--space-2); height: 170px; }
+.ops-histogram-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--space-1); height: 100%; justify-content: flex-end; }
+.ops-histogram-bar { width: 100%; min-height: 3px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(180deg, var(--info), rgba(108, 182, 255, 0.35)); }
+.ops-histogram-count { color: var(--text-soft); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.ops-histogram-label { color: var(--text-faint); font-size: 0.66rem; white-space: nowrap; }
+
+.ops-errors { display: flex; flex-direction: column; gap: var(--space-2); }
+.ops-error-row { display: grid; grid-template-columns: 84px minmax(0, 1fr) 56px; align-items: center; gap: var(--space-3); font-size: 0.78rem; }
+.ops-error-row > span:first-child { color: var(--text-muted); }
+.ops-error-row > span:last-child { color: var(--text-soft); text-align: right; font-variant-numeric: tabular-nums; }
+.ops-error-meter { height: 8px; border-radius: var(--radius-pill); background: var(--bg-inset); overflow: hidden; }
+.ops-error-meter > span { display: block; height: 100%; background: var(--bad); }
+.ops-error-meter > span.is-warn { background: var(--warn); }
+.ops-error-meter > span.is-info { background: var(--info); }
+.ops-empty { color: var(--text-muted); font-size: 0.8rem; padding: var(--space-4) 0; margin: 0; }
+
+/* -----------------------------------------------------------------------------
+   7. Alerts
+   -------------------------------------------------------------------------- */
+.ops-alert-severity { color: var(--text-soft); font-size: 0.76rem; }
+.ops-alert-severity.is-critical { color: var(--bad); font-weight: 650; }
+.ops-alert-severity.is-warning { color: var(--warn); font-weight: 650; }
+
+/* -----------------------------------------------------------------------------
+   8. Channel × model matrix
+   -------------------------------------------------------------------------- */
+.ops-table-wrap { overflow-x: auto; border: 1px solid var(--border-color); border-radius: var(--radius-md); }
+
+.ops-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
+
+.ops-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ops-table tbody td {
+  padding: 10px var(--space-4);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-soft);
+  vertical-align: middle;
+}
+
+.ops-table tbody tr.is-channel td { background: var(--surface-2); color: var(--text-main); font-weight: 650; }
+.ops-table tbody tr.is-model td { color: var(--text-secondary); font-size: 0.78rem; }
+.ops-table tbody tr.is-model td:first-child { padding-left: var(--space-8); font-family: var(--font-mono); }
+.ops-table tbody tr:hover td { background: var(--surface-3); }
+
+.ops-bar { display: inline-block; height: 10px; min-width: 3px; border-radius: 2px; background: rgba(74, 222, 155, 0.75); vertical-align: middle; }
+.ops-bar.is-warn { background: rgba(245, 194, 100, 0.85); }
 .ops-bar.is-bad { background: rgba(251, 113, 133, 0.85); }
-.ops-bar.is-none { background: rgba(148, 163, 184, 0.4); }
 
-.ops-coverage { font-size: 12px; color: var(--text-secondary, #4a5160); margin: 0; line-height: 1.7; }
+.ops-coverage-fold {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
 
-.logs-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
-.logs-tab {
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: transparent;
-  color: inherit;
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
+.ops-coverage-fold > summary {
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
   cursor: pointer;
 }
-.logs-tab.is-active { background: rgba(56, 189, 248, 0.18); border-color: rgba(56, 189, 248, 0.6); }
 
-.logs-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
-.logs-filters .ops-select input { min-width: 110px; }
+.ops-coverage { margin: 0; padding: 0 var(--space-4) var(--space-4); color: var(--text-muted); font-size: 0.78rem; line-height: 1.75; }
 
-.logs-layout { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
-@media (max-width: 980px) { .logs-layout { grid-template-columns: 1fr; } }
+/* -----------------------------------------------------------------------------
+   9. Log centre (shares this stylesheet)
+   -------------------------------------------------------------------------- */
+.ops-subtitle { color: var(--text-secondary); font-size: 0.84rem; }
 
-.logs-list-wrap { min-width: 0; }
+.logs-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.logs-tab { height: var(--control-h); padding: 0 var(--space-4); font-size: 0.82rem; border-radius: var(--radius-pill); }
+.logs-tab.is-active { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
 
-.logs-table tbody tr { cursor: pointer; }
-.logs-table tbody tr.is-selected { background: rgba(56, 189, 248, 0.12); }
-.logs-more { margin-top: 10px; }
-
-/* Long upstream error text has to wrap, but not mid-word inside a scannable
-   cell, and never in the timestamp / status / duration columns. */
-.logs-table { table-layout: auto; }
-.logs-table td { max-width: 340px; overflow-wrap: anywhere; }
-.logs-table th.logs-time, .logs-table td.logs-time { white-space: nowrap; width: 1%; }
-.logs-table th.logs-status, .logs-table td.logs-status { white-space: nowrap; width: 1%; }
-.logs-table th.logs-duration, .logs-table td.logs-duration {
-  white-space: nowrap;
-  width: 1%;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
+.logs-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+  align-items: end;
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
 }
 
-.logs-detail { border-left: 1px solid rgba(148, 163, 184, 0.18); padding-left: 14px; font-size: 12px; min-width: 0; }
-.logs-detail h2 { font-size: 13px; margin: 0 0 8px; }
-/* Single-column layout: a left gutter only squeezes the panel into a sliver. */
-@media (max-width: 980px) {
-  .logs-detail {
-    border-left: 0;
-    padding-left: 0;
-    border-top: 1px solid rgba(148, 163, 184, 0.18);
-    padding-top: 12px;
-  }
+.logs-filters[hidden] { display: none; }
+.logs-filters .ops-select { flex-direction: column; align-items: stretch; gap: var(--space-1); }
+.logs-filters .ops-select input { width: 100%; }
+.logs-filter-actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
+.logs-filter-note { grid-column: 1 / -1; margin: 0; color: var(--text-muted); font-size: 0.74rem; }
+.logs-filter-note.is-error-text { color: var(--bad); }
+
+/* Drill-down scope bar: what the list is filtered to, and the way back to the
+   chart that opened it. It sits above the table so a narrowed list always says
+   why it is narrow. */
+.logs-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
 }
-.logs-detail dl { display: grid; grid-template-columns: 96px 1fr; gap: 4px 10px; margin: 0 0 10px; }
-.logs-detail dt { color: var(--text-secondary, #4a5160); }
-.logs-detail dd { margin: 0; word-break: break-word; overflow-wrap: anywhere; }
-.logs-detail pre {
-  background: rgba(2, 6, 23, 0.6);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 6px;
-  padding: 8px;
-  overflow-x: auto;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-.logs-attempts { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-/* Upstream URLs and error strings are single long tokens: break between words
-   when possible, inside the token only when there is no other choice. */
-.logs-attempt {
-  border-left: 3px solid rgba(148, 163, 184, 0.4);
-  padding: 6px 8px;
-  background: rgba(15, 23, 42, 0.4);
-  border-radius: 4px;
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-.logs-attempt .ops-empty { word-break: break-word; overflow-wrap: anywhere; }
-.logs-badge {
-  display: inline-block;
-  font-size: 11px;
-  padding: 1px 6px;
+.logs-scope[hidden] { display: none; }
+.logs-scope-items { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.logs-scope-chip {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: 4px var(--space-3);
+  border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.2);
-  margin-left: 6px;
+  background: var(--surface-1);
+  color: var(--text-main);
+  font-size: 0.74rem;
 }
-.logs-badge.is-ok { background: rgba(74, 222, 128, 0.2); }
-.logs-badge.is-error { background: rgba(251, 113, 133, 0.25); }
+.logs-scope-key { color: var(--text-muted); }
+.logs-scope-actions { display: flex; gap: var(--space-2); }
+
+.logs-table-wrap {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: auto;
+  max-height: 62vh;
+}
+
+.logs-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
+.logs-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.logs-table tbody td { padding: 9px var(--space-4); border-bottom: 1px solid var(--border-color); color: var(--text-soft); vertical-align: middle; }
+.logs-table tbody tr { cursor: pointer; }
+.logs-table tbody tr:hover td { background: var(--surface-2); }
+.logs-table tbody tr.is-selected td { background: var(--accent-soft); }
+
+.logs-cell-time { color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.logs-cell-action { color: var(--text-main); font-weight: 550; }
+.logs-cell-target { color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.76rem; }
+.logs-cell-duration { text-align: right; font-variant-numeric: tabular-nums; }
+
+.logs-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: var(--idle-soft);
+  color: var(--text-soft);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.logs-badge.is-ok { color: var(--ok); border-color: rgba(74, 222, 155, 0.35); background: var(--ok-soft); }
+.logs-badge.is-info { color: var(--info); border-color: rgba(108, 182, 255, 0.35); background: var(--info-soft); }
+.logs-badge.is-warn { color: var(--warn); border-color: rgba(245, 194, 100, 0.35); background: var(--warn-soft); }
+.logs-badge.is-error { color: var(--bad); border-color: rgba(251, 113, 133, 0.35); background: var(--bad-soft); }
+.logs-badge.is-idle { color: var(--idle); }
+
+.logs-more { display: flex; justify-content: center; padding: var(--space-4) 0 0; }
+.logs-more button[hidden] { display: none; }
+.logs-coverage { margin: 0; }
+
+.logs-detail { font-size: 0.82rem; }
+.logs-detail h2 { margin-bottom: var(--space-3); font-size: 0.95rem; }
+.logs-detail dl { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: var(--space-2) var(--space-3); margin: 0 0 var(--space-4); }
+.logs-detail dt { color: var(--text-muted); font-size: 0.76rem; }
+.logs-detail dd { margin: 0; color: var(--text-main); word-break: break-all; }
+
+/* Result strip: the panel opens with what happened, because a failure is the usual
+   reason it was opened at all. */
+.logs-detail-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+.logs-detail-raw { color: var(--text-muted); font-family: var(--font-mono); font-size: 0.74rem; }
+
+.logs-detail-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+
+/* Facts: two columns of label-over-value blocks. Thirteen definition-list rows
+   became a handful of compact cells, and empty fields keep their slot only when
+   the emptiness itself is the fact (a probe has no model, a channel may not report
+   usage). */
+.logs-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+.logs-fact { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.logs-fact.is-wide { grid-column: 1 / -1; }
+.logs-fact-label { color: var(--text-muted); font-size: 0.7rem; }
+.logs-fact-value {
+  color: var(--text-main);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.logs-fact-value.is-empty { color: var(--text-faint); }
+
+.logs-detail pre {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* An error is the first thing to read, so it is not muted like the other blocks. */
+.logs-detail pre.logs-detail-error { border-color: rgba(251, 113, 133, 0.35); background: var(--bad-soft); color: var(--text-main); }
+
+.logs-detail-section-title { margin-bottom: var(--space-2); color: var(--text-soft); font-size: 0.8rem; font-weight: 650; }
+.logs-attempts { display: flex; flex-direction: column; gap: var(--space-2); }
+.logs-attempt { padding: var(--space-3); border: 1px solid var(--border-color); border-left: 3px solid var(--idle); border-radius: var(--radius-md); background: var(--surface-1); }
+.logs-attempt.is-failed { border-left-color: var(--bad); }
+.logs-attempt > div:first-child { display: flex; gap: var(--space-2); align-items: center; color: var(--text-main); font-weight: 600; }
+/* The upstream's own reason for refusing, shown under the attempt's status line. */
+.logs-attempt-reason {
+  margin-top: var(--space-1);
+  color: var(--bad);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.logs-diagnostics { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border-color); }
+.logs-diagnostics > div:first-child { color: var(--text-soft); font-weight: 650; }
+.logs-diagnostic-body { display: flex; flex-direction: column; gap: var(--space-2); }
+.logs-section { border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-1); overflow: hidden; }
+.logs-section > summary { padding: var(--space-3); color: var(--text-soft); font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+.logs-section > pre {
+  margin: 0;
+  padding: var(--space-3);
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* -----------------------------------------------------------------------------
+   10. Drill-down affordances, cohort selector and alert policy
+   -------------------------------------------------------------------------- */
+
+/* Anything that opens something else says so. A chart bar or a row name that
+   looks identical to a static label is a feature nobody finds. */
+.is-clickable { cursor: pointer; }
+.is-clickable:hover { color: var(--accent); }
+.is-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.ops-legend-item { display: inline-flex; gap: 6px; align-items: center; margin-right: var(--space-3); color: var(--text-muted); font-size: 0.72rem; }
+.ops-legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.ops-legend-swatch.series-error { background: var(--bad); }
+.ops-legend-swatch.series-alt { background: var(--warn); }
+
+/* The 口径 selector: one control driving the latency cards and the distribution. */
+.ops-tabs { display: inline-flex; gap: 4px; margin-left: auto; }
+.ops-tabs .ops-chip { padding: 3px 8px; font-size: 0.7rem; }
+
+/* Second series on a bar chart (upstream attempt failures). */
+polyline.series-alt { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 4 3; }
+rect.is-clickable { cursor: pointer; }
+rect.is-clickable:hover { opacity: 0.75; }
+
+/* History blocks in the matrix: one block per minute of retained traffic. */
+.ops-history-cells { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
+.ops-block { display: inline-block; width: 8px; height: 14px; border-radius: 2px; background: var(--idle); opacity: 0.6; }
+.ops-block.is-ok { background: var(--ok); opacity: 0.85; }
+.ops-block.is-warn { background: var(--warn); opacity: 0.9; }
+.ops-block.is-bad { background: var(--bad); opacity: 0.95; }
+.ops-block.is-idle { background: var(--surface-3); opacity: 0.8; }
+.ops-matrix-name.is-clickable { text-decoration: underline dotted; text-underline-offset: 3px; }
+
+.ops-inline-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: 0.72rem;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+button.ops-error-row { width: 100%; border: 0; background: none; text-align: left; font: inherit; }
+
+/* Alert policy form. */
+.alerts-form { display: flex; flex-direction: column; gap: var(--space-3); }
+.alerts-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.alerts-field { display: flex; flex-direction: column; gap: var(--space-1); }
+.alerts-field-label { color: var(--text-soft); font-size: 0.8rem; font-weight: 600; }
+.alerts-field-hint { color: var(--text-secondary); font-size: 0.76rem; line-height: 1.5; }
+/* A percentage field reads as one control: the number and its unit.
+   .alerts-field-control is created by alerts.js for every 'ratio' field. */
+.alerts-field-control { display: flex; align-items: center; gap: var(--space-2); }
+.alerts-field-control .form-input { flex: 1 1 auto; }
+.alerts-field-unit { color: var(--text-secondary); font-size: 0.86rem; font-weight: 600; }
+.alerts-checkbox { width: 18px; height: 18px; accent-color: var(--accent); }
+.alerts-preview { padding: var(--space-3) var(--space-4); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-1); }
+.alerts-preview-line { margin: 0 0 var(--space-1); color: var(--text-soft); font-size: 0.78rem; }
+.alerts-help { display: flex; flex-direction: column; gap: var(--space-2); }
+.alerts-help-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--space-3); font-size: 0.78rem; }
+.alerts-help-row strong { color: var(--text-soft); }
+
+@media (max-width: 900px) {
+  .alerts-grid { grid-template-columns: minmax(0, 1fr); }
+  .alerts-help-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* -----------------------------------------------------------------------------
+   11. Responsive
+   -------------------------------------------------------------------------- */
+@media (max-width: 1400px) {
+  .ops-resources { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 1200px) {
+  .ops-top { grid-template-columns: minmax(0, 1fr); }
+  .ops-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ops-grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .ops-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ops-grid-3 { grid-template-columns: minmax(0, 1fr); }
+  .ops-hero-body { grid-template-columns: minmax(0, 1fr); }
+  .ops-head-filters { margin-left: 0; width: 100%; }
+  .ops-resources { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+  .ops-kpi-grid,
+  .ops-resources { grid-template-columns: minmax(0, 1fr); }
+  .logs-filters { grid-template-columns: 1fr; }
+  .ops-live-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* On a phone the log list is a stack of records, not a table. Five columns in 390px
+   left the status badge 40px wide, so "上游错误" stacked one character per line while
+   the channel and the model each wrapped on their own; reading a single row meant
+   decoding four fragments. The cells keep their classes and their order and are laid
+   out as blocks: time and duration on the first line, what happened on the second,
+   what it was against and how it ended on the third. */
+@media (max-width: 700px) {
+  .logs-table-wrap {
+    max-height: none;
+    border: 0;
+    background: none;
+    overflow: visible;
+  }
+
+  .logs-table,
+  .logs-table tbody,
+  .logs-table tr,
+  .logs-table td { display: block; }
+
+  .logs-table thead { display: none; }
+
+  .logs-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'time duration'
+      'action action'
+      'target status';
+    gap: var(--space-1) var(--space-3);
+    margin-bottom: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-1);
+  }
+
+  .logs-table tbody tr:hover { background: var(--surface-2); }
+
+  .logs-table tbody tr.is-selected {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  /* The cells are painted transparent because they are stacked inside one card: the
+     per-cell padding and bottom border that separate table columns would draw three
+     boxes inside every row. Specificity has to match the table rules above, which
+     address `tbody td`, not `td`. */
+  .logs-table tbody td,
+  .logs-table tbody tr:hover td,
+  .logs-table tbody tr.is-selected td {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    white-space: normal;
+  }
+
+  .logs-cell-time { grid-area: time; }
+  .logs-cell-action { grid-area: action; }
+  .logs-cell-target { grid-area: target; }
+  .logs-cell-duration { grid-area: duration; text-align: right; }
+  .logs-cell-status { grid-area: status; justify-self: end; }
+
+  .logs-cell-action .logs-badge { margin-top: var(--space-1); }
+
+  .table-empty-cell { display: block; padding: var(--space-4); text-align: center; }
+
+  /* The matrices keep their horizontal scroll, but the row label travels with it:
+     scrolled to the 历史 column, a row without its channel name is a row of numbers
+     with no owner. */
+  .ops-table td:first-child,
+  .ops-table th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    background: var(--surface-2);
+    box-shadow: 1px 0 0 var(--border-color);
+  }
+
+  .ops-table thead th:first-child { z-index: 4; }
+}

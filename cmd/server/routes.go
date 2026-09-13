@@ -160,9 +160,12 @@ func registerRoutes(
 	mux.HandleFunc("/api/ops/overview", sessionAuth(apiHandler.HandleOpsOverview))
 	mux.HandleFunc("/api/ops/channels", sessionAuth(apiHandler.HandleOpsChannels))
 	mux.HandleFunc("/api/ops/alerts", sessionAuth(apiHandler.HandleOpsAlerts))
+	mux.HandleFunc("/api/ops/alerts/rules", sessionAuth(apiHandler.HandleOpsAlertRules))
+	mux.HandleFunc("/api/ops/runtime", sessionAuth(apiHandler.HandleOpsRuntime))
 	// Journal: one endpoint per tab (request / operation / system) with the
 	// upstream attempts of each request joined in.
 	mux.HandleFunc("/api/journal/records", sessionAuth(apiHandler.HandleJournalRecords))
+	mux.HandleFunc("/api/journal/diagnostics", sessionAuth(apiHandler.HandleJournalDiagnostics))
 	mux.HandleFunc("/api/journal/operations", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		if query.Get("kind") == "" {

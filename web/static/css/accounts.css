@@ -1,0 +1,310 @@
+/* Account management. Loaded after main.css; tokens come from there. */
+
+/* -----------------------------------------------------------------------------
+   Toolbar: platform switch on the left, actions grouped on the right
+   -------------------------------------------------------------------------- */
+.accounts-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.accounts-platform-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: var(--surface-1);
+}
+
+.accounts-platform-switch .tab-item {
+  height: var(--control-h-sm);
+  border-color: transparent;
+  background: transparent;
+}
+
+.accounts-platform-switch .tab-item.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+/* The action group stays contiguous: export / bulk / primary are three visually
+   separated clusters, not items scattered across the row. */
+.accounts-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.accounts-actions .accounts-action-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.accounts-actions .accounts-action-cluster.is-danger { background: var(--bad-soft); }
+
+/* -----------------------------------------------------------------------------
+   Table: identity first, compact rows
+   -------------------------------------------------------------------------- */
+.accounts-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.82rem;
+}
+
+.accounts-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px var(--space-3);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.accounts-table tbody td {
+  padding: 8px var(--space-3);
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-soft);
+  vertical-align: middle;
+}
+
+.accounts-table tbody tr:hover td { background: var(--surface-2); }
+.accounts-table tbody tr.is-selected td { background: var(--accent-soft); }
+.accounts-table tbody tr:last-child td { border-bottom: 0; }
+
+.accounts-table .col-id {
+  width: 56px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
+
+.accounts-table .col-check { width: 40px; }
+.accounts-table .col-tier { width: 132px; }
+.accounts-table .col-quota { width: 148px; }
+.accounts-table .col-status { width: 120px; }
+.accounts-table .col-capability { width: 96px; }
+.accounts-table .col-usage { width: 96px; text-align: right; }
+.accounts-table .col-actions { width: 190px; text-align: right; }
+
+/* Identity: the address/identifier is the row's subject; the credential summary
+   is supporting detail underneath, never the headline. */
+.account-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.account-identity-primary {
+  overflow: hidden;
+  color: var(--text-main);
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-identity-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The channel pill on each row comes from main.css (.badge .badge-<channel>). */
+.account-identity-sub .badge { height: 20px; font-size: 0.68rem; }
+
+.account-identity-token {
+  overflow: hidden;
+  max-width: 260px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-usage-count {
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.account-usage-when { color: var(--text-muted); font-size: 0.72rem; }
+
+/* Row actions: small text buttons with a visible boundary, not bare abbreviations. */
+.accounts-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.accounts-row-actions .action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 550;
+  font-style: normal;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.accounts-row-actions .action-icon:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+  color: var(--text-main);
+}
+
+.accounts-row-actions .action-icon.is-danger { color: var(--bad); border-color: rgba(251, 113, 133, 0.32); }
+.accounts-row-actions .action-icon.is-danger:hover { background: var(--bad-soft); color: #ffd6de; }
+
+/* -----------------------------------------------------------------------------
+   Stat cards read as one band, connected to the table below
+   -------------------------------------------------------------------------- */
+.accounts-stats { margin-bottom: var(--space-4); }
+.accounts-stats .stat-card { min-height: 80px; }
+
+.accounts-panel {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+
+.accounts-panel .pagination-shell {
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-1);
+}
+
+.accounts-panel .table-wrap { max-height: 68vh; overflow: auto; }
+
+/* -----------------------------------------------------------------------------
+   Import status + mobile cards
+   -------------------------------------------------------------------------- */
+.account-import-status {
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text-soft);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.account-import-status.is-active { border-color: var(--info); background: var(--info-soft); }
+.account-import-status.is-error { border-color: var(--bad); background: var(--bad-soft); }
+.account-import-status strong { color: var(--text-main); }
+
+.account-token-input {
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  resize: vertical;
+}
+
+.accounts-mobile-list {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+
+.account-mobile-card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+.account-mobile-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.account-mobile-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-main);
+  font-weight: 600;
+}
+
+.account-mobile-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+
+.account-mobile-token .token-text {
+  display: block;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-mobile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.account-mobile-item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+
+.account-mobile-label {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.account-mobile-value,
+.account-mobile-inline { color: var(--text-main); font-size: 0.86rem; min-width: 0; }
+.account-mobile-inline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+.account-mobile-identity {
+  color: var(--text-main);
+  font-size: 0.9rem;
+  font-weight: 650;
+  word-break: break-all;
+}
+
+@media (max-width: 900px) {
+  .accounts-toolbar { align-items: stretch; }
+  .accounts-actions { justify-content: flex-start; }
+  .accounts-actions .accounts-action-cluster { width: 100%; justify-content: space-between; }
+}
+
+@media (max-width: 640px) {
+  .account-mobile-grid { grid-template-columns: 1fr; }
+}

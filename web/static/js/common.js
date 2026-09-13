@@ -281,9 +281,43 @@ function switchTab(tabName, skipSidebar = false) {
   window.location.href = url.toString();
 }
 
+// Every switch in the console is a <label class="toggle"> wrapping a checkbox, and the
+// paint comes from the .active class. Pages that render a switch without setting that
+// class leaned on the .toggle:has(input:checked) fallback in the stylesheet — which
+// browsers without :has() ignore, so the switch showed OFF for an enabled row. The
+// account form's 启用账号 switch was exactly that case: checked, no class.
+//
+// Keeping the class in step here gives the console one contract for its switches
+// instead of one per page, and keeps the fallback as a fallback.
+function syncToggleStates(root) {
+  const scope = root && typeof root.querySelectorAll === "function"
+    ? root
+    : (typeof document !== "undefined" && typeof document.querySelectorAll === "function" ? document : null);
+  if (!scope) return;
+  scope.querySelectorAll("label.toggle").forEach((label) => {
+    const input = label.querySelector("input[type=checkbox]");
+    if (input) label.classList.toggle("active", !!input.checked);
+  });
+}
+
+// A switch flipped by a click or a tap. This is the path every page already takes.
+document.addEventListener("change", (event) => {
+  const input = event.target;
+  if (!input || input.type !== "checkbox") return;
+  const label = input.closest ? input.closest("label.toggle") : null;
+  if (label) label.classList.toggle("active", !!input.checked);
+});
+
+// A switch assigned by script fires no change event — the account form assigns #enabled
+// when its dialog opens — so those call sites run syncToggleStates() explicitly rather
+// than the console listening to every click on the document: another document-level click
+// listener would sit in front of every page's own delegate.
+window.syncToggleStates = syncToggleStates;
+
 document.addEventListener("DOMContentLoaded", () => {
   setSidebarOpen(false);
   refreshSidebarAccountStats();
+  syncToggleStates();
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       setSidebarOpen(false);

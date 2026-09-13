@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,8 @@ import (
 
 // defaultOpsWindowMinutes is the window the overview opens with.
 const defaultOpsWindowMinutes = 180
+
+const alertRulesRedisKey = "ops:alert_rules"
 
 // nonProviderChannels are aggregates that are counted but must not be presented
 // as provider channels in the matrix or the channel picker:
@@ -184,6 +187,87 @@ func (a *API) HandleOpsAlerts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	alerts := a.firingAlerts()
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"alerts": alerts, "count": len(alerts)})
+}
+
+// HandleOpsAlertRules exposes the exact policy used by the alert engine. Saved
+// rules are persisted in Redis and take effect on the next evaluation tick.
+func (a *API) HandleOpsAlertRules(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	defaults := alerting.DefaultRules()
+	if a == nil || a.alertEngine == nil || a.store == nil || a.store.RedisClient() == nil {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"rules": defaults, "defaults": defaults, "editable": false,
+			"note": "告警规则需要 Redis 和告警引擎。",
+		})
+		return
+	}
+	if r.Method == http.MethodGet {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"rules": a.alertEngine.Thresholds(), "defaults": defaults, "editable": true,
+		})
+		return
+	}
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var rules alerting.Rules
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err := decoder.Decode(&rules); err != nil {
+		http.Error(w, "Invalid alert rules", http.StatusBadRequest)
+		return
+	}
+	if err := a.alertEngine.SetThresholds(rules); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	raw, _ := json.Marshal(rules)
+	if err := a.store.RedisClient().Set(r.Context(), a.store.RedisPrefix()+alertRulesRedisKey, raw, 0).Err(); err != nil {
+		http.Error(w, "Could not persist alert rules", http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"rules": rules, "defaults": defaults, "editable": true})
+}
+
+// HandleOpsRuntime supplies lightweight process metrics for the resource cards.
+func (a *API) HandleOpsRuntime(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	refreshing := 0
+	if a != nil && a.refreshConcurrency != nil {
+		refreshing = a.refreshConcurrency()
+	}
+	metrics := []map[string]interface{}{
+		{"label": "Go 堆内存", "value": formatRuntimeBytes(memory.Alloc), "detail": "当前已分配", "available": true, "status": "ok"},
+		{"label": "Goroutine", "value": strconv.Itoa(runtime.NumGoroutine()), "detail": "当前协程数", "available": true, "status": "ok"},
+		{"label": "账号刷新", "value": strconv.Itoa(refreshing), "detail": "正在刷新", "available": true, "status": "ok"},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"available": true, "metrics": metrics})
+}
+
+func formatRuntimeBytes(value uint64) string {
+	const mb = 1024 * 1024
+	return strconv.FormatFloat(float64(value)/mb, 'f', 1, 64) + " MB"
+}
+
+// HandleJournalDiagnostics keeps the redesigned journal detail panel usable on
+// deployments that do not have the optional diagnostic bundle store. The UI
+// treats available=false as an informative empty state.
+func (a *API) HandleJournalDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"available": false,
+		"note":      "当前版本没有保存该请求的诊断内容。",
+	})
 }
 
 // HandleJournalRecords answers one journal tab. It is the modern counterpart of

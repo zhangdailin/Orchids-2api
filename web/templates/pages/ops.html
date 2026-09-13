@@ -1,73 +1,204 @@
-{{define "page-ops"}}<!DOCTYPE html>
+{{define "page-ops"}}
+<!DOCTYPE html>
 <html lang="zh-CN">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{{.Title}} · 运维总览</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-4">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260914-ops4">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260913-ui10">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260913-ops11">
 </head>
 
 <body>
   {{template "sidebar.html" .}}
 
+
   <main class="main-content ops-page">
-    <section class="header-section">
-      <h1>运维总览</h1>
-      <p class="ops-subtitle" id="opsWindowLabel">正在读取指标…</p>
-      <div class="ops-toolbar">
-        <div class="ops-filter-group" role="group" aria-label="时间范围">
-          <button class="ops-chip" data-window="60" type="button">1 小时</button>
-          <button class="ops-chip is-active" data-window="180" type="button">3 小时</button>
-          <button class="ops-chip" data-window="720" type="button">12 小时</button>
-          <button class="ops-chip" data-window="1440" type="button">24 小时</button>
+    <header class="ops-head">
+      <div class="ops-head-title">
+        <span class="ops-head-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M3 3v18h18" /><path d="M7 15l3-4 3 3 4-6" /></svg>
+        </span>
+        <div>
+          <h1>运维监控</h1>
+          <p class="ops-status">
+            <span class="ops-dot" id="opsStatusDot" aria-hidden="true"></span>
+            <span id="opsStatusText">就绪</span>
+            <span class="ops-status-sep">·</span>
+            <span>刷新: <span id="opsRefreshedAt">—</span></span>
+            <span class="ops-status-sep">·</span>
+            <span>剩余 <span id="opsCountdown">—</span>s</span>
+          </p>
         </div>
-        <label class="ops-select">
-          <span>渠道</span>
-          <select id="opsChannel"><option value="">全部渠道</option></select>
+      </div>
+      <div class="ops-head-filters">
+        <label class="ops-select"><span class="sr-only">渠道</span>
+          <select id="opsChannel" class="compact-select"><option value="">全部渠道</option></select>
         </label>
-        <button class="ops-refresh" id="opsRefresh" type="button">刷新</button>
+        <label class="ops-select"><span class="sr-only">模型</span>
+          <select id="opsModel" class="compact-select"><option value="">全部模型</option></select>
+        </label>
+        <label class="ops-select"><span class="sr-only">时间窗口</span>
+          <select id="opsWindow" class="compact-select">
+            <option value="60">近 1 小时</option>
+            <option value="180" selected>近 3 小时</option>
+            <option value="720">近 12 小时</option>
+            <option value="1440">近 24 小时</option>
+          </select>
+        </label>
+        <button class="btn-icon" id="opsRefresh" type="button" title="立即刷新" aria-label="立即刷新">⟳</button>
+        <button class="btn" id="opsAlertRules" type="button" data-scroll-to="opsAlertsCard">预警规则</button>
+        <button class="btn" id="opsSettingsLink" type="button" data-scroll-to="opsCoverageFold">口径设置</button>
       </div>
+    </header>
+
+    <section class="ops-top">
+      <article class="ops-card ops-hero">
+        <div class="ops-card-head">
+          <h2>实时信息</h2>
+          <span class="ops-hint" id="opsHeroHint">按分钟桶聚合</span>
+        </div>
+        <div class="ops-hero-body">
+          <div class="ops-gauge">
+            <div class="ops-gauge-ring" id="opsGaugeRing">
+              <span class="ops-gauge-value" id="opsGaugeValue">—</span>
+              <span class="ops-gauge-label" id="opsGaugeLabel">健康</span>
+            </div>
+            <p class="ops-gauge-state" id="opsGaugeState">待机</p>
+            <p class="ops-gauge-sub" id="opsGaugeSub">—</p>
+          </div>
+          <div class="ops-hero-live">
+            <div class="ops-hero-tabs" id="opsLiveTabs" role="tablist" aria-label="实时窗口">
+              <button class="ops-chip is-active" data-live="1" type="button">1min</button>
+              <button class="ops-chip" data-live="5" type="button">5min</button>
+              <button class="ops-chip" data-live="30" type="button">30min</button>
+              <button class="ops-chip" data-live="60" type="button">1h</button>
+            </div>
+            <div class="ops-live-grid">
+              <div class="ops-live-col">
+                <span class="ops-live-label">当前</span>
+                <div class="ops-live-values">
+                  <span><strong id="opsLiveQpsNow">0.0</strong> QPS</span>
+                  <span><strong id="opsLiveTpsNow">0.0</strong> TPS</span>
+                </div>
+              </div>
+              <div class="ops-live-col">
+                <span class="ops-live-label">峰值</span>
+                <div class="ops-live-values">
+                  <span><strong id="opsLiveQpsPeak">0.0</strong> QPS</span>
+                  <span><strong id="opsLiveTpsPeak">0.0</strong> TPS</span>
+                </div>
+              </div>
+              <div class="ops-live-col">
+                <span class="ops-live-label">平均</span>
+                <div class="ops-live-values">
+                  <span><strong id="opsLiveQpsAvg">0.0</strong> QPS</span>
+                  <span><strong id="opsLiveTpsAvg">0.0</strong> TPS</span>
+                </div>
+              </div>
+            </div>
+            <div class="ops-spark" id="opsSpark" aria-hidden="true"></div>
+          </div>
+        </div>
+      </article>
+
+      <div class="ops-kpi-grid" id="opsKpis" aria-live="polite"></div>
     </section>
 
-    <section class="ops-kpis" id="opsKpis" aria-live="polite"></section>
+    <section class="ops-resources" id="opsResources" aria-live="polite"></section>
 
-    <section class="ops-panels">
-      <div class="ops-card">
+    <section class="ops-grid ops-grid-3">
+      <article class="ops-card">
         <div class="ops-card-head">
-          <h2>请求量趋势</h2>
-          <span class="ops-hint">每分钟请求数，悬停查看明细</span>
+          <h2>并发 / 排队</h2>
+          <span class="ops-hint">按平台</span>
         </div>
-        <div class="ops-chart" id="opsTrend"></div>
-      </div>
+        <div class="ops-concurrency" id="opsConcurrency"></div>
+      </article>
 
-      <div class="ops-card">
+      <article class="ops-card">
         <div class="ops-card-head">
-          <h2>当前告警</h2>
-          <span class="ops-hint" id="opsAlertCount">—</span>
+          <h2>平均账号切换趋势</h2>
+          <span class="ops-hint">每次请求切换的上游账号数</span>
         </div>
-        <ul class="ops-alerts" id="opsAlerts"></ul>
-      </div>
+        <div class="ops-chart" id="opsSwitchTrend"></div>
+      </article>
+
+      <article class="ops-card ops-card-wide">
+        <div class="ops-card-head">
+          <h2>吞吐趋势</h2>
+          <div class="ops-card-tools">
+            <span class="ops-hint" id="opsThroughputHint">左轴 QPS · 右轴 TPS</span>
+            <span class="ops-legend"><i class="ops-legend-dot is-qps"></i>QPS <i class="ops-legend-dot is-tps"></i>TPS</span>
+            <button class="btn btn-sm" id="opsTrendReset" type="button">重置</button>
+            <button class="btn btn-sm" id="opsTrendDownload" type="button">下载</button>
+          </div>
+        </div>
+        <div class="ops-chart ops-chart-tall" id="opsThroughput"></div>
+      </article>
     </section>
 
-    <section class="ops-card">
+    <section class="ops-grid ops-grid-3">
+      <article class="ops-card">
+        <div class="ops-card-head">
+          <h2>请求时长分布</h2>
+          <span class="ops-hint" id="opsHistogramHint">—</span>
+        </div>
+        <div class="ops-histogram" id="opsHistogram"></div>
+      </article>
+
+      <article class="ops-card">
+        <div class="ops-card-head">
+          <h2>错误分布</h2>
+          <span class="ops-hint" id="opsErrorMixHint">—</span>
+        </div>
+        <div class="ops-errors" id="opsErrorMix"></div>
+      </article>
+
+      <article class="ops-card">
+        <div class="ops-card-head">
+          <h2>错误趋势</h2>
+          <div class="ops-card-tools">
+            <span class="ops-hint" id="opsErrorTrendLegend"></span>
+            <span class="ops-hint">点击柱子查看该分钟的请求日志</span>
+          </div>
+        </div>
+        <div class="ops-chart" id="opsErrorTrend"></div>
+      </article>
+    </section>
+
+    <section class="ops-card" id="opsAlertsCard">
       <div class="ops-card-head">
-        <h2>渠道 × 模型状态</h2>
-        <span class="ops-hint">KPI 是所选窗口全渠道汇总，下表按渠道 / 模型拆分；两者同为 P95 分位（不是平均值），只是样本数不同。无流量显示“暂无样本”，不会显示为健康。</span>
+        <div>
+          <h2>告警事件</h2>
+          <p class="hint">最近的告警触发 / 恢复记录（来自系统日志，与告警规则同一份证据）</p>
+        </div>
+        <div class="ops-card-tools">
+          <label class="ops-select"><span class="sr-only">严重级别</span>
+            <select id="opsAlertSeverity" class="compact-select">
+              <option value="">全部级别</option>
+              <option value="critical">严重</option>
+              <option value="warning">警告</option>
+            </select>
+          </label>
+          <label class="ops-select"><span class="sr-only">渠道</span>
+            <select id="opsAlertChannel" class="compact-select"><option value="">全部渠道</option></select>
+          </label>
+          <button class="btn btn-sm" id="opsAlertReload" type="button">刷新</button>
+          <button class="btn btn-sm" id="opsAlertsLink" type="button">告警配置</button>
+        </div>
       </div>
       <div class="ops-table-wrap">
-        <table class="ops-table" id="opsMatrix">
+        <table class="ops-table" id="opsAlertTable">
           <thead>
             <tr>
-              <th>渠道 / 模型</th>
-              <th>可用账号</th>
-              <th>请求</th>
-              <th>成功率</th>
-              <th title="该渠道 / 模型在所选窗口内“响应前耗时”的 P95 分位，不是平均值；与上方 KPI 同为 P95，样本数不同。">首 Token P95 (ms)</th>
-              <th title="该渠道 / 模型在所选窗口内“整段生成耗时”的 P95 分位，不是平均值；与上方 KPI 同为 P95，样本数不同。">总耗时 P95 (ms)</th>
-              <th>限流</th>
-              <th>历史</th>
+              <th>时间</th>
+              <th>状态</th>
+              <th>严重级别</th>
+              <th>渠道</th>
+              <th>对象</th>
+              <th>说明</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -77,16 +208,38 @@
 
     <section class="ops-card">
       <div class="ops-card-head">
-        <h2>数据覆盖</h2>
-        <span class="ops-hint">为什么这里不是“最近 7 天”</span>
+        <h2>渠道 × 模型状态</h2>
+        <span class="ops-hint">渠道行是汇总，缩进行是模型明细；无流量显示“暂无样本”，不会显示为健康</span>
       </div>
-      <p class="ops-coverage" id="opsCoverage">—</p>
+      <div class="ops-table-wrap">
+        <table class="ops-table" id="opsMatrix">
+          <thead>
+            <tr>
+              <th>渠道 / 模型</th>
+              <th>可用账号</th>
+              <th>请求</th>
+              <th>成功率</th>
+              <th>首 Token P95</th>
+              <th>总耗时 P95</th>
+              <th>限流</th>
+              <th>历史</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
-    <script src="{{.AdminPath}}/js/common.js?v=20260914-ops4"></script>
-    <script src="{{.AdminPath}}/js/ops.js?v=20260914-ops4"></script>
+    <details class="ops-coverage-fold" id="opsCoverageFold">
+      <summary>数据覆盖与统计口径</summary>
+      <p class="ops-coverage" id="opsCoverage">—</p>
+    </details>
+
+    <script src="{{.AdminPath}}/js/common.js?v=20260913-ui2"></script>
+    <script src="{{.AdminPath}}/js/ops.js?v=20260913-ops8"></script>
   </main>
 </body>
 
 </html>
+
 {{end}}

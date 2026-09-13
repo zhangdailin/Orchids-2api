@@ -5,724 +5,103 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
-  <style>
-    .models-page {
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
-    }
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260913-ui10">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/models.css?v=20260913-models2">
 
-    .models-section-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 12px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: var(--text-secondary);
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-
-    .models-filter-panel {
-      padding: 18px 20px;
-      border: 1px solid var(--border-color);
-      border-radius: 20px;
-      background: rgba(255, 255, 255, 0.025);
-      box-shadow: var(--shadow-sm);
-    }
-
-    .models-filter-top {
-      display: flex;
-      justify-content: space-between;
-      gap: 14px;
-      align-items: center;
-      flex-wrap: wrap;
-      margin-bottom: 14px;
-    }
-
-    .models-filter-copy {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .models-filter-copy h3 {
-      margin: 0 0 4px;
-      font-size: 1rem;
-      color: var(--text-main);
-    }
-
-    .models-filter-copy p {
-      margin: 0;
-      font-size: 0.88rem;
-      color: var(--text-secondary);
-    }
-
-    .models-active-count {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--border-color);
-      color: var(--text-secondary);
-      font-size: 0.85rem;
-    }
-
-    .models-active-count strong {
-      color: var(--text-main);
-    }
-
-    .models-filter-meta {
-      color: var(--text-secondary);
-      font-size: 0.82rem;
-    }
-
-    .models-toolbar {
-      align-items: flex-start;
-      padding: 0;
-      border: none;
-      background: transparent;
-      gap: 14px;
-    }
-
-    .models-toolbar-main {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      flex: 1;
-      min-width: 0;
-    }
-
-    .models-filter-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1.55fr) repeat(3, minmax(140px, 0.72fr));
-      gap: 12px;
-      align-items: end;
-    }
-
-    .models-control {
-      min-width: 0;
-    }
-
-    .models-control label {
-      display: block;
-      margin-bottom: 8px;
-      color: var(--text-secondary);
-      font-size: 0.82rem;
-      font-weight: 600;
-    }
-
-    .models-filter-row .form-input {
-      height: 42px;
-    }
-
-    .models-search {
-      width: 100%;
-    }
-
-    .models-table {
-      table-layout: fixed;
-      min-width: 760px;
-    }
-
-    .models-table thead th {
-      position: sticky;
-      top: 0;
-      z-index: 1;
-      backdrop-filter: blur(8px);
-      background: rgba(15, 19, 24, 0.96);
-    }
-
-    .models-table th,
-    .models-table td {
-      padding: 14px 16px;
-      vertical-align: middle;
-    }
-
-    .models-table .col-model {
-      min-width: 0;
-    }
-
-    .models-table .col-status {
-      width: 120px;
-    }
-
-    .models-table .col-sort {
-      width: 78px;
-    }
-
-    .models-table .col-toggle {
-      width: 92px;
-      text-align: center;
-    }
-
-    .models-table .col-actions {
-      width: 132px;
-      text-align: center;
-    }
-
-    .models-cell-main {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-width: 0;
-    }
-
-    .models-cell-main strong {
-      color: var(--text-main);
-      font-size: 0.95rem;
-    }
-
-    .models-cell-title {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .models-cell-sub {
-      color: var(--text-secondary);
-      font-size: 0.82rem;
-      line-height: 1.45;
-    }
-
-    .models-model-id {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.82rem;
-      color: #93c5fd;
-      word-break: break-all;
-    }
-
-    .models-default-badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: rgba(59, 130, 246, 0.18);
-      color: #93c5fd;
-      font-size: 0.78rem;
-      font-weight: 600;
-    }
-
-    .models-results-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-    }
-
-    .models-primary-action {
-      min-width: 148px;
-      padding: 10px 18px;
-      border: none;
-      border-radius: 14px;
-      background: linear-gradient(135deg, var(--primary), #b6f86a);
-      color: #10150f;
-      box-shadow: 0 10px 24px rgba(215, 255, 100, 0.16);
-    }
-
-    .models-refresh-action {
-      min-width: 156px;
-      border-radius: 14px;
-    }
-
-    .models-status-badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 4px 10px;
-      border-radius: 999px;
-      font-size: 0.78rem;
-      font-weight: 600;
-      border: 1px solid transparent;
-    }
-
-    .models-actions {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-      flex-wrap: wrap;
-    }
-
-    .models-action-btn {
-      min-width: 54px;
-      padding: 6px 10px;
-      font-size: 0.8rem;
-      white-space: nowrap;
-    }
-
-    .models-action-btn-danger {
-      color: #fca5a5;
-      border-color: rgba(239, 68, 68, 0.28);
-    }
-
-    .models-results-card {
-      overflow: hidden;
-      border-radius: 24px;
-    }
-
-    .models-results-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 14px;
-      padding: 18px 20px;
-      border-bottom: 1px solid var(--border-color);
-      background:
-        linear-gradient(180deg, rgba(215, 255, 100, 0.08), rgba(215, 255, 100, 0.015)),
-        var(--bg-elevated);
-      flex-wrap: wrap;
-    }
-
-    .models-results-copy h3 {
-      margin: 0 0 4px;
-      color: var(--text-main);
-      font-size: 1rem;
-    }
-
-    .models-results-copy p {
-      margin: 0;
-      color: var(--text-secondary);
-      font-size: 0.88rem;
-    }
-
-    .models-results-meta {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin-left: auto;
-      justify-content: flex-end;
-    }
-
-    .models-meta-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border-radius: 999px;
-      border: 1px solid var(--border-color);
-      background: rgba(255, 255, 255, 0.04);
-      color: var(--text-secondary);
-      font-size: 0.82rem;
-    }
-
-    .models-meta-pill strong {
-      color: var(--text-main);
-    }
-
-    .models-refresh-summary {
-      display: grid;
-      gap: 14px;
-      padding: 18px 20px;
-      border-bottom: 1px solid var(--border-color);
-      background: rgba(255, 255, 255, 0.025);
-    }
-
-    .models-refresh-summary[hidden] {
-      display: none;
-    }
-
-    .models-refresh-summary-copy {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .models-refresh-summary-copy h4 {
-      margin: 0;
-      color: var(--text-main);
-      font-size: 0.96rem;
-    }
-
-    .models-refresh-summary-copy p {
-      margin: 0;
-      color: var(--text-secondary);
-      font-size: 0.86rem;
-      line-height: 1.6;
-    }
-
-    .models-refresh-stat-grid {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 10px;
-    }
-
-    .models-refresh-stat {
-      min-width: 0;
-      padding: 12px 14px;
-      border-radius: 14px;
-      border: 1px solid rgba(255, 255, 255, 0.06);
-      background: rgba(255, 255, 255, 0.03);
-    }
-
-    .models-refresh-stat-label {
-      margin-bottom: 6px;
-      color: var(--text-secondary);
-      font-size: 0.76rem;
-      letter-spacing: 0.03em;
-      text-transform: uppercase;
-    }
-
-    .models-refresh-stat-value {
-      color: var(--text-main);
-      font-size: 1.05rem;
-      font-weight: 700;
-    }
-
-    .models-refresh-deleted {
-      display: grid;
-      gap: 8px;
-      padding: 14px;
-      border-radius: 16px;
-      border: 1px solid rgba(248, 113, 113, 0.18);
-      background: rgba(127, 29, 29, 0.14);
-    }
-
-    .models-refresh-deleted[hidden] {
-      display: none;
-    }
-
-    .models-refresh-deleted-title {
-      color: #fecaca;
-      font-size: 0.84rem;
-      font-weight: 700;
-    }
-
-    .models-refresh-deleted-copy {
-      color: #fca5a5;
-      font-size: 0.82rem;
-      line-height: 1.55;
-    }
-
-    .models-refresh-deleted-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
-    .models-refresh-deleted-item {
-      display: inline-flex;
-      align-items: center;
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid rgba(248, 113, 113, 0.24);
-      background: rgba(0, 0, 0, 0.16);
-      color: #fee2e2;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.8rem;
-      line-height: 1.2;
-    }
-
-    .models-table-wrap {
-      max-height: 68vh;
-      overflow-x: auto;
-      overflow-y: auto;
-    }
-
-    .models-footer {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      padding: 16px 20px;
-      border-top: 1px solid var(--border-color);
-      background: var(--bg-elevated);
-      flex-wrap: wrap;
-    }
-
-    .models-footer-meta {
-      color: var(--text-secondary);
-      font-size: 0.9rem;
-    }
-
-    .models-pagination {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .models-empty {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      height: 320px;
-      color: var(--text-secondary);
-    }
-
-    .models-empty-icon {
-      width: 68px;
-      height: 68px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 20px;
-      background: rgba(56, 189, 248, 0.1);
-      color: #e8ffac;
-      font-size: 2rem;
-      box-shadow: inset 0 0 0 1px rgba(215, 255, 100, 0.12);
-    }
-
-    @media (max-width: 900px) {
-      .models-refresh-stat-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-
-      .models-filter-row {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    @media (max-width: 700px) {
-      .models-refresh-stat-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .models-primary-action {
-        width: 100%;
-      }
-
-      .models-results-actions {
-        width: 100%;
-      }
-
-      .models-refresh-action {
-        width: 100%;
-      }
-
-      .models-results-head,
-      .models-footer {
-        padding-left: 16px;
-        padding-right: 16px;
-      }
-    }
-
-    .models-section-label {
-      padding: 0;
-      border: 0;
-      border-radius: 0;
-      background: transparent;
-      color: #9a9a9a;
-      font-size: 0.72rem;
-      letter-spacing: .01em;
-      text-transform: none;
-    }
-
-    .models-filter-panel {
-      padding: 0;
-      background: transparent;
-      border: 0;
-      border-radius: 0;
-      box-shadow: none;
-    }
-
-    .models-filter-copy h3,
-    .models-results-copy h3 {
-      color: #222;
-      font-size: .92rem;
-    }
-
-    .models-filter-copy p,
-    .models-results-copy p,
-    .models-filter-meta {
-      color: #777;
-      font-size: .8rem;
-    }
-
-    .models-active-count,
-    .models-meta-pill {
-      border: 0;
-      background: #f1ece2;
-      color: #6a6459;
-      font-size: .78rem;
-    }
-
-    .models-control label {
-      color: #777;
-      font-size: .76rem;
-    }
-
-    .models-primary-action {
-      min-width: 118px;
-      border: 0;
-      border-radius: 999px;
-      background: #111;
-      color: #fff;
-      box-shadow: none;
-    }
-
-    .models-refresh-action {
-      min-width: 128px;
-      border-radius: 999px;
-    }
-
-    .models-results-card {
-      border-radius: 14px;
-      background: #fff;
-    }
-
-    .models-results-head,
-    .models-refresh-summary,
-    .models-footer {
-      border: 0;
-      background: #fff;
-    }
-
-    .models-results-head {
-      padding: 16px 18px 8px;
-    }
-
-    .models-refresh-stat {
-      border: 0;
-      background: #faf9f5;
-    }
-
-    .models-refresh-deleted {
-      border: 0;
-      background: #fbf3f2;
-    }
-
-    .models-refresh-deleted-title {
-      color: #92514b;
-    }
-
-    .models-refresh-deleted-copy {
-      color: #b7726a;
-    }
-
-    .models-refresh-deleted-item {
-      border: 0;
-      background: #fff;
-      color: #92514b;
-    }
-
-    .models-table thead th {
-      background: #fff;
-      backdrop-filter: none;
-    }
-
-    .models-table .models-model-id {
-      color: #777;
-    }
-
-    .models-default-badge {
-      background: #f1ece2;
-      color: #6a6459;
-    }
-
-    .models-action-btn-danger {
-      color: #92514b;
-      border-color: transparent;
-    }
-
-    .models-empty-icon {
-      width: 60px;
-      height: 30px;
-      border-radius: 999px;
-      background: #f1ece2;
-      color: #6a6459;
-      font-size: .72rem;
-      box-shadow: none;
-    }
-  </style>
 </head>
+<body>
 <body>
   {{template "sidebar.html" .}}
 
+
   <main class="main-content models-page">
     <section class="header-section" id="modelsHeader">
-      <h1>模型管理</h1>
-      <p>把模型维护收敛成概览、筛选和动作三层，先看渠道分布，再定位到具体模型。</p>
+      <div>
+        <h1>模型管理</h1>
+        <p class="page-sub" id="modelsFilterMeta">当前渠道共 0 条，筛选后 0 条。</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="refreshModelsButton" type="button" onclick="refreshModelsForCurrentChannel()">刷新当前渠道</button>
+        <button class="btn btn-danger-outline" id="deleteOfflineModelsButton" type="button" onclick="deleteOfflineModelsForCurrentChannel()">清理已下线</button>
+        <button class="btn-primary models-primary-action" onclick="openModelModal()">添加模型</button>
+      </div>
     </section>
 
-    <section class="models-filter-panel">
-      <div class="models-filter-top">
-        <div class="models-filter-copy">
-          <div class="models-section-label">筛选</div>
-          <h3>先切渠道，再按状态缩小范围</h3>
-          <p>先从渠道切到正确范围，再用状态和搜索快速缩小到你要处理的模型。</p>
-          <div class="models-filter-meta" id="modelsFilterMeta">当前渠道共 0 条，筛选后 0 条。</div>
-        </div>
-        <div class="models-active-count">当前筛选结果 <strong id="totalModelCount">0</strong></div>
-      </div>
+    <section class="models-toolbar">
+      <div class="filter-tabs models-channel-switch" id="modelPlatformFilters">
 
-      <div class="toolbar models-toolbar">
-        <div class="models-toolbar-main">
-          <div class="filter-tabs" id="modelPlatformFilters">
-            <!-- Dynamic channel tabs will be rendered here -->
-          </div>
-          <div class="models-filter-row">
-            <div class="models-control">
-              <label for="modelSearchInput">搜索</label>
-              <input id="modelSearchInput" class="form-input models-search" type="text" placeholder="搜索模型 ID、显示名称或渠道" />
-            </div>
-            <div class="models-control">
-              <label for="modelStatusFilter">状态</label>
-              <select id="modelStatusFilter" class="form-input">
-                <option value="">全部状态</option>
-                <option value="available">仅可用</option>
-                <option value="maintenance">仅维护中</option>
-                <option value="offline">仅已下线</option>
-              </select>
-            </div>
-            <div class="models-control">
-              <label for="modelPageSize">每页显示</label>
-              <select id="modelPageSize" class="form-input">
-                <option value="20">每页 20 条</option>
-                <option value="50" selected>每页 50 条</option>
-                <option value="100">每页 100 条</option>
-              </select>
-            </div>
-            <div class="models-control">
-              <label for="modelRefreshConcurrency">刷新并发</label>
-              <select id="modelRefreshConcurrency" class="form-input">
+      </div>
+      <div class="models-toolbar-controls">
+        <label class="models-control models-control-search">
+          <span class="sr-only">搜索</span>
+          <input id="modelSearchInput" class="form-input models-search" type="text" placeholder="搜索模型 ID、显示名称或渠道" />
+        </label>
+        <label class="models-control">
+          <span class="sr-only">状态</span>
+          <select id="modelStatusFilter" class="form-input compact-select">
+            <option value="">全部状态</option>
+            <option value="available">仅可用</option>
+            <option value="maintenance">仅维护中</option>
+            <option value="offline">仅已下线</option>
+          </select>
+        </label>
+        <label class="models-control">
+          <span class="sr-only">每页显示</span>
+          <select id="modelPageSize" class="form-input compact-select">
+            <option value="20" selected>每页 20 条</option>
+            <option value="50">每页 50 条</option>
+            <option value="100">每页 100 条</option>
+          </select>
+        </label>
+
+        <details class="advanced-settings models-advanced">
+          <summary>高级设置</summary>
+          <div class="advanced-body">
+            <label class="models-control">
+              <span class="models-control-label">刷新并发</span>
+              <select id="modelRefreshConcurrency" class="form-input compact-select">
                 <option value="1">单线程</option>
                 <option value="2">2 线程</option>
                 <option value="4" selected>4 线程</option>
                 <option value="8">8 线程</option>
                 <option value="16">16 线程</option>
               </select>
-            </div>
+            </label>
+            <p class="helper-text">仅影响“刷新当前渠道”的并行度；并发越高，上游越容易限流。</p>
           </div>
-        </div>
+        </details>
       </div>
     </section>
 
     <div id="modelsListWrapper">
-      <div class="content-card models-results-card">
-        <div class="models-results-head">
-          <div class="models-results-copy">
-            <div class="models-section-label">动作</div>
-            <h3 id="modelsPanelTitle">动作区</h3>
-            <p id="modelsPanelHint">表格只负责具体修改，右侧只保留编辑、删除和启停。</p>
+      <section class="models-results-card">
+        <div class="card-head">
+          <div>
+            <h2 id="modelsPanelTitle">模型列表</h2>
+            <p class="hint" id="modelsPanelHint">启停、编辑与删除都在行内完成。</p>
           </div>
-          <div class="models-results-actions">
-            <button class="btn btn-outline models-refresh-action" id="refreshModelsButton" type="button" onclick="refreshModelsForCurrentChannel()">刷新当前渠道</button>
-            <button class="btn btn-outline models-action-btn-danger" id="deleteOfflineModelsButton" type="button" onclick="deleteOfflineModelsForCurrentChannel()">删除已下线</button>
-            <button class="btn btn-primary models-primary-action" onclick="openModelModal()">+ 添加模型</button>
+          <div class="models-results-meta">
+            <span class="models-meta-pill">渠道 <strong id="currentChannelPill">-</strong></span>
+            <span class="models-meta-pill">本页 <strong id="currentPageCount">0</strong></span>
+            <span class="models-meta-pill">筛选结果 <strong id="totalModelCount">0</strong></span>
           </div>
         </div>
-        <div class="models-results-meta">
-          <span class="models-meta-pill">当前渠道 <strong id="currentChannelPill">-</strong></span>
-          <span class="models-meta-pill">本页记录 <strong id="currentPageCount">0</strong></span>
+
+        <div class="models-batch-bar" id="modelsBatchBar" hidden>
+          <span class="models-batch-count">已选 <strong id="modelsSelectedCount">0</strong> 项</span>
+          <div class="inline-actions">
+            <button class="btn btn-sm" type="button" data-batch="enable">批量启用</button>
+            <button class="btn btn-sm" type="button" data-batch="disable">批量停用</button>
+            <button class="btn btn-sm btn-danger" type="button" data-batch="delete">批量删除</button>
+            <button class="btn btn-sm btn-outline" type="button" data-batch="clear">取消选择</button>
+          </div>
         </div>
+
         <div class="models-refresh-summary" id="modelsRefreshSummary" hidden>
           <div class="models-refresh-summary-copy">
             <div class="models-section-label">最近刷新</div>
             <h4 id="modelsRefreshSummaryTitle">尚未执行刷新</h4>
-            <p id="modelsRefreshSummaryMeta">执行“刷新当前渠道”后，这里会展示最新一次同步结果。</p>
+            <p id="modelsRefreshSummaryMeta">执行“刷新当前渠道”后，这里会展示最新一次同步的结果。</p>
           </div>
           <div class="models-refresh-stat-grid" id="modelsRefreshStatGrid"></div>
           <div class="models-refresh-deleted" id="modelsRefreshDeletedBlock" hidden>
@@ -741,18 +120,197 @@
           <div class="models-footer-meta pagination-info" id="modelsPaginationInfo">共 0 条记录，第 1/1 页</div>
           <div class="models-pagination pagination-controls" id="modelsPaginationControls"></div>
         </div>
-      </div>
+      </section>
     </div>
   </main>
 
-  {{template "model-modal.html"}}
-  {{template "key-modals.html"}}
 
-  <!-- Toast Container -->
+<div class="modal" id="modelModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modelModalTitle">添加模型</h3>
+      <button class="modal-close" onclick="closeModelModal()">&times;</button>
+    </div>
+    <form id="modelForm" onsubmit="saveModel(event)">
+      <input type="hidden" id="modelId" />
+      <div class="form-group">
+        <label class="form-label">渠道</label>
+        <select class="form-input" id="modelChannel">
+          <option value="Warp">Warp</option>
+          <option value="Puter">Puter</option>
+          <option value="WorkBuddy">WorkBuddy</option>
+          <option value="Grok">Grok</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">模型 ID</label>
+        <input type="text" class="form-input" id="modelModelId" required placeholder="e.g. claude-3-opus-20240229" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">显示名称</label>
+        <input type="text" class="form-input" id="modelName" required placeholder="e.g. Claude 3 Opus" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">排序权重</label>
+          <input type="number" class="form-input" id="modelSortOrder" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">状态</label>
+          <select class="form-input" id="modelStatus">
+            <option value="available">可用 (Available)</option>
+            <option value="maintenance">维护 (Maintenance)</option>
+            <option value="offline">下线 (Offline)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <label class="toggle">
+            <input type="checkbox" id="modelIsDefault" />
+            <span class="toggle-slider"></span>
+          </label>
+          &nbsp;&nbsp;设为默认模型
+        </label>
+        <div class="helper-text" style="margin-top:8px;line-height:1.5;">
+          同一渠道只会保留一个默认模型，保存后会自动替换当前默认项。
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px">
+        保存
+      </button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="createKeyModal">
+  <div class="modal-content modal-content-md">
+    <div class="modal-header">
+      <h3 class="modal-title">创建 API Key</h3>
+      <button class="modal-close" onclick="closeCreateKeyModal()">
+        &times;
+      </button>
+    </div>
+    <form onsubmit="createApiKey(event)">
+      <div class="form-group">
+        <label class="form-label">名称 / 备注（支持换行批量创建）</label>
+        <textarea class="form-input" id="keyName" required placeholder="每行一个名称，例如：&#10;生产环境&#10;测试用&#10;开发者-张三"
+          rows="4" style="resize: vertical;"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">允许模型（可选，每行或逗号分隔）</label>
+        <textarea class="form-input" id="keyAllowedModels" placeholder="留空表示全部模型，例如：&#10;grok-4.6&#10;grok-imagine-image" rows="3"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">每分钟请求数（RPM）</label>
+          <input class="form-input" id="keyRPMLimit" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">到期时间（可选）</label>
+          <input class="form-input" id="keyExpiresAt" type="datetime-local" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">
+        创建
+      </button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="editKeyModal">
+  <div class="modal-content modal-content-md">
+    <div class="modal-header">
+      <h3 class="modal-title">编辑 API Key 策略</h3>
+      <button class="modal-close" onclick="closeEditKeyModal()">&times;</button>
+    </div>
+    <form onsubmit="saveKeyPolicy(event)">
+      <input type="hidden" id="editKeyId" />
+      <div class="form-group">
+        <label class="form-label">允许模型（每行或逗号分隔）</label>
+        <textarea class="form-input" id="editKeyAllowedModels" placeholder="留空表示全部模型" rows="4"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">每分钟请求数（0 表示不限）</label>
+          <input class="form-input" id="editKeyRPMLimit" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">到期时间（留空表示永不过期）</label>
+          <input class="form-input" id="editKeyExpiresAt" type="datetime-local" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">保存策略</button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="showKeyModal">
+  <div class="modal-content modal-content-lg">
+    <div class="modal-header">
+      <h3 class="modal-title">API Key 已创建</h3>
+    </div>
+    <div class="modal-body">
+    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+      请立即复制并保存您的 API Key：
+    </p>
+    <div id="fullKeyDisplay" class="modal-scroll">
+    </div>
+    <div class="warning-box">
+      <strong>请妥善保存</strong><br />
+      关闭此窗口后将无法再次查看完整 Key
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="copyAllKeys()">
+        复制全部
+      </button>
+      <button class="btn btn-neutral"
+        onclick="closeShowKeyModal()">
+        我已保存，关闭
+      </button>
+    </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="modal" id="deleteKeyModal">
+  <div class="modal-content modal-content-sm">
+    <div class="modal-header">
+      <h3 class="modal-title">删除 API Key</h3>
+      <button class="modal-close" onclick="closeDeleteKeyModal()">
+        &times;
+      </button>
+    </div>
+    <div class="modal-body">
+    <p style="margin-bottom: 20px;">
+      确定要删除 Key「<strong id="deleteKeyName"></strong>」吗？<br />
+      <span class="warning-text">此操作不可撤销，使用此 Key 的应用将无法访问。</span>
+    </p>
+    <input type="hidden" id="deleteKeyId" />
+    <div class="modal-actions">
+      <button class="btn btn-neutral"
+        onclick="closeDeleteKeyModal()">
+        取消
+      </button>
+      <button class="btn btn-danger" onclick="confirmDeleteKey()">
+        删除
+      </button>
+    </div>
+    </div>
+  </div>
+</div>
+
+
+
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v=20260605-2"></script>
-  <script src="{{.AdminPath}}/js/models.js?v=20260605-1"></script>
+  <script src="{{.AdminPath}}/js/common.js?v=20260913-ui2"></script>
+  <script src="{{.AdminPath}}/js/models.js?v=20260913-models2"></script>
 </body>
 </html>
+
 {{end}}

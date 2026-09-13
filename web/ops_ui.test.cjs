@@ -13,19 +13,19 @@ test('the overview page carries the filters the design calls for', () => {
   const page = read('templates/pages/ops.html');
   // Fixed time range on top, channel filter beside it.
   for (const window of ['60', '180', '720', '1440']) {
-    assert.match(page, new RegExp(`data-window="${window}"`), `missing ${window}-minute range`);
+    assert.match(page, new RegExp(`<option value="${window}"`), `missing ${window}-minute range`);
   }
   assert.match(page, /id="opsChannel"/, 'missing channel filter');
   assert.match(page, /id="opsKpis"/, 'missing KPI container');
-  assert.match(page, /id="opsTrend"/, 'missing trend chart container');
+  assert.match(page, /id="opsThroughput"/, 'missing trend chart container');
   assert.match(page, /id="opsMatrix"/, 'missing channel × model matrix');
-  assert.match(page, /id="opsAlerts"/, 'missing alert list');
+  assert.match(page, /id="opsAlertTable"/, 'missing alert table');
   assert.match(page, /id="opsCoverage"/, 'missing data-coverage note');
 });
 
 test('the overview states every KPI the operations spec lists', () => {
   const script = read('static/js/ops.js');
-  for (const label of ['请求量', '成功率', 'RPM', '首 Token P95', '总耗时 P95', '刷新中账号', '探测量']) {
+  for (const label of ['请求', 'SLA', '请求错误', '请求时长', 'TTFT', '上游错误']) {
     assert.ok(script.includes(label), `KPI ${label} is not rendered`);
   }
   // No traffic must read as 暂无样本, never as a healthy zero.
@@ -34,7 +34,7 @@ test('the overview states every KPI the operations spec lists', () => {
 
 test('the trend marks failed buckets apart from successful ones', () => {
   const script = read('static/js/ops.js');
-  assert.ok(script.includes('is-failed'), 'failed minutes are not distinguished');
+  assert.ok(script.includes('is-bad'), 'failed minutes are not distinguished');
   assert.ok(script.includes('point.failed'), 'failed counts are not plotted');
 });
 

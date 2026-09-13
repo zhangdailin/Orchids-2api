@@ -1,0 +1,490 @@
+/* =============================================================================
+   使用教程 — help centre
+   =============================================================================
+
+   Loaded after main.css and scoped to .tut-page: nothing here leaks into the
+   other pages, and main.css is never patched from here.
+
+   Every colour, gap and radius is a token from the top of main.css: there is no
+   raw colour value in this file. State overlays use the translucent
+   --accent-soft / --bg-inset tokens instead.
+
+   Sections: 1 shells · 2 table of contents · 3 quick start · 4 copy controls
+   5 channel cards · 6 speed table & error table · 7 responsive
+   ============================================================================= */
+
+/* -----------------------------------------------------------------------------
+   1. Section shells
+   -------------------------------------------------------------------------- */
+.tut-page { padding-bottom: var(--space-10); }
+
+/* .tut-copy-row is display:flex, which would beat the UA [hidden] rule, so the
+   quick-start Claude Code row is hidden explicitly here. */
+.tut-page [hidden] { display: none !important; }
+
+.tut-section {
+  margin-bottom: var(--space-5);
+  scroll-margin-top: var(--space-6);
+}
+
+.tut-section:last-child { margin-bottom: 0; }
+
+.tut-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tut-section-head h2 { font-size: 0.98rem; font-weight: 650; }
+
+.tut-section-hint {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.tut-section-body {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+/* The shared callouts are card-coloured; inside a section card they sit one step
+   lighter so they read as blocks instead of as an edge. */
+.tut-section-body .doc-callout { background: var(--surface-2); }
+
+/* -----------------------------------------------------------------------------
+   2. Table of contents
+   -------------------------------------------------------------------------- */
+.tut-toc {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: var(--surface-1);
+}
+
+.tut-toc-label {
+  padding: 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.tut-toc a {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  text-decoration: none;
+  transition: background var(--transition), color var(--transition);
+}
+
+.tut-toc a:hover { background: var(--surface-2); color: var(--text-main); }
+
+.tut-toc-sep {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+/* -----------------------------------------------------------------------------
+   3. Quick start: channel picker, address, example config
+   -------------------------------------------------------------------------- */
+.tut-quick { gap: var(--space-5); }
+
+.tut-step {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.tut-step-no {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.tut-step-title {
+  margin-bottom: var(--space-2);
+  color: var(--text-main);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.tut-step-note {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.7;
+}
+
+.tut-picker {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+}
+
+.tut-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-soft);
+  font-family: inherit;
+  font-size: 0.82rem;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+/* The channel badge keeps its own colour but drops its pill chrome inside the
+   picker, so the selected chip is the only highlighted shape. */
+.tut-picker-btn .tag {
+  height: auto;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.tut-picker-btn:hover { background: var(--surface-2); color: var(--text-main); }
+
+.tut-picker-btn.is-active {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  font-weight: 650;
+}
+
+.tut-quick-claude { margin-top: var(--space-2); }
+
+/* -----------------------------------------------------------------------------
+   4. Copy controls: fixed-width feedback slot, scrolling code blocks
+   -------------------------------------------------------------------------- */
+.tut-copy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tut-url {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 18ch;
+  min-width: 0;
+  min-height: var(--control-h);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.tut-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.78rem;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+/* Label and feedback slot are two flex items, so the confirmation appears beside
+   the label without pushing it around. */
+.tut-copy-label { white-space: nowrap; }
+
+.tut-copy:hover { background: var(--surface-3); border-color: var(--accent-line); }
+.tut-copy.is-copied { border-color: var(--accent-line); background: var(--accent-soft); }
+
+/* The inline 已复制 confirmation writes into this slot. The slot reserves its
+   width even while empty, so the button and the row around it never move. */
+.tut-copy-flag {
+  min-width: 3.6em;
+  color: var(--ok);
+  font-size: 0.74rem;
+  text-align: left;
+}
+
+.tut-copy-mini {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  font-size: 0.74rem;
+}
+
+.tut-copy-mini .tut-copy-flag { min-width: 3.2em; }
+
+.tut-config {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.tut-code {
+  grid-column: 1;
+  max-width: 100%;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.tut-config .tut-copy { grid-column: 2; }
+
+/* -----------------------------------------------------------------------------
+   5. Channel cards
+   -------------------------------------------------------------------------- */
+.tut-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.tut-card {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+
+.tut-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.98rem;
+  font-weight: 650;
+}
+
+.tut-row {
+  display: grid;
+  grid-template-columns: 8.5em minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  align-items: start;
+}
+
+.tut-row-label {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.7;
+}
+
+.tut-row-value {
+  min-width: 0;
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+
+.tut-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Channel caveats: folded away, never dropped. */
+.tut-caveats {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.tut-caveats-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  color: var(--text-soft);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tut-caveats-summary::-webkit-details-marker { display: none; }
+
+.tut-caveats-summary::before {
+  content: "＋";
+  color: var(--warn);
+}
+
+.tut-caveats[open] .tut-caveats-summary::before { content: "－"; }
+
+.tut-caveats[open] .tut-caveats-summary { border-bottom: 1px solid var(--border-color); }
+
+.tut-caveat-body {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+.tut-caveat {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.tut-caveat-title {
+  color: var(--warn);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.tut-caveat-text {
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  line-height: 1.8;
+}
+
+/* -----------------------------------------------------------------------------
+   6. Speed table & error table
+   -------------------------------------------------------------------------- */
+.tut-url-cell {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.tut-table [data-api-path] { cursor: pointer; }
+
+.tut-table tbody td { vertical-align: top; }
+
+.tut-errors th:first-child,
+.tut-errors td:first-child { width: 24%; }
+
+.tut-errors th:nth-child(2),
+.tut-errors td:nth-child(2) { width: 30%; }
+
+.tut-fix { display: grid; gap: var(--space-1); }
+
+/* -----------------------------------------------------------------------------
+   7. Responsive: below 900px everything stacks, code scrolls in place
+   -------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+  .tut-page { padding-bottom: var(--space-8); }
+
+  .tut-toc {
+    width: 100%;
+    border-radius: var(--radius-md);
+  }
+
+  .tut-toc-label { display: none; }
+
+  .tut-cards { grid-template-columns: minmax(0, 1fr); }
+
+  .tut-section-head { align-items: flex-start; }
+
+  .tut-step { grid-template-columns: 22px minmax(0, 1fr); }
+
+  .tut-step-no {
+    width: 22px;
+    height: 22px;
+  }
+
+  .tut-row { grid-template-columns: minmax(0, 1fr); }
+
+  .tut-config { grid-template-columns: minmax(0, 1fr); }
+
+  .tut-config .tut-copy {
+    grid-column: 1;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .tut-copy-row { align-items: stretch; }
+
+  .tut-copy-row .tut-url { flex: 1 1 100%; }
+
+  .tut-copy-row .tut-copy {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  /* Both tables become stacked lists: every cell keeps its column name above
+     the value, so nothing is cut off and nothing scrolls sideways. */
+  .tut-table thead { display: none; }
+
+  .tut-table,
+  .tut-table tbody,
+  .tut-table tr,
+  .tut-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .tut-table tbody tr {
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .tut-table tbody tr:last-child { border-bottom: 0; }
+
+  .tut-table tbody td {
+    padding: var(--space-1) 0;
+    border-bottom: 0;
+  }
+
+  .tut-table tbody td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 650;
+  }
+}

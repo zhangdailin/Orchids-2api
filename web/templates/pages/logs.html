@@ -5,69 +5,110 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>{{.Title}} · 日志中心</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-4">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260914-ops4">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260913-ui10">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260913-ops11">
 </head>
 
 <body>
   {{template "sidebar.html" .}}
 
+
   <main class="main-content ops-page">
     <section class="header-section">
-      <h1>日志中心</h1>
-      <p class="ops-subtitle" id="logsCoverage">—</p>
+      <div>
+        <h1>日志中心</h1>
+        <p class="page-sub" id="logsTabNote">请求、操作、系统三本账共用一份审计流；某个请求的诊断包挂在该请求的详情里。</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="logsFiltersToggle" type="button" aria-expanded="false" aria-controls="logsFilters">筛选</button>
+        <button class="btn" id="logsReload" type="button">刷新</button>
+      </div>
     </section>
 
-    <section class="ops-card">
-      <div class="logs-tabs" role="tablist" aria-label="日志类型">
-        <button class="logs-tab is-active" role="tab" aria-selected="true" data-kind="request" type="button">请求日志</button>
-        <button class="logs-tab" role="tab" aria-selected="false" data-kind="operation" type="button">操作日志</button>
-        <button class="logs-tab" role="tab" aria-selected="false" data-kind="system" type="button">系统日志</button>
-      </div>
+    <div class="logs-tabs" role="tablist" aria-label="日志类型">
+      <button class="logs-tab is-active" role="tab" aria-selected="true" data-kind="request" type="button">请求日志</button>
+      <button class="logs-tab" role="tab" aria-selected="false" data-kind="operation" type="button">操作日志</button>
+      <button class="logs-tab" role="tab" aria-selected="false" data-kind="system" type="button">系统日志</button>
+    </div>
 
-      <form class="logs-filters" id="logsFilters" autocomplete="off">
-        <label class="ops-select"><span>渠道</span><input id="filterChannel" placeholder="grok / warp" /></label>
-        <label class="ops-select"><span>模型</span><input id="filterModel" placeholder="grok-4.6" /></label>
-        <label class="ops-select"><span>状态</span><input id="filterStatus" placeholder="success / error" /></label>
-        <label class="ops-select"><span>操作者</span><input id="filterActor" placeholder="admin-session" /></label>
-        <label class="ops-select"><span>动作</span><input id="filterAction" placeholder="accounts.update" /></label>
-        <button class="ops-refresh" type="submit">筛选</button>
+
+    <div class="logs-scope" id="logsScope" hidden>
+      <div class="logs-scope-items" id="logsScopeItems"></div>
+      <div class="logs-scope-actions">
+        <button class="btn btn-sm" id="logsScopeClear" type="button">清除筛选</button>
+        <button class="btn btn-sm" id="logsScopeBack" type="button" hidden>返回运维总览</button>
+      </div>
+    </div>
+
+    <form class="logs-filters" id="logsFilters" hidden autocomplete="off">
+      <label class="ops-select"><span>渠道</span><input id="filterChannel" placeholder="grok" /></label>
+      <label class="ops-select"><span>模型</span><input id="filterModel" placeholder="grok-4.6" /></label>
+      <label class="ops-select"><span>状态</span><input id="filterStatus" placeholder="success" /></label>
+      <label class="ops-select"><span>结果</span>
+        <select id="filterOutcome" class="compact-select">
+          <option value="">全部结果</option>
+          <option value="failed">失败（全部失败类型）</option>
+          <option value="success">成功</option>
+          <option value="rate_limited">限流 429/529</option>
+          <option value="upstream_auth">上游认证失败 401/403</option>
+          <option value="rejected">网关拒绝 401/403（我方拒绝）</option>
+          <option value="quota_exhausted">额度用尽 402</option>
+          <option value="client_error">客户端错误 4xx</option>
+          <option value="server_error">上游错误 5xx</option>
+          <option value="stream_error">流中断</option>
+        </select>
+      </label>
+      <label class="ops-select"><span>起始</span><input id="filterSince" placeholder="2026-09-13T00:00:00Z" /></label>
+      <label class="ops-select"><span>结束</span><input id="filterUntil" placeholder="2026-09-13T01:00:00Z" /></label>
+      <label class="ops-select"><span>操作者</span><input id="filterActor" placeholder="admin-session" /></label>
+      <label class="ops-select"><span>动作</span><input id="filterAction" placeholder="accounts.update" /></label>
+      <div class="logs-filter-actions">
         <button class="ops-chip" id="logsClear" type="button">清除</button>
-      </form>
-
-      <div class="logs-layout">
-        <div class="logs-list-wrap">
-          <table class="ops-table logs-table">
-            <thead>
-              <tr>
-                <th class="logs-time">时间</th>
-                <th>渠道 / 动作</th>
-                <th>对象</th>
-                <th class="logs-status">状态</th>
-                <th class="logs-duration">耗时</th>
-              </tr>
-            </thead>
-            <tbody id="logsRows">
-              <tr><td colspan="5" class="ops-empty">正在加载…</td></tr>
-            </tbody>
-          </table>
-          <div class="logs-more">
-            <button class="ops-chip" id="logsMore" type="button" hidden>加载更早的记录</button>
-          </div>
-        </div>
-
-        <aside class="logs-detail" id="logsDetail" aria-live="polite">
-          <h2>详情</h2>
-          <p class="ops-empty">选择左侧一条记录查看详情。</p>
-        </aside>
+        <button class="btn-primary" type="submit">筛选</button>
       </div>
-    </section>
+      <p class="logs-filter-note" id="logsFilterScope">—</p>
+    </form>
 
-    <script src="{{.AdminPath}}/js/common.js?v=20260914-ops4"></script>
-    <script src="{{.AdminPath}}/js/logs.js?v=20260914-ops4"></script>
+    <div class="logs-table-wrap">
+      <table class="ops-table logs-table">
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th id="logsActionHeader">渠道 / 动作</th>
+            <th>对象</th>
+            <th>状态</th>
+            <th>耗时</th>
+          </tr>
+        </thead>
+        <tbody id="logsRows">
+          <tr><td colspan="5" class="table-empty-cell">正在加载…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="logs-more">
+      <button class="btn" id="logsMore" type="button" hidden>加载更早的记录</button>
+    </div>
+
+    <p class="ops-coverage logs-coverage" id="logsCoverage">—</p>
+
+    <aside class="drawer" id="logsDetail" aria-live="polite" aria-label="日志详情" aria-hidden="true">
+      <div class="drawer-head">
+        <div>
+          <div class="logs-detail-section-title" id="logsDetailTitle">详情</div>
+          <p class="muted" id="logsDetailSub">选择左侧一条记录查看详情</p>
+        </div>
+        <button class="panel-close-btn" id="logsDetailClose" type="button" aria-label="关闭详情">✕</button>
+      </div>
+      <div class="drawer-body" id="logsDetailBody"></div>
+    </aside>
+    <div class="drawer-backdrop" id="logsDetailBackdrop"></div>
+
+    <script src="{{.AdminPath}}/js/common.js?v=20260913-ui2"></script>
+    <script src="{{.AdminPath}}/js/logs.js?v=20260913-logs14"></script>
   </main>
 </body>
 
 </html>
+
 {{end}}

@@ -97,6 +97,8 @@ func (r *Renderer) RenderIndex(w http.ResponseWriter, req *http.Request, cfg *co
 		templateName = "page-ops"
 	case "logs":
 		templateName = "page-logs"
+	case "alerts":
+		templateName = "page-alerts"
 	case "tutorial":
 		templateName = "page-tutorial"
 	case "models":

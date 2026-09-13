@@ -6,209 +6,532 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260913-ui10">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/config.css?v=20260913-config2">
 </head>
 
 <body>
   {{template "sidebar.html" .}}
 
-  <main class="main-content">
+
+  <main class="main-content config-page">
     <section class="header-section" id="configHeader">
-      <h1>配置管理</h1>
-      <p>集中管理安全参数、缓存策略、代理网络和后台访问控制。</p>
+      <div>
+        <h1>配置管理</h1>
+        <p>按分组管理后台凭据、上游指纹、缓存策略与代理网络；改动后底部保存栏会显示未保存数量。</p>
+      </div>
     </section>
 
-    <div class="content-card">
-      <!-- Tabs Navigation -->
-      <div id="configTabs" class="platform-tabs config-tabs-shell">
-        <button class="tab-item active" onclick="switchConfigTab('basic')">基础配置</button>
-        <button class="tab-item" onclick="switchConfigTab('auth')">API Key 管理</button>
-      </div>
 
-      <!-- Configuration Sections -->
-      <div id="basicConfig" class="config-section config-section-shell">
-        <!-- Admin Settings -->
-        <div class="config-grid config-grid-two">
-          <div>
-            <label class="form-label">管理员密码</label>
-            <div class="input-wrapper">
-              <input type="password" id="cfg_admin_pass" class="form-input" placeholder="留空则不修改">
-              <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_admin_pass')">••</button>
-            </div>
-          </div>
-          <div>
-            <label class="form-label">API 管理 Token</label>
-            <div class="input-wrapper">
-              <input type="password" id="cfg_admin_token" class="form-input" placeholder="用于调用管理接口">
-              <div class="input-actions">
-                <button type="button" class="btn-icon" onclick="togglePassword('cfg_admin_token')">••</button>
-                <button type="button" class="btn-icon" onclick="copyFieldValue('cfg_admin_token')">CP</button>
-              </div>
-            </div>
-          </div>
-        </div>
+    <div id="configTabs" class="platform-tabs config-tabs-shell config-tabs-switch">
+      <button type="button" class="tab-item active" onclick="switchConfigTab('basic')">基础配置</button>
+      <button type="button" class="tab-item" onclick="switchConfigTab('auth')">API Key 管理</button>
+    </div>
 
-        <div class="settings-panel settings-panel-spaced">
-          <div class="settings-panel-head">
-            <div class="inline-actions">
-              <h3 class="settings-panel-title">Grok 浏览器指纹</h3>
-              <span class="mini-badge">Headers</span>
-            </div>
-            <span class="meta-text meta-text-xs">来自真实浏览器会话</span>
-          </div>
 
-          <div class="config-grid config-grid-gap-sm">
-            <div>
-              <label class="form-label">x-statsig-id</label>
-              <input type="text" id="cfg_grok_statsig_id" class="form-input" placeholder="浏览器抓包得到的 x-statsig-id">
-            </div>
-          </div>
+    <div id="basicConfig" class="config-section-shell config-body">
+      <div class="config-layout">
+        <nav class="config-nav" id="configNav" aria-label="配置分组">
+          <div class="config-nav-head">配置分组</div>
+          <a class="config-nav-link active" href="#groupOverview" data-nav-group="groupOverview">概览</a>
+          <a class="config-nav-link" href="#groupAuth" data-nav-group="groupAuth">认证与密钥</a>
+          <a class="config-nav-link" href="#groupUpstream" data-nav-group="groupUpstream">上游与指纹</a>
+          <a class="config-nav-link" href="#groupCache" data-nav-group="groupCache">缓存</a>
+          <a class="config-nav-link" href="#groupProxy" data-nav-group="groupProxy">代理</a>
+        </nav>
 
-          <div class="config-grid config-grid-two config-grid-gap-sm">
-            <div>
-              <label class="form-label">cf_clearance</label>
-              <input type="password" id="cfg_grok_cf_clearance" class="form-input" placeholder="Cloudflare cf_clearance">
-            </div>
-            <div>
-              <label class="form-label">__cf_bm</label>
-              <input type="password" id="cfg_grok_cf_bm" class="form-input" placeholder="Cloudflare __cf_bm">
-            </div>
-          </div>
-        </div>
+        <div class="config-cards">
 
-        <!-- Token Usage Cache Config -->
-        <div class="settings-panel">
-          <div class="settings-panel-head">
-            <h3 class="settings-panel-title">Prompt 用量缓存</h3>
-            <label class="toggle">
-              <input type="checkbox" id="cfg_enable_token_cache" onchange="toggleCacheConfig(this.checked)">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-
-          <div id="cacheConfigDetails" style="display: none;">
-            <div class="config-grid config-grid-two config-grid-gap-sm">
-              <div>
-                <label class="form-label">缓存有效期</label>
-                <input type="hidden" id="cfg_token_cache_ttl" value="300">
-                <select id="cfg_token_cache_ttl_preset" class="form-input" onchange="handleTokenCacheTTLPresetChange()">
-                  <option value="60">1 分钟</option>
-                  <option value="300">5 分钟</option>
-                  <option value="900">15 分钟</option>
-                  <option value="1800">30 分钟</option>
-                  <option value="3600">1 小时</option>
-                  <option value="86400">1 天</option>
-                  <option value="259200">3 天</option>
-                  <option value="604800">1 周</option>
-                  <option value="custom">自定义</option>
-                </select>
-                <div id="cfg_token_cache_ttl_custom_wrap" class="config-subsection" style="display: none;">
-                  <label class="form-label">自定义 TTL (秒)</label>
-                  <input type="number" id="cfg_token_cache_ttl_custom" class="form-input" min="1" value="300"
-                    oninput="handleTokenCacheTTLCustomInput()">
+          <section class="settings-card" id="groupOverview">
+            <div class="settings-card-head">
+              <h2 class="settings-card-title">概览</h2>
+              <span class="mini-badge">只读</span>
+            </div>
+            <p class="settings-card-note">
+              这一页把配置拆成认证与密钥、上游与指纹、缓存、代理四组；密钥类字段带「密钥」标记。
+              改动任意字段后，底部保存栏显示未保存数量，保存成功才成为新的对比基准。
+            </p>
+            <div class="settings-card-body">
+              <div class="form-row">
+                <div class="form-row-label">
+                  <span class="form-label">配置接口</span>
+                  <span class="helper-text">页面加载读取 /api/config/list，保存写入 /api/config/save。</span>
+                </div>
+                <div class="form-row-control config-inline-tags">
+                  <span class="inline-code">/api/config/list</span>
+                  <span class="inline-code">/api/config/save</span>
                 </div>
               </div>
-              <div>
-                <label class="form-label">缓存策略</label>
-                <select id="cfg_token_cache_strategy" class="form-input" onchange="updateMemoryEstimation()">
-                  <option value="0">完整匹配 (System + Tools)</option>
-                  <option value="1">分离缓存 (推荐)</option>
-                  <option value="2">仅缓存 System</option>
-                  <option value="3">仅缓存 Tools</option>
-                </select>
-              </div>
-            </div>
 
-            <div class="estimate-panel">
-              <div id="memoryEstTitle" class="estimate-title">内存估算</div>
-              <div class="estimate-grid">
-                <div class="estimate-card estimate-card-green">
-                  <div class="estimate-caption">10 QPS</div>
-                  <div id="estLow" class="estimate-value estimate-value-green">~1.5MB</div>
+              <div class="form-row">
+                <div class="form-row-label">
+                  <span class="form-label">Prompt 用量缓存</span>
+                  <span class="helper-text">缓存运行状态来自 /api/token-cache/stats。</span>
                 </div>
-                <div class="estimate-card estimate-card-blue">
-                  <div class="estimate-caption">50 QPS</div>
-                  <div id="estMid" class="estimate-value estimate-value-blue">~7.5MB</div>
-                </div>
-                <div class="estimate-card estimate-card-purple">
-                  <div class="estimate-caption">100 QPS</div>
-                  <div id="estHigh" class="estimate-value estimate-value-purple">~15MB</div>
+                <div class="form-row-control config-row-stack">
+                  <div id="cacheStatsText" class="meta-text">正在统计缓存...</div>
+                  <button type="button" class="btn btn-outline btn-xs" onclick="clearCache()">清空缓存</button>
                 </div>
               </div>
-              <div class="estimate-meta">
-                <span>TTL: <span id="estTTLSeconds">300</span>s</span>
-                <span>系数: <span id="estStrategyMult">× 2</span></span>
+
+              <div class="form-row">
+                <div class="form-row-label">
+                  <span class="form-label">Token 估算缓存</span>
+                  <span class="helper-text">只影响本地估算，不改变发给上游的内容。</span>
+                </div>
+                <div class="form-row-control">
+                  <div id="estimateCacheStatsText" class="meta-text">用于缓存本地 token 估算结果，不代表上游真实用量。</div>
+                </div>
               </div>
             </div>
+          </section>
 
-            <div class="settings-panel-foot">
-              <div id="cacheStatsText" class="meta-text">正在统计缓存...</div>
-              <button class="btn btn-outline btn-xs" onclick="clearCache()">清空缓存</button>
+
+          <section class="settings-card" id="groupAuth">
+            <div class="settings-card-head">
+              <h2 class="settings-card-title">认证与密钥</h2>
+              <span class="mini-badge">访问控制</span>
             </div>
-          </div>
-        </div>
+            <p class="settings-card-note">后台登录凭据与管理接口 Token。密钥字段使用独立配色与「密钥」标记，并保留显示/隐藏开关。</p>
+            <div class="settings-card-body">
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_admin_pass">管理员密码 <span class="secret-badge">密钥</span></label>
+                  <span class="helper-text">控制台登录密码；留空表示不修改当前密码。</span>
+                </div>
+                <div class="form-row-control">
+                  <div class="input-wrapper secret-shell">
+                    <input type="password" id="cfg_admin_pass" class="form-input secret-field" placeholder="留空则不修改">
+                    <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_admin_pass')">••</button>
+                  </div>
+                </div>
+              </div>
 
-        <div class="settings-panel">
-          <div class="settings-panel-head">
-            <h3 class="settings-panel-title">Token 估算缓存</h3>
-            <label class="toggle">
-              <input type="checkbox" id="cfg_cache_token_count">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <div class="settings-panel-foot">
-            <div id="estimateCacheStatsText" class="meta-text">用于缓存本地 token 估算结果，不代表上游真实用量。</div>
-          </div>
-        </div>
-
-        <!-- Proxy Config -->
-        <div class="settings-panel settings-panel-spaced">
-          <div class="settings-panel-head">
-            <div class="inline-actions">
-              <h3 class="settings-panel-title">代理配置</h3>
-              <span class="mini-badge">URL</span>
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_admin_token">API 管理 Token <span class="secret-badge">密钥</span></label>
+                  <span class="helper-text">用于调用管理接口；可先显示再复制，避免明文回显。</span>
+                </div>
+                <div class="form-row-control">
+                  <div class="input-wrapper">
+                    <input type="password" id="cfg_admin_token" class="form-input secret-field" placeholder="用于调用管理接口">
+                    <div class="input-actions">
+                      <button type="button" class="btn-icon" onclick="togglePassword('cfg_admin_token')">••</button>
+                      <button type="button" class="btn-icon" onclick="copyFieldValue('cfg_admin_token')">CP</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <span class="meta-text meta-text-xs">留空表示直连</span>
-          </div>
+          </section>
 
-          <div class="config-grid config-grid-gap-sm">
-            <div>
-              <label class="form-label">代理 URL</label>
-              <input type="text" id="cfg_proxy_url" class="form-input" placeholder="http://user:pass@host:port/ 或 socks5://user:pass@host:port/">
-              <div class="meta-text meta-text-xs" style="margin-top: 8px;">支持 `http://`、`https://`、`socks5://`，留空则不使用代理。</div>
+
+          <section class="settings-card" id="groupUpstream">
+            <div class="settings-card-head">
+              <h2 class="settings-card-title">上游与指纹</h2>
+              <span class="mini-badge">Grok Headers</span>
             </div>
-          </div>
+            <p class="settings-card-note">来自真实浏览器会话的请求头。指纹失效时上游会返回风控页面，需要重新抓包替换。</p>
+            <div class="settings-card-body">
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_grok_statsig_id">x-statsig-id</label>
+                  <span class="helper-text">浏览器抓包得到的 x-statsig-id，用于通过上游指纹校验。</span>
+                </div>
+                <div class="form-row-control">
+                  <input type="text" id="cfg_grok_statsig_id" class="form-input" placeholder="浏览器抓包得到的 x-statsig-id">
+                </div>
+              </div>
 
-          <div>
-            <label class="form-label">直连域名/网段</label>
-            <textarea id="cfg_proxy_bypass" class="form-input" rows="3" placeholder="每行一个域名或 CIDR，例如 example.com 或 10.0.0.0/8"></textarea>
-          </div>
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_grok_cf_clearance">cf_clearance <span class="secret-badge">密钥</span></label>
+                  <span class="helper-text">Cloudflare 验证通过后下发的 Cookie，等同于会话凭据。</span>
+                </div>
+                <div class="form-row-control">
+                  <div class="input-wrapper secret-shell">
+                    <input type="password" id="cfg_grok_cf_clearance" class="form-input secret-field" placeholder="Cloudflare cf_clearance">
+                    <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_grok_cf_clearance')">••</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_grok_cf_bm">__cf_bm <span class="secret-badge">密钥</span></label>
+                  <span class="helper-text">与 cf_clearance 同批次获取，两者需要来自同一次浏览器会话。</span>
+                </div>
+                <div class="form-row-control">
+                  <div class="input-wrapper secret-shell">
+                    <input type="password" id="cfg_grok_cf_bm" class="form-input secret-field" placeholder="Cloudflare __cf_bm">
+                    <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_grok_cf_bm')">••</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+
+          <section class="settings-card" id="groupCache">
+            <div class="settings-card-head">
+              <h2 class="settings-card-title">缓存</h2>
+              <span class="mini-badge">Token</span>
+            </div>
+            <p class="settings-card-note">Prompt 前缀缓存降低上游 token 消耗，常驻内存随 TTL 与 QPS 线性增长。</p>
+
+            <div class="settings-card-body">
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_enable_token_cache">启用 Prompt 用量缓存</label>
+                  <span class="helper-text">按 System / Tools 前缀复用上游 prompt 计算结果，关闭后每次请求都完整走上游。</span>
+                </div>
+                <div class="form-row-control config-toggle-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="cfg_enable_token_cache" onchange="toggleCacheConfig(this.checked)">
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="config-toggle-hint">开：命中即跳过上游计算</span>
+                </div>
+              </div>
+
+              <div id="cacheConfigDetails" class="config-cache-details" style="display: none;">
+                <div class="form-row">
+                  <div class="form-row-label">
+                    <label class="form-label" for="cfg_token_cache_ttl_preset">缓存有效期</label>
+                    <span class="helper-text">TTL 越长命中率越高，常驻内存也越大；推荐 5–30 分钟。</span>
+                  </div>
+                  <div class="form-row-control">
+                    <input type="hidden" id="cfg_token_cache_ttl" value="300">
+                    <select id="cfg_token_cache_ttl_preset" class="form-input" onchange="handleTokenCacheTTLPresetChange()">
+                      <option value="60">1 分钟</option>
+                      <option value="300">5 分钟</option>
+                      <option value="900">15 分钟</option>
+                      <option value="1800">30 分钟</option>
+                      <option value="3600">1 小时</option>
+                      <option value="86400">1 天</option>
+                      <option value="259200">3 天</option>
+                      <option value="604800">1 周</option>
+                      <option value="custom">自定义</option>
+                    </select>
+                    <div id="cfg_token_cache_ttl_custom_wrap" class="config-subsection" style="display: none;">
+                      <label class="form-label" for="cfg_token_cache_ttl_custom">自定义 TTL (秒)</label>
+                      <input type="number" id="cfg_token_cache_ttl_custom" class="form-input" min="1" value="300"
+                        oninput="handleTokenCacheTTLCustomInput()">
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-row">
+                  <div class="form-row-label">
+                    <label class="form-label" for="cfg_token_cache_strategy">缓存策略</label>
+                    <span class="helper-text">分离缓存把 System 与 Tools 分开存放，命中率更稳。</span>
+                  </div>
+                  <div class="form-row-control">
+                    <select id="cfg_token_cache_strategy" class="form-input" onchange="updateMemoryEstimation()">
+                      <option value="0">完整匹配 (System + Tools)</option>
+                      <option value="1">分离缓存 (推荐)</option>
+                      <option value="2">仅缓存 System</option>
+                      <option value="3">仅缓存 Tools</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="estimate-panel">
+                  <div id="memoryEstTitle" class="estimate-title">内存估算</div>
+                  <p class="estimate-note">估算口径：QPS × TTL × 0.5KB × 策略系数，括号内为当前生效参数。</p>
+                  <div class="estimate-grid">
+                    <div class="estimate-card estimate-card-green">
+                      <div class="estimate-caption estimate-caption-ok">10 QPS · 推荐区间</div>
+                      <div id="estLow" class="estimate-value estimate-value-green">~1.5MB</div>
+                      <div class="estimate-meta"><span>低并发，TTL ≤ 30 分钟时内存可忽略</span></div>
+                    </div>
+                    <div class="estimate-card estimate-card-blue">
+                      <div class="estimate-caption">50 QPS · 常见区间</div>
+                      <div id="estMid" class="estimate-value estimate-value-blue">~7.5MB</div>
+                      <div class="estimate-meta"><span>建议 TTL 不超过 1 小时</span></div>
+                    </div>
+                    <div class="estimate-card estimate-card-purple">
+                      <div class="estimate-caption estimate-caption-warn">100 QPS · 需关注</div>
+                      <div id="estHigh" class="estimate-value estimate-value-purple">~15MB</div>
+                      <div class="estimate-meta"><span>TTL 超过 1 小时后增速最快</span></div>
+                    </div>
+                  </div>
+                  <div class="estimate-meta">
+                    <span>TTL: <span id="estTTLSeconds">300</span>s</span>
+                    <span>系数: <span id="estStrategyMult">× 2</span></span>
+                    <span>推荐 TTL: 5–30 分钟</span>
+                  </div>
+                  <p class="estimate-note estimate-note-warn">
+                    数值过高说明 TTL 或 QPS 估计偏大：100 QPS + TTL 1 周 + ×2 系数时估算内存可达数 GB。
+                    建议先按 5–30 分钟 TTL 观察命中率，再逐步调大。
+                  </p>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_cache_token_count">Token 估算缓存</label>
+                  <span class="helper-text">缓存本地 token 估算结果，不代表上游真实用量。</span>
+                </div>
+                <div class="form-row-control config-toggle-control">
+                  <label class="toggle">
+                    <input type="checkbox" id="cfg_cache_token_count">
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="config-toggle-hint">开：本地估算结果复用</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+
+          <section class="settings-card" id="groupProxy">
+            <div class="settings-card-head">
+              <h2 class="settings-card-title">代理</h2>
+              <span class="mini-badge">出网</span>
+            </div>
+            <p class="settings-card-note">上游请求的出网方式，留空表示直连。</p>
+            <div class="settings-card-body">
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_proxy_url">代理 URL <span class="secret-badge">密钥</span></label>
+                  <span class="helper-text">支持 http://、https://、socks5://；URL 内可包含 user:pass 凭据，不要泄露给他人。</span>
+                </div>
+                <div class="form-row-control">
+                  <input type="text" id="cfg_proxy_url" class="form-input secret-field"
+                    placeholder="http://user:pass@host:port/ 或 socks5://user:pass@host:port/">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-row-label">
+                  <label class="form-label" for="cfg_proxy_bypass">直连域名/网段</label>
+                  <span class="helper-text">每行一个域名或 CIDR，列表内的目标不走代理。</span>
+                </div>
+                <div class="form-row-control">
+                  <textarea id="cfg_proxy_bypass" class="form-input" rows="3"
+                    placeholder="每行一个域名或 CIDR，例如 example.com 或 10.0.0.0/8"></textarea>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
 
-      <div id="authConfig" class="config-section config-section-shell" style="display: none;">
-        <div class="section-head">
-          <h2 class="section-title">API Key 管理</h2>
-          <button class="btn btn-primary" onclick="openCreateKeyModal()">+ 创建 API Key</button>
-        </div>
-        <div id="keysList"></div>
-      </div>
 
-      <!-- Global Save Footer -->
-      <div class="save-footer">
-        <button class="btn btn-primary btn-save" onclick="saveConfiguration()">保存配置</button>
+      <div class="sticky-actions config-save-bar" id="cfgSaveBar">
+        <div class="config-save-state">
+          <span class="unsaved-dot hidden" id="cfgDirtyState">0 项未保存</span>
+          <span class="config-save-clean" id="cfgCleanState">已与服务器同步</span>
+          <span class="config-save-error hidden" id="cfgSaveError"></span>
+        </div>
+        <div class="config-save-actions">
+          <button type="button" class="btn btn-outline" id="cfgResetBtn" onclick="resetConfigChanges()" disabled>重置</button>
+          <button type="button" class="btn btn-primary btn-save" id="cfgSaveBtn" onclick="saveConfiguration()">保存配置</button>
+        </div>
       </div>
+    </div>
+
+
+    <div id="authConfig" class="settings-card config-auth-card" style="display: none;">
+      <div class="settings-card-head">
+        <div>
+          <h2 class="settings-card-title">API Key 管理</h2>
+          <p class="settings-card-note">用于访问接口的身份认证；禁用的 Key 将立即无法访问 API。</p>
+        </div>
+        <button type="button" class="btn btn-primary" onclick="openCreateKeyModal()">+ 创建 API Key</button>
+      </div>
+      <div id="keysList" class="settings-card-body"></div>
     </div>
   </main>
 
-  {{template "model-modal.html"}}
-  {{template "key-modals.html"}}
+
+<div class="modal" id="modelModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modelModalTitle">添加模型</h3>
+      <button class="modal-close" onclick="closeModelModal()">&times;</button>
+    </div>
+    <form id="modelForm" onsubmit="saveModel(event)">
+      <input type="hidden" id="modelId" />
+      <div class="form-group">
+        <label class="form-label">渠道</label>
+        <select class="form-input" id="modelChannel">
+          <option value="Warp">Warp</option>
+          <option value="Puter">Puter</option>
+          <option value="WorkBuddy">WorkBuddy</option>
+          <option value="Grok">Grok</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">模型 ID</label>
+        <input type="text" class="form-input" id="modelModelId" required placeholder="e.g. claude-3-opus-20240229" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">显示名称</label>
+        <input type="text" class="form-input" id="modelName" required placeholder="e.g. Claude 3 Opus" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">排序权重</label>
+          <input type="number" class="form-input" id="modelSortOrder" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">状态</label>
+          <select class="form-input" id="modelStatus">
+            <option value="available">可用 (Available)</option>
+            <option value="maintenance">维护 (Maintenance)</option>
+            <option value="offline">下线 (Offline)</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <label class="toggle">
+            <input type="checkbox" id="modelIsDefault" />
+            <span class="toggle-slider"></span>
+          </label>
+          &nbsp;&nbsp;设为默认模型
+        </label>
+        <div class="helper-text" style="margin-top:8px;line-height:1.5;">
+          同一渠道只会保留一个默认模型，保存后会自动替换当前默认项。
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px">
+        保存
+      </button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="createKeyModal">
+  <div class="modal-content modal-content-md">
+    <div class="modal-header">
+      <h3 class="modal-title">创建 API Key</h3>
+      <button class="modal-close" onclick="closeCreateKeyModal()">
+        &times;
+      </button>
+    </div>
+    <form onsubmit="createApiKey(event)">
+      <div class="form-group">
+        <label class="form-label">名称 / 备注（支持换行批量创建）</label>
+        <textarea class="form-input" id="keyName" required placeholder="每行一个名称，例如：&#10;生产环境&#10;测试用&#10;开发者-张三"
+          rows="4" style="resize: vertical;"></textarea>
+      </div>
+      <div class="form-group">
+        <label class="form-label">允许模型（可选，每行或逗号分隔）</label>
+        <textarea class="form-input" id="keyAllowedModels" placeholder="留空表示全部模型，例如：&#10;grok-4.6&#10;grok-imagine-image" rows="3"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">每分钟请求数（RPM）</label>
+          <input class="form-input" id="keyRPMLimit" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">到期时间（可选）</label>
+          <input class="form-input" id="keyExpiresAt" type="datetime-local" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">
+        创建
+      </button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="editKeyModal">
+  <div class="modal-content modal-content-md">
+    <div class="modal-header">
+      <h3 class="modal-title">编辑 API Key 策略</h3>
+      <button class="modal-close" onclick="closeEditKeyModal()">&times;</button>
+    </div>
+    <form onsubmit="saveKeyPolicy(event)">
+      <input type="hidden" id="editKeyId" />
+      <div class="form-group">
+        <label class="form-label">允许模型（每行或逗号分隔）</label>
+        <textarea class="form-input" id="editKeyAllowedModels" placeholder="留空表示全部模型" rows="4"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">每分钟请求数（0 表示不限）</label>
+          <input class="form-input" id="editKeyRPMLimit" type="number" min="0" value="0" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">到期时间（留空表示永不过期）</label>
+          <input class="form-input" id="editKeyExpiresAt" type="datetime-local" />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">保存策略</button>
+    </form>
+  </div>
+</div>
+
+
+<div class="modal" id="showKeyModal">
+  <div class="modal-content modal-content-lg">
+    <div class="modal-header">
+      <h3 class="modal-title">API Key 已创建</h3>
+    </div>
+    <div class="modal-body">
+    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+      请立即复制并保存您的 API Key：
+    </p>
+    <div id="fullKeyDisplay" class="modal-scroll">
+    </div>
+    <div class="warning-box">
+      <strong>请妥善保存</strong><br />
+      关闭此窗口后将无法再次查看完整 Key
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="copyAllKeys()">
+        复制全部
+      </button>
+      <button class="btn btn-neutral"
+        onclick="closeShowKeyModal()">
+        我已保存，关闭
+      </button>
+    </div>
+    </div>
+  </div>
+</div>
+
+
+<div class="modal" id="deleteKeyModal">
+  <div class="modal-content modal-content-sm">
+    <div class="modal-header">
+      <h3 class="modal-title">删除 API Key</h3>
+      <button class="modal-close" onclick="closeDeleteKeyModal()">
+        &times;
+      </button>
+    </div>
+    <div class="modal-body">
+    <p style="margin-bottom: 20px;">
+      确定要删除 Key「<strong id="deleteKeyName"></strong>」吗？<br />
+      <span class="warning-text">此操作不可撤销，使用此 Key 的应用将无法访问。</span>
+    </p>
+    <input type="hidden" id="deleteKeyId" />
+    <div class="modal-actions">
+      <button class="btn btn-neutral"
+        onclick="closeDeleteKeyModal()">
+        取消
+      </button>
+      <button class="btn btn-danger" onclick="confirmDeleteKey()">
+        删除
+      </button>
+    </div>
+    </div>
+  </div>
+</div>
+
 
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v=20260605-2"></script>
-  <script src="{{.AdminPath}}/js/config.js?v=20260826-1"></script>
+  <script src="{{.AdminPath}}/js/common.js?v=20260913-ui2"></script>
+  <script src="{{.AdminPath}}/js/config.js?v=20260912-ui1"></script>
 </body>
 
 </html>
+
 {{end}}

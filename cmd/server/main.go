@@ -195,7 +195,14 @@ func main() {
 		apiHandler.SetRefreshConcurrencyReporter(grokRefreshHub.Len)
 		// Alert transitions are journalled as system events, which is what makes a
 		// failure and its recovery one traceable pair.
-		alertEngine = alerting.NewEngine(alerting.DefaultRules(), newAuditAlertRecorder(auditLogger))
+		alertRules := alerting.DefaultRules()
+		if raw, err := redisClient.Get(context.Background(), s.RedisPrefix()+"ops:alert_rules").Bytes(); err == nil {
+			var saved alerting.Rules
+			if json.Unmarshal(raw, &saved) == nil && saved.Validate() == nil {
+				alertRules = saved
+			}
+		}
+		alertEngine = alerting.NewEngine(alertRules, newAuditAlertRecorder(auditLogger))
 		apiHandler.SetAlertEngine(alertEngine)
 		wiredAuditLogger = auditLogger
 		// One account change, three caches: the pool snapshot, the cached upstream

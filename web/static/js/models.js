@@ -4,7 +4,7 @@ let models = [];
 let currentModelChannel = "";
 let modelSearchTerm = "";
 let modelStatusFilter = "";
-let modelPageSize = 50;
+let modelPageSize = 20;
 let modelCurrentPage = 1;
 let modelRefreshInFlight = false;
 let modelDeleteOfflineInFlight = false;
@@ -113,13 +113,13 @@ function updateModelSummary(channelModels, filtered) {
 
   const panelTitle = document.getElementById("modelsPanelTitle");
   if (panelTitle) {
-    panelTitle.textContent = `${channelLabel} 动作区`;
+    panelTitle.textContent = currentModelChannel ? `${channelLabel} 模型` : "全部模型";
   }
 
   const panelHint = document.getElementById("modelsPanelHint");
   if (panelHint) {
     panelHint.textContent = filtered.length > 0
-      ? `当前筛选结果共有 ${filtered.length} 条，可直接在表格中编辑、删除或启停。默认模型请在编辑弹窗里维护。`
+      ? "启停、编辑与删除都在行内完成；默认模型请在编辑弹窗里维护。"
       : "当前筛选条件下没有命中的模型记录。";
   }
 }
@@ -159,7 +159,7 @@ function modelRefreshSourceLabel(source) {
     public_page: "Warp 公开页面",
     puter_public_models: "Puter 公开模型 API",
     puter_public_models_test_mode: "Puter 公开 API + 账号验证",
-    puter_public_models_unverified: "Puter 公开 API",
+    puter_public_models_unverified: "Puter 公开 API（未逐个验证）",
     grok_app_chat_static: "Grok App Chat 模型表",
     warp_cached_models: "Warp 上次成功目录（官方暂未返回可用模型）",
   };
@@ -189,7 +189,12 @@ function renderModelRefreshSummary() {
 
   summary.hidden = false;
   title.textContent = `${result.channel || channel} 最近一次刷新结果`;
-  meta.textContent = `来源：${modelRefreshSourceLabel(result.source)}。并发数 ${result.concurrency || modelRefreshConcurrency}。刷新只会补充新模型，已有模型的状态、名称、排序和默认项会保持不变。`;
+  // "同步 0" is the honest result of a catalog-only refresh, so say why instead
+  // of leaving the operator to wonder whether the refresh ran.
+  const skippedNote = Number(result.verified) === 0
+    ? "主动探测已关闭，本次只读取目录、未向上游逐个验证模型。"
+    : "";
+  meta.textContent = `来源：${modelRefreshSourceLabel(result.source)}。并发数 ${result.concurrency || modelRefreshConcurrency}。${skippedNote}刷新只会补充新模型，已有模型的状态、名称、排序和默认项会保持不变。`;
 
   const stats = [
     { label: "发现", value: result.discovered },
@@ -325,7 +330,10 @@ function renderModels() {
     const defaultBadge = m.is_default ? `<span class="models-default-badge">默认</span>` : "";
 
     return `
-      <tr>
+      <tr data-id="${encodeData(m.id)}">
+        <td class="col-select">
+          <input type="checkbox" class="row-checkbox" data-action="row-select" data-id="${encodeData(m.id)}" />
+        </td>
         <td class="col-model">
           <div class="models-cell-main">
             <div class="models-cell-title">
@@ -333,15 +341,15 @@ function renderModels() {
               ${defaultBadge}
             </div>
             <span class="models-model-id">${escapeHtml(m.model_id || "-")}</span>
-            <span class="models-cell-sub">排序 ${escapeHtml(String(m.sort_order ?? 0))}</span>
           </div>
         </td>
+        <td class="col-channel">${escapeHtml(m.channel || "-")}</td>
         <td class="col-status">
           <span class="models-status-badge" style="background:${status.bg};color:${status.color};border-color:${status.border};">${status.label}</span>
         </td>
         <td class="col-sort">${escapeHtml(String(m.sort_order ?? 0))}</td>
         <td class="col-toggle">
-          <label class="toggle" title="${normalizeModelStatus(m.status) === "available" ? "点击下线" : "点击启用"}">
+          <label class="toggle${normalizeModelStatus(m.status) === "available" ? " active" : ""}" title="${normalizeModelStatus(m.status) === "available" ? "点击下线" : "点击启用"}">
             <input type="checkbox" data-action="toggle-status" data-id="${encodeData(m.id)}" ${normalizeModelStatus(m.status) === "available" ? "checked" : ""} />
             <span class="toggle-slider"></span>
           </label>
@@ -361,7 +369,9 @@ function renderModels() {
       <table class="models-table">
         <thead>
           <tr>
+            <th class="col-select"><input type="checkbox" data-action="select-all" aria-label="选择本页全部模型" /></th>
             <th class="col-model">模型</th>
+            <th class="col-channel">渠道</th>
             <th class="col-status">状态</th>
             <th class="col-sort">排序</th>
             <th class="col-toggle">启用</th>
@@ -377,6 +387,20 @@ function renderModels() {
     const target = event.target.closest("[data-action]");
     if (!target || !container.contains(target)) return;
     const action = target.dataset.action;
+    if (action === "select-all") {
+      modelsSelectedIds.clear();
+      if (target.checked) pageItems.forEach((m) => modelsSelectedIds.add(String(m.id)));
+      renderModels();
+      return;
+    }
+    if (action === "row-select") {
+      const id = decodeData(target.dataset.id || "");
+      if (target.checked) modelsSelectedIds.add(id);
+      else modelsSelectedIds.delete(id);
+      updateModelsBatchBar();
+      refreshRowSelectionStyles(container);
+      return;
+    }
     const id = decodeData(target.dataset.id || "");
     if (!id) return;
     if (action === "edit") editModel(id);
@@ -386,11 +410,82 @@ function renderModels() {
   container.onchange = (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement)) return;
+    if (target.dataset.action === "select-all") {
+      // Handled by the click handler so the header checkbox and the rows stay in
+      // step; letting both run would toggle the set twice.
+      return;
+    }
     if (target.dataset.action !== "toggle-status") return;
     const id = decodeData(target.dataset.id || "");
     if (!id) return;
     toggleModelStatus(id, target.checked);
   };
+
+  refreshRowSelectionStyles(container);
+  updateModelsBatchBar();
+}
+
+// modelsSelectedIds survives paging so a selection is not silently lost when the
+// operator moves between pages.
+const modelsSelectedIds = new Set();
+
+function refreshRowSelectionStyles(container) {
+  container.querySelectorAll("tr[data-id]").forEach((tr) => {
+    const id = decodeData(tr.dataset.id || "");
+    tr.classList.toggle("is-selected", modelsSelectedIds.has(id));
+  });
+}
+
+function updateModelsBatchBar() {
+  const bar = document.getElementById("modelsBatchBar");
+  const count = document.getElementById("modelsSelectedCount");
+  if (count) count.textContent = String(modelsSelectedIds.size);
+  if (bar) bar.hidden = modelsSelectedIds.size === 0;
+}
+
+function clearModelSelection() {
+  modelsSelectedIds.clear();
+  renderModels();
+}
+
+async function runModelBatch(action) {
+  const ids = Array.from(modelsSelectedIds);
+  if (ids.length === 0) return;
+  if (action === "clear") {
+    clearModelSelection();
+    return;
+  }
+  const labels = { enable: "启用", disable: "停用", delete: "删除" };
+  if (action === "delete" && !confirm(`确定删除选中的 ${ids.length} 个模型吗？此操作不可撤销。`)) return;
+
+  let done = 0;
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      if (action === "delete") {
+        const response = await fetch(`/api/models/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+      } else {
+        const current = models.find((m) => String(m.id) === String(id));
+        if (!current) throw new Error("模型已不在列表中");
+        const response = await fetch(`/api/models/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...current, status: action === "enable" ? "available" : "offline" }),
+        });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+      }
+      done += 1;
+    } catch (error) {
+      failed += 1;
+      console.warn("batch model action failed", id, error);
+    }
+  }
+  modelsSelectedIds.clear();
+  showToast(failed === 0
+    ? `已批量${labels[action]} ${done} 个模型`
+    : `批量${labels[action]}完成：成功 ${done}，失败 ${failed}`, failed === 0 ? "success" : "error");
+  await loadModels();
 }
 
 function renderModelsMobile(container, pageItems) {
@@ -418,7 +513,7 @@ function renderModelsMobile(container, pageItems) {
           </div>
           <div class="models-mobile-item">
             <span class="models-mobile-label">启用</span>
-            <label class="toggle" title="${normalizeModelStatus(m.status) === "available" ? "点击下线" : "点击启用"}">
+            <label class="toggle${normalizeModelStatus(m.status) === "available" ? " active" : ""}" title="${normalizeModelStatus(m.status) === "available" ? "点击下线" : "点击启用"}">
               <input type="checkbox" data-action="toggle-status" data-id="${encodeData(m.id)}" ${normalizeModelStatus(m.status) === "available" ? "checked" : ""} />
               <span class="toggle-slider"></span>
             </label>
@@ -744,6 +839,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const pageSize = document.getElementById("modelPageSize");
   const refreshConcurrency = document.getElementById("modelRefreshConcurrency");
 
+  // Batch actions act on the current selection through the per-model endpoints,
+  // so no new server surface is needed for a multi-row edit.
+  const batchBar = document.getElementById("modelsBatchBar");
+  if (batchBar) {
+    batchBar.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-batch]");
+      if (!button) return;
+      runModelBatch(button.dataset.batch);
+    });
+  }
+
   if (searchInput) {
     searchInput.addEventListener("input", (event) => {
       modelSearchTerm = String(event.target.value || "").trim();
@@ -761,8 +867,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (pageSize) {
+    // The select is the source of truth for the first render: initialising the
+    // state to a different number than the markup's selected option made the page
+    // render 50 rows while the control read 每页 20 条 (and the 本页 label said 50).
+    modelPageSize = parseInt(pageSize.value || "20", 10) || 20;
     pageSize.addEventListener("change", (event) => {
-      modelPageSize = parseInt(event.target.value || "50", 10) || 50;
+      modelPageSize = parseInt(event.target.value || "20", 10) || 20;
       modelCurrentPage = 1;
       renderModels();
     });

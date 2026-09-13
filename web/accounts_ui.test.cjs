@@ -98,7 +98,7 @@ test('clicking a platform tab makes 添加账号 open in that platform', () => {
 
   const tabs = node('platformFilters').children;
   for (const platform of ['grok', 'puter', 'warp', 'workbuddy']) {
-    const tab = tabs.find((candidate) => candidate.textContent === platform);
+    const tab = tabs.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === platform);
     assert.ok(tab, `no ${platform} tab among ${tabs.map((candidate) => candidate.textContent).join(',')}`);
     tab.click();
     node('accountId').value = '';
@@ -165,7 +165,7 @@ test('openModal after a tab click renders that tab form, not the previously open
   };
   const tabs = node('platformFilters').children;
   for (const platform of ['grok', 'puter', 'warp', 'workbuddy']) {
-    const tab = tabs.find((candidate) => candidate.textContent === platform);
+    const tab = tabs.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === platform);
     assert.ok(tab, `no ${platform} tab`);
     tab.click();
     node('accountId').value = '';
@@ -650,7 +650,7 @@ test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login, ne
   context.renderPlatformTabs();
 
   const tabs = node('platformFilters').children;
-  const workbuddyTab = tabs.find((tab) => tab.textContent === 'workbuddy');
+  const workbuddyTab = tabs.find((tab) => decodeURIComponent(tab.dataset.platform || '') === 'workbuddy');
   assert.ok(workbuddyTab, `no workbuddy tab among ${tabs.map((tab) => tab.textContent).join(',')}`);
   workbuddyTab.click();
   assert.equal(vm.runInContext('currentPlatform', context), 'workbuddy');

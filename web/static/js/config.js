@@ -34,6 +34,183 @@ function copyFieldValue(fieldId) {
   }
 }
 
+// ── Unsaved-change tracking ───────────────────────────────────────────────────
+// The sticky save bar compares the live control values against the values the
+// server returned on load. Only the fields the save payload actually reads are
+// counted; the TTL preset select and its custom box mirror the effective TTL and
+// are rebuilt from it instead of being tracked separately.
+const CONFIG_TRACKED_FIELDS = [
+  "cfg_admin_pass",
+  "cfg_admin_token",
+  "cfg_grok_statsig_id",
+  "cfg_grok_cf_clearance",
+  "cfg_grok_cf_bm",
+  "cfg_proxy_url",
+  "cfg_proxy_bypass",
+  "cfg_token_cache_ttl",
+  "cfg_token_cache_strategy",
+  "cfg_enable_token_cache",
+  "cfg_cache_token_count",
+];
+const CONFIG_MIRROR_FIELDS = ["cfg_token_cache_ttl_preset", "cfg_token_cache_ttl_custom"];
+let configBaseline = null;
+let configSaving = false;
+
+function readConfigFieldValue(id) {
+  const field = document.getElementById(id);
+  if (!field) return null;
+  if (field.type === "checkbox") return field.checked ? "true" : "false";
+  return field.value;
+}
+
+function collectConfigState(ids) {
+  const state = {};
+  ids.forEach((id) => {
+    const value = readConfigFieldValue(id);
+    if (value !== null) state[id] = value;
+  });
+  return state;
+}
+
+// main.css paints a switch from `.toggle.active`; keep that class in step with
+// the native checkbox so a hydrated switch is never drawn off while checked.
+function syncToggleElement(checkbox) {
+  const label = checkbox && checkbox.closest ? checkbox.closest(".toggle") : null;
+  if (label) label.classList.toggle("active", !!checkbox.checked);
+}
+
+function syncAllToggleStates() {
+  document.querySelectorAll(".toggle input[type=checkbox]").forEach(syncToggleElement);
+}
+
+function countConfigChanges() {
+  if (!configBaseline) return 0;
+  return CONFIG_TRACKED_FIELDS.reduce((count, id) => {
+    const current = readConfigFieldValue(id);
+    if (current === null || !(id in configBaseline)) return count;
+    return current === configBaseline[id] ? count : count + 1;
+  }, 0);
+}
+
+function setConfigSaveError(message) {
+  const errorEl = document.getElementById("cfgSaveError");
+  if (!errorEl) return;
+  errorEl.textContent = message || "";
+  errorEl.classList.toggle("hidden", !message);
+}
+
+function renderConfigDirtyState() {
+  const dirtyEl = document.getElementById("cfgDirtyState");
+  const cleanEl = document.getElementById("cfgCleanState");
+  const resetBtn = document.getElementById("cfgResetBtn");
+  const count = countConfigChanges();
+
+  if (resetBtn) resetBtn.disabled = count === 0;
+
+  if (!configBaseline) {
+    // A failed load leaves nothing to compare against; say so instead of
+    // claiming the settings already match the server.
+    if (dirtyEl) dirtyEl.classList.add("hidden");
+    if (cleanEl) {
+      cleanEl.textContent = "配置未加载，可直接编辑后保存";
+      cleanEl.classList.remove("hidden");
+    }
+    return;
+  }
+
+  if (dirtyEl) {
+    dirtyEl.textContent = count + " 项未保存";
+    dirtyEl.classList.toggle("hidden", count === 0);
+  }
+  if (cleanEl) {
+    cleanEl.textContent = "已与服务器同步";
+    cleanEl.classList.toggle("hidden", count > 0);
+  }
+}
+
+function captureConfigBaseline() {
+  configBaseline = collectConfigState(CONFIG_TRACKED_FIELDS);
+  syncAllToggleStates();
+  setConfigSaveError("");
+  renderConfigDirtyState();
+}
+
+function handleConfigFieldChange() {
+  syncAllToggleStates();
+  renderConfigDirtyState();
+}
+
+function bindConfigDirtyTracking() {
+  CONFIG_TRACKED_FIELDS.concat(CONFIG_MIRROR_FIELDS).forEach((id) => {
+    const field = document.getElementById(id);
+    if (!field) return;
+    field.addEventListener("input", handleConfigFieldChange);
+    field.addEventListener("change", handleConfigFieldChange);
+  });
+  // Checkboxes outside the tracked set (the API key rows) still paint correctly.
+  document.addEventListener("change", (event) => {
+    const target = event.target;
+    if (target && target.type === "checkbox") syncToggleElement(target);
+  });
+}
+
+// Discard local edits and fall back to the values the server returned on load.
+function resetConfigChanges() {
+  if (!configBaseline) return;
+  CONFIG_TRACKED_FIELDS.forEach((id) => {
+    const field = document.getElementById(id);
+    if (!field || !(id in configBaseline)) return;
+    if (field.type === "checkbox") {
+      field.checked = configBaseline[id] === "true";
+    } else {
+      field.value = configBaseline[id];
+    }
+  });
+  syncTokenCacheTTLControls(getTokenCacheTTLValue());
+  const cacheEnabled = !!document.getElementById("cfg_enable_token_cache")?.checked;
+  toggleCacheConfig(cacheEnabled);
+  updateMemoryEstimation();
+  setConfigSaveError("");
+  handleConfigFieldChange();
+  showToast("已重置为服务器上的配置");
+}
+
+// ── Group nav (sticky left rail on the basic tab) ─────────────────────────────
+function setActiveConfigNav(group) {
+  const nav = document.getElementById("configNav");
+  if (!nav) return;
+  nav.querySelectorAll(".config-nav-link").forEach((link) => {
+    link.classList.toggle("active", link.getAttribute("data-nav-group") === group);
+  });
+}
+
+function bindConfigNav() {
+  const nav = document.getElementById("configNav");
+  if (!nav) return;
+  const links = Array.prototype.slice.call(nav.querySelectorAll(".config-nav-link"));
+  if (links.length === 0) return;
+
+  links.forEach((link) => {
+    link.addEventListener("click", () => setActiveConfigNav(link.getAttribute("data-nav-group")));
+  });
+
+  // The highlight follows the last section whose heading passed the fold, so it
+  // stays honest after a manual scroll as well as after a click.
+  const highlight = () => {
+    let current = links[0].getAttribute("data-nav-group");
+    links.forEach((link) => {
+      const section = document.getElementById(link.getAttribute("data-nav-group"));
+      if (section && section.getBoundingClientRect().top <= 160) {
+        current = link.getAttribute("data-nav-group");
+      }
+    });
+    setActiveConfigNav(current);
+  };
+
+  window.addEventListener("scroll", highlight, { passive: true });
+  highlight();
+}
+
 function parseProxyBypass(raw) {
   if (!raw) return [];
   return raw
@@ -113,13 +290,14 @@ function handleTokenCacheTTLCustomInput() {
   updateMemoryEstimation();
 }
 
-// Load configuration from API
+// Load configuration from API. Returns true only when the server values were
+// applied: a failed load must not become the baseline the save bar diffs against.
 async function loadConfiguration() {
   try {
     const res = await fetch("/api/config/list");
     if (res.status === 401) {
       window.location.href = "./login.html";
-      return;
+      return false;
     }
     const payload = await res.json();
     if (payload && typeof payload.code !== "undefined" && payload.code !== 0) {
@@ -144,13 +322,18 @@ async function loadConfiguration() {
     syncTokenCacheTTLControls(cfg.token_cache_ttl || 300);
     document.getElementById("cfg_token_cache_strategy").value = cfg.token_cache_strategy || "1";
 
+    return true;
   } catch (err) {
+    // Without a baseline the save bar reports that nothing was loaded.
+    renderConfigDirtyState();
     showToast("加载配置失败", "error");
+    return false;
   }
 }
 
 // Save configuration to API
 async function saveConfiguration() {
+  if (configSaving) return;
   const proxyBypassRaw = document.getElementById("cfg_proxy_bypass").value;
   const data = {
     admin_password: document.getElementById("cfg_admin_pass").value,
@@ -166,6 +349,13 @@ async function saveConfiguration() {
     token_cache_strategy: document.getElementById("cfg_token_cache_strategy").value,
   };
 
+  const saveBtn = document.getElementById("cfgSaveBtn");
+  configSaving = true;
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "保存中…";
+  }
+
   try {
     const res = await fetch("/api/config/save", {
       method: "POST",
@@ -177,9 +367,22 @@ async function saveConfiguration() {
     if (payload.code !== 0) {
       throw new Error(payload.message || payload.msg || "保存失败");
     }
+    setConfigSaveError("");
     showToast("配置保存成功");
+    // What was just saved becomes the new comparison baseline: the bar goes
+    // clean because the fields now match the server.
+    captureConfigBaseline();
   } catch (err) {
+    // A failed save keeps every edit and the unsaved count, and says why.
+    setConfigSaveError("保存失败：" + err.message);
+    renderConfigDirtyState();
     showToast("保存失败: " + err.message, "error");
+  } finally {
+    configSaving = false;
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "保存配置";
+    }
   }
 }
 
@@ -193,6 +396,8 @@ async function loadApiKeys() {
     }
     apiKeys = (await res.json()) || [];
     renderApiKeys();
+    // The key rows carry switches: paint them from their checkbox state.
+    syncAllToggleStates();
   } catch (err) {
     showToast("加载 API Keys 失败", "error");
   }
@@ -254,12 +459,14 @@ function renderApiKeys() {
     display.id = `key-display-${idx}`;
     display.className = "key-display";
     display.dataset.key = encodedKey;
-    display.style.fontFamily = "monospace";
-    display.style.color = "var(--text-secondary)";
     display.style.cursor = "pointer";
     display.textContent = `${k.key_prefix || ""}****...${k.key_suffix || ""}`;
+    const badge = document.createElement("span");
+    badge.className = "secret-badge";
+    badge.textContent = "密钥";
     tokenWrap.appendChild(toggle);
     tokenWrap.appendChild(display);
+    tokenWrap.appendChild(badge);
     tdToken.appendChild(tokenWrap);
     tr.appendChild(tdToken);
 
@@ -317,12 +524,7 @@ function renderApiKeys() {
   container.appendChild(table);
 
   const tip = document.createElement("div");
-  tip.style.marginTop = "24px";
-  tip.style.padding = "16px";
-  tip.style.background = "rgba(56, 189, 248, 0.1)";
-  tip.style.border = "1px solid var(--accent-blue)";
-  tip.style.borderRadius = "8px";
-  tip.style.color = "var(--text-primary)";
+  tip.className = "config-key-tip";
   const tipRow = document.createElement("div");
   tipRow.style.display = "flex";
   tipRow.style.gap = "8px";
@@ -405,6 +607,7 @@ function renderApiKeysMobile(container) {
           <div class="config-key-token">
             <button type="button" class="key-toggle" data-idx="${idx}">👁️</button>
             <span id="key-display-${idx}" class="key-display" data-key="${encodedKey}">${escapeHtml(`${k.key_prefix || ""}****...${k.key_suffix || ""}`)}</span>
+            <span class="secret-badge">密钥</span>
           </div>
           <label class="toggle">
             <input type="checkbox" data-action="toggle-key" data-id="${encodeData(k.id)}" ${k.enabled ? "checked" : ""}>
@@ -623,7 +826,7 @@ function renderCreatedKeys() {
     wrap.className = "key-display";
     wrap.style.marginBottom = "8px";
     wrap.style.padding = "12px";
-    wrap.style.background = "var(--card-soft)";
+    wrap.style.background = "var(--surface-2)";
     wrap.style.border = "1px dashed var(--border-color)";
     wrap.style.borderRadius = "8px";
 
@@ -784,11 +987,16 @@ async function clearCache() {
 
 // Load configuration on page load
 document.addEventListener('DOMContentLoaded', () => {
-  loadConfiguration().then(() => {
+  bindConfigDirtyTracking();
+  bindConfigNav();
+  loadConfiguration().then((loaded) => {
     const cacheEnabled = !!document.getElementById("cfg_enable_token_cache")?.checked;
     toggleCacheConfig(cacheEnabled);
     updateMemoryEstimation();
     loadCacheStats();
     loadApiKeys();
+    // The values the server just returned are the baseline the save bar diffs
+    // against; a failed load leaves the bar in its "not loaded" state instead.
+    if (loaded) captureConfigBaseline();
   });
 });

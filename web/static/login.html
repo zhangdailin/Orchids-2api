@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>管理登录 - CodeFreeMax</title>
     <!-- Use the refined main.css -->
-    <link rel="stylesheet" href="css/main.css"> 
+    <link rel="stylesheet" href="css/main.css?v=20260912-ui1">
 </head>
 <body class="login-body">
     <!-- Ambient Background -->
@@ -68,7 +68,7 @@
     </div>
 
     <style>
-        /* Inline quick spinner animation if not in main.css yet, though logic suggests main.css covers most things. 
+        /* Inline quick spinner animation if not in main.css yet, though logic suggests main.css covers most things.
            Adding specific spinner keyframes just in case */
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
@@ -115,7 +115,7 @@
                 });
 
                 if (response.ok) {
-                    window.location.href = './'; 
+                    window.location.href = './';
                 } else {
                     const error = await response.text();
                     showToast(error || '登录失败，请重试');

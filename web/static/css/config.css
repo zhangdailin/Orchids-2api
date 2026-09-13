@@ -1,0 +1,466 @@
+/* 配置管理 (Config).
+   Loaded after main.css; every colour, space and radius below comes from the
+   token set documented at the top of main.css. No raw hex, no rgba() except
+   translucent state overlays (--accent-soft / --warn-soft / --info-soft).
+
+   Structure of the page:
+     shell  → secondary tab switch (基础配置 / API Key 管理)
+            → two-column body: sticky group nav + grouped settings cards
+            → sticky save bar carrying the unsaved-change count.
+
+   Sections: 1 shell & switch · 2 layout & nav · 3 cards & rows · 4 secret
+   fields · 5 cache details & estimates · 6 save bar · 7 API key list
+   8 responsive */
+
+/* -----------------------------------------------------------------------------
+   1. Shell & secondary switch
+   -------------------------------------------------------------------------- */
+.config-page { padding-bottom: var(--space-10); }
+
+/* The basic tab is one long column: nav + cards + the sticky save bar. The
+   inline display:block/none that config.js writes for tab switching stays the
+   only thing that hides it. */
+.config-body { display: block; }
+
+/* 基础配置 / API Key 管理 is a secondary switch: the group nav inside the basic
+   tab is what actually navigates the settings. */
+.config-tabs-switch {
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+  padding: var(--space-2);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.config-tabs-switch .tab-item { background: transparent; }
+
+/* -----------------------------------------------------------------------------
+   2. Layout & group nav
+   -------------------------------------------------------------------------- */
+.config-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 216px) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.config-cards {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+/* align-self: start is what lets the nav stay stuck instead of stretching to the
+   height of the card column. */
+.config-nav {
+  position: sticky;
+  top: var(--space-4);
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: calc(100vh - var(--space-8));
+  padding: var(--space-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  overflow-y: auto;
+}
+
+/* --text-secondary, not --text-muted: this line is below 12px. */
+.config-nav-head {
+  padding: 0 var(--space-2) var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.config-nav-link {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  font-weight: 550;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.config-nav-link:hover {
+  background: var(--surface-2);
+  color: var(--text-main);
+}
+
+.config-nav-link.active {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 650;
+}
+
+/* -----------------------------------------------------------------------------
+   3. Grouped cards & setting rows
+   -------------------------------------------------------------------------- */
+.settings-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  scroll-margin-top: var(--space-6);
+}
+
+.settings-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-card-title { font-size: 0.98rem; }
+
+/* One-line explanation under the card title. */
+.settings-card-note {
+  padding: var(--space-3) var(--space-5) 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.settings-card-head .settings-card-note { padding: 0; }
+
+/* One row per setting: label and explanation on the left, control on the right.
+   .form-row already provides the two-column grid; these rules only stack the
+   label block and keep the control column from stretching the page. */
+.settings-card-body {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+
+.form-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.form-row-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.form-row-control > .form-input,
+.form-row-control > .input-wrapper,
+.form-row-control > .config-subsection { max-width: 560px; }
+
+/* Toggle rows keep the switch beside the label it belongs to, with its state
+   sentence on the same line. */
+.config-toggle-control {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.config-toggle-hint {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.config-inline-tags {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.config-row-stack {
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+/* -----------------------------------------------------------------------------
+   4. Secret fields
+   -------------------------------------------------------------------------- */
+/* Password, admin token, Cloudflare cookies, proxy credentials and API keys all
+   carry credentials, so they share one accent: a distinct border plus a 密钥
+   badge instead of looking like any other text input. */
+.secret-field {
+  border-color: var(--accent-line);
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+.secret-field::placeholder {
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+}
+
+.secret-field:focus {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-glow);
+}
+
+/* Room for the absolutely positioned .password-toggle that main.css pins to the
+   right edge of .input-wrapper. */
+.input-wrapper.secret-shell .form-input { padding-right: var(--space-8); }
+
+.secret-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 18px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+/* -----------------------------------------------------------------------------
+   5. Cache details & memory estimates
+   -------------------------------------------------------------------------- */
+/* config.js toggles this box with an inline display:block/none, so its children
+   stack with margins rather than a flex/grid gap. */
+.config-cache-details {
+  padding: var(--space-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.config-cache-details > * + * { margin-top: var(--space-5); }
+
+.config-subsection .form-label { margin-bottom: var(--space-2); }
+
+.estimate-panel { padding: var(--space-4); }
+
+.estimate-note {
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+
+/* The risk note for a value that is too high: a warn rail on the estimate panel
+   itself, so the numbers never stand alone. */
+.estimate-note-warn {
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: var(--warn-soft);
+  color: var(--text-soft);
+}
+
+.estimate-card .estimate-meta { margin-top: var(--space-2); }
+
+.estimate-caption-ok { color: var(--ok); }
+.estimate-caption-warn { color: var(--warn); }
+
+/* -----------------------------------------------------------------------------
+   6. Sticky save bar
+   -------------------------------------------------------------------------- */
+.config-save-bar {
+  bottom: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-6);
+}
+
+.config-save-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.config-save-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.config-save-clean {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.config-save-error {
+  color: var(--bad);
+  font-size: 0.78rem;
+}
+
+/* -----------------------------------------------------------------------------
+   7. API key list (rendered by config.js)
+   -------------------------------------------------------------------------- */
+#keysList { overflow-x: auto; }
+
+/* main.css pins .key-toggle absolutely; inside the mobile key row the eye button
+   belongs in the token row's own flow. */
+.config-key-token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.config-key-token .key-toggle {
+  position: static;
+  flex: none;
+}
+
+.config-key-token .key-display { min-width: 0; }
+
+.config-key-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.config-key-card { padding: var(--space-4); }
+
+.config-key-meta {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.config-key-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.config-key-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.config-key-actions .btn { flex: 1; }
+
+/* A key value is a credential: same accent treatment as .secret-field. */
+.key-display {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+}
+
+.config-key-tip,
+.config-key-tip-title { color: var(--text-soft); }
+
+.config-key-tip {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--info);
+  border-radius: var(--radius-md);
+  background: var(--info-soft);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.config-key-tip-title {
+  margin-bottom: var(--space-1);
+  font-weight: 650;
+}
+
+.config-key-tip-body { line-height: 1.7; }
+
+/* API Key 管理 is one card: the head carries the create action, the body carries
+   the rendered key list. */
+.config-auth-card {
+  margin-top: var(--space-5);
+  margin-bottom: var(--space-6);
+}
+
+.config-auth-card .settings-card-head { align-items: flex-start; }
+
+/* -----------------------------------------------------------------------------
+   8. Responsive: the nav becomes a horizontal strip under the mobile top bar
+   -------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+  .config-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+
+  .config-nav {
+    top: calc(60px + env(safe-area-inset-top));
+    z-index: 4;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-2);
+    max-height: none;
+    padding: var(--space-2);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .config-nav-head { display: none; }
+
+  .config-nav-link {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    height: 44px;
+    min-height: 44px;
+    padding: 0 var(--space-3);
+    border: 1px solid transparent;
+    border-left: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    white-space: nowrap;
+  }
+
+  .config-nav-link.active {
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+  }
+
+  /* The strip is 60px down and ~46px tall: an anchored card has to clear both
+     the top bar and the strip. */
+  .settings-card { scroll-margin-top: 132px; }
+
+  .form-row-control > .form-input,
+  .form-row-control > .input-wrapper,
+  .form-row-control > .config-subsection,
+  .form-row-control > textarea.form-input { max-width: none; }
+}
+
+@media (max-width: 640px) {
+  .settings-card-head,
+  .settings-card-note { padding-right: var(--space-4); padding-left: var(--space-4); }
+
+  .settings-card-body {
+    padding: var(--space-4);
+    gap: var(--space-4);
+  }
+
+  .config-save-bar {
+    bottom: 0;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+
+  .config-save-state { width: 100%; }
+  .config-save-actions { width: 100%; }
+  .config-save-actions .btn { flex: 1; }
+}

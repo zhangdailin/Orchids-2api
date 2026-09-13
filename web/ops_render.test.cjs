@@ -35,6 +35,9 @@ function makeElement(id) {
       return node;
     },
     addEventListener() {},
+    setAttribute(name, value) {
+      this[name] = String(value);
+    },
     querySelector(selector) {
       if (selector === 'tbody') {
         this.tbody = this.tbody || makeElement('tbody');
@@ -117,6 +120,7 @@ function renderPage(payload) {
       readyState: 'complete',
       getElementById: node,
       createElement: (tag) => makeElement(tag),
+      createElementNS: (_namespace, tag) => makeElement(tag),
       querySelector: node,
       querySelectorAll: () => [],
       addEventListener() {},
@@ -150,9 +154,7 @@ test('the data-coverage card is filled in from the payload', async () => {
   assert.match(coverage, /http/, 'the excluded aggregate is not explained');
   assert.match(coverage, /probe/, 'the excluded aggregate is not explained');
 
-  const label = node('opsWindowLabel').textContent;
-  assert.match(label, /180/, 'the window label is not filled in');
-  assert.match(label, /192/, 'the retention hours are not shown');
+  assert.doesNotMatch(coverage, /固定 8 天/, 'the page promises a fixed retention period');
 });
 
 test('the KPI cards render the figures and mark no-sample ones', async () => {
@@ -164,7 +166,7 @@ test('the KPI cards render the figures and mark no-sample ones', async () => {
   assert.ok(cards.length >= 6, `expected KPI cards, got ${cards.length}`);
   const values = cards.map((card) => (card.children[1] ? card.children[1].textContent : ''));
   assert.ok(values.includes('248'), `real request count missing from ${values.join(',')}`);
-  assert.ok(values.some((value) => /90\.9%/.test(value)), `success rate missing from ${values.join(',')}`);
+  assert.ok(values.some((value) => /90\.90*%/.test(value)), `success rate missing from ${values.join(',')}`);
 });
 
 test('the matrix renders provider rows plus their model rows', async () => {
@@ -198,9 +200,9 @@ test('the live production payload renders every card', async () => {
   assert.ok(node('opsKpis').children.length > 0, 'KPI cards are empty with the live payload');
   assert.notEqual(node('opsCoverage').textContent, '—', 'the coverage card is empty with the live payload');
   assert.ok(node('opsCoverage').textContent.length > 0, 'the coverage card is empty with the live payload');
-  assert.ok(node('opsTrend').children.length > 0, 'the trend is empty with the live payload');
+  assert.ok(node('opsThroughput').children.length > 0, 'the trend is empty with the live payload');
   assert.ok(node('opsMatrix').querySelector('tbody').children.length > 0, 'the matrix is empty with the live payload');
-  assert.ok(node('opsWindowLabel').textContent.length > 0, 'the window label is empty with the live payload');
+  assert.ok(node('opsStatusText').textContent.length > 0, 'the refresh status is empty with the live payload');
 });
 test('a failed fetch still explains itself instead of leaving the card blank', async () => {
   const elements = new Map();
@@ -210,7 +212,7 @@ test('a failed fetch still explains itself instead of leaving the card blank', a
   };
   const context = vm.createContext({
     console,
-    document: { readyState: 'complete', getElementById: node, createElement: (tag) => makeElement(tag), querySelector: node, querySelectorAll: () => [], addEventListener() {} },
+    document: { readyState: 'complete', getElementById: node, createElement: (tag) => makeElement(tag), createElementNS: (_namespace, tag) => makeElement(tag), querySelector: node, querySelectorAll: () => [], addEventListener() {} },
     window: { setInterval: () => 0, clearInterval() {}, addEventListener() {} },
     setInterval: () => 0,
     setTimeout: (fn) => { fn(); return 0; },
