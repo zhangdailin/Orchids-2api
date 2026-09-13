@@ -463,10 +463,9 @@ func (c *Config) PublicAPIEnabled() bool {
 }
 
 // InferenceAuthEnabled reports whether model and inference endpoints require
-// a managed API key. Authentication is enabled by default; trusted upstream
-// gateways cannot opt out through legacy configuration.
+// a managed API key.
 func (c *Config) InferenceAuthEnabled() bool {
-	return true
+	return c == nil || c.InferenceAuth == nil || *c.InferenceAuth
 }
 
 func generateRandomPassword(length int) (string, error) {

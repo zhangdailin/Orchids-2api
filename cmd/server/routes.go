@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"orchids-api/internal/api"
 	"orchids-api/internal/auth"
@@ -40,9 +39,9 @@ func registerRoutes(
 	tmplRenderer *template.Renderer,
 ) {
 	mux := http.NewServeMux()
-	inferenceIPLimit := middleware.NewRateLimiter(600, time.Minute)
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		secured := middleware.BearerAPIKeyAuth(
+		return middleware.APIKeyAuth(
+			func() bool { return cfg.InferenceAuthEnabled() },
 			func(ctx context.Context, token string) (*middleware.APIKeyPrincipal, error) {
 				key, err := s.AuthorizeApiKey(ctx, token)
 				switch {
@@ -58,16 +57,8 @@ func registerRoutes(
 					return nil, err
 				}
 			},
-			inferenceIPLimit,
-			middleware.APIKeyConcurrencyWithTracker(middleware.InferenceErrors(next), accountTracker),
+			middleware.APIKeyConcurrencyWithTracker(next, accountTracker),
 		)
-		return func(w http.ResponseWriter, r *http.Request) {
-			if middleware.APIKeyID(r.Context()) > 0 {
-				next(w, r)
-				return
-			}
-			secured(w, r)
-		}
 	}
 	// --- Channel-specific message routes ---
 	mux.HandleFunc("/warp/v1/messages", inferenceAuth(limiter.Limit(h.HandleMessages)))
