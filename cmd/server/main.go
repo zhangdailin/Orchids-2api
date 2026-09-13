@@ -92,16 +92,6 @@ func main() {
 	}
 	slog.Info("Credential encryption enabled", "key_source", credentialKeySource)
 
-	// DebugEnabled creates per-request files even when verbose diagnostics are
-	// disabled, so always apply startup retention in debug mode.
-	if cfg.DebugEnabled {
-		if err := debug.CleanupAllLogs(); err != nil {
-			slog.Warn("清理调试日志失败", "error", err)
-		} else {
-			slog.Debug("已清空调试日志目录")
-		}
-	}
-
 	s, err := store.New(store.Options{
 		StoreMode:               cfg.StoreMode,
 		RedisAddr:               cfg.RedisAddr,
@@ -145,6 +135,9 @@ func main() {
 	}
 
 	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
+	diagnosticStore := debug.NewDiagnosticStore(s.RedisClient(), s.RedisPrefix())
+	apiHandler.SetDiagnosticStore(diagnosticStore)
+	apiHandler.SetConnectionTracker(accountTracker)
 	if err := apiHandler.EnsureGrokSSOProviderViews(context.Background()); err != nil {
 		slog.Error("Failed to reconcile linked Grok SSO provider accounts", "error", err)
 	}
@@ -180,8 +173,8 @@ func main() {
 		slog.Debug("Session store initialized", "backend", "redis")
 
 		auditLogger := audit.NewRedisLogger(redisClient, s.RedisPrefix(), 10000)
-		h.SetAuditLogger(auditLogger)
-		grokHandler.SetAuditLogger(auditLogger)
+		h.SetAuditLogger(middleware.ObserveAuditLogger(auditLogger))
+		grokHandler.SetAuditLogger(middleware.ObserveAuditLogger(auditLogger))
 		// The admin session wrapper journals management changes; wiring the same
 		// logger keeps requests and operations in one searchable journal.
 		middleware.SetOperationAuditLogger(auditLogger)
@@ -189,7 +182,7 @@ func main() {
 		// reports one observation per finished request, so the counters cannot
 		// double count an upstream retry.
 		opsAggregator := opsagg.New(redisClient, s.RedisPrefix())
-		middleware.SetRequestOutcomeRecorder(opsAggregator.ObserveHTTPRequest)
+		middleware.SetDetailedOutcomeRecorder(opsAggregator.Observe)
 		wiredOps = opsAggregator
 		apiHandler.SetOpsAggregator(opsAggregator)
 		apiHandler.SetRefreshConcurrencyReporter(grokRefreshHub.Len)
@@ -270,6 +263,7 @@ func main() {
 			trustedProxy,
 			middleware.SecurityHeaders,
 			middleware.TraceMiddleware,
+			middleware.Diagnostics(diagnosticStore, apiHandler.DiagnosticsEnabled),
 			middleware.LoggingMiddleware,
 		)(mux),
 		ReadHeaderTimeout: 10 * time.Second,

@@ -265,6 +265,10 @@ func ApplyDefaults(cfg *Config) {
 // retry/deadline settings. Configured runtime values survive file/Redis/API
 // round trips; protocol constants remain non-configurable.
 func ApplyHardcoded(cfg *Config) {
+	if cfg != nil {
+		enabled := true
+		cfg.InferenceAuth = &enabled
+	}
 	cfg.UpstreamMode = "ws"
 	cfg.ContextMaxTokens = 100000
 	cfg.ContextSummaryMaxTokens = 800
@@ -460,9 +464,9 @@ func (c *Config) PublicAPIEnabled() bool {
 
 // InferenceAuthEnabled reports whether model and inference endpoints require
 // a managed API key. Authentication is enabled by default; trusted upstream
-// gateways can explicitly opt out with inference_auth_enabled=false.
+// gateways cannot opt out through legacy configuration.
 func (c *Config) InferenceAuthEnabled() bool {
-	return c == nil || c.InferenceAuth == nil || *c.InferenceAuth
+	return true
 }
 
 func generateRandomPassword(length int) (string, error) {

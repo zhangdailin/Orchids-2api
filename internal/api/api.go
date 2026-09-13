@@ -23,8 +23,10 @@ import (
 	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
 	"orchids-api/internal/config"
+	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
+	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/puter"
@@ -36,6 +38,8 @@ import (
 )
 
 type API struct {
+	configMu     sync.Mutex
+	connTracker  loadbalancer.ConnTracker
 	store        *store.Store
 	tokenCache   tokencache.Cache
 	promptCache  tokencache.PromptCache
@@ -68,6 +72,8 @@ type API struct {
 
 	// opsAggregator and alerts back the operations overview. They are optional:
 	// a Redis-less deployment simply reports "no sample" instead of failing.
+	diagnostics   *debug.DiagnosticStore
+	alertRulesMu  sync.Mutex
 	opsAggregator *opsagg.Aggregator
 	alertEngine   *alerting.Engine
 	// refreshConcurrency reports how many accounts are being refreshed right now.
@@ -191,9 +197,9 @@ func (a *API) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 		"scanned":     scanned,
 		// Filtered: true means the store was scanned to its cap, so an empty page
 		// is "nothing matched inside the retained window" — not "never happened".
-		"filtered":   scanned >= int(scanCount),
-		"scan_cap":   scanCount,
-		"coverage":   a.auditCoverage(r.Context()),
+		"filtered":    scanned >= int(scanCount),
+		"scan_cap":    scanCount,
+		"coverage":    a.auditCoverage(r.Context()),
 		"filter_used": filter.describe(),
 	})
 }
@@ -770,6 +776,21 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 	for key, value := range o.Quota {
 		merged[key] = value
 	}
+	// Credentials are write-only. The account API exposes only their presence,
+	// including for create, update and refresh responses.
+	merged["has_credential"] = o.SessionFingerprint != "" || o.WarpAuthenticated
+	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "session_fingerprint", "warp_authenticated"} {
+		delete(merged, field)
+	}
+	if o.Account != nil {
+		message := o.Account.StatusMessage
+		for _, secret := range []string{o.Account.Token, o.Account.ClientCookie, o.Account.RefreshToken, o.Account.SessionCookie, o.Account.OAuthAccessToken, o.Account.OAuthRefreshToken, o.Account.WorkBuddyAccessToken, o.Account.WorkBuddyRefreshToken} {
+			if secret != "" {
+				message = strings.ReplaceAll(message, secret, "[REDACTED]")
+			}
+		}
+		merged["status_message"] = message
+	}
 	return json.Marshal(merged)
 }
 
@@ -781,6 +802,13 @@ func normalizeAccountOutput(acc *store.Account) *accountOutput {
 	out := normalizeWarpTokenOutput(acc)
 	if out == nil {
 		return nil
+	}
+	// Redact before the provider-specific output normalization removes secrets.
+	out.StatusMessage = acc.StatusMessage
+	for _, secret := range []string{acc.Token, acc.ClientCookie, acc.RefreshToken, acc.SessionCookie, acc.SessionID, acc.ClientUat, acc.OAuthAccessToken, acc.OAuthRefreshToken, acc.WorkBuddyAccessToken, acc.WorkBuddyRefreshToken} {
+		if secret != "" {
+			out.StatusMessage = strings.ReplaceAll(out.StatusMessage, secret, "[REDACTED]")
+		}
 	}
 	if strings.EqualFold(out.AccountType, "warp") && out.WarpMonthlyLimit > 0 {
 		out.Subscription = warp.InferSubscriptionFromRequestLimit(&warp.RequestLimitInfo{
@@ -1449,6 +1477,8 @@ func (a *API) HandleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 
 	switch r.Method {
@@ -1497,6 +1527,8 @@ func (a *API) HandleConfigList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) HandleConfigSave(w http.ResponseWriter, r *http.Request) {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -2335,6 +2367,9 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			NormalizeWorkBuddyCredentials(&acc)
+		} else if strings.EqualFold(acc.AccountType, "puter") && strings.EqualFold(existing.AccountType, "puter") && strings.TrimSpace(acc.ClientCookie) == "" && strings.TrimSpace(acc.Token) == "" {
+			acc.ClientCookie = existing.ClientCookie
+			acc.Token = existing.Token
 		}
 
 		isWarpAccount := strings.EqualFold(acc.AccountType, "warp")
@@ -3118,6 +3153,10 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 	if err != nil {
 		return err
 	}
+	if err := a.store.SetSetting(ctx, "config", string(data)); err != nil {
+		return err
+	}
+	cacheChanged := tokenCacheConfigChanged(current, newCfg)
 
 	// Keep the original shared config pointer updated in place so long-lived
 	// components started with that pointer (handler/background loops/providers)
@@ -3128,10 +3167,7 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 		storedCfg = current
 	}
 	a.config.Store(storedCfg)
-	if err := a.store.SetSetting(ctx, "config", string(data)); err != nil {
-		return err
-	}
-	if tokenCacheConfigChanged(current, newCfg) {
+	if cacheChanged {
 		a.clearTokenCaches(ctx)
 	}
 	return nil

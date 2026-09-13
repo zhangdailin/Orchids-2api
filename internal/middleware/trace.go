@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"orchids-api/internal/logutil"
+	"orchids-api/internal/opsagg"
 )
 
 // TraceIDHeader 是请求追踪 ID 的 HTTP 头名称
@@ -107,7 +108,10 @@ func (w *TracedResponseWriter) ContentWriteAt() time.Time { return w.contentWrit
 // status line was already sent. The metric recorder reads it through
 // StreamFailed(); the HTTP status stays whatever was committed, because it
 // cannot be changed at that point.
-func (w *TracedResponseWriter) MarkStreamFailure() { w.streamFailed = true }
+func (w *TracedResponseWriter) MarkStreamFailure() {
+	w.streamFailed = true
+	MarkStreamFailure(w.ResponseWriter)
+}
 
 // StreamFailed reports whether the response failed after committing a 2xx status.
 func (w *TracedResponseWriter) StreamFailed() bool { return w.streamFailed }
@@ -194,7 +198,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		// The handler will publish the model it resolved; the hint must exist
 		// before the handler runs because the request context is already cloned.
 		requestCtx, readModel := RequestModelHint(r.Context())
-		r = r.WithContext(requestCtx)
+		r = r.WithContext(context.WithValue(requestCtx, requestObservationKey{}, &requestObservation{}))
 
 		if logutil.VerboseDiagnosticsEnabled() {
 			slog.Debug("Request started",
@@ -290,7 +294,7 @@ func RequestModelHint(ctx context.Context) (context.Context, func() string) {
 const ProbeHeader = "X-Orchids-Probe"
 
 func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, duration time.Duration, model string) {
-	if requestOutcomeRecorder == nil || r == nil || wrapped == nil {
+	if (requestOutcomeRecorder == nil && detailedOutcomeRecorder == nil) || r == nil || wrapped == nil {
 		return
 	}
 	durationMS := duration.Milliseconds()
@@ -313,6 +317,30 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 		// The status line is already committed, so the only honest record of a
 		// stream that died after it is a failure class of its own.
 		statusClass = streamFailureClass
+	}
+	if detailedOutcomeRecorder != nil {
+		outcome := opsagg.Outcome{Channel: requestChannel(r.URL.Path), Model: model, Status: statusClass, HTTPStatus: wrapped.StatusCode, OK: statusClass == "2xx", DurationMS: durationMS, FirstTokenMS: firstTokenMS, At: time.Now(), Detailed: true}
+		if box, ok := r.Context().Value(requestObservationKey{}).(*requestObservation); ok {
+			box.mu.Lock()
+			outcome.InputTokens = box.input
+			outcome.OutputTokens = box.output
+			outcome.UsageReported = box.usage
+			outcome.AttemptFailures = box.failures
+			outcome.AccountSwitches = box.switches
+			outcome.ProviderReached = box.providerReached
+			box.mu.Unlock()
+		}
+		if strings.TrimSpace(r.Header.Get(ProbeHeader)) != "" {
+			outcome.Channel = ProbeChannel
+			outcome.Model = probeModel
+			outcome.Synthetic = true
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		detailedOutcomeRecorder(ctx, outcome)
+	}
+	if requestOutcomeRecorder == nil {
+		return
 	}
 	if strings.TrimSpace(r.Header.Get(ProbeHeader)) != "" {
 		requestOutcomeRecorder(ProbeChannel, probeModel, statusClass, durationMS, firstTokenMS)

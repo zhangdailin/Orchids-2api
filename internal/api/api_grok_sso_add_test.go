@@ -132,7 +132,7 @@ func TestHandleAccounts_PostSSOAccountDoesNotDisturbExistingSSOAccount(t *testin
 			if row["status_code"] != "" {
 				t.Fatalf("existing account row status = %v, want clean", row["status_code"])
 			}
-			if token, _ := row["client_cookie"].(string); token != "sso=token-good" {
+			if token, _ := row["client_cookie"].(string); token != "" || row["has_credential"] != true {
 				t.Fatalf("existing account row lost its cookie: %q", token)
 			}
 		}

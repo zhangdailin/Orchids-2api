@@ -362,7 +362,7 @@ func TestHandleAccountByID_PutClearsLegacyWarpCredentialFields(t *testing.T) {
 	if stored.RefreshToken != "warp-refresh" || stored.Name != "renamed" {
 		t.Fatal("settings edit must preserve the private login session")
 	}
-	if strings.Contains(rec.Body.String(), "warp-refresh") || !strings.Contains(rec.Body.String(), `"warp_authenticated":true`) {
+	if strings.Contains(rec.Body.String(), "warp-refresh") || !strings.Contains(rec.Body.String(), `"has_credential":true`) {
 		t.Fatalf("expected credential presence without the secret: %s", rec.Body.String())
 	}
 }

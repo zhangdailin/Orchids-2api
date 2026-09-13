@@ -112,7 +112,7 @@ func TestWarpManagementResponsesHideSessionCredentials(t *testing.T) {
 		} else {
 			a.HandleAccountByID(rec, req)
 		}
-		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "private-") || !strings.Contains(rec.Body.String(), `"warp_authenticated":true`) {
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "private-") || !strings.Contains(rec.Body.String(), `"has_credential":true`) {
 			t.Fatalf("unexpected public account response: %s", rec.Body.String())
 		}
 	}

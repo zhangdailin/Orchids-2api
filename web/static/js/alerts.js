@@ -163,6 +163,7 @@
     if (rules.SuccessRateWarning <= 0 || rules.SuccessRateWarning > 1) return '告警成功率阈值必须在 0% 与 100% 之间。';
     if (rules.SuccessRateCritical <= 0 || rules.SuccessRateCritical > 1) return '严重成功率阈值必须在 0% 与 100% 之间。';
     if (rules.SuccessRateCritical >= rules.SuccessRateWarning) return '严重阈值必须低于告警阈值。';
+    if (rules.SuccessRateWarning + rules.ClearMargin > 1) return '告警阈值与恢复余量之和不能超过 100%。';
     if (rules.ClearMargin < 0 || rules.ClearMargin > 0.5) return '恢复余量必须在 0% 与 50% 之间。';
     if (rules.MinRequests < 0 || rules.MinFailures < 0) return '计数类阈值不能为负。';
     return '';

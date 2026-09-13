@@ -154,8 +154,8 @@ func TestPercentile_NearestRank(t *testing.T) {
 	if got := percentile(values, 0.95); got != 100 {
 		t.Fatalf("p95 = %d, want 100", got)
 	}
-	if got := percentile(values, 0.5); got != 60 {
-		t.Fatalf("p50 = %d, want 60", got)
+	if got := percentile(values, 0.5); got != 50 {
+		t.Fatalf("p50 = %d, want 50", got)
 	}
 	if got := percentile(nil, 0.95); got != 0 {
 		t.Fatalf("empty percentile = %d, want 0", got)
@@ -193,6 +193,7 @@ func TestChannels_IgnoresSideLists(t *testing.T) {
 		t.Fatalf("summary = %+v, want a 120ms p95 sample", summary)
 	}
 }
+
 // TestSummarizeWith_RateUsesTheWindowNotTheBuckets is the reported RPM bug: a
 // single request inside a sixty-minute window reported an RPM of 1, because the
 // rate was divided by the number of buckets that happened to exist.
@@ -296,5 +297,40 @@ func TestSummarizeWith_MergedSamplesProducePercentiles(t *testing.T) {
 	// The merged p95 must reflect the slowest channel, not only the first one.
 	if summary.DurationP95MS <= 300 {
 		t.Fatalf("duration p95 = %d, want it to include the slower channel", summary.DurationP95MS)
+	}
+}
+
+func TestDetailedOutcomePreservesUsageCohortsAndTruePercentiles(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+	agg := New(client, "details:")
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	for i := 1; i <= 100; i++ {
+		agg.Observe(ctx, Outcome{Channel: "grok", Model: "test", At: at, OK: i != 100, Status: "2xx", HTTPStatus: 200, Detailed: true, UsageReported: true, InputTokens: 10, OutputTokens: 20, DurationMS: int64(i * 100), FirstTokenMS: int64(i * 10), AttemptFailures: 1, AccountSwitches: 1})
+	}
+	buckets, err := agg.Range(ctx, "grok", at, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durations, ttft := agg.SamplesFor(ctx, "grok", buckets)
+	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, WindowMinutes: 5, Durations: durations, FirstTokenMS: ttft, SamplesProvided: true})
+	if summary.Duration.P95 != 9500 || summary.Duration.P99 != 9900 {
+		t.Fatalf("percentiles=%+v", summary.Duration)
+	}
+	if summary.InputTokens != 1000 || summary.OutputTokens != 2000 || summary.TPS != 10 || summary.UsageSamples != 100 {
+		t.Fatalf("usage=%+v", summary)
+	}
+	if summary.DurationFailed.Samples != 1 || summary.DurationAttempt.Samples != 100 || summary.AttemptFailures != 100 {
+		t.Fatalf("cohorts=%+v", summary)
+	}
+	channels, err := agg.Channels(ctx, at, at)
+	if err != nil || len(channels) != 1 || channels[0] != "grok" {
+		t.Fatalf("side lists treated as channels: %v %v", channels, err)
+	}
+	models := agg.ModelStatsFromBuckets(ctx, "grok", buckets)
+	if len(models) != 1 || models[0].FirstTokenSamples != 100 || models[0].FirstTokenP95MS != 950 {
+		t.Fatalf("model ttft=%+v", models)
 	}
 }

@@ -10,6 +10,7 @@ package opsagg
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,9 @@ const (
 // Outcome is one finished request (or probe) attributed to a channel, model and
 // account.
 type Outcome struct {
+	HTTPStatus                               int
+	Detailed, UsageReported, ProviderReached bool
+	AttemptFailures, AccountSwitches         int64
 	// Synthetic marks a probe. Probes are counted separately from real traffic so
 	// an injected failure cannot distort the user-facing success rate.
 	Synthetic bool
@@ -49,20 +53,37 @@ type Outcome struct {
 
 // Bucket is one minute of one channel.
 type Bucket struct {
-	Channel         string    `json:"channel"`
-	Minute          time.Time `json:"minute"`
-	Requests        int64     `json:"requests"`
-	Success         int64     `json:"success"`
-	Failed          int64     `json:"failed"`
-	Probes          int64     `json:"probes"`
-	Input           int64     `json:"input_tokens"`
-	Output          int64     `json:"output_tokens"`
-	DurationMS      []int64   `json:"-"`
-	ConcurrencyPeak int64     `json:"concurrency_peak"`
+	Counters
+	DurationFailed, FirstTokenFailed, DurationAttempt, FirstTokenAttempt []int64   `json:"-"`
+	Channel                                                              string    `json:"channel"`
+	Minute                                                               time.Time `json:"minute"`
+	Requests                                                             int64     `json:"requests"`
+	Success                                                              int64     `json:"success"`
+	Failed                                                               int64     `json:"failed"`
+	Probes                                                               int64     `json:"probes"`
+	Input                                                                int64     `json:"input_tokens"`
+	Output                                                               int64     `json:"output_tokens"`
+	DurationMS                                                           []int64   `json:"-"`
+	ConcurrencyPeak                                                      int64     `json:"concurrency_peak"`
 }
 
 // Summary is a rolled-up view over a time range.
 type Summary struct {
+	Attributable   int64   `json:"attributable"`
+	SLASuccessRate float64 `json:"sla_success_rate"`
+	Counters
+	QPS                      float64        `json:"qps"`
+	TPS                      float64        `json:"tps"`
+	Duration                 Distribution   `json:"duration"`
+	FirstToken               Distribution   `json:"first_token"`
+	DurationFailed           Distribution   `json:"duration_failed"`
+	FirstTokenFailed         Distribution   `json:"first_token_failed"`
+	DurationAttempt          Distribution   `json:"duration_attempt"`
+	FirstTokenAttempt        Distribution   `json:"first_token_attempt"`
+	DurationHistogram        []HistogramBin `json:"duration_histogram"`
+	DurationHistogramFailed  []HistogramBin `json:"duration_histogram_failed"`
+	DurationHistogramAttempt []HistogramBin `json:"duration_histogram_attempt"`
+
 	Channel         string  `json:"channel"`
 	Requests        int64   `json:"requests"`
 	Success         int64   `json:"success"`
@@ -152,6 +173,7 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 
 	pipe := a.client.Pipeline()
 	pipe.HIncrBy(ctx, key, "requests", 1)
+	a.observeDetails(ctx, pipe, key, outcome)
 	if outcome.Synthetic {
 		pipe.HIncrBy(ctx, key, "probes", 1)
 	}
@@ -187,6 +209,9 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 		}
 		if outcome.FirstTokenMS > 0 {
 			pipe.HIncrBy(ctx, key, modelField+":ttft_sum", outcome.FirstTokenMS)
+			pipe.RPush(ctx, key+":"+modelField+":ttft", outcome.FirstTokenMS)
+			pipe.Expire(ctx, key+":"+modelField+":ttft", BucketRetention)
+			pipe.LTrim(ctx, key+":"+modelField+":ttft", -2000, -1)
 		}
 		pipe.RPush(ctx, key+":model:"+strings.TrimSpace(outcome.Model), outcome.DurationMS)
 	}
@@ -293,6 +318,9 @@ func channelFromBucketKey(prefix, key string) (string, bool) {
 	if channel == "" {
 		return "", false
 	}
+	if isDetailSuffix(channel) {
+		return "", false
+	}
 	if strings.HasSuffix(channel, ":dur") || strings.HasSuffix(channel, ":ttft") {
 		return "", false
 	}
@@ -321,7 +349,8 @@ func (a *Aggregator) SamplesFor(ctx context.Context, channel string, buckets []B
 	if !a.Enabled() {
 		return nil, nil
 	}
-	for _, bucket := range buckets {
+	for i, bucket := range buckets {
+		a.loadCohorts(ctx, &buckets[i])
 		key := a.key(bucket.Minute, channel)
 		durations = append(durations, a.listInts(ctx, key+":dur")...)
 		ttfts = append(ttfts, a.listInts(ctx, key+":ttft")...)
@@ -336,6 +365,7 @@ func bucketFromFields(minute time.Time, channel string, fields map[string]string
 		return value
 	}
 	return &Bucket{
+		Counters:        countersFrom(fields),
 		Channel:         normalizeChannel(channel),
 		Minute:          minute,
 		Requests:        toInt("requests"),
@@ -383,12 +413,17 @@ func (a *Aggregator) Summarize(ctx context.Context, channel string, buckets []Bu
 // SummarizeWith is Summarize with the window and sample lists made explicit.
 func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summary {
 	summary := Summary{Channel: normalizeChannel(input.Channel)}
-	var durations, ttfts []int64
+	var durations, ttfts, failedDur, failedTTFT, attemptDur, attemptTTFT []int64
 	if input.SamplesProvided {
 		durations = input.Durations
 		ttfts = input.FirstTokenMS
 	}
 	for _, bucket := range input.Buckets {
+		summary.Counters.Add(bucket.Counters)
+		failedDur = append(failedDur, bucket.DurationFailed...)
+		failedTTFT = append(failedTTFT, bucket.FirstTokenFailed...)
+		attemptDur = append(attemptDur, bucket.DurationAttempt...)
+		attemptTTFT = append(attemptTTFT, bucket.FirstTokenAttempt...)
 		summary.Requests += bucket.Requests
 		summary.Success += bucket.Success
 		summary.Failed += bucket.Failed
@@ -429,6 +464,23 @@ func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summ
 		summary.RPM = float64(real) / windowMinutes
 	}
 
+	summary.Attributable = max(int64(0), real-summary.RateLimited-summary.Rejected-summary.QuotaExhausted)
+	if summary.Attributable > 0 {
+		summary.SLASuccessRate = min(1, float64(summary.Success)/float64(summary.Attributable))
+	}
+	summary.QPS = summary.RPM / 60
+	if windowMinutes > 0 {
+		summary.TPS = float64(summary.InputTokens+summary.OutputTokens) / (windowMinutes * 60)
+	}
+	summary.Duration = distribution(durations)
+	summary.FirstToken = distribution(ttfts)
+	summary.DurationFailed = distribution(failedDur)
+	summary.FirstTokenFailed = distribution(failedTTFT)
+	summary.DurationAttempt = distribution(attemptDur)
+	summary.FirstTokenAttempt = distribution(attemptTTFT)
+	summary.DurationHistogram = histogram(durations)
+	summary.DurationHistogramFailed = histogram(failedDur)
+	summary.DurationHistogramAttempt = histogram(attemptDur)
 	summary.Samples = int64(len(durations))
 	summary.DurationP95MS = percentile(durations, 0.95)
 	summary.FirstTokenP95MS = percentile(ttfts, 0.95)
@@ -457,7 +509,7 @@ func percentile(values []int64, p float64) int64 {
 	}
 	sorted := append([]int64(nil), values...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	rank := int(float64(len(sorted)) * p)
+	rank := int(math.Ceil(float64(len(sorted))*p)) - 1
 	if rank >= len(sorted) {
 		rank = len(sorted) - 1
 	}
@@ -469,14 +521,15 @@ func percentile(values []int64, p float64) int64 {
 
 // ModelStats is the per-model roll-up inside one channel.
 type ModelStats struct {
-	Model           string  `json:"model"`
-	Requests        int64   `json:"requests"`
-	Success         int64   `json:"success"`
-	Failed          int64   `json:"failed"`
-	SuccessRate     float64 `json:"success_rate"`
-	FirstTokenP95MS int64   `json:"first_token_p95_ms"`
-	DurationP95MS   int64   `json:"duration_p95_ms"`
-	Samples         int64   `json:"samples"`
+	FirstTokenSamples int64   `json:"first_token_samples"`
+	Model             string  `json:"model"`
+	Requests          int64   `json:"requests"`
+	Success           int64   `json:"success"`
+	Failed            int64   `json:"failed"`
+	SuccessRate       float64 `json:"success_rate"`
+	FirstTokenP95MS   int64   `json:"first_token_p95_ms"`
+	DurationP95MS     int64   `json:"duration_p95_ms"`
+	Samples           int64   `json:"samples"`
 }
 
 // ModelStatsFromBuckets extracts the per-model counters a channel's buckets
@@ -487,7 +540,7 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 	}
 	type acc struct {
 		requests, success, failed int64
-		duration                  []int64
+		duration, ttfts           []int64
 	}
 	byModel := map[string]*acc{}
 	for _, bucket := range buckets {
@@ -523,17 +576,19 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 		}
 		for model, entry := range byModel {
 			entry.duration = append(entry.duration, a.listInts(ctx, key+":model:"+model)...)
+			entry.ttfts = append(entry.ttfts, a.listInts(ctx, key+":model:"+model+":ttft")...)
 		}
 	}
 	stats := make([]ModelStats, 0, len(byModel))
 	for model, entry := range byModel {
 		stat := ModelStats{
-			Model:         model,
-			Requests:      entry.requests,
-			Success:       entry.success,
-			Failed:        entry.failed,
-			DurationP95MS: percentile(entry.duration, 0.95),
-			Samples:       int64(len(entry.duration)),
+			Model:           model,
+			Requests:        entry.requests,
+			Success:         entry.success,
+			Failed:          entry.failed,
+			DurationP95MS:   percentile(entry.duration, 0.95),
+			FirstTokenP95MS: percentile(entry.ttfts, 0.95), FirstTokenSamples: int64(len(entry.ttfts)),
+			Samples: int64(len(entry.duration)),
 		}
 		if entry.requests > 0 {
 			stat.SuccessRate = float64(entry.success) / float64(entry.requests)

@@ -180,6 +180,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 	}
 	defer resp.Body.Close()
 
+	resp.Body = debug.CaptureBody(ctx, resp.Body)
 	result, err := consumePuterStream(resp.Body, onMessage)
 	if err != nil {
 		return err

@@ -48,8 +48,8 @@ func TestWarpAccountOutput_CarriesFingerprintNotSecret(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if !strings.Contains(string(encoded), "session_fingerprint") {
-		t.Fatalf("fingerprint missing from the response: %s", encoded)
+	if strings.Contains(string(encoded), "session_fingerprint") || !strings.Contains(string(encoded), `"has_credential":true`) {
+		t.Fatalf("credential presence contract violated: %s", encoded)
 	}
 	if strings.Contains(string(encoded), "warp-session-token-secret") {
 		t.Fatalf("the response exposed the session token: %s", encoded)
@@ -82,9 +82,9 @@ func TestWarpFingerprint_IsPresentInTheAccountList(t *testing.T) {
 			continue
 		}
 		found = true
-		fingerprint, _ := row["session_fingerprint"].(string)
-		if fingerprint == "" {
-			t.Fatalf("warp row has no session_fingerprint: %v", row)
+		_, fingerprintExposed := row["session_fingerprint"]
+		if fingerprintExposed || row["has_credential"] != true {
+			t.Fatalf("warp row must expose only credential presence: %v", row)
 		}
 		if _, leaked := row["refresh_token"].(string); leaked {
 			if row["refresh_token"] != "" {

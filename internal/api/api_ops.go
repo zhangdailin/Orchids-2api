@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"net/http"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -217,57 +216,19 @@ func (a *API) HandleOpsAlertRules(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid alert rules", http.StatusBadRequest)
 		return
 	}
-	if err := a.alertEngine.SetThresholds(rules); err != nil {
+	if err := rules.Validate(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	a.alertRulesMu.Lock()
+	defer a.alertRulesMu.Unlock()
 	raw, _ := json.Marshal(rules)
 	if err := a.store.RedisClient().Set(r.Context(), a.store.RedisPrefix()+alertRulesRedisKey, raw, 0).Err(); err != nil {
 		http.Error(w, "Could not persist alert rules", http.StatusInternalServerError)
 		return
 	}
+	_ = a.alertEngine.SetThresholds(rules)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"rules": rules, "defaults": defaults, "editable": true})
-}
-
-// HandleOpsRuntime supplies lightweight process metrics for the resource cards.
-func (a *API) HandleOpsRuntime(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var memory runtime.MemStats
-	runtime.ReadMemStats(&memory)
-	refreshing := 0
-	if a != nil && a.refreshConcurrency != nil {
-		refreshing = a.refreshConcurrency()
-	}
-	metrics := []map[string]interface{}{
-		{"label": "Go 堆内存", "value": formatRuntimeBytes(memory.Alloc), "detail": "当前已分配", "available": true, "status": "ok"},
-		{"label": "Goroutine", "value": strconv.Itoa(runtime.NumGoroutine()), "detail": "当前协程数", "available": true, "status": "ok"},
-		{"label": "账号刷新", "value": strconv.Itoa(refreshing), "detail": "正在刷新", "available": true, "status": "ok"},
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"available": true, "metrics": metrics})
-}
-
-func formatRuntimeBytes(value uint64) string {
-	const mb = 1024 * 1024
-	return strconv.FormatFloat(float64(value)/mb, 'f', 1, 64) + " MB"
-}
-
-// HandleJournalDiagnostics keeps the redesigned journal detail panel usable on
-// deployments that do not have the optional diagnostic bundle store. The UI
-// treats available=false as an informative empty state.
-func (a *API) HandleJournalDiagnostics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"available": false,
-		"note":      "当前版本没有保存该请求的诊断内容。",
-	})
 }
 
 // HandleJournalRecords answers one journal tab. It is the modern counterpart of
@@ -367,6 +328,25 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		event := record["event"].(audit.Event)
+		if event.RequestID != "" {
+			ids = append(ids, event.RequestID)
+		}
+	}
+	indexes, err := a.diagnostics.Indexes(r.Context(), ids)
+	if err != nil {
+		http.Error(w, "Could not read diagnostic indexes", http.StatusServiceUnavailable)
+		return
+	}
+	for _, record := range records {
+		event := record["event"].(audit.Event)
+		if index, ok := indexes[event.RequestID]; ok {
+			record["diagnostics"] = index
+		}
+	}
+
 	// The cursor must advance past everything that was SCANNED, not past the last
 	// record that matched. Returning the last match as the cursor made an older
 	// page unreachable whenever the window held more non-matching entries than the
@@ -453,6 +433,11 @@ func (a *API) opsBucketsWithSamples(ctx context.Context, scope string, since, un
 		for _, bucket := range buckets {
 			combined := merged[bucket.Minute]
 			combined.Minute = bucket.Minute
+			combined.Counters.Add(bucket.Counters)
+			combined.DurationFailed = append(combined.DurationFailed, bucket.DurationFailed...)
+			combined.FirstTokenFailed = append(combined.FirstTokenFailed, bucket.FirstTokenFailed...)
+			combined.DurationAttempt = append(combined.DurationAttempt, bucket.DurationAttempt...)
+			combined.FirstTokenAttempt = append(combined.FirstTokenAttempt, bucket.FirstTokenAttempt...)
 			combined.Requests += bucket.Requests
 			combined.Success += bucket.Success
 			combined.Failed += bucket.Failed
@@ -474,11 +459,12 @@ func opsSeries(buckets []opsagg.Bucket) []map[string]interface{} {
 	series := make([]map[string]interface{}, 0, len(buckets))
 	for _, bucket := range buckets {
 		series = append(series, map[string]interface{}{
-			"minute":   bucket.Minute.UTC().Format(time.RFC3339),
-			"requests": bucket.Requests,
-			"success":  bucket.Success,
-			"failed":   bucket.Failed,
-			"probes":   bucket.Probes,
+			"minute":       bucket.Minute.UTC().Format(time.RFC3339),
+			"requests":     bucket.Requests,
+			"success":      bucket.Success,
+			"failed":       bucket.Failed,
+			"probes":       bucket.Probes,
+			"input_tokens": bucket.Input, "output_tokens": bucket.Output, "usage_samples": bucket.UsageSamples, "attempt_failures": bucket.AttemptFailures, "account_switch_count": bucket.AccountSwitchCount, "account_switch_sum": bucket.AccountSwitchSum,
 		})
 	}
 	return series
@@ -488,6 +474,16 @@ func opsSeries(buckets []opsagg.Bucket) []map[string]interface{} {
 // reported as such (samples = 0) instead of a green, traffic-free channel.
 func (a *API) opsMatrix(ctx context.Context, channels []string, since, until time.Time) []map[string]interface{} {
 	accounts, _ := a.store.ListAccounts(ctx)
+	ids := make([]int64, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc != nil {
+			ids = append(ids, acc.ID)
+		}
+	}
+	counts := map[int64]int64{}
+	if a.connTracker != nil {
+		counts = a.connTracker.GetCounts(ids)
+	}
 	now := time.Now()
 	// The rate is per minute of the requested window, not per bucket that exists.
 	windowMinutes := until.Sub(since).Minutes()
@@ -503,9 +499,16 @@ func (a *API) opsMatrix(ctx context.Context, channels []string, since, until tim
 			continue
 		}
 		enabled, available, needingLogin, modelCooldowns := poolCounts(accounts, channel, now)
+		active := int64(0)
+		for _, acc := range accounts {
+			if acc != nil && strings.EqualFold(acc.AccountType, channel) {
+				active += counts[acc.ID]
+			}
+		}
 		row := map[string]interface{}{
-			"channel":                channel,
-			"accounts_enabled":       enabled,
+			"channel":          channel,
+			"accounts_enabled": enabled,
+			"active_requests":  active, "concurrency_available": a.connTracker != nil,
 			"accounts_available":     available,
 			"accounts_needing_login": needingLogin,
 			"model_cooldowns":        modelCooldowns,

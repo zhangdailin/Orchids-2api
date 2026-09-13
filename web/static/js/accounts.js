@@ -288,13 +288,13 @@ function applyTokenLabels(type) {
     label.textContent = "SSO Token";
     input.placeholder = "每行一个 sso token（或包含 sso= 的 Cookie）";
     hint.textContent = accountId
-      ? "编辑时仅保存第一行 SSO Token"
+      ? "凭证不回显；留空保留原凭证，填写则替换"
       : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
   } else if (normalized === 'puter') {
       label.textContent = "Auth Token";
       input.placeholder = "每行一个 Puter auth_token";
       hint.textContent = accountId
-        ? "Puter 编辑时仅保存第一行 auth_token。可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取"
+        ? "凭证不回显；留空保留原凭证，填写则替换"
         : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
       input.required = true;
     } else {
@@ -305,6 +305,7 @@ function applyTokenLabels(type) {
       : "支持原始 __client、完整 Cookie Header 或 Cookie JSON；推荐同时带上 __client_uat 以提高补全成功率";
     input.required = true;
   }
+  if (accountId) input.required = false;
 }
 
 function getWarpDeviceLoginStatusNode() {
@@ -952,15 +953,15 @@ function evaluateAccountStatus(acc) {
   } else if (type === 'grok') {
     // OAuth secrets are redacted by the account list API. credential_type is
     // the safe indicator that the server holds a Build OAuth credential.
-    if (!isSidebarGrokOAuthAccount(acc) && !getAccountToken(acc)) {
+    if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 SSO Token' };
     }
   } else if (type === 'puter') {
-    if (!getAccountToken(acc)) {
+    if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Puter auth_token' };
     }
   } else if (type === 'workbuddy') {
-    if (!getAccountToken(acc)) {
+    if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 WorkBuddy 凭证（refreshToken / accessToken）' };
     }
   } else if (!acc.session_id && !acc.session_cookie) {
@@ -1790,7 +1791,7 @@ function openModal(account = null) {
       document.getElementById("accountId").value = account.id;
       modalType = normalizeAccountType(account);
       setAccountModalType(modalType);
-      document.getElementById("clientCookie").value = getAccountToken(account);
+      document.getElementById("clientCookie").value = "";
       document.getElementById("enabled").checked = account.enabled;
       const isOAuth = String(account.credential_type || "").trim().toLowerCase() === "oauth";
       if (modeSelect) modeSelect.value = isOAuth ? "oauth" : "sso";
@@ -1896,8 +1897,8 @@ async function saveAccount(e) {
 
   // A WorkBuddy edit may legitimately keep the stored credential: the refresh
   // token is never returned to the browser, so an empty field means "unchanged".
-  const keepStoredWorkBuddyCredential = Boolean(id) && type === "workbuddy" && splitCredentials.length === 0;
-  if (type !== "warp" && !isOAuth && credentials.length === 0 && !keepStoredWorkBuddyCredential) {
+  const keepStoredCredential = Boolean(id) && existing && normalizeAccountType(existing) === type && splitCredentials.length === 0;
+  if (type !== "warp" && !isOAuth && credentials.length === 0 && !keepStoredCredential) {
     if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
       const details = []
         .concat(duplicateInputs.slice(0, 4).map((item) => `输入重复: ${item}`))
@@ -2004,6 +2005,7 @@ function parseDataId(value) {
 }
 
 function formatTokenDisplay(acc) {
+  if (typeof acc?.has_credential === "boolean") return acc.has_credential ? '凭证已配置' : '待登录';
   const type = normalizeAccountType(acc);
   if (type === 'warp') {
     // Warp authenticates with a browser session that carries no email or

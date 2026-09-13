@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260913-ui11">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260913-ops11">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260913-observability1">
 </head>
 
 <body>
@@ -21,6 +21,7 @@
         <p class="page-sub" id="logsTabNote">请求、操作、系统三本账共用一份审计流；某个请求的诊断包挂在该请求的详情里。</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="logsDiagnosticsToggle" type="button" aria-pressed="false" disabled>诊断采集：读取中…</button>
         <button class="btn" id="logsFiltersToggle" type="button" aria-expanded="false" aria-controls="logsFilters">筛选</button>
         <button class="btn" id="logsReload" type="button">刷新</button>
       </div>
@@ -104,8 +105,8 @@
     </aside>
     <div class="drawer-backdrop" id="logsDetailBackdrop"></div>
 
-    <script src="{{.AdminPath}}/js/common.js?v=20260913-ui2"></script>
-    <script src="{{.AdminPath}}/js/logs.js?v=20260913-logs14"></script>
+    <script src="{{.AdminPath}}/js/common.js?v=20260913-security1"></script>
+    <script src="{{.AdminPath}}/js/logs.js?v=20260913-security1"></script>
   </main>
 </body>
 

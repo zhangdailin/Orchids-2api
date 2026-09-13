@@ -156,6 +156,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 		return apiError(resp.StatusCode, raw)
 	}
 
+	resp.Body = debug.CaptureBody(ctx, resp.Body)
 	result, err := consumeStream(resp.Body, onMessage)
 	if err != nil {
 		return err

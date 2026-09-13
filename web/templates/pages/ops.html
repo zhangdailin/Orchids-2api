@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260913-ui11">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260913-ops11">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260913-observability1">
 </head>
 
 <body>
@@ -36,8 +36,8 @@
         <label class="ops-select"><span class="sr-only">渠道</span>
           <select id="opsChannel" class="compact-select"><option value="">全部渠道</option></select>
         </label>
-        <label class="ops-select"><span class="sr-only">模型</span>
-          <select id="opsModel" class="compact-select"><option value="">全部模型</option></select>
+        <label class="ops-select"><span class="sr-only">模型（仅筛选下方状态表）</span>
+          <select id="opsModel" title="仅筛选下方渠道 × 模型状态表" class="compact-select"><option value="">全部模型</option></select>
         </label>
         <label class="ops-select"><span class="sr-only">时间窗口</span>
           <select id="opsWindow" class="compact-select">
@@ -111,7 +111,7 @@
     <section class="ops-grid ops-grid-3">
       <article class="ops-card">
         <div class="ops-card-head">
-          <h2>并发 / 排队</h2>
+          <h2>活跃请求 / 账号</h2>
           <span class="ops-hint">按平台</span>
         </div>
         <div class="ops-concurrency" id="opsConcurrency"></div>
@@ -235,8 +235,8 @@
       <p class="ops-coverage" id="opsCoverage">—</p>
     </details>
 
-    <script src="{{.AdminPath}}/js/common.js?v=20260913-ui2"></script>
-    <script src="{{.AdminPath}}/js/ops.js?v=20260913-ops8"></script>
+    <script src="{{.AdminPath}}/js/common.js?v=20260913-security1"></script>
+    <script src="{{.AdminPath}}/js/ops.js?v=20260913-observability1"></script>
   </main>
 </body>
 

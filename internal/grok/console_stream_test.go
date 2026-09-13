@@ -83,7 +83,7 @@ func TestStreamConsoleChatReportsMalformedSSEData(t *testing.T) {
 	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader("data: {not-json}\n"))
 
 	body := recorder.Body.String()
-	if !strings.Contains(body, "event: error") || !strings.Contains(body, "console stream parse error") || !strings.Contains(body, "data: [DONE]") {
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, "Use the request ID") || !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("stream=%q want explicit SSE parse error and terminator", body)
 	}
 }
@@ -93,7 +93,7 @@ func TestStreamConsoleChatReportsScannerError(t *testing.T) {
 	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, &failingConsoleStreamReader{})
 
 	body := recorder.Body.String()
-	if !strings.Contains(body, "event: error") || !strings.Contains(body, "upstream connection interrupted") || !strings.Contains(body, "data: [DONE]") {
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, "Use the request ID") || strings.Contains(body, "upstream connection interrupted") || !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("stream=%q want explicit SSE read error and terminator", body)
 	}
 }

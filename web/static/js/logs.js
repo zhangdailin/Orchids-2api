@@ -50,6 +50,10 @@
   // The capture records a request as a fixed sequence of numbered sections. The
   // order is the request's own timeline, so the panel must not sort it.
   const SECTION_LABELS = {
+    '1_http_request.json': '1 · 客户端原始请求',
+    '5_http_response.txt': '5 · 实际返回客户端内容',
+    '6_http_summary.json': '6 · HTTP 完成状态',
+    '6_request_events.jsonl': '6 · 上游尝试与请求事件',
     '1_claude_request.json': '1 · 客户端请求',
     '1_early_exit.json': '1 · 提前返回',
     '2_converted_prompt.md': '2 · 转换后提示词',
@@ -789,7 +793,7 @@
       failed.textContent = '读取诊断日志失败：' + (error.message || error);
       body.appendChild(failed);
     }
-    if (button) button.hidden = true;
+    if (button) { button.disabled = false; button.textContent = '重新读取诊断内容'; }
   }
 
   function renderBundle(container, entry, retention) {
@@ -1029,10 +1033,40 @@
     });
   }
 
+  async function initDiagnosticToggle() {
+    const button = el('logsDiagnosticsToggle');
+    if (!button) return;
+    let enabled = null;
+    async function update(save) {
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/journal/diagnostics/settings', save ? {
+          method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: !enabled }),
+        } : { credentials: 'same-origin', cache: 'no-store' });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const payload = await response.json();
+        if (typeof payload.enabled !== 'boolean') throw new Error('Invalid setting');
+        enabled = payload.enabled;
+        button.setAttribute('aria-pressed', String(enabled));
+        button.textContent = enabled ? '诊断采集：已开启（点击关闭）' : '诊断采集：已关闭（点击开启）';
+        button.title = '对新请求生效，诊断内容最多保留 24 小时、512 个请求';
+      } catch (error) {
+        button.textContent = enabled == null ? '诊断采集：读取失败，点击重试' : '诊断采集：保存失败，点击重试';
+        button.title = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    }
+    button.addEventListener('click', () => update(enabled != null));
+    await update(false);
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { bind(); load(false); });
+    document.addEventListener('DOMContentLoaded', () => { bind(); load(false); initDiagnosticToggle(); });
   } else {
     bind();
     load(false);
+    initDiagnosticToggle();
   }
 })();

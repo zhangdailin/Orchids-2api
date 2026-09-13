@@ -273,15 +273,15 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		}
 	}()
 	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		if _, result.Err = io.Copy(io.MultiWriter(w, fullCapture), body); result.Err != nil {
-			return
-		}
-		if fullCapture.overflow {
-			result.Err = fmt.Errorf("response audit JSON exceeded capture limit")
+		raw, readErr := io.ReadAll(io.LimitReader(body, (8<<20)+1))
+		if readErr != nil || len(raw) > 8<<20 {
+			result.Err = fmt.Errorf("upstream response could not be read within the response limit")
+			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
 			return
 		}
 		var response map[string]interface{}
-		if result.Err = json.Unmarshal(fullCapture.data, &response); result.Err != nil {
+		if result.Err = json.Unmarshal(raw, &response); result.Err != nil {
+			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Invalid upstream response")
 			return
 		}
 		if response == nil {
@@ -291,6 +291,10 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		responseID = interfaceString(response["id"])
 		result.Usage = consoleUsage(response)
 		result.Finish, result.Err = responseTerminalFinish("", response)
+		if redactResponseError(response) {
+			raw, _ = json.Marshal(response)
+		}
+		_, _ = io.MultiWriter(w, fullCapture).Write(raw)
 		return
 	}
 
@@ -316,6 +320,10 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 			if id := interfaceString(response["id"]); id != "" {
 				responseID = id
 			}
+		}
+		if redactResponseError(event) {
+			raw, _ := json.Marshal(event)
+			frame.data = []string{string(raw)}
 		}
 		if err := frame.writeTo(target); err != nil {
 			result.Err = err
@@ -417,6 +425,31 @@ func writeResponsesAPIError(w http.ResponseWriter, status int, code, message str
 			"code":    code,
 		},
 	})
+}
+
+// Only protocol error envelopes are rewritten; model output and tool arguments
+// remain byte-for-byte unchanged on successful events.
+func redactResponseError(event map[string]interface{}) bool {
+	if event == nil {
+		return false
+	}
+	changed := false
+	if event["error"] != nil {
+		event["error"] = map[string]interface{}{"code": "upstream_error", "message": "Upstream request failed. Use the request ID to inspect diagnostics."}
+		changed = true
+	}
+	if event["type"] == "error" {
+		for _, key := range []string{"message", "detail", "code", "param"} {
+			delete(event, key)
+		}
+		event["message"] = "Upstream request failed. Use the request ID to inspect diagnostics."
+		event["code"] = "upstream_error"
+		changed = true
+	}
+	if response, ok := event["response"].(map[string]interface{}); ok {
+		changed = redactResponseError(response) || changed
+	}
+	return changed
 }
 
 func writeStoredResponseLookupError(w http.ResponseWriter, err error, notFoundMessage string) {

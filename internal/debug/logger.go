@@ -24,6 +24,7 @@ var debugLoggerCreateCount atomic.Uint64
 
 // Logger 调试日志记录器
 type Logger struct {
+	capture    *Capture
 	enabled    bool
 	sseEnabled bool
 	dir        string
@@ -141,6 +142,13 @@ func (l *Logger) LogUpstreamRequest(url string, headers map[string]string, body 
 			safeHeaders[key] = value
 		}
 	}
+	if raw, ok := body.([]byte); ok {
+		if json.Valid(raw) {
+			body = json.RawMessage(raw)
+		} else {
+			body = string(raw)
+		}
+	}
 	data := map[string]interface{}{
 		"url":     url,
 		"headers": safeHeaders,
@@ -185,6 +193,10 @@ func (l *Logger) LogOutputSSE(event string, data string) {
 }
 
 func (l *Logger) appendStream(file **os.File, written *int64, name, data string) {
+	if l.capture != nil {
+		l.capture.Append(name, data)
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -267,9 +279,13 @@ func (l *Logger) writeJSON(filename string, data interface{}) {
 	if err != nil {
 		return
 	}
-	os.WriteFile(filepath.Join(l.dir, filename), jsonData, 0600)
+	l.writeFile(filename, string(jsonData))
 }
 
 func (l *Logger) writeFile(filename string, content string) {
+	if l.capture != nil {
+		l.capture.Set(filename, content)
+		return
+	}
 	os.WriteFile(filepath.Join(l.dir, filename), []byte(content), 0600)
 }

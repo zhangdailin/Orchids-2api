@@ -101,6 +101,9 @@ func (r Rules) Validate() error {
 	if r.SuccessRateCritical <= 0 || r.SuccessRateCritical >= r.SuccessRateWarning {
 		return fmt.Errorf("critical success rate must be positive and below the warning threshold")
 	}
+	if r.SuccessRateWarning+r.ClearMargin > 1 {
+		return fmt.Errorf("warning threshold plus clear margin cannot exceed 100%%")
+	}
 	if r.ClearMargin < 0 || r.ClearMargin > 0.5 {
 		return fmt.Errorf("clear margin must be between 0 and 0.5")
 	}

@@ -393,3 +393,22 @@ func TestEngine_ThresholdsIsSafeUnderConcurrency(t *testing.T) {
 		<-done
 	}
 }
+
+func TestRejectUnreachableRecoveryAndAllow100Percent(t *testing.T) {
+	rules := DefaultRules()
+	rules.SuccessRateWarning = .99
+	rules.ClearMargin = .03
+	if rules.Validate() == nil {
+		t.Fatal("accepted a 102% recovery line")
+	}
+	rules.SuccessRateWarning = .97
+	if err := rules.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine(rules, nil)
+	engine.Evaluate(Snapshot{Channels: []ChannelSnapshot{channel("grok", func(c *ChannelSnapshot) { c.SuccessRate = .8; c.Failed = 5 })}})
+	recovery := engine.Evaluate(Snapshot{Channels: []ChannelSnapshot{channel("grok", nil)}})
+	if len(recovery.Recovered) != 1 || len(engine.Firing()) != 0 {
+		t.Fatal("100% must recover")
+	}
+}

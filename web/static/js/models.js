@@ -7,6 +7,7 @@ let modelStatusFilter = "";
 let modelPageSize = 20;
 let modelCurrentPage = 1;
 let modelRefreshInFlight = false;
+let modelBatchInFlight = false;
 let modelDeleteOfflineInFlight = false;
 let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
@@ -310,6 +311,7 @@ function renderModels() {
   }
   renderPagination(modelCurrentPage, totalPages);
 
+  updateModelsBatchBar();
   if (pageItems.length === 0) {
     container.innerHTML = `
       <div class="models-empty empty-state-panel">
@@ -332,7 +334,7 @@ function renderModels() {
     return `
       <tr data-id="${encodeData(m.id)}">
         <td class="col-select">
-          <input type="checkbox" class="row-checkbox" data-action="row-select" data-id="${encodeData(m.id)}" />
+          <input type="checkbox" class="row-checkbox" data-action="row-select" data-id="${encodeData(m.id)}" ${modelsSelectedIds.has(String(m.id)) ? "checked" : ""} />
         </td>
         <td class="col-model">
           <div class="models-cell-main">
@@ -388,8 +390,10 @@ function renderModels() {
     if (!target || !container.contains(target)) return;
     const action = target.dataset.action;
     if (action === "select-all") {
-      modelsSelectedIds.clear();
-      if (target.checked) pageItems.forEach((m) => modelsSelectedIds.add(String(m.id)));
+      pageItems.forEach(m => {
+        if (target.checked) modelsSelectedIds.add(String(m.id));
+        else modelsSelectedIds.delete(String(m.id));
+      });
       renderModels();
       return;
     }
@@ -430,6 +434,17 @@ function renderModels() {
 const modelsSelectedIds = new Set();
 
 function refreshRowSelectionStyles(container) {
+  container.querySelectorAll('input[data-action="row-select"]').forEach(input => {
+    input.checked = modelsSelectedIds.has(decodeData(input.dataset.id || ''));
+  });
+  const header = container.querySelector('input[data-action="select-all"]');
+  const rows = Array.from(container.querySelectorAll('input[data-action="row-select"]'));
+  if (header) {
+    const selected = rows.filter(input => input.checked).length;
+    header.checked = rows.length > 0 && selected === rows.length;
+    header.indeterminate = selected > 0 && selected < rows.length;
+  }
+
   container.querySelectorAll("tr[data-id]").forEach((tr) => {
     const id = decodeData(tr.dataset.id || "");
     tr.classList.toggle("is-selected", modelsSelectedIds.has(id));
@@ -449,7 +464,9 @@ function clearModelSelection() {
 }
 
 async function runModelBatch(action) {
-  const ids = Array.from(modelsSelectedIds);
+  if (modelBatchInFlight || !['enable', 'disable', 'delete', 'clear'].includes(action)) return;
+  const scopedIds = new Set(getChannelScopedModels().map(model => String(model.id)));
+  const ids = Array.from(modelsSelectedIds).filter(id => scopedIds.has(id));
   if (ids.length === 0) return;
   if (action === "clear") {
     clearModelSelection();
@@ -458,6 +475,9 @@ async function runModelBatch(action) {
   const labels = { enable: "启用", disable: "停用", delete: "删除" };
   if (action === "delete" && !confirm(`确定删除选中的 ${ids.length} 个模型吗？此操作不可撤销。`)) return;
 
+  modelBatchInFlight = true;
+  const batchButtons = document.querySelectorAll('#modelsBatchBar button');
+  batchButtons.forEach(button => { button.disabled = true; });
   let done = 0;
   let failed = 0;
   for (const id of ids) {
@@ -485,7 +505,10 @@ async function runModelBatch(action) {
   showToast(failed === 0
     ? `已批量${labels[action]} ${done} 个模型`
     : `批量${labels[action]}完成：成功 ${done}，失败 ${failed}`, failed === 0 ? "success" : "error");
-  await loadModels();
+  try { await loadModels(); } finally {
+    modelBatchInFlight = false;
+    batchButtons.forEach(button => { button.disabled = false; });
+  }
 }
 
 function renderModelsMobile(container, pageItems) {
@@ -567,6 +590,8 @@ async function loadModels() {
 }
 
 function filterModelsByChannel(channel) {
+  modelsSelectedIds.clear();
+  updateModelsBatchBar();
   currentModelChannel = channel;
   modelCurrentPage = 1;
   document.querySelectorAll("#modelPlatformFilters .tab-item").forEach((btn) => {

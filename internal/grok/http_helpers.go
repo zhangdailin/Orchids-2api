@@ -136,7 +136,7 @@ func writeSSEError(w http.ResponseWriter, message, errType, code string) {
 	middleware.MarkStreamFailure(w)
 	payload := map[string]interface{}{
 		"error": map[string]interface{}{
-			"message": strings.TrimSpace(message),
+			"message": "Upstream request failed. Use the request ID to inspect diagnostics.",
 			"type":    strings.TrimSpace(errType),
 			"code":    strings.TrimSpace(code),
 		},

@@ -20,10 +20,10 @@ func TestBuildVideoUploadIsOneTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registerBuildVideoUpload() error = %v", err)
 	}
-	token := strings.TrimPrefix(uploadURL, "https://media.example/v1/media/uploads/")
+	token := strings.TrimPrefix(uploadURL, "https://media.example/media/uploads/")
 	h := &Handler{}
 
-	req := httptest.NewRequest(http.MethodPut, "/v1/media/uploads/"+token, bytes.NewReader([]byte("video-data")))
+	req := httptest.NewRequest(http.MethodPut, "/media/uploads/"+token, bytes.NewReader([]byte("video-data")))
 	req.Header.Set("Content-Type", "video/mp4")
 	rec := httptest.NewRecorder()
 	h.HandleVideoUpload(rec, req)
@@ -37,7 +37,7 @@ func TestBuildVideoUploadIsOneTime(t *testing.T) {
 		t.Fatalf("uploaded content not persisted: %v", err)
 	}
 
-	retry := httptest.NewRequest(http.MethodPut, "/v1/media/uploads/"+token, bytes.NewReader([]byte("again")))
+	retry := httptest.NewRequest(http.MethodPut, "/media/uploads/"+token, bytes.NewReader([]byte("again")))
 	retry.Header.Set("Content-Type", "video/mp4")
 	retryRec := httptest.NewRecorder()
 	h.HandleVideoUpload(retryRec, retry)
@@ -61,7 +61,7 @@ func TestBuildVideoUploadTokenIsSharedThroughRedis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registerBuildVideoUpload() error = %v", err)
 	}
-	token := strings.TrimPrefix(uploadURL, "https://media.example/v1/media/uploads/")
+	token := strings.TrimPrefix(uploadURL, "https://media.example/media/uploads/")
 	h2 := &Handler{lb: h1.lb}
 	resolved, ok := h2.consumeBuildVideoUpload(t.Context(), token)
 	if !ok || resolved == nil || resolved.ID != job.ID {

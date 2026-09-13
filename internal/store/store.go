@@ -59,7 +59,7 @@ type Account struct {
 	// distinguish "never checked" from "checked and healthy": LastAttempt and the
 	// quota snapshot are reset by ordinary quota recovery, so they cannot tell a
 	// newly added account from a verified one.
-	VerifiedAt   time.Time `json:"verified_at,omitempty"`
+	VerifiedAt time.Time `json:"verified_at,omitempty"`
 	// ClearVerifiedAt asks the store to drop the stored verdict timestamp when a
 	// credential is replaced. It exists because a zero VerifiedAt is
 	// indistinguishable from "this partial update did not touch the field".
@@ -67,8 +67,8 @@ type Account struct {
 	QuotaResetAt    time.Time `json:"quota_reset_at"`
 	RequestCount    int64     `json:"request_count"`
 	LastUsedAt      time.Time `json:"last_used_at"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 
 	// CredentialType marks the Grok account credential mode. Empty or "sso"
 	// keeps the legacy SSO-cookie behavior; "oauth" selects the Build CLI OAuth
@@ -806,7 +806,11 @@ func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error
 	if key.ExpiresAt != nil && !now.Before(key.ExpiresAt.UTC()) {
 		return nil, ErrApiKeyExpired
 	}
-	allowed, err := s.apiKeys.ConsumeApiKeyRPM(ctx, key.ID, key.RPMLimit, now)
+	rpm := key.RPMLimit
+	if rpm <= 0 {
+		rpm = 60
+	}
+	allowed, err := s.apiKeys.ConsumeApiKeyRPM(ctx, key.ID, rpm, now)
 	if err != nil {
 		return nil, err
 	}

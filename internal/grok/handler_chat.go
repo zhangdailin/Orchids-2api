@@ -187,7 +187,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	req.sourceOperation, _ = r.Context().Value(chatSourceOperationKey{}).(string)
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
 	debugLogSSE := h != nil && h.cfg != nil && h.cfg.DebugLogSSE
-	logger := debug.New(verboseDiagnostics, verboseDiagnostics && debugLogSSE)
+	logger := debug.NewForContext(r.Context(), verboseDiagnostics, verboseDiagnostics && debugLogSSE)
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
 	req.Model = normalizeModelID(req.Model)

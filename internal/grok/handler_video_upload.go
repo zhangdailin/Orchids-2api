@@ -53,7 +53,7 @@ func (h *Handler) registerBuildVideoUpload(job *videoJob) (string, error) {
 		if err := h.lb.Store.RedisClient().Set(context.Background(), redisKey, raw, videoJobTTL).Err(); err != nil {
 			return "", fmt.Errorf("persist Build video upload token: %w", err)
 		}
-		return base + "/v1/media/uploads/" + token, nil
+		return base + "/media/uploads/" + token, nil
 	}
 	buildVideoUploads.Lock()
 	now := time.Now()
@@ -64,7 +64,7 @@ func (h *Handler) registerBuildVideoUpload(job *videoJob) (string, error) {
 	}
 	buildVideoUploads.items[key] = videoUploadTarget{job: job, expiresAt: now.Add(videoJobTTL)}
 	buildVideoUploads.Unlock()
-	return base + "/v1/media/uploads/" + token, nil
+	return base + "/media/uploads/" + token, nil
 }
 
 func (h *Handler) consumeBuildVideoUpload(ctx context.Context, token string) (*videoJob, bool) {
@@ -100,7 +100,7 @@ func (h *Handler) HandleVideoUpload(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPut) {
 		return
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/v1/media/uploads/"))
+	token := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/media/uploads/"))
 	if !videoUploadTokenPattern.MatchString(token) {
 		http.NotFound(w, r)
 		return

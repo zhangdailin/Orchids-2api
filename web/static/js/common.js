@@ -46,6 +46,7 @@ function isSidebarGrokOAuthAccount(acc) {
 }
 
 function hasSidebarAccountCredential(acc) {
+  if (typeof acc?.has_credential === "boolean") return acc.has_credential;
   if (normalizeSidebarAccountType(acc) === "warp") return acc?.warp_authenticated === true;
   return isSidebarGrokOAuthAccount(acc) || Boolean(getSidebarAccountToken(acc));
 }

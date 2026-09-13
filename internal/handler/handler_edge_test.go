@@ -470,8 +470,8 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	}
 
 	out := rec.Body.String()
-	if !strings.Contains(out, "Request failed: puter API error: message=Model not found") {
-		t.Fatalf("expected explicit upstream error, got: %s", out)
+	if !strings.Contains(out, "Use the request ID") || strings.Contains(out, "puter API error") {
+		t.Fatalf("expected redacted upstream error, got: %s", out)
 	}
 	if strings.Contains(out, "No output was presented to the user") {
 		t.Fatalf("did not expect generic empty fallback, got: %s", out)

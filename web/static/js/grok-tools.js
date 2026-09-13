@@ -2,6 +2,7 @@
   const LIVEKIT_CLIENT_VERSIONS = {
     stable: {
       label: "2.7.3",
+      integrity: "sha384-Ci1eiIh2+SkRFqqfxfXgWEo0r6h30tVLpq9wIjI3lkG2VpU9MN/aNZdmQy0t3+9X",
       url: "https://cdn.jsdelivr.net/npm/livekit-client@2.7.3/dist/livekit-client.umd.min.js",
     },
   };
@@ -2425,6 +2426,8 @@
           return;
         }
         const script = document.createElement("script");
+        script.integrity = cfg.integrity;
+        script.crossOrigin = "anonymous";
         script.src = cfg.url;
         script.async = true;
         script.dataset.livekitClient = "1";

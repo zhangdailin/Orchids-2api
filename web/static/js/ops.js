@@ -9,8 +9,8 @@
     channel: '',
     model: '',
     liveWindow: 1,
-    refreshSeconds: 60,
-    countdown: 60,
+    refreshSeconds: 15,
+    countdown: 15,
     timer: null,
     overview: null,
     series: [],
@@ -341,11 +341,20 @@
     const width = 320;
     const height = 72;
     container.replaceChildren();
-    if (points.length < 2) {
+    if (!points.length) {
       const note = document.createElement('p');
       note.className = 'ops-chart-empty';
-      note.textContent = '样本不足';
+      note.textContent = '指标未采集';
       container.appendChild(note);
+      return;
+    }
+    if (points.length === 1) {
+      const svg = svgEl('svg', { viewBox: `0 0 ${width} ${height}` });
+      svg.appendChild(svgEl('circle', { cx: width / 2, cy: height / 2, r: 4, fill: 'var(--accent)' }));
+      const label = svgEl('text', { x: width / 2, y: height - 8, 'text-anchor': 'middle', class: 'axis-text' });
+      label.textContent = points[0].value > 0 ? '当前分钟已有请求' : '当前分钟无请求';
+      svg.appendChild(label);
+      container.appendChild(svg);
       return;
     }
     const max = Math.max(1, ...points.map((p) => p.value));
@@ -494,8 +503,9 @@
     rowList(requests, [
       { label: 'Token 数', value: fmtAmount((totals.input_tokens || 0) + (totals.output_tokens || 0)) },
       { label: '平均 QPS', value: (totals.qps != null ? Number(totals.qps) : Number(totals.rpm || 0) / 60).toFixed(2) + ' 次/秒' },
-      { label: '平均 TPS', value: (totals.tps || 0).toFixed(1) + ' token/秒' },
+      { label: '平均 TPS', value: totals.usage_samples > 0 || totals.input_tokens > 0 || totals.output_tokens > 0 || real === 0 ? Number(totals.tps || 0).toFixed(1) + ' token/秒' : '未采集' },
     ]);
+    if (real > 0 && Number(totals.detailed_requests || 0) < real) rowList(requests, [{ label: '数据覆盖', value: '窗口含旧数据，部分用量和错误分类未采集' }]);
     container.appendChild(requests);
 
     // SLA. Throttling (429/529), a credential our own gate refused (401/403) and an
@@ -507,8 +517,8 @@
     // was calculated over all real requests, which is the compatible fallback.
     const attributable = totals.attributable == null ? real : Number(totals.attributable || 0);
     const slaSuccess = Number(totals.success || 0);
-    const slaRate = attributable > 0 ? Number(totals.success_rate || 0) : 0;
-    const sla = kpiCard('SLA（排除业务限制）', '成功率口径');
+    const slaRate = attributable > 0 ? Number(totals.sla_success_rate ?? totals.success_rate ?? 0) : 0;
+    const sla = kpiCard('SLA（排除业务限制）', Number(totals.detailed_requests || 0) < real ? '旧数据未分类，按全部请求计' : '成功率口径');
     bigValue(sla, fmtRate(slaRate, attributable), '', attributable === 0 ? 'is-muted' : (slaRate >= 0.95 ? 'is-ok' : slaRate >= 0.8 ? 'is-warn' : 'is-error'));
     meter(sla, slaRate, slaRate >= 0.95 ? '' : slaRate >= 0.8 ? 'is-warn' : 'is-error');
     rowList(sla, [
@@ -521,7 +531,7 @@
 
     // Request errors
     const errorRate = real > 0 ? (totals.failed || 0) / real : 0;
-    const errors = kpiCard('请求错误', '排除业务限制');
+    const errors = kpiCard('请求错误', '包含业务限制');
     bigValue(errors, real === 0 ? '暂无样本' : (errorRate * 100).toFixed(2) + '%', '', real === 0 ? 'is-muted' : errorRate > 0.1 ? 'is-error' : errorRate > 0.01 ? 'is-warn' : 'is-ok');
     rowList(errors, [
       { label: '最终失败', value: fmtInt(totals.failed || 0) },
@@ -532,25 +542,23 @@
 
     // Request duration, with the cohort selector
     const tab = outcomeTab(state.outcome);
-    const duration = totals[tab.duration] || (totals.duration_p95_ms ? {
-      p99_ms: totals.duration_p95_ms,
+    const duration = totals[tab.duration] || (state.outcome === 'all' && totals.duration_p95_ms ? {
       p95_ms: totals.duration_p95_ms,
       samples: totals.samples || 0,
     } : {});
     const durationCard = kpiCard('请求时长', (duration.samples || 0) + ' 个样本');
     durationCard.querySelector('.ops-kpi-head').appendChild(outcomeTabs(() => renderKpis(payload)));
-    bigValue(durationCard, fmtMs(duration.p99_ms, duration.samples), '', duration.samples ? '' : 'is-muted');
+    bigValue(durationCard, fmtMs(duration.p99_ms ?? duration.p95_ms, duration.samples), duration.p99_ms == null ? 'P95' : 'P99', duration.samples ? '' : 'is-muted');
     rowList(durationCard, percentileRows(duration).filter((row) => row.label !== 'P99'));
     container.appendChild(durationCard);
 
     // Time to first token, same cohort
-    const firstToken = totals[tab.firstToken] || (totals.first_token_p95_ms ? {
-      p99_ms: totals.first_token_p95_ms,
+    const firstToken = totals[tab.firstToken] || (state.outcome === 'all' && totals.first_token_p95_ms ? {
       p95_ms: totals.first_token_p95_ms,
       samples: totals.samples || 0,
     } : {});
     const ttftCard = kpiCard('TTFT', '口径：' + tab.label);
-    bigValue(ttftCard, fmtMs(firstToken.p99_ms, firstToken.samples), '', firstToken.samples ? '' : 'is-muted');
+    bigValue(ttftCard, fmtMs(firstToken.p99_ms ?? firstToken.p95_ms, firstToken.samples), firstToken.p99_ms == null ? 'P95' : 'P99', firstToken.samples ? '' : 'is-muted');
     rowList(ttftCard, percentileRows(firstToken).filter((row) => row.label !== 'P99'));
     container.appendChild(ttftCard);
 
@@ -574,34 +582,47 @@
 
   // --- hero gauge and live figures ------------------------------------------
 
+  function liveBuckets(minutes) {
+    if (!state.overview || state.overview.available === false) return [];
+    const serverTime = Date.parse(state.overview.until || '');
+    const until = Number.isFinite(serverTime) ? serverTime : Date.now();
+    const lastMinute = Math.floor(until / 60000) * 60000;
+    const byMinute = new Map(state.series.map(point => [Date.parse(point.minute), point]));
+    return Array.from({ length: minutes }, (_, index) => {
+      const minute = lastMinute - (minutes - 1 - index) * 60000;
+      return { minute: new Date(minute).toISOString(), requests: 0, input_tokens: 0, output_tokens: 0,
+        ...(byMinute.get(minute) || {}), seconds: minute === lastMinute ? Math.max(1, (until - minute) / 1000) : 60 };
+    });
+  }
+
   function seriesWindowPoints(minutes, pick) {
-    const cutoff = Date.now() - minutes * 60 * 1000;
-    return state.series
-      .filter((point) => new Date(point.minute).getTime() >= cutoff)
-      .map((point) => ({ label: fmtMinute(point.minute), value: pick(point) || 0 }));
+    return liveBuckets(minutes).map(point => ({ label: fmtMinute(point.minute), value: pick(point) || 0 }));
   }
 
   function renderHero(payload) {
     const totals = payload.totals || {};
+    state.overview = payload;
     state.series = (payload.series || []).slice();
-    const points = seriesWindowPoints(state.liveWindow, (point) => point.requests);
-    const qpsPoints = points.map((point) => ({ label: point.label, value: point.value / 60 }));
-    const tpsPoints = seriesWindowPoints(state.liveWindow, (point) => ((point.input_tokens || 0) + (point.output_tokens || 0)) / 60);
-
+    const buckets = liveBuckets(state.liveWindow);
+    const qpsPoints = buckets.map(point => ({ label: fmtMinute(point.minute), value: point.requests / point.seconds }));
+    const tpsPoints = buckets.map(point => ({ label: fmtMinute(point.minute), value: ((point.input_tokens || 0) + (point.output_tokens || 0)) / point.seconds }));
+    const seconds = buckets.reduce((sum, point) => sum + point.seconds, 0);
+    const requests = buckets.reduce((sum, point) => sum + point.requests, 0);
+    const tokens = buckets.reduce((sum, point) => sum + (point.input_tokens || 0) + (point.output_tokens || 0), 0);
+    const hasUsage = requests === 0 || tokens > 0 || buckets.some(point => point.usage_samples > 0);
     const current = qpsPoints.length ? qpsPoints[qpsPoints.length - 1].value : 0;
     const peak = qpsPoints.reduce((max, point) => Math.max(max, point.value), 0);
-    const avg = qpsPoints.length ? qpsPoints.reduce((sum, point) => sum + point.value, 0) / qpsPoints.length : 0;
+    const avg = seconds ? requests / seconds : 0;
     const tpsCurrent = tpsPoints.length ? tpsPoints[tpsPoints.length - 1].value : 0;
     const tpsPeak = tpsPoints.reduce((max, point) => Math.max(max, point.value), 0);
-    const tpsAvg = tpsPoints.length ? tpsPoints.reduce((sum, point) => sum + point.value, 0) / tpsPoints.length : 0;
-
-    setText('opsLiveQpsNow', current.toFixed(2));
-    setText('opsLiveQpsPeak', peak.toFixed(2));
-    setText('opsLiveQpsAvg', avg.toFixed(2));
-    setText('opsLiveTpsNow', tpsCurrent.toFixed(1));
-    setText('opsLiveTpsPeak', tpsPeak.toFixed(1));
-    setText('opsLiveTpsAvg', tpsAvg.toFixed(1));
-    setText('opsHeroHint', `${state.liveWindow} 分钟窗口 · ${state.channel || '全部渠道'}`);
+    const tpsAvg = seconds ? tokens / seconds : 0;
+    setText('opsLiveQpsNow', buckets.length ? current.toFixed(2) : '未采集');
+    setText('opsLiveQpsPeak', buckets.length ? peak.toFixed(2) : '未采集');
+    setText('opsLiveQpsAvg', buckets.length ? avg.toFixed(2) : '未采集');
+    setText('opsLiveTpsNow', buckets.length && hasUsage ? tpsCurrent.toFixed(1) : '未采集');
+    setText('opsLiveTpsPeak', buckets.length && hasUsage ? tpsPeak.toFixed(1) : '未采集');
+    setText('opsLiveTpsAvg', buckets.length && hasUsage ? tpsAvg.toFixed(1) : '未采集');
+    setText('opsHeroHint', `最近 ${state.liveWindow} 个分钟桶 · 当前分钟按已过时间计算 · 15 秒刷新`);
 
     // Health: the SLA of the window, with the traffic level deciding whether the
     // console is "serving" or "standby".
@@ -716,7 +737,7 @@
       name.textContent = row.channel;
       const rate = document.createElement('span');
       rate.className = 'ops-platform-rate';
-      rate.textContent = `${available}/${enabled} ${(ratio * 100).toFixed(0)}%`;
+      rate.textContent = row.concurrency_available ? `${row.active_requests || 0} 活跃请求 · ${available}/${enabled} 可用账号` : `${available}/${enabled} 可用账号 · 并发未采集`;
       top.appendChild(name);
       top.appendChild(rate);
       card.appendChild(top);
@@ -774,7 +795,7 @@
         : '左轴 QPS（次/秒） · 窗口内请求未上报用量，TPS 暂不绘制');
     }
     if (switchTrend) {
-      const average = points.map((p) => ({
+      const average = points.filter(p => p.account_switch_count > 0).map((p) => ({
         label: fmtMinute(p.minute),
         value: p.account_switch_count ? (p.account_switch_sum || 0) / p.account_switch_count : 0,
       }));
@@ -901,14 +922,14 @@
         fill.style.width = (group.value / maxValue * 100).toFixed(1) + '%';
         bar.appendChild(fill);
         const value = document.createElement('span');
-        value.textContent = fmtInt(group.value);
+        value.textContent = (totals.requests > 0 && !totals.detailed_requests) ? '未采集' : fmtInt(group.value);
         row.appendChild(label);
         row.appendChild(bar);
         row.appendChild(value);
         errorMix.appendChild(row);
       });
-      const total = (totals.client_errors || 0) + (totals.server_errors || 0) + (totals.stream_errors || 0);
-      setText('opsErrorMixHint', total === 0 ? '该时间窗口内暂无最终失败。' : `最终失败 ${total} 次 · 点击分类可下钻`);
+      const total = totals.failed || 0;
+      setText('opsErrorMixHint', Number(totals.detailed_requests || 0) < Math.max(0, (totals.requests || 0) - (totals.probes || 0)) ? '窗口含旧数据，错误分类未完整采集' : total === 0 ? '该时间窗口内暂无最终失败。' : `最终失败 ${total} 次 · 点击分类可下钻`);
     }
   }
 
@@ -1188,7 +1209,7 @@
   }
 
   async function load() {
-    renderSkeletons();
+    if (!state.overview) renderSkeletons();
     setStatus('读取中…', 'is-warn');
     const windowMinutes = state.window;
     const params = new URLSearchParams({ window: String(windowMinutes) });
@@ -1197,7 +1218,7 @@
     try {
       const [overviewResponse, runtimeResponse] = await Promise.all([
         fetch('/api/ops/overview?' + params.toString(), { credentials: 'same-origin' }),
-        fetch('/api/ops/runtime', { credentials: 'same-origin' }),
+        fetch('/api/ops/runtime', { credentials: 'same-origin' }).catch(() => null),
       ]);
       if (!overviewResponse.ok) throw new Error('HTTP ' + overviewResponse.status);
       const payload = await overviewResponse.json();
@@ -1211,7 +1232,7 @@
       renderCoverage(payload);
       updateChannelOptions(payload.channels, state.channel);
       updateModelOptions(payload.matrix, state.model);
-      if (runtimeResponse.ok) renderResources(await runtimeResponse.json());
+      if (runtimeResponse && runtimeResponse.ok) renderResources(await runtimeResponse.json());
       else renderResources({ available: false, note: '运行时指标读取失败。' });
       setText('opsRefreshedAt', fmtClock(new Date()));
       setStatus('就绪', '');

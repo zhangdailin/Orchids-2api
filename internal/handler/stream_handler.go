@@ -2631,6 +2631,11 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 // InjectErrorText injects an error message as a text delta into the stream or buffer.
 func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
+	if strings.Contains(strings.ToLower(errorMsg), "rate-limit") {
+		errorMsg = "Upstream accounts are currently rate-limited. Please retry later."
+	} else {
+		errorMsg = "Upstream request failed. Use the request ID to inspect diagnostics."
+	}
 	if logutil.VerboseDiagnosticsEnabled() {
 		slog.Debug(logMsg, "error_msg", errorMsg, "is_stream", h.isStream)
 	}
