@@ -596,18 +596,9 @@ func (t *tokenUpdater) persist(creds, previous Credentials) {
 
 // WorkBuddyModel is one entry of the /v3/config catalog.
 type WorkBuddyModel struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	MaxInputTokens  int64  `json:"maxInputTokens"`
-	MaxOutputTokens int64  `json:"maxOutputTokens"`
-	SupportsTools   bool   `json:"supportsToolCall"`
-	SupportsReason  bool   `json:"supportsReasoning"`
-	OnlyReasoning   bool   `json:"onlyReasoning"`
-	Disabled        bool   `json:"disabled"`
-	Reasoning       struct {
-		Effort           string   `json:"effort"`
-		SupportedEfforts []string `json:"supportedEfforts"`
-	} `json:"reasoning"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Disabled bool   `json:"disabled"`
 }
 
 type configResponse struct {

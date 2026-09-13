@@ -37,20 +37,17 @@ const (
 	// cached client built from the old credential must not be reused.
 	KindCredential Kind = "credential"
 	// KindStatus covers health changes (status code, verdict stamp).
-	KindStatus Kind = "status"
+	KindStatus  Kind = "status"
 	KindDeleted Kind = "deleted"
 )
 
-// Change is one published account mutation.
+// Change is one published account mutation. It carries the identity of the
+// account and the kind of change; subscribers that need the before/after state
+// resolve it themselves, since the bus only guarantees "this account moved".
 type Change struct {
 	AccountID int64
 	Kind      Kind
-	// Account is the state AFTER the write, or nil for a deletion.
-	Account *store.Account
-	// Previous is the state before the write, nil for a creation. It is what
-	// lets a subscriber see which field actually moved instead of guessing.
-	Previous *store.Account
-	At       time.Time
+	At        time.Time
 }
 
 // Subscriber receives coalesced change batches. Batch delivery is deliberate:
@@ -90,12 +87,6 @@ func (k *Kick) Channel() <-chan struct{} {
 		return nil
 	}
 	return k.signal
-}
-
-// Logger is the store's side of the contract. The store stays unaware of who
-// listens; it only announces.
-type Logger interface {
-	Publish(change Change)
 }
 
 const (

@@ -5,8 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -19,35 +17,18 @@ type Cache interface {
 }
 
 type MemoryCache struct {
-	mu          sync.RWMutex
-	ttl         time.Duration
-	maxEntries  int
-	items       map[string]cacheItem
-	sizeBytes   int64
-	done        chan struct{}
-	accessCount atomic.Uint64
+	memoryStore[cacheItem]
+	done chan struct{}
 }
 
 type cacheItem struct {
-	tokens     int
-	expiresAt  time.Time
-	accessedAt time.Time
-	size       int64
+	tokens int
 }
 
 func NewMemoryCache(ttl time.Duration, maxEntries ...int) *MemoryCache {
-	if ttl < 0 {
-		ttl = 0
-	}
-	limit := 0
-	if len(maxEntries) > 0 && maxEntries[0] > 0 {
-		limit = maxEntries[0]
-	}
 	c := &MemoryCache{
-		ttl:        ttl,
-		maxEntries: limit,
-		items:      make(map[string]cacheItem),
-		done:       make(chan struct{}),
+		memoryStore: newMemoryStore[cacheItem](ttl, maxEntries...),
+		done:        make(chan struct{}),
 	}
 	// Start background cleanup
 	go c.cleanupLoop()
@@ -73,13 +54,7 @@ func (c *MemoryCache) SetTTL(ttl time.Duration) {
 	if ttl < 0 {
 		ttl = 0
 	}
-	c.mu.Lock()
-	if c.ttl != ttl {
-		c.ttl = ttl
-		c.items = make(map[string]cacheItem)
-		c.sizeBytes = 0
-	}
-	c.mu.Unlock()
+	c.setTTL(ttl)
 }
 
 func (c *MemoryCache) Get(ctx context.Context, key string) (int, bool) {
@@ -92,16 +67,9 @@ func (c *MemoryCache) Get(ctx context.Context, key string) (int, bool) {
 		c.mu.RUnlock()
 		return 0, false
 	}
-	if c.ttl > 0 && !item.expiresAt.IsZero() && time.Now().After(item.expiresAt) {
+	if c.expiredLocked(item, time.Now()) {
 		c.mu.RUnlock()
-		c.mu.Lock()
-		if current, ok := c.items[key]; ok {
-			if c.ttl > 0 && !current.expiresAt.IsZero() && time.Now().After(current.expiresAt) {
-				c.sizeBytes -= current.size
-				delete(c.items, key)
-			}
-		}
-		c.mu.Unlock()
+		c.dropExpired(key)
 		return 0, false
 	}
 	c.mu.RUnlock()
@@ -109,16 +77,9 @@ func (c *MemoryCache) Get(ctx context.Context, key string) (int, bool) {
 	// Sampled LRU update: only update accessedAt ~12.5% of the time to avoid
 	// write-lock contention on every read. Approximate LRU ordering is
 	// sufficient for eviction decisions.
-	if c.accessCount.Add(1)%8 == 0 {
-		c.mu.Lock()
-		if item, ok := c.items[key]; ok {
-			item.accessedAt = time.Now()
-			c.items[key] = item
-		}
-		c.mu.Unlock()
-	}
+	c.touch(key)
 
-	return item.tokens, true
+	return item.value.tokens, true
 }
 
 func (c *MemoryCache) Put(ctx context.Context, key string, tokens int) {
@@ -137,8 +98,8 @@ func (c *MemoryCache) Put(ctx context.Context, key string, tokens int) {
 	} else if c.maxEntries > 0 && len(c.items) >= c.maxEntries {
 		c.evictLRULocked()
 	}
-	c.items[key] = cacheItem{
-		tokens:     tokens,
+	c.items[key] = memoryItem[cacheItem]{
+		value:      cacheItem{tokens: tokens},
 		expiresAt:  expiresAt,
 		accessedAt: now,
 		size:       size,
@@ -147,32 +108,11 @@ func (c *MemoryCache) Put(ctx context.Context, key string, tokens int) {
 	c.mu.Unlock()
 }
 
-func (c *MemoryCache) evictLRULocked() {
-	var lruKey string
-	var lruTime time.Time
-	first := true
-	for k, item := range c.items {
-		if first || item.accessedAt.Before(lruTime) {
-			lruKey = k
-			lruTime = item.accessedAt
-			first = false
-		}
-	}
-	if !first {
-		c.sizeBytes -= c.items[lruKey].size
-		delete(c.items, lruKey)
-	}
-}
-
 func (c *MemoryCache) GetStats(ctx context.Context) (int64, int64, error) {
 	if c == nil {
 		return 0, 0, nil
 	}
-	c.mu.Lock()
-	c.pruneExpiredLocked(time.Now())
-	count := int64(len(c.items))
-	size := c.sizeBytes
-	c.mu.Unlock()
+	count, size := c.stats()
 	return count, size, nil
 }
 
@@ -180,23 +120,8 @@ func (c *MemoryCache) Clear(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
-	c.mu.Lock()
-	c.items = make(map[string]cacheItem)
-	c.sizeBytes = 0
-	c.mu.Unlock()
+	c.clear()
 	return nil
-}
-
-func (c *MemoryCache) pruneExpiredLocked(now time.Time) {
-	if c.ttl <= 0 {
-		return
-	}
-	for key, item := range c.items {
-		if !item.expiresAt.IsZero() && now.After(item.expiresAt) {
-			c.sizeBytes -= item.size
-			delete(c.items, key)
-		}
-	}
 }
 
 func normalizeStrategy(strategy string) string {

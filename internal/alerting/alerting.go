@@ -17,7 +17,6 @@ import (
 type Severity string
 
 const (
-	SeverityInfo     Severity = "info"
 	SeverityWarning  Severity = "warning"
 	SeverityCritical Severity = "critical"
 )
@@ -132,10 +131,6 @@ func Evaluate(snapshot Snapshot, previous map[string]Alert, rules Rules) Transit
 	}
 	if rules.MinFailures <= 0 {
 		rules.MinFailures = 1
-	}
-	now := snapshot.At
-	if now.IsZero() {
-		now = time.Now()
 	}
 	current := map[string]Alert{}
 
@@ -304,6 +299,31 @@ func (e *Engine) Evaluate(snapshot Snapshot) Transition {
 		}
 	}
 	return transition
+}
+
+// Thresholds returns the rules this engine evaluates against.
+//
+// The rules are an unexported field, so nothing outside the package could read
+// them — which left the operations page showing a success-rate percentage with
+// no stated target and no way to explain where the number is measured against.
+// Exposing them lets the UI say "目标 90%" next to the rate instead of leaving
+// the reader to guess why 84.6% is a problem.
+//
+// A nil engine has no rules at all, and a caller that is already nil-safe
+// (Firing() is) must not start panicking here: it falls back to DefaultRules so
+// the UI always gets the shipped 0.9 rather than a zero that renders as
+// "目标 0.0%".
+func (e *Engine) Thresholds() Rules {
+	if e == nil {
+		return DefaultRules()
+	}
+	// Same semaphore dance as Firing(): take the token, copy the value, give it
+	// back before returning. Rules are never mutated after NewEngine, but the
+	// copy under the token keeps that guarantee independent of future edits.
+	<-e.mu
+	rules := e.rules
+	e.mu <- struct{}{}
+	return rules
 }
 
 // Firing returns a copy of the currently firing alerts.

@@ -44,11 +44,7 @@ type codexModelEntry struct {
 	Priority                          int                   `json:"priority"`
 	AdditionalSpeedTiers              []string              `json:"additional_speed_tiers"`
 	ServiceTiers                      []any                 `json:"service_tiers"`
-	DefaultServiceTier                *string               `json:"default_service_tier"`
-	AvailabilityNUX                   any                   `json:"availability_nux"`
-	Upgrade                           any                   `json:"upgrade"`
 	BaseInstructions                  string                `json:"base_instructions"`
-	ModelMessages                     any                   `json:"model_messages"`
 	IncludeSkillsUsageInstructions    bool                  `json:"include_skills_usage_instructions"`
 	SupportsReasoningSummaryParameter bool                  `json:"supports_reasoning_summary_parameter"`
 	SupportsReasoningSummaries        bool                  `json:"supports_reasoning_summaries"`
@@ -62,7 +58,6 @@ type codexModelEntry struct {
 	SupportsImageDetailOriginal       bool                  `json:"supports_image_detail_original"`
 	ContextWindow                     int                   `json:"context_window"`
 	MaxContextWindow                  int                   `json:"max_context_window"`
-	AutoCompactTokenLimit             *int                  `json:"auto_compact_token_limit"`
 	EffectiveContextWindowPercent     int                   `json:"effective_context_window_percent"`
 	ExperimentalSupportedTools        []string              `json:"experimental_supported_tools"`
 	InputModalities                   []string              `json:"input_modalities"`

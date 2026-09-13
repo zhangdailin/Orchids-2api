@@ -6,8 +6,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}} · 日志中心</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260914-ops1">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-4">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260914-ops4">
 </head>
 
 <body>
@@ -41,11 +41,11 @@
           <table class="ops-table logs-table">
             <thead>
               <tr>
-                <th>时间</th>
+                <th class="logs-time">时间</th>
                 <th>渠道 / 动作</th>
                 <th>对象</th>
-                <th>状态</th>
-                <th>耗时</th>
+                <th class="logs-status">状态</th>
+                <th class="logs-duration">耗时</th>
               </tr>
             </thead>
             <tbody id="logsRows">
@@ -64,8 +64,8 @@
       </div>
     </section>
 
-    <script src="{{.AdminPath}}/js/common.js?v=20260914-ops1"></script>
-    <script src="{{.AdminPath}}/js/logs.js?v=20260914-ops1"></script>
+    <script src="{{.AdminPath}}/js/common.js?v=20260914-ops4"></script>
+    <script src="{{.AdminPath}}/js/logs.js?v=20260914-ops4"></script>
   </main>
 </body>
 

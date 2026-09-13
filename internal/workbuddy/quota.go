@@ -2,7 +2,6 @@ package workbuddy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,14 +29,6 @@ const (
 	// billingWindowDays bounds the package end-time filter.
 	billingWindowDays = 365 * 101
 )
-
-// MeterWindow is one metered allowance window.
-type MeterWindow struct {
-	Limit     float64
-	Remaining float64
-	Used      float64
-	ResetAt   time.Time
-}
 
 // Quota is the account's credit state as reported by the meter.
 type Quota struct {
@@ -251,9 +242,6 @@ func ApplyQuota(acc *store.Account, quota *Quota) {
 		acc.QuotaResetAt = quota.ResetAt
 	}
 }
-
-// ErrQuotaUnavailable marks a quota read that the upstream refused.
-var ErrQuotaUnavailable = errors.New("workbuddy quota is unavailable")
 
 // VisibleUsed returns the credit consumption the operator can see: whole credits
 // removed from the cycle allowance (the upstream also counts fractional credits).

@@ -45,7 +45,6 @@ type ContentBlock struct {
 	ToolUseID    string        `json:"tool_use_id,omitempty"`
 	Content      interface{}   `json:"content,omitempty"`
 	IsError      bool          `json:"is_error,omitempty"`
-	HasInput     bool          `json:"has_input,omitempty"`
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 

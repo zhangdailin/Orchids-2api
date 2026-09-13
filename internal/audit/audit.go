@@ -36,16 +36,13 @@ type Event struct {
 	Action    string `json:"action"`
 	// Actor is the operator or credential that caused a management change. It is
 	// empty for inference traffic, which is identified by APIKeyID instead.
-	Actor     string `json:"actor,omitempty"`
-	APIKeyID  int64  `json:"api_key_id,omitempty"`
-	AccountID int64  `json:"account_id,omitempty"`
-	Model     string `json:"model,omitempty"`
-	Channel   string `json:"channel,omitempty"`
-	Provider  string `json:"provider,omitempty"`
-	Attempt   int    `json:"attempt,omitempty"`
-	// UpstreamAttempts counts how many upstream tries one client request took.
-	// A retry that succeeded is not a failed user request.
-	UpstreamAttempts  int    `json:"upstream_attempts,omitempty"`
+	Actor             string `json:"actor,omitempty"`
+	APIKeyID          int64  `json:"api_key_id,omitempty"`
+	AccountID         int64  `json:"account_id,omitempty"`
+	Model             string `json:"model,omitempty"`
+	Channel           string `json:"channel,omitempty"`
+	Provider          string `json:"provider,omitempty"`
+	Attempt           int    `json:"attempt,omitempty"`
 	InputTokens       int    `json:"input_tokens,omitempty"`
 	OutputTokens      int    `json:"output_tokens,omitempty"`
 	CachedInputTokens int    `json:"cached_input_tokens,omitempty"`
@@ -53,9 +50,6 @@ type Event struct {
 	ClientIP          string `json:"client_ip,omitempty"`
 	UserAgent         string `json:"user_agent,omitempty"`
 	Duration          int64  `json:"duration_ms,omitempty"`
-	// FirstTokenMS is time-to-first-token. It is kept apart from Duration so a
-	// slow prefill is distinguishable from slow generation.
-	FirstTokenMS int64 `json:"first_token_ms,omitempty"`
 	// Target names the object a management change touched (account id, key id).
 	Target  string `json:"target,omitempty"`
 	Status  string `json:"status"`

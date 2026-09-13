@@ -1,3 +1,5 @@
+//go:build live
+
 package live
 
 // Live end-to-end verification against the real WorkBuddy international

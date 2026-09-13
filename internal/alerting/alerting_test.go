@@ -341,3 +341,55 @@ func TestEvaluate_FailureFloorDoesNotReleaseAFiringAlert(t *testing.T) {
 		t.Fatalf("a held alert cleared although the rate had not recovered: %+v", transition.Recovered)
 	}
 }
+
+// TestEngine_ThresholdsExposesTheRules is what lets the operations page state the
+// target a success rate is measured against: the rules are an unexported field,
+// so without this accessor the UI could never explain its own percentage.
+func TestEngine_ThresholdsExposesTheRules(t *testing.T) {
+	engine := NewEngine(DefaultRules(), nil)
+	if got := engine.Thresholds(); got.SuccessRateWarning != 0.9 || got.SuccessRateCritical != 0.5 {
+		t.Fatalf("Thresholds() = %+v, want the shipped 0.9/0.5", got)
+	}
+
+	// A custom policy must be visible too, otherwise the page would always show
+	// the default while alerts fire on something else.
+	custom := DefaultRules()
+	custom.SuccessRateWarning = 0.75
+	if got := NewEngine(custom, nil).Thresholds().SuccessRateWarning; got != 0.75 {
+		t.Fatalf("custom SuccessRateWarning = %v, want 0.75", got)
+	}
+}
+
+// TestEngine_ThresholdsOnNilEngineFallsBackToDefaults keeps the nil-safe callers
+// (Firing() is nil-safe, and HandleOpsOverview reads thresholds before it knows
+// whether an engine exists) from panicking, and from publishing a 0 that the page
+// would render as "目标 0.0%".
+func TestEngine_ThresholdsOnNilEngineFallsBackToDefaults(t *testing.T) {
+	var engine *Engine
+	if got := engine.Thresholds(); got != DefaultRules() {
+		t.Fatalf("nil engine Thresholds() = %+v, want DefaultRules() %+v", got, DefaultRules())
+	}
+}
+
+// TestEngine_ThresholdsIsSafeUnderConcurrency pins the semaphore use: Thresholds()
+// must hand the token back, so a reader running alongside a rule reader still
+// makes progress instead of deadlocking the next Evaluate.
+func TestEngine_ThresholdsIsSafeUnderConcurrency(t *testing.T) {
+	engine := NewEngine(DefaultRules(), nil)
+	done := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < 50; j++ {
+				if got := engine.Thresholds().SuccessRateWarning; got != 0.9 {
+					t.Errorf("Thresholds() = %v, want 0.9", got)
+					return
+				}
+				engine.Firing()
+			}
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		<-done
+	}
+}

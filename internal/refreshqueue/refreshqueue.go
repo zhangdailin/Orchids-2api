@@ -19,14 +19,8 @@ import (
 type Task struct {
 	// AccountID is the key that deduplicates work.
 	AccountID int64
-	// Channel names the provider the refresh belongs to (grok, warp, ...). It is
-	// informational: lease identity stays the account.
-	Channel string
 	// Due explains why the task is scheduled, for logs and tests.
 	Due time.Duration
-	// Stale reports whether a verdict is already needed (never verified) rather
-	// than merely expired.
-	Stale bool
 	// Payload carries the caller's account object through the queue.
 	Payload interface{}
 }

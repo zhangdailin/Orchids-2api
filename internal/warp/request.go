@@ -17,6 +17,7 @@ import (
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/toolname"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 type InputTokenEstimate struct {
@@ -908,11 +909,11 @@ func compactWarpSchemaForTool(name string, schema map[string]interface{}) map[st
 		return nil
 	}
 	cleaned = filtered
-	if warpSchemaJSONLen(cleaned) <= maxWarpToolSchemaJSONLen {
+	if util.SchemaJSONLen(cleaned) <= maxWarpToolSchemaJSONLen {
 		return cleaned
 	}
 	stripped := cleanWarpSchema(cleaned, false)
-	if warpSchemaJSONLen(stripped) <= maxWarpToolSchemaJSONLen {
+	if util.SchemaJSONLen(stripped) <= maxWarpToolSchemaJSONLen {
 		return stripped
 	}
 	return map[string]interface{}{
@@ -1005,15 +1006,4 @@ func cleanWarpSchemaValue(value interface{}, keepDescriptions bool) interface{} 
 	default:
 		return value
 	}
-}
-
-func warpSchemaJSONLen(schema map[string]interface{}) int {
-	if schema == nil {
-		return 0
-	}
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		return 0
-	}
-	return len(raw)
 }

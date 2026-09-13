@@ -35,7 +35,6 @@ func (e *AppError) WriteResponse(w http.ResponseWriter) {
 // 预定义错误码
 const (
 	CodeInvalidRequest = "invalid_request_error"
-	CodeOverloaded     = "overloaded_error"
 )
 
 // New 创建新的应用错误

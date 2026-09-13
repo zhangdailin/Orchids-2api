@@ -6,7 +6,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-3">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260328-4">
 </head>
 
 <body>
@@ -18,11 +18,11 @@
       <p id="pageSubtitle">统一维护渠道账号、状态和可用性，快速完成导出、清理和批量操作。</p>
     </section>
 
-    <section class="stats-grid" id="statsGrid">
+    <section class="stats-grid" id="statsGrid" data-loading="true">
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">总账号数</span>
-          <span class="value" id="totalAccounts">0</span>
+          <span class="value" id="totalAccounts">—</span>
         </div>
         <div class="stat-icon total" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -31,7 +31,7 @@
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">状态正常</span>
-          <span class="value metric-positive" id="enabledAccounts">0</span>
+          <span class="value metric-positive" id="enabledAccounts">—</span>
         </div>
         <div class="stat-icon normal" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
@@ -40,7 +40,7 @@
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">状态异常</span>
-          <span class="value metric-negative" id="disabledAccounts">0</span>
+          <span class="value metric-negative" id="disabledAccounts">—</span>
         </div>
         <div class="stat-icon abnormal" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
@@ -49,7 +49,7 @@
       <div class="stat-card">
         <div class="stat-info">
           <span class="label">已选中</span>
-          <span class="value metric-accent" id="selectedCount">0</span>
+          <span class="value metric-accent" id="selectedCount">—</span>
         </div>
         <div class="stat-icon selected" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
@@ -63,7 +63,7 @@
 
         <div class="toolbar-actions toolbar-actions-spread">
           <div class="inline-actions">
-            <button class="btn btn-outline" onclick="exportAccounts()" title="不包含 Warp 登录会话；迁移后请重新进行官方网页登录">导出（不含 Warp）</button>
+            <button class="btn btn-outline" onclick="exportAccounts()" title="导出账号；不包含 Warp 登录会话，迁移后请重新进行官方网页登录">导出</button>
           </div>
           <div class="toolbar-divider"></div>
           <div class="inline-actions">
@@ -76,15 +76,16 @@
 
       <div class="content-card">
         <div id="accountsList">
-          <div class="empty-state empty-state-panel">
-            <span class="empty-state-mark">AC</span>
-            <p>暂无账号数据</p>
+          <div class="empty-state empty-state-panel empty-state-loading">
+            <span class="empty-state-mark">…</span>
+            <p>正在加载账号…</p>
+            <p class="empty-state-hint">首次加载可能需要几秒</p>
           </div>
         </div>
       </div>
 
       <div class="pagination-shell">
-        <div id="paginationInfo" class="pagination-info">共 0 条记录，第 1/1 页</div>
+        <div id="paginationInfo" class="pagination-info">正在加载…</div>
         <div class="inline-actions">
           <select class="form-input compact-select" onchange="updatePageSize(this.value)">
             <option value="20">20 条/页</option>
@@ -112,7 +113,7 @@
   <script src="{{.AdminPath}}/js/common.js?v=20260914-warpfp1"></script>
   <script src="{{.AdminPath}}/js/puter-auth.js?v=20260908-1"></script>
   <script src="{{.AdminPath}}/js/workbuddy-auth.js?v=20260914-warpfp1"></script>
-  <script src="{{.AdminPath}}/js/accounts.js?v=20260914-warpfp1"></script>
+  <script src="{{.AdminPath}}/js/accounts.js?v=20260914-ui2"></script>
 </body>
 
 </html>

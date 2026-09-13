@@ -8,6 +8,7 @@ import (
 
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 // ChatMessage is one OpenAI-shaped message in the WorkBuddy payload.
@@ -128,7 +129,7 @@ func convertAssistantMessage(msg prompt.Message) (ChatMessage, bool) {
 				Type: "function",
 				Function: ToolCallFunction{
 					Name:      name,
-					Arguments: compactToolInput(block.Input),
+					Arguments: util.CompactToolInput(block.Input),
 				},
 			})
 		}
@@ -196,17 +197,6 @@ func stringifyToolResult(value interface{}) string {
 	}
 }
 
-func compactToolInput(value interface{}) string {
-	if value == nil {
-		return "{}"
-	}
-	raw, err := json.Marshal(value)
-	if err != nil || len(raw) == 0 || string(raw) == "null" {
-		return "{}"
-	}
-	return string(raw)
-}
-
 // normalizeToolDefinitions accepts both OpenAI (`{"type":"function","function":{...}}`)
 // and Anthropic (`{"name":...,"input_schema":...}`) tool declarations.
 func normalizeToolDefinitions(tools []interface{}) []interface{} {
@@ -221,14 +211,14 @@ func normalizeToolDefinitions(tools []interface{}) []interface{} {
 			continue
 		}
 		if fn, ok := decoded["function"].(map[string]interface{}); ok {
-			if strings.TrimSpace(stringValue(fn["name"])) == "" {
+			if strings.TrimSpace(util.StringValue(fn["name"])) == "" {
 				continue
 			}
 			decoded["type"] = "function"
 			out = append(out, decoded)
 			continue
 		}
-		name := strings.TrimSpace(stringValue(decoded["name"]))
+		name := strings.TrimSpace(util.StringValue(decoded["name"]))
 		if name == "" {
 			continue
 		}
@@ -240,20 +230,10 @@ func normalizeToolDefinitions(tools []interface{}) []interface{} {
 			"type": "function",
 			"function": map[string]interface{}{
 				"name":        name,
-				"description": stringValue(decoded["description"]),
+				"description": util.StringValue(decoded["description"]),
 				"parameters":  parameters,
 			},
 		})
 	}
 	return out
-}
-
-func stringValue(value interface{}) string {
-	if value == nil {
-		return ""
-	}
-	if text, ok := value.(string); ok {
-		return text
-	}
-	return fmt.Sprint(value)
 }

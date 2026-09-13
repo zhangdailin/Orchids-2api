@@ -694,7 +694,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			}
 			delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, 0, 0)
 			lastDelay = delay
-			if !sleepWithContext(ctx, delay) {
+			if !util.SleepWithContext(ctx, delay) {
 				return nil, ctx.Err()
 			}
 			continue
@@ -728,7 +728,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 				retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 				delay := backoffDelay(baseDelay, retry429Delay, lastDelay, attempt, lastStatus, retryAfter)
 				lastDelay = delay
-				if !sleepWithContext(ctx, delay) {
+				if !util.SleepWithContext(ctx, delay) {
 					return nil, ctx.Err()
 				}
 				continue

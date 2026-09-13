@@ -8,6 +8,7 @@ import (
 
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/toolname"
+	"orchids-api/internal/util"
 )
 
 const (
@@ -290,7 +291,7 @@ func compactIncomingToolSchema(toolName string, schema map[string]interface{}) m
 	}
 	stripped := stripSchemaDescriptions(cleaned)
 	filtered := filterIncomingToolSchema(toolName, stripped)
-	if schemaJSONLen(filtered) <= maxCompactToolSchemaJSONLen {
+	if util.SchemaJSONLen(filtered) <= maxCompactToolSchemaJSONLen {
 		return filtered
 	}
 	return map[string]interface{}{
@@ -400,17 +401,6 @@ func stripSchemaDescriptionsValue(value interface{}) interface{} {
 	default:
 		return value
 	}
-}
-
-func schemaJSONLen(schema map[string]interface{}) int {
-	if schema == nil {
-		return 0
-	}
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		return 0
-	}
-	return len(raw)
 }
 
 func cleanJSONSchemaProperties(schema map[string]interface{}) map[string]interface{} {

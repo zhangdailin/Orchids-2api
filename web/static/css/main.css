@@ -3889,3 +3889,225 @@ textarea.form-input {
     grid-template-columns: 1fr;
   }
 }
+
+/* =========================================
+   12. Account management: responsive fixes
+   -----------------------------------------
+   Appended last on purpose: the stylesheet carries three stacked :root themes
+   and several competing .stats-grid / table rules, so this block is the single
+   place that decides the account page layout. Everything here is scoped to the
+   account page's own selectors, except for a few conservative typography
+   tweaks that only touch font size and colour.
+   ========================================= */
+
+/* A. The four stat cards must never fall into a 3 + 1 orphan: four across when
+   there is room, a neat 2x2 below that. The old auto-fit/minmax(240px) rule
+   produced exactly the three-columns-and-a-gap layout that was reported. */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 1120px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Cards are bulkier than the number they carry; trim the box, not the digits. */
+.stat-card {
+  min-height: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  gap: 10px;
+}
+
+.stat-info {
+  gap: 6px;
+  min-width: 0;
+}
+
+.stat-info .label {
+  font-size: 0.76rem;
+  color: #5b6472;
+}
+
+.stat-info .value {
+  font-size: 1.5rem;
+  line-height: 1.15;
+}
+
+.stat-icon {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+}
+
+/* While /api/accounts is in flight the numbers read "—"; a dimmed card says
+   "not loaded yet" without needing extra copy. */
+.stats-grid[data-loading="true"] .stat-info .value {
+  color: #9aa1ad;
+}
+
+/* B. One filter row, one action row, and the action row never wraps into two. */
+.toolbar-compact {
+  padding: 10px 12px;
+  gap: 10px;
+}
+
+@media (max-width: 1120px) {
+  .filter-tabs {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 6px;
+    scrollbar-width: none;
+  }
+
+  .filter-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .filter-tabs .tab-item {
+    flex: 0 0 auto;
+    min-width: 0;
+    height: 28px;
+    padding: 0 11px;
+    font-size: 0.74rem;
+  }
+
+  /* The action group scrolls instead of wrapping: a second row of buttons was
+     what made the toolbar look twice as tall as it needed to be. */
+  .toolbar-actions-spread {
+    width: 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    justify-content: flex-start;
+    gap: 8px;
+    scrollbar-width: none;
+  }
+
+  .toolbar-actions-spread::-webkit-scrollbar {
+    display: none;
+  }
+
+  .toolbar-actions-spread > * {
+    flex: 0 0 auto;
+  }
+
+  .toolbar-actions-spread .btn,
+  .inline-actions .btn {
+    min-height: 30px;
+    padding: 0 12px;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+
+  /* A 1px divider between button groups only bought whitespace on narrow
+     screens. */
+  .toolbar-divider {
+    display: none;
+  }
+}
+
+.inline-actions {
+  gap: 6px;
+}
+
+/* C. The table no longer needs a horizontal scrollbar to reach 操作: drop the
+   hard min-width, tighten the cells and drop the three columns that carry the
+   least weight at this width. */
+.accounts-table {
+  min-width: 0 !important;
+  table-layout: fixed;
+}
+
+.accounts-table th,
+.accounts-table td {
+  padding: 9px 8px;
+  font-size: 0.8rem;
+}
+
+.accounts-table .col-token .token-text {
+  max-width: 100%;
+  font-size: 0.76rem;
+}
+
+@media (max-width: 1120px) {
+  /* Columns: 1 checkbox, 2 ID, 3 account, 4 tier, 5 quota, 6 status,
+     7 calls, 8 last used, 9 actions. ID, calls and last used are the
+     expendable three; they are all still present in the detail modal. */
+  .accounts-table thead th:nth-child(2),
+  .accounts-table tbody td:nth-child(2),
+  .accounts-table thead th:nth-child(7),
+  .accounts-table tbody td:nth-child(7),
+  .accounts-table thead th:nth-child(8),
+  .accounts-table tbody td:nth-child(8) {
+    display: none;
+  }
+
+  .accounts-table th,
+  .accounts-table td {
+    padding: 8px 6px;
+    font-size: 0.78rem;
+  }
+}
+
+/* The action column is the one the report called out: keep the three buttons
+   on one line and stop the cell from being the thing that overflows. */
+.accounts-table td:last-child,
+.accounts-table th:last-child {
+  width: 124px;
+  white-space: nowrap;
+}
+
+.accounts-table td:last-child > * {
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+
+.accounts-table .action-icon {
+  min-width: 24px;
+  padding: 0 3px;
+  font-size: 0.62rem;
+}
+
+/* D. Readability: the helper copy was too light and too small to scan. */
+th {
+  font-size: 0.74rem;
+  color: #5b6472;
+  white-space: nowrap;
+}
+
+td {
+  font-size: 0.84rem;
+}
+
+.pagination-shell {
+  color: #5b6472;
+  font-size: 0.8rem;
+}
+
+.pagination-info {
+  font-size: 0.8rem;
+  color: #5b6472;
+}
+
+.empty-state-panel {
+  min-height: 180px;
+  padding: 20px;
+  gap: 6px;
+}
+
+.empty-state-hint {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.empty-state-loading,
+.empty-state-error {
+  color: #6b7280;
+}

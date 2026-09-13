@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -17,34 +15,17 @@ type PromptCache interface {
 }
 
 type MemoryPromptCache struct {
-	mu          sync.RWMutex
-	ttl         time.Duration
-	maxEntries  int
-	items       map[string]promptCacheItem
-	sizeBytes   int64
-	done        chan struct{}
-	accessCount atomic.Uint64
+	memoryStore[promptCacheItem]
+	done chan struct{}
 }
 
-type promptCacheItem struct {
-	expiresAt  time.Time
-	accessedAt time.Time
-	size       int64
-}
+// promptCacheItem carries no payload: presence in the map is the cached signal.
+type promptCacheItem struct{}
 
 func NewMemoryPromptCache(ttl time.Duration, maxEntries ...int) *MemoryPromptCache {
-	if ttl < 0 {
-		ttl = 0
-	}
-	limit := 0
-	if len(maxEntries) > 0 && maxEntries[0] > 0 {
-		limit = maxEntries[0]
-	}
 	c := &MemoryPromptCache{
-		ttl:        ttl,
-		maxEntries: limit,
-		items:      make(map[string]promptCacheItem),
-		done:       make(chan struct{}),
+		memoryStore: newMemoryStore[promptCacheItem](ttl, maxEntries...),
+		done:        make(chan struct{}),
 	}
 	go c.cleanupLoop()
 	return c
@@ -65,6 +46,18 @@ func (c *MemoryPromptCache) cleanupLoop() {
 	}
 }
 
+// Close 停止后台清理 goroutine
+func (c *MemoryPromptCache) Close() {
+	if c == nil {
+		return
+	}
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+}
+
 func (c *MemoryPromptCache) SetTTL(ttl time.Duration) {
 	if c == nil {
 		return
@@ -72,13 +65,7 @@ func (c *MemoryPromptCache) SetTTL(ttl time.Duration) {
 	if ttl < 0 {
 		ttl = 0
 	}
-	c.mu.Lock()
-	if c.ttl != ttl {
-		c.ttl = ttl
-		c.items = make(map[string]promptCacheItem)
-		c.sizeBytes = 0
-	}
-	c.mu.Unlock()
+	c.setTTL(ttl)
 }
 
 func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, toolsTokens int, systemText, toolsText string) (readTokens int, creationTokens int) {
@@ -106,14 +93,7 @@ func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, tool
 		item, ok := c.items[key]
 		if ok && (c.ttl == 0 || item.expiresAt.IsZero() || !now.After(item.expiresAt)) {
 			c.mu.RUnlock()
-			if c.accessCount.Add(1)%8 == 0 {
-				c.mu.Lock()
-				if it, ok := c.items[key]; ok {
-					it.accessedAt = time.Now()
-					c.items[key] = it
-				}
-				c.mu.Unlock()
-			}
+			c.touch(key)
 			return tokens, 0
 		}
 		c.mu.RUnlock()
@@ -126,7 +106,7 @@ func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, tool
 		} else if c.maxEntries > 0 && len(c.items) >= c.maxEntries {
 			c.evictLRULocked()
 		}
-		c.items[key] = promptCacheItem{
+		c.items[key] = memoryItem[promptCacheItem]{
 			expiresAt:  expiresAt,
 			accessedAt: now,
 			size:       size,
@@ -170,32 +150,11 @@ func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, tool
 	return readTokens, creationTokens
 }
 
-func (c *MemoryPromptCache) evictLRULocked() {
-	var lruKey string
-	var lruTime time.Time
-	first := true
-	for k, item := range c.items {
-		if first || item.accessedAt.Before(lruTime) {
-			lruKey = k
-			lruTime = item.accessedAt
-			first = false
-		}
-	}
-	if !first {
-		c.sizeBytes -= c.items[lruKey].size
-		delete(c.items, lruKey)
-	}
-}
-
 func (c *MemoryPromptCache) GetStats(ctx context.Context) (int64, int64, error) {
 	if c == nil {
 		return 0, 0, nil
 	}
-	c.mu.Lock()
-	c.pruneExpiredLocked(time.Now())
-	count := int64(len(c.items))
-	size := c.sizeBytes
-	c.mu.Unlock()
+	count, size := c.stats()
 	return count, size, nil
 }
 
@@ -203,21 +162,6 @@ func (c *MemoryPromptCache) Clear(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
-	c.mu.Lock()
-	c.items = make(map[string]promptCacheItem)
-	c.sizeBytes = 0
-	c.mu.Unlock()
+	c.clear()
 	return nil
-}
-
-func (c *MemoryPromptCache) pruneExpiredLocked(now time.Time) {
-	if c.ttl <= 0 {
-		return
-	}
-	for key, item := range c.items {
-		if !item.expiresAt.IsZero() && now.After(item.expiresAt) {
-			c.sizeBytes -= item.size
-			delete(c.items, key)
-		}
-	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
+	"orchids-api/internal/util"
 )
 
 func (h *Handler) consoleURL(path string) string {
@@ -494,7 +495,7 @@ func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountS
 		}
 
 		sess.Close()
-		if !sleepWithContext(ctx, switchPace) {
+		if !util.SleepWithContext(ctx, switchPace) {
 			return nil, ctx.Err()
 		}
 		next, switchErr := openNext(used)

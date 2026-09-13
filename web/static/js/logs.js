@@ -68,6 +68,7 @@
       tr.dataset.index = String(start + index);
 
       const time = document.createElement('td');
+      time.className = 'logs-time';
       time.textContent = formatTime(event.timestamp);
       tr.appendChild(time);
 
@@ -86,10 +87,12 @@
       tr.appendChild(target);
 
       const status = document.createElement('td');
+      status.className = 'logs-status';
       status.appendChild(statusBadge(event.status));
       tr.appendChild(status);
 
       const duration = document.createElement('td');
+      duration.className = 'logs-duration';
       duration.textContent = event.duration_ms ? event.duration_ms + ' ms' : '—';
       tr.appendChild(duration);
 

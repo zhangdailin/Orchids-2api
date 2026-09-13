@@ -194,9 +194,7 @@ func planGrokRefreshCycle(candidates []grokRefreshCandidate) []grokRefreshCandid
 		due := grokRefreshDue(acc, now)
 		tasks = append(tasks, refreshqueue.Task{
 			AccountID: acc.ID,
-			Channel:   "grok",
 			Due:       due,
-			Stale:     acc.VerifiedAt.IsZero(),
 			Payload:   candidate,
 		})
 	}

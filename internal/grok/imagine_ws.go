@@ -24,13 +24,11 @@ const (
 )
 
 type imagineWSEvent struct {
-	Type     string
-	ImageID  string
-	URL      string
-	Blob     string
-	Progress int
-	Final    bool
-	Error    string
+	Type    string
+	ImageID string
+	URL     string
+	Blob    string
+	Final   bool
 }
 
 type imagineWSSlot struct {
@@ -204,7 +202,7 @@ func (h *Handler) runImagineWSImages(ctx context.Context, sess *chatAccountSessi
 		if collected >= n {
 			return nil
 		}
-		if !sleepWithContext(ctx, imagineWSInterRoundPause) {
+		if !util.SleepWithContext(ctx, imagineWSInterRoundPause) {
 			return ctx.Err()
 		}
 	}
@@ -276,7 +274,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 					progress: 10,
 				}
 				slots[imageID] = slot
-				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID, Progress: slot.progress}) {
+				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID}) {
 					return finals, ctx.Err()
 				}
 			case "completed":
@@ -311,7 +309,7 @@ func runImagineWSRound(ctx context.Context, conn *websocket.Conn, prompt, aspect
 			progress := min(max(interfaceToInt(msg["percentage_complete"]), 10), 99)
 			if progress > slot.progress {
 				slot.progress = progress
-				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID, URL: slot.lastURL, Blob: slot.lastBlob, Progress: slot.progress}) {
+				if !sendImagineEvent(ctx, events, imagineWSEvent{Type: "progress", ImageID: imageID, URL: slot.lastURL, Blob: slot.lastBlob}) {
 					return finals, ctx.Err()
 				}
 			}

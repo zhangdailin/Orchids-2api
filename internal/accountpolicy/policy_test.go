@@ -142,6 +142,7 @@ func TestAccountLifecycle(t *testing.T) {
 
 	rejected := grokSSO()
 	Classify(rejected, errors.New("401: grok session unauthenticated"), "").Apply(rejected)
+	now = rejected.VerifiedAt
 	if !AccountHeld(rejected, now) {
 		t.Fatal("a freshly rejected credential must hold the account")
 	}

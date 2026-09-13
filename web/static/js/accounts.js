@@ -10,6 +10,11 @@ let currentPlatform = '';
 let accountHealth = {};
 let pageSize = 20;
 let currentPage = 1;
+// 是否已从 /api/accounts 拿到过结果。false 时 UI 必须显示加载态占位，
+// 不能显示 0 / "暂无账号数据"，否则会被误读成数据丢失。
+let accountsLoaded = false;
+// 最近一次加载是否失败（用于渲染可重试的错误态）。
+let accountsLoadError = false;
 
 // DOM 缓存
 const domCache = {
@@ -28,6 +33,9 @@ function initDOMCache() {
 
 // Load accounts from API
 async function loadAccounts() {
+  accountsLoaded = false;
+  accountsLoadError = false;
+  setStatsLoading(true);
   try {
     const res = await fetch("/api/accounts");
     if (res.status === 401) {
@@ -42,13 +50,35 @@ async function loadAccounts() {
     ));
     sortAccounts();
     renderPlatformTabs();
+    accountsLoaded = true;
+    accountsLoadError = false;
+    setStatsLoading(false);
     renderAccounts();
     updateStats();
     // Fire-and-forget: the table renders immediately, refreshed rows stream in.
     autoSyncStaleAccounts();
   } catch (err) {
     console.error("Failed to load accounts:", err);
+    accountsLoaded = true;
+    accountsLoadError = true;
+    setStatsLoading(false);
+    updateStats();
+    renderAccounts();
     showToast("加载账号失败", "error");
+  }
+}
+
+function setStatText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+// setStatsLoading toggles #statsGrid[data-loading] so CSS can render a skeleton
+// while the first request is in flight.
+function setStatsLoading(loading) {
+  const grid = document.getElementById("statsGrid");
+  if (grid && typeof grid.setAttribute === "function") {
+    grid.setAttribute("data-loading", loading ? "true" : "false");
   }
 }
 
@@ -247,58 +277,66 @@ function buildNSFWBadgeMarkup(acc) {
 }
 
 function applyTokenLabels(type) {
+  const normalized = String(type || "").trim().toLowerCase();
   const label = document.getElementById("tokenLabel");
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
   const accountId = String(document.getElementById("accountId")?.value || "");
   const puterWebLoginGroup = document.getElementById("puterWebLoginGroup");
-  if (puterWebLoginGroup) puterWebLoginGroup.hidden = type !== "puter" || Boolean(accountId);
+  if (puterWebLoginGroup) puterWebLoginGroup.hidden = normalized !== "puter" || Boolean(accountId);
   // WorkBuddy login stays available while editing so an expired authorization can
   // be renewed by signing in again instead of deleting the account.
   const workbuddyLoginGroup = document.getElementById("workbuddyLoginGroup");
-  if (workbuddyLoginGroup) workbuddyLoginGroup.hidden = type !== "workbuddy";
+  if (workbuddyLoginGroup) workbuddyLoginGroup.hidden = normalized !== "workbuddy";
   const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
   if (warpDeviceLoginGroup) {
-    warpDeviceLoginGroup.hidden = type !== "warp" || Boolean(accountId);
+    warpDeviceLoginGroup.hidden = normalized !== "warp" || Boolean(accountId);
   }
   const saveButton = document.querySelector('#accountForm button[type="submit"]');
   if (saveButton) {
     // Warp and WorkBuddy are created by their official login flows, so the form
     // has nothing to submit for a new account of either type.
-    saveButton.hidden = (type === "warp" || type === "workbuddy") && !accountId;
+    saveButton.hidden = (normalized === "warp" || normalized === "workbuddy") && !accountId;
   }
-  applyCredentialModeUI(type);
+  applyCredentialModeUI(normalized);
   if (!label || !input || !hint) return;
-  if (type === 'warp') {
-    input.value = "";
-    input.required = false;
-  } else if (type === 'workbuddy') {
+  // `required` is the single source of truth for "this channel owns a manual
+  // credential field": applyCredentialModeUI clears it for Warp, WorkBuddy and
+  // Grok OAuth. Those channels must not keep a value typed for another channel.
+  if (!input.required) input.value = "";
+  // Every branch writes label / placeholder / hint. A branch that only cleared
+  // the value (the historical Warp case) left whatever the previous render wrote
+  // in place, so opening Warp right after Grok kept showing "SSO Token" and
+  // "支持批量添加 Grok…" under the 官方 Warp 登录 button.
+  if (normalized === "warp") {
+    label.textContent = "Warp 登录会话";
+    input.placeholder = "";
+    hint.textContent = accountId
+      ? "Warp 凭据由官方登录维护，这里不显示也不接受手填"
+      : "该渠道只支持官方登录，请使用下方「使用 Warp 官方网页登录」";
+  } else if (normalized === "workbuddy") {
     // OAuth-only channel: no manual credential field is exposed.
-    input.value = "";
-    input.required = false;
     label.textContent = "WorkBuddy 凭证";
     input.placeholder = "";
     hint.textContent = "该渠道只支持官方登录";
-  } else if (type === 'grok') {
+  } else if (normalized === "grok") {
     label.textContent = "SSO Token";
     input.placeholder = "每行一个 sso token（或包含 sso= 的 Cookie）";
     hint.textContent = accountId
       ? "编辑时仅保存第一行 SSO Token"
       : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
-  } else if (type === 'puter') {
-      label.textContent = "Auth Token";
-      input.placeholder = "每行一个 Puter auth_token";
-      hint.textContent = accountId
-        ? "Puter 编辑时仅保存第一行 auth_token。可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取"
-        : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
-      input.required = true;
-    } else {
+  } else if (normalized === "puter") {
+    label.textContent = "Auth Token";
+    input.placeholder = "每行一个 Puter auth_token";
+    hint.textContent = accountId
+      ? "Puter 编辑时仅保存第一行 auth_token。可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取"
+      : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
+  } else {
     label.textContent = "Cookie / __client / __session";
     input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
     hint.textContent = accountId
       ? "支持直接粘贴 "
       : "支持原始 __client、完整 Cookie Header 或 Cookie JSON；推荐同时带上 __client_uat 以提高补全成功率";
-    input.required = true;
   }
 }
 
@@ -510,13 +548,16 @@ function applyCredentialModeUI(type) {
   const modeGroup = document.getElementById("credentialModeGroup");
   const modeSelect = document.getElementById("credentialType");
   if (!modeGroup || !modeSelect) return;
-  const isGrok = String(type || "").trim().toLowerCase() === "grok";
+  const normalizedType = String(type || "").trim().toLowerCase();
+  const isGrok = normalizedType === "grok";
+  const isWarp = normalizedType === "warp";
+  const isWorkBuddy = normalizedType === "workbuddy";
   modeGroup.hidden = !isGrok;
   const mode = String(modeSelect?.value || "sso").trim().toLowerCase();
   const isOAuth = isGrok && mode === "oauth";
   // The credential textarea is hidden for the channels that only accept official
   // login (Warp) and for WorkBuddy, which is OAuth-only by product decision.
-  const showToken = type !== "warp" && type !== "workbuddy" && !isOAuth;
+  const showToken = !isWarp && !isWorkBuddy && !isOAuth;
   const providerGroup = document.getElementById("grokProviderGroup");
   if (providerGroup) providerGroup.hidden = true;
   document.getElementById("ssoCredentialGroup").hidden = !showToken;
@@ -1165,15 +1206,54 @@ function renderAccounts() {
     empty.className = "empty-state empty-state-panel";
     const icon = document.createElement("span");
     icon.className = "empty-state-mark";
-    icon.textContent = "EMPTY";
     const text = document.createElement("p");
-    text.textContent = `暂无 ${currentPlatform ? currentPlatform : ''} 账号数据`;
+    const hint = document.createElement("p");
+    hint.className = "empty-state-hint";
+    const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
+
+    if (!accountsLoaded) {
+      // 数据还没到：必须是加载态，绝不能显示 "0 / 暂无账号"。
+      icon.textContent = "…";
+      text.textContent = "正在加载账号…";
+      hint.textContent = "首次加载可能需要几秒";
+      paginationInfo.textContent = "正在加载…";
+      empty.classList.add("empty-state-loading");
+    } else if (accountsLoadError) {
+      icon.textContent = "!";
+      text.textContent = "账号加载失败";
+      hint.textContent = "数据未加载成功，请检查网络或服务状态后重试（不是账号被清空）";
+      paginationInfo.textContent = "加载失败，请重试";
+      empty.classList.add("empty-state-error");
+      const retry = document.createElement("button");
+      retry.className = "btn btn-outline";
+      retry.type = "button";
+      retry.textContent = "重试";
+      retry.style.marginTop = "10px";
+      retry.addEventListener("click", () => loadAccounts());
+      empty.appendChild(icon);
+      empty.appendChild(text);
+      empty.appendChild(hint);
+      empty.appendChild(retry);
+      container.appendChild(empty);
+      renderPagination(1, 1);
+      updateSelectedCount();
+      return;
+    } else {
+      // 已加载且确实为空：这是真实空态，要说清是"当前筛选条件下"。
+      icon.textContent = "EMPTY";
+      text.textContent = currentPlatform
+        ? `当前筛选条件（${currentPlatform}）下没有账号`
+        : "当前筛选条件下没有账号";
+      hint.textContent = "账号已加载完成，可切换筛选条件或添加账号";
+      paginationInfo.textContent = "共 0 条记录，第 1/1 页（当前筛选条件下没有账号）";
+    }
+
     empty.appendChild(icon);
     empty.appendChild(text);
+    empty.appendChild(hint);
     container.appendChild(empty);
-    const paginationInfo = domCache.paginationInfo || document.getElementById("paginationInfo");
-    paginationInfo.textContent = `共 0 条记录，第 1/1 页`;
     renderPagination(1, 1);
+    updateSelectedCount();
     return;
   }
 
@@ -1322,10 +1402,15 @@ function renderAccounts() {
 
     const tdActions = document.createElement("td");
     tdActions.style.textAlign = "right";
+    tdActions.style.whiteSpace = "nowrap";
     const actionWrap = document.createElement("div");
     actionWrap.style.display = "flex";
     actionWrap.style.justifyContent = "flex-end";
-    actionWrap.style.gap = "12px";
+    actionWrap.style.alignItems = "center";
+    // 三个操作按钮必须留在同一行内，不换行、不溢出，避免窄屏要横向滚动。
+    actionWrap.style.gap = "6px";
+    actionWrap.style.flexWrap = "nowrap";
+    actionWrap.style.whiteSpace = "nowrap";
 
     const edit = document.createElement("i");
     edit.className = "action-icon";
@@ -1638,6 +1723,19 @@ function updateStats() {
   const abnormal = accounts.filter(isAccountAbnormal).length;
   const normal = Math.max(0, total - abnormal);
 
+  // 未拿到数据时写占位符而不是 0，避免"先看到 0 再变成 15"被读成数据丢失。
+  const placeholder = "—";
+  // 未加载成功（首次加载中，或请求失败）时写占位符而不是 0。
+  if (!accountsLoaded || accountsLoadError) {
+    setStatText("totalAccounts", placeholder);
+    setStatText("enabledAccounts", placeholder);
+    setStatText("disabledAccounts", placeholder);
+    setStatsLoading(!accountsLoaded);
+    updateSelectedCount();
+    return;
+  }
+
+  setStatsLoading(false);
   document.getElementById("totalAccounts").textContent = total;
   document.getElementById("enabledAccounts").textContent = normal;
   document.getElementById("disabledAccounts").textContent = abnormal;
@@ -1660,7 +1758,8 @@ function updateStats() {
 function updateSelectedCount() {
   const checked = document.querySelectorAll(".row-checkbox:checked").length;
   const el = document.getElementById("selectedCount");
-  if (el) el.textContent = checked;
+  // 未加载完成时不显示 0，避免与"一个都没选"混淆。
+  if (el) el.textContent = (!accountsLoaded || accountsLoadError) ? "—" : checked;
   const batchBtn = document.getElementById("batchDeleteBtn");
   if (batchBtn) {
     batchBtn.disabled = checked === 0;

@@ -45,6 +45,39 @@ func IsProviderChannel(channel string) bool {
 	return !nonProviderChannels[name]
 }
 
+// alertingSuccessTargetSource names where the target comes from. The page shows
+// it verbatim next to the percentage, so it doubles as the provenance: the number
+// is a policy threshold, not a measured average of recent traffic.
+const alertingSuccessTargetSource = "告警阈值 SuccessRateWarning"
+
+// successTarget answers the question the operations page could not: what is the
+// displayed success rate measured against? The threshold is read from the engine
+// rather than hard-coded so the number on the page and the number the alerts fire
+// on cannot drift apart.
+//
+// A nil engine — aggregation disabled, a test, or a deployment that never wired
+// alerting — still has to answer, and so does an engine built from a zero-value
+// Rules: the shipped policy is the honest fallback, because a returned 0 would
+// make the page print "目标 0.0%" and look broken.
+func successTarget(engine *alerting.Engine) (float64, string) {
+	rules := engine.Thresholds()
+	if rules.SuccessRateWarning <= 0 {
+		rules.SuccessRateWarning = alerting.DefaultRules().SuccessRateWarning
+	}
+	return rules.SuccessRateWarning, alertingSuccessTargetSource
+}
+
+// successTargetCritical is the severe line: below it a channel is broken whatever
+// the failure count. It rides along because the alert text quotes the very same
+// number, and one source is better than two that can disagree.
+func successTargetCritical(engine *alerting.Engine) float64 {
+	rules := engine.Thresholds()
+	if rules.SuccessRateCritical <= 0 {
+		rules.SuccessRateCritical = alerting.DefaultRules().SuccessRateCritical
+	}
+	return rules.SuccessRateCritical
+}
+
 // HandleOpsOverview answers the operations overview: KPI totals, a per-minute
 // trend and the current alert set. Every number states its sample count, so the
 // UI can show "暂无样本" instead of a healthy-looking zero.
@@ -75,6 +108,19 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 		"aggregation":         "per-minute",
 		"retention_hours":     int(opsagg.BucketRetention.Hours()),
 	}
+
+	// The target the success rate is judged against, set immediately after the
+	// literal so the early return below (aggregation unavailable) carries it too:
+	// that branch still renders a success-rate KPI, and a percentage with no
+	// stated target is exactly the confusion this field removes.
+	//
+	// success_target_critical is the severe line the alert detail already quotes
+	// ("阈值 <50%"); the page does not draw it yet, but keeping it in the same
+	// response means the two numbers an operator compares have one source.
+	successTargetValue, targetSource := successTarget(a.alertEngine)
+	payload["success_target"] = successTargetValue
+	payload["success_target_source"] = targetSource
+	payload["success_target_critical"] = successTargetCritical(a.alertEngine)
 
 	if a.opsAggregator == nil || !a.opsAggregator.Enabled() {
 		payload["available"] = false

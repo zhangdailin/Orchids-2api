@@ -6,7 +6,6 @@ import "orchids-api/internal/prompt"
 type UpstreamRequest struct {
 	Prompt               string
 	Model                string
-	Stream               bool
 	Messages             []prompt.Message
 	System               []prompt.SystemItem
 	Tools                []interface{}
@@ -14,7 +13,6 @@ type UpstreamRequest struct {
 	Attempt              int
 	ChatSessionID        string
 	Workdir              string // Dynamic local workdir override
-	ProjectID            string
 	WarpCliAgentModel    string
 	WarpComputerUseModel string
 	WarpToolContexts     map[string]WarpToolContext

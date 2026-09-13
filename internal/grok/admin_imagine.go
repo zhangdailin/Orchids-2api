@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"orchids-api/internal/util"
 )
 
 const (
@@ -301,20 +303,6 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 	return nil, 0, lastErr
 }
 
-func sleepWithContext(ctx context.Context, d time.Duration) bool {
-	if d <= 0 {
-		return true
-	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-
 func (h *Handler) runImagineLoop(
 	ctx context.Context,
 	prompt string,
@@ -373,7 +361,7 @@ func (h *Handler) runImagineLoop(
 			}) {
 				return
 			}
-			if !sleepWithContext(ctx, delay) {
+			if !util.SleepWithContext(ctx, delay) {
 				return
 			}
 			continue

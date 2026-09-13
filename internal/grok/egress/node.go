@@ -125,7 +125,6 @@ type Lease struct {
 	ProxyURL         string
 	UserAgent        string
 	CFCookies        string
-	Scope            string
 	clearanceKey     string
 	clearanceVersion uint64
 	client           *http.Client

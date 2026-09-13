@@ -8,6 +8,7 @@ orchids-api
 orchids-server
 orchids-server-linux-*
 server
+server-linux-amd64
 !cmd/server/
 !cmd/server/*.go
 

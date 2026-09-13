@@ -7,6 +7,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/util"
 )
 
 // Puter's DeepSeek gateway requires a non-empty reasoning_content on every
@@ -93,7 +94,7 @@ func convertAssistantMessage(msg prompt.Message, echoReasoning bool) (Message, b
 				Type: "function",
 				Function: ToolCallFunction{
 					Name:      name,
-					Arguments: compactToolInput(block.Input),
+					Arguments: util.CompactToolInput(block.Input),
 				},
 			})
 		}
@@ -165,17 +166,6 @@ func stringifyToolResult(value interface{}) string {
 	}
 }
 
-func compactToolInput(value interface{}) string {
-	if value == nil {
-		return "{}"
-	}
-	raw, err := json.Marshal(value)
-	if err != nil || len(raw) == 0 || string(raw) == "null" {
-		return "{}"
-	}
-	return string(raw)
-}
-
 func normalizeToolDefinitions(tools []interface{}) []interface{} {
 	out := make([]interface{}, 0, len(tools))
 	for _, tool := range tools {
@@ -188,16 +178,16 @@ func normalizeToolDefinitions(tools []interface{}) []interface{} {
 			continue
 		}
 		if fn, ok := decoded["function"].(map[string]interface{}); ok {
-			if strings.TrimSpace(stringValue(fn["name"])) == "" {
+			if strings.TrimSpace(util.StringValue(fn["name"])) == "" {
 				continue
 			}
 			decoded["type"] = "function"
 			out = append(out, decoded)
 			continue
 		}
-		name := strings.TrimSpace(stringValue(decoded["name"]))
+		name := strings.TrimSpace(util.StringValue(decoded["name"]))
 		if name == "" {
-			if strings.TrimSpace(stringValue(decoded["type"])) != "" {
+			if strings.TrimSpace(util.StringValue(decoded["type"])) != "" {
 				out = append(out, decoded)
 			}
 			continue
@@ -210,22 +200,12 @@ func normalizeToolDefinitions(tools []interface{}) []interface{} {
 			"type": "function",
 			"function": map[string]interface{}{
 				"name":        name,
-				"description": stringValue(decoded["description"]),
+				"description": util.StringValue(decoded["description"]),
 				"parameters":  parameters,
 			},
 		})
 	}
 	return out
-}
-
-func stringValue(value interface{}) string {
-	if value == nil {
-		return ""
-	}
-	if text, ok := value.(string); ok {
-		return text
-	}
-	return fmt.Sprint(value)
 }
 
 func mergeAdjacentAssistantMessages(messages []Message) []Message {

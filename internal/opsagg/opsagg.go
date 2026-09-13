@@ -33,7 +33,6 @@ type Outcome struct {
 	Synthetic bool
 	Channel   string
 	Model     string
-	AccountID int64
 	Status    string
 	// OK decides the success ratio. A retry that eventually succeeded is OK.
 	OK bool
@@ -50,18 +49,16 @@ type Outcome struct {
 
 // Bucket is one minute of one channel.
 type Bucket struct {
-	Channel    string    `json:"channel"`
-	Minute     time.Time `json:"minute"`
-	Requests   int64     `json:"requests"`
-	Success    int64     `json:"success"`
-	Failed     int64     `json:"failed"`
-	Probes     int64     `json:"probes"`
-	Input      int64     `json:"input_tokens"`
-	Output     int64     `json:"output_tokens"`
-	DurationMS []int64   `json:"-"`
-	TTFTMS     []int64   `json:"-"`
-
-	ConcurrencyPeak int64 `json:"concurrency_peak"`
+	Channel         string    `json:"channel"`
+	Minute          time.Time `json:"minute"`
+	Requests        int64     `json:"requests"`
+	Success         int64     `json:"success"`
+	Failed          int64     `json:"failed"`
+	Probes          int64     `json:"probes"`
+	Input           int64     `json:"input_tokens"`
+	Output          int64     `json:"output_tokens"`
+	DurationMS      []int64   `json:"-"`
+	ConcurrencyPeak int64     `json:"concurrency_peak"`
 }
 
 // Summary is a rolled-up view over a time range.
@@ -526,7 +523,8 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 		}
 		for model, entry := range byModel {
 			entry.duration = append(entry.duration, a.listInts(ctx, key+":model:"+model)...)
-		}	}
+		}
+	}
 	stats := make([]ModelStats, 0, len(byModel))
 	for model, entry := range byModel {
 		stat := ModelStats{
@@ -545,4 +543,3 @@ func (a *Aggregator) ModelStatsFromBuckets(ctx context.Context, channel string, 
 	sort.Slice(stats, func(i, j int) bool { return stats[i].Requests > stats[j].Requests })
 	return stats
 }
-

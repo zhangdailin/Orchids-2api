@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"orchids-api/internal/api"
 	"orchids-api/internal/accountevents"
 	"orchids-api/internal/alerting"
+	"orchids-api/internal/api"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -63,8 +63,6 @@ func (e accountChangeEmitter) Publish(change store.AccountChange) {
 	e.bus.Publish(accountevents.Change{
 		AccountID: change.AccountID,
 		Kind:      accountevents.Classify(change.Previous, current),
-		Previous:  change.Previous,
-		Account:   current,
 	})
 }
 

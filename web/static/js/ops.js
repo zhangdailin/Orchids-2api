@@ -13,21 +13,48 @@
     return (rate * 100).toFixed(1) + '%';
   }
 
-  function formatMs(value, samples) {
+  // 45279 ms is unreadable at a glance; 45.3 s is. The raw millisecond value is
+  // never dropped: it is repeated in the note / title so a slow regression can
+  // still be read off the card.
+  function formatDuration(value, samples) {
     if (!samples || !value) return '暂无样本';
-    return value + ' ms';
+    const ms = Number(value);
+    if (!Number.isFinite(ms) || ms <= 0) return '暂无样本';
+    if (ms < 1000) return Math.round(ms) + ' ms';
+    if (ms < 60000) return (ms / 1000).toFixed(1) + ' s';
+    return (ms / 60000).toFixed(1) + ' min';
   }
 
-  function rateClass(rate, samples) {
-    if (!samples) return 'is-muted';
-    if (rate >= 0.95) return '';
-    if (rate >= 0.8) return 'is-warn';
-    return '';
+  // Kept as the single formatting entry point so the KPI cards and the
+  // channel × model matrix can never drift apart in unit or wording.
+  function formatMs(value, samples) {
+    return formatDuration(value, samples);
   }
 
-  function kpi(label, value, note, muted) {
+  function preciseMs(value) {
+    const ms = Number(value);
+    if (!Number.isFinite(ms)) return '';
+    return Math.round(ms) + ' ms';
+  }
+
+  // "P95" is the whole point of these two cards: the number is the 95th
+  // percentile of the window, not an average, so say so on the card.
+  function p95Note(samples, value, what) {
+    if (!samples || !value) return `P95 分位 · ${what} · 暂无样本`;
+    return `P95（非均值）· ${samples} 样本 · 最慢 5% · 精确 ${preciseMs(value)}`;
+  }
+
+  function p95Title(samples, value, what) {
+    if (!samples || !value) return `P95 分位 · ${what} · 暂无样本`;
+    return `${what}的 P95 分位（不是平均值）：${preciseMs(value)}，共 ${samples} 个样本，代表其中最慢的 5%。`;
+  }
+
+  // options: legacy boolean (muted) or { muted, belowTarget, title }.
+  function kpi(label, value, note, options) {
+    const opts = typeof options === 'boolean' ? { muted: options } : (options || {});
     const card = document.createElement('div');
-    card.className = 'ops-kpi' + (muted ? ' is-muted' : '');
+    card.className = 'ops-kpi' + (opts.muted ? ' is-muted' : '') + (opts.belowTarget ? ' is-below-target' : '');
+    if (opts.title) card.title = opts.title;
     const labelNode = document.createElement('div');
     labelNode.className = 'label';
     labelNode.textContent = label;
@@ -45,6 +72,38 @@
     return card;
   }
 
+  // success_target / success_target_source are optional payload fields supplied
+  // by the alerting configuration. When they are absent the card simply keeps
+  // its plain "N 次失败" note — never "目标 undefined%".
+  function targetNote(target, source, rate) {
+    const value = Number(target);
+    if (!Number.isFinite(value) || value <= 0 || value > 1) return '';
+    const percent = (value * 100).toFixed(1);
+    const origin = source ? `（${source}）` : '';
+    const current = Number(rate);
+    if (!Number.isFinite(current)) return `目标 ${percent}%${origin}`;
+    const diff = (current - value) * 100;
+    if (Math.abs(diff) < 0.05) return `目标 ${percent}%${origin} · 已达标`;
+    const gap = Math.abs(diff).toFixed(1);
+    return `目标 ${percent}%${origin} · 当前${diff < 0 ? '低' : '高'} ${gap} 个百分点`;
+  }
+
+  function successRateCard(totals, real, payload) {
+    const rate = totals.success_rate || 0;
+    const parts = [`${totals.failed || 0} 次失败`];
+    const target = targetNote(payload && payload.success_target, payload && payload.success_target_source, rate);
+    if (target) parts.push(target);
+    const targetValue = Number(payload && payload.success_target);
+    const below = Number.isFinite(targetValue) && targetValue > 0 && real > 0 && rate < targetValue;
+    return kpi('成功率', formatRate(rate, real), parts.join(' · '), {
+      muted: real === 0,
+      belowTarget: below,
+      title: below
+        ? `窗口内成功率 ${formatRate(rate, real)}，低于告警阈值 ${(targetValue * 100).toFixed(1)}%。`
+        : `窗口内成功率 ${formatRate(rate, real)}（成功 ${totals.success || 0} / 真实请求 ${real}）。`,
+    });
+  }
+
   function renderKpis(payload) {
     const container = el('opsKpis');
     if (!container) return;
@@ -57,11 +116,26 @@
       container.appendChild(kpi('指标聚合', '未启用', payload.note || '需要 Redis', true));
       return;
     }
-    container.appendChild(kpi('请求量', String(Math.max(real, 0)), `${payload.window_minutes} 分钟窗口`));
-    container.appendChild(kpi('成功率', formatRate(totals.success_rate || 0, real), `${totals.failed || 0} 次失败`, real === 0));
-    container.appendChild(kpi('RPM', real ? (totals.rpm || 0).toFixed(2) : '暂无样本', '每分钟真实请求', real === 0));
-    container.appendChild(kpi('首 Token P95', formatMs(totals.first_token_p95_ms, samples), '响应前耗时', samples === 0));
-    container.appendChild(kpi('总耗时 P95', formatMs(totals.duration_p95_ms, samples), '整段生成耗时', samples === 0));
+    // 请求量 is a window total, RPM is the per-minute average over the very
+    // same window. Spelling both out is what stops them looking contradictory.
+    container.appendChild(kpi('请求量', String(Math.max(real, 0)), `${payload.window_minutes} 分钟窗口内累计 · 不含探测`, {
+      title: `所选 ${payload.window_minutes} 分钟窗口内的真实请求累计值（已扣除 ${totals.probes || 0} 次合成探测）。`,
+    }));
+    container.appendChild(successRateCard(totals, real, payload));
+    container.appendChild(kpi('RPM', real ? (totals.rpm || 0).toFixed(2) : '暂无样本', '窗口内平均 · 每分钟真实请求', {
+      muted: real === 0,
+      title: `同一窗口的平均值：${Math.max(real, 0)} 次 ÷ ${payload.window_minutes} 分钟，不是瞬时速率。`,
+    }));
+    // The two P95 cards: say what the number measures, that it is a percentile
+    // and not an average, and keep the exact millisecond value around.
+    container.appendChild(kpi('首 Token P95（响应前）', formatMs(totals.first_token_p95_ms, samples), p95Note(samples, totals.first_token_p95_ms, '响应前耗时'), {
+      muted: samples === 0,
+      title: p95Title(samples, totals.first_token_p95_ms, '响应前耗时'),
+    }));
+    container.appendChild(kpi('总耗时 P95（整段生成）', formatMs(totals.duration_p95_ms, samples), p95Note(samples, totals.duration_p95_ms, '整段生成耗时'), {
+      muted: samples === 0,
+      title: p95Title(samples, totals.duration_p95_ms, '整段生成耗时'),
+    }));
     const concurrency = (payload.concurrency && payload.concurrency.accounts_refreshing) || 0;
     container.appendChild(kpi('刷新中账号', String(concurrency), '当前并发刷新'));
     container.appendChild(kpi('探测量', String(totals.probes || 0), '合成流量，不计入成功率'));
@@ -120,6 +194,7 @@
 
   function historyCells(series) {
     const cell = document.createElement('td');
+    cell.className = 'ops-history';
     const buckets = (series || []).slice(-40);
     if (!buckets.length) {
       cell.textContent = '—';
@@ -131,8 +206,9 @@
       const errorRate = point.requests ? (point.failed || 0) / point.requests : 0;
       if (errorRate > 0.5) bar.classList.add('is-bad');
       else if (errorRate > 0) bar.classList.add('is-warn');
-      bar.style.width = '4px';
-      bar.style.marginRight = '2px';
+      // 40 buckets at 4px + 2px used to push the row past a 736px window.
+      bar.style.width = '3px';
+      bar.style.marginRight = '1px';
       bar.title = `${point.minute}: ${point.requests} 请求 / ${point.failed} 失败`;
       cell.appendChild(bar);
     });
@@ -164,12 +240,20 @@
     if (!samples) rate.className = 'ops-empty';
     tr.appendChild(rate);
 
+    const ttftValue = options.isModel ? row.first_token_p95_ms : (row.summary && row.summary.first_token_p95_ms);
     const ttft = document.createElement('td');
-    ttft.textContent = options.isModel ? formatMs(row.first_token_p95_ms, samples) : formatMs(row.summary && row.summary.first_token_p95_ms, samples);
+    ttft.className = 'ops-duration';
+    // Same formatter as the KPI cards: the two sets of P95 numbers can only be
+    // compared if they are rendered with one rule.
+    ttft.textContent = formatMs(ttftValue, samples);
+    ttft.title = samples ? p95Title(samples, ttftValue, '响应前耗时') : '暂无样本';
     tr.appendChild(ttft);
 
+    const durationValue = options.isModel ? row.duration_p95_ms : (row.summary && row.summary.duration_p95_ms);
     const duration = document.createElement('td');
-    duration.textContent = options.isModel ? formatMs(row.duration_p95_ms, samples) : formatMs(row.summary && row.summary.duration_p95_ms, samples);
+    duration.className = 'ops-duration';
+    duration.textContent = formatMs(durationValue, samples);
+    duration.title = samples ? p95Title(samples, durationValue, '整段生成耗时') : '暂无样本';
     tr.appendChild(duration);
 
     const throttled = document.createElement('td');

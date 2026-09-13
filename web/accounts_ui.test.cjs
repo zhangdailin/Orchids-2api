@@ -123,6 +123,62 @@ test('the active platform tab wins over a stale account-type field', () => {
   assert.equal(node('accountType').value, 'grok', 'the active platform tab wins over a stale field');
 });
 
+test('every channel owns its credential copy: switching type never leaves another channel text behind', () => {
+  const { context, node } = loadUI();
+  node('accountId').value = '';
+  // Open Grok first: its copy is the one that used to survive into Warp.
+  context.applyTokenLabels('grok');
+  assert.equal(node('tokenLabel').textContent, 'SSO Token');
+  assert.match(node('tokenHint').textContent, /Grok/);
+
+  context.applyTokenLabels('warp');
+  assert.equal(node('tokenLabel').textContent, 'Warp 登录会话');
+  assert.match(node('tokenHint').textContent, /Warp/);
+  assert.equal(node('tokenHint').textContent.includes('Grok'), false, 'Warp must not inherit Grok hint text');
+
+  // And the other way round: Warp must not leak into the channels that follow.
+  context.applyTokenLabels('puter');
+  assert.equal(node('tokenLabel').textContent, 'Auth Token');
+  assert.match(node('tokenHint').textContent, /Puter/);
+
+  context.applyTokenLabels('workbuddy');
+  assert.equal(node('tokenLabel').textContent, 'WorkBuddy 凭证');
+  assert.equal(node('tokenHint').textContent.includes('Puter'), false);
+
+  context.applyTokenLabels('grok');
+  assert.equal(node('tokenLabel').textContent, 'SSO Token');
+  assert.equal(node('tokenHint').textContent.includes('WorkBuddy'), false);
+});
+
+test('openModal after a tab click renders that tab form, not the previously opened one', () => {
+  const { context, node } = loadUI();
+  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
+  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('enabled').checked = true;
+  context.renderPlatformTabs();
+
+  const expectations = {
+    grok: { label: 'SSO Token', hint: /Grok/, sso: false, warpLogin: true },
+    puter: { label: 'Auth Token', hint: /Puter/, sso: false, warpLogin: true },
+    warp: { label: 'Warp 登录会话', hint: /Warp/, sso: true, warpLogin: false },
+    workbuddy: { label: 'WorkBuddy 凭证', hint: /官方登录/, sso: true, warpLogin: true },
+  };
+  const tabs = node('platformFilters').children;
+  for (const platform of ['grok', 'puter', 'warp', 'workbuddy']) {
+    const tab = tabs.find((candidate) => candidate.textContent === platform);
+    assert.ok(tab, `no ${platform} tab`);
+    tab.click();
+    node('accountId').value = '';
+    context.openModal();
+    const expected = expectations[platform];
+    assert.equal(node('accountType').value, platform, `${platform}: modal type`);
+    assert.equal(node('tokenLabel').textContent, expected.label, `${platform}: credential label`);
+    assert.match(node('tokenHint').textContent, expected.hint, `${platform}: credential hint`);
+    assert.equal(node('ssoCredentialGroup').hidden, expected.sso, `${platform}: credential field visibility`);
+    assert.equal(node('warpDeviceLoginGroup').hidden, expected.warpLogin, `${platform}: warp login visibility`);
+  }
+});
+
 test('editing a Grok account keeps its credential UI while another tab is active', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
