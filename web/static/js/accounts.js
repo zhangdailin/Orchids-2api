@@ -715,6 +715,11 @@ function getActiveAccountType() {
 // a previous modal interaction (or the HTML default "warp") silently win, which
 // made the Grok tab open a Warp form.
 function selectedPlatformAccountType(typeEl) {
+  const activeTab = document.querySelector("#platformFilters .tab-item.active");
+  if (activeTab?.dataset?.platform) {
+    const visible = decodeURIComponent(activeTab.dataset.platform);
+    if (visible) return platformAccountType(visible);
+  }
   const active = String(currentPlatform || "").trim().toLowerCase();
   if (active) return platformAccountType(active);
   const selected = String(typeEl?.value || "").trim().toLowerCase();
@@ -1681,6 +1686,7 @@ function goToPage(page) {
 
 // Filter by platform
 function filterByPlatform(platform) {
+  platform = String(platform || "").trim().toLowerCase();
   currentPlatform = platform;
   currentPage = 1; // Reset to first page
   // Keep the modal's account type in step with the selected tab. The hidden

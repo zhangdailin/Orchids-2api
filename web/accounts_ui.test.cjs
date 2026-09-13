@@ -123,6 +123,19 @@ test('the active platform tab wins over a stale account-type field', () => {
   assert.equal(node('accountType').value, 'grok', 'the active platform tab wins over a stale field');
 });
 
+test('the visibly highlighted provider wins if in-memory state is stale', () => {
+  const { context, node } = loadUI();
+  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
+  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
+  node('enabled').checked = true;
+  context.filterByPlatform('grok');
+  node('#platformFilters .tab-item.active').dataset.platform = encodeURIComponent('puter');
+  node('accountId').value = '';
+  context.openModal();
+  assert.equal(node('accountType').value, 'puter');
+  assert.equal(node('accountTypeDisplay').value, 'Puter');
+});
+
 test('every channel owns its credential copy: switching type never leaves another channel text behind', () => {
   const { context, node } = loadUI();
   node('accountId').value = '';
