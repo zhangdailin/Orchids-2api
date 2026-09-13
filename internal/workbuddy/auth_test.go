@@ -249,6 +249,32 @@ func TestConsumeStream_EmitsTextReasoningAndToolCalls(t *testing.T) {
 	}
 }
 
+func TestConsumeStream_ReassemblesSplitToolArguments(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_split","type":"function","function":{"name":"write_file","arguments":"{\"path\":"}}]},"finish_reason":""}]}`,
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"notes.txt\",\"content\":\"ok\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+	}, "\n")
+
+	var calls []upstream.SSEMessage
+	result, err := consumeStream(strings.NewReader(body), func(msg upstream.SSEMessage) {
+		if msg.Type == "model.tool-call" {
+			calls = append(calls, msg)
+		}
+	})
+	if err != nil {
+		t.Fatalf("consumeStream() error = %v", err)
+	}
+	if result.ToolCallCount != 1 || len(calls) != 1 {
+		t.Fatalf("tool calls = %d/%d, want exactly one", result.ToolCallCount, len(calls))
+	}
+	if got := calls[0].Event["input"]; got != `{"path":"notes.txt","content":"ok"}` {
+		t.Fatalf("tool input = %q", got)
+	}
+}
+
 func TestRunChat_RequiresCredentials(t *testing.T) {
 	t.Parallel()
 
@@ -331,7 +357,7 @@ func TestFetchModels_FiltersCLIWhitelist(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"code":0,"data":{
 			"models":[
-				{"id":"hy3","name":"HY3","disabled":false},
+				{"id":"hy3","name":"HY3","maxInputTokens":131072,"maxOutputTokens":8192,"supportsToolCall":true,"supportsReasoning":true,"disabled":false},
 				{"id":"default-model","name":"Default","disabled":false},
 				{"id":"hidden-model","name":"Hidden","disabled":false},
 				{"id":"disabled-model","name":"Disabled","disabled":true}
@@ -356,6 +382,9 @@ func TestFetchModels_FiltersCLIWhitelist(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "hy3,default-model" {
 		t.Fatalf("models = %v, want the cli whitelist minus disabled entries", got)
+	}
+	if !models[0].SupportsTools || !models[0].SupportsReason || models[0].MaxInputTokens != 131072 || models[0].MaxOutputTokens != 8192 {
+		t.Fatalf("model capabilities were lost: %+v", models[0])
 	}
 }
 

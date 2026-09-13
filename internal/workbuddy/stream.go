@@ -213,8 +213,11 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 		for _, call := range delta.ToolCalls {
 			result.SawMeaningfulEvent = true
 			tools.add(call.Index, call.ID, call.Function.Name, call.Function.Arguments)
-			// Emit as soon as the call is complete; the upstream does not send
-			// an explicit end marker per call.
+		}
+		// OpenAI-style tool arguments can span several deltas. Emitting on the
+		// first delta loses every later fragment and produces invalid JSON. A
+		// non-empty finish reason closes the choice; [DONE]/EOF is handled below.
+		if strings.TrimSpace(chunk.Choices[0].FinishReason) != "" {
 			emitTools()
 		}
 	}
