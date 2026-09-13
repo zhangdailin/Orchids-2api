@@ -104,6 +104,12 @@ func ClassifyAccountStatus(errStr string) string {
 	if strings.Contains(lower, "model is not found") || strings.Contains(lower, "model not found") {
 		return ""
 	}
+	// An entitlement refusal means the credential was accepted. It must not be
+	// recorded as an account status, or a valid account is disabled by a plan
+	// problem — and the alarm says the channel is broken when it is not.
+	if strings.Contains(lower, "no usable plan or allowance") || strings.Contains(lower, "qoder.com/pricing") {
+		return ""
+	}
 	// A status reason persisted by an admin handler is the wrapped error string,
 	// so recognise the code that sits inside the wrap chain as well.
 	if code := LeadingStatusCode(lower); code != "" {
@@ -167,7 +173,12 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		strings.Contains(lower, "model not found") ||
 		strings.Contains(lower, "no_implementation_available") ||
 		strings.Contains(lower, "context_window_exceeded") ||
-		strings.Contains(lower, "max_token_limit"):
+		strings.Contains(lower, "max_token_limit") ||
+		// A Qoder account the upstream authenticated but refused for lacking a
+		// plan or allowance. No retry and no account switch can change a
+		// subscription, so this is a client-side outcome rather than a transient
+		// upstream fault. The phrase is the sentinel the Qoder channel emits.
+		strings.Contains(lower, "no usable plan or allowance"):
 		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "401") ||
 		strings.Contains(lower, "signed out") ||

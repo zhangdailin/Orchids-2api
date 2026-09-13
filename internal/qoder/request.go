@@ -659,6 +659,12 @@ func classifyStatus(status int, retryAfter string, raw []byte) error {
 	if code == busyCode {
 		return &attemptStreamError{err: fmt.Errorf("%w: %v", ErrBusy, wrapped), busy: true, retryable: true, wait: busyWait(retryAfter, raw)}
 	}
+	// A 403 that names the pricing page is an entitlement refusal, not a
+	// credential failure: retrying and refreshing both change nothing, and
+	// classifying it as unauthorized would retire a valid account.
+	if DetectNoEntitlement(detail, string(raw)) {
+		return &attemptStreamError{err: entitlementError(string(raw))}
+	}
 	switch status {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return &attemptStreamError{err: fmt.Errorf("%w: %v", errUpstreamUnauthorized, wrapped), unauth: true}

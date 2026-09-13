@@ -3,24 +3,34 @@ package qoder
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"sort"
 	"strings"
-
-	"github.com/goccy/go-json"
 
 	"orchids-api/internal/store"
 )
 
-// The catalog has two sources and the account's cached snapshot always wins.
+// The catalog is local, and that is a property of the protocol rather than a
+// shortcut.
 //
-//   - The gateway answers GET /algo/api/v2/model/list?Encode=1 with a scene map.
-//     This is the authority on what the account may run, which is why the
-//     snapshot is stored per account rather than globally.
-//   - The built-in seed exists so a brand-new or freshly imported account can
-//     serve a request before its first refresh. It is a fallback, not a claim
-//     about what the account is entitled to.
+// The Qoder CLI's entire HTTP surface is four endpoints — the device token
+// refresh, the user profile, the PAT job-token exchange and the chat SSE. It
+// never reads a model list over the network: it carries a built-in catalog and
+// optionally a locally cached `catalog-v6` blob. The OAuth device credential is
+// therefore not accepted by the gateway's `/algo/api/v2/model/list`, which
+// answers `403 code=101 Signature invalid` for a signature that is otherwise
+// proven good by the chat call succeeding.
+//
+// Verified against a live account: a chat request with the same credential and
+// the same runtime pair is authenticated (the gateway answers a business error
+// about a missing subscription), while the model-list read is refused. Reading
+// that endpoint would therefore turn a working credential into a bogus
+// signature failure, so it is not read at all.
+//
+//   - The built-in catalog is the authority this channel can actually observe.
+//     The account snapshot records whatever was installed, and the chat call —
+//     not this list — is what reports an entitlement problem.
+//   - CatalogFromSnapshot rebuilds the list from an account record, so an
+//     operator-supplied snapshot keeps working without a network read.
 
 // modelEntry is one catalog row. Key is the internal gateway key; Name is what a
 // client may ask for.
@@ -272,138 +282,39 @@ func DefaultCatalog() *Catalog {
 	return newCatalog(seedModels())
 }
 
-// ErrCatalogUnavailable means the gateway did not answer the model list read with
-// a usable catalog. It is a classification, not a credential verdict: device
-// authorization does not depend on this read, so a caller may legitimately fall
-// back to the built-in catalog.
-var ErrCatalogUnavailable = fmt.Errorf("qoder model catalog is unavailable")
-
-// FetchModels reads the account's model catalog from the gateway.
+// FetchModels returns the catalog this channel can serve.
 //
-// A failure here is deliberately strict: model refresh must report a real
-// problem instead of silently installing a stale list. Callers that only need
-// *some* catalog — most importantly the login flow — use FetchModelsLenient.
+// It is local by construction: the OAuth device credential is not accepted by
+// the gateway's model-list endpoint, so there is nothing to fetch over the
+// network. Keeping one entry point means a future gateway that does expose an
+// authenticated catalog changes exactly one place.
+//
+// The account snapshot wins when one is stored; otherwise the built-in list is
+// returned. The error is always nil — the chat call, not this list, is what
+// reports an entitlement problem.
 func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if c == nil {
 		return nil, fmt.Errorf("qoder client is nil")
 	}
-	creds, err := c.ensureAccessToken(ctx)
-	if err != nil {
-		return nil, err
+	if c.account != nil {
+		if catalog := catalogFromIDs(c.account.QoderModelIDs); catalog.Len() > 0 {
+			return catalog, nil
+		}
 	}
-	fields, err := c.ensureRuntimeFields(ctx, creds)
-	if err != nil {
-		return nil, err
-	}
-
-	url := catalogURL(c.endpoints.inference)
-	// The catalog read is a signed GET: the same COSY headers as a chat request
-	// with an empty body, and the empty body is what the signature covers.
-	reqCtx, cancel := context.WithTimeout(ctx, authRequestTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build catalog request: %w", err)
-	}
-	requestID, err := newUUID(c.entropy)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.applyAuthHeaders(req, creds, fields, requestID, "", "", "", ""); err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.control.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("send catalog request: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, apiError(http.MethodGet, url, resp.StatusCode, raw))
-	}
-
-	catalog, err := parseCatalog(raw)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCatalogUnavailable, err)
-	}
-	if catalog.Len() == 0 {
-		return nil, fmt.Errorf("%w: the response carried no usable chat models", ErrCatalogUnavailable)
-	}
-	return catalog, nil
+	return DefaultCatalog(), nil
 }
 
-// FetchModelsLenient returns the account catalog when the gateway answers and
-// the built-in catalog otherwise.
-//
-// The device authorization flow does not depend on the model list read: the CLI
-// carries its own catalog and Qoder-2API-Go reads it from a local cache, so a
-// gateway that does not serve this path (a CN-region account, a plan without the
-// CLI surface, or an endpoint that moved) must not cause a successfully issued
-// credential to be thrown away. The failure is returned alongside the fallback so
-// the caller can record why the snapshot is missing instead of pretending the
-// seed list was observed.
+// FetchModelsLenient is the login-time entry point. It matches FetchModels and
+// always succeeds, so a successfully issued device credential is never discarded
+// over a catalog read.
 func (c *Client) FetchModelsLenient(ctx context.Context) (*Catalog, error) {
-	catalog, err := c.FetchModels(ctx)
-	if err == nil {
-		return catalog, nil
-	}
-	return DefaultCatalog(), err
+	return c.FetchModels(ctx)
 }
 
-// parseCatalog reads the scene map the gateway answers with. The `chat` scene is
-// the only one this channel serves; the enterprise scenes carry models the
-// account may not run through the CLI surface.
-//
-// The scene may arrive at the top level or wrapped one level deep, because two
-// gateway deployments answer this path with different envelopes. Both shapes are
-// accepted so a deployment difference does not present as a broken credential.
-func parseCatalog(raw []byte) (*Catalog, error) {
-	// Top level, or the envelope the service surface adds around a payload.
-	var immediate struct {
-		Chat           json.RawMessage `json:"chat"`
-		Data           json.RawMessage `json:"data"`
-		Result         json.RawMessage `json:"result"`
-		StatusCode     string          `json:"statusCode"`
-		StatusCodeValu int             `json:"statusCodeValue"`
-	}
-	if err := json.Unmarshal(raw, &immediate); err != nil {
-		return nil, fmt.Errorf("decode catalog response: %w", err)
-	}
-	if len(immediate.Chat) > 0 {
-		return catalogFromScene(immediate.Chat)
-	}
-	// A 200 envelope can still carry a business failure in its body.
-	if immediate.StatusCodeValu >= 400 {
-		return nil, fmt.Errorf("catalog envelope carries status %d", immediate.StatusCodeValu)
-	}
-	for _, nested := range []json.RawMessage{immediate.Data, immediate.Result} {
-		if len(nested) == 0 {
-			continue
-		}
-		var inner struct {
-			Chat json.RawMessage `json:"chat"`
-		}
-		if err := json.Unmarshal(nested, &inner); err == nil && len(inner.Chat) > 0 {
-			return catalogFromScene(inner.Chat)
-		}
-	}
-	return nil, fmt.Errorf("qoder catalog response has no chat scene")
-}
-
-func catalogFromScene(scene json.RawMessage) (*Catalog, error) {
-	var rows []modelEntry
-	if err := json.Unmarshal(scene, &rows); err != nil {
-		return nil, fmt.Errorf("decode chat scene: %w", err)
-	}
-	if len(rows) == 0 {
-		return nil, fmt.Errorf("qoder chat scene is empty")
-	}
-	return newCatalog(rows), nil
-}
-
-// SyncCatalog fetches the catalog and stores the snapshot on the account.
+// SyncCatalog installs the catalog snapshot on the account.
 func (c *Client) SyncCatalog(ctx context.Context) (*Catalog, error) {
 	catalog, err := c.FetchModels(ctx)
 	if err != nil {

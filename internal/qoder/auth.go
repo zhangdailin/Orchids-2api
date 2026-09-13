@@ -99,6 +99,15 @@ var (
 	// ErrBusy means the gateway refused the request for queue or concurrency
 	// reasons (business code 10605). Backing off helps; refreshing does not.
 	ErrBusy = fmt.Errorf("qoder gateway is busy")
+	// ErrNoEntitlement means the credential is valid and the gateway accepted the
+	// request, but the account has no usable plan or allowance for the model. The
+	// gateway reports it as `403 {"pricingUrl":"https://qoder.com/pricing?client=qoder"}`
+	// inside a 200 SSE envelope.
+	//
+	// It is deliberately distinct from an authentication failure: the credential
+	// must not be marked dead, because re-authorizing or rotating the token
+	// changes nothing. Only a plan change on the Qoder side fixes it.
+	ErrNoEntitlement = fmt.Errorf("qoder account has no usable plan or allowance; the model requires a subscription")
 )
 
 // Credentials is the device credential pair plus the identity observed at login.
@@ -392,6 +401,69 @@ func parseUnixString(raw string) (int64, error) {
 		return 0, fmt.Errorf("non-positive timestamp")
 	}
 	return value, nil
+}
+
+// pricingURLFragment identifies the gateway's entitlement refusal. It is the
+// exact marker the upstream uses to point at its pricing page, and it appears
+// both as a bare string and as escaped JSON inside the envelope body.
+const pricingURLFragment = "qoder.com/pricing"
+
+// DetectNoEntitlement reports whether an upstream message is an entitlement
+// refusal rather than a credential failure.
+//
+// The gateway reports a missing subscription with HTTP 200 and a business status
+// of 403 whose body carries a pricing URL. Treating that as an auth problem would
+// disable a perfectly valid account — which is exactly the misdiagnosis this
+// function exists to prevent.
+func DetectNoEntitlement(values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(value, pricingURLFragment) {
+			return true
+		}
+	}
+	return false
+}
+
+// entitlementError renders an entitlement refusal.
+//
+// It deliberately omits the upstream HTTP status. The shared account classifier
+// reads any `status=403` in an error string as "this credential is forbidden" and
+// would retire a perfectly valid account; the failure here is about the plan, and
+// the reason is carried in operator terms instead.
+func entitlementError(body string) error {
+	detail := decodeBodyMessage(body)
+	if detail == "" {
+		detail = truncate(strings.TrimSpace(body), 300)
+	}
+	if code := envelopeCode([]byte(body)); code != "" {
+		return fmt.Errorf("%w (upstream code=%s: %s)", ErrNoEntitlement, code, detail)
+	}
+	return fmt.Errorf("%w (%s)", ErrNoEntitlement, detail)
+}
+
+// decodeBodyMessage unwraps one level of escaping so the operator sees readable
+// text instead of a JSON string literal.
+func decodeBodyMessage(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return ""
+	}
+	var decoded struct {
+		Message string `json:"message"`
+	}
+	if json.Unmarshal([]byte(trimmed), &decoded) == nil && strings.TrimSpace(decoded.Message) != "" {
+		inner := strings.TrimSpace(decoded.Message)
+		// The message is itself sometimes a JSON document; one more level of
+		// unwrapping is all the gateway ever uses.
+		var nested struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal([]byte(inner), &nested) == nil && strings.TrimSpace(nested.Message) != "" {
+			return strings.TrimSpace(nested.Message)
+		}
+		return inner
+	}
+	return ""
 }
 
 // apiError renders an upstream failure in the form the shared error classifier

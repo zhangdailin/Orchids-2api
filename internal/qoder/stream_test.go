@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goccy/go-json"
+
 	"orchids-api/internal/upstream"
 )
 
@@ -149,6 +151,41 @@ func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 	}
 }
 
+// TestConsumeStreamAuthenticatedRequestEnvelope covers the exact answer a live
+// account without a subscription receives: HTTP 200, a business status of 403,
+// and a body that names the pricing page.
+//
+// It must NOT be reported as an authentication failure: the credential was
+// accepted, and classifying it as unauthorized makes the shared account
+// classifier retire a working account as "forbidden" — the misdiagnosis this
+// test exists to prevent.
+func TestConsumeStreamAuthenticatedRequestEnvelope(t *testing.T) {
+	t.Parallel()
+
+	// The body is exactly as the gateway sends it, including the escaping.
+	body := "data:{\"headers\":{\"Content-Type\":[\"application/json\"]},\"body\":\"{\\\"code\\\":\\\"112\\\",\\\"message\\\":\\\"{\\\\\\\"pricingUrl\\\\\\\":\\\\\\\"https://qoder.com/pricing?client=qoder\\\\\\\"}\\\"}\",\"statusCodeValue\":403,\"statusCode\":\"FORBIDDEN\"}\n\n"
+
+	_, _, err := collectStream(t, body)
+	if err == nil {
+		t.Fatal("consumeStream() error = nil for an entitlement refusal")
+	}
+	if !errors.Is(err, ErrNoEntitlement) {
+		t.Fatalf("error = %v, want ErrNoEntitlement", err)
+	}
+	// The account classifier reads any "status=403" as a dead credential, so the
+	// error text must not carry the upstream status.
+	if strings.Contains(err.Error(), "status=403") {
+		t.Fatalf("error text = %q, want no upstream status (it would retire the account)", err)
+	}
+	if strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("error text = %q, want no forbidden wording", err)
+	}
+	// The reason must reach the operator.
+	if !strings.Contains(err.Error(), "pricing") && !strings.Contains(err.Error(), "plan") {
+		t.Fatalf("error text = %q, want the entitlement reason", err)
+	}
+}
+
 // TestConsumeStreamClassifiesUnauthorizedEnvelope proves a genuine auth failure
 // is distinguished from a busy verdict.
 func TestConsumeStreamClassifiesUnauthorizedEnvelope(t *testing.T) {
@@ -158,6 +195,9 @@ func TestConsumeStreamClassifiesUnauthorizedEnvelope(t *testing.T) {
 	_, _, err := collectStream(t, body)
 	if !errors.Is(err, errUpstreamUnauthorized) {
 		t.Fatalf("error = %v, want errUpstreamUnauthorized", err)
+	}
+	if !strings.Contains(err.Error(), "status=403") && !strings.Contains(err.Error(), "login expired") {
+		t.Fatalf("error = %v, want the upstream reason", err)
 	}
 }
 
@@ -398,5 +438,65 @@ func TestFinishReasonMapping(t *testing.T) {
 	}
 	if got := (streamResult{ToolCallCount: 1}).FinishReason(); got != "tool_use" {
 		t.Errorf("FinishReason with a tool call = %q, want tool_use", got)
+	}
+}
+
+// TestEntitlementRefusalDoesNotRetireTheAccount is the regression test for the
+// misdiagnosis observed on a live account.
+//
+// The gateway reports a missing subscription with HTTP 200, a business status of
+// 403 and a body naming its pricing page. That message reached the shared account
+// classifier, which read "403" as a dead credential and set the account's status
+// to "403" — the console showed 「禁止访问」 for an account whose credential was
+// perfectly valid, and the pool alarm fired for a channel that was not broken.
+//
+// The fixture is built with encoding/json rather than hand-escaped, because the
+// escaping is exactly what a hand-written fixture gets wrong.
+func TestEntitlementRefusalDoesNotRetireTheAccount(t *testing.T) {
+	t.Parallel()
+
+	// The inner payload the gateway nests as a JSON string.
+	inner := `{"code":"112","message":"{\"pricingUrl\":\"https://qoder.com/pricing?client=qoder\"}"}`
+	envelopeBody, err := json.Marshal(map[string]any{
+		"headers":         map[string][]string{"Content-Type": {"application/json"}},
+		"body":            inner,
+		"statusCodeValue": 403,
+		"statusCode":      "FORBIDDEN",
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+	stream := "data:" + string(envelopeBody) + "\n\n"
+
+	_, _, streamErr := collectStream(t, stream)
+	if streamErr == nil {
+		t.Fatal("consumeStream() error = nil, want an entitlement refusal")
+	}
+	if !errors.Is(streamErr, ErrNoEntitlement) {
+		t.Fatalf("error = %v, want ErrNoEntitlement", streamErr)
+	}
+
+	text := streamErr.Error()
+
+	// The shared classifier's exact triggers. Any of these would set the
+	// account's status and disable it.
+	lower := strings.ToLower(text)
+	for _, forbidden := range []string{"status=403", "403", "forbidden", "unauthorized"} {
+		if strings.Contains(lower, forbidden) {
+			t.Errorf("error text %q contains %q, which the account classifier reads as a dead credential", text, forbidden)
+		}
+	}
+
+	// And the operator must still learn what is actually wrong. The code marker is
+	// asserted too, so this test cannot pass through the generic error path: it
+	// must be the entitlement branch that produced the message.
+	if !strings.Contains(text, "code=112") {
+		t.Fatalf("error text %q was not produced by the entitlement branch", text)
+	}
+	if !strings.Contains(text, "pricing") {
+		t.Errorf("error text %q does not name the pricing page", text)
+	}
+	if !strings.Contains(text, "plan") && !strings.Contains(text, "subscription") {
+		t.Errorf("error text %q does not say what to do", text)
 	}
 }

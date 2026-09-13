@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goccy/go-json"
+
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
@@ -287,33 +290,24 @@ func TestBusyWaitIsCapped(t *testing.T) {
 	}
 }
 
-// TestFetchModelsParsesChatScene pins catalog parsing and the display-name to
-// key mapping.
-func TestFetchModelsParsesChatScene(t *testing.T) {
+// TestFetchModelsServesTheBuiltInCatalog proves the channel serves a usable
+// catalog with no network access at all, which is what makes the device login
+// independent of the gateway's model-list endpoint.
+func TestFetchModelsServesTheBuiltInCatalog(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "/algo/api/v2/model/list") {
-			t.Errorf("path = %q, want the model list endpoint", r.URL.Path)
-		}
-		if got := r.Header.Get("X-Model-Key"); got != "" {
-			t.Errorf("catalog request carried X-Model-Key = %q, want none", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"chat":[{"key":"qmodel_latest","display_name":"Qwen3.7-Max","enable":true,"is_vl":true},{"key":"dfmodel","display_name":"DeepSeek-V4-Flash","enable":true},{"key":"disabled","display_name":"Disabled","enable":false},{"key":"auto","display_name":"Auto"}]}`))
-	}))
-	defer server.Close()
-
 	acc := signedTestAccount()
+	acc.QoderModelIDs = nil
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	// Point everything at a closed port: a network read would fail here.
+	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 
 	catalog, err := client.FetchModels(context.Background())
 	if err != nil {
 		t.Fatalf("FetchModels() error = %v", err)
 	}
-	if got := catalog.Len(); got != 2 {
-		t.Fatalf("catalog length = %d, want 2 (disabled and auto excluded)", got)
+	if catalog.Len() == 0 {
+		t.Fatal("the built-in catalog is empty")
 	}
 	entry, err := catalog.Resolve("Qwen3.7-Max")
 	if err != nil {
@@ -490,4 +484,84 @@ func TestApplyAuthHeadersOmitsOrganizationWhenAbsent(t *testing.T) {
 
 func credsOf(acc *store.Account) Credentials {
 	return ResolveCredentials(acc)
+}
+
+// TestEntitlementRefusalKeepsTheAccountUsable drives one real streaming request
+// against a stub that answers exactly what a live Qoder account without a
+// subscription answers, then feeds the resulting error to the shared account
+// classifier the handler uses.
+//
+// This is the whole bug in one assertion. On the live deployment the classifier
+// read the upstream "403" out of the message, marked the account status "403",
+// and the console showed 「禁止访问」 — and the channel raised a "no usable
+// account" alarm — for an account whose credential the gateway had just accepted.
+func TestEntitlementRefusalKeepsTheAccountUsable(t *testing.T) {
+	t.Parallel()
+
+	// Verbatim from the live gateway: HTTP 200, a business status of 403, and a
+	// body naming the pricing page.
+	inner := `{"code":"112","message":"{\"pricingUrl\":\"https://qoder.com/pricing?client=qoder\"}"}`
+	envelopeBody, err := json.Marshal(map[string]any{
+		"headers":         map[string][]string{"Content-Type": {"application/json"}},
+		"body":            inner,
+		"statusCodeValue": 403,
+		"statusCode":      "FORBIDDEN",
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data:" + string(envelopeBody) + "\n\n"))
+	}))
+	defer server.Close()
+
+	acc := signedTestAccount()
+	client := NewFromAccount(acc, nil)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+
+	requestErr := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model:    "Qwen3.7-Max",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}},
+	}, nil, nil)
+	if requestErr == nil {
+		t.Fatal("SendRequestWithPayload() error = nil, want an entitlement refusal")
+	}
+	if !errors.Is(requestErr, ErrNoEntitlement) {
+		t.Fatalf("error = %v, want ErrNoEntitlement", requestErr)
+	}
+
+	// The handler's own classifier, on the handler's own input.
+	if status := apperrors.ClassifyAccountStatus(requestErr.Error()); status != "" {
+		t.Fatalf("ClassifyAccountStatus(%q) = %q, want \"\" — a non-empty status disables the account", requestErr.Error(), status)
+	}
+
+	// And the reason still reaches whoever reads the request error.
+	if !strings.Contains(requestErr.Error(), "pricing") {
+		t.Fatalf("error = %v, want the pricing pointer", requestErr)
+	}
+}
+
+// TestEntitlementRefusalIsTerminal pins the retry verdict. Four attempts were
+// spent on a live account before this: the shared classifier buckets an
+// unrecognised error as retryable, so a missing subscription was retried until
+// the budget ran out even though no retry can change a plan.
+func TestEntitlementRefusalIsTerminal(t *testing.T) {
+	t.Parallel()
+
+	err := entitlementError(`{"code":"112","message":"{\"pricingUrl\":\"https://qoder.com/pricing?client=qoder\"}"}`)
+	class := apperrors.ClassifyUpstreamError(err.Error())
+	if class.Category != "client" {
+		t.Fatalf("category = %q, want client", class.Category)
+	}
+	if class.Retryable {
+		t.Fatal("an entitlement refusal must not be retried")
+	}
+	if class.SwitchAccount {
+		t.Fatal("an entitlement refusal must not switch accounts: every account on the pool would fail the same way")
+	}
+	if status := apperrors.ClassifyAccountStatus(err.Error()); status != "" {
+		t.Fatalf("account status = %q, want \"\"", status)
+	}
 }

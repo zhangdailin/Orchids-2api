@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -12,24 +10,6 @@ import (
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 )
-
-// qoderCatalogStub serves the signed catalog read for a Qoder account. It is a
-// control-plane endpoint, so a successful answer is the credential check.
-func qoderCatalogStub(t *testing.T) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "/algo/api/v2/model/list") {
-			t.Errorf("unexpected path %q", r.URL.Path)
-		}
-		for _, header := range []string{"Authorization", "Cosy-Key", "Cosy-MachineId", "Cosy-User", "Cosy-Date"} {
-			if r.Header.Get(header) == "" {
-				t.Errorf("catalog request is missing %s", header)
-			}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"chat":[{"key":"qmodel_latest","display_name":"Qwen3.7-Max","enable":true},{"key":"dfmodel","display_name":"DeepSeek-V4-Flash","enable":true},{"key":"off","display_name":"Off","enable":false}]}`))
-	}))
-}
 
 func qoderTestAccount(machineID string) *store.Account {
 	return &store.Account{
@@ -47,50 +27,54 @@ func qoderTestAccount(machineID string) *store.Account {
 	}
 }
 
-// TestDiscoverQoderModels_PersistsAccountSnapshot proves model refresh reads the
-// account's signed catalog, translates it into channel models and records the
-// account-scoped snapshot the routing check uses.
+// TestDiscoverQoderModels_PersistsAccountSnapshot proves model refresh publishes
+// the channel catalog and records the account-scoped snapshot the routing check
+// uses.
 func TestDiscoverQoderModels_PersistsAccountSnapshot(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 	clearModelsForChannel(t, context.Background(), s, "Qoder")
-
-	stub := qoderCatalogStub(t)
-	defer stub.Close()
 
 	acc := qoderTestAccount("11111111-2222-4333-8444-555555555555")
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	cfg := &config.Config{QoderInferenceURL: stub.URL, QoderOpenAPIBaseURL: stub.URL}
-	candidates, source, err := discoverQoderModels(context.Background(), cfg, s)
+	candidates, source, err := discoverQoderModels(context.Background(), &config.Config{}, s)
 	if err != nil {
 		t.Fatalf("discoverQoderModels() error = %v", err)
 	}
-	if source != "qoder_model_list" {
-		t.Fatalf("source = %q, want qoder_model_list", source)
+	if source != "qoder_builtin_catalog" {
+		t.Fatalf("source = %q, want qoder_builtin_catalog", source)
 	}
-	if len(candidates) != 2 {
-		t.Fatalf("candidates = %+v, want the two enabled rows", candidates)
+	if len(candidates) == 0 {
+		t.Fatal("no candidates were published")
 	}
 	// The public identifier is the lowercased display name, because that is what
 	// a client asks for and what the store index is keyed by.
-	if candidates[0].ID != "qwen3.7-max" || candidates[0].Name != "qwen3.7-max" {
-		t.Fatalf("first candidate = %+v, want the lowercased display name", candidates[0])
-	}
+	seen := map[string]bool{}
 	for _, candidate := range candidates {
-		if candidate.ID == "off" || candidate.ID == "qmodel_latest" {
-			t.Fatalf("candidate %+v is not the public form", candidate)
+		seen[candidate.ID] = true
+		if candidate.ID != strings.ToLower(candidate.ID) {
+			t.Fatalf("candidate %+v is not lowercased", candidate)
 		}
+		if candidate.Name != candidate.ID {
+			t.Fatalf("candidate %+v does not use the public name", candidate)
+		}
+	}
+	if !seen["qwen3.7-max"] {
+		t.Fatalf("candidates = %+v, want the Qwen3.7-Max row", candidates)
 	}
 
 	stored, err := s.GetAccount(context.Background(), acc.ID)
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
-	if len(stored.QoderModelIDs) != 2 || stored.QoderModelsSyncedAt.IsZero() {
-		t.Fatalf("account snapshot = %v (synced %v), want a recorded snapshot", stored.QoderModelIDs, stored.QoderModelsSyncedAt)
+	if len(stored.QoderModelIDs) == 0 {
+		t.Fatalf("account snapshot = %v, want a recorded snapshot", stored.QoderModelIDs)
+	}
+	if !stored.QoderModelsSyncedAt.IsZero() {
+		t.Fatal("a local catalog was stamped as if it had been observed upstream")
 	}
 	// The snapshot round-trips through the channel's own resolver.
 	catalog := qoder.CatalogFromSnapshot(stored.QoderModelIDs)
@@ -99,26 +83,38 @@ func TestDiscoverQoderModels_PersistsAccountSnapshot(t *testing.T) {
 	}
 }
 
-// TestDiscoverQoderModels_ReportsAnAccountFailure proves a broken credential is
-// surfaced instead of silently producing an empty catalog.
-func TestDiscoverQoderModels_ReportsAnAccountFailure(t *testing.T) {
+// TestDiscoverQoderModels_DoesNotDependOnTheGateway proves the refresh needs no
+// upstream access at all.
+//
+// The Qoder catalog is local, so pointing every endpoint at a closed port must
+// still publish the catalog. If this ever starts reaching the network, the test
+// fails — which is the point: a gateway that refuses the model-list read must not
+// be able to break model management.
+func TestDiscoverQoderModels_DoesNotDependOnTheGateway(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
-
-	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"message":"forbidden"}`))
-	}))
-	defer failing.Close()
 
 	acc := qoderTestAccount("11111111-2222-4333-8444-555555555555")
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	cfg := &config.Config{QoderInferenceURL: failing.URL, QoderOpenAPIBaseURL: failing.URL}
-	if _, _, err := discoverQoderModels(context.Background(), cfg, s); err == nil {
-		t.Fatal("discoverQoderModels() error = nil for a rejected credential")
+	dead := "http://127.0.0.1:1"
+	cfg := &config.Config{
+		QoderOAuthBaseURL:   dead,
+		QoderOpenAPIBaseURL: dead,
+		QoderInferenceURL:   dead,
+		QoderAuthBaseURL:    dead,
+	}
+	candidates, source, err := discoverQoderModels(context.Background(), cfg, s)
+	if err != nil {
+		t.Fatalf("discoverQoderModels() error = %v, want the local catalog", err)
+	}
+	if len(candidates) == 0 {
+		t.Fatal("no candidates were published")
+	}
+	if source != "qoder_builtin_catalog" {
+		t.Fatalf("source = %q", source)
 	}
 }
 
@@ -144,13 +140,13 @@ func TestNormalizeAdminModelChannel_AcceptsQoder(t *testing.T) {
 	}
 }
 
-// TestShouldDeleteMissingModelsOnRefresh_CoversQoder proves a model that left the
-// account catalog stops being routable.
-func TestShouldDeleteMissingModelsOnRefresh_CoversQoder(t *testing.T) {
-	if !shouldDeleteMissingModelsOnRefresh("qoder", "qoder_model_list") {
-		t.Fatal("qoder catalog refresh must prune models that disappeared")
-	}
-	if shouldDeleteMissingModelsOnRefresh("qoder", "something_else") {
-		t.Fatal("an unknown source must not prune the qoder catalog")
+// TestShouldDeleteMissingModelsOnRefresh_KeepsTheLocalQoderCatalog proves a
+// Qoder refresh never prunes: nothing upstream was observed, so a missing row is
+// not evidence that a model became unavailable.
+func TestShouldDeleteMissingModelsOnRefresh_KeepsTheLocalQoderCatalog(t *testing.T) {
+	for _, source := range []string{"qoder_builtin_catalog", "qoder_model_list", "something_else"} {
+		if shouldDeleteMissingModelsOnRefresh("qoder", source) {
+			t.Fatalf("source %q pruned the local Qoder catalog", source)
+		}
 	}
 }

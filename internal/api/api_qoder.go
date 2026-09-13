@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
-	"time"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/qoder"
@@ -166,13 +165,16 @@ func NormalizeQoderCredentials(acc *store.Account) bool {
 	return true
 }
 
-// verifyQoderAccount proves the credential works before it is persisted and
-// applies the account-scoped catalog on the way.
+// verifyQoderAccount checks that a Qoder account is still usable and refreshes
+// the identity and derived material it owns.
 //
-// The signed catalog read is the verification: it exercises every layer of the
-// credential chain (device token, runtime fields, COSY signature), so a
-// successful read is stronger evidence than a bare HTTP 200 from the token
-// endpoint.
+// Scope is deliberately credential liveness only. An earlier version verified
+// with the gateway's model-list read, which an OAuth credential is refused by
+// (`403 code=101 Signature invalid`) — so a perfectly valid account reported 403,
+// the console showed it as forbidden, and the channel raised a "no usable
+// account" alarm. Entitlement is not checked here either: a plan problem is
+// reported by the chat call itself, in terms the operator can act on, and
+// marking the credential dead over it is exactly the mistake being corrected.
 func verifyQoderAccount(ctx context.Context, acc *store.Account, cfg *config.Config) (string, int, error) {
 	if acc == nil {
 		return "", 0, nil
@@ -220,13 +222,10 @@ func verifyQoderAccount(ctx context.Context, acc *store.Account, cfg *config.Con
 	acc.QoderRuntimeInfo = fields.EncryptUserInfo
 	acc.QoderRuntimeKey = fields.Key
 
-	catalog, err := client.FetchModels(ctx)
-	if err != nil {
-		return "", 502, err
-	}
-	if ids := qoder.CatalogSnapshot(catalog); len(ids) > 0 {
+	// The catalog is local, so there is nothing to observe and no timestamp to
+	// write. It is installed only to keep the snapshot resolvable.
+	if ids := qoder.CatalogSnapshot(qoder.DefaultCatalog()); len(acc.QoderModelIDs) == 0 && len(ids) > 0 {
 		acc.QoderModelIDs = ids
-		acc.QoderModelsSyncedAt = time.Now()
 	}
 	return "", 0, nil
 }

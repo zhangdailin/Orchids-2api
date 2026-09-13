@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"orchids-api/internal/config"
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 )
@@ -252,8 +253,13 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	if acc.QoderRuntimeInfo == "" || acc.QoderRuntimeKey == "" {
 		t.Fatal("the derived runtime pair was not stored")
 	}
-	if len(acc.QoderModelIDs) != 2 {
-		t.Fatalf("catalog snapshot = %v, want two models", acc.QoderModelIDs)
+	// The Qoder catalog is local (the gateway refuses the model-list read for an
+	// OAuth credential), so a completed login installs the built-in list.
+	if want := len(qoder.CatalogSnapshot(qoder.DefaultCatalog())); len(acc.QoderModelIDs) != want {
+		t.Fatalf("catalog snapshot has %d entries, want the built-in %d", len(acc.QoderModelIDs), want)
+	}
+	if !acc.QoderModelsSyncedAt.IsZero() {
+		t.Fatal("the built-in catalog was stamped as if it had been observed upstream")
 	}
 	if acc.QoderJobToken != "gw-sot" {
 		t.Fatalf("job token = %q, want the handshake result", acc.QoderJobToken)
@@ -274,12 +280,14 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 }
 
 // TestHandleQoderLogin_SurvivesAnUnavailableCatalog proves an issued credential
-// is not thrown away when the gateway does not serve the model list path.
+// is not thrown away when the gateway refuses the model list path.
 //
-// Device authorization does not depend on that read: the Qoder CLI carries its
-// own catalog and the Qoder-2API-Go reference reads a local cache, so a
-// deployment whose gateway answers 404/403 there (for example a CN-region
-// account) must still end up with a usable account.
+// This is not hypothetical: a live OAuth account receives
+// `403 code=101 Signature invalid` from `/algo/api/v2/model/list` even though the
+// same credential and runtime pair authenticate a chat request. Device
+// authorization does not depend on that read, so the account must still be
+// stored — and the built-in catalog must not be stamped as if a sync had
+// happened.
 func TestHandleQoderLogin_SurvivesAnUnavailableCatalog(t *testing.T) {
 	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
@@ -529,4 +537,73 @@ func qoderAccountRequest(t *testing.T, method, path, body string) *http.Request 
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	return req
+}
+
+// TestVerifyQoderAccountDoesNotReportForbidden proves the account check no longer
+// depends on the model-list read.
+//
+// On the live deployment the check call was what set the account's status to
+// "403": it read `/algo/api/v2/model/list`, the gateway refused that read for an
+// OAuth credential, and the console showed 「禁止访问」 plus a
+// "no usable account" alarm for an account whose credential was valid. The check
+// must therefore pass with no upstream catalog available at all.
+func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
+	s, _ := newTestStore(t, "qd-verify:")
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/userinfo":
+			_, _ = w.Write([]byte(`{"uid":"uid-qoder","name":"operator","email":"operator@example.com"}`))
+		case "/algo/api/v2/model/list":
+			// Exactly what the gateway answers for this credential.
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"code":"101","message":"Signature invalid"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	acc := &store.Account{
+		AccountType:       "qoder",
+		Name:              "qoder-verify",
+		QoderAccessToken:  "access-1",
+		QoderRefreshToken: "refresh-1",
+		QoderMachineID:    "11111111-2222-4333-8444-555555555555",
+		QoderUserID:       "uid-qoder",
+		QoderRuntimeInfo:  "runtime-info",
+		QoderRuntimeKey:   "runtime-key",
+		QoderDataPolicy:   true,
+		Enabled:           true,
+	}
+	if err := s.CreateAccount(t.Context(), acc); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	cfg := &config.Config{
+		QoderOAuthBaseURL:   upstream.URL,
+		QoderOpenAPIBaseURL: upstream.URL,
+		QoderInferenceURL:   upstream.URL,
+		QoderAuthBaseURL:    upstream.URL,
+	}
+	status, httpStatus, err := verifyQoderAccount(t.Context(), acc, cfg)
+	if err != nil {
+		t.Fatalf("verifyQoderAccount() error = %v, want success", err)
+	}
+	if status != "" {
+		t.Fatalf("status = %q, want no account status", status)
+	}
+	if httpStatus != 0 {
+		t.Fatalf("httpStatus = %d, want 0", httpStatus)
+	}
+	if apperrors.ClassifyAccountStatus("") != "" {
+		t.Fatal("sanity: the classifier must not invent a status")
+	}
+	if len(acc.QoderModelIDs) == 0 {
+		t.Fatal("no catalog was installed")
+	}
+	if !acc.QoderModelsSyncedAt.IsZero() {
+		t.Fatal("a local catalog was stamped as synced")
+	}
 }

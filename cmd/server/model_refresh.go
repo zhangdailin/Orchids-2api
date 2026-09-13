@@ -257,12 +257,15 @@ func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.S
 	return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", lastErr)
 }
 
-// discoverQoderModels reads the account-scoped Qoder model catalog.
-// GET /algo/api/v2/model/list is an authenticated, signed control-plane read, so
-// a successful answer is itself proof that the credential works; no completion
-// probe is sent because the upstream bills per token.
+// discoverQoderModels publishes the Qoder channel catalog.
+//
+// The catalog is local, not fetched: the Qoder CLI's HTTP surface has no model
+// list endpoint and its OAuth credential is refused by the gateway's
+// `/algo/api/v2/model/list` with `403 code=101 Signature invalid`. The built-in
+// list is therefore what this channel can honestly publish, and the per-account
+// snapshot records what was installed.
 func discoverQoderModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	source := "qoder_model_list"
+	source := "qoder_builtin_catalog"
 	accounts, err := enabledAccountsByType(ctx, s, "qoder")
 	if err != nil {
 		return nil, "", fmt.Errorf("qoder model discovery failed: %w", err)
@@ -324,7 +327,10 @@ func qoderCatalogToDiscovered(catalog *qoder.Catalog) []discoveredModel {
 }
 
 // persistQoderCatalogSnapshot records the account-scoped catalog so model
-// selection can be checked against what this account may actually run.
+// selection resolves against the same list the channel publishes.
+//
+// No sync timestamp is written: the catalog is local, so dating it would claim an
+// upstream observation that never happened.
 func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store.Account, catalog *qoder.Catalog) {
 	if acc == nil || acc.ID == 0 {
 		return
@@ -334,7 +340,7 @@ func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store
 		return
 	}
 	acc.QoderModelIDs = ids
-	acc.QoderModelsSyncedAt = time.Now()
+	acc.QoderModelsSyncedAt = time.Time{}
 	if err := s.UpdateAccount(ctx, acc); err != nil {
 		slog.Warn("failed to persist qoder model snapshot", "account_id", acc.ID, "error", err)
 	}
@@ -1226,9 +1232,9 @@ func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 		return strings.HasPrefix(strings.TrimSpace(source), "workbuddy_cli_models")
 	}
 	if strings.EqualFold(strings.TrimSpace(channel), "qoder") {
-		// GET /algo/api/v2/model/list is the authoritative account catalog, so a
-		// model that disappeared from it must not stay routable.
-		return strings.HasPrefix(strings.TrimSpace(source), "qoder_model_list")
+		// The Qoder catalog is local, so a refresh observes nothing new about the
+		// account's entitlements. Pruning on it would delete models for no reason.
+		return false
 	}
 	if !strings.EqualFold(strings.TrimSpace(channel), "warp") {
 		return false

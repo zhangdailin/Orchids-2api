@@ -461,9 +461,27 @@ curl -s -X DELETE http://127.0.0.1:3002/api/qoder/login/<login-id>
 - PKCE verifier、nonce 与设备 `machine_id` 只保存在服务端；轮询响应里不会出现它们（`user_code` 恒为空）
 - 上游在浏览器步骤完成前对 `GET /api/v1/deviceToken/poll` 返回 **404**，服务端归一为「pending」并按 2s 节奏轮询
 - 授权成功后服务端会派生并保存该账号的 runtime 认证对（`qoder_runtime_info` / `qoder_runtime_key`），登录时即完成，避免第一次聊天才暴露失败
-- **落库条件是「上游签发了设备凭据」+「解析出账号身份」**，不依赖模型目录读取：Qoder CLI 自带模型清单、Qoder-2API-Go 参考实现读本地缓存，都不通过网络拉取。因此当 `/algo/api/v2/model/list` 返回 404/403 或不可达（例如 CN 区账号、未开通 CLI 面、端点变更）时，账号仍会保存并装入内置模型清单，真实的读取失败原因写入服务端日志
+- **落库条件是「上游签发了设备凭据」+「解析出账号身份」**，不依赖模型目录读取。Qoder CLI 的全部 HTTP 接口只有四个（设备 token 刷新、`userinfo`、PAT jobToken 兑换、聊天 SSE），**不含任何模型清单接口**：它自带内置清单，必要时读本地 `catalog-v6` 缓存
+- 已用真实账号实测：`GET /algo/api/v2/model/list` 对 OAuth 设备凭据返回 `403 {"code":"101","message":"Signature invalid"}`，而**同一凭据、同一 runtime 对**的聊天请求是通过鉴权的（上游返回业务错误而非签名错误）。因此该接口不再被调用，模型清单为本地内置 + 账号快照
 - 只有确实不可用的凭据才会被拒绝：解析不出账号身份（`userinfo` 被拒且设备 token 未带 `user_id`）或未签发 refreshToken 时，账号不落库，且失败消息会带上具体原因（而不只是「could not be verified」）
-- `/api/models/refresh?channel=qoder` 仍然严格：读不到账号目录时会报错，而不会把内置清单伪装成「上游已同步」
+- 模型清单是**本地**的，因此 `POST /api/models/refresh?channel=qoder` 不会因上游不可达而失败，也不会因为某个模型「不在账号目录里」而删除它（`source=qoder_builtin_catalog`）；账号快照不带同步时间戳，因为不存在可观测的上游目录
+
+### 9.2 套餐与额度（`403` + `pricingUrl`）
+
+Qoder 侧没有可用套餐/额度时，上游**接受鉴权**但返回业务拒绝：
+
+```json
+{"code":"112","message":"{"pricingUrl":"https://qoder.com/pricing?client=qoder"}"}
+```
+
+这条被单独分类（`ErrNoEntitlement`），因为它**不是**凭据问题：
+
+- 账号状态不会被置为 `403`，控制台不会再显示「禁止访问」
+- 错误归类为 `client`（不可重试、不切换账号），不会把请求预算浪费在同一条注定失败的调用上
+- 错误消息会带上 `pricingUrl`，直接告诉操作者要买订阅，而不是去查凭据
+- 「qoder 没有可用账号」的池告警不会因为套餐问题而误报
+
+注意：参考实现（Qoder CLI 协议基线）在同一账号上同样失败并返回同一个 `pricingUrl`，所以这是账号侧的套餐状态，而非网关行为差异。要真正跑通聊天，需要在 qoder.com 上为该账号开通可用订阅或额度。
 - 设备 refreshToken 由上游轮换，服务端在过期前自动刷新并回写账号记录；管理页面不会返回 refreshToken、runtime 字段或 jobToken
 - 触发了 `POST /algo/api/v3/user/jobToken`（PAT 形态网关握手）时结果只作为辅助字段保存，**不是**推理凭据；握手失败只记日志，不影响登录或推理
 - 同一账号再次登录会更新原账号，不会产生重复记录

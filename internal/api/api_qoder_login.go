@@ -368,18 +368,15 @@ func (a *API) buildQoderAccountFromCredentials(ctx context.Context, loginID, mac
 	acc.QoderRuntimeInfo = client.RuntimeFields().EncryptUserInfo
 	acc.QoderRuntimeKey = client.RuntimeFields().Key
 
+	// The catalog is installed from the built-in list. QoderModelsSyncedAt is
+	// deliberately left zero: there is no upstream catalog to observe, so a sync
+	// timestamp would claim a freshness this channel cannot have.
 	models, catalogErr := client.FetchModelsLenient(ctx)
 	if catalogErr != nil {
-		// Recorded, not fatal. A snapshot is only stamped with a sync time when
-		// it was actually observed, so the account table can still tell "not
-		// synced yet" from "synced".
 		slog.Warn("Qoder catalog read failed; the account was saved with the built-in model list",
 			"login_id", loginID, "error", catalogErr)
-	} else {
-		acc.QoderModelIDs = qoder.CatalogSnapshot(models)
-		acc.QoderModelsSyncedAt = time.Now()
 	}
-	if len(acc.QoderModelIDs) == 0 {
+	if acc.QoderModelIDs = qoder.CatalogSnapshot(models); len(acc.QoderModelIDs) == 0 {
 		acc.QoderModelIDs = qoder.CatalogSnapshot(qoder.DefaultCatalog())
 	}
 

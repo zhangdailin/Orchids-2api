@@ -322,11 +322,17 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 			if detail == "" {
 				detail = fmt.Sprintf("upstream status %d", envelope.StatusCodeValue)
 			}
-			if stringOfCode(failure.Code) == busyCode {
+			switch {
+			case stringOfCode(failure.Code) == busyCode:
 				streamErr = fmt.Errorf("%w: %s", ErrBusy, detail)
-			} else if envelope.StatusCodeValue == http.StatusUnauthorized || envelope.StatusCodeValue == http.StatusForbidden {
+			case DetectNoEntitlement(detail, envelope.Body):
+				// The credential was accepted; the account simply has no plan or
+				// allowance for this model. This must not be classified as an
+				// authentication failure, or a working account is retired.
+				streamErr = entitlementError(envelope.Body)
+			case envelope.StatusCodeValue == http.StatusUnauthorized || envelope.StatusCodeValue == http.StatusForbidden:
 				streamErr = fmt.Errorf("%w: %s", errUpstreamUnauthorized, detail)
-			} else {
+			default:
 				streamErr = fmt.Errorf("qoder upstream error: %s", detail)
 			}
 			return false
