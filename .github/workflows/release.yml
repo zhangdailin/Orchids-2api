@@ -81,13 +81,13 @@ jobs:
           cd dist
           binary="orchids-server-${GOOS_TARGET}-${GOARCH_TARGET}"
           sha256sum "$binary" > "$binary.sha256"
-          cat > "$binary.build-info.txt" <<EOF
-version=${{ steps.meta.outputs.version }}
-commit=${{ steps.meta.outputs.commit }}
-built_at=${{ steps.meta.outputs.built_at }}
-goos=${GOOS_TARGET}
-goarch=${GOARCH_TARGET}
-EOF
+          printf '%s\n' \
+            'version=${{ steps.meta.outputs.version }}' \
+            'commit=${{ steps.meta.outputs.commit }}' \
+            'built_at=${{ steps.meta.outputs.built_at }}' \
+            "goos=${GOOS_TARGET}" \
+            "goarch=${GOARCH_TARGET}" \
+            > "$binary.build-info.txt"
           ls -l
 
       - name: Upload artifact
