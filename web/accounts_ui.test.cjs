@@ -1056,28 +1056,11 @@ test('every channel has a badge style, so the tutorial row is not unstyled', () 
   }
 });
 
-
-// Renders the live Grok OAuth payloads (exported from the running server) so the
-// 等级 / 配额 columns can be checked against what the operator actually sees.
-test('the live Grok OAuth payloads render a tier and a quota', () => {
-  const fixtures = JSON.parse(fs.readFileSync('/tmp/grok_oauth.json', 'utf8'));
-  const { context } = loadUI();
-  const strip = (html) => String(html).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-  for (const account of fixtures) {
-    const q = context.getQuotaStats(account);
-    console.log(`id ${account.id} sub=${JSON.stringify(account.subscription)} `
-      + `conf=${JSON.stringify(account.quota_confidence)} limit=${account.quota_limit} `
-      + `=> 等级="${strip(context.buildSubscriptionMarkup(account))}" `
-      + `配额="${strip(context.buildQuotaMarkup(account))}" `
-      + `quotaStats=${JSON.stringify(q && { limit: q.limit, remaining: q.remaining, estimated: q.estimated, confirmedFree: q.confirmedFree, unknown: q.unknown, quotaUnavailable: q.quotaUnavailable })}`);
-  }
-});
-
 // A Grok Build Free account has no plan name from the identity endpoint, so the
 // server records "unknown" — and the tier column showed 未知 while the quota
 // column already knew the account was Free. The server now emits "free" once its
 // own Free inference fires, and the badge must render that as a tier.
-test('a Grok Free account shows the Free tier instead of 未知', () => {
+test('Grok OAuth API payloads render the Free tier and quota provenance', () => {
   const { context } = loadUI();
   const strip = (html) => String(html).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 
@@ -1098,10 +1081,16 @@ test('a Grok Free account shows the Free tier instead of 未知', () => {
     quota_window_hours: 24,
   };
   assert.equal(strip(context.buildSubscriptionMarkup(free)), 'Free');
+  const confirmedQuota = strip(context.buildQuotaMarkup(free));
+  assert.match(confirmedQuota, /500[,.]?000/);
+  assert.match(confirmedQuota, /Free 实报/);
+  assert.doesNotMatch(confirmedQuota, /^≈/);
 
   const estimated = { ...free, subscription: 'free', quota_source: 'billingProfile', quota_confidence: 'estimated', quota_limit_known: false };
   assert.equal(strip(context.buildSubscriptionMarkup(estimated)), 'Free');
-  assert.match(strip(context.buildQuotaMarkup(estimated)), /^≈/);
+  const estimatedQuota = strip(context.buildQuotaMarkup(estimated));
+  assert.match(estimatedQuota, /^≈/);
+  assert.match(estimatedQuota, /Free 估算/);
 
   // An account the server could not characterise stays honest.
   const unknown = { ...free, subscription: 'unknown' };
