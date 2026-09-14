@@ -253,6 +253,10 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 
 	acc1 := createEnabledTestAccount(t, s, "acc-1", "puter")
 	acc2 := createEnabledTestAccount(t, s, "acc-2", "puter")
+	acc2.MaxConcurrent = 2
+	if err := s.UpdateAccount(context.Background(), acc2); err != nil {
+		t.Fatalf("UpdateAccount(acc-2) error = %v", err)
+	}
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 	globalTracker := newSpyConnTracker(nil)
@@ -328,8 +332,13 @@ func TestWorkBuddyDefaultConcurrencyLimitIsThree(t *testing.T) {
 	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "workbuddy", MaxConcurrent: 7}); got != 7 {
 		t.Fatalf("configured WorkBuddy limit = %d, want 7", got)
 	}
-	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "puter"}); got != 0 {
-		t.Fatalf("unconfigured Puter limit = %d, want unlimited", got)
+	for _, accountType := range []string{"puter", "warp", "grok"} {
+		if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: accountType}); got != 1 {
+			t.Fatalf("unconfigured %s limit = %d, want 1", accountType, got)
+		}
+	}
+	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "puter", MaxConcurrent: 4}); got != 4 {
+		t.Fatalf("configured Puter limit = %d, want 4", got)
 	}
 }
 

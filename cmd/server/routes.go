@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/goccy/go-json"
+
 	"orchids-api/internal/api"
 	"orchids-api/internal/auth"
 	"orchids-api/internal/config"
@@ -15,6 +17,7 @@ import (
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
+	"orchids-api/internal/warp"
 	"orchids-api/web"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -327,7 +330,25 @@ func registerRoutes(
 	// --- Health, metrics, pprof ---
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		status := "ok"
+		warpStatus := "ready"
+		if warp.ConfigurationError() != nil {
+			status = "degraded"
+			warpStatus = "configuration_error"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":    status,
+			"providers": map[string]string{"warp": warpStatus},
+		})
+	})
+	mux.HandleFunc("/ready/warp", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := warp.ConfigurationError(); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "configuration_error", "message": "Warp OAuth is not configured"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 	})
 	mux.Handle("/metrics", promhttp.Handler())
 	slog.Debug("Prometheus metrics enabled", "path", "/metrics")

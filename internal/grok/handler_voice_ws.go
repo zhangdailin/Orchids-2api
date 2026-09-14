@@ -18,6 +18,8 @@ import (
 const (
 	voiceWSHandshakeTimeout = 20 * time.Second
 	voiceWSMessageLimit     = 16 << 20
+	voiceWSIdleTimeout      = 2 * time.Minute
+	voiceWSPingInterval     = 30 * time.Second
 )
 
 var consoleVoiceUpgrader = websocket.Upgrader{
@@ -80,6 +82,8 @@ func (h *Handler) handleVoiceWebSocket(w http.ResponseWriter, r *http.Request, p
 	defer client.Close()
 	client.SetReadLimit(voiceWSMessageLimit)
 	upstream.SetReadLimit(voiceWSMessageLimit)
+	configureVoiceWSDeadline(client)
+	configureVoiceWSDeadline(upstream)
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -98,8 +102,34 @@ func (h *Handler) handleVoiceWebSocket(w http.ResponseWriter, r *http.Request, p
 	errCh := make(chan error, 2)
 	go func() { errCh <- pumpVoiceWebSocket(client, upstream) }()
 	go func() { errCh <- pumpVoiceWebSocket(upstream, client) }()
-	<-errCh
-	closeBoth()
+	ping := time.NewTicker(voiceWSPingInterval)
+	defer ping.Stop()
+	for {
+		select {
+		case <-errCh:
+			closeBoth()
+			return
+		case <-ping.C:
+			deadline := time.Now().Add(5 * time.Second)
+			if client.WriteControl(websocket.PingMessage, nil, deadline) != nil || upstream.WriteControl(websocket.PingMessage, nil, deadline) != nil {
+				closeBoth()
+				return
+			}
+		case <-ctx.Done():
+			closeBoth()
+			return
+		}
+	}
+}
+
+func configureVoiceWSDeadline(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(voiceWSIdleTimeout))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(voiceWSIdleTimeout))
+	})
 }
 
 func pumpVoiceWebSocket(source, destination *websocket.Conn) error {
@@ -111,6 +141,7 @@ func pumpVoiceWebSocket(source, destination *websocket.Conn) error {
 		if err := destination.WriteMessage(messageType, payload); err != nil {
 			return err
 		}
+		_ = source.SetReadDeadline(time.Now().Add(voiceWSIdleTimeout))
 	}
 }
 

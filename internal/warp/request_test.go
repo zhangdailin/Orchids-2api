@@ -13,10 +13,17 @@ import (
 )
 
 func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
+	taskContext, err := proto.Marshal(warpapi.Request_TaskContext_builder{
+		Tasks: []*warpapi.Task{warpapi.Task_builder{Id: stringPtr("task-1")}.Build()},
+	}.Build())
+	if err != nil {
+		t.Fatalf("marshal task context: %v", err)
+	}
 	req := upstream.UpstreamRequest{
-		Model:         "claude-4-5-sonnet",
-		Workdir:       "/repo",
-		ChatSessionID: "warp_conv_1",
+		Model:           "claude-4-5-sonnet",
+		Workdir:         "/repo",
+		ChatSessionID:   "warp_conv_1",
+		WarpTaskContext: taskContext,
 		Messages: []prompt.Message{
 			{
 				Role: "user",
@@ -64,6 +71,9 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	}
 	if decoded.GetInput().WhichType() != warpapi.Request_Input_UserInputs_case {
 		t.Fatalf("input type=%v want user_inputs", decoded.GetInput().WhichType())
+	}
+	if tasks := decoded.GetTaskContext().GetTasks(); len(tasks) != 1 || tasks[0].GetId() != "task-1" {
+		t.Fatalf("task context=%#v want task-1", tasks)
 	}
 	inputs := decoded.GetInput().GetUserInputs().GetInputs()
 	if len(inputs) != 1 {

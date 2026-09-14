@@ -102,6 +102,64 @@ func TestEnsureLoginRetriesImmediatelyAfterFailure(t *testing.T) {
 	}
 }
 
+func TestEnsureTokenWaiterReceivesOriginalRefreshError(t *testing.T) {
+	t.Setenv(warpFirebaseAPIKeyEnv, "test-key")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"error":"unavailable"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	sess := &session{refreshToken: "token-123"}
+
+	first := make(chan error, 1)
+	go func() { first <- sess.ensureToken(context.Background(), client) }()
+	<-entered
+	second := make(chan error, 1)
+	go func() { second <- sess.ensureToken(context.Background(), client) }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		sess.mu.Lock()
+		refreshing := sess.refreshing
+		sess.mu.Unlock()
+		if refreshing || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	err1, err2 := <-first, <-second
+	if err1 == nil || err2 == nil {
+		t.Fatalf("refresh errors = %v, %v; want both failures", err1, err2)
+	}
+	if err1.Error() != err2.Error() {
+		t.Fatalf("waiter error %q lost original refresh error %q", err2, err1)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("refresh calls=%d want 1", got)
+	}
+}
+
+func TestInvalidateSessionDropsCachedIdentity(t *testing.T) {
+	const accountID = int64(99123)
+	first := getSession(accountID, "refresh-a", "device-a", "request-a")
+	InvalidateSession(accountID)
+	second := getSession(accountID, "refresh-a", "device-a", "request-a")
+	if first == second {
+		t.Fatal("invalidated Warp account reused its cached session")
+	}
+	InvalidateSession(accountID)
+}
+
 func TestSessionRefresh_DoesNotFallbackToWarpTokenProxy(t *testing.T) {
 	t.Parallel()
 

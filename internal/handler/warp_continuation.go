@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -13,6 +14,7 @@ type warpContinuation struct {
 	conversationID string
 	accountID      int64
 	toolContexts   map[string]upstream.WarpToolContext
+	taskContext    []byte
 }
 
 func warpBindingInput(toolType, input string) string {
@@ -33,9 +35,6 @@ func (h *Handler) resolveWarpContinuation(ctx context.Context, conversationKey s
 	}
 
 	toolResultIDs := latestToolResultIDs(messages)
-	if len(toolResultIDs) > 0 && conversationKey == "" {
-		return warpContinuation{}, fmt.Errorf("cannot resume Warp tool results without a stable conversation_id, session_id, or thread_id")
-	}
 	for _, toolCallID := range toolResultIDs {
 		binding, ok := h.sessionStore.GetWarpToolBinding(ctx, conversationKey, toolCallID)
 		if !ok {
@@ -55,6 +54,16 @@ func (h *Handler) resolveWarpContinuation(ctx context.Context, conversationKey s
 			Type:  binding.ToolType,
 			Name:  binding.ToolName,
 			Input: binding.ToolInput,
+		}
+		if encoded := strings.TrimSpace(binding.TaskContext); encoded != "" {
+			decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+			if err != nil {
+				return warpContinuation{}, fmt.Errorf("cannot resume Warp tool result %q because its task context is invalid", toolCallID)
+			}
+			if len(continuation.taskContext) > 0 && string(continuation.taskContext) != string(decoded) {
+				return warpContinuation{}, fmt.Errorf("Warp tool results belong to different task contexts")
+			}
+			continuation.taskContext = decoded
 		}
 	}
 	if len(toolResultIDs) > 0 && continuation.conversationID == "" {

@@ -36,6 +36,7 @@ type session struct {
 	jar            http.CookieJar
 	refreshing     bool
 	refreshDone    chan struct{}
+	refreshErr     error
 	loggingIn      bool
 	loginDone      chan struct{}
 	loginErr       error
@@ -82,6 +83,15 @@ func getSession(accountID int64, refreshToken, deviceID, requestID string) *sess
 			sess.expiresAt = time.Time{}
 			sess.loggedIn = false
 			sess.lastLogin = time.Time{}
+			sess.refreshErr = nil
+			// A refresh-token replacement denotes a new Firebase/Warp identity.
+			// Cookies and experiment/request identity from the previous login must
+			// not cross that boundary.
+			sess.jar = mustNewCookieJar()
+			sess.deviceID = deviceID
+			sess.requestID = requestID
+			sess.experimentID = ""
+			sess.experimentBuck = ""
 		}
 		if sess.deviceID == "" {
 			sess.deviceID = deviceID
@@ -170,6 +180,9 @@ func (s *session) ensureToken(ctx context.Context, httpClient *http.Client) erro
 		if s.tokenValid() {
 			return nil
 		}
+		if s.refreshErr != nil {
+			return s.refreshErr
+		}
 		return fmt.Errorf("warp refresh did not produce a valid token")
 	}
 
@@ -180,6 +193,7 @@ func (s *session) ensureToken(ctx context.Context, httpClient *http.Client) erro
 	err := s.refresh(ctx, httpClient, "")
 
 	s.mu.Lock()
+	s.refreshErr = err
 	s.refreshing = false
 	close(s.refreshDone)
 	s.refreshDone = nil

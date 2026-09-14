@@ -56,13 +56,19 @@ func (r *teamCooldownRegistry) Note(scope RateLimitScope, teamID, model string, 
 	}
 	key := teamCooldownKey(scope, teamID, model)
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	until := now.Add(retryAfter)
 	if cur, ok := r.entries[key]; ok && cur.until.After(until) {
+		r.mu.Unlock()
 		return
 	}
 	r.entries[key] = teamCooldownEntry{until: until}
 	r.maybeGC(now)
+	r.mu.Unlock()
+	// Redis is deliberately outside the local registry lock. A slow or failed
+	// shared backend must not serialize unrelated in-process model checks.
+	if backend := grokLimitsBackend(); backend != nil {
+		_ = backend.noteCooldown(scope, teamID, model, retryAfter)
+	}
 }
 
 // RetryAfterFor returns the remaining cooldown for a scope+team+model, or 0 if
@@ -74,16 +80,23 @@ func (r *teamCooldownRegistry) RetryAfterFor(scope RateLimitScope, teamID, model
 	key := teamCooldownKey(scope, teamID, model)
 	now := time.Now()
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	cur, ok := r.entries[key]
-	if !ok {
-		return 0
-	}
-	if !cur.until.After(now) {
+	if ok && !cur.until.After(now) {
 		delete(r.entries, key)
-		return 0
+		ok = false
 	}
-	return cur.until.Sub(now)
+	remaining := time.Duration(0)
+	if ok {
+		remaining = cur.until.Sub(now)
+	}
+	r.mu.Unlock()
+	// As in Note, never hold the process-local mutex across Redis I/O.
+	if backend := grokLimitsBackend(); backend != nil {
+		if shared := backend.cooldownRemaining(scope, teamID, model); shared > remaining {
+			remaining = shared
+		}
+	}
+	return remaining
 }
 
 // Wait blocks until the scope+team+model cooldown clears or ctx is done.

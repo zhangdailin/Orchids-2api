@@ -46,8 +46,12 @@ func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	}
 
 	disableWarpTools := req.NoTools || len(tools) == 0
+	taskContext, err := buildWarpTaskContext(req.WarpTaskContext)
+	if err != nil {
+		return "", nil, err
+	}
 	apiReq := warpapi.Request_builder{
-		TaskContext: warpapi.Request_TaskContext_builder{}.Build(),
+		TaskContext: taskContext,
 		Input:       input,
 		Settings:    buildRequestSettings(req, disableWarpTools),
 		Metadata:    buildRequestMetadata(req.ChatSessionID),
@@ -65,6 +69,17 @@ func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 		return "", nil, err
 	}
 	return query, payload, nil
+}
+
+func buildWarpTaskContext(encoded []byte) (*warpapi.Request_TaskContext, error) {
+	context := warpapi.Request_TaskContext_builder{}.Build()
+	if len(encoded) == 0 {
+		return context, nil
+	}
+	if err := proto.Unmarshal(encoded, context); err != nil {
+		return nil, fmt.Errorf("decode Warp task context: %w", err)
+	}
+	return context, nil
 }
 
 func extractMessageText(content prompt.MessageContent) string {

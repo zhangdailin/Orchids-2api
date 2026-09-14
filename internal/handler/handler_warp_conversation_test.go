@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
@@ -139,19 +140,25 @@ func TestWarpConversationID_NotPersistedWithoutConversationKey(t *testing.T) {
 	}
 }
 
-func TestWarpToolResultFollowup_RequiresStableClientSessionID(t *testing.T) {
+func TestWarpToolResultFollowup_ResumesWithoutClientSessionID(t *testing.T) {
 	t.Parallel()
+	taskContext := []byte("opaque-warp-task-context")
+	finalTaskContext := []byte("opaque-warp-task-context-after-final-actions")
 
 	client := &fakePayloadClient{
 		eventsByOp: [][]upstream.SSEMessage{{
 			{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_upstream_tool_conv"}},
 			{Type: "model.tool-call", Event: map[string]interface{}{
-				"toolCallId":   "tool_write_1",
-				"toolName":     "Write",
-				"input":        `{"file_path":"calculator.py","content":"print(1)"}`,
-				"warpToolType": "call_mcp_tool",
+				"toolCallId":      "tool_write_1",
+				"toolName":        "Write",
+				"input":           `{"file_path":"calculator.py","content":"print(1)"}`,
+				"warpToolType":    "call_mcp_tool",
+				"warpTaskContext": base64.RawURLEncoding.EncodeToString(taskContext),
 			}},
-			{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}},
+			{Type: "model.finish", Event: map[string]interface{}{
+				"finishReason":    "tool_use",
+				"warpTaskContext": base64.RawURLEncoding.EncodeToString(finalTaskContext),
+			}},
 		}},
 	}
 	h := newTestHandler(client)
@@ -180,19 +187,22 @@ func TestWarpToolResultFollowup_RequiresStableClientSessionID(t *testing.T) {
 	}`)
 	rec2 := httptest.NewRecorder()
 	h.HandleMessages(rec2, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(second)))
-	if rec2.Code != http.StatusConflict {
+	if rec2.Code != http.StatusOK {
 		t.Fatalf("second status=%d body=%s", rec2.Code, rec2.Body.String())
 	}
 
 	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("calls=%d want 1", len(calls))
+	if len(calls) != 2 {
+		t.Fatalf("calls=%d want 2", len(calls))
 	}
 	if calls[0].ChatSessionID != "" {
 		t.Fatalf("new conversation id=%q want empty", calls[0].ChatSessionID)
 	}
-	if !strings.Contains(rec2.Body.String(), "stable conversation_id") {
-		t.Fatalf("missing stable session diagnostic: %s", rec2.Body.String())
+	if calls[1].ChatSessionID != "warp_upstream_tool_conv" {
+		t.Fatalf("continuation conversation=%q want warp_upstream_tool_conv", calls[1].ChatSessionID)
+	}
+	if !bytes.Equal(calls[1].WarpTaskContext, finalTaskContext) {
+		t.Fatalf("continuation task context=%q want %q", calls[1].WarpTaskContext, finalTaskContext)
 	}
 }
 

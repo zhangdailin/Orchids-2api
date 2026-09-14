@@ -230,7 +230,8 @@ type streamHandler struct {
 
 	// Callbacks
 	onConversationID     func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
-	onToolCall           func(id, name, input, upstreamType string)
+	onToolCall           func(id, name, input, upstreamType, taskContext string)
+	onWarpTaskContext    func(string)
 	onModelConfigRefresh func()
 	// Logger
 	logger *debug.Logger
@@ -2497,7 +2498,8 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.toolCallHandled[toolID] = true
 		if h.onToolCall != nil {
 			upstreamType, _ := msg.Event["warpToolType"].(string)
-			h.onToolCall(toolID, name, inputStr, upstreamType)
+			taskContext, _ := msg.Event["warpTaskContext"].(string)
+			h.onToolCall(toolID, name, inputStr, upstreamType, taskContext)
 		}
 		if h.isStream {
 			if inputStr != "" {
@@ -2536,7 +2538,8 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		h.toolCallHandled[toolID] = true
 		if h.onToolCall != nil {
 			upstreamType, _ := msg.Event["warpToolType"].(string)
-			h.onToolCall(toolID, toolName, inputStr, upstreamType)
+			taskContext, _ := msg.Event["warpTaskContext"].(string)
+			h.onToolCall(toolID, toolName, inputStr, upstreamType, taskContext)
 		}
 		if h.isStream {
 			h.emitToolUseFromInput(toolID, toolName, inputStr)
@@ -2569,6 +2572,9 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	case "model.finish":
 		stopReason := "end_turn"
+		if taskContext, _ := msg.Event["warpTaskContext"].(string); taskContext != "" && h.onWarpTaskContext != nil {
+			h.onWarpTaskContext(taskContext)
+		}
 		if shouldRefresh, ok := msg.Event["shouldRefreshModelConfig"].(bool); ok && shouldRefresh {
 			slog.Warn("Warp upstream requested model config refresh")
 			if h.onModelConfigRefresh != nil {
@@ -2631,10 +2637,11 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 // InjectErrorText injects an error message as a text delta into the stream or buffer.
 func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
-	if strings.Contains(strings.ToLower(errorMsg), "rate-limit") {
-		errorMsg = "Upstream accounts are currently rate-limited. Please retry later."
-	} else {
-		errorMsg = "Upstream request failed. Use the request ID to inspect diagnostics."
+	errorMsg = apperrors.PublicMessage(errorMsg)
+	if h != nil && h.w != nil {
+		if requestID := strings.TrimSpace(h.w.Header().Get("X-Orchids-Request-ID")); requestID != "" {
+			errorMsg += " Request ID: " + requestID
+		}
 	}
 	if logutil.VerboseDiagnosticsEnabled() {
 		slog.Debug(logMsg, "error_msg", errorMsg, "is_stream", h.isStream)

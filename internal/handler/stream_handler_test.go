@@ -183,7 +183,7 @@ func TestInjectNoAvailableAccountError_RateLimitUsesHelpfulMessage(t *testing.T)
 		t.Fatal("expected text builder to be populated")
 	}
 	body := builder.String()
-	if !strings.Contains(body, "currently rate-limited") {
+	if !strings.Contains(body, "rate-limited") || !strings.Contains(body, "Retry after the cooldown") {
 		t.Fatalf("expected rate-limit-specific error text, got: %s", body)
 	}
 	if strings.Contains(body, "Please check account statuses in Admin UI") {

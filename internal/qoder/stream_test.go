@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -148,6 +149,32 @@ func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 	_, _, err := collectStream(t, body)
 	if !errors.Is(err, ErrBusy) {
 		t.Fatalf("error = %v, want ErrBusy", err)
+	}
+}
+
+func TestConsumeStreamClassifiesAgentLimitWithoutClaimingAccountQuota(t *testing.T) {
+	t.Parallel()
+	const resetMillis = int64(1790538433100)
+	body := "data: " + `{"statusCodeValue":401,"body":"{\"message\":\"{\\\"agentLimitResetTime\\\":1790538433100}\"}"}` + "\n\n"
+	_, _, err := collectStream(t, body)
+	var agentErr *agentLimitError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("error = %v, want agentLimitError", err)
+	}
+	if want := time.UnixMilli(resetMillis); !agentErr.resetAt.Equal(want) {
+		t.Fatalf("reset=%v want %v", agentErr.resetAt, want)
+	}
+	if strings.Contains(err.Error(), "quota exhausted") {
+		t.Fatalf("agent-scoped refusal was presented as account quota exhaustion: %v", err)
+	}
+}
+
+func TestConsumeStreamDoesNotRetryDuplicateRequest(t *testing.T) {
+	t.Parallel()
+	body := "data: " + `{"statusCodeValue":401,"body":"{\"message\":\"Duplicate request\"}"}` + "\n\n"
+	_, _, err := collectStream(t, body)
+	if err == nil || !strings.Contains(err.Error(), "duplicate request") || errors.Is(err, errUpstreamUnauthorized) {
+		t.Fatalf("error = %v, want non-auth duplicate request", err)
 	}
 }
 

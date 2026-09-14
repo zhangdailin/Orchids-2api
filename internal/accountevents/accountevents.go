@@ -47,7 +47,11 @@ const (
 type Change struct {
 	AccountID int64
 	Kind      Kind
-	At        time.Time
+	// Origin names the component that produced the write. Scheduler-originated
+	// refresh results must invalidate request caches, but must not wake the same
+	// scheduler again and form a positive feedback loop.
+	Origin string
+	At     time.Time
 }
 
 // Subscriber receives coalesced change batches. Batch delivery is deliberate:
@@ -59,19 +63,72 @@ type Subscriber interface {
 	AccountChanges(ids []int64)
 }
 
+// DetailedSubscriber receives the same batch with kind and origin preserved.
+// The bus prefers this interface when implemented, while legacy cache
+// subscribers continue to receive only account IDs.
+type DetailedSubscriber interface {
+	AccountChangeBatch(changes []Change)
+}
+
 // Kick is a subscriber that only signals that something changed, so a loop can
 // wake early instead of waiting for its next tick. The channel is buffered and
 // the signal is dropped when one is already pending, which is what keeps a burst
 // of changes from queueing a burst of wake-ups.
 type Kick struct {
-	signal chan struct{}
+	signal         chan struct{}
+	allowedKinds   map[Kind]struct{}
+	ignoredOrigins map[string]struct{}
 }
 
 // NewKick creates a Kick with a one-slot buffer.
 func NewKick() *Kick { return &Kick{signal: make(chan struct{}, 1)} }
 
+// NewFilteredKick creates a scheduler wake-up that reacts only to selected
+// mutation kinds and ignores writes produced by the listed origins.
+func NewFilteredKick(kinds []Kind, ignoredOrigins ...string) *Kick {
+	k := NewKick()
+	if len(kinds) > 0 {
+		k.allowedKinds = make(map[Kind]struct{}, len(kinds))
+		for _, kind := range kinds {
+			k.allowedKinds[kind] = struct{}{}
+		}
+	}
+	if len(ignoredOrigins) > 0 {
+		k.ignoredOrigins = make(map[string]struct{}, len(ignoredOrigins))
+		for _, origin := range ignoredOrigins {
+			if origin = strings.TrimSpace(origin); origin != "" {
+				k.ignoredOrigins[origin] = struct{}{}
+			}
+		}
+	}
+	return k
+}
+
 // AccountChanges implements Subscriber.
 func (k *Kick) AccountChanges([]int64) {
+	k.signalNow()
+}
+
+// AccountChangeBatch applies the scheduler's kind/origin filter.
+func (k *Kick) AccountChangeBatch(changes []Change) {
+	if k == nil {
+		return
+	}
+	for _, change := range changes {
+		if _, ignored := k.ignoredOrigins[strings.TrimSpace(change.Origin)]; ignored {
+			continue
+		}
+		if len(k.allowedKinds) > 0 {
+			if _, allowed := k.allowedKinds[change.Kind]; !allowed {
+				continue
+			}
+		}
+		k.signalNow()
+		return
+	}
+}
+
+func (k *Kick) signalNow() {
 	if k == nil {
 		return
 	}
@@ -173,17 +230,19 @@ func (b *Bus) Deliveries() int64 {
 func (b *Bus) deliverLoop() {
 	timer := time.NewTimer(coalesceWindow)
 	defer timer.Stop()
-	pending := map[int64]struct{}{}
+	pending := map[int64]Change{}
 
 	flush := func() {
 		if len(pending) == 0 {
 			return
 		}
 		ids := make([]int64, 0, len(pending))
-		for id := range pending {
+		changes := make([]Change, 0, len(pending))
+		for id, change := range pending {
 			ids = append(ids, id)
+			changes = append(changes, change)
 		}
-		pending = map[int64]struct{}{}
+		pending = map[int64]Change{}
 
 		b.mu.Lock()
 		subscribers := append([]Subscriber(nil), b.subscribers...)
@@ -191,7 +250,7 @@ func (b *Bus) deliverLoop() {
 		b.mu.Unlock()
 
 		for _, subscriber := range subscribers {
-			notify(subscriber, ids)
+			notify(subscriber, ids, changes)
 		}
 	}
 
@@ -202,7 +261,9 @@ func (b *Bus) deliverLoop() {
 			return
 		case change := <-b.queue:
 			if change.AccountID != 0 {
-				pending[change.AccountID] = struct{}{}
+				if previous, ok := pending[change.AccountID]; !ok || changePriority(change.Kind) >= changePriority(previous.Kind) {
+					pending[change.AccountID] = change
+				}
 			}
 			// Reset the window so a burst flushes as one batch.
 			if !timer.Stop() {
@@ -221,13 +282,32 @@ func (b *Bus) deliverLoop() {
 
 // notify isolates a subscriber: one that panics or blocks must not stop delivery
 // to the others, and a bad notification must never reach the write path.
-func notify(subscriber Subscriber, ids []int64) {
+func notify(subscriber Subscriber, ids []int64, changes []Change) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("Account change subscriber panicked", "error", r, "accounts", len(ids))
 		}
 	}()
+	if detailed, ok := subscriber.(DetailedSubscriber); ok {
+		detailed.AccountChangeBatch(changes)
+		return
+	}
 	subscriber.AccountChanges(ids)
+}
+
+func changePriority(kind Kind) int {
+	switch kind {
+	case KindDeleted:
+		return 5
+	case KindCreated:
+		return 4
+	case KindCredential:
+		return 3
+	case KindStatus:
+		return 2
+	default:
+		return 1
+	}
 }
 
 // Classify decides what kind of change a write represents. Credential changes

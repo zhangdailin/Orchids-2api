@@ -338,6 +338,15 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			switch {
 			case stringOfCode(failure.Code) == busyCode:
 				streamErr = fmt.Errorf("%w: %s", ErrBusy, detail)
+			case isDuplicateRequest(detail, envelope.Body):
+				// Replaying the same signed body/request id cannot repair an
+				// idempotency conflict; it only creates a retry storm.
+				streamErr = fmt.Errorf("qoder duplicate request")
+			case hasAgentLimitReset(detail, envelope.Body):
+				// This business payload is an allowance deadline carried under
+				// 401, not a credential rejection. Refreshing the token is both
+				// useless and harmful (it may rotate a still-valid credential).
+				streamErr = &agentLimitError{resetAt: agentLimitResetAt(detail, envelope.Body)}
 			case DetectNoEntitlement(detail, envelope.Body):
 				// The credential was accepted; the account simply has no plan or
 				// allowance for this model. This must not be classified as an
@@ -525,6 +534,70 @@ const busyCode = "10605"
 // errUpstreamUnauthorized marks an authentication failure that a token refresh
 // can plausibly fix.
 var errUpstreamUnauthorized = fmt.Errorf("qoder upstream rejected the credential")
+
+type agentLimitError struct {
+	resetAt time.Time
+}
+
+func (e *agentLimitError) Error() string {
+	if e != nil && !e.resetAt.IsZero() {
+		return "qoder agent limit reached; resets at " + e.resetAt.UTC().Format(time.RFC3339)
+	}
+	return "qoder agent limit reached"
+}
+
+func isDuplicateRequest(values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), "duplicate request") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAgentLimitReset(values ...string) bool {
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), "agentlimitresettime") {
+			return true
+		}
+	}
+	return false
+}
+
+func agentLimitResetAt(values ...string) time.Time {
+	for _, value := range values {
+		if parsed := agentLimitResetAtDepth(strings.TrimSpace(value), 0); !parsed.IsZero() {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func agentLimitResetAtDepth(value string, depth int) time.Time {
+	if value == "" || depth > 3 {
+		return time.Time{}
+	}
+	var payload struct {
+		ResetAt int64  `json:"agentLimitResetTime"`
+		Message string `json:"message"`
+		Body    string `json:"body"`
+	}
+	if json.Unmarshal([]byte(value), &payload) != nil {
+		return time.Time{}
+	}
+	if payload.ResetAt > 0 {
+		if payload.ResetAt < 100000000000 {
+			return time.Unix(payload.ResetAt, 0)
+		}
+		return time.UnixMilli(payload.ResetAt)
+	}
+	for _, nested := range []string{payload.Message, payload.Body} {
+		if parsed := agentLimitResetAtDepth(strings.TrimSpace(nested), depth+1); !parsed.IsZero() {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
 
 func stringOfCode(raw string) string {
 	return strings.TrimSpace(raw)

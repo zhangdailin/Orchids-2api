@@ -74,6 +74,62 @@ func TestRefreshGrokAccounts_RetriesSingleRejection(t *testing.T) {
 	}
 }
 
+// TestRefreshGrokAccounts_RetriesQuotaRejection proves background refresh uses
+// the same retry rule as the account page. A transient quota-surface 401 must
+// not leave a valid account marked abnormal until someone clicks Refresh.
+func TestRefreshGrokAccounts_RetriesQuotaRejection(t *testing.T) {
+	oldDelay := grokSSORefreshRetryDelay
+	grokSSORefreshRetryDelay = time.Millisecond
+	t.Cleanup(func() { grokSSORefreshRetryDelay = oldDelay })
+
+	var quotaCalls int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/auth/session":
+			_, _ = w.Write([]byte(`{"status":"authenticated","session":{"userId":"user-ok"}}`))
+		case "/rest/rate-limits":
+			if atomic.AddInt32(&quotaCalls, 1) == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"status":"unauthenticated"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"remainingQueries":0,"totalQueries":100,"remainingTokens":0,"totalTokens":1000,"windowSizeSeconds":3600}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "sso-quota-retry:"})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	ctx := context.Background()
+	acc := &store.Account{Name: "flaky-quota", AccountType: "grok", CredentialType: "sso", GrokProvider: "web", ClientCookie: "sso=token", Enabled: true, Weight: 1, StatusCode: "500"}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	refreshGrokAccounts(ctx, &config.Config{GrokAPIBaseURL: upstream.URL}, s, []*store.Account{acc})
+	after, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if after.StatusCode != "" {
+		t.Fatalf("transient quota rejection left status=%q", after.StatusCode)
+	}
+	if after.GrokWebQuota.Auto.Remaining != 0 || !after.GrokWebQuota.Auto.HasRemaining {
+		t.Fatalf("quota snapshot was not persisted: %+v", after.GrokWebQuota.Auto)
+	}
+	if got := atomic.LoadInt32(&quotaCalls); got < 2 {
+		t.Fatalf("quota calls=%d want at least 2", got)
+	}
+}
+
 // TestGrokRefreshCandidates_SkipDeadCredentials pins the rotation invariant: a
 // credential the upstream already rejected must not consume a slot of the
 // per-cycle budget on every tick. It stays queued again once the operator

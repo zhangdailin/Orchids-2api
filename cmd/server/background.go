@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/qoder"
 	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -54,6 +54,9 @@ const (
 	maxGrokRefreshPerCycle = 5
 	grokRefresh429Backoff  = 10 * time.Minute
 	grokRefreshPause       = 500 * time.Millisecond
+	// Credential expiry checks may tick every minute, but provider identity and
+	// quota probes are materially heavier. New/replaced credentials remain due.
+	providerHealthRefreshInterval = 30 * time.Minute
 	// grokRefreshDeadCredentialBackoff keeps a credential the upstream already
 	// rejected out of the rotation. Re-asking once per tick burns a slot of the
 	// per-cycle budget that a healthy account needs, and the answer cannot change
@@ -192,6 +195,9 @@ func planGrokRefreshCycle(candidates []grokRefreshCandidate) []grokRefreshCandid
 			continue
 		}
 		due := grokRefreshDue(acc, now)
+		if due < 0 {
+			continue
+		}
 		tasks = append(tasks, refreshqueue.Task{
 			AccountID: acc.ID,
 			Due:       due,
@@ -233,8 +239,8 @@ func grokRefreshDue(acc *store.Account, now time.Time) time.Duration {
 func grokRefreshIntervalMinutes() int {
 	grokRefreshMu.Lock()
 	defer grokRefreshMu.Unlock()
-	if grokRefreshIntervalMin <= 0 {
-		return 30
+	if grokRefreshIntervalMin < int(providerHealthRefreshInterval/time.Minute) {
+		return int(providerHealthRefreshInterval / time.Minute)
 	}
 	return grokRefreshIntervalMin
 }
@@ -302,13 +308,15 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 		}
 	}
 
-	billingCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	billing, billingErr := cliClient.FetchBilling(billingCtx, acc)
-	cancel()
-	if billingErr != nil {
-		slog.Warn("Auto sync grok cli billing failed; leaving numeric quota unavailable", "account_id", acc.ID, "error", billingErr)
-	} else {
-		grok.ApplyCLIBillingInfo(acc, billing)
+	if grokCLIBillingNeedsSync(acc, time.Now()) {
+		billingCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		billing, billingErr := cliClient.FetchBilling(billingCtx, acc)
+		cancel()
+		if billingErr != nil {
+			slog.Warn("Auto sync grok cli billing failed; leaving numeric quota unavailable", "account_id", acc.ID, "error", billingErr)
+		} else {
+			grok.ApplyCLIBillingInfo(acc, billing)
+		}
 	}
 	if grok.CLIModelsNeedSync(acc, time.Now()) {
 		modelsCtx, modelsCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -322,6 +330,57 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 	}
 	if updateErr := s.UpdateAccount(ctx, acc); updateErr != nil {
 		slog.Warn("Auto refresh grok cli: update account failed", "account_id", acc.ID, "error", updateErr)
+	}
+}
+
+func grokCLIBillingNeedsSync(acc *store.Account, now time.Time) bool {
+	if acc == nil || acc.GrokBilling.SyncedAt.IsZero() {
+		return true
+	}
+	return now.Sub(acc.GrokBilling.SyncedAt) >= providerHealthRefreshInterval
+}
+
+func qoderQuotaRefreshDue(acc *store.Account, now time.Time) bool {
+	if acc == nil || acc.QoderQuota.SyncedAt.IsZero() {
+		return true
+	}
+	return now.Sub(acc.QoderQuota.SyncedAt) >= providerHealthRefreshInterval
+}
+
+// refreshQoderQuota reads the same authoritative allowance endpoint used by a
+// manual account refresh. Inference-agent limit payloads are intentionally not
+// used here: they can be model-scoped while the account still has credits.
+func refreshQoderQuota(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) {
+	if acc == nil || s == nil || !qoderQuotaRefreshDue(acc, time.Now()) {
+		return
+	}
+	if !refreshqueue.WithLease(acc.ID, func() {
+		client := qoder.NewFromAccount(acc, cfg)
+		defer client.Close()
+		client.SetAccountStore(s)
+		quotaCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		quota, err := client.FetchQuota(quotaCtx)
+		cancel()
+		if err != nil {
+			slog.Warn("Auto refresh qoder quota failed; keeping the last account verdict", "account_id", acc.ID, "error", err)
+			return
+		}
+		qoder.ApplyQuota(acc, quota)
+		if quota.Exhausted {
+			accountpolicy.Verdict{
+				Status:  "402",
+				Message: "Qoder allowance exhausted; confirmed by the quota endpoint",
+				Scope:   accountpolicy.ScopeAccount,
+				At:      time.Now(),
+			}.Apply(acc)
+		} else {
+			accountpolicy.Success(time.Now()).Apply(acc)
+		}
+		if err := s.UpdateAccount(ctx, acc); err != nil {
+			slog.Warn("Auto refresh qoder quota: update account failed", "account_id", acc.ID, "error", err)
+		}
+	}) {
+		slog.Debug("Auto refresh qoder quota: account already refreshing", "account_id", acc.ID)
 	}
 }
 
@@ -355,6 +414,36 @@ func retryGrokRefreshAttempt(ctx context.Context, client *grok.Client, token str
 			"first_error", firstErr)
 	}
 	return identity, err
+}
+
+// retryGrokQuotaAttempt gives the quota endpoint the same two-witness rule as
+// the identity endpoint and the manual account refresh. Grok occasionally
+// returns a transient unauthenticated response from one surface while the same
+// cookie is still valid; persisting that first answer made the background view
+// say "异常" until a manual refresh immediately corrected it.
+func retryGrokQuotaAttempt(ctx context.Context, client *grok.Client, token string) (map[string]*grok.RateLimitInfo, error) {
+	attempt := func() (map[string]*grok.RateLimitInfo, error) {
+		attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		return client.GetWebQuota(attemptCtx, token)
+	}
+	windows, err := attempt()
+	if err == nil || !grok.IsAuthenticationFailure(err) {
+		return windows, err
+	}
+	firstErr := err
+	select {
+	case <-ctx.Done():
+		return nil, err
+	case <-time.After(grokSSORefreshRetryDelay):
+	}
+	windows, err = attempt()
+	if err == nil {
+		slog.Warn("Auto refresh grok: quota rejected once and accepted on retry; keeping the account",
+			"token_fingerprint", grok.TokenFingerprint(token),
+			"first_error", firstErr)
+	}
+	return windows, err
 }
 
 func refreshGrokAccounts(ctx context.Context, cfg *config.Config, s *store.Store, accounts []*store.Account) {
@@ -427,9 +516,7 @@ func refreshGrokCandidate(ctx context.Context, cfg *config.Config, s *store.Stor
 			slog.Debug("Auto refresh grok: session identity unavailable; continuing quota sync", "error", identityErr)
 		}
 
-		quotaCtx, quotaCancel := context.WithTimeout(ctx, 30*time.Second)
-		windows, quotaErr := grokClient.GetWebQuota(quotaCtx, candidate.token)
-		quotaCancel()
+		windows, quotaErr := retryGrokQuotaAttempt(ctx, grokClient, candidate.token)
 		if quotaErr != nil {
 			statusCode := apperrors.ClassifyAccountStatus(quotaErr.Error())
 			if statusCode == "429" {
@@ -522,7 +609,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 		interval = 30 * time.Minute
 	}
 	grokRefreshMu.Lock()
-	grokRefreshIntervalMin = int(interval.Minutes())
+	grokRefreshIntervalMin = max(int(interval.Minutes()), int(providerHealthRefreshInterval/time.Minute))
 	grokRefreshMu.Unlock()
 	slog.Debug("Auto refresh token enabled", "interval", interval.String())
 
@@ -531,7 +618,8 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 		if cfg == nil {
 			return
 		}
-		accounts, err := s.GetEnabledAccounts(context.Background())
+		refreshCtx := store.WithAccountChangeOrigin(context.Background(), store.AccountChangeOriginScheduler)
+		accounts, err := s.GetEnabledAccounts(refreshCtx)
 		if err != nil {
 			slog.Error("Auto refresh token: list accounts failed", "error", err)
 			return
@@ -543,6 +631,9 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 		grokPendingVerification := make([]*store.Account, 0)
 		for _, acc := range accounts {
 			if strings.EqualFold(acc.AccountType, "warp") {
+				if !providerHealthRefreshDue(acc, time.Now()) {
+					continue
+				}
 				// nextRefreshTime from Warp's quota GraphQL response is a billing
 				// period boundary, not a request backoff. Only skip an account when
 				// the upstream actually returned 429 with Retry-After.
@@ -553,15 +644,19 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 					continue
 				}
 				warpClient := warp.NewFromAccount(acc, cfg)
-				_, err := warpClient.RefreshAccount(context.Background())
+				_, err := warpClient.RefreshAccount(refreshCtx)
 				if err != nil {
 					retryAfter := warp.RetryAfter(err)
 					httpStatus := warp.HTTPStatusCode(err)
 					if httpStatus == 401 || httpStatus == 403 {
-						lb.MarkAccountStatus(context.Background(), acc, fmt.Sprintf("%d", httpStatus))
+						verdict := accountpolicy.Classify(acc, err, "")
+						verdict.Apply(acc)
+						if updateErr := s.UpdateAccount(refreshCtx, acc); updateErr != nil {
+							slog.Warn("Auto refresh token: persist Warp auth verdict failed", "account", acc.Name, "error", updateErr)
+						}
 					} else if retryAfter > 0 {
 						acc.QuotaResetAt = time.Now().Add(retryAfter)
-						if updateErr := s.UpdateAccount(context.Background(), acc); updateErr != nil {
+						if updateErr := s.UpdateAccount(refreshCtx, acc); updateErr != nil {
 							slog.Warn("Auto refresh token: record warp retry-after failed", "account", acc.Name, "type", "warp", "error", updateErr)
 						}
 					}
@@ -569,9 +664,10 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 					continue
 				}
 				warpClient.SyncAccountStateTo(acc)
+				accountpolicy.Success(time.Now()).Apply(acc)
 
 				// Sync Warp usage quota via GraphQL
-				limitCtx, limitCancel := context.WithTimeout(context.Background(), 15*time.Second)
+				limitCtx, limitCancel := context.WithTimeout(refreshCtx, 15*time.Second)
 				limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
 				limitCancel()
 				if limitErr != nil {
@@ -586,11 +682,15 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 					slog.Debug("Warp usage synced", "account", acc.Name, "limit", acc.UsageLimit, "used", acc.UsageCurrent, "subscription", acc.Subscription)
 				}
 
-				preserveLatestAccountStatus(context.Background(), s, acc)
+				preserveLatestAccountStatus(refreshCtx, s, acc)
 
-				if err := s.UpdateAccount(context.Background(), acc); err != nil {
+				if err := s.UpdateAccount(refreshCtx, acc); err != nil {
 					slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "warp", "error", err)
 				}
+				continue
+			}
+			if strings.EqualFold(acc.AccountType, "qoder") {
+				refreshQoderQuota(refreshCtx, cfg, s, acc)
 				continue
 			}
 			if isUnverifiedGrokSSOAccount(acc) {
@@ -604,7 +704,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 			// lifecycle; SSO accounts check once per unique token.
 			if strings.EqualFold(acc.AccountType, "grok") {
 				if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
-					refreshCLIAccount(context.Background(), cfg, s, acc)
+					refreshCLIAccount(refreshCtx, cfg, s, acc)
 				} else {
 					grokRefreshQueue = append(grokRefreshQueue, acc)
 				}
@@ -613,7 +713,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 			// Non-warp/non-grok account types are not auto-refreshed here.
 			continue
 		}
-		refreshGrokAccounts(context.Background(), cfg, s, grokRefreshQueue)
+		refreshGrokAccounts(refreshCtx, cfg, s, grokRefreshQueue)
 		if len(grokPendingVerification) > 0 {
 			// Newest first: the newest row is the account an operator just added and
 			// is waiting on. These bypass the per-cycle rotation cap on purpose —
@@ -625,7 +725,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 				ids = append(ids, acc.ID)
 			}
 			slog.Info("Auto refresh grok: verifying accounts without a health verdict", "account_ids", ids)
-			refreshGrokAccounts(context.Background(), cfg, s, grokPendingVerification)
+			refreshGrokAccounts(refreshCtx, cfg, s, grokPendingVerification)
 		}
 	}
 
@@ -658,4 +758,17 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 
 // refreshKick wakes the refresh loop when an account changes, so a new account is
 // picked up immediately instead of after up to one full interval.
-var refreshKick = accountevents.NewKick()
+var refreshKick = accountevents.NewFilteredKick(
+	[]accountevents.Kind{accountevents.KindCreated, accountevents.KindCredential},
+	store.AccountChangeOriginScheduler,
+)
+
+func providerHealthRefreshDue(acc *store.Account, now time.Time) bool {
+	if acc == nil || acc.VerifiedAt.IsZero() {
+		return true
+	}
+	if strings.TrimSpace(acc.StatusCode) != "" {
+		return !accountpolicy.AccountHeld(acc, now)
+	}
+	return now.Sub(acc.VerifiedAt) >= providerHealthRefreshInterval
+}

@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -11,6 +12,18 @@ import (
 // therefore this parser) applies to.
 func buildAcc() *store.Account {
 	return &store.Account{ID: 143, AccountType: "grok", GrokProvider: ProviderBuild}
+}
+
+func TestAccountUsableForModelHonorsBuildFreeReset(t *testing.T) {
+	acc := buildAcc()
+	acc.GrokFreeQuota.ResetAt = time.Now().Add(time.Hour)
+	if accountUsableForModel(context.Background(), acc) {
+		t.Fatal("Build Free account was selected before its confirmed reset")
+	}
+	acc.GrokFreeQuota.ResetAt = time.Now().Add(-time.Second)
+	if !accountUsableForModel(context.Background(), acc) {
+		t.Fatal("Build Free account remained unavailable after its reset")
+	}
 }
 
 // TestApplyFreeQuotaExhaustionReadsTheRealWindow pins the one place a Free allowance

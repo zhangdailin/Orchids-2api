@@ -37,6 +37,7 @@ type Client struct {
 	httpClient     *http.Client
 	authToken      string
 	requestTimeout time.Duration
+	streamIdle     time.Duration
 }
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -59,6 +60,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		httpClient:     util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
 		authToken:      ResolveAuthToken(acc),
 		requestTimeout: timeout,
+		streamIdle:     cfg.PuterStreamIdleTimeout(),
 	}
 }
 
@@ -179,6 +181,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 		return err
 	}
 	defer resp.Body.Close()
+	resp.Body = util.MonitorReadIdle(resp.Body, c.streamIdle, cancel, "puter")
 
 	result, err := consumePuterStream(resp.Body, onMessage)
 	if err != nil {

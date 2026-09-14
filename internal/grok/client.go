@@ -685,7 +685,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			do = lease.Do
 		}
 		diagnosticAttempt := debug.BeginUpstream(ctx, method, reqURL, req.Header, body)
-		resp, err = doUpstreamHTTP(req, do, 0)
+		resp, err = doUpstreamHTTP(req, do, c.cfg.GrokStreamIdleTimeout())
 		diagnosticAttempt.Response(resp, err)
 		if err != nil {
 			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {

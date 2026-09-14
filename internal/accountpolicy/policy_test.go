@@ -40,6 +40,8 @@ func TestClassify_ModelScopedFailureKeepsAccount(t *testing.T) {
 	acc := grokSSO()
 	for _, message := range []string{
 		"workbuddy API error: status=200, code=6004, message=usage exceeds frequency limit",
+		"qoder agent limit reached; resets at 2026-09-27T19:47:13Z",
+		`qoder upstream rejected the credential: {"agentLimitResetTime":1790538433100}`,
 		"404: model is not found",
 		"model not found: grok-4.6",
 		"no_implementation_available for grok-4.6",

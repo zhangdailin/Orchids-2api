@@ -252,7 +252,7 @@ func TestHandleMessages_WarpChatCodingRequestUsesFreeTextOnly(t *testing.T) {
 		ContextSummaryMaxTokens: 256,
 		ContextKeepTurns:        2,
 	}, lb)
-	h.connTracker = newSpyConnTracker(map[int64]int64{free.ID: 0, paid.ID: 10})
+	h.connTracker = newSpyConnTracker(map[int64]int64{free.ID: 0, paid.ID: 0})
 	seen := []int64{}
 	requests := []upstream.UpstreamRequest{}
 	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
@@ -327,6 +327,7 @@ func TestHandleMessages_WarpAgentRequiresCloudAgentAccount(t *testing.T) {
 		WarpMonthlyRemaining: 100,
 		Enabled:              true,
 		Weight:               1,
+		MaxConcurrent:        11,
 	}
 	if err := s.CreateAccount(context.Background(), paid); err != nil {
 		t.Fatalf("CreateAccount(paid) error = %v", err)

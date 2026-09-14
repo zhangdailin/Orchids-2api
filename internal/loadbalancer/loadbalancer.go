@@ -19,6 +19,25 @@ import (
 
 const defaultCacheTTL = 5 * time.Second
 
+// EffectiveAccountConcurrencyLimit supplies conservative defaults for
+// consumer credentials. An explicit per-account value always wins.
+func EffectiveAccountConcurrencyLimit(acc *store.Account) int64 {
+	if acc == nil {
+		return 0
+	}
+	if acc.MaxConcurrent > 0 {
+		return int64(acc.MaxConcurrent)
+	}
+	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "workbuddy":
+		return 3
+	case "warp", "puter", "grok":
+		return 1
+	default:
+		return 0
+	}
+}
+
 type LoadBalancer struct {
 	Store          *store.Store
 	mu             sync.RWMutex
@@ -222,7 +241,7 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		}
 
 		conns := connCounts[acc.ID]
-		if acc.MaxConcurrent > 0 && conns >= int64(acc.MaxConcurrent) {
+		if limit := EffectiveAccountConcurrencyLimit(acc); limit > 0 && conns >= limit {
 			continue
 		}
 		score := float64(conns) / float64(weight)

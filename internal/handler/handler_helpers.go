@@ -152,8 +152,6 @@ func (h *Handler) acquireAccountSelection(ctx context.Context, targetChannel str
 	return nil, nil, func() {}, errors.New("no client configured")
 }
 
-const defaultWorkBuddyMaxConcurrent = 3
-
 // acquireReservedAccountSelection closes the check-then-increment race between
 // account selection and connection tracking. A candidate is not returned until
 // its per-account slot has been atomically reserved; if another request wins the
@@ -342,19 +340,7 @@ func (h *Handler) refreshWarpModelConfigAsync(acc *store.Account) {
 }
 
 func effectiveAccountConcurrencyLimit(acc *store.Account) int64 {
-	if acc == nil {
-		return 0
-	}
-	if acc.MaxConcurrent > 0 {
-		return int64(acc.MaxConcurrent)
-	}
-	// WorkBuddy's reference gateway defaults to three in-flight requests per
-	// account. Treating an omitted value as unlimited is what allowed the live
-	// pool to hit business code 14003 under ordinary parallel use.
-	if strings.EqualFold(strings.TrimSpace(acc.AccountType), "workbuddy") {
-		return defaultWorkBuddyMaxConcurrent
-	}
-	return 0
+	return loadbalancer.EffectiveAccountConcurrencyLimit(acc)
 }
 
 func (h *Handler) tryAcquireTrackedAccount(acc *store.Account) (int64, bool) {

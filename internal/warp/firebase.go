@@ -13,6 +13,13 @@ const (
 	warpFirebaseCustomTokenEndpoint = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
 )
 
+// ConfigurationError reports whether Warp OAuth/token refresh can be used by
+// this process without contacting the upstream.
+func ConfigurationError() error {
+	_, err := warpFirebaseURL(warpFirebaseTokenEndpoint)
+	return err
+}
+
 func warpFirebaseTokenURL() (string, error) {
 	return warpFirebaseURL(warpFirebaseTokenEndpoint)
 }

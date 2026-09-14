@@ -189,6 +189,11 @@ func TestJournalRecordsOutcomeClassMatchesOverview(t *testing.T) {
 		requestEvent("req-500", "error", 503),
 		requestEvent("req-400", "error", 400),
 		requestEvent("req-ok", "success", 200),
+		requestEvent("req-stop", "stop", 200),
+		requestEvent("req-tools", "tool_calls", 200),
+		requestEvent("req-length", "length", 200),
+		requestEvent("req-filtered", "content_filter", 200),
+		requestEvent("req-error-200", "error", 200),
 	})
 
 	payload := journalRequest(t, a, "?kind=request&limit=50")
@@ -200,12 +205,17 @@ func TestJournalRecordsOutcomeClassMatchesOverview(t *testing.T) {
 		classes[fmt.Sprint(event["request_id"])] = fmt.Sprint(row["outcome_class"])
 	}
 	want := map[string]string{
-		"req-429": "rate_limited",
-		"req-402": "quota_exhausted",
-		"req-401": "upstream_auth",
-		"req-500": "server_error",
-		"req-400": "client_error",
-		"req-ok":  "success",
+		"req-429":       "rate_limited",
+		"req-402":       "quota_exhausted",
+		"req-401":       "upstream_auth",
+		"req-500":       "server_error",
+		"req-400":       "client_error",
+		"req-ok":        "success",
+		"req-stop":      "success",
+		"req-tools":     "success",
+		"req-length":    "success",
+		"req-filtered":  "success",
+		"req-error-200": "failed",
 	}
 	for id, class := range want {
 		if classes[id] != class {

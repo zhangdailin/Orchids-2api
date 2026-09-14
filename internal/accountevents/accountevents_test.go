@@ -113,6 +113,25 @@ func TestBus_NotifiesEverySubscriber(t *testing.T) {
 	}, "not every subscriber was notified")
 }
 
+func TestFilteredKickIgnoresStatusAndSchedulerWrites(t *testing.T) {
+	kick := NewFilteredKick([]Kind{KindCreated, KindCredential}, store.AccountChangeOriginScheduler)
+	kick.AccountChangeBatch([]Change{{AccountID: 1, Kind: KindStatus}})
+	kick.AccountChangeBatch([]Change{{AccountID: 1, Kind: KindCredential, Origin: store.AccountChangeOriginScheduler}})
+
+	select {
+	case <-kick.Channel():
+		t.Fatal("status or scheduler-originated write unexpectedly woke refresh loop")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	kick.AccountChangeBatch([]Change{{AccountID: 1, Kind: KindCredential, Origin: "admin"}})
+	select {
+	case <-kick.Channel():
+	case <-time.After(time.Second):
+		t.Fatal("admin credential change did not wake refresh loop")
+	}
+}
+
 // TestBus_SubscriberPanicDoesNotStopDelivery isolates a bad subscriber.
 func TestBus_SubscriberPanicDoesNotStopDelivery(t *testing.T) {
 	bus := NewBus()

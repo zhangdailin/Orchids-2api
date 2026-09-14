@@ -64,6 +64,7 @@ func (e accountChangeEmitter) Publish(change store.AccountChange) {
 	e.bus.Publish(accountevents.Change{
 		AccountID: change.AccountID,
 		Kind:      accountevents.Classify(change.Previous, current),
+		Origin:    change.Origin,
 	})
 }
 
@@ -130,7 +131,9 @@ func main() {
 	// Connection tracker: use Redis when available
 	var accountTracker loadbalancer.ConnTracker
 	if redisClient := s.RedisClient(); redisClient != nil {
-		accountTracker = loadbalancer.NewRedisConnTracker(redisClient, s.RedisPrefix())
+		redisAccountTracker := loadbalancer.NewRedisConnTracker(redisClient, s.RedisPrefix())
+		defer redisAccountTracker.Close()
+		accountTracker = redisAccountTracker
 		lb.SetConnTracker(accountTracker)
 		slog.Debug("Connection tracker initialized", "backend", "redis")
 	}

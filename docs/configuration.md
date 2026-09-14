@@ -122,14 +122,18 @@ cp config.example.json config.json
 | `grok_console_timeout_seconds` | 跟随 `request_timeout` | Console HTTP 总超时，含响应体读取，上限 86400 秒 |
 | `grok_build_timeout_seconds` | 跟随 `request_timeout` | Build HTTP 总超时，含响应体读取，上限 86400 秒 |
 | `grok_stream_idle_seconds` | `120` | Build/Console SSE 有效输出空闲超时，上限 3600 秒；keepalive 不重置计时 |
+| `warp_stream_idle_seconds` | `300` | Warp 响应体连续无字节空闲超时，上限 3600 秒；有持续输出的长任务不受影响 |
+| `puter_stream_idle_seconds` | `120` | Puter NDJSON 响应体连续无字节空闲超时，上限 3600 秒；非法或未知事件会按协议错误记录 |
 | `grok_web_rps` / `grok_console_rps` / `grok_build_rps` | `0` | 0 关闭主动限速；正数按账号/团队限速，范围 0.01–1000，每个桶 burst=1 |
 | `grok_probe_model` | `grok-4.6` | 渠道探测循环请求的模型。探测只测可达性、不测能力，因此默认用一个便宜模型；部署套餐不提供该模型时改成自己的可用模型，否则探测会长期误报故障 |
 
 探测循环每 5 分钟向有可用账号的渠道发一次合成请求，启动后 90 秒才发第一次（监听套接字此时才就绪）。探测结果以 `channel_probe` 记入系统日志，指标里记在保留渠道名 `probe` 下，绝不参与真实渠道的成功率。开启推理鉴权（`inference_auth_enabled`，默认开启）时必须配置 `public_key`，探测才会带上 `Authorization`；未配置则整轮跳过，不会产生一串本地 401。
 
-限流状态按 provider、账号/已知团队、模型隔离；真实 429 冷却不随主动限速关闭。优先使用 `Retry-After`，再使用响应中的 reset 信息；信息缺失时只冷却受影响的账号/模型，不再全局停顿。限流注册表为进程内状态，不是跨副本共享限流。
+限流状态按 provider、账号/已知团队、模型隔离；真实 429 冷却不随主动限速关闭。优先使用 `Retry-After`，再使用响应中的 reset 信息；信息缺失时只冷却受影响的账号/模型，不再全局停顿。配置 Redis 时，Grok 主动 pacing 和团队/模型冷却会跨副本共享；Redis 暂时不可用时退化到进程内 pacing。
 
 总超时与空闲超时是不同边界。长回答需要同时满足入口 `concurrency_timeout` 和目标 provider HTTP 超时。中转层已删除思考质量门控、额外质量重试和缺失思考惩罚；历史 `grok_quality_*` / `grok_missing_thinking_cooldown_seconds` 配置不再生效。存储会话仍保留账号绑定。
+
+未显式设置账号 `max_concurrent` 时，WorkBuddy 默认每账号 3 路，Warp、Puter、Grok 默认每账号 1 路；显式正数会覆盖默认值。Redis 部署使用带过期与续租的分布式连接租约，进程异常退出后遗留计数会自动回收。
 
 Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress 固定 120 秒总超时或共享客户端 HTTP/1 固定 120 秒响应头上限影响；等待响应头仍受 HTTP 总超时约束。其他模型继续使用原有共享客户端策略。
 
@@ -191,6 +195,7 @@ Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress �
 - 配置保存在 Redis 后，后续重启会优先使用 Redis 版本
 - 可用 `ORCHIDS_CREDENTIAL_ENCRYPTION_KEY` 提供 Base64、Hex 或 32 字节原始主密钥；环境变量优先于密钥文件
 - Warp 登录与账号 token 刷新需要设置 `ORCHIDS_WARP_FIREBASE_API_KEY`；该值只从进程环境读取，不写入配置文件、Redis 或管理 API
+- `/health` 会报告 Warp 配置状态；`/ready/warp` 在 Firebase API key 缺失时返回 503，便于部署系统在接流量前发现登录能力不可用
 - 首次启动自动创建主密钥文件，并把已有账号明文凭据迁移为 `enc:v1:` 密文
 - 主密钥不会写入 Redis 或管理 API；必须和 Redis 数据共同备份，切勿在已有账号后更换或删除
 - `data/tmp`、`debug-logs` 等目录是运行期产物，不是配置项

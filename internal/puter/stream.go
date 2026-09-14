@@ -63,7 +63,7 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 
 		var chunk StreamChunk
 		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			continue
+			return result, fmt.Errorf("puter stream protocol error: invalid JSON event preview=%q", boundedPuterPreview(line))
 		}
 		if chunk.Error.Present() {
 			return result, formatPuterAPIError(chunk.Error.AsPayload(), line)
@@ -109,12 +109,23 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 			}
 		case "error":
 			return result, puterStreamError(chunk.Message, line)
+		default:
+			return result, fmt.Errorf("puter stream protocol error: unknown event type %q preview=%q", chunk.Type, boundedPuterPreview(line))
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return result, fmt.Errorf("failed to read puter stream: %w", err)
 	}
 	return result, nil
+}
+
+func boundedPuterPreview(line string) string {
+	line = strings.ToValidUTF8(strings.TrimSpace(line), "�")
+	const limit = 256
+	if len(line) > limit {
+		return line[:limit] + "…"
+	}
+	return line
 }
 
 // puterStreamError 把 puter 的错误事件归一成可分类的错误。puter 经常把 HTTP

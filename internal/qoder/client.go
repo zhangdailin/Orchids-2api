@@ -3,6 +3,7 @@ package qoder
 import (
 	"context"
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -212,6 +213,16 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		lastErr = err
 		if emitted {
 			// Content already reached the client; replaying would duplicate it.
+			return err
+		}
+		var agentErr *agentLimitError
+		if errors.As(err, &agentErr) {
+			// agentLimitResetTime is emitted by the inference agent and is not an
+			// authoritative account credit snapshot.  The OpenAPI quota endpoint
+			// may still report spendable credits, so do not overwrite QoderQuota or
+			// globally quarantine the account here.  The handler records a
+			// model-scoped cooldown; periodic/manual quota sync remains the sole
+			// authority for account-wide exhaustion.
 			return err
 		}
 

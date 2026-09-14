@@ -36,7 +36,6 @@ type Client struct {
 
 const (
 	defaultRequestTimeout = 600 * time.Second
-	maxRequestTimeout     = 600 * time.Second
 )
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
@@ -66,9 +65,6 @@ func newHTTPClient(timeout time.Duration, cfg *config.Config) *http.Client {
 		timeout = defaultRequestTimeout
 		if cfg != nil && cfg.RequestTimeout > 0 {
 			timeout = time.Duration(cfg.RequestTimeout) * time.Second
-		}
-		if timeout > maxRequestTimeout {
-			timeout = maxRequestTimeout
 		}
 	}
 
@@ -222,9 +218,11 @@ func (c *Client) doStreamRequest(ctx context.Context, payload []byte, logger *de
 }
 
 func (c *Client) streamWithRetry(ctx context.Context, payload []byte, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger, refresh func() error) error {
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	c.session.beginRequest()
 
-	resp, err := c.doStreamRequest(ctx, payload, logger)
+	resp, err := c.doStreamRequest(streamCtx, payload, logger)
 	if err != nil {
 		return err
 	}
@@ -240,15 +238,21 @@ func (c *Client) streamWithRetry(ctx context.Context, payload []byte, req upstre
 			return err
 		}
 		c.session.beginRequest()
-		resp, err = c.doStreamRequest(ctx, payload, logger)
+		resp, err = c.doStreamRequest(streamCtx, payload, logger)
 		if err != nil {
 			return err
 		}
 	}
-	return c.handleStreamResponse(ctx, req, resp, onMessage, logger)
+	return c.handleStreamResponseWithCancel(streamCtx, req, resp, onMessage, logger, cancel)
 }
 
 func (c *Client) handleStreamResponse(ctx context.Context, req upstream.UpstreamRequest, resp *http.Response, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	return c.handleStreamResponseWithCancel(streamCtx, req, resp, onMessage, logger, cancel)
+}
+
+func (c *Client) handleStreamResponseWithCancel(ctx context.Context, req upstream.UpstreamRequest, resp *http.Response, onMessage func(upstream.SSEMessage), logger *debug.Logger, cancel context.CancelFunc) error {
 	if resp == nil {
 		return fmt.Errorf("warp stream response is nil")
 	}
@@ -301,6 +305,7 @@ func (c *Client) handleStreamResponse(ctx context.Context, req upstream.Upstream
 		body = gr
 	}
 	defer resp.Body.Close()
+	body = util.MonitorReadIdle(body, c.config.WarpStreamIdleTimeout(), cancel, "warp")
 
 	return processStreamBody(ctx, body, onMessage, logger)
 }
@@ -388,9 +393,6 @@ func (c *Client) requestTimeout() time.Duration {
 	timeout := defaultRequestTimeout
 	if c != nil && c.config != nil && c.config.RequestTimeout > 0 {
 		timeout = time.Duration(c.config.RequestTimeout) * time.Second
-	}
-	if timeout > maxRequestTimeout {
-		return maxRequestTimeout
 	}
 	return timeout
 }

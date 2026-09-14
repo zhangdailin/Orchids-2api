@@ -29,6 +29,10 @@ type UpstreamRequest struct {
 	WarpCliAgentModel    string
 	WarpComputerUseModel string
 	WarpToolContexts     map[string]WarpToolContext
+	// WarpTaskContext is the protobuf-encoded task state returned by Warp on
+	// the preceding turn. Warp conversations are stateful but task state is
+	// client-owned and must be round-tripped with tool results.
+	WarpTaskContext []byte
 }
 
 // WarpToolContext retains the upstream action identity that produced a

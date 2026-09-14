@@ -116,9 +116,19 @@ func waitScopedRateLimit(ctx context.Context, provider, token, model string, rat
 		}
 	}
 	if rate <= 0 {
-		return ctx.Err()
+		return nil
 	}
 	endpointKey := identity
+	if backend := grokLimitsBackend(); backend != nil {
+		if err := backend.waitPacing(ctx, endpointKey, rate); err == nil {
+			slog.Debug("Rate limiter: distributed token acquired", "endpoint", endpointKey)
+			return nil
+		} else if ctx.Err() != nil {
+			return ctx.Err()
+		} else {
+			slog.Warn("Rate limiter: Redis pacing unavailable; using process-local fallback", "error", err)
+		}
+	}
 	endpointRateLimiterMu.Lock()
 	tb := endpointRateLimiters[endpointKey]
 	if tb == nil || tb.rate != rate {

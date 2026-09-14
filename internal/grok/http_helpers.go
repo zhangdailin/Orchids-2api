@@ -8,6 +8,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/debug"
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
 )
 
@@ -134,11 +135,13 @@ func writeSSEBytes(w http.ResponseWriter, event string, data []byte) {
 // died after starting as a failure rather than a success.
 func writeSSEError(w http.ResponseWriter, message, errType, code string) {
 	middleware.MarkStreamFailure(w)
+	requestID := strings.TrimSpace(w.Header().Get(middleware.DiagnosticRequestIDHeader))
 	payload := map[string]interface{}{
 		"error": map[string]interface{}{
-			"message": "Upstream request failed. Use the request ID to inspect diagnostics.",
-			"type":    strings.TrimSpace(errType),
-			"code":    strings.TrimSpace(code),
+			"message":    apperrors.PublicMessage(message),
+			"type":       strings.TrimSpace(errType),
+			"code":       strings.TrimSpace(code),
+			"request_id": requestID,
 		},
 	}
 	writeSSEBytes(w, "error", encodeJSONBytes(payload))

@@ -5,7 +5,60 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
+
+func withTestDistributedGrokLimits(t *testing.T) *redisGrokLimits {
+	t.Helper()
+	mini := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	distributedGrokLimits.Lock()
+	previous := distributedGrokLimits.backend
+	distributedGrokLimits.backend = &redisGrokLimits{
+		client: client,
+		prefix: "test:grok:limits:",
+		note: redis.NewScript(`
+			local current = redis.call("PTTL", KEYS[1])
+			local wanted = tonumber(ARGV[1])
+			if current < wanted then redis.call("PSETEX", KEYS[1], wanted, "1") end
+			return 1
+		`),
+	}
+	backend := distributedGrokLimits.backend
+	distributedGrokLimits.Unlock()
+	t.Cleanup(func() {
+		distributedGrokLimits.Lock()
+		distributedGrokLimits.backend = previous
+		distributedGrokLimits.Unlock()
+		_ = client.Close()
+		mini.Close()
+	})
+	return backend
+}
+
+func TestDistributedCooldownVisibleToAnotherRegistry(t *testing.T) {
+	withTestDistributedGrokLimits(t)
+	first := newTeamCooldownRegistry()
+	second := newTeamCooldownRegistry()
+	first.Note(RateLimitScopeRPM, "shared-team", "grok-4.6", time.Minute)
+	if remaining := second.RetryAfterFor(RateLimitScopeRPM, "shared-team", "grok-4.6"); remaining <= 0 {
+		t.Fatal("second process did not observe Redis cooldown")
+	}
+}
+
+func TestDistributedPacingSerializesReplicas(t *testing.T) {
+	backend := withTestDistributedGrokLimits(t)
+	if err := backend.waitPacing(context.Background(), "shared-account", 2); err != nil {
+		t.Fatalf("first pacing token failed: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if err := backend.waitPacing(ctx, "shared-account", 2); err == nil {
+		t.Fatal("second replica bypassed distributed pacing interval")
+	}
+}
 
 func TestTeamCooldownNoteAndRetry(t *testing.T) {
 	registry := newTeamCooldownRegistry()

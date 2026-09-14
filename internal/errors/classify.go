@@ -134,6 +134,7 @@ func ClassifyAccountStatus(errStr string) string {
 	case HasExplicitHTTPStatus(lower, "404"):
 		return "404"
 	case HasExplicitHTTPStatus(lower, "402") ||
+		strings.Contains(lower, "qoder quota exhausted") ||
 		strings.Contains(lower, "insufficient_funds") ||
 		strings.Contains(lower, "insufficient funding") ||
 		strings.Contains(lower, "available funding is insufficient") ||
@@ -144,6 +145,8 @@ func ClassifyAccountStatus(errStr string) string {
 		return "402"
 	case
 		HasExplicitHTTPStatus(lower, "429") ||
+			strings.Contains(lower, "qoder agent limit reached") ||
+			strings.Contains(lower, "agentlimitresettime") ||
 			strings.Contains(lower, "too many requests") ||
 			strings.Contains(lower, "rate limit") ||
 			strings.Contains(lower, "rate_limit") ||
@@ -169,6 +172,15 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	switch {
 	case strings.Contains(lower, "context canceled") || strings.Contains(lower, "canceled"):
 		return UpstreamErrorClass{Category: "canceled"}
+	case strings.Contains(lower, " is not configured") ||
+		strings.Contains(lower, "configuration error") ||
+		strings.Contains(lower, "missing puter auth token") ||
+		strings.Contains(lower, "client is nil"):
+		return UpstreamErrorClass{Category: "configuration"}
+	case strings.Contains(lower, "protocol error") || strings.Contains(lower, "no usable stream events"):
+		return UpstreamErrorClass{Category: "protocol"}
+	case strings.Contains(lower, "pacing registry capacity reached"):
+		return UpstreamErrorClass{Category: "local_overload", Retryable: true}
 	case strings.Contains(lower, "model is not found") ||
 		strings.Contains(lower, "model not found") ||
 		strings.Contains(lower, "no_implementation_available") ||
@@ -178,7 +190,8 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		// plan or allowance. No retry and no account switch can change a
 		// subscription, so this is a client-side outcome rather than a transient
 		// upstream fault. The phrase is the sentinel the Qoder channel emits.
-		strings.Contains(lower, "no usable plan or allowance"):
+		strings.Contains(lower, "no usable plan or allowance") ||
+		strings.Contains(lower, "duplicate request"):
 		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "401") ||
 		strings.Contains(lower, "signed out") ||
@@ -193,18 +206,23 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "model_unavailable", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "input is too long") || HasExplicitHTTPStatus(lower, "400"):
 		return UpstreamErrorClass{Category: "client"}
-	case HasExplicitHTTPStatus(lower, "429") ||
-		HasExplicitHTTPStatus(lower, "402") ||
-		strings.Contains(lower, "too many requests") ||
-		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "rate_limit") ||
+	case HasExplicitHTTPStatus(lower, "402") ||
+		strings.Contains(lower, "qoder quota exhausted") ||
 		strings.Contains(lower, "insufficient_funds") ||
 		strings.Contains(lower, "insufficient funding") ||
-		strings.Contains(lower, "no remaining quota") ||
 		strings.Contains(lower, "quota_limit") ||
 		strings.Contains(lower, "out of credits") ||
 		strings.Contains(lower, "credits exhausted") ||
 		strings.Contains(lower, "run out of credits"):
+		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
+	case HasExplicitHTTPStatus(lower, "429") ||
+		strings.Contains(lower, "qoder agent limit reached") ||
+		strings.Contains(lower, "agentlimitresettime") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "rate_limit") ||
+		strings.Contains(lower, "no remaining quota") ||
+		strings.Contains(lower, "quota exceeded"):
 		return UpstreamErrorClass{Category: "rate_limit", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") || strings.Contains(lower, "context deadline"):
 		return UpstreamErrorClass{Category: "timeout", Retryable: true, SwitchAccount: true}

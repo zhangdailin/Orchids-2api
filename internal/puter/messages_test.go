@@ -4,9 +4,27 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goccy/go-json"
+
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/upstream"
 )
+
+func TestToolCallOnlyAssistantAlwaysSerializesContent(t *testing.T) {
+	raw, err := json.Marshal(Message{
+		Role: "assistant",
+		ToolCalls: []ToolCall{{
+			ID: "call-a", Type: "function",
+			Function: ToolCallFunction{Name: "Read", Arguments: `{}`},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"content":""`) {
+		t.Fatalf("tool-call-only assistant omitted required content: %s", raw)
+	}
+}
 
 func TestSplitMultiToolCallsSplitsPairedTurns(t *testing.T) {
 	in := []Message{

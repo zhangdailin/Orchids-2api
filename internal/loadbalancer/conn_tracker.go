@@ -2,11 +2,12 @@ package loadbalancer
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"log/slog"
-	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -93,35 +94,52 @@ type RedisConnTracker struct {
 	prefix        string
 	releaseScript *redis.Script
 	acquireScript *redis.Script
+	refreshScript *redis.Script
+	mu            sync.Mutex
+	held          map[int64][]*redisConnLease
+	closed        bool
+}
+
+const redisConnLeaseTTL = 2 * time.Minute
+
+type redisConnLease struct {
+	id   string
+	stop chan struct{}
+	done chan struct{}
+	once sync.Once
 }
 
 func NewRedisConnTracker(client *redis.Client, prefix string) *RedisConnTracker {
 	t := &RedisConnTracker{
 		client: client,
 		prefix: prefix + "conns:",
+		held:   make(map[int64][]*redisConnLease),
 	}
-	// Lua script to decrement but never go below 0
+	// Each request owns one expiring sorted-set member. A crashed process stops
+	// renewing its members and Redis reclaims them automatically.
 	t.releaseScript = redis.NewScript(`
-		local key = KEYS[1]
-		local val = tonumber(redis.call("GET", key) or "0")
-		if val > 0 then
-			return redis.call("DECR", key)
-		end
-		return 0
+		return redis.call("ZREM", KEYS[1], ARGV[1])
 	`)
 	t.acquireScript = redis.NewScript(`
 		local key = KEYS[1]
 		local limit = tonumber(ARGV[1]) or 0
-		local current = tonumber(redis.call("GET", key) or "0")
+		local kind = redis.call("TYPE", key).ok
+		if kind ~= "none" and kind ~= "zset" then redis.call("DEL", key) end
+		redis.call("ZREMRANGEBYSCORE", key, "-inf", ARGV[2])
+		local current = redis.call("ZCARD", key)
 		if limit > 0 and current >= limit then
 			return 0
 		end
-		redis.call("INCR", key)
+		redis.call("ZADD", key, ARGV[3], ARGV[4])
+		redis.call("PEXPIRE", key, ARGV[5])
 		return 1
 	`)
-
-	// Clear stale counters on startup
-	t.clearAll()
+	t.refreshScript = redis.NewScript(`
+		if redis.call("ZSCORE", KEYS[1], ARGV[1]) == false then return 0 end
+		redis.call("ZADD", KEYS[1], "XX", ARGV[2], ARGV[1])
+		redis.call("PEXPIRE", KEYS[1], ARGV[3])
+		return 1
+	`)
 	return t
 }
 
@@ -130,24 +148,82 @@ func (t *RedisConnTracker) key(accountID int64) string {
 }
 
 func (t *RedisConnTracker) Acquire(accountID int64) {
-	ctx := context.Background()
-	t.client.Incr(ctx, t.key(accountID))
+	_, _ = t.acquire(accountID, 0)
 }
 
 func (t *RedisConnTracker) TryAcquire(accountID int64, limit int64) bool {
-	ctx := context.Background()
-	result, err := t.acquireScript.Run(ctx, t.client, []string{t.key(accountID)}, limit).Int64()
-	return err == nil && result == 1
+	_, ok := t.acquire(accountID, limit)
+	return ok
 }
 
 func (t *RedisConnTracker) Release(accountID int64) {
-	ctx := context.Background()
-	t.releaseScript.Run(ctx, t.client, []string{t.key(accountID)})
+	if t == nil || t.client == nil || accountID == 0 {
+		return
+	}
+	t.mu.Lock()
+	list := t.held[accountID]
+	if len(list) == 0 {
+		t.mu.Unlock()
+		return
+	}
+	lease := list[len(list)-1]
+	list = list[:len(list)-1]
+	if len(list) == 0 {
+		delete(t.held, accountID)
+	} else {
+		t.held[accountID] = list
+	}
+	t.mu.Unlock()
+	lease.once.Do(func() { close(lease.stop) })
+	<-lease.done
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = t.releaseScript.Run(ctx, t.client, []string{t.key(accountID)}, lease.id).Err()
+}
+
+// Close releases every lease owned by this process. Expiry remains the crash
+// fallback, but a graceful service restart must not make healthy accounts look
+// concurrency-exhausted until the lease TTL elapses.
+func (t *RedisConnTracker) Close() {
+	if t == nil || t.client == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return
+	}
+	t.closed = true
+	held := t.held
+	t.held = make(map[int64][]*redisConnLease)
+	t.mu.Unlock()
+
+	for _, leases := range held {
+		for _, lease := range leases {
+			lease.once.Do(func() { close(lease.stop) })
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	pipe := t.client.Pipeline()
+	for accountID, leases := range held {
+		for _, lease := range leases {
+			<-lease.done
+			pipe.ZRem(ctx, t.key(accountID), lease.id)
+		}
+	}
+	_, _ = pipe.Exec(ctx)
 }
 
 func (t *RedisConnTracker) GetCount(accountID int64) int64 {
-	ctx := context.Background()
-	val, err := t.client.Get(ctx, t.key(accountID)).Int64()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	val, err := redis.NewScript(`
+		local kind = redis.call("TYPE", KEYS[1]).ok
+		if kind ~= "none" and kind ~= "zset" then redis.call("DEL", KEYS[1]); return 0 end
+		redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[1])
+		return redis.call("ZCARD", KEYS[1])
+	`).Run(ctx, t.client, []string{t.key(accountID)}, time.Now().UnixMilli()).Int64()
 	if err != nil {
 		return 0
 	}
@@ -156,56 +232,84 @@ func (t *RedisConnTracker) GetCount(accountID int64) int64 {
 
 func (t *RedisConnTracker) GetCounts(accountIDs []int64) map[int64]int64 {
 	ctx := context.Background()
-	counts := make(map[int64]int64, len(accountIDs))
+	result := make(map[int64]int64, len(accountIDs))
 
 	if len(accountIDs) == 0 {
-		return counts
+		return result
 	}
 
-	keys := make([]string, len(accountIDs))
+	pipe := t.client.Pipeline()
+	now := fmt.Sprint(time.Now().UnixMilli())
+	commands := make([]*redis.IntCmd, len(accountIDs))
 	for i, id := range accountIDs {
-		keys[i] = t.key(id)
+		key := t.key(id)
+		pipe.ZRemRangeByScore(ctx, key, "-inf", now)
+		commands[i] = pipe.ZCard(ctx, key)
 	}
-
-	vals, err := t.client.MGet(ctx, keys...).Result()
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		// Fallback to individual gets
 		for _, id := range accountIDs {
-			counts[id] = t.GetCount(id)
+			result[id] = t.GetCount(id)
 		}
-		return counts
+		return result
 	}
 
-	for i, val := range vals {
-		if val == nil {
-			counts[accountIDs[i]] = 0
-			continue
-		}
-		if s, ok := val.(string); ok {
-			n, _ := strconv.ParseInt(s, 10, 64)
-			counts[accountIDs[i]] = n
-		}
+	for i, command := range commands {
+		value, _ := command.Result()
+		result[accountIDs[i]] = value
 	}
-	return counts
+	return result
 }
 
-// clearAll removes all connection counter keys on startup.
-func (t *RedisConnTracker) clearAll() {
-	ctx := context.Background()
-	var cursor uint64
-	pattern := t.prefix + "*"
+func (t *RedisConnTracker) acquire(accountID, limit int64) (*redisConnLease, bool) {
+	if t == nil || t.client == nil || accountID == 0 {
+		return nil, false
+	}
+	lease := &redisConnLease{id: newRedisConnLeaseID(), stop: make(chan struct{}), done: make(chan struct{})}
+	now := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	result, err := t.acquireScript.Run(ctx, t.client, []string{t.key(accountID)},
+		limit, now.UnixMilli(), now.Add(redisConnLeaseTTL).UnixMilli(), lease.id, (redisConnLeaseTTL * 2).Milliseconds()).Int64()
+	cancel()
+	if err != nil || result != 1 {
+		return nil, false
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = t.releaseScript.Run(ctx, t.client, []string{t.key(accountID)}, lease.id).Err()
+		return nil, false
+	}
+	t.held[accountID] = append(t.held[accountID], lease)
+	t.mu.Unlock()
+	go t.renew(accountID, lease)
+	return lease, true
+}
+
+func (t *RedisConnTracker) renew(accountID int64, lease *redisConnLease) {
+	defer close(lease.done)
+	ticker := time.NewTicker(redisConnLeaseTTL / 3)
+	defer ticker.Stop()
 	for {
-		keys, nextCursor, err := t.client.Scan(ctx, cursor, pattern, 100).Result()
-		if err != nil {
-			slog.Warn("Failed to clear connection counters", "error", err)
+		select {
+		case <-lease.stop:
 			return
-		}
-		if len(keys) > 0 {
-			t.client.Del(ctx, keys...)
-		}
-		cursor = nextCursor
-		if cursor == 0 {
-			break
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = t.refreshScript.Run(ctx, t.client, []string{t.key(accountID)}, lease.id,
+				time.Now().Add(redisConnLeaseTTL).UnixMilli(), (redisConnLeaseTTL * 2).Milliseconds()).Err()
+			cancel()
 		}
 	}
+}
+
+func newRedisConnLeaseID() string {
+	buffer := make([]byte, 16)
+	if _, err := rand.Read(buffer); err == nil {
+		return hex.EncodeToString(buffer)
+	}
+	return fmt.Sprintf("lease-%d", time.Now().UnixNano())
 }

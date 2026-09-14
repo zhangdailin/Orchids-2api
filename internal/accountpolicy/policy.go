@@ -239,6 +239,8 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 // the credential or the account's quota.
 func isModelScopedFailure(lower string) bool {
 	return strings.Contains(lower, "code=6004") ||
+		strings.Contains(lower, "qoder agent limit reached") ||
+		strings.Contains(lower, "agentlimitresettime") ||
 		strings.Contains(lower, "model is not found") ||
 		strings.Contains(lower, "model not found") ||
 		strings.Contains(lower, "no_implementation_available") ||

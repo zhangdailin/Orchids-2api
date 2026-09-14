@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,29 @@ type ChangeEmitter interface {
 type AccountChange struct {
 	AccountID int64
 	Previous  *Account
+	Origin    string
+}
+
+const AccountChangeOriginScheduler = "token_refresh_scheduler"
+
+type accountChangeOriginContextKey struct{}
+
+// WithAccountChangeOrigin marks writes made by an internal controller. Cache
+// invalidation still happens, while a filtered scheduler subscriber can ignore
+// its own persisted result.
+func WithAccountChangeOrigin(ctx context.Context, origin string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, accountChangeOriginContextKey{}, strings.TrimSpace(origin))
+}
+
+func accountChangeOrigin(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	origin, _ := ctx.Value(accountChangeOriginContextKey{}).(string)
+	return strings.TrimSpace(origin)
 }
 
 // SetChangeEmitter wires the notification target. Passing nil disables it.
@@ -56,7 +80,7 @@ func (s *redisStore) SetChangeEmitter(emitter ChangeEmitter) {
 // turn a successful write into a slow or failed one. The store hands over the
 // previous state and the id; reading the after-state is the emitter's job, which
 // keeps the store free of subscriber concerns.
-func (s *redisStore) publishChange(previous *Account, id int64) {
+func (s *redisStore) publishChange(ctx context.Context, previous *Account, id int64) {
 	if s == nil || s.changeEmitter == nil || id == 0 {
 		return
 	}
@@ -73,7 +97,7 @@ func (s *redisStore) publishChange(previous *Account, id int64) {
 				slog.Error("Account change emitter panicked", "error", r)
 			}
 		}()
-		emitter.Publish(AccountChange{AccountID: id, Previous: previousCopy})
+		emitter.Publish(AccountChange{AccountID: id, Previous: previousCopy, Origin: accountChangeOrigin(ctx)})
 	}()
 }
 
@@ -229,7 +253,7 @@ func (s *redisStore) CreateAccount(ctx context.Context, acc *Account) error {
 	}
 	// Only a write that reached Redis is announced: a subscriber must never react
 	// to a change that did not happen.
-	s.publishChange(nil, id)
+	s.publishChange(ctx, nil, id)
 	return nil
 }
 
@@ -377,7 +401,16 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 			updated.VerifiedAt = acc.VerifiedAt
 		}
 		updated.ClearVerifiedAt = false
-		updated.QuotaResetAt = acc.QuotaResetAt
+		// A request may persist its verdict after a background quota refresh has
+		// already written a newer reset. Never let that stale request shorten or
+		// erase the authoritative deadline. A current snapshot may still clear it.
+		staleSnapshot := !acc.UpdatedAt.IsZero() && acc.UpdatedAt.Before(existing.UpdatedAt)
+		switch {
+		case acc.QuotaResetAt.After(updated.QuotaResetAt):
+			updated.QuotaResetAt = acc.QuotaResetAt
+		case !staleSnapshot:
+			updated.QuotaResetAt = acc.QuotaResetAt
+		}
 		updated.MissingThinkingStrikes = acc.MissingThinkingStrikes
 		updated.MissingThinkingLastAt = acc.MissingThinkingLastAt
 		// Grok Build CLI OAuth credentials and identity must survive refresh /
@@ -492,14 +525,15 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		if !acc.QoderModelsSyncedAt.IsZero() {
 			updated.QoderModelsSyncedAt = acc.QoderModelsSyncedAt
 		}
-		if !acc.QoderQuota.SyncedAt.IsZero() {
+		if !acc.QoderQuota.SyncedAt.IsZero() && (existing.QoderQuota.SyncedAt.IsZero() || !acc.QoderQuota.SyncedAt.Before(existing.QoderQuota.SyncedAt)) {
 			updated.QoderQuota = acc.QoderQuota
 		}
-		updated.UpdatedAt = time.Now()
 		*existing = updated
 		return nil
 	})
 }
+
+var errAccountUnchanged = fmt.Errorf("account unchanged")
 
 // updateAccountAtomic applies a field mutation with optimistic locking. Every
 // account writer uses the same watched key, so a quota/stat update that lands
@@ -522,6 +556,10 @@ func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate f
 			if err != nil {
 				return err
 			}
+			legacyCredential, err := hasLegacyCredential(value)
+			if err != nil {
+				return err
+			}
 			current, err := s.unmarshalAccount(value, id)
 			if err != nil {
 				return err
@@ -530,6 +568,15 @@ func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate f
 			previous = &copied
 			if err := mutate(current); err != nil {
 				return err
+			}
+			// UpdatedAt describes a persisted semantic change. Do not rewrite the
+			// row or publish an event when a refresh observed exactly the state we
+			// already have.
+			current.UpdatedAt = previous.UpdatedAt
+			// A semantic no-op must still rewrite legacy plaintext credentials so
+			// the normal encrypted marshal path can complete the migration.
+			if reflect.DeepEqual(current, previous) && !(legacyCredential && s.credentials != nil) {
+				return errAccountUnchanged
 			}
 			current.UpdatedAt = time.Now()
 			data, err := s.marshalAccount(current)
@@ -551,13 +598,16 @@ func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate f
 		if err == redis.TxFailedErr {
 			continue
 		}
+		if err == errAccountUnchanged {
+			return nil
+		}
 		if err == ErrNoRows {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		s.publishChange(previous, id)
+		s.publishChange(ctx, previous, id)
 		return nil
 	}
 	return fmt.Errorf("account %d changed too frequently; update could not be committed", id)
@@ -643,7 +693,7 @@ func (s *redisStore) DeleteAccount(ctx context.Context, id int64) error {
 		return err
 	}
 	if previousErr == nil {
-		s.publishChange(previous, id)
+		s.publishChange(ctx, previous, id)
 	}
 	return nil
 }

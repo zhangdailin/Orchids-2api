@@ -8,7 +8,7 @@ import (
 
 func TestGrokLimitsSurviveConfigRoundTrip(t *testing.T) {
 	var cfg Config
-	if err := json.Unmarshal([]byte(`{"max_retries":2,"retry_delay":50,"account_switch_count":4,"request_timeout":1800,"concurrency_timeout":2400,"retry_429_interval":90,"grok_web_rps":3,"grok_console_rps":0.5,"grok_build_rps":10,"grok_web_timeout_seconds":900,"grok_console_timeout_seconds":1200,"grok_build_timeout_seconds":1800,"grok_stream_idle_seconds":300}`), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(`{"max_retries":2,"retry_delay":50,"account_switch_count":4,"request_timeout":1800,"concurrency_timeout":2400,"retry_429_interval":90,"grok_web_rps":3,"grok_console_rps":0.5,"grok_build_rps":10,"grok_web_timeout_seconds":900,"grok_console_timeout_seconds":1200,"grok_build_timeout_seconds":1800,"grok_stream_idle_seconds":300,"warp_stream_idle_seconds":420,"puter_stream_idle_seconds":180}`), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	ApplyHardcoded(&cfg)
@@ -36,6 +36,9 @@ func TestGrokLimitsSurviveConfigRoundTrip(t *testing.T) {
 	if restored.GrokStreamIdleTimeout() != 300*time.Second {
 		t.Fatal("idle setting lost")
 	}
+	if restored.WarpStreamIdleTimeout() != 420*time.Second || restored.PuterStreamIdleTimeout() != 180*time.Second {
+		t.Fatal("Warp/Puter idle settings lost")
+	}
 }
 
 func TestGrokLimitsDefaultsAndBounds(t *testing.T) {
@@ -43,9 +46,12 @@ func TestGrokLimitsDefaultsAndBounds(t *testing.T) {
 	if cfg.GrokRequestsPerSecond("console") != 0 || cfg.GrokRequestTimeout("build") != 600*time.Second {
 		t.Fatal("unexpected defaults")
 	}
-	cfg = &Config{RequestTimeout: 999999, GrokWebTimeout: 999999, GrokConsoleRPS: 999999, GrokBuildRPS: -1, GrokStreamIdleSeconds: 999999}
+	cfg = &Config{RequestTimeout: 999999, GrokWebTimeout: 999999, GrokConsoleRPS: 999999, GrokBuildRPS: -1, GrokStreamIdleSeconds: 999999, WarpStreamIdleSeconds: 999999, PuterStreamIdleSeconds: 999999}
 	ApplyHardcoded(cfg)
 	if cfg.RequestTimeout != 86400 || cfg.GrokRequestTimeout("web") != 24*time.Hour || cfg.GrokStreamIdleTimeout() != time.Hour || cfg.GrokRequestsPerSecond("console") != 1000 || cfg.GrokRequestsPerSecond("build") != 0 {
 		t.Fatal("invalid bounds")
+	}
+	if cfg.WarpStreamIdleTimeout() != time.Hour || cfg.PuterStreamIdleTimeout() != time.Hour {
+		t.Fatal("invalid Warp/Puter idle bounds")
 	}
 }

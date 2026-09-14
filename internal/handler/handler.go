@@ -833,6 +833,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	sh.setEmptyOutputFallback(successfulFileMutationToolResultFallback(upstreamMessages))
 	sh.setUsageTokens(inputTokens, -1) // Correctly initialize input tokens
 	activeWarpConversationID := chatSessionID
+	activeWarpBindings := make(map[string]WarpToolBinding)
 	// Capture the server-issued Warp conversation and bind it to both an
 	// explicit client session (when present) and every emitted tool call.
 	sh.onConversationID = func(id string) {
@@ -848,7 +849,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("Warp conversationID captured", "key", conversationKey, "id", activeWarpConversationID)
 		}
 	}
-	sh.onToolCall = func(id, name, input, upstreamType string) {
+	sh.onToolCall = func(id, name, input, upstreamType, taskContext string) {
 		if isPuterRequest && isDeepSeekPuterModel(mappedModel) {
 			if reasoning := sh.currentReasoningText(); reasoning != "" {
 				if err := h.savePuterReasoningForTool(r.Context(), mappedModel, id, reasoning); err != nil {
@@ -863,18 +864,29 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if currentAccount != nil {
 			accountID = currentAccount.ID
 		}
-		// Tool continuation is only safe when the caller supplied a stable
-		// conversation namespace. Never create a globally addressable binding.
-		if conversationKey == "" {
-			return
-		}
-		h.sessionStore.SetWarpToolBinding(r.Context(), conversationKey, id, WarpToolBinding{
+		// Clients such as DSH do not always send a stable session id. In that
+		// case the unguessable server-issued tool-call id acts as a short-lived
+		// capability and still binds the continuation to this account/conversation.
+		binding := WarpToolBinding{
 			ConversationID: activeWarpConversationID,
 			AccountID:      accountID,
 			ToolType:       upstreamType,
 			ToolName:       name,
 			ToolInput:      warpBindingInput(upstreamType, input),
-		})
+			TaskContext:    taskContext,
+		}
+		activeWarpBindings[id] = binding
+		h.sessionStore.SetWarpToolBinding(r.Context(), conversationKey, id, binding)
+	}
+	sh.onWarpTaskContext = func(taskContext string) {
+		if !isWarpRequest || taskContext == "" {
+			return
+		}
+		for id, binding := range activeWarpBindings {
+			binding.TaskContext = taskContext
+			activeWarpBindings[id] = binding
+			h.sessionStore.SetWarpToolBinding(r.Context(), conversationKey, id, binding)
+		}
 	}
 	sh.onModelConfigRefresh = func() {
 		if isWarpRequest {
@@ -962,6 +974,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
 			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
 			WarpToolContexts:     warpContinuationState.toolContexts,
+			WarpTaskContext:      warpContinuationState.taskContext,
 		}
 		primaryHandler := sh.handleMessage
 		var attempt int
@@ -1065,7 +1078,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						slog.Debug("标记账号状态", "account_id", currentAccount.ID, "status", verdict.Status, "scope", string(verdict.Scope), "category", errClass.Category)
 					}
 					if !skipAccountStatusMark {
-						if isWarpRequest && errClass.Category == "rate_limit" && isWarpQuotaExhaustedError(errStr) {
+						if isWarpRequest && (errClass.Category == "rate_limit" || errClass.Category == "quota_exhausted") && isWarpQuotaExhaustedError(errStr) {
 							markWarpQuotaExhausted(r.Context(), h.loadBalancer.Store, currentAccount)
 						} else {
 							// Apply keeps the status and its operator-facing reason

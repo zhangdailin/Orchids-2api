@@ -371,7 +371,7 @@ func auditOutcomeClass(event audit.Event) string {
 	}
 	httpStatus := auditMetadataInt(event, "http_status")
 	switch status {
-	case "success", "ok":
+	case "success", "ok", "stop", "tool_calls", "length", "content_filter", "recovered":
 		return "success"
 	case "stream_error":
 		// The status line was already committed: a class of its own, exactly as the
@@ -386,6 +386,12 @@ func auditOutcomeClass(event audit.Event) string {
 		if httpStatus == 0 {
 			return ""
 		}
+	}
+	// Provider finish reasons evolve. A completed 2xx response is successful
+	// unless the journal explicitly recorded an error; retain the raw finish
+	// reason for the UI's more specific badge/tooltip.
+	if httpStatus >= 200 && httpStatus < 300 && status != "error" && status != "failed" {
+		return "success"
 	}
 	switch {
 	case httpStatus == 429 || httpStatus == 529:
@@ -2299,6 +2305,11 @@ func (a *API) startWarpDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 	details, err := authenticator.Start(ctx)
 	if err != nil {
 		slog.Warn("Warp device authorization could not be started", "error", err)
+		class := apperrors.ClassifyUpstreamError(err.Error())
+		if class.Category == "configuration" {
+			apperrors.New("configuration_error", apperrors.PublicMessage(err.Error()), http.StatusServiceUnavailable).WriteResponse(w)
+			return
+		}
 		http.Error(w, "failed to start Warp device authorization", http.StatusBadGateway)
 		return
 	}

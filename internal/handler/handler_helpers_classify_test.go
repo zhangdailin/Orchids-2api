@@ -10,8 +10,8 @@ func TestClassifyUpstreamErrorCreditsExhausted(t *testing.T) {
 	t.Parallel()
 
 	errClass := apperrors.ClassifyUpstreamError("puter upstream error: no remaining quota: You have run out of credits.")
-	if errClass.Category != "rate_limit" {
-		t.Fatalf("expected rate_limit category, got %q", errClass.Category)
+	if errClass.Category != "quota_exhausted" {
+		t.Fatalf("expected quota_exhausted category, got %q", errClass.Category)
 	}
 	if !errClass.Retryable {
 		t.Fatal("expected credits exhausted to be retryable")

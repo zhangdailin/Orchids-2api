@@ -492,6 +492,80 @@ func TestProcessStreamBody_SuppressesUnsupportedServerTool(t *testing.T) {
 	}
 }
 
+func TestProcessStreamBody_AttachesTaskContextToClientToolCall(t *testing.T) {
+	taskID := "task-roundtrip"
+	toolID := "shell-roundtrip"
+	stream := warpSSEActionFrame(t, warpapi.ClientAction_builder{
+		CreateTask: warpapi.ClientAction_CreateTask_builder{
+			Task: warpapi.Task_builder{
+				Id:       stringPtr(taskID),
+				Messages: []*warpapi.Message{warpAgentOutputMessage("intro", "checking")},
+			}.Build(),
+		}.Build(),
+	}.Build())
+	stream += warpSSEActionFrame(t, warpapi.ClientAction_builder{
+		AddMessagesToTask: warpapi.ClientAction_AddMessagesToTask_builder{
+			TaskId: stringPtr(taskID),
+			Messages: []*warpapi.Message{warpapi.Message_builder{
+				Id: stringPtr("tool-message"),
+				ToolCall: warpapi.Message_ToolCall_builder{
+					ToolCallId:      stringPtr(toolID),
+					RunShellCommand: warpapi.Message_ToolCall_RunShellCommand_builder{Command: stringPtr("pwd")}.Build(),
+				}.Build(),
+			}.Build()},
+		}.Build(),
+	}.Build())
+	stream += warpSSEActionFrame(t, warpapi.ClientAction_builder{
+		UpdateTaskSummary: warpapi.ClientAction_UpdateTaskSummary_builder{
+			TaskId:  stringPtr(taskID),
+			Summary: stringPtr("ready for tool result"),
+		}.Build(),
+	}.Build())
+	stream += warpSSEFinishFrame(t)
+
+	var toolEvent upstream.SSEMessage
+	var finishEvent upstream.SSEMessage
+	if err := processStreamBody(context.Background(), strings.NewReader(stream), func(message upstream.SSEMessage) {
+		if message.Type == "model.tool-call" {
+			toolEvent = message
+		}
+		if message.Type == "model.finish" {
+			finishEvent = message
+		}
+	}, nil); err != nil {
+		t.Fatalf("processStreamBody error: %v", err)
+	}
+	encoded, _ := toolEvent.Event["warpTaskContext"].(string)
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode task context: %v", err)
+	}
+	var context warpapi.Request_TaskContext
+	if err := proto.Unmarshal(raw, &context); err != nil {
+		t.Fatalf("unmarshal task context: %v", err)
+	}
+	tasks := context.GetTasks()
+	if len(tasks) != 1 || tasks[0].GetId() != taskID || len(tasks[0].GetMessages()) != 2 {
+		t.Fatalf("task context=%#v", tasks)
+	}
+	call := tasks[0].GetMessages()[1].GetToolCall()
+	if call.GetToolCallId() != toolID || call.GetRunShellCommand().GetCommand() != "pwd" {
+		t.Fatalf("round-tripped tool call=%#v", call)
+	}
+	finalEncoded, _ := finishEvent.Event["warpTaskContext"].(string)
+	finalRaw, err := base64.RawURLEncoding.DecodeString(finalEncoded)
+	if err != nil {
+		t.Fatalf("decode final task context: %v", err)
+	}
+	var finalContext warpapi.Request_TaskContext
+	if err := proto.Unmarshal(finalRaw, &finalContext); err != nil {
+		t.Fatalf("unmarshal final task context: %v", err)
+	}
+	if got := finalContext.GetTasks()[0].GetSummary(); got != "ready for tool result" {
+		t.Fatalf("final task summary=%q", got)
+	}
+}
+
 func TestProcessStreamBody_ParsesRunShellCommand(t *testing.T) {
 	var events []upstream.SSEMessage
 

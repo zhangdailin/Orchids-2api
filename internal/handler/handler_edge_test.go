@@ -165,9 +165,10 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 		t.Fatalf("CreateAccount(first) error = %v", err)
 	}
 	second := &store.Account{
-		AccountType: "puter",
-		Enabled:     true,
-		Weight:      1,
+		AccountType:   "puter",
+		Enabled:       true,
+		Weight:        1,
+		MaxConcurrent: 2,
 	}
 	if err := s.CreateAccount(context.Background(), second); err != nil {
 		t.Fatalf("CreateAccount(second) error = %v", err)
@@ -470,7 +471,7 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	}
 
 	out := rec.Body.String()
-	if !strings.Contains(out, "Use the request ID") || strings.Contains(out, "puter API error") {
+	if !strings.Contains(out, "rejected the request parameters or model") || strings.Contains(out, "puter API error") {
 		t.Fatalf("expected redacted upstream error, got: %s", out)
 	}
 	if strings.Contains(out, "No output was presented to the user") {

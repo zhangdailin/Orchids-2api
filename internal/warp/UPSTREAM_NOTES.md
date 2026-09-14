@@ -134,10 +134,13 @@ Current behavior:
   settings. Orchids-2api currently uses official default role models and leaves
   those optional advanced settings disabled.
 - Official client converts native Warp conversation state into separate
-  `UserInputs` and action-result inputs. Orchids-2api preserves complete
-  OpenAI/Claude history as a bounded transcript whenever no server-issued Warp
-  conversation ID is available. Tool-result continuations require a stable
-  client conversation/session/thread ID and are isolated by that namespace.
+  `TaskContext`, `UserInputs`, and action-result inputs. Orchids-2api preserves
+  complete OpenAI/Claude history as a bounded transcript whenever no
+  server-issued Warp conversation ID is available. For tool-result
+  continuations it captures the task actions emitted by Warp, stores that task
+  context with the unguessable tool-call binding, and round-trips it with the
+  conversation ID. A stable client conversation/session/thread ID is optional;
+  when absent, the tool-call ID is the short-lived continuation capability.
 - Some native Warp actions can contain multiple reads, searches, globs, or
   file edits under one upstream tool-call ID. These are rejected rather than
   truncating them to the first operation; a future bridge must model batches

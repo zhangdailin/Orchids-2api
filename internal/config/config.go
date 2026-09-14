@@ -117,6 +117,8 @@ type Config struct {
 	GrokConsoleTimeout      int      `json:"grok_console_timeout_seconds,omitempty"`
 	GrokBuildTimeout        int      `json:"grok_build_timeout_seconds,omitempty"`
 	GrokStreamIdleSeconds   int      `json:"grok_stream_idle_seconds,omitempty"`
+	WarpStreamIdleSeconds   int      `json:"warp_stream_idle_seconds,omitempty"`
+	PuterStreamIdleSeconds  int      `json:"puter_stream_idle_seconds,omitempty"`
 
 	// ── Channel probes (synthetic reachability checks) ──
 	// The model a probe asks for. Empty means the built-in cheap default; a

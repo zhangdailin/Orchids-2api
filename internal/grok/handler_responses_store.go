@@ -12,6 +12,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 )
@@ -440,14 +441,15 @@ func redactResponseError(event map[string]interface{}) bool {
 	}
 	changed := false
 	if event["error"] != nil {
-		event["error"] = map[string]interface{}{"code": "upstream_error", "message": "Upstream request failed. Use the request ID to inspect diagnostics."}
+		message := fmt.Sprint(event["error"])
+		event["error"] = map[string]interface{}{"code": "upstream_error", "message": apperrors.PublicMessage(message)}
 		changed = true
 	}
 	if event["type"] == "error" {
 		for _, key := range []string{"message", "detail", "code", "param"} {
 			delete(event, key)
 		}
-		event["message"] = "Upstream request failed. Use the request ID to inspect diagnostics."
+		event["message"] = apperrors.PublicMessage(fmt.Sprint(event["message"]))
 		event["code"] = "upstream_error"
 		changed = true
 	}

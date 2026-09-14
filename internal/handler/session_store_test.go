@@ -154,13 +154,14 @@ func TestMemorySessionStoreWarpToolBindingAndAccount(t *testing.T) {
 		ToolType:       "call_mcp_tool",
 		ToolName:       "Write",
 		ToolInput:      `{"file_path":"main.go"}`,
+		TaskContext:    "dGFzaw",
 	})
 
 	if accountID, ok := store.GetAccountID(ctx, "session"); !ok || accountID != 132 {
 		t.Fatalf("accountID=%d ok=%v, want 132 true", accountID, ok)
 	}
 	binding, ok := store.GetWarpToolBinding(ctx, "session", "tool_write")
-	if !ok || binding.ConversationID != "warp_conv" || binding.AccountID != 132 || binding.ToolType != "call_mcp_tool" {
+	if !ok || binding.ConversationID != "warp_conv" || binding.AccountID != 132 || binding.ToolType != "call_mcp_tool" || binding.TaskContext != "dGFzaw" {
 		t.Fatalf("binding=%#v ok=%v", binding, ok)
 	}
 }
@@ -195,5 +196,18 @@ func TestMemorySessionStoreWarpToolBindingIsConversationScoped(t *testing.T) {
 	}
 	if binding, ok := store.GetWarpToolBinding(ctx, "conversation-b", "tool_1"); !ok || binding.ConversationID != "conv_b" {
 		t.Fatalf("conversation-b binding=%#v ok=%v", binding, ok)
+	}
+}
+
+func TestMemorySessionStoreAllowsAnonymousToolCapability(t *testing.T) {
+	store := NewMemorySessionStore(time.Hour, 10)
+	ctx := context.Background()
+	store.SetWarpToolBinding(ctx, "", "unguessable-tool-id", WarpToolBinding{ConversationID: "warp-conv", AccountID: 7})
+	binding, ok := store.GetWarpToolBinding(ctx, "", "unguessable-tool-id")
+	if !ok || binding.ConversationID != "warp-conv" || binding.AccountID != 7 {
+		t.Fatalf("anonymous capability binding=%+v ok=%v", binding, ok)
+	}
+	if _, ok := store.GetWarpToolBinding(ctx, "another-session", "unguessable-tool-id"); ok {
+		t.Fatal("anonymous capability leaked into an explicit conversation namespace")
 	}
 }

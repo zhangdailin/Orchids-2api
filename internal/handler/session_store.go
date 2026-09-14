@@ -19,6 +19,7 @@ type WarpToolBinding struct {
 	ToolType       string `json:"tool_type,omitempty"`
 	ToolName       string `json:"tool_name,omitempty"`
 	ToolInput      string `json:"tool_input,omitempty"`
+	TaskContext    string `json:"task_context,omitempty"`
 }
 
 // SessionStore abstracts request session state and Warp tool continuations.
@@ -29,8 +30,9 @@ type SessionStore interface {
 	SetConvID(ctx context.Context, key, convID string)
 	GetAccountID(ctx context.Context, key string) (int64, bool)
 	SetAccountID(ctx context.Context, key string, accountID int64)
-	// Warp tool-call IDs are only unique within a client conversation.  Always
-	// scope a binding by the caller-provided conversation key.
+	// Bindings normally use the caller conversation. Clients that omit one use
+	// an anonymous capability namespace: possession of the server-issued,
+	// unguessable tool-call ID is sufficient to resume that exact call.
 	GetWarpToolBinding(ctx context.Context, conversationKey, toolCallID string) (WarpToolBinding, bool)
 	SetWarpToolBinding(ctx context.Context, conversationKey, toolCallID string, binding WarpToolBinding)
 	DeleteSession(ctx context.Context, key string)
@@ -64,6 +66,7 @@ func (s *RedisSessionStore) key(k string) string {
 }
 
 func (s *RedisSessionStore) toolKey(conversationKey, toolCallID string) string {
+	conversationKey = warpToolBindingNamespace(conversationKey)
 	sum := sha256.Sum256([]byte(conversationKey + "\x00" + toolCallID))
 	return s.toolRoot + hex.EncodeToString(sum[:])
 }
@@ -115,7 +118,7 @@ func (s *RedisSessionStore) SetAccountID(ctx context.Context, key string, accoun
 
 func (s *RedisSessionStore) GetWarpToolBinding(ctx context.Context, conversationKey, toolCallID string) (WarpToolBinding, bool) {
 	var binding WarpToolBinding
-	if conversationKey == "" || toolCallID == "" {
+	if toolCallID == "" {
 		return WarpToolBinding{}, false
 	}
 	raw, err := s.client.Get(ctx, s.toolKey(conversationKey, toolCallID)).Bytes()
@@ -126,7 +129,7 @@ func (s *RedisSessionStore) GetWarpToolBinding(ctx context.Context, conversation
 }
 
 func (s *RedisSessionStore) SetWarpToolBinding(ctx context.Context, conversationKey, toolCallID string, binding WarpToolBinding) {
-	if conversationKey == "" || toolCallID == "" || binding.ConversationID == "" {
+	if toolCallID == "" || binding.ConversationID == "" {
 		return
 	}
 	raw, err := json.Marshal(binding)
@@ -261,11 +264,20 @@ func (s *MemorySessionStore) SetAccountID(_ context.Context, key string, account
 }
 
 func memoryToolKey(conversationKey, toolCallID string) string {
-	return conversationKey + "\x00" + toolCallID
+	return warpToolBindingNamespace(conversationKey) + "\x00" + toolCallID
+}
+
+const anonymousWarpToolNamespace = "__anonymous_warp_tool_capability__"
+
+func warpToolBindingNamespace(conversationKey string) string {
+	if conversationKey == "" {
+		return anonymousWarpToolNamespace
+	}
+	return conversationKey
 }
 
 func (s *MemorySessionStore) GetWarpToolBinding(_ context.Context, conversationKey, toolCallID string) (WarpToolBinding, bool) {
-	if conversationKey == "" || toolCallID == "" {
+	if toolCallID == "" {
 		return WarpToolBinding{}, false
 	}
 	s.mu.RLock()
@@ -278,7 +290,7 @@ func (s *MemorySessionStore) GetWarpToolBinding(_ context.Context, conversationK
 }
 
 func (s *MemorySessionStore) SetWarpToolBinding(_ context.Context, conversationKey, toolCallID string, binding WarpToolBinding) {
-	if conversationKey == "" || toolCallID == "" || binding.ConversationID == "" {
+	if toolCallID == "" || binding.ConversationID == "" {
 		return
 	}
 	s.mu.Lock()

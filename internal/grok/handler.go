@@ -69,6 +69,9 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	cliClient := NewCLIClient(cfg)
 	if lb != nil {
 		cliClient.SetAccountStore(lb.Store)
+		if lb.Store != nil {
+			configureDistributedGrokLimits(lb.Store.RedisClient(), lb.Store.RedisPrefix())
+		}
 	}
 	instanceID := "grok-" + randomHex(16)
 	if cfg != nil && strings.TrimSpace(cfg.DeploymentInstance) != "" {
@@ -488,10 +491,11 @@ func modelValidationMessage(modelID string, err error) string {
 
 func (h *Handler) accountCapacityAvailable(acc *store.Account) bool {
 	tracker := h.connTrackerSnapshot()
-	if acc == nil || acc.MaxConcurrent <= 0 || tracker == nil {
+	limit := loadbalancer.EffectiveAccountConcurrencyLimit(acc)
+	if acc == nil || limit <= 0 || tracker == nil {
 		return true
 	}
-	return tracker.GetCount(acc.ID) < int64(acc.MaxConcurrent)
+	return tracker.GetCount(acc.ID) < limit
 }
 
 func (h *Handler) reserveAccount(acc *store.Account) (func(), bool) {
@@ -503,7 +507,7 @@ func (h *Handler) reserveAccount(acc *store.Account) (func(), bool) {
 		return func() {}, true
 	}
 	if limiter, ok := tracker.(loadbalancer.LimitedConnTracker); ok {
-		if !limiter.TryAcquire(acc.ID, int64(acc.MaxConcurrent)) {
+		if !limiter.TryAcquire(acc.ID, loadbalancer.EffectiveAccountConcurrencyLimit(acc)) {
 			return func() {}, false
 		}
 	} else {
@@ -614,6 +618,15 @@ func requestModelFromContext(ctx context.Context) string {
 // per-model failure: a throttled model must not remove the account's other
 // models from the pool.
 func accountUsableForModel(ctx context.Context, acc *store.Account) bool {
+	if acc == nil {
+		return false
+	}
+	// A Build Free refusal is authoritative for the whole included-usage
+	// window. Do not send the account back to the upstream every minute while
+	// its confirmed 24-hour reset is still in the future.
+	if ProviderForAccount(acc) == ProviderBuild && !acc.GrokFreeQuota.ResetAt.IsZero() && time.Now().Before(acc.GrokFreeQuota.ResetAt) {
+		return false
+	}
 	model := requestModelFromContext(ctx)
 	if model == "" {
 		return true

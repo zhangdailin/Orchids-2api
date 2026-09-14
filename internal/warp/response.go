@@ -68,6 +68,7 @@ type parsedEvent struct {
 	ConversationID string
 	RequestID      string
 	RunID          string
+	ClientActions  []*warpapi.ClientAction
 	ContentUpdates []warpContentUpdate
 	ToolCalls      []toolCall
 	Finish         *finishInfo
@@ -85,13 +86,102 @@ type warpStreamState struct {
 	textByMessage      map[string]*strings.Builder
 	reasoningByMessage map[string]*strings.Builder
 	seenToolCalls      map[string]struct{}
+	tasks              map[string]*warpapi.Task
+	taskOrder          []string
 }
 
 func newWarpStreamState() *warpStreamState {
 	return &warpStreamState{
 		textByMessage:      make(map[string]*strings.Builder),
 		reasoningByMessage: make(map[string]*strings.Builder),
+		tasks:              make(map[string]*warpapi.Task),
 	}
+}
+
+func (s *warpStreamState) applyClientActions(actions []*warpapi.ClientAction) {
+	for _, action := range actions {
+		if action == nil {
+			continue
+		}
+		switch action.WhichAction() {
+		case warpapi.ClientAction_CreateTask_case:
+			task := action.GetCreateTask().GetTask()
+			if task == nil || strings.TrimSpace(task.GetId()) == "" {
+				continue
+			}
+			id := task.GetId()
+			if _, exists := s.tasks[id]; !exists {
+				s.taskOrder = append(s.taskOrder, id)
+			}
+			s.tasks[id] = proto.Clone(task).(*warpapi.Task)
+		case warpapi.ClientAction_AddMessagesToTask_case:
+			update := action.GetAddMessagesToTask()
+			if task := s.tasks[update.GetTaskId()]; task != nil {
+				messages := append([]*warpapi.Message(nil), task.GetMessages()...)
+				for _, message := range update.GetMessages() {
+					messages = append(messages, proto.Clone(message).(*warpapi.Message))
+				}
+				task.SetMessages(messages)
+			}
+		case warpapi.ClientAction_UpdateTaskMessage_case:
+			update := action.GetUpdateTaskMessage()
+			s.replaceTaskMessage(update.GetTaskId(), update.GetMessage())
+		case warpapi.ClientAction_AppendToMessageContent_case:
+			// Append actions carry content deltas rather than complete messages.
+			// The task's prior snapshot remains valid for identity/routing; later
+			// UpdateTaskMessage actions replace it with the complete value.
+		case warpapi.ClientAction_UpdateTaskDescription_case:
+			update := action.GetUpdateTaskDescription()
+			if task := s.tasks[update.GetTaskId()]; task != nil {
+				task.SetDescription(update.GetDescription())
+			}
+		case warpapi.ClientAction_UpdateTaskSummary_case:
+			update := action.GetUpdateTaskSummary()
+			if task := s.tasks[update.GetTaskId()]; task != nil {
+				task.SetSummary(update.GetSummary())
+			}
+		case warpapi.ClientAction_UpdateTaskServerData_case:
+			update := action.GetUpdateTaskServerData()
+			if task := s.tasks[update.GetTaskId()]; task != nil {
+				task.SetServerData(update.GetServerData())
+			}
+		}
+	}
+}
+
+func (s *warpStreamState) replaceTaskMessage(taskID string, message *warpapi.Message) {
+	task := s.tasks[taskID]
+	if task == nil || message == nil || strings.TrimSpace(message.GetId()) == "" {
+		return
+	}
+	messages := append([]*warpapi.Message(nil), task.GetMessages()...)
+	for i, existing := range messages {
+		if existing != nil && existing.GetId() == message.GetId() {
+			messages[i] = proto.Clone(message).(*warpapi.Message)
+			task.SetMessages(messages)
+			return
+		}
+	}
+	messages = append(messages, proto.Clone(message).(*warpapi.Message))
+	task.SetMessages(messages)
+}
+
+func (s *warpStreamState) encodedTaskContext() string {
+	if len(s.taskOrder) == 0 {
+		return ""
+	}
+	tasks := make([]*warpapi.Task, 0, len(s.taskOrder))
+	for _, id := range s.taskOrder {
+		if task := s.tasks[id]; task != nil {
+			tasks = append(tasks, task)
+		}
+	}
+	context := warpapi.Request_TaskContext_builder{Tasks: tasks}.Build()
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(context)
+	if err != nil || len(raw) == 0 {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
 func (s *warpStreamState) applyContentUpdate(update warpContentUpdate) string {
@@ -329,6 +419,7 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), state *w
 	if !parsed.Recognized {
 		return false, false, nil
 	}
+	state.applyClientActions(parsed.ClientActions)
 	if parsed.ConversationID != "" {
 		onMessage(upstream.SSEMessage{
 			Type:  "model.conversation_id",
@@ -360,14 +451,18 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), state *w
 			continue
 		}
 		state.sawToolCall = true
+		event := map[string]interface{}{
+			"toolCallId":   call.ID,
+			"toolName":     call.Name,
+			"input":        call.Input,
+			"warpToolType": call.Type,
+		}
+		if taskContext := state.encodedTaskContext(); taskContext != "" {
+			event["warpTaskContext"] = taskContext
+		}
 		onMessage(upstream.SSEMessage{
-			Type: "model.tool-call",
-			Event: map[string]interface{}{
-				"toolCallId":   call.ID,
-				"toolName":     call.Name,
-				"input":        call.Input,
-				"warpToolType": call.Type,
-			},
+			Type:  "model.tool-call",
+			Event: event,
 		})
 	}
 	if parsed.Finish == nil {
@@ -393,6 +488,9 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), state *w
 		finishReason = "max_tokens"
 	}
 	finish := map[string]interface{}{"finishReason": finishReason}
+	if taskContext := state.encodedTaskContext(); taskContext != "" {
+		finish["warpTaskContext"] = taskContext
+	}
 	if parsed.Finish.InputTokens > 0 || parsed.Finish.OutputTokens > 0 {
 		finish["usage"] = map[string]interface{}{
 			"inputTokens":  parsed.Finish.InputTokens,
@@ -450,7 +548,8 @@ func parseResponseEvent(data []byte) (*parsedEvent, error) {
 		out.RequestID = init.GetRequestId()
 		out.RunID = init.GetRunId()
 	case warpapi.ResponseEvent_ClientActions_case:
-		for _, action := range event.GetClientActions().GetActions() {
+		out.ClientActions = event.GetClientActions().GetActions()
+		for _, action := range out.ClientActions {
 			appendWarpClientAction(out, action)
 		}
 	case warpapi.ResponseEvent_Finished_case:
