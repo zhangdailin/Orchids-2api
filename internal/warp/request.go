@@ -586,6 +586,14 @@ func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warp
 	// Always send the bounded official lists. Per-request denial is enforced by
 	// the handler's prompt gate and response-side hard gate.
 	toolsEnabled := !disableTools
+	parallelTools := toolsEnabled
+	if req.ParallelToolCalls != nil {
+		parallelTools = toolsEnabled && *req.ParallelToolCalls
+	} else if choice, ok := req.ToolChoice.(map[string]interface{}); ok {
+		if disabled, ok := choice["disable_parallel_tool_use"].(bool); ok && disabled {
+			parallelTools = false
+		}
+	}
 	supportedTools := officialSupportedTools
 	supportedCliTools := officialSupportedCliAgentTools
 	if disableTools {
@@ -605,7 +613,7 @@ func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warp
 			BaseModelContextWindowLimit: &contextLimit,
 		}.Build(),
 		WebContextRetrievalEnabled:                 boolPtr(toolsEnabled),
-		SupportsParallelToolCalls:                  boolPtr(toolsEnabled),
+		SupportsParallelToolCalls:                  boolPtr(parallelTools),
 		UseAnthropicTextEditorTools:                boolPtr(false),
 		PlanningEnabled:                            boolPtr(false),
 		WarpDriveContextEnabled:                    boolPtr(false),

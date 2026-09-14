@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -30,6 +31,7 @@ type Client struct {
 	httpClient *http.Client
 	authClient *http.Client
 	session    *session
+	accountMu  sync.Mutex
 }
 
 const (
@@ -331,34 +333,52 @@ func (c *Client) SyncAccountState() bool {
 	if c == nil || c.account == nil || c.session == nil {
 		return false
 	}
+	c.accountMu.Lock()
+	defer c.accountMu.Unlock()
+	return c.syncAccountStateTo(c.account)
+}
+
+// SyncAccountStateTo copies the session's rotated credentials into the
+// request-owned account snapshot. Cached clients can serve concurrent requests,
+// so callers must not rely on the client's original account pointer.
+func (c *Client) SyncAccountStateTo(account *store.Account) bool {
+	if c == nil || account == nil || c.session == nil {
+		return false
+	}
+	c.accountMu.Lock()
+	defer c.accountMu.Unlock()
+	return c.syncAccountStateTo(account)
+}
+
+func (c *Client) syncAccountStateTo(account *store.Account) bool {
 
 	refresh := c.session.currentRefreshToken()
 
 	changed := false
 	// These fields were legacy Warp credential inputs. Clear them whenever the
 	// account is synchronized so persisted records converge on refresh_token.
-	if c.account.Token != "" {
-		c.account.Token = ""
+	if account.Token != "" {
+		account.Token = ""
 		changed = true
 	}
-	if c.account.ClientCookie != "" {
-		c.account.ClientCookie = ""
+	if account.ClientCookie != "" {
+		account.ClientCookie = ""
 		changed = true
 	}
-	if c.account.SessionCookie != "" {
-		c.account.SessionCookie = ""
+	if account.SessionCookie != "" {
+		account.SessionCookie = ""
 		changed = true
 	}
-	if refresh != "" && refresh != c.account.RefreshToken {
-		c.account.RefreshToken = refresh
+	if refresh != "" && refresh != account.RefreshToken {
+		account.RefreshToken = refresh
 		changed = true
 	}
-	if deviceID := c.session.currentDeviceID(); deviceID != "" && deviceID != c.account.DeviceID {
-		c.account.DeviceID = deviceID
+	if deviceID := c.session.currentDeviceID(); deviceID != "" && deviceID != account.DeviceID {
+		account.DeviceID = deviceID
 		changed = true
 	}
-	if requestID := c.session.currentRequestID(); requestID != "" && requestID != c.account.RequestID {
-		c.account.RequestID = requestID
+	if requestID := c.session.currentRequestID(); requestID != "" && requestID != account.RequestID {
+		account.RequestID = requestID
 		changed = true
 	}
 	return changed

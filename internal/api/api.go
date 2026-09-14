@@ -1695,7 +1695,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 			}
 			return accountStatus, httpStatus, fmt.Errorf("failed to refresh warp account: %w", err)
 		}
-		warpClient.SyncAccountState()
+		warpClient.SyncAccountStateTo(acc)
 
 		limitCtx, limitCancel := context.WithTimeout(ctx, 15*time.Second)
 		limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)

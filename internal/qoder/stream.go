@@ -91,10 +91,6 @@ type streamResult struct {
 	FinishReasonValue  string
 	Usage              map[string]interface{}
 	ThinkingSignature  string
-	// DroppedToolCallCount counts calls the upstream reported through a reused
-	// index. They are not forwarded because their arguments were incomplete, so
-	// the count is the only evidence they existed.
-	DroppedToolCallCount int
 }
 
 // FinishReason maps the accumulated stream onto an Anthropic-style stop reason.
@@ -124,16 +120,11 @@ func NewToolCallID() string {
 // arrives in the first delta and the arguments are streamed afterwards.
 //
 // The upstream sometimes reuses one index for calls that are only distinguished
-// by id. One index can hold only one call, so the newest id wins: the displaced
-// call is dropped and counted, because its argument buffer is incomplete and
-// emitting a half-built call would hand the client invalid JSON. The drop count
-// is what lets the caller tell "the model made one call" from "the model made a
-// call this channel could not represent".
+// by id. The order therefore stores call instances rather than indexes; the map
+// only identifies which instance receives an id-less continuation delta.
 type toolCallAccumulator struct {
-	order   []int
-	indexed map[int]struct{}
-	calls   map[int]*toolCallState
-	dropped int
+	order []*toolCallState
+	calls map[int]*toolCallState
 }
 
 type toolCallState struct {
@@ -143,10 +134,11 @@ type toolCallState struct {
 	Emitted   bool
 }
 
+const maxTextToolFallbackBytes = 2 << 20
+
 func newToolCallAccumulator() *toolCallAccumulator {
 	return &toolCallAccumulator{
-		indexed: map[int]struct{}{},
-		calls:   map[int]*toolCallState{},
+		calls: map[int]*toolCallState{},
 	}
 }
 
@@ -154,24 +146,16 @@ func newToolCallAccumulator() *toolCallAccumulator {
 func (a *toolCallAccumulator) add(index int, id, name, args string) *toolCallState {
 	trimmedID := strings.TrimSpace(id)
 	state, ok := a.calls[index]
-	if ok && trimmedID != "" && state.ID != "" && state.ID != trimmedID {
-		// A different id at the same index is a different call; the index can
-		// only carry one.
-		if !state.Emitted && state.Name != "" {
-			a.dropped++
-		}
+	if ok && (state.Emitted || (trimmedID != "" && state.ID != "" && state.ID != trimmedID)) {
+		// A closed call or a new id at the same index starts another call
+		// instance. Keeping the old pointer in order preserves parallel calls.
 		state = nil
 		ok = false
 	}
 	if !ok {
 		state = &toolCallState{}
 		a.calls[index] = state
-		if _, tracked := a.indexed[index]; !tracked {
-			// An index that was already closed keeps its slot: appending it
-			// again would emit the same call twice on the next flush.
-			a.order = append(a.order, index)
-			a.indexed[index] = struct{}{}
-		}
+		a.order = append(a.order, state)
 	}
 	if trimmedID != "" {
 		state.ID = trimmedID
@@ -186,8 +170,7 @@ func (a *toolCallAccumulator) add(index int, id, name, args string) *toolCallSta
 // pending returns the not-yet-emitted calls in stream order.
 func (a *toolCallAccumulator) pending() []*toolCallState {
 	out := make([]*toolCallState, 0, len(a.order))
-	for _, index := range a.order {
-		state := a.calls[index]
+	for _, state := range a.order {
 		if state == nil || state.Emitted || state.Name == "" {
 			continue
 		}
@@ -259,8 +242,38 @@ func readSSE(reader io.Reader, fn func(sseFrame) bool) error {
 
 // consumeStream parses the SSE body and forwards deltas to the caller.
 func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamResult, error) {
+	return consumeStreamWithTools(body, false, onMessage)
+}
+
+// consumeStreamWithTools also recognizes the text fallback emitted by some
+// Qoder models: `Tool calls: [...]`. Text is buffered only while it can still be
+// that exact prefix; normal answers continue streaming as soon as they diverge.
+func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(upstream.SSEMessage)) (streamResult, error) {
 	result := streamResult{}
 	tools := newToolCallAccumulator()
+	var pendingText strings.Builder
+	bufferingToolText := toolsEnabled
+	sawNativeTools := false
+
+	emitText := func(text string) {
+		if text == "" {
+			return
+		}
+		result.SawMeaningfulEvent = true
+		if onMessage != nil {
+			onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{
+				"delta": text,
+			}})
+		}
+	}
+
+	flushPendingText := func() {
+		if pendingText.Len() == 0 {
+			return
+		}
+		emitText(pendingText.String())
+		pendingText.Reset()
+	}
 
 	emitTools := func() {
 		for _, state := range tools.completeAll() {
@@ -385,15 +398,24 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 			}
 		}
 		if delta.Content != "" {
-			result.SawMeaningfulEvent = true
-			if onMessage != nil {
-				onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{
-					"delta": delta.Content,
-				}})
+			if !bufferingToolText || sawNativeTools {
+				emitText(delta.Content)
+			} else {
+				pendingText.WriteString(delta.Content)
+				if pendingText.Len() > maxTextToolFallbackBytes || !isPotentialTextToolCall(pendingText.String()) {
+					bufferingToolText = false
+					flushPendingText()
+				}
 			}
 		}
 		for _, call := range delta.ToolCalls {
 			result.SawMeaningfulEvent = true
+			if !sawNativeTools {
+				sawNativeTools = true
+				// A textual prefix followed by native tool deltas is a duplicate
+				// representation, not assistant prose.
+				pendingText.Reset()
+			}
 			tools.add(call.Index, call.ID, call.Function.Name, call.Function.Arguments)
 		}
 		if reason := strings.TrimSpace(choice.FinishReason); reason != "" && reason != "null" {
@@ -411,14 +433,88 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 	if streamErr != nil {
 		return result, streamErr
 	}
+	if toolsEnabled && !sawNativeTools && pendingText.Len() > 0 {
+		if parsed := parseTextToolCalls(pendingText.String()); len(parsed) > 0 {
+			pendingText.Reset()
+			for index, call := range parsed {
+				tools.add(index, call.ID, call.Name, call.Arguments)
+			}
+			result.SawMeaningfulEvent = true
+		} else {
+			flushPendingText()
+		}
+	}
 	emitTools()
 	if !sawFinish {
 		// An EOF without a finish event means the connection was cut
 		// mid-answer. Reporting success here would truncate silently.
 		return result, ErrStreamTruncated
 	}
-	result.DroppedToolCallCount = tools.dropped
 	return result, nil
+}
+
+type textToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+func isPotentialTextToolCall(text string) bool {
+	candidate := strings.TrimLeft(text, " \t\r\n")
+	if candidate == "" {
+		return true
+	}
+	const prefix = "Tool calls:"
+	return strings.HasPrefix(prefix, candidate) || strings.HasPrefix(candidate, prefix)
+}
+
+func parseTextToolCalls(text string) []textToolCall {
+	const prefix = "Tool calls:"
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, prefix) {
+		return nil
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	if strings.HasPrefix(payload, "```") && strings.HasSuffix(payload, "```") {
+		if newline := strings.IndexByte(payload, '\n'); newline >= 0 {
+			payload = strings.TrimSpace(payload[newline+1 : len(payload)-3])
+		}
+	}
+	if !strings.HasPrefix(payload, "[") {
+		return nil
+	}
+
+	var raw []struct {
+		ID       string `json:"id"`
+		Function struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal([]byte(payload), &raw); err != nil || len(raw) == 0 {
+		return nil
+	}
+	if len(raw) > 128 {
+		raw = raw[:128]
+	}
+	out := make([]textToolCall, 0, len(raw))
+	for _, call := range raw {
+		name := strings.TrimSpace(call.Function.Name)
+		if name == "" {
+			continue
+		}
+		arguments := "{}"
+		if len(call.Function.Arguments) > 0 && string(call.Function.Arguments) != "null" {
+			var encoded string
+			if json.Unmarshal(call.Function.Arguments, &encoded) == nil {
+				arguments = encoded
+			} else if json.Valid(call.Function.Arguments) {
+				arguments = string(call.Function.Arguments)
+			}
+		}
+		out = append(out, textToolCall{ID: strings.TrimSpace(call.ID), Name: name, Arguments: arguments})
+	}
+	return out
 }
 
 // busyCode is the gateway's queue/concurrency refusal. It arrives as a business

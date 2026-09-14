@@ -37,6 +37,7 @@ type Handler struct {
 	modelCacheMu sync.RWMutex
 	modelCache   map[string]time.Time
 	sessionMu    sync.Mutex
+	affinityMu   sync.Mutex
 	affinity     map[string]sessionAffinityEntry
 	replay       map[string]reasoningReplayEntry
 	instanceID   string
@@ -141,8 +142,20 @@ func (h *Handler) buildClient() *CLIClient {
 
 func (h *Handler) SetAuditLogger(logger audit.Logger) {
 	if h != nil && logger != nil {
+		h.runtimeMu.Lock()
 		h.auditLogger = logger
+		h.runtimeMu.Unlock()
 	}
+}
+
+func (h *Handler) auditLoggerSnapshot() audit.Logger {
+	if h == nil {
+		return nil
+	}
+	h.runtimeMu.RLock()
+	logger := h.auditLogger
+	h.runtimeMu.RUnlock()
+	return logger
 }
 
 func (h *Handler) auditAttempt(ctx context.Context, acc *store.Account, provider string, attempt int, started time.Time, err error, stages ...string) {
@@ -154,7 +167,8 @@ func (h *Handler) auditAttempt(ctx context.Context, acc *store.Account, provider
 }
 
 func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req *ChatCompletionsRequest, result chatOutcome) {
-	if h == nil || h.auditLogger == nil {
+	logger := h.auditLoggerSnapshot()
+	if logger == nil {
 		return
 	}
 	status, message := result.Finish, ""
@@ -180,7 +194,7 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 		accountID = acc.ID
 		provider = ProviderForAccount(acc)
 	}
-	h.auditLogger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
+	logger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
 		AccountID: accountID, Model: req.Model, Channel: "grok", Provider: provider, Status: status, Error: message, Duration: duration, Metadata: metadata,
 		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]),
 		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])})
@@ -190,8 +204,20 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 // used by the general load balancer.
 func (h *Handler) SetConnTracker(tracker loadbalancer.ConnTracker) {
 	if h != nil && tracker != nil {
+		h.runtimeMu.Lock()
 		h.connTracker = tracker
+		h.runtimeMu.Unlock()
 	}
+}
+
+func (h *Handler) connTrackerSnapshot() loadbalancer.ConnTracker {
+	if h == nil {
+		return nil
+	}
+	h.runtimeMu.RLock()
+	tracker := h.connTracker
+	h.runtimeMu.RUnlock()
+	return tracker
 }
 
 func (h *Handler) currentClient() *Client {
@@ -262,7 +288,7 @@ func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, er
 	if h.lb == nil {
 		return nil, "", fmt.Errorf("load balancer not configured")
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTracker, isGrokWebAccount)
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTrackerSnapshot(), isGrokWebAccount)
 	if err != nil {
 		return nil, "", err
 	}
@@ -461,20 +487,22 @@ func modelValidationMessage(modelID string, err error) string {
 }
 
 func (h *Handler) accountCapacityAvailable(acc *store.Account) bool {
-	if acc == nil || acc.MaxConcurrent <= 0 || h == nil || h.connTracker == nil {
+	tracker := h.connTrackerSnapshot()
+	if acc == nil || acc.MaxConcurrent <= 0 || tracker == nil {
 		return true
 	}
-	return h.connTracker.GetCount(acc.ID) < int64(acc.MaxConcurrent)
+	return tracker.GetCount(acc.ID) < int64(acc.MaxConcurrent)
 }
 
 func (h *Handler) reserveAccount(acc *store.Account) (func(), bool) {
-	if h == nil || h.connTracker == nil || acc == nil || acc.ID == 0 {
+	tracker := h.connTrackerSnapshot()
+	if tracker == nil || acc == nil || acc.ID == 0 {
 		if h != nil && h.base != nil {
 			return h.base.TrackAccount(acc), true
 		}
 		return func() {}, true
 	}
-	if limiter, ok := h.connTracker.(loadbalancer.LimitedConnTracker); ok {
+	if limiter, ok := tracker.(loadbalancer.LimitedConnTracker); ok {
 		if !limiter.TryAcquire(acc.ID, int64(acc.MaxConcurrent)) {
 			return func() {}, false
 		}
@@ -482,9 +510,9 @@ func (h *Handler) reserveAccount(acc *store.Account) (func(), bool) {
 		if !h.accountCapacityAvailable(acc) {
 			return func() {}, false
 		}
-		h.connTracker.Acquire(acc.ID)
+		tracker.Acquire(acc.ID)
 	}
-	return func() { h.connTracker.Release(acc.ID) }, true
+	return func() { tracker.Release(acc.ID) }, true
 }
 
 func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err error) {
@@ -625,14 +653,14 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 	}
 	candidates := normalizeGrokPoolCandidates(poolCandidates)
 	if len(candidates) == 0 {
-		acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, ssoFilter)
+		acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), ssoFilter)
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		for _, pool := range candidates {
 			wantPool := pool
-			acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
+			acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), func(acc *store.Account) bool {
 				return strings.EqualFold(grokAccountPool(acc), wantPool) && ssoFilter(acc)
 			})
 			if err == nil && acc != nil {

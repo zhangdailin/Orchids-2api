@@ -477,7 +477,7 @@ func (h *Handler) openConsoleVideoAccountSession(ctx context.Context, model stri
 	if h == nil || h.lb == nil {
 		return nil, fmt.Errorf("load balancer not configured")
 	}
-	account, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTracker, func(account *store.Account) bool {
+	account, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTrackerSnapshot(), func(account *store.Account) bool {
 		return isGrokConsoleAccount(account) && AccountSupportsModel(account, model) && h.routeAllowsAccount(ctx, model, account.ID)
 	})
 	if err != nil {

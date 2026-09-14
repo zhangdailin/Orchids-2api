@@ -124,6 +124,16 @@ func (h *Handler) affinityAccount(ctx context.Context, provider string) int64 {
 	if h.lb == nil || h.lb.Store == nil {
 		return 0
 	}
+	// Serialize a cache miss with concurrent rebinding. Without this second
+	// gate, a slow persistent read can overwrite a newer in-memory binding.
+	h.affinityMu.Lock()
+	defer h.affinityMu.Unlock()
+	h.sessionMu.Lock()
+	if latest, exists := h.affinity[key]; exists && time.Now().Before(latest.ExpiresAt) {
+		h.sessionMu.Unlock()
+		return latest.AccountID
+	}
+	h.sessionMu.Unlock()
 	persisted, err := h.lb.Store.GetSessionAffinity(ctx, provider, session.Model, session.Key)
 	if err != nil || persisted == nil || persisted.AccountID == 0 {
 		return 0
@@ -139,8 +149,11 @@ func (h *Handler) bindAffinity(ctx context.Context, provider string, accountID i
 	if h == nil || session.Key == "" || accountID == 0 {
 		return
 	}
+	h.affinityMu.Lock()
+	defer h.affinityMu.Unlock()
+	expiresAt := time.Now().Add(grokSessionStateTTL)
 	h.sessionMu.Lock()
-	h.affinity[affinityMapKey(session, provider)] = sessionAffinityEntry{AccountID: accountID, ExpiresAt: time.Now().Add(grokSessionStateTTL)}
+	h.affinity[affinityMapKey(session, provider)] = sessionAffinityEntry{AccountID: accountID, ExpiresAt: expiresAt}
 	h.sessionMu.Unlock()
 	if h.lb != nil && h.lb.Store != nil {
 		_ = h.lb.Store.SaveSessionAffinity(ctx, &store.StoredSessionAffinity{
@@ -163,7 +176,7 @@ func (h *Handler) loadReasoningReplayItems(model, key string) []interface{} {
 	mapKey := replayMapKey(model, key)
 	entry, ok := h.replay[mapKey]
 	if ok && time.Now().Before(entry.ExpiresAt) {
-		return entry.Items
+		return cloneReplayItems(entry.Items)
 	}
 	if ok {
 		delete(h.replay, mapKey)
@@ -182,13 +195,14 @@ func (h *Handler) loadReasoningReplayItems(model, key string) []interface{} {
 		return nil
 	}
 	if latest, ok := h.replay[mapKey]; ok && time.Now().Before(latest.ExpiresAt) {
-		return latest.Items
+		return cloneReplayItems(latest.Items)
 	}
 	if h.replay == nil {
 		h.replay = map[string]reasoningReplayEntry{}
 	}
-	h.replay[mapKey] = reasoningReplayEntry{Items: items, ExpiresAt: persisted.ExpiresAt}
-	return items
+	cacheItems := cloneReplayItems(items)
+	h.replay[mapKey] = reasoningReplayEntry{Items: cacheItems, ExpiresAt: persisted.ExpiresAt}
+	return cloneReplayItems(cacheItems)
 }
 
 // replayItemsFromStored reads the normalized item list, falling back to the
@@ -221,8 +235,12 @@ func (h *Handler) storeReasoningReplayItems(model, key string, items []interface
 	if h == nil || strings.TrimSpace(key) == "" || len(items) == 0 {
 		return
 	}
-	raw := make([]json.RawMessage, 0, len(items))
-	for _, item := range items {
+	cacheItems := cloneReplayItems(items)
+	if len(cacheItems) == 0 {
+		return
+	}
+	raw := make([]json.RawMessage, 0, len(cacheItems))
+	for _, item := range cacheItems {
 		encoded, err := json.Marshal(item)
 		if err != nil {
 			return
@@ -234,7 +252,7 @@ func (h *Handler) storeReasoningReplayItems(model, key string, items []interface
 	if h.replay == nil {
 		h.replay = map[string]reasoningReplayEntry{}
 	}
-	h.replay[replayMapKey(model, key)] = reasoningReplayEntry{Items: items, ExpiresAt: time.Now().Add(grokSessionStateTTL)}
+	h.replay[replayMapKey(model, key)] = reasoningReplayEntry{Items: cacheItems, ExpiresAt: time.Now().Add(grokSessionStateTTL)}
 	// Serialize persistence with invalidation. A detached save must not resurrect
 	// a rejected ciphertext after a later request has already cleared it.
 	if h.lb != nil && h.lb.Store != nil {
@@ -242,6 +260,24 @@ func (h *Handler) storeReasoningReplayItems(model, key string, items []interface
 		defer cancel()
 		_ = h.lb.Store.SaveReasoningReplay(ctx, &store.StoredReasoningReplay{Model: model, SessionKey: key, Items: raw}, grokSessionStateTTL)
 	}
+}
+
+// cloneReplayItems prevents request normalizers from mutating cached maps that
+// another request may be reading. Replay values are already JSON-compatible,
+// making a JSON round trip a compact and reliable deep copy.
+func cloneReplayItems(items []interface{}) []interface{} {
+	if len(items) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return nil
+	}
+	var cloned []interface{}
+	if json.Unmarshal(raw, &cloned) != nil {
+		return nil
+	}
+	return cloned
 }
 
 // storeReasoningReplay is the single-cipher convenience used by paths that only

@@ -26,33 +26,38 @@ func waitForPuterRequestSlot(ctx context.Context, rawURL, authToken string) erro
 	}
 
 	key := sha256.Sum256([]byte(strings.TrimSpace(authToken)))
-	now := time.Now()
-	puterRequestPacer.Lock()
-	next := puterRequestPacer.next[key]
-	if next.Before(now) {
-		next = now
-	}
-	puterRequestPacer.next[key] = next.Add(puterRequestInterval)
-	if len(puterRequestPacer.next) > 256 {
-		cutoff := now.Add(-time.Minute)
-		for candidate, candidateNext := range puterRequestPacer.next {
-			if candidateNext.Before(cutoff) {
-				delete(puterRequestPacer.next, candidate)
+	for {
+		now := time.Now()
+		puterRequestPacer.Lock()
+		next := puterRequestPacer.next[key]
+		if !next.After(now) {
+			puterRequestPacer.next[key] = now.Add(puterRequestInterval)
+			if len(puterRequestPacer.next) > 256 {
+				cutoff := now.Add(-time.Minute)
+				for candidate, candidateNext := range puterRequestPacer.next {
+					if candidateNext.Before(cutoff) {
+						delete(puterRequestPacer.next, candidate)
+					}
+				}
 			}
+			puterRequestPacer.Unlock()
+			return nil
 		}
-	}
-	puterRequestPacer.Unlock()
+		puterRequestPacer.Unlock()
 
-	delay := time.Until(next)
-	if delay <= 0 {
-		return nil
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
+		timer := time.NewTimer(time.Until(next))
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+			// Compete for the now-open slot. Only the goroutine that advances
+			// next returns; canceled waiters never reserve future capacity.
+		}
 	}
 }

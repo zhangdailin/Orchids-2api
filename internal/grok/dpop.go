@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
+	"golang.org/x/sync/singleflight"
 	"orchids-api/internal/debug"
 )
 
@@ -45,6 +46,7 @@ type dpopSession struct {
 type dpopSessionManager struct {
 	mu       sync.Mutex
 	sessions map[string]dpopSession
+	fetches  singleflight.Group
 }
 
 func newDPoPSessionManager() *dpopSessionManager {
@@ -258,11 +260,29 @@ func (c *Client) dpopSession(ctx context.Context, token string) (dpopSession, st
 	if s, ok := c.dpop.cached(cacheKey); ok {
 		return s, cacheKey, nil
 	}
-	s, err := c.fetchDPoPSession(ctx, token)
-	if err == nil {
-		c.dpop.store(cacheKey, s)
+	result := c.dpop.fetches.DoChan(cacheKey, func() (interface{}, error) {
+		if s, ok := c.dpop.cached(cacheKey); ok {
+			return s, nil
+		}
+		s, err := c.fetchDPoPSession(ctx, token)
+		if err == nil {
+			c.dpop.store(cacheKey, s)
+		}
+		return s, err
+	})
+	select {
+	case <-ctx.Done():
+		return dpopSession{}, cacheKey, ctx.Err()
+	case completed := <-result:
+		if completed.Err != nil {
+			return dpopSession{}, cacheKey, completed.Err
+		}
+		s, ok := completed.Val.(dpopSession)
+		if !ok {
+			return dpopSession{}, cacheKey, errors.New("invalid DPoP session result")
+		}
+		return s, cacheKey, nil
 	}
-	return s, cacheKey, err
 }
 
 func (c *Client) doConsoleDPoPRequest(ctx context.Context, token, method, endpoint string, body []byte) (*http.Response, error) {

@@ -568,7 +568,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 					slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "warp", "http_status", httpStatus, "error", err)
 					continue
 				}
-				warpClient.SyncAccountState()
+				warpClient.SyncAccountStateTo(acc)
 
 				// Sync Warp usage quota via GraphQL
 				limitCtx, limitCancel := context.WithTimeout(context.Background(), 15*time.Second)

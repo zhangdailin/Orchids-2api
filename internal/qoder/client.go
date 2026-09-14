@@ -172,7 +172,8 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 		logger.LogUpstreamRequest(url, map[string]string{"provider": "qoder", "model": model.Key}, body)
 	}
 
-	return c.runChat(ctx, url, body, model, requestID, fields, onMessage)
+	toolsEnabled := !req.NoTools && len(normalizeToolDefinitions(req, model)) > 0
+	return c.runChat(ctx, url, body, model, requestID, fields, toolsEnabled, onMessage)
 }
 
 // runChat performs the upstream call with the CLI's retry policy: transport
@@ -181,7 +182,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 //
 // Retrying after output has been handed to the caller would duplicate content,
 // so a retry is only attempted while the callback has not seen anything.
-func (c *Client) runChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, onMessage func(upstream.SSEMessage)) error {
+func (c *Client) runChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, toolsEnabled bool, onMessage func(upstream.SSEMessage)) error {
 	const maxAttempts = 4
 	emitted := false
 	emit := func(msg upstream.SSEMessage) {
@@ -193,7 +194,8 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		result, err := c.attemptChat(ctx, url, body, model, requestID, fields, emit)
+		attemptCredentials := c.currentCredentials()
+		result, err := c.attemptChat(ctx, url, body, model, requestID, fields, attemptCredentials, toolsEnabled, emit)
 		if err == nil {
 			if !result.SawMeaningfulEvent {
 				return fmt.Errorf("qoder stream produced no usable events")
@@ -215,7 +217,7 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 
 		switch {
 		case isUnauthorized(err) && attempt == 1:
-			if refreshErr := c.forceRefresh(ctx); refreshErr != nil {
+			if refreshErr := c.forceRefresh(ctx, attemptCredentials); refreshErr != nil {
 				return refreshErr
 			}
 			if fields, err = c.ensureRuntimeFields(ctx, c.currentCredentials()); err != nil {
@@ -323,12 +325,11 @@ func (c *Client) ensureAccessToken(ctx context.Context) (Credentials, error) {
 
 // forceRefresh renews the credential unconditionally. The stream path calls it
 // after the upstream rejected a request that was otherwise well formed.
-func (c *Client) forceRefresh(ctx context.Context) error {
-	creds := c.currentCredentials()
-	if strings.TrimSpace(creds.RefreshToken) == "" {
+func (c *Client) forceRefresh(ctx context.Context, rejected Credentials) error {
+	if strings.TrimSpace(rejected.RefreshToken) == "" {
 		return ErrCredentialMissing
 	}
-	_, err := c.refresh(ctx, creds)
+	_, err := c.refresh(ctx, rejected)
 	return err
 }
 

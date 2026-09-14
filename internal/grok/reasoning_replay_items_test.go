@@ -158,3 +158,28 @@ func TestCaptureReasoningReplayFromStream(t *testing.T) {
 		t.Fatalf("stream capture cipher=%q want %q", got, cipher)
 	}
 }
+
+func TestReasoningReplayCacheReturnsDeepCopies(t *testing.T) {
+	h := &Handler{affinity: map[string]sessionAffinityEntry{}, replay: map[string]reasoningReplayEntry{}}
+	cipher := testReplayCipher(7)
+	original := []interface{}{map[string]interface{}{
+		"type": "reasoning", "encrypted_content": cipher,
+		"summary": []interface{}{map[string]interface{}{"type": "summary_text", "text": "stable"}},
+	}}
+	h.storeReasoningReplayItems("grok-4.6", "session", original)
+
+	loaded := h.loadReasoningReplayItems("grok-4.6", "session")
+	loadedItem := loaded[0].(map[string]interface{})
+	loadedItem["encrypted_content"] = "mutated"
+	loadedItem["summary"].([]interface{})[0].(map[string]interface{})["text"] = "mutated"
+
+	again := h.loadReasoningReplayItems("grok-4.6", "session")
+	againItem := again[0].(map[string]interface{})
+	if got := interfaceString(againItem["encrypted_content"]); got != cipher {
+		t.Fatalf("cached cipher was mutated: %q", got)
+	}
+	summary := againItem["summary"].([]interface{})[0].(map[string]interface{})
+	if got := interfaceString(summary["text"]); got != "stable" {
+		t.Fatalf("nested cached value was mutated: %q", got)
+	}
+}

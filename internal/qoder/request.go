@@ -58,29 +58,30 @@ func catalogURL(base string) string {
 // here: the body is encoded and the signature covers the encoded bytes, not the
 // JSON, so member order is irrelevant to the signature.
 type chatBody struct {
-	Business      businessInfo           `json:"business"`
-	RequestID     string                 `json:"request_id"`
-	RequestSetID  string                 `json:"request_set_id"`
-	ChatRecordID  string                 `json:"chat_record_id"`
-	SessionID     string                 `json:"session_id"`
-	Stream        bool                   `json:"stream"`
-	ChatTask      string                 `json:"chat_task"`
-	ChatContext   map[string]interface{} `json:"chat_context"`
-	IsReply       bool                   `json:"is_reply"`
-	IsRetry       bool                   `json:"is_retry"`
-	Source        int                    `json:"source"`
-	Version       string                 `json:"version"`
-	AgentID       string                 `json:"agent_id"`
-	TaskID        string                 `json:"task_id"`
-	SessionType   string                 `json:"session_type"`
-	AliyunUser    string                 `json:"aliyun_user_type"`
-	ModelConfig   modelConfigWire        `json:"model_config"`
-	CustomModel   interface{}            `json:"custom_model"`
-	System        string                 `json:"system"`
-	Messages      []chatMessage          `json:"messages"`
-	Tools         []interface{}          `json:"tools"`
-	Parameters    map[string]interface{} `json:"parameters"`
-	ParallelTools *bool                  `json:"parallel_tool_calls,omitempty"`
+	Business          businessInfo           `json:"business"`
+	RequestID         string                 `json:"request_id"`
+	RequestSetID      string                 `json:"request_set_id"`
+	ChatRecordID      string                 `json:"chat_record_id"`
+	SessionID         string                 `json:"session_id"`
+	Stream            bool                   `json:"stream"`
+	ChatTask          string                 `json:"chat_task"`
+	ChatContext       map[string]interface{} `json:"chat_context"`
+	IsReply           bool                   `json:"is_reply"`
+	IsRetry           bool                   `json:"is_retry"`
+	Source            int                    `json:"source"`
+	Version           string                 `json:"version"`
+	AgentID           string                 `json:"agent_id"`
+	TaskID            string                 `json:"task_id"`
+	SessionType       string                 `json:"session_type"`
+	AliyunUser        string                 `json:"aliyun_user_type"`
+	ModelConfig       modelConfigWire        `json:"model_config"`
+	CustomModel       interface{}            `json:"custom_model"`
+	System            string                 `json:"system"`
+	Messages          []chatMessage          `json:"messages"`
+	Tools             []interface{}          `json:"tools"`
+	ToolChoice        interface{}            `json:"tool_choice,omitempty"`
+	Parameters        map[string]interface{} `json:"parameters"`
+	ParallelToolCalls *bool                  `json:"parallel_tool_calls,omitempty"`
 }
 
 // modelConfigWire is the model block as the gateway reads it. It is deliberately
@@ -178,11 +179,8 @@ func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, re
 	if model.MaxInputTokens > 0 {
 		parameters["context_length"] = model.MaxInputTokens
 	}
-	if tools := normalizeToolDefinitions(req, model); len(tools) > 0 {
-		// tool_choice is accepted as a string on this surface; an object form is
-		// rejected, so the caller's choice is not forwarded verbatim.
-		parameters["tool_choice"] = "auto"
-	}
+	tools := normalizeToolDefinitions(req, model)
+	toolChoice, parallelTools := normalizeToolControls(req, len(tools) > 0)
 
 	body := chatBody{
 		Business: businessInfo{
@@ -194,27 +192,29 @@ func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, re
 			BeginAt: time.Now().UnixMilli(),
 			Stage:   "start",
 		},
-		RequestID:    requestID,
-		RequestSetID: requestID,
-		ChatRecordID: requestID,
-		SessionID:    sessionID,
-		Stream:       true,
-		ChatTask:     chatTask,
-		ChatContext:  map[string]interface{}{},
-		IsReply:      true,
-		IsRetry:      false,
-		Source:       sourceValue,
-		Version:      "3",
-		AgentID:      agentID,
-		TaskID:       taskID,
-		SessionType:  sessionType,
-		AliyunUser:   "",
-		ModelConfig:  wireModelConfig(model),
-		CustomModel:  nil,
-		System:       systemText,
-		Messages:     messages,
-		Tools:        normalizeToolDefinitions(req, model),
-		Parameters:   parameters,
+		RequestID:         requestID,
+		RequestSetID:      requestID,
+		ChatRecordID:      requestID,
+		SessionID:         sessionID,
+		Stream:            true,
+		ChatTask:          chatTask,
+		ChatContext:       map[string]interface{}{},
+		IsReply:           true,
+		IsRetry:           false,
+		Source:            sourceValue,
+		Version:           "3",
+		AgentID:           agentID,
+		TaskID:            taskID,
+		SessionType:       sessionType,
+		AliyunUser:        "",
+		ModelConfig:       wireModelConfig(model),
+		CustomModel:       nil,
+		System:            systemText,
+		Messages:          messages,
+		Tools:             tools,
+		ToolChoice:        toolChoice,
+		Parameters:        parameters,
+		ParallelToolCalls: parallelTools,
 	}
 	if body.Tools == nil {
 		// The gateway rejects a null tools array on some plans; an empty array is
@@ -430,9 +430,10 @@ func convertBlockMessage(role string, msg prompt.Message, toolCallIDs map[string
 			// A result whose call never appeared in this history would leave a
 			// dangling tool message, which the upstream rejects. The pairing is
 			// tracked so it can be reported instead of silently dropped.
-			if len(toolCallIDs) > 0 && !toolCallIDs[toolID] {
+			if !toolCallIDs[toolID] {
 				continue
 			}
+			delete(toolCallIDs, toolID)
 			out = append(out, chatMessage{
 				Role:       "tool",
 				ToolCallID: toolID,
@@ -535,6 +536,69 @@ func normalizeToolDefinitions(req upstream.UpstreamRequest, model modelEntry) []
 	return out
 }
 
+// normalizeToolControls maps both OpenAI and Anthropic tool selection shapes to
+// the OpenAI-compatible fields accepted by Qoder's chat endpoint. Tool controls
+// belong at the top level of the request; placing tool_choice under parameters
+// makes the gateway treat an otherwise valid tool request as ordinary chat.
+func normalizeToolControls(req upstream.UpstreamRequest, toolsEnabled bool) (interface{}, *bool) {
+	if !toolsEnabled || req.NoTools {
+		return nil, nil
+	}
+
+	parallel := cloneBool(req.ParallelToolCalls)
+	choice := req.ToolChoice
+	if choice == nil {
+		return "auto", parallel
+	}
+
+	switch typed := choice.(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "auto", "required", "none":
+			return strings.ToLower(strings.TrimSpace(typed)), parallel
+		default:
+			return "auto", parallel
+		}
+	case map[string]interface{}:
+		kind := strings.ToLower(strings.TrimSpace(util.StringValue(typed["type"])))
+		if disable, ok := typed["disable_parallel_tool_use"].(bool); ok && parallel == nil {
+			value := !disable
+			parallel = &value
+		}
+		switch kind {
+		case "auto":
+			return "auto", parallel
+		case "any", "required":
+			return "required", parallel
+		case "none":
+			return "none", parallel
+		case "tool":
+			name := strings.TrimSpace(util.StringValue(typed["name"]))
+			if name == "" {
+				return "auto", parallel
+			}
+			return map[string]interface{}{
+				"type":     "function",
+				"function": map[string]interface{}{"name": name},
+			}, parallel
+		case "function":
+			return typed, parallel
+		default:
+			return "auto", parallel
+		}
+	default:
+		return "auto", parallel
+	}
+}
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
 // applyAuthHeaders sets the signed header set on an inference request.
 //
 // The header count is conditional: the organization headers are omitted when
@@ -600,8 +664,7 @@ func filterTags(tags []string) []string {
 }
 
 // attemptChat performs one upstream attempt and consumes its stream.
-func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, emit func(upstream.SSEMessage)) (streamResult, error) {
-	creds := c.currentCredentials()
+func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, creds Credentials, toolsEnabled bool, emit func(upstream.SSEMessage)) (streamResult, error) {
 	reqCtx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout)
 	defer cancel()
 
@@ -625,7 +688,7 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 		return streamResult{}, classifyStatus(resp.StatusCode, resp.Header.Get("Retry-After"), raw)
 	}
 
-	result, err := consumeStream(resp.Body, emit)
+	result, err := consumeStreamWithTools(resp.Body, toolsEnabled, emit)
 	if err != nil {
 		var target *attemptStreamError
 		if asAttemptError(err, &target) {

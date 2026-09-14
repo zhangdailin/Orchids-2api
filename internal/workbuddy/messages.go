@@ -39,6 +39,7 @@ type ToolCallFunction struct {
 // prompt is prepended when the caller supplied none.
 func buildMessages(req upstream.UpstreamRequest) []ChatMessage {
 	out := make([]ChatMessage, 0, len(req.Messages)+len(req.System)+2)
+	pendingToolCalls := make(map[string]bool)
 
 	for _, item := range req.System {
 		text := strings.TrimSpace(item.Text)
@@ -72,11 +73,11 @@ func buildMessages(req upstream.UpstreamRequest) []ChatMessage {
 
 		switch role {
 		case "assistant":
-			if converted, ok := convertAssistantMessage(msg); ok {
+			if converted, ok := convertAssistantMessage(msg, pendingToolCalls); ok {
 				out = append(out, converted)
 			}
 		default:
-			out = append(out, convertBlockMessage(role, msg)...)
+			out = append(out, convertBlockMessage(role, msg, pendingToolCalls)...)
 		}
 	}
 
@@ -102,7 +103,7 @@ func reasoningForReplay(msg prompt.Message) string {
 
 // convertAssistantMessage maps text, thinking and tool_use blocks onto one
 // assistant message.
-func convertAssistantMessage(msg prompt.Message) (ChatMessage, bool) {
+func convertAssistantMessage(msg prompt.Message, pendingToolCalls map[string]bool) (ChatMessage, bool) {
 	message := ChatMessage{Role: "assistant", ReasoningContent: strings.TrimSpace(msg.ReasoningContent)}
 	var text []string
 	for _, block := range msg.Content.GetBlocks() {
@@ -132,6 +133,7 @@ func convertAssistantMessage(msg prompt.Message) (ChatMessage, bool) {
 					Arguments: util.CompactToolInput(block.Input),
 				},
 			})
+			pendingToolCalls[id] = true
 		}
 	}
 	message.Content = strings.Join(text, "\n")
@@ -140,7 +142,7 @@ func convertAssistantMessage(msg prompt.Message) (ChatMessage, bool) {
 
 // convertBlockMessage maps user/system blocks, splitting tool_result blocks
 // into standalone `tool` messages so the assistant/tool pairing stays intact.
-func convertBlockMessage(role string, msg prompt.Message) []ChatMessage {
+func convertBlockMessage(role string, msg prompt.Message, pendingToolCalls map[string]bool) []ChatMessage {
 	blocks := msg.Content.GetBlocks()
 	out := make([]ChatMessage, 0, len(blocks))
 	pending := make([]string, 0, len(blocks))
@@ -163,6 +165,10 @@ func convertBlockMessage(role string, msg prompt.Message) []ChatMessage {
 			if toolID == "" {
 				continue
 			}
+			if !pendingToolCalls[toolID] {
+				continue
+			}
+			delete(pendingToolCalls, toolID)
 			out = append(out, ChatMessage{
 				Role:       "tool",
 				ToolCallID: toolID,
@@ -172,6 +178,30 @@ func convertBlockMessage(role string, msg prompt.Message) []ChatMessage {
 	}
 	flush()
 	return out
+}
+
+// normalizeToolChoice converts both OpenAI and Anthropic selection forms to
+// the string-only control accepted by WorkBuddy. A named-tool request cannot
+// be represented exactly by this upstream, so "required" is the closest safe
+// behavior; the response-side allowlist still rejects undeclared tool names.
+func normalizeToolChoice(choice interface{}) string {
+	switch typed := choice.(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "auto", "required", "none":
+			return strings.ToLower(strings.TrimSpace(typed))
+		}
+	case map[string]interface{}:
+		switch strings.ToLower(strings.TrimSpace(util.StringValue(typed["type"]))) {
+		case "auto":
+			return "auto"
+		case "none":
+			return "none"
+		case "any", "required", "tool", "function":
+			return "required"
+		}
+	}
+	return "auto"
 }
 
 func stringifyToolResult(value interface{}) string {

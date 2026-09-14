@@ -217,7 +217,7 @@ func (c *Client) buildBody(req upstream.UpstreamRequest) ([]byte, error) {
 	if req.Tools != nil && !req.NoTools {
 		if tools := normalizeToolDefinitions(req.Tools); len(tools) > 0 {
 			body["tools"] = tools
-			body["tool_choice"] = "auto"
+			body["tool_choice"] = normalizeToolChoice(req.ToolChoice)
 		}
 	}
 	raw, err := json.Marshal(body)

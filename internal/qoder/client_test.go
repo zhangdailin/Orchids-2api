@@ -129,6 +129,22 @@ func TestConcurrentExpiredCredentialRefreshesOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestForceRefreshSkipsCredentialAlreadyRotatedByPeer(t *testing.T) {
+	t.Parallel()
+	acc := signedTestAccount()
+	acc.ID = 0
+	acc.QoderAccessToken = "access-new"
+	acc.QoderRefreshToken = "refresh-new"
+	client := NewFromAccount(acc, nil)
+	rejected := Credentials{AccessToken: "access-old", RefreshToken: "refresh-old"}
+	if err := client.forceRefresh(context.Background(), rejected); err != nil {
+		t.Fatalf("peer-rotated credential should be reused: %v", err)
+	}
+	if got := client.currentCredentials().AccessToken; got != "access-new" {
+		t.Fatalf("access token=%q want access-new", got)
+	}
+}
+
 type failingQoderUpdater struct {
 	fail  bool
 	calls int

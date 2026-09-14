@@ -36,6 +36,9 @@ type session struct {
 	jar            http.CookieJar
 	refreshing     bool
 	refreshDone    chan struct{}
+	loggingIn      bool
+	loginDone      chan struct{}
+	loginErr       error
 }
 
 type refreshResponse struct {
@@ -301,7 +304,7 @@ func postWarpTokenForm(ctx context.Context, httpClient *http.Client, endpoint st
 	return body, nil
 }
 
-func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) error {
+func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) (err error) {
 	if s == nil {
 		return fmt.Errorf("warp session is nil")
 	}
@@ -310,16 +313,36 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 	}
 
 	s.mu.Lock()
-	if !s.lastLogin.IsZero() && time.Since(s.lastLogin) < 5*time.Minute {
+	if s.loggedIn && !s.lastLogin.IsZero() && time.Since(s.lastLogin) < 5*time.Minute {
 		s.mu.Unlock()
 		return nil
 	}
-	s.lastLogin = time.Now()
+	if s.loggingIn {
+		wait := s.loginDone
+		s.mu.Unlock()
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.loggedIn && !s.lastLogin.IsZero() && time.Since(s.lastLogin) < 5*time.Minute {
+			return nil
+		}
+		if s.loginErr != nil {
+			return s.loginErr
+		}
+		return fmt.Errorf("warp login did not complete")
+	}
 	jwt := strings.TrimSpace(s.jwt)
 	if jwt == "" {
 		s.mu.Unlock()
 		return fmt.Errorf("warp jwt missing")
 	}
+	s.loggingIn = true
+	s.loginDone = make(chan struct{})
+	s.loginErr = nil
 	if strings.TrimSpace(s.experimentID) == "" {
 		s.experimentID = newSessionUUID()
 	}
@@ -329,6 +352,20 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 	experimentID := s.experimentID
 	experimentBuck := s.experimentBuck
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if err == nil && strings.TrimSpace(s.jwt) == jwt {
+			s.loggedIn = true
+			s.lastLogin = time.Now()
+		} else if err == nil {
+			err = fmt.Errorf("warp credentials changed during login")
+		}
+		s.loginErr = err
+		s.loggingIn = false
+		close(s.loginDone)
+		s.loginDone = nil
+		s.mu.Unlock()
+	}()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, warpLoginURL, nil)
 	if err != nil {
@@ -360,10 +397,6 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) erro
 		}
 	}
 
-	s.mu.Lock()
-	s.loggedIn = true
-	s.lastLogin = time.Now()
-	s.mu.Unlock()
 	return nil
 }
 

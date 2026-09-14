@@ -45,7 +45,6 @@ Standard Grok video routes include `/v1/videos/generations`, `/v1/videos/edits`,
 - [API Reference](docs/api-reference.md)
 - [Configuration](docs/configuration.md)
 - [Deployment](docs/deployment.md)
-- [Grok parity checklist](docs/grok2api-parity-checklist.md)
 
 Historical reviews and fix logs remain available in Git history. The topic guides above describe current behavior.
 

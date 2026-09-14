@@ -306,8 +306,7 @@ func TestConsumeStreamToolCallAccumulatesArguments(t *testing.T) {
 // TestToolCallAccumulatorOpensNewCallOnIDChange covers parallel calls, which the
 // upstream sometimes reports by reusing one index and changing only the id.
 //
-// One index holds one call, so the newest id wins and the displaced call is
-// counted rather than emitted with its truncated arguments.
+// Call instances are retained independently even when their index collides.
 func TestToolCallAccumulatorOpensNewCallOnIDChange(t *testing.T) {
 	t.Parallel()
 
@@ -332,20 +331,17 @@ func TestToolCallAccumulatorOpensNewCallOnIDChange(t *testing.T) {
 	}
 }
 
-// TestToolCallAccumulatorCountsDisplacedCalls proves an index collision while a
-// call is still open is reported rather than silently swallowed.
-func TestToolCallAccumulatorCountsDisplacedCalls(t *testing.T) {
+// TestToolCallAccumulatorPreservesCallsAtReusedIndex proves an index collision
+// does not silently discard one parallel call or merge their arguments.
+func TestToolCallAccumulatorPreservesCallsAtReusedIndex(t *testing.T) {
 	t.Parallel()
 
 	accumulator := newToolCallAccumulator()
 	accumulator.add(1, "call_c", "third", `{"c":3}`)
 	accumulator.add(1, "call_d", "fourth", `{"d":4}`)
 	flushed := accumulator.completeAll()
-	if len(flushed) != 1 || flushed[0].ID != "call_d" {
-		t.Fatalf("flush = %+v, want only the newest call at the index", flushed)
-	}
-	if accumulator.dropped != 1 {
-		t.Fatalf("dropped = %d, want 1", accumulator.dropped)
+	if len(flushed) != 2 || flushed[0].ID != "call_c" || flushed[1].ID != "call_d" {
+		t.Fatalf("flush = %+v, want both calls in arrival order", flushed)
 	}
 	if got := accumulator.completeAll(); len(got) != 0 {
 		t.Fatalf("re-flush = %+v, want nothing", got)

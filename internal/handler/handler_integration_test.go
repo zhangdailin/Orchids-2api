@@ -208,6 +208,44 @@ func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
 	}
 }
 
+func TestHandleMessages_ForwardsAndEnforcesToolControls(t *testing.T) {
+	parallel := false
+	up := &mockUpstream{events: []upstream.SSEMessage{{
+		Type: "model.finish", Event: map[string]any{"finishReason": "end_turn"},
+	}}}
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
+	h.client = up
+	tool := map[string]any{"name": "read", "input_schema": map[string]any{"type": "object"}}
+
+	send := func(choice interface{}) upstream.UpstreamRequest {
+		body, _ := json.Marshal(map[string]any{
+			"model": "claude-opus-5", "messages": []map[string]any{{"role": "user", "content": "hi"}},
+			"tools": []any{tool}, "tool_choice": choice, "parallel_tool_calls": parallel, "stream": false,
+		})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+		h.HandleMessages(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		return up.capturedReqs[len(up.capturedReqs)-1]
+	}
+
+	forwarded := send(map[string]any{"type": "tool", "name": "read"})
+	choice, _ := forwarded.ToolChoice.(map[string]interface{})
+	if choice["type"] != "tool" || choice["name"] != "read" || forwarded.ParallelToolCalls == nil || *forwarded.ParallelToolCalls {
+		t.Fatalf("tool controls were not forwarded: %#v", forwarded)
+	}
+	if forwarded.NoTools || len(forwarded.Tools) != 1 {
+		t.Fatalf("enabled tools were unexpectedly gated: %#v", forwarded)
+	}
+
+	disabled := send("none")
+	if !disabled.NoTools || len(disabled.Tools) != 0 {
+		t.Fatalf("tool_choice=none was not enforced: %#v", disabled)
+	}
+}
+
 func TestHandleMessages_Puter_PreservesContentByDefault(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
 	up := &mockUpstream{events: []upstream.SSEMessage{

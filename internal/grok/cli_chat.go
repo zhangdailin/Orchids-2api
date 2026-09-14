@@ -82,7 +82,7 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 			pinned.Close()
 		}
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, func(acc *store.Account) bool {
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), func(acc *store.Account) bool {
 		// A model this credential is cooling down for must not be retried on the
 		// same account; the account's other models stay eligible.
 		return acc != nil && ProviderForAccount(acc) == ProviderBuild && AccountSupportsModel(acc, modelID) &&
@@ -138,7 +138,7 @@ func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []in
 			}
 		}
 	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTracker, allowed)
+	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), allowed)
 	if err != nil {
 		return nil, err
 	}

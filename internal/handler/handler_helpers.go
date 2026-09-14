@@ -409,7 +409,7 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {
 	var changed bool
 	if strings.EqualFold(account.AccountType, "warp") {
 		if warpClient, ok := client.(*warp.Client); ok {
-			changed = warpClient.SyncAccountState()
+			changed = warpClient.SyncAccountStateTo(account)
 		}
 	}
 

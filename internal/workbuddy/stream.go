@@ -72,7 +72,7 @@ type streamChunk struct {
 // toolCallAccumulator rebuilds tool calls from OpenAI-style deltas, where the
 // name arrives in the first delta and the arguments are streamed afterwards.
 type toolCallAccumulator struct {
-	order []int
+	order []*toolCallState
 	calls map[int]*toolCallState
 }
 
@@ -88,14 +88,19 @@ func newToolCallAccumulator() *toolCallAccumulator {
 }
 
 func (a *toolCallAccumulator) add(index int, id, name, args string) *toolCallState {
+	trimmedID := strings.TrimSpace(id)
 	state, ok := a.calls[index]
+	if ok && (state.Emitted || (trimmedID != "" && state.ID != "" && state.ID != trimmedID)) {
+		state = nil
+		ok = false
+	}
 	if !ok {
 		state = &toolCallState{}
 		a.calls[index] = state
-		a.order = append(a.order, index)
+		a.order = append(a.order, state)
 	}
-	if trimmed := strings.TrimSpace(id); trimmed != "" {
-		state.ID = trimmed
+	if trimmedID != "" {
+		state.ID = trimmedID
 	}
 	if trimmed := strings.TrimSpace(name); trimmed != "" {
 		state.Name = trimmed
@@ -107,8 +112,7 @@ func (a *toolCallAccumulator) add(index int, id, name, args string) *toolCallSta
 // pending returns not-yet-emitted complete tool calls in stream order.
 func (a *toolCallAccumulator) pending() []*toolCallState {
 	out := make([]*toolCallState, 0, len(a.order))
-	for _, index := range a.order {
-		state := a.calls[index]
+	for _, state := range a.order {
 		if state == nil || state.Emitted || state.Name == "" {
 			continue
 		}

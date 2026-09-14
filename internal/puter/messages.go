@@ -22,6 +22,7 @@ const missingDeepSeekReasoningFallback = "\u200b"
 // 内容；其余服务行为不变（与旧版一致）。
 func convertMessages(messages []prompt.Message, system []prompt.SystemItem, echoReasoning bool) []Message {
 	out := make([]Message, 0, len(messages)+len(system))
+	pendingToolCalls := make(map[string]bool)
 	for _, item := range system {
 		if text := strings.TrimSpace(item.Text); text != "" {
 			out = append(out, Message{Role: "system", Content: item.Text})
@@ -48,10 +49,13 @@ func convertMessages(messages []prompt.Message, system []prompt.SystemItem, echo
 		switch role {
 		case "assistant":
 			if converted, ok := convertAssistantMessage(msg, echoReasoning); ok {
+				for _, call := range converted.ToolCalls {
+					pendingToolCalls[call.ID] = true
+				}
 				out = append(out, converted)
 			}
 		case "user", "tool":
-			out = append(out, convertUserBlocks(msg.Content.GetBlocks())...)
+			out = append(out, convertUserBlocks(msg.Content.GetBlocks(), pendingToolCalls)...)
 		default:
 			if text := joinTextBlocks(msg.Content.GetBlocks()); text != "" {
 				out = append(out, Message{Role: role, Content: text})
@@ -106,7 +110,7 @@ func convertAssistantMessage(msg prompt.Message, echoReasoning bool) (Message, b
 	return message, message.Content != "" || len(message.ToolCalls) > 0 || message.ReasoningContent != ""
 }
 
-func convertUserBlocks(blocks []prompt.ContentBlock) []Message {
+func convertUserBlocks(blocks []prompt.ContentBlock, pendingToolCalls map[string]bool) []Message {
 	out := make([]Message, 0, len(blocks))
 	var text []string
 	flushText := func() {
@@ -128,6 +132,10 @@ func convertUserBlocks(blocks []prompt.ContentBlock) []Message {
 			if toolID == "" {
 				continue
 			}
+			if !pendingToolCalls[toolID] {
+				continue
+			}
+			delete(pendingToolCalls, toolID)
 			out = append(out, Message{
 				Role:       "tool",
 				ToolCallID: toolID,

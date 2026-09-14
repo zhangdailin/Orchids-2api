@@ -60,13 +60,15 @@ type UpstreamClient interface {
 }
 
 type ClaudeRequest struct {
-	Model          string                 `json:"model"`
-	Messages       []prompt.Message       `json:"messages"`
-	System         SystemItems            `json:"system"`
-	Tools          []interface{}          `json:"tools"`
-	Stream         bool                   `json:"stream"`
-	ConversationID string                 `json:"conversation_id"`
-	Metadata       map[string]interface{} `json:"metadata"`
+	Model             string                 `json:"model"`
+	Messages          []prompt.Message       `json:"messages"`
+	System            SystemItems            `json:"system"`
+	Tools             []interface{}          `json:"tools"`
+	ToolChoice        interface{}            `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool                  `json:"parallel_tool_calls,omitempty"`
+	Stream            bool                   `json:"stream"`
+	ConversationID    string                 `json:"conversation_id"`
+	Metadata          map[string]interface{} `json:"metadata"`
 }
 
 type toolCall struct {
@@ -502,6 +504,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	gateNoTools := false
 	toolGateReasons := make([]string, 0, 2)
 	toolGateMessage := ""
+	if toolChoiceDisablesTools(req.ToolChoice) {
+		gateNoTools = true
+		toolGateReasons = append(toolGateReasons, "tool_choice_none")
+		toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
+	}
 	if suggestionMode {
 		gateNoTools = true
 		toolGateReasons = append(toolGateReasons, "suggestion_mode")
@@ -937,6 +944,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			Messages:             payloadMessages,
 			System:               payloadSystem,
 			Tools:                effectiveTools,
+			ToolChoice:           req.ToolChoice,
+			ParallelToolCalls:    req.ParallelToolCalls,
 			NoTools:              gateNoTools,
 			ChatSessionID:        chatSessionID,
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
@@ -1281,6 +1290,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			InputTokens:  sh.inputTokens,
 			OutputTokens: sh.outputTokens,
 		})
+	}
+}
+
+func toolChoiceDisablesTools(choice interface{}) bool {
+	switch typed := choice.(type) {
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "none")
+	case map[string]interface{}:
+		return strings.EqualFold(strings.TrimSpace(fmt.Sprint(typed["type"])), "none")
+	default:
+		return false
 	}
 }
 

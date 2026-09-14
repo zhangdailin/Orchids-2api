@@ -16,10 +16,12 @@ type Request struct {
 }
 
 type RequestArgs struct {
-	Messages []Message     `json:"messages"`
-	Model    string        `json:"model"`
-	Stream   bool          `json:"stream"`
-	Tools    []interface{} `json:"tools,omitempty"`
+	Messages          []Message     `json:"messages"`
+	Model             string        `json:"model"`
+	Stream            bool          `json:"stream"`
+	Tools             []interface{} `json:"tools,omitempty"`
+	ToolChoice        interface{}   `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool         `json:"parallel_tool_calls,omitempty"`
 }
 
 type Message struct {

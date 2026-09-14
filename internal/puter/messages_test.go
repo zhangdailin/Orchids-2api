@@ -146,6 +146,30 @@ func TestBuildRequestSplitsMultiToolCallsOnlyForDeepseek(t *testing.T) {
 	}
 }
 
+func TestBuildRequestForwardsToolControls(t *testing.T) {
+	parallel := false
+	client := NewFromAccount(nil, nil)
+	req, err := client.buildRequest(upstream.UpstreamRequest{
+		Model: "gpt-5.6-sol",
+		Tools: []interface{}{map[string]interface{}{
+			"name": "read", "input_schema": map[string]interface{}{"type": "object"},
+		}},
+		ToolChoice:        map[string]interface{}{"type": "tool", "name": "read"},
+		ParallelToolCalls: &parallel,
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	choice, _ := req.Args.ToolChoice.(map[string]interface{})
+	function, _ := choice["function"].(map[string]interface{})
+	if choice["type"] != "function" || function["name"] != "read" {
+		t.Fatalf("tool choice=%#v", req.Args.ToolChoice)
+	}
+	if req.Args.ParallelToolCalls == nil || *req.Args.ParallelToolCalls {
+		t.Fatalf("parallel_tool_calls=%v want false", req.Args.ParallelToolCalls)
+	}
+}
+
 func TestSplitMultiToolCallsReordersToolResultsCorrectly(t *testing.T) {
 	// tool 回应顺序与 tool_calls 不一致时,按 tool_calls 顺序成对输出。
 	in := []Message{
@@ -250,6 +274,32 @@ func TestConvertMessagesSkipsReasoningForOtherServices(t *testing.T) {
 	}
 	if out[0].Content != "answer" {
 		t.Fatalf("content=%q want %q", out[0].Content, "answer")
+	}
+}
+
+func TestConvertMessagesDropsDanglingAndDuplicateToolResults(t *testing.T) {
+	messages := []prompt.Message{
+		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
+			Type: "tool_use", ID: "call-1", Name: "read", Input: map[string]interface{}{},
+		}}}},
+		{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+			{Type: "tool_result", ToolUseID: "call-1", Content: "ok"},
+			{Type: "tool_result", ToolUseID: "call-1", Content: "duplicate"},
+			{Type: "tool_result", ToolUseID: "missing", Content: "dangling"},
+		}}},
+	}
+	got := convertMessages(messages, nil, false)
+	toolMessages := 0
+	for _, message := range got {
+		if message.Role == "tool" {
+			toolMessages++
+			if message.ToolCallID != "call-1" || message.Content != "ok" {
+				t.Fatalf("unexpected tool message: %#v", message)
+			}
+		}
+	}
+	if toolMessages != 1 {
+		t.Fatalf("tool messages=%d want 1: %#v", toolMessages, got)
 	}
 }
 

@@ -2,6 +2,7 @@ package puter
 
 import (
 	"context"
+	"crypto/sha256"
 	"testing"
 	"time"
 )
@@ -32,7 +33,17 @@ func TestWaitForPuterRequestSlot_HonorsContext(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
+	key := sha256.Sum256([]byte("token"))
+	puterRequestPacer.Lock()
+	before := puterRequestPacer.next[key]
+	puterRequestPacer.Unlock()
 	if err := waitForPuterRequestSlot(ctx, defaultAPIURL, "token"); err == nil {
 		t.Fatal("expected queued request to honor context cancellation")
+	}
+	puterRequestPacer.Lock()
+	after := puterRequestPacer.next[key]
+	puterRequestPacer.Unlock()
+	if !after.Equal(before) {
+		t.Fatalf("canceled request reserved a future slot: before=%v after=%v", before, after)
 	}
 }

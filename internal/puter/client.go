@@ -243,6 +243,7 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 	// DeepSeek 思考模式要求 assistant 消息回传 reasoning_content，否则上游 400；
 	// 仅对 deepseek 服务开启回传，其余服务行为不变。
 	msgs := convertMessages(req.Messages, req.System, service == "deepseek")
+	toolChoice, parallelTools := normalizePuterToolControls(req, service, len(tools) > 0)
 	if service == "deepseek" {
 		// OpenAI-compatible DeepSeek gateways require assistant/tool history to
 		// follow a stricter role sequence than Anthropic clients do. Clients may
@@ -259,13 +260,67 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 		TestMode:  testMode,
 		Method:    defaultMethod,
 		Args: RequestArgs{
-			Messages: msgs,
-			Model:    modelID,
-			Stream:   true,
-			Tools:    tools,
+			Messages:          msgs,
+			Model:             modelID,
+			Stream:            true,
+			Tools:             tools,
+			ToolChoice:        toolChoice,
+			ParallelToolCalls: parallelTools,
 		},
 		AuthToken: c.authToken,
 	}, nil
+}
+
+// normalizePuterToolControls uses the provider-neutral controls accepted by
+// Puter's driver envelope while translating Anthropic's named-tool shape for
+// OpenAI-shaped providers. Individual Puter providers may apply stricter
+// policies, but omitting these fields prevents supporting providers from ever
+// observing the client's request.
+func normalizePuterToolControls(req upstream.UpstreamRequest, service string, toolsEnabled bool) (interface{}, *bool) {
+	if !toolsEnabled || req.NoTools {
+		return nil, nil
+	}
+	var parallel *bool
+	if req.ParallelToolCalls != nil {
+		value := *req.ParallelToolCalls
+		parallel = &value
+	}
+	choice := req.ToolChoice
+	if choice == nil {
+		return nil, parallel
+	}
+	if service == "claude" {
+		return choice, parallel
+	}
+	switch typed := choice.(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "auto", "required", "none":
+			return strings.ToLower(strings.TrimSpace(typed)), parallel
+		}
+	case map[string]interface{}:
+		kind := strings.ToLower(strings.TrimSpace(util.StringValue(typed["type"])))
+		if disabled, ok := typed["disable_parallel_tool_use"].(bool); ok && parallel == nil {
+			value := !disabled
+			parallel = &value
+		}
+		switch kind {
+		case "auto":
+			return "auto", parallel
+		case "any", "required":
+			return "required", parallel
+		case "none":
+			return "none", parallel
+		case "tool":
+			name := strings.TrimSpace(util.StringValue(typed["name"]))
+			if name != "" {
+				return map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": name}}, parallel
+			}
+		case "function":
+			return typed, parallel
+		}
+	}
+	return nil, parallel
 }
 
 func serviceForModel(modelID string) (string, error) {

@@ -88,7 +88,8 @@ func diagnosticText(text string, acc *store.Account) string {
 }
 
 func (h *Handler) auditAttemptDiagnostic(ctx context.Context, acc *store.Account, provider string, attempt int, started time.Time, err error, stage string, resp *http.Response, body []byte, result string) {
-	if h == nil || h.auditLogger == nil {
+	logger := h.auditLoggerSnapshot()
+	if logger == nil {
 		return
 	}
 	metadata := map[string]interface{}{"stage": stage, "started_at": started.UTC().Format(time.RFC3339Nano)}
@@ -175,6 +176,6 @@ func (h *Handler) auditAttemptDiagnostic(ctx context.Context, acc *store.Account
 	if acc != nil {
 		accountID = acc.ID
 	}
-	h.auditLogger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Action: "grok_upstream_attempt", Channel: "grok", Provider: provider, Attempt: attempt, Duration: time.Since(started).Milliseconds(), Status: status, Metadata: metadata,
+	logger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Action: "grok_upstream_attempt", Channel: "grok", Provider: provider, Attempt: attempt, Duration: time.Since(started).Milliseconds(), Status: status, Metadata: metadata,
 		InputTokens: interfaceToInt(usage["input_tokens"]), OutputTokens: interfaceToInt(usage["output_tokens"]), CachedInputTokens: interfaceToInt(inputDetails["cached_tokens"]), ReasoningTokens: interfaceToInt(outputDetails["reasoning_tokens"])})
 }
