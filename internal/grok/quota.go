@@ -306,6 +306,9 @@ func ApplyFreeQuotaExhaustion(acc *store.Account, body []byte) bool {
 	}
 	now := time.Now().UTC()
 	previous := acc.GrokFreeQuota
+	if !now.After(previous.ConfirmedAt) {
+		now = previous.ConfirmedAt.Add(time.Nanosecond)
+	}
 	snapshot := store.GrokFreeQuotaSnapshot{
 		// A refusal without a readable pair still refreshes the window, but it must not
 		// erase a limit an earlier refusal did report.

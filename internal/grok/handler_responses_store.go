@@ -274,7 +274,12 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 	}()
 	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
 		raw, readErr := io.ReadAll(io.LimitReader(body, (8<<20)+1))
-		if readErr != nil || len(raw) > 8<<20 {
+		if readErr != nil {
+			result.Err = fmt.Errorf("upstream response could not be read within the response limit: %w", readErr)
+			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
+			return
+		}
+		if len(raw) > 8<<20 {
 			result.Err = fmt.Errorf("upstream response could not be read within the response limit")
 			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
 			return
