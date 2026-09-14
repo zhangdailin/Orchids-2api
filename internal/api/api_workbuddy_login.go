@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -34,6 +35,18 @@ const (
 // is a variable so tests can drive the flow without touching the network.
 var newWorkBuddyLoginClient = func(acc *store.Account, cfg *config.Config) *workbuddy.Client {
 	return workbuddy.NewFromAccount(acc, cfg)
+}
+
+// newWorkBuddyLoginClientMu protects the replaceable client factory used by
+// tests. Login polling runs in a background goroutine, so a test may restore
+// the factory while that goroutine is still winding down after cancellation.
+var newWorkBuddyLoginClientMu sync.RWMutex
+
+func makeWorkBuddyLoginClient(acc *store.Account, cfg *config.Config) *workbuddy.Client {
+	newWorkBuddyLoginClientMu.RLock()
+	factory := newWorkBuddyLoginClient
+	newWorkBuddyLoginClientMu.RUnlock()
+	return factory(acc, cfg)
 }
 
 // HandleWorkBuddyLogin starts and observes the official WorkBuddy
@@ -80,7 +93,7 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	client := newWorkBuddyLoginClient(nil, a.config.Load())
+	client := makeWorkBuddyLoginClient(nil, a.config.Load())
 	defer client.Close()
 	state, authURL, err := client.StartAuthLogin(ctx, workbuddyClientVersion)
 	if err != nil {
@@ -174,7 +187,7 @@ func (a *API) cancelWorkBuddyLogin(w http.ResponseWriter, id string) {
 // pollWorkBuddyLogin exchanges the authorization state until the browser step
 // completes, then verifies and persists the account.
 func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
-	client := newWorkBuddyLoginClient(nil, a.config.Load())
+	client := makeWorkBuddyLoginClient(nil, a.config.Load())
 	defer client.Close()
 
 	for {
@@ -262,7 +275,7 @@ func (a *API) buildWorkBuddyAccountFromCredentials(ctx context.Context, loginID 
 	}
 
 	state := a.workBuddyLoginState(loginID)
-	client := newWorkBuddyLoginClient(acc, a.config.Load())
+	client := makeWorkBuddyLoginClient(acc, a.config.Load())
 	defer client.Close()
 
 	// The access-token JWT already proves the identity; the profile endpoint only

@@ -80,13 +80,19 @@ func testJWT(uid, email string) string {
 
 func stubWorkBuddyLoginClient(t *testing.T, baseURL string) {
 	t.Helper()
+	newWorkBuddyLoginClientMu.Lock()
 	previous := newWorkBuddyLoginClient
-	t.Cleanup(func() { newWorkBuddyLoginClient = previous })
 	newWorkBuddyLoginClient = func(acc *store.Account, cfg *config.Config) *workbuddy.Client {
 		client := workbuddy.NewFromAccount(acc, cfg)
 		client.SetBaseURLForTest(baseURL)
 		return client
 	}
+	newWorkBuddyLoginClientMu.Unlock()
+	t.Cleanup(func() {
+		newWorkBuddyLoginClientMu.Lock()
+		newWorkBuddyLoginClient = previous
+		newWorkBuddyLoginClientMu.Unlock()
+	})
 }
 
 func startWorkBuddyLoginRequest(t *testing.T, method, path, body string) *http.Request {
