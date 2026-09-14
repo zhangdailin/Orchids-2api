@@ -4,9 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -15,7 +12,6 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
-	"orchids-api/web"
 )
 
 func TestRenderIndexCountsOnlyVisibleAccounts(t *testing.T) {
@@ -69,13 +65,9 @@ func TestRendererParsesAndRendersEmbeddedTemplates(t *testing.T) {
 	}
 }
 
-// TestTutorialPageListsEveryChannel proves the rendered tutorial page carries a
-// quick-reference row for every channel the page's own script knows about.
-//
-// The table is plain markup, so adding a channel never fails to compile: Qoder
-// shipped with four rows and no card, and the operator's tutorial simply did not
-// mention it. This asserts on the rendered HTML so the markup, the script and the
-// channel list cannot drift apart again.
+// TestTutorialPageListsEveryChannel proves that the tutorial's single channel
+// table includes every public base URL. Channel content intentionally lives in
+// the template now; tutorial.js only fills the current origin and handles copy.
 func TestTutorialPageListsEveryChannel(t *testing.T) {
 	renderer, err := NewRenderer()
 	if err != nil {
@@ -89,22 +81,7 @@ func TestTutorialPageListsEveryChannel(t *testing.T) {
 	}
 	page := recorder.Body.String()
 
-	// The channel list lives in the page's script; every entry must have a row.
-	js, err := web.TemplateFS.ReadFile("templates/pages/tutorial.html")
-	if err != nil {
-		t.Fatalf("read tutorial template: %v", err)
-	}
-	_ = js
-	scriptBytes, err := os.ReadFile(filepath.Join("..", "..", "web", "static", "js", "tutorial.js"))
-	if err != nil {
-		t.Fatalf("read tutorial script: %v", err)
-	}
-	keys := regexp.MustCompile(`key:\s*'([a-z0-9_-]+)'`).FindAllStringSubmatch(string(scriptBytes), -1)
-	if len(keys) < 5 {
-		t.Fatalf("parsed %d channels from the tutorial script, want at least 5", len(keys))
-	}
-	for _, match := range keys {
-		key := match[1]
+	for _, key := range []string{"warp", "puter", "workbuddy", "qoder", "grok"} {
 		if !strings.Contains(page, `badge-`+key) {
 			t.Errorf("the rendered tutorial page has no row for channel %q", key)
 		}
@@ -113,7 +90,9 @@ func TestTutorialPageListsEveryChannel(t *testing.T) {
 			t.Errorf("the rendered tutorial page has no address cell for channel %q", key)
 		}
 	}
-	if !strings.Contains(page, `badge-qoder`) {
-		t.Error("the rendered tutorial page does not mention the Qoder channel")
+	for _, unrelatedID := range []string{"modelModal", "createKeyModal", "editKeyModal", "showKeyModal", "deleteKeyModal"} {
+		if strings.Contains(page, `id="`+unrelatedID+`"`) {
+			t.Errorf("tutorial page still includes unrelated modal %q", unrelatedID)
+		}
 	}
 }
