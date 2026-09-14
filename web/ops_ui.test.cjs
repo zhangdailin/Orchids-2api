@@ -68,8 +68,9 @@ test('the light-weight pages do not claim a fixed retention window', () => {
 
 test('运维总览 is reachable from the sidebar and is the landing tab', () => {
   const sidebar = read('templates/partials/sidebar.html');
-  assert.match(sidebar, /switchTab\('ops'\)/, 'sidebar has no 运维总览 entry');
-  assert.match(sidebar, /switchTab\('logs'\)/, 'sidebar has no 日志中心 entry');
+  assert.match(sidebar, /href="\{\{\.AdminPath\}\}\/\?tab=ops"/, 'sidebar has no 运维总览 entry');
+  assert.match(sidebar, /href="\{\{\.AdminPath\}\}\/\?tab=logs"/, 'sidebar has no 日志中心 entry');
+  assert.doesNotMatch(sidebar, /onclick="switchTab\(/, 'sidebar navigation still depends on inline JavaScript');
   assert.ok(sidebar.includes('运维总览'), 'the sidebar label is missing');
   assert.ok(sidebar.includes('日志中心'), 'the sidebar label is missing');
 

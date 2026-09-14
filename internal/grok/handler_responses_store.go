@@ -35,7 +35,7 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", modelValidationMessage(modelID, err))
 		return
 	}
-	if h == nil || h.cliClient == nil {
+	if h == nil || h.buildClient() == nil {
 		writeResponsesAPIError(w, http.StatusServiceUnavailable, "service_unavailable", "grok cli client not configured")
 		return
 	}
@@ -71,7 +71,7 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	payload["model"] = spec.UpstreamModel
 	call := func() (*http.Response, error) {
 		if pinned {
-			return h.cliClient.doResponsesAt(r.Context(), sess.acc, upstreamPath, payload)
+			return h.buildClient().doResponsesAt(r.Context(), sess.acc, upstreamPath, payload)
 		}
 		return h.doCLIWithAutoSwitchAt(r.Context(), sess, payload, spec.UpstreamModel, upstreamPath)
 	}
@@ -154,7 +154,7 @@ func (h *Handler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	spec, ok := h.resolveConversationModel(r.Context(), modelID)
-	if !ok || !modelRoutedToCLI(spec, h.cfg) {
+	if !ok || !modelRoutedToCLI(spec, h.configSnapshot()) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses compact requires a Grok Build model")
 		return
 	}
@@ -208,7 +208,7 @@ func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request)
 	defer sess.Close()
 
 	path := "/responses/" + url.PathEscape(responseID)
-	resp, err := h.cliClient.doResponseResource(r.Context(), sess.acc, r.Method, path, r.URL.RawQuery)
+	resp, err := h.buildClient().doResponseResource(r.Context(), sess.acc, r.Method, path, r.URL.RawQuery)
 	if err != nil {
 		writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
@@ -234,8 +234,8 @@ func (h *Handler) saveStoredResponse(r *http.Request, response *store.StoredResp
 		return errors.New("response store not configured")
 	}
 	ttl := defaultStoredResponseTTL
-	if h.cfg != nil && h.cfg.ResponseStoreTTL > 0 {
-		ttl = time.Duration(h.cfg.ResponseStoreTTL) * time.Hour
+	if h.configSnapshot() != nil && h.configSnapshot().ResponseStoreTTL > 0 {
+		ttl = time.Duration(h.configSnapshot().ResponseStoreTTL) * time.Hour
 	}
 	return h.lb.Store.SaveStoredResponse(r.Context(), response, ttl)
 }

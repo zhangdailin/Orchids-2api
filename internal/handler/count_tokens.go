@@ -28,7 +28,8 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger := debug.NewForContext(r.Context(), h.config.DebugEnabled, h.config.DebugLogSSE)
+	cfg := h.configSnapshot()
+	logger := debug.NewForContext(r.Context(), cfg.DebugEnabled, cfg.DebugLogSSE)
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
 

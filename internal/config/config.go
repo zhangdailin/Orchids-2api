@@ -173,6 +173,37 @@ type EgressNodeConfig struct {
 	Proxied bool   `json:"proxied"`
 }
 
+// Clone returns a deep copy suitable for publishing as an immutable runtime
+// snapshot. Config contains pointer and slice fields, so a plain struct copy
+// would still let a later request mutate data observed by concurrent readers.
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+
+	clone := *c
+	clone.InferenceAuth = cloneBool(c.InferenceAuth)
+	clone.GrokTemporary = cloneBool(c.GrokTemporary)
+	clone.GrokDisableMemory = cloneBool(c.GrokDisableMemory)
+	clone.WarpDisableTools = cloneBool(c.WarpDisableTools)
+	clone.Stream = cloneBool(c.Stream)
+	clone.ImageNSFW = cloneBool(c.ImageNSFW)
+	clone.PublicEnabled = cloneBool(c.PublicEnabled)
+	clone.TrustedProxies = append([]string(nil), c.TrustedProxies...)
+	clone.GrokCLIModelIDs = append([]string(nil), c.GrokCLIModelIDs...)
+	clone.GrokEgressNodes = append([]EgressNodeConfig(nil), c.GrokEgressNodes...)
+	clone.ProxyBypass = append([]string(nil), c.ProxyBypass...)
+	return &clone
+}
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
 func Load(path string) (*Config, string, error) {
 	resolvedPath, err := resolveConfigPath(path)
 	if err != nil {

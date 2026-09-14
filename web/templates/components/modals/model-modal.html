@@ -1,9 +1,9 @@
 <!-- Model Modal -->
-<div class="modal" id="modelModal">
+<div class="modal" id="modelModal" role="dialog" aria-modal="true" aria-labelledby="modelModalTitle">
   <div class="modal-content">
     <div class="modal-header">
       <h3 class="modal-title" id="modelModalTitle">添加模型</h3>
-      <button class="modal-close" onclick="closeModelModal()">&times;</button>
+      <button class="modal-close" type="button" onclick="closeModelModal()" aria-label="关闭模型窗口">&times;</button>
     </div>
     <form id="modelForm" onsubmit="saveModel(event)">
       <input type="hidden" id="modelId" />
@@ -47,11 +47,11 @@
           </label>
           &nbsp;&nbsp;设为默认模型
         </label>
-        <div class="helper-text" style="margin-top:8px;line-height:1.5;">
+        <div class="helper-text modal-field-note">
           同一渠道只会保留一个默认模型，保存后会自动替换当前默认项。
         </div>
       </div>
-      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px">
+      <button type="submit" class="btn btn-primary modal-submit">
         保存
       </button>
     </form>

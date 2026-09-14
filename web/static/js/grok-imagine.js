@@ -646,6 +646,29 @@
     updateSelectedCount();
   }
 
+  const JSZIP_URL = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+  const JSZIP_INTEGRITY = "sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG";
+  let jsZipPromise = null;
+
+  function loadJSZip() {
+    if (window.JSZip) return Promise.resolve(window.JSZip);
+    if (jsZipPromise) return jsZipPromise;
+
+    jsZipPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = JSZIP_URL;
+      script.integrity = JSZIP_INTEGRITY;
+      script.crossOrigin = "anonymous";
+      script.onload = () => window.JSZip ? resolve(window.JSZip) : reject(new Error("JSZip unavailable"));
+      script.onerror = () => reject(new Error("JSZip load failed"));
+      document.head.appendChild(script);
+    }).catch((error) => {
+      jsZipPromise = null;
+      throw error;
+    });
+    return jsZipPromise;
+  }
+
   async function downloadSelected() {
     if (state.selected.size === 0) {
       toggleSelectAll();
@@ -654,19 +677,16 @@
         return;
       }
     }
-    if (typeof JSZip === "undefined") {
-      toast("JSZip 未加载", "error");
-      return;
-    }
     const btn = $("downloadSelectedBtn");
     if (btn) {
       btn.disabled = true;
       btn.textContent = "打包中...";
     }
-    const zip = new JSZip();
-    const folder = zip.folder("images");
     let processed = 0;
     try {
+      const JSZip = await loadJSZip();
+      const zip = new JSZip();
+      const folder = zip.folder("images");
       for (const item of state.selected) {
         const url = item.dataset.imageUrl || "";
         let blob = null;

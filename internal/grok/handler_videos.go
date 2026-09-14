@@ -485,7 +485,7 @@ func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec Mod
 		h.failVideoJob(job, err)
 		return
 	}
-	raw, _, err := h.client.downloadAsset(ctx, sess.token, artifact.URL)
+	raw, _, err := h.webClient().downloadAsset(ctx, sess.token, artifact.URL)
 	if err != nil {
 		h.failVideoJob(job, err)
 		return

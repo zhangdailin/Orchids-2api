@@ -127,10 +127,10 @@ func (h *Handler) HandlePublicImagineConfig(w http.ResponseWriter, r *http.Reque
 	finalMinBytes := 100000
 	mediumMinBytes := 30000
 	nsfw := true
-	if h != nil && h.cfg != nil {
-		finalMinBytes = h.cfg.PublicImagineFinalMinBytes()
-		mediumMinBytes = h.cfg.PublicImagineMediumMinBytes()
-		nsfw = h.cfg.PublicImagineNSFW()
+	if h != nil && h.configSnapshot() != nil {
+		finalMinBytes = h.configSnapshot().PublicImagineFinalMinBytes()
+		mediumMinBytes = h.configSnapshot().PublicImagineMediumMinBytes()
+		nsfw = h.configSnapshot().PublicImagineNSFW()
 	}
 
 	writeJSON(w, map[string]interface{}{

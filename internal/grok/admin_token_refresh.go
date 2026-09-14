@@ -105,7 +105,7 @@ func (h *Handler) runTokenRefreshBatch(ctx context.Context, tokens []string, mod
 		if ctx.Err() == nil {
 			callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 			defer cancel()
-			info, err := h.client.VerifyToken(callCtx, token, model)
+			info, err := h.webClient().VerifyToken(callCtx, token, model)
 			success = err == nil
 			status := ""
 			if err != nil {

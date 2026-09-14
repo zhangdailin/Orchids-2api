@@ -279,7 +279,7 @@ func (h *Handler) fetchOnlineAssetDetails(
 	}
 
 	details := make([]map[string]interface{}, len(requestTokens))
-	if h == nil || h.client == nil {
+	if h == nil || h.webClient() == nil {
 		for i, token := range requestTokens {
 			masked, lastClear := onlineAccountInfo(accountByToken, token)
 			details[i] = map[string]interface{}{
@@ -314,7 +314,7 @@ func (h *Handler) fetchOnlineAssetDetails(
 			"last_asset_clear_at": lastClear,
 		}
 
-		count, err := h.client.countAssets(ctx, item.token)
+		count, err := h.webClient().countAssets(ctx, item.token)
 		if err != nil {
 			msg := strings.TrimSpace(err.Error())
 			if msg == "" {
@@ -674,7 +674,7 @@ func (h *Handler) HandleAdminCacheOnlineClear(w http.ResponseWriter, r *http.Req
 	successAll := 0
 	failedAll := 0
 	for _, token := range tokens {
-		total, success, failed, err := h.client.clearAssets(r.Context(), token)
+		total, success, failed, err := h.webClient().clearAssets(r.Context(), token)
 		if err != nil {
 			results[token] = map[string]interface{}{
 				"status": "error",
@@ -893,7 +893,7 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 			mu        sync.Mutex
 		)
 		runWorkerPool(ctx, tokens, 4, func(token string) {
-			total, success, failed, err := h.client.clearAssets(ctx, token)
+			total, success, failed, err := h.webClient().clearAssets(ctx, token)
 			ok := err == nil
 			entry := map[string]interface{}{}
 			if err != nil {

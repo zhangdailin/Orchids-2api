@@ -127,7 +127,7 @@ func (h *Handler) cacheMediaURL(ctx context.Context, token, rawURL, mediaType st
 	// is required for images to display at all.
 	forceCache := mediaType == "image" && mustCacheImageURL(lurl)
 
-	data, mimeType, err := h.client.downloadAsset(ctx, token, rawURL)
+	data, mimeType, err := h.webClient().downloadAsset(ctx, token, rawURL)
 	if err != nil {
 		return "", err
 	}
@@ -215,7 +215,7 @@ func (h *Handler) imageOutputValue(ctx context.Context, token, url, format strin
 		}
 		return trim, nil
 	}
-	raw, _, err := h.client.downloadAsset(ctx, token, url)
+	raw, _, err := h.webClient().downloadAsset(ctx, token, url)
 	if err != nil {
 		return "", err
 	}

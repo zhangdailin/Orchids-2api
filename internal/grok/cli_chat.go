@@ -11,17 +11,17 @@ import (
 )
 
 func (h *Handler) cliBaseURL() string {
-	if h != nil && h.cfg != nil {
-		return h.cfg.GrokCLIBaseURLOrDefault()
+	if h != nil && h.configSnapshot() != nil {
+		return h.configSnapshot().GrokCLIBaseURLOrDefault()
 	}
 	return defaultCLIBaseURL
 }
 
 func (h *Handler) cliHeaders(acc *store.Account, token string) http.Header {
-	if h == nil || h.cliClient == nil {
+	if h == nil || h.buildClient() == nil {
 		return nil
 	}
-	return h.cliClient.cliHeaders(acc, token)
+	return h.buildClient().cliHeaders(acc, token)
 }
 
 // doCLIWithAutoSwitchAt issues a CLI request, switching to another OAuth account
@@ -32,11 +32,11 @@ func (h *Handler) doCLIWithAutoSwitchAt(ctx context.Context, sess *chatAccountSe
 	if sess == nil || sess.acc == nil {
 		return nil, fmt.Errorf("empty cli chat session")
 	}
-	if h == nil || h.cliClient == nil {
+	if h == nil || h.buildClient() == nil {
 		return nil, fmt.Errorf("grok cli client not configured")
 	}
 	return h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond,
-		func() (*http.Response, error) { return h.cliClient.doResponsesAt(ctx, sess.acc, path, payload) },
+		func() (*http.Response, error) { return h.buildClient().doResponsesAt(ctx, sess.acc, path, payload) },
 		func(used []int64) (*chatAccountSession, error) { return h.openCLIAccountSession(ctx, used, modelID) }, nil)
 }
 

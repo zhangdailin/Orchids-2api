@@ -178,7 +178,7 @@ func (h *Handler) runNSFWEnableBatch(ctx context.Context, targets []nsfwTarget, 
 		} else {
 			callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 			defer cancel()
-			outcome := h.client.EnableNSFWDetailed(callCtx, target.Token)
+			outcome := h.webClient().EnableNSFWDetailed(callCtx, target.Token)
 			res.Success, res.HTTPStatus, res.GRPCStatus = outcome.Success, outcome.HTTPStatus, outcome.GRPCStatus
 			res.GRPCMessage, res.Error = outcome.GRPCMessage, strings.TrimSpace(outcome.Error)
 			if !res.Success && res.Error == "" {

@@ -96,3 +96,62 @@ func TestTutorialPageListsEveryChannel(t *testing.T) {
 		}
 	}
 }
+
+func TestPagesRenderOnlyTheirOwnModals(t *testing.T) {
+	renderer, err := NewRenderer()
+	if err != nil {
+		t.Fatalf("NewRenderer() error = %v", err)
+	}
+
+	tests := []struct {
+		tab       string
+		wantIDs   []string
+		forbidIDs []string
+	}{
+		{"accounts", []string{"accountModal"}, []string{"modelModal", "createKeyModal"}},
+		{"keys", []string{"createKeyModal", "editKeyModal", "showKeyModal", "deleteKeyModal"}, []string{"accountModal", "modelModal"}},
+		{"models", []string{"modelModal"}, []string{"accountModal", "createKeyModal"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tab, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/?tab="+tt.tab, nil)
+			if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil); err != nil {
+				t.Fatalf("RenderIndex() error = %v", err)
+			}
+			page := recorder.Body.String()
+			for _, id := range tt.wantIDs {
+				if !strings.Contains(page, `id="`+id+`"`) {
+					t.Errorf("missing modal %q", id)
+				}
+			}
+			for _, id := range tt.forbidIDs {
+				if strings.Contains(page, `id="`+id+`"`) {
+					t.Errorf("includes unrelated modal %q", id)
+				}
+			}
+		})
+	}
+}
+
+func TestSidebarUsesRealLinks(t *testing.T) {
+	renderer, err := NewRenderer()
+	if err != nil {
+		t.Fatalf("NewRenderer() error = %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/?tab=ops", nil)
+	if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/console"}, nil); err != nil {
+		t.Fatalf("RenderIndex() error = %v", err)
+	}
+	page := recorder.Body.String()
+	for _, tab := range []string{"ops", "logs", "accounts", "keys", "models", "grok-tools", "alerts", "tutorial"} {
+		if !strings.Contains(page, `href="/console/?tab=`+tab+`"`) {
+			t.Errorf("sidebar has no native link for %q", tab)
+		}
+	}
+	if strings.Contains(page, `onclick="switchTab(`) {
+		t.Error("sidebar navigation still depends on inline JavaScript")
+	}
+}

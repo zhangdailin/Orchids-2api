@@ -38,6 +38,30 @@ func TestConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestCloneDeepCopiesReferenceFields(t *testing.T) {
+	on := true
+	original := &Config{
+		InferenceAuth:   &on,
+		TrustedProxies:  []string{"10.0.0.1"},
+		GrokCLIModelIDs: []string{"grok-test"},
+		GrokEgressNodes: []EgressNodeConfig{{Name: "primary", URL: "http://proxy"}},
+		ProxyBypass:     []string{"localhost"},
+	}
+
+	clone := original.Clone()
+	*clone.InferenceAuth = false
+	clone.TrustedProxies[0] = "10.0.0.2"
+	clone.GrokCLIModelIDs[0] = "changed"
+	clone.GrokEgressNodes[0].Name = "changed"
+	clone.ProxyBypass[0] = "example.com"
+
+	if !*original.InferenceAuth || original.TrustedProxies[0] != "10.0.0.1" ||
+		original.GrokCLIModelIDs[0] != "grok-test" || original.GrokEgressNodes[0].Name != "primary" ||
+		original.ProxyBypass[0] != "localhost" {
+		t.Fatalf("Clone shares mutable fields with original: %#v", original)
+	}
+}
+
 func TestApplyDefaultsGeneratesRandomPassword(t *testing.T) {
 	var cfg Config
 	ApplyDefaults(&cfg)

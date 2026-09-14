@@ -303,7 +303,7 @@ func (h *Handler) collectImagineWSGeneration(ctx context.Context, w http.Respons
 }
 
 func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, publicBase string) {
-	onePayload := h.client.appChatImagePayload(spec, req.Prompt, req.Size, req.N)
+	onePayload := h.webClient().appChatImagePayload(spec, req.Prompt, req.Size, req.N)
 	ensureImageNSFW(onePayload)
 	resp, err := h.doAppChatImageRequest(ctx, sess, spec, &onePayload, true)
 	if err != nil {
@@ -343,7 +343,7 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 			break
 		}
 		count := req.N
-		payload := h.client.appChatImagePayload(spec, req.Prompt, req.Size, count)
+		payload := h.webClient().appChatImagePayload(spec, req.Prompt, req.Size, count)
 		ensureImageNSFW(payload)
 		resp, err := h.doAppChatImageRequest(ctx, sess, spec, &payload, allowSwitch)
 		if err != nil {

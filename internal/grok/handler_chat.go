@@ -156,10 +156,10 @@ func isThinkingResponse(resp map[string]interface{}) bool {
 }
 
 func (h *Handler) defaultChatStream() bool {
-	if h == nil || h.cfg == nil {
+	if h == nil || h.configSnapshot() == nil {
 		return true
 	}
-	return h.cfg.ChatDefaultStream()
+	return h.configSnapshot().ChatDefaultStream()
 }
 
 func (h *Handler) applyDefaultChatStream(req *ChatCompletionsRequest) {
@@ -186,7 +186,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	req.startedAt = time.Now()
 	req.sourceOperation, _ = r.Context().Value(chatSourceOperationKey{}).(string)
 	verboseDiagnostics := logutil.VerboseDiagnosticsEnabled()
-	debugLogSSE := h != nil && h.cfg != nil && h.cfg.DebugLogSSE
+	debugLogSSE := h != nil && h.configSnapshot() != nil && h.configSnapshot().DebugLogSSE
 	logger := debug.NewForContext(r.Context(), verboseDiagnostics, verboseDiagnostics && debugLogSSE)
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
@@ -309,7 +309,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	// Native providers consume structured messages directly, without Web's
 	// prompt/attachment adapter or its tool limits.
-	if !spec.IsVideo && modelRoutedToCLI(spec, h.cfg) {
+	if !spec.IsVideo && modelRoutedToCLI(spec, h.configSnapshot()) {
 		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 		if err != nil {
 			http.Error(w, "no available grok cli token: "+err.Error(), http.StatusServiceUnavailable)
@@ -407,7 +407,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !logger.Capturing() {
-		logger.LogUpstreamRequest(h.client.baseURL()+defaultChatPath, debugHeaderMap(h.client.appChatHeaders(sess.token)), payload)
+		logger.LogUpstreamRequest(h.webClient().baseURL()+defaultChatPath, debugHeaderMap(h.webClient().appChatHeaders(sess.token)), payload)
 	}
 
 	resp, err := h.doChatWithAutoSwitchRebuild(r.Context(), sess, &payload, buildPayload)
@@ -436,7 +436,7 @@ func (h *Handler) buildChatPayload(
 	videoCfg *VideoConfig,
 	req *ChatCompletionsRequest,
 ) (map[string]interface{}, error) {
-	payload := h.client.chatPayload(spec, text, true, 0)
+	payload := h.webClient().chatPayload(spec, text, true, 0)
 	if len(fileAttachments) > 0 {
 		payload["fileAttachments"] = fileAttachments
 	}
@@ -531,8 +531,8 @@ func (h *Handler) buildVideoExtendPayload(spec ModelSpec, prompt string, parentP
 		message = strings.TrimSpace(message + " " + modeFlag)
 	}
 	temporary := true
-	if h != nil && h.cfg != nil {
-		temporary = h.cfg.GrokChatTemporary()
+	if h != nil && h.configSnapshot() != nil {
+		temporary = h.configSnapshot().GrokChatTemporary()
 	}
 	payload := map[string]interface{}{
 		"temporary":        temporary,
@@ -615,8 +615,8 @@ func (h *Handler) uploadSingleInput(ctx context.Context, token, input string) (s
 	if isRemoteURL(data) {
 		var err error
 		proxyFunc := http.ProxyFromEnvironment
-		if h != nil && h.cfg != nil {
-			proxyFunc = util.ProxyFuncFromConfig(h.cfg)
+		if h != nil && h.configSnapshot() != nil {
+			proxyFunc = util.ProxyFuncFromConfig(h.configSnapshot())
 		}
 		data, err = fetchRemoteAsDataURI(data, 30*time.Second, proxyFunc)
 		if err != nil {
@@ -630,7 +630,7 @@ func (h *Handler) uploadSingleInput(ctx context.Context, token, input string) (s
 		mime = "application/octet-stream"
 		contentBase64 = data
 	}
-	return h.client.uploadFile(ctx, token, filename, mime, contentBase64)
+	return h.webClient().uploadFile(ctx, token, filename, mime, contentBase64)
 }
 
 type streamMarkupFilter struct {
@@ -1322,7 +1322,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		if tail := mf.flush(); tail != "" {
 			emitTextChunk(tail)
 		}
-		if tokenFallback.Len() > 0 && !sawModelMessage && h != nil && h.cfg != nil && h.cfg.DebugEnabled {
+		if tokenFallback.Len() > 0 && !sawModelMessage && h != nil && h.configSnapshot() != nil && h.configSnapshot().DebugEnabled {
 			slog.Debug("grok stream fallback used token deltas (no modelResponse)", "model", model)
 		}
 	} else {

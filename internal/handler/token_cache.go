@@ -14,17 +14,18 @@ func (h *Handler) estimateInputTokens(ctx context.Context, model, prompt string)
 	if prompt == "" {
 		return 0
 	}
-	if h.tokenCache == nil || h.config == nil || !h.config.CacheTokenCount {
+	cfg := h.configSnapshot()
+	if h.tokenCache == nil || cfg == nil || !cfg.CacheTokenCount {
 		return tiktoken.EstimateTextTokens(prompt)
 	}
 
-	ttl := time.Duration(h.config.CacheTTL) * time.Minute
+	ttl := time.Duration(cfg.CacheTTL) * time.Minute
 	if ttl <= 0 {
 		ttl = defaultTokenCacheTTL
 	}
 	h.tokenCache.SetTTL(ttl)
 
-	key := tokencache.CacheKey(h.config.CacheStrategy, model, prompt)
+	key := tokencache.CacheKey(cfg.CacheStrategy, model, prompt)
 	if tokens, ok := h.tokenCache.Get(ctx, key); ok {
 		return tokens
 	}

@@ -38,9 +38,9 @@ func (a *API) HandleDiagnosticSettings(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Configuration unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		next := *current
+		next := current.Clone()
 		next.DebugEnabled = *input.Enabled
-		if err := a.persistConfig(r.Context(), current, &next); err != nil {
+		if err := a.persistConfig(r.Context(), current, next); err != nil {
 			http.Error(w, "Could not save diagnostic setting", http.StatusServiceUnavailable)
 			return
 		}

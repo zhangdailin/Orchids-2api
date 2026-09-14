@@ -236,7 +236,8 @@ func (h *Handler) getOrCreateAccountClient(acc *store.Account) UpstreamClient {
 		return h.buildAccountClient(acc)
 	}
 
-	fingerprint := accountClientFingerprint(acc, h.config)
+	cfg := h.configSnapshot()
+	fingerprint := accountClientFingerprint(acc, cfg)
 
 	h.clientCache.mu.RLock()
 	entry, ok := h.clientCache.entries[acc.ID]
@@ -283,7 +284,7 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	}
 	var cfg *config.Config
 	if h != nil {
-		cfg = h.config
+		cfg = h.configSnapshot()
 	}
 	if h != nil && h.clientFactory != nil {
 		return h.clientFactory(acc, cfg)

@@ -509,7 +509,11 @@ func refreshGrokCandidate(ctx context.Context, cfg *config.Config, s *store.Stor
 	}
 }
 
-func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Store, lb *loadbalancer.LoadBalancer) {
+func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Config, s *store.Store, lb *loadbalancer.LoadBalancer) {
+	cfg := configSnapshot()
+	if cfg == nil {
+		return
+	}
 	if !cfg.AutoRefreshToken {
 		return
 	}
@@ -523,6 +527,10 @@ func startTokenRefreshLoop(ctx context.Context, cfg *config.Config, s *store.Sto
 	slog.Debug("Auto refresh token enabled", "interval", interval.String())
 
 	refreshAccounts := func() {
+		cfg := configSnapshot()
+		if cfg == nil {
+			return
+		}
 		accounts, err := s.GetEnabledAccounts(context.Background())
 		if err != nil {
 			slog.Error("Auto refresh token: list accounts failed", "error", err)

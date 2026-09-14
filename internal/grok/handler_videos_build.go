@@ -46,7 +46,7 @@ func (h *Handler) runBuildVideoCreateJob(ctx context.Context, job *videoJob, spe
 		h.handleConsoleVideoJobError(job, lease, err)
 		return
 	}
-	response, err := h.cliClient.doResponsesAt(leaseCtx, sess.acc, "/videos/generations", payload)
+	response, err := h.buildClient().doResponsesAt(leaseCtx, sess.acc, "/videos/generations", payload)
 	if err != nil {
 		if upstreamHTTPResponseStatus(err) != http.StatusForbidden {
 			h.handleConsoleVideoJobError(job, lease, err)
@@ -60,7 +60,7 @@ func (h *Handler) runBuildVideoCreateJob(ctx context.Context, job *videoJob, spe
 		fallbackPayload := cloneStringInterfaceMap(payload)
 		fallbackPayload["model"] = "grok-imagine-video-1.5-preview"
 		fallbackPayload["output"] = map[string]interface{}{"upload_url": uploadURL}
-		response, err = h.cliClient.doFallbackRequest(leaseCtx, sess.acc, http.MethodPost, "/videos/generations", fallbackPayload)
+		response, err = h.buildClient().doFallbackRequest(leaseCtx, sess.acc, http.MethodPost, "/videos/generations", fallbackPayload)
 		if err != nil {
 			h.handleConsoleVideoJobError(job, lease, err)
 			return
@@ -183,9 +183,9 @@ func (h *Handler) pollBuildVideoJob(ctx context.Context, lease *consoleVideoJobL
 		var response *http.Response
 		var err error
 		if job.BuildFallback {
-			response, err = h.cliClient.doFallbackRequest(ctx, sess.acc, http.MethodGet, "/videos/"+url.PathEscape(requestID), nil)
+			response, err = h.buildClient().doFallbackRequest(ctx, sess.acc, http.MethodGet, "/videos/"+url.PathEscape(requestID), nil)
 		} else {
-			response, err = h.cliClient.doResponseResource(ctx, sess.acc, http.MethodGet, "/videos/"+url.PathEscape(requestID), "")
+			response, err = h.buildClient().doResponseResource(ctx, sess.acc, http.MethodGet, "/videos/"+url.PathEscape(requestID), "")
 		}
 		if err != nil {
 			h.handleConsoleVideoJobError(job, lease, err)
@@ -231,7 +231,7 @@ func (h *Handler) completeBuildVideoJob(ctx context.Context, lease *consoleVideo
 		h.scheduleStoredConsoleVideoRetry(job)
 		return
 	}
-	raw, mimeType, err := h.cliClient.downloadTrustedBuildVideo(ctx, videoURL)
+	raw, mimeType, err := h.buildClient().downloadTrustedBuildVideo(ctx, videoURL)
 	if err != nil {
 		h.handleConsoleVideoJobError(job, lease, err)
 		return

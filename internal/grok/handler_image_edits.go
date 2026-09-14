@@ -26,10 +26,10 @@ func (h *Handler) buildImageEditPayload(spec ModelSpec, prompt string, assets []
 		"enableImageStreaming": true, "enableSideBySide": true, "sendFinalMetadata": true,
 		"mediaGenInput": map[string]interface{}{"imageToImage": input},
 	}
-	if h != nil && h.cfg != nil {
-		payload["temporary"] = h.cfg.GrokChatTemporary()
-		payload["disableMemory"] = h.cfg.GrokChatDisableMemory(false)
-		if instruction := h.cfg.GrokChatCustomInstruction(); instruction != "" {
+	if h != nil && h.configSnapshot() != nil {
+		payload["temporary"] = h.configSnapshot().GrokChatTemporary()
+		payload["disableMemory"] = h.configSnapshot().GrokChatDisableMemory(false)
+		if instruction := h.configSnapshot().GrokChatCustomInstruction(); instruction != "" {
 			payload["customPersonality"] = instruction
 		}
 	}

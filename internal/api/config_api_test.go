@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -153,7 +155,7 @@ func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	}
 }
 
-func TestHandleConfigSaveUpdatesOriginalSharedConfigPointer(t *testing.T) {
+func TestHandleConfigSavePublishesImmutableSnapshot(t *testing.T) {
 	api, s, mini := setupConfigAPI(t)
 	defer func() {
 		_ = s.Close()
@@ -182,10 +184,93 @@ func TestHandleConfigSaveUpdatesOriginalSharedConfigPointer(t *testing.T) {
 		t.Fatalf("expected code 0, got %d body=%s", resp.Code, rec.Body.String())
 	}
 
-	if original.ProxyURL != "http://alice:secret@127.0.0.1:9090" {
-		t.Fatalf("shared ProxyURL=%q want updated value", original.ProxyURL)
+	if original.ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("published snapshot mutated in place: ProxyURL=%q", original.ProxyURL)
 	}
-	if api.config.Load() != original {
-		t.Fatal("expected API config pointer to keep sharing the original config object")
+	updated := api.config.Load()
+	if updated == original {
+		t.Fatal("expected a new immutable config snapshot")
+	}
+	if updated.ProxyURL != "http://alice:secret@127.0.0.1:9090" {
+		t.Fatalf("updated ProxyURL=%q want new value", updated.ProxyURL)
+	}
+}
+
+func TestHandleConfigSaveNotifiesRuntimeConsumers(t *testing.T) {
+	api, s, mini := setupConfigAPI(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	var notified *config.Config
+	api.SetConfigChangeHook(func(cfg *config.Config) { notified = cfg })
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", strings.NewReader(`{"proxy_url":"http://127.0.0.1:9091"}`))
+	rec := httptest.NewRecorder()
+	api.HandleConfigSave(rec, req)
+
+	if notified == nil {
+		t.Fatal("runtime config hook was not called")
+	}
+	if notified != api.config.Load() {
+		t.Fatal("runtime consumers did not receive the published snapshot")
+	}
+	if notified.ProxyURL != "http://127.0.0.1:9091" {
+		t.Fatalf("notified ProxyURL=%q", notified.ProxyURL)
+	}
+}
+
+func TestPersistConfigConcurrentReadersSeeCompleteSnapshots(t *testing.T) {
+	api, s, mini := setupConfigAPI(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	const updates = 100
+	var readers sync.WaitGroup
+	errCh := make(chan error, 8)
+	done := make(chan struct{})
+	for range 8 {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				snapshot := api.config.Load()
+				if snapshot == nil || snapshot.AdminUser == "admin" {
+					continue
+				}
+				if snapshot.ProxyURL != "http://"+snapshot.AdminUser+".example" {
+					select {
+					case errCh <- fmt.Errorf("torn snapshot: user=%q proxy=%q", snapshot.AdminUser, snapshot.ProxyURL):
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+
+	for i := range updates {
+		current := api.config.Load()
+		next := current.Clone()
+		next.AdminUser = fmt.Sprintf("admin-%d", i)
+		next.ProxyURL = "http://" + next.AdminUser + ".example"
+		if err := api.persistConfig(context.Background(), current, next); err != nil {
+			close(done)
+			readers.Wait()
+			t.Fatalf("persistConfig: %v", err)
+		}
+	}
+	close(done)
+	readers.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
 	}
 }

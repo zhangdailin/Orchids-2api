@@ -1,5 +1,5 @@
 <div class="mobile-topbar">
-  <button class="mobile-menu-btn" type="button" onclick="toggleSidebar()" aria-label="打开或关闭导航菜单" aria-controls="sidebar" aria-expanded="false">
+  <button class="mobile-menu-btn" type="button" data-sidebar-toggle aria-label="打开或关闭导航菜单" aria-controls="sidebar" aria-expanded="false">
     <span></span>
     <span></span>
     <span></span>
@@ -12,7 +12,7 @@
     </div>
   </div>
 </div>
-<div class="sidebar-overlay" onclick="toggleSidebar(false)" aria-hidden="true"></div>
+<div class="sidebar-overlay" data-sidebar-close aria-hidden="true"></div>
 <aside class="sidebar" id="sidebar" aria-label="主导航">
   <div class="sidebar-header">
     <div class="logo">O</div>
@@ -23,7 +23,7 @@
   </div>
   <ul class="sidebar-menu">
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "ops"}}active{{end}}" {{if eq .ActiveTab "ops"}}aria-current="page"{{end}} onclick="switchTab('ops')">
+      <a href="{{.AdminPath}}/?tab=ops" class="sidebar-link {{if eq .ActiveTab "ops"}}active{{end}}" {{if eq .ActiveTab "ops"}}aria-current="page"{{end}}>
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l3-4 3 3 4-6"/><circle cx="7" cy="15" r="1"/><circle cx="17" cy="8" r="1"/></svg>
         </span>
@@ -31,7 +31,7 @@
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "logs"}}active{{end}}" {{if eq .ActiveTab "logs"}}aria-current="page"{{end}} onclick="switchTab('logs')">
+      <a href="{{.AdminPath}}/?tab=logs" class="sidebar-link {{if eq .ActiveTab "logs"}}active{{end}}" {{if eq .ActiveTab "logs"}}aria-current="page"{{end}}>
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>
         </span>
@@ -39,7 +39,7 @@
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "accounts"}}active{{end}}" {{if eq .ActiveTab "accounts"}}aria-current="page"{{end}} onclick="switchTab('accounts')">
+      <a href="{{.AdminPath}}/?tab=accounts" class="sidebar-link {{if eq .ActiveTab "accounts"}}active{{end}}" {{if eq .ActiveTab "accounts"}}aria-current="page"{{end}}>
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         </span>
@@ -47,7 +47,7 @@
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "keys"}}active{{end}}" {{if eq .ActiveTab "keys"}}aria-current="page"{{end}} onclick="switchTab('keys')">
+      <a href="{{.AdminPath}}/?tab=keys" class="sidebar-link {{if eq .ActiveTab "keys"}}active{{end}}" {{if eq .ActiveTab "keys"}}aria-current="page"{{end}}>
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
         </span>
@@ -55,7 +55,7 @@
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "models"}}active{{end}}" {{if eq .ActiveTab "models"}}aria-current="page"{{end}} onclick="switchTab('models')">
+      <a href="{{.AdminPath}}/?tab=models" class="sidebar-link {{if eq .ActiveTab "models"}}active{{end}}" {{if eq .ActiveTab "models"}}aria-current="page"{{end}}>
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6"/></svg>
         </span>
@@ -63,7 +63,7 @@
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "grok-tools"}}active{{end}}" {{if eq .ActiveTab "grok-tools"}}aria-current="page"{{end}} onclick="switchTab('grok-tools')">
+      <a href="{{.AdminPath}}/?tab=grok-tools" class="sidebar-link {{if eq .ActiveTab "grok-tools"}}active{{end}}" {{if eq .ActiveTab "grok-tools"}}aria-current="page"{{end}}>
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M10 20.5c.5-2.5 2-4.5 4.5-6"/><path d="M14 3.5c3 1 5.5 3.5 6.5 6.5"/><path d="M4 14c1-3 3.5-5.5 6.5-6.5"/><path d="M6 20h12"/><circle cx="12" cy="12" r="3"/></svg>
         </span>
@@ -71,7 +71,7 @@
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "alerts"}}active{{end}}" {{if eq .ActiveTab "alerts"}}aria-current="page"{{end}} onclick="switchTab('alerts')">
+      <a href="{{.AdminPath}}/?tab=alerts" class="sidebar-link {{if eq .ActiveTab "alerts"}}active{{end}}" {{if eq .ActiveTab "alerts"}}aria-current="page"{{end}}>
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
         </span>
@@ -79,7 +79,7 @@
       </a>
     </li>
     <li class="sidebar-item">
-      <a href="#" class="sidebar-link {{if eq .ActiveTab "tutorial"}}active{{end}}" {{if eq .ActiveTab "tutorial"}}aria-current="page"{{end}} onclick="switchTab('tutorial')">
+      <a href="{{.AdminPath}}/?tab=tutorial" class="sidebar-link {{if eq .ActiveTab "tutorial"}}active{{end}}" {{if eq .ActiveTab "tutorial"}}aria-current="page"{{end}}>
         <span class="nav-glyph" aria-hidden="true">
           <svg viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5Z"/></svg>
         </span>
@@ -102,7 +102,7 @@
         <span class="footer-stat-value abnormal" id="footerAbnormal">{{.Stats.AbnormalAccounts}}</span>
       </div>
     </div>
-    <button class="btn btn-outline sidebar-logout" onclick="logout()">
+    <button class="btn btn-outline sidebar-logout" type="button" data-logout>
       <span class="nav-glyph nav-glyph-small">EX</span>
       <span>退出登录</span>
     </button>

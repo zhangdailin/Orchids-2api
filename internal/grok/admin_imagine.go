@@ -233,14 +233,14 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 	nsfwEnabled := true
 	if nsfw != nil {
 		nsfwEnabled = *nsfw
-	} else if h != nil && h.cfg != nil {
-		nsfwEnabled = h.cfg.PublicImagineNSFW()
+	} else if h != nil && h.configSnapshot() != nil {
+		nsfwEnabled = h.configSnapshot().PublicImagineNSFW()
 	}
 
 	startedAt := time.Now()
 	maxAttempts := 2
-	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		maxAttempts = h.cfg.AccountSwitchCount
+	if h != nil && h.configSnapshot() != nil && h.configSnapshot().AccountSwitchCount > 0 {
+		maxAttempts = h.configSnapshot().AccountSwitchCount
 	}
 
 	var lastErr error

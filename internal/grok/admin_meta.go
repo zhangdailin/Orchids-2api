@@ -22,8 +22,8 @@ func (h *Handler) HandleAdminStorage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	storageType := "redis"
-	if h != nil && h.cfg != nil && strings.TrimSpace(h.cfg.StoreMode) != "" {
-		storageType = strings.ToLower(strings.TrimSpace(h.cfg.StoreMode))
+	if h != nil && h.configSnapshot() != nil && strings.TrimSpace(h.configSnapshot().StoreMode) != "" {
+		storageType = strings.ToLower(strings.TrimSpace(h.configSnapshot().StoreMode))
 	}
 	writeJSON(w, map[string]interface{}{
 		"type": storageType,

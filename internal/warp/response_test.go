@@ -219,28 +219,28 @@ func TestProcessStreamBody_MapsMaxTokenLimitToNormalStop(t *testing.T) {
 }
 
 func TestParseStreamFinished_UsesCurrentChargeMetadata(t *testing.T) {
-	input, output, cacheRead, cacheWrite := uint32(100), uint32(20), uint32(30), uint32(4)
+	input, output, cacheRead, cacheWrite := uint64(100), uint64(20), uint64(30), uint64(4)
 	inputCost, outputCost, cacheReadCost, cacheWriteCost := float32(0.1), float32(0.2), float32(0.03), float32(0.04)
 	searches, searchCost, platformCost := uint32(2), float32(0.5), float32(0.6)
 	exactCredits, platformCredits := float32(1.25), float32(0.75)
 	totalInput, conversationCredits, conversationPlatform, contextUsage := uint32(777), float32(8.5), float32(2.5), float32(0.42)
 
-	count := warpapi.ResponseEvent_StreamFinished_TokenCount_builder{
+	count := warpapi.TokenCount_builder{
 		Input: &input, Output: &output, InputCacheRead: &cacheRead, InputCacheWrite: &cacheWrite,
 	}.Build()
-	cost := warpapi.ResponseEvent_StreamFinished_TokenCost_builder{
+	cost := warpapi.TokenCost_builder{
 		InputCostInCents: &inputCost, OutputCostInCents: &outputCost,
 		InputCacheReadCostInCents: &cacheReadCost, InputCacheWriteCostInCents: &cacheWriteCost,
 	}.Build()
-	inference := warpapi.ResponseEvent_StreamFinished_InferenceUsage_builder{
+	inference := warpapi.InferenceUsage_builder{
 		TokenCount: count, TokenCost: cost, WebSearchCount: &searches, WebSearchCostInCents: &searchCost,
 	}.Build()
-	charged := warpapi.ResponseEvent_StreamFinished_ChargedUsage_builder{
-		DirectApiInferenceUsage: map[string]*warpapi.ResponseEvent_StreamFinished_InferenceUsage{"model": inference},
+	charged := warpapi.ChargedUsage_builder{
+		DirectApiInferenceUsage: map[string]*warpapi.InferenceUsage{"model": inference},
 		PlatformUsageInCents:    &platformCost,
 	}.Build()
-	charges := warpapi.ResponseEvent_StreamFinished_RequestCharges_builder{
-		UsageByCategory: map[string]*warpapi.ResponseEvent_StreamFinished_ChargedUsage{"primary_agent": charged},
+	charges := warpapi.RequestCharges_builder{
+		UsageByCategory: map[string]*warpapi.ChargedUsage{"primary_agent": charged},
 	}.Build()
 	requestCost := warpapi.ResponseEvent_StreamFinished_RequestCost_builder{Exact: &exactCredits, PlatformCredits: &platformCredits}.Build()
 	conversation := warpapi.ResponseEvent_StreamFinished_ConversationUsageMetadata_builder{

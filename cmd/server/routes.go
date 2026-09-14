@@ -39,9 +39,15 @@ func registerRoutes(
 	tmplRenderer *template.Renderer,
 ) {
 	mux := http.NewServeMux()
+	currentConfig := func() *config.Config {
+		if current := apiHandler.ConfigSnapshot(); current != nil {
+			return current
+		}
+		return cfg
+	}
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return middleware.APIKeyAuth(
-			func() bool { return cfg.InferenceAuthEnabled() },
+			func() bool { return currentConfig().InferenceAuthEnabled() },
 			func(ctx context.Context, token string) (*middleware.APIKeyPrincipal, error) {
 				key, err := s.AuthorizeApiKey(ctx, token)
 				switch {
@@ -130,7 +136,8 @@ func registerRoutes(
 	// --- Admin API routes (session auth, dual prefix) ---
 	sessionAuth := func(h http.HandlerFunc) http.HandlerFunc {
 		return middleware.SessionAuthDynamic(func() (string, string) {
-			return cfg.AdminPass, cfg.AdminToken
+			current := currentConfig()
+			return current.AdminPass, current.AdminToken
 		}, h)
 	}
 
@@ -150,7 +157,9 @@ func registerRoutes(
 	mux.HandleFunc("/api/keys", sessionAuth(apiHandler.HandleKeys))
 	mux.HandleFunc("/api/keys/", sessionAuth(apiHandler.HandleKeyByID))
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
-	mux.HandleFunc("/api/models/refresh", sessionAuth(makeModelRefreshHandler(cfg, s)))
+	mux.HandleFunc("/api/models/refresh", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
+		makeModelRefreshHandler(currentConfig(), s)(w, r)
+	}))
 	mux.HandleFunc("/api/models/", sessionAuth(apiHandler.HandleModelByID))
 	mux.HandleFunc("/api/export", sessionAuth(apiHandler.HandleExport))
 	mux.HandleFunc("/api/import", sessionAuth(apiHandler.HandleImport))
@@ -228,12 +237,12 @@ func registerRoutes(
 	// --- Public API routes (dual prefix) ---
 	publicAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			middleware.PublicKeyAuth(cfg.PublicAPIKey(), next)(w, r)
+			middleware.PublicKeyAuth(currentConfig().PublicAPIKey(), next)(w, r)
 		}
 	}
 	publicImagineStreamAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			middleware.PublicImagineStreamAuth(cfg.PublicAPIKey(), next)(w, r)
+			middleware.PublicImagineStreamAuth(currentConfig().PublicAPIKey(), next)(w, r)
 		}
 	}
 
@@ -279,7 +288,7 @@ func registerRoutes(
 			http.NotFound(w, r)
 			return
 		}
-		if cfg.PublicAPIEnabled() {
+		if currentConfig().PublicAPIEnabled() {
 			http.Redirect(w, r, grokToolsURL(), http.StatusFound)
 			return
 		}
@@ -296,7 +305,7 @@ func registerRoutes(
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !cfg.PublicAPIEnabled() {
+		if !currentConfig().PublicAPIEnabled() {
 			http.NotFound(w, r)
 			return
 		}
@@ -313,7 +322,7 @@ func registerRoutes(
 	}
 
 	// --- Admin Web UI ---
-	registerAdminUI(mux, cfg, s, staticRootHandler, tmplRenderer)
+	registerAdminUI(mux, cfg, currentConfig, s, staticRootHandler, tmplRenderer)
 
 	// --- Health, metrics, pprof ---
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -325,7 +334,8 @@ func registerRoutes(
 
 	if cfg.DebugEnabled {
 		mux.HandleFunc("/debug/pprof/", middleware.SessionAuthDynamic(func() (string, string) {
-			return cfg.AdminPass, cfg.AdminToken
+			current := currentConfig()
+			return current.AdminPass, current.AdminToken
 		}, http.DefaultServeMux.ServeHTTP))
 		slog.Debug("pprof enabled", "path", "/debug/pprof/")
 	}
@@ -342,8 +352,16 @@ func registerRoutes(
 	})
 }
 
-func registerAdminUI(mux *http.ServeMux, cfg *config.Config, s *store.Store, staticRootHandler http.Handler, tmplRenderer *template.Renderer) {
+func registerAdminUI(mux *http.ServeMux, cfg *config.Config, currentConfig func() *config.Config, s *store.Store, staticRootHandler http.Handler, tmplRenderer *template.Renderer) {
 	staticHandler := http.StripPrefix(cfg.AdminPath, staticRootHandler)
+	currentUIConfig := func() *config.Config {
+		current := currentConfig().Clone()
+		// The route tree cannot be re-registered while the server is running.
+		// AdminPath therefore remains a restart-required setting even though the
+		// rest of the rendered configuration is refreshed immediately.
+		current.AdminPath = cfg.AdminPath
+		return current
+	}
 
 	isAdminAuthenticated := func(r *http.Request) bool {
 		cookie, err := r.Cookie("session_token")
@@ -351,12 +369,12 @@ func registerAdminUI(mux *http.ServeMux, cfg *config.Config, s *store.Store, sta
 		if authenticated {
 			return true
 		}
-		adminToken := cfg.AdminToken
+		adminToken := currentConfig().AdminToken
 		authHeader := r.Header.Get("Authorization")
 		return adminToken != "" && (authHeader == "Bearer "+adminToken || authHeader == adminToken || r.Header.Get("X-Admin-Token") == adminToken)
 	}
 	renderAdminIndex := func(w http.ResponseWriter, r *http.Request) {
-		if err := tmplRenderer.RenderIndex(w, r, cfg, s); err != nil {
+		if err := tmplRenderer.RenderIndex(w, r, currentUIConfig(), s); err != nil {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
 	}

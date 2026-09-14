@@ -1,17 +1,17 @@
 <!-- 创建 Key 弹窗 -->
-<div class="modal" id="createKeyModal">
+<div class="modal" id="createKeyModal" role="dialog" aria-modal="true" aria-labelledby="createKeyModalTitle">
   <div class="modal-content modal-content-md">
     <div class="modal-header">
-      <h3 class="modal-title">创建 API Key</h3>
-      <button class="modal-close" onclick="closeCreateKeyModal()">
+      <h3 class="modal-title" id="createKeyModalTitle">创建 API Key</h3>
+      <button class="modal-close" type="button" onclick="closeCreateKeyModal()" aria-label="关闭创建 API Key 窗口">
         &times;
       </button>
     </div>
     <form onsubmit="createApiKey(event)">
       <div class="form-group">
         <label class="form-label">名称 / 备注（支持换行批量创建）</label>
-        <textarea class="form-input" id="keyName" required placeholder="每行一个名称，例如：&#10;生产环境&#10;测试用&#10;开发者-张三"
-          rows="4" style="resize: vertical;"></textarea>
+        <textarea class="form-input textarea-resizable" id="keyName" required placeholder="每行一个名称，例如：&#10;生产环境&#10;测试用&#10;开发者-张三"
+          rows="4"></textarea>
       </div>
       <div class="form-group">
         <label class="form-label">允许模型（可选，每行或逗号分隔）</label>
@@ -27,7 +27,7 @@
           <input class="form-input" id="keyExpiresAt" type="datetime-local" />
         </div>
       </div>
-      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">
+      <button type="submit" class="btn btn-primary modal-submit">
         创建
       </button>
     </form>
@@ -35,11 +35,11 @@
 </div>
 
 <!-- Key 策略编辑弹窗 -->
-<div class="modal" id="editKeyModal">
+<div class="modal" id="editKeyModal" role="dialog" aria-modal="true" aria-labelledby="editKeyModalTitle">
   <div class="modal-content modal-content-md">
     <div class="modal-header">
-      <h3 class="modal-title">编辑 API Key 策略</h3>
-      <button class="modal-close" onclick="closeEditKeyModal()">&times;</button>
+      <h3 class="modal-title" id="editKeyModalTitle">编辑 API Key 策略</h3>
+      <button class="modal-close" type="button" onclick="closeEditKeyModal()" aria-label="关闭编辑 API Key 窗口">&times;</button>
     </div>
     <form onsubmit="saveKeyPolicy(event)">
       <input type="hidden" id="editKeyId" />
@@ -57,19 +57,19 @@
           <input class="form-input" id="editKeyExpiresAt" type="datetime-local" />
         </div>
       </div>
-      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px;">保存策略</button>
+      <button type="submit" class="btn btn-primary modal-submit">保存策略</button>
     </form>
   </div>
 </div>
 
 <!-- Key 展示弹窗 -->
-<div class="modal" id="showKeyModal">
+<div class="modal" id="showKeyModal" role="dialog" aria-modal="true" aria-labelledby="showKeyModalTitle">
   <div class="modal-content modal-content-lg">
     <div class="modal-header">
-      <h3 class="modal-title">API Key 已创建</h3>
+      <h3 class="modal-title" id="showKeyModalTitle">API Key 已创建</h3>
     </div>
     <div class="modal-body">
-    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+    <p class="modal-intro">
       请立即复制并保存您的 API Key：
     </p>
     <div id="fullKeyDisplay" class="modal-scroll">
@@ -79,10 +79,10 @@
       关闭此窗口后将无法再次查看完整 Key
     </div>
     <div class="modal-actions">
-      <button class="btn btn-primary" onclick="copyAllKeys()">
+      <button class="btn btn-primary" type="button" onclick="copyAllKeys()">
         复制全部
       </button>
-      <button class="btn btn-neutral"
+      <button class="btn btn-neutral" type="button"
         onclick="closeShowKeyModal()">
         我已保存，关闭
       </button>
@@ -92,26 +92,26 @@
 </div>
 
 <!-- 删除 Key 确认弹窗 -->
-<div class="modal" id="deleteKeyModal">
+<div class="modal" id="deleteKeyModal" role="alertdialog" aria-modal="true" aria-labelledby="deleteKeyModalTitle" aria-describedby="deleteKeyModalDescription">
   <div class="modal-content modal-content-sm">
     <div class="modal-header">
-      <h3 class="modal-title">删除 API Key</h3>
-      <button class="modal-close" onclick="closeDeleteKeyModal()">
+      <h3 class="modal-title" id="deleteKeyModalTitle">删除 API Key</h3>
+      <button class="modal-close" type="button" onclick="closeDeleteKeyModal()" aria-label="关闭删除 API Key 窗口">
         &times;
       </button>
     </div>
     <div class="modal-body">
-    <p style="margin-bottom: 20px;">
+    <p class="modal-confirm-text" id="deleteKeyModalDescription">
       确定要删除 Key「<strong id="deleteKeyName"></strong>」吗？<br />
       <span class="warning-text">此操作不可撤销，使用此 Key 的应用将无法访问。</span>
     </p>
     <input type="hidden" id="deleteKeyId" />
     <div class="modal-actions">
-      <button class="btn btn-neutral"
+      <button class="btn btn-neutral" type="button"
         onclick="closeDeleteKeyModal()">
         取消
       </button>
-      <button class="btn btn-danger" onclick="confirmDeleteKey()">
+      <button class="btn btn-danger" type="button" onclick="confirmDeleteKey()">
         删除
       </button>
     </div>

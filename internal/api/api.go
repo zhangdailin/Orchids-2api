@@ -40,6 +40,7 @@ import (
 
 type API struct {
 	configMu     sync.Mutex
+	configHookMu sync.RWMutex
 	connTracker  loadbalancer.ConnTracker
 	store        *store.Store
 	tokenCache   tokencache.Cache
@@ -48,6 +49,7 @@ type API struct {
 	adminPass    string
 	loginLimiter *middleware.RateLimiter
 	config       atomic.Pointer[config.Config]
+	configHook   func(*config.Config)
 
 	// Account check backoff / storm control
 	checkMu          sync.Mutex
@@ -1875,9 +1877,39 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		qoderLogins:      map[string]*qoderLoginTransaction{},
 	}
 	if cfg != nil {
-		a.config.Store(cfg)
+		a.config.Store(cfg.Clone())
 	}
 	return a
+}
+
+// SetConfigChangeHook registers the runtime components that must adopt a newly
+// persisted immutable config snapshot. The hook is invoked after the snapshot
+// has been durably stored and atomically published by the API.
+func (a *API) SetConfigChangeHook(hook func(*config.Config)) {
+	if a == nil {
+		return
+	}
+	a.configHookMu.Lock()
+	a.configHook = hook
+	a.configHookMu.Unlock()
+}
+
+// ConfigSnapshot returns the current immutable runtime configuration. Callers
+// must treat the returned value as read-only.
+func (a *API) ConfigSnapshot() *config.Config {
+	if a == nil {
+		return nil
+	}
+	return a.config.Load()
+}
+
+func (a *API) notifyConfigChanged(cfg *config.Config) {
+	a.configHookMu.RLock()
+	hook := a.configHook
+	a.configHookMu.RUnlock()
+	if hook != nil {
+		hook(cfg)
+	}
 }
 
 func (a *API) SetPromptCache(cache tokencache.PromptCache) {
@@ -1971,18 +2003,18 @@ func (a *API) HandleConfig(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		// Copy current config, decode into copy, then atomically store
 		current := a.config.Load()
-		newCfg := *current
-		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
+		newCfg := current.Clone()
+		if err := json.NewDecoder(r.Body).Decode(newCfg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := a.persistConfig(r.Context(), current, &newCfg); err != nil {
+		if err := a.persistConfig(r.Context(), current, newCfg); err != nil {
 			http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(&newCfg)
+		json.NewEncoder(w).Encode(newCfg)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -3655,26 +3687,23 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 		return fmt.Errorf("settings store not configured")
 	}
 
-	config.ApplyHardcoded(newCfg)
+	storedCfg := newCfg.Clone()
+	config.ApplyHardcoded(storedCfg)
 
-	data, err := json.Marshal(newCfg)
+	data, err := json.Marshal(storedCfg)
 	if err != nil {
 		return err
 	}
 	if err := a.store.SetSetting(ctx, "config", string(data)); err != nil {
 		return err
 	}
-	cacheChanged := tokenCacheConfigChanged(current, newCfg)
+	cacheChanged := tokenCacheConfigChanged(current, storedCfg)
 
-	// Keep the original shared config pointer updated in place so long-lived
-	// components started with that pointer (handler/background loops/providers)
-	// observe runtime config changes such as proxy updates immediately.
-	storedCfg := newCfg
-	if current != nil {
-		*current = *newCfg
-		storedCfg = current
-	}
+	// Runtime configs are immutable after publication. Replacing the pointer is
+	// atomic; mutating the previously published object would race with request
+	// handlers and background jobs reading its fields.
 	a.config.Store(storedCfg)
+	a.notifyConfigChanged(storedCfg)
 	if cacheChanged {
 		a.clearTokenCaches(ctx)
 	}

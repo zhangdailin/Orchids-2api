@@ -28,6 +28,7 @@ const grokModelValidationCacheTTL = 3 * time.Second
 
 type Handler struct {
 	base         *handler.BaseHandler
+	runtimeMu    sync.RWMutex
 	cfg          *config.Config
 	lb           *loadbalancer.LoadBalancer
 	client       *Client
@@ -89,6 +90,55 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	return h
 }
 
+// SetConfig replaces the immutable config and the clients whose transports are
+// derived from it. Existing requests retain their client pointers; new requests
+// immediately observe the new proxy, timeout and endpoint settings.
+func (h *Handler) SetConfig(cfg *config.Config) {
+	if h == nil || cfg == nil {
+		return
+	}
+	client := New(cfg)
+	cliClient := NewCLIClient(cfg)
+	if h.lb != nil {
+		cliClient.SetAccountStore(h.lb.Store)
+	}
+	h.runtimeMu.Lock()
+	h.cfg = cfg
+	h.client = client
+	h.cliClient = cliClient
+	h.runtimeMu.Unlock()
+}
+
+func (h *Handler) configSnapshot() *config.Config {
+	if h == nil {
+		return nil
+	}
+	h.runtimeMu.RLock()
+	cfg := h.cfg
+	h.runtimeMu.RUnlock()
+	return cfg
+}
+
+func (h *Handler) webClient() *Client {
+	if h == nil {
+		return nil
+	}
+	h.runtimeMu.RLock()
+	client := h.client
+	h.runtimeMu.RUnlock()
+	return client
+}
+
+func (h *Handler) buildClient() *CLIClient {
+	if h == nil {
+		return nil
+	}
+	h.runtimeMu.RLock()
+	client := h.cliClient
+	h.runtimeMu.RUnlock()
+	return client
+}
+
 func (h *Handler) SetAuditLogger(logger audit.Logger) {
 	if h != nil && logger != nil {
 		h.auditLogger = logger
@@ -145,10 +195,7 @@ func (h *Handler) SetConnTracker(tracker loadbalancer.ConnTracker) {
 }
 
 func (h *Handler) currentClient() *Client {
-	if h == nil {
-		return nil
-	}
-	return h.client
+	return h.webClient()
 }
 
 func (h *Handler) isModelValidationCached(modelID string) bool {

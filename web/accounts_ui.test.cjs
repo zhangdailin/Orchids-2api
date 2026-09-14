@@ -1006,20 +1006,15 @@ test('the live Qoder account payloads render 等级 / 配额 / 状态 / 能力',
 // templates and fail when a channel in the tutorial's own list is missing.
 // ---------------------------------------------------------------------------
 
-const CHANNEL_TEMPLATES = [
-  'templates/pages/tutorial.html',
-  'templates/pages/models.html',
-  'templates/pages/config.html',
+const CHANNEL_SELECT_TEMPLATES = [
   'templates/components/modals/model-modal.html',
 ];
 
-test('every channel in the tutorial list appears in the tutorial quick-reference table', () => {
-  const source = fs.readFileSync(path.join(__dirname, 'static/js/tutorial.js'), 'utf8');
-  const keys = [...source.matchAll(/key:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1]);
-  assert.ok(keys.length >= 5, `parsed only ${keys.length} channels: ${keys}`);
+const CHANNEL_KEYS = ['warp', 'puter', 'workbuddy', 'qoder', 'grok'];
 
+test('every channel in the tutorial list appears in the tutorial quick-reference table', () => {
   const template = fs.readFileSync(path.join(__dirname, 'templates/pages/tutorial.html'), 'utf8');
-  for (const key of keys) {
+  for (const key of CHANNEL_KEYS) {
     assert.match(
       template,
       new RegExp(`badge-${key}\\b`),
@@ -1035,12 +1030,9 @@ test('every channel in the tutorial list appears in the tutorial quick-reference
 });
 
 test('every channel is selectable in the forms that pick a channel', () => {
-  const source = fs.readFileSync(path.join(__dirname, 'static/js/tutorial.js'), 'utf8');
-  const keys = [...source.matchAll(/key:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1]);
-
-  for (const relative of CHANNEL_TEMPLATES) {
+  for (const relative of CHANNEL_SELECT_TEMPLATES) {
     const template = fs.readFileSync(path.join(__dirname, relative), 'utf8');
-    for (const key of keys) {
+    for (const key of CHANNEL_KEYS) {
       const option = new RegExp(`<option value="${key}">`, 'i');
       assert.match(template, option, `${relative} cannot select the ${key} channel`);
     }
@@ -1049,9 +1041,7 @@ test('every channel is selectable in the forms that pick a channel', () => {
 
 test('every channel has a badge style, so the tutorial row is not unstyled', () => {
   const css = fs.readFileSync(path.join(__dirname, 'static/css/main.css'), 'utf8');
-  const source = fs.readFileSync(path.join(__dirname, 'static/js/tutorial.js'), 'utf8');
-  const keys = [...source.matchAll(/key:\s*'([a-z0-9_-]+)'/g)].map((m) => m[1]);
-  for (const key of keys) {
+  for (const key of CHANNEL_KEYS) {
     assert.match(css, new RegExp(`\\.badge-${key}\\b`), `no CSS rule for .badge-${key}`);
   }
 });

@@ -311,8 +311,8 @@ func probeOnce(ctx context.Context, s *store.Store, cfg *config.Config, logger a
 
 // startProbeLoop issues periodic probes and records their outcome in the journal
 // as a system event.
-func startProbeLoop(ctx context.Context, s *store.Store, cfg *config.Config, logger audit.Logger, port string) {
-	if s == nil || cfg == nil || strings.TrimSpace(port) == "" {
+func startProbeLoop(ctx context.Context, s *store.Store, configSnapshot func() *config.Config, logger audit.Logger, port string) {
+	if s == nil || configSnapshot == nil || strings.TrimSpace(port) == "" {
 		return
 	}
 	base := "http://127.0.0.1:" + strings.TrimSpace(port)
@@ -330,7 +330,7 @@ func startProbeLoop(ctx context.Context, s *store.Store, cfg *config.Config, log
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			probeOnce(ctx, s, cfg, logger, base, client)
+			probeOnce(ctx, s, configSnapshot(), logger, base, client)
 		}
 		ticker := time.NewTicker(probeEvery)
 		defer ticker.Stop()
@@ -339,7 +339,7 @@ func startProbeLoop(ctx context.Context, s *store.Store, cfg *config.Config, log
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				probeOnce(ctx, s, cfg, logger, base, client)
+				probeOnce(ctx, s, configSnapshot(), logger, base, client)
 			}
 		}
 	}()

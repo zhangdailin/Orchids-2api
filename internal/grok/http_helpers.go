@@ -88,7 +88,7 @@ func requireGrokStore(w http.ResponseWriter, h *Handler) bool {
 // requireGrokClient writes the standard 503 response and returns false when
 // the handler has no grok client.
 func requireGrokClient(w http.ResponseWriter, h *Handler) bool {
-	if h == nil || h.client == nil {
+	if h == nil || h.webClient() == nil {
 		http.Error(w, "grok client not configured", http.StatusServiceUnavailable)
 		return false
 	}

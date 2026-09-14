@@ -1,9 +1,9 @@
 <!-- Account Modal -->
-<div class="modal" id="accountModal">
+<div class="modal" id="accountModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="modal-content">
     <div class="modal-header">
       <h3 class="modal-title" id="modalTitle">添加账号</h3>
-      <button class="modal-close" onclick="closeModal()">&times;</button>
+      <button class="modal-close" type="button" onclick="closeModal()" aria-label="关闭账号窗口">&times;</button>
     </div>
     <form id="accountForm" onsubmit="saveAccount(event)">
       <input type="hidden" id="accountId" />
@@ -87,7 +87,7 @@
         </label>
       </div>
       <div class="account-import-status" id="accountImportStatus" hidden></div>
-      <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 16px">
+      <button type="submit" class="btn btn-primary modal-submit">
         保存
       </button>
     </form>

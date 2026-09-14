@@ -1523,6 +1523,12 @@ td.num,
   border-top: 1px solid var(--border-color);
 }
 
+.modal-submit { width: 100%; margin-top: var(--space-4); }
+.modal-field-note { margin-top: var(--space-2); line-height: 1.5; }
+.modal-intro { margin-bottom: var(--space-4); color: var(--text-secondary); }
+.modal-confirm-text { margin-bottom: var(--space-5); }
+.textarea-resizable { resize: vertical; }
+
 /* Drawer: the log centre's detail panel and the models editor. */
 .drawer {
   position: fixed;

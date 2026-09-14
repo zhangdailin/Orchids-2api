@@ -52,12 +52,12 @@ func (h *Handler) runVideoSegment(
 	logger *debug.Logger,
 	onProgress func(int),
 ) (videoSegmentResult, error) {
-	if h == nil || h.client == nil {
+	if h == nil || h.webClient() == nil {
 		return videoSegmentResult{}, fmt.Errorf("grok client not configured")
 	}
 	if logger != nil {
 		if !logger.Capturing() {
-			logger.LogUpstreamRequest(h.client.baseURL()+defaultChatPath, debugHeaderMap(h.client.headers(sess.token)), payload)
+			logger.LogUpstreamRequest(h.webClient().baseURL()+defaultChatPath, debugHeaderMap(h.webClient().headers(sess.token)), payload)
 		}
 	}
 	resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, &payload, rebuild)

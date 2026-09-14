@@ -30,8 +30,8 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run tests
-        run: go test ./... -cover -count=1 -p 1
+      - name: Run tests with race detector
+        run: go test -race ./... -cover -count=1 -p 1
 
       - name: Setup Node
         uses: actions/setup-node@v4

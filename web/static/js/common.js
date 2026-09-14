@@ -221,9 +221,10 @@ function setSidebarOpen(open) {
   const overlay = document.querySelector(".sidebar-overlay");
   const menuBtn = document.querySelector(".mobile-menu-btn");
   const shouldOpen = Boolean(open);
+  const isMobile = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 900px)").matches;
   if (sidebar) {
     sidebar.classList.toggle("mobile-open", shouldOpen);
-    sidebar.setAttribute("aria-hidden", shouldOpen ? "false" : "true");
+    sidebar.setAttribute("aria-hidden", isMobile && !shouldOpen ? "true" : "false");
   }
   if (overlay) {
     overlay.classList.toggle("active", shouldOpen);
@@ -362,6 +363,16 @@ document.addEventListener("DOMContentLoaded", () => {
   setSidebarOpen(false);
   refreshSidebarAccountStats();
   syncToggleStates();
+
+  document.querySelector("[data-sidebar-toggle]")?.addEventListener("click", () => toggleSidebar());
+  document.querySelector("[data-sidebar-close]")?.addEventListener("click", () => setSidebarOpen(false));
+  document.querySelector("[data-logout]")?.addEventListener("click", logout);
+
+  const sidebarMedia = typeof window.matchMedia === "function" ? window.matchMedia("(max-width: 900px)") : null;
+  const resetSidebar = () => setSidebarOpen(false);
+  if (sidebarMedia?.addEventListener) sidebarMedia.addEventListener("change", resetSidebar);
+  else if (sidebarMedia?.addListener) sidebarMedia.addListener(resetSidebar);
+
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       setSidebarOpen(false);

@@ -203,7 +203,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	spec, resolved := h.resolveConversationModel(r.Context(), req.Model)
-	if resolved && modelRoutedToCLI(spec, h.cfg) {
+	if resolved && modelRoutedToCLI(spec, h.configSnapshot()) {
 		h.handleNativeCLIResponses(w, r, req.Model, spec, nativePayload)
 		return
 	}

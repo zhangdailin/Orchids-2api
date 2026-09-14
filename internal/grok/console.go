@@ -17,8 +17,8 @@ import (
 
 func (h *Handler) consoleURL(path string) string {
 	base := "https://console.x.ai/v1"
-	if h != nil && h.cfg != nil {
-		base = h.cfg.GrokConsoleBaseURLOrDefault()
+	if h != nil && h.configSnapshot() != nil {
+		base = h.configSnapshot().GrokConsoleBaseURLOrDefault()
 	}
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
 }
@@ -128,7 +128,7 @@ func (h *Handler) doConsole(ctx context.Context, token string, payload map[strin
 	if err != nil {
 		return nil, err
 	}
-	return h.client.doConsoleDPoPRequest(ctx, token, http.MethodPost, h.consoleURL("responses"), body)
+	return h.webClient().doConsoleDPoPRequest(ctx, token, http.MethodPost, h.consoleURL("responses"), body)
 }
 
 func requiresConsoleResponses(spec ModelSpec) bool {
@@ -394,7 +394,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 }
 
 func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger, build bool) {
-	if h == nil || sess == nil || sess.acc == nil || (build && h.cliClient == nil) || (!build && h.client == nil) {
+	if h == nil || sess == nil || sess.acc == nil || (build && h.buildClient() == nil) || (!build && h.webClient() == nil) {
 		http.Error(w, "grok upstream client or account not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -423,7 +423,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 	request := func() (*http.Response, error) {
 		if build {
 			attemptStarted := time.Now()
-			resp, requestErr := h.cliClient.doResponsesAt(ctx, sess.acc, "/responses", payload)
+			resp, requestErr := h.buildClient().doResponsesAt(ctx, sess.acc, "/responses", payload)
 			if requestErr == nil || !req.ReasoningReplay || !isReasoningReplayDecodeError(requestErr) || preservesClientCompaction(payload, requestErr) {
 				return resp, requestErr
 			}
@@ -435,7 +435,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 				recoveryAttempt++
 				lastRecoveryStage = stage
 				started := time.Now()
-				response, failure := h.cliClient.doResponsesAt(ctx, sess.acc, "/responses", payload)
+				response, failure := h.buildClient().doResponsesAt(ctx, sess.acc, "/responses", payload)
 				h.auditAttempt(ctx, sess.acc, ProviderBuild, recoveryAttempt, started, failure, stage)
 				return response, failure
 			})
@@ -457,7 +457,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		if build {
 			return h.cliHeaders(sess.acc, sess.token)
 		}
-		return h.client.consoleHeaders(sess.token)
+		return h.webClient().consoleHeaders(sess.token)
 	}, payload, resp, err)
 }
 
@@ -468,8 +468,8 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 // payload for the new account).
 func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountSession, switchPace time.Duration, doRequest func() (*http.Response, error), openNext func(used []int64) (*chatAccountSession, error), onSwitch func() error) (*http.Response, error) {
 	maxAttempts := 5
-	if h != nil && h.cfg != nil && h.cfg.AccountSwitchCount > 0 {
-		maxAttempts = min(h.cfg.AccountSwitchCount, 20)
+	if h != nil && h.configSnapshot() != nil && h.configSnapshot().AccountSwitchCount > 0 {
+		maxAttempts = min(h.configSnapshot().AccountSwitchCount, 20)
 	}
 
 	used := make([]int64, 0)

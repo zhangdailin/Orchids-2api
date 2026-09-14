@@ -145,6 +145,11 @@ func main() {
 	h := handler.NewWithLoadBalancer(cfg, lb)
 	defer h.Close()
 	grokHandler := grok.NewHandler(cfg, lb)
+	apiHandler.SetConfigChangeHook(func(next *config.Config) {
+		configureRuntimeLogging(next)
+		h.SetConfig(next)
+		grokHandler.SetConfig(next)
+	})
 	if accountTracker != nil {
 		grokHandler.SetConnTracker(accountTracker)
 	}
@@ -285,13 +290,13 @@ func main() {
 	ctx, cancelBackground := context.WithCancel(context.Background())
 	defer cancelBackground()
 
-	startTokenRefreshLoop(ctx, cfg, s, lb)
+	startTokenRefreshLoop(ctx, apiHandler.ConfigSnapshot, s, lb)
 	// Alert evaluation runs beside the refresh loop: it reads the same metric
 	// buckets the overview shows, so an alert and the page never disagree.
 	startAlertLoop(ctx, wiredOps, s, alertEngine, wiredAuditLogger)
 	// Probes answer "can this channel serve right now?" when there is no real
 	// traffic; their outcomes are counted apart from user requests.
-	startProbeLoop(ctx, s, cfg, wiredAuditLogger, cfg.Port)
+	startProbeLoop(ctx, s, apiHandler.ConfigSnapshot, wiredAuditLogger, cfg.Port)
 	logWorkBuddyReachability(cfg)
 	logQoderReachability(cfg)
 

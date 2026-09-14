@@ -311,3 +311,11 @@ test('Grok responses payload only sends sampling where the backend accepts it', 
   assert.equal(buildResult.temperature, undefined);
   assert.equal(buildResult.top_p, undefined);
 });
+
+test('JSZip is loaded only when the image batch download is used', () => {
+  const template = fs.readFileSync(path.join(__dirname, 'templates/pages/grok-tools.html'), 'utf8');
+  const imagine = fs.readFileSync(path.join(__dirname, 'static/js/grok-imagine.js'), 'utf8');
+  assert.doesNotMatch(template, /<script[^>]+jszip/i, 'JSZip must not block the initial page load');
+  assert.match(imagine, /function loadJSZip\(\)/, 'the image downloader has no lazy JSZip loader');
+  assert.match(imagine, /await loadJSZip\(\)/, 'batch download does not await the lazy JSZip loader');
+});

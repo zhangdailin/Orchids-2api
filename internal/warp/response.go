@@ -904,7 +904,7 @@ func parseStreamFinished(event *warpapi.ResponseEvent_StreamFinished) *finishInf
 	return finish
 }
 
-func summarizeRequestCharges(charges *warpapi.ResponseEvent_StreamFinished_RequestCharges) (input, output, cacheRead, cacheWrite, searches int, providerCents, platformCents float64) {
+func summarizeRequestCharges(charges *warpapi.RequestCharges) (input, output, cacheRead, cacheWrite, searches int, providerCents, platformCents float64) {
 	if charges == nil {
 		return
 	}
@@ -913,7 +913,7 @@ func summarizeRequestCharges(charges *warpapi.ResponseEvent_StreamFinished_Reque
 			continue
 		}
 		platformCents += float64(charged.GetPlatformUsageInCents())
-		usageSets := []map[string]*warpapi.ResponseEvent_StreamFinished_InferenceUsage{
+		usageSets := []map[string]*warpapi.InferenceUsage{
 			charged.GetDirectApiInferenceUsage(),
 			charged.GetByokInferenceUsage(),
 			charged.GetCustomEndpointInferenceUsage(),
