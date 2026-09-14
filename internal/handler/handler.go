@@ -68,6 +68,7 @@ type ClaudeRequest struct {
 	ParallelToolCalls *bool                  `json:"parallel_tool_calls,omitempty"`
 	Stream            bool                   `json:"stream"`
 	ConversationID    string                 `json:"conversation_id"`
+	ConversationIDAlt string                 `json:"conversationId"`
 	Metadata          map[string]interface{} `json:"metadata"`
 }
 
@@ -142,6 +143,15 @@ func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Han
 	})
 
 	return h
+}
+
+// SetConnTracker makes selection and reservation use the deployment-wide
+// tracker. In Redis mode this keeps per-account WorkBuddy limits correct across
+// every handler instance instead of maintaining a disconnected local count.
+func (h *Handler) SetConnTracker(tracker loadbalancer.ConnTracker) {
+	if h != nil && tracker != nil {
+		h.connTracker = tracker
+	}
 }
 
 // SetConfig atomically changes the immutable config snapshot used by future
@@ -576,14 +586,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	failedAccountIDs := []int64{}
 	failedAccountSet := make(map[int64]struct{})
 
-	apiClient, currentAccount, releaseClient, err := h.acquireAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
+	apiClient, currentAccount, releaseClient, trackedAccountID, err := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 		ModelID:               upstreamWarpModelID(req.Model),
 		RequireWarpCloudAgent: requireWarpCloudAgent,
 		PreferredAccountID:    warpContinuationState.accountID,
 	})
 	// The client is held for the whole request: a credential change during it
 	// retires the client and closes it here, after the request finished.
-	defer releaseClient()
+	defer func() { releaseClient() }()
+	defer func() { h.releaseTrackedAccount(trackedAccountID) }()
 	if err != nil {
 		slog.Error("selectAccount failed", "error", err, "channel", targetChannel)
 		logger.LogEarlyExit("select_account_failed", map[string]interface{}{
@@ -647,12 +658,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("Checkpoint: message processing done")
 	}
 
-	// 手动管理连接计数，账号切换时需要释放旧账号、获取新账号
-	trackedAccountID := int64(0)
-	trackedAccountID = h.acquireTrackedAccount(currentAccount)
-	defer func() {
-		h.releaseTrackedAccount(trackedAccountID)
-	}()
+	// The account slot was atomically reserved with selection. Keeping the
+	// reservation from this point through the complete SSE prevents concurrent
+	// requests from racing past a per-account limit before either increments it.
 
 	// 构建 prompt（V2 Markdown 格式）
 	startBuild := time.Now()
@@ -947,6 +955,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			ToolChoice:           req.ToolChoice,
 			ParallelToolCalls:    req.ParallelToolCalls,
 			NoTools:              gateNoTools,
+			RequestID:            workBuddyConversationRequestID(r),
+			ConversationID:       explicitConversationID(r, req),
+			TraceID:              middleware.GetTraceID(r.Context()),
 			ChatSessionID:        chatSessionID,
 			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
 			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
@@ -1036,7 +1047,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			verdict := accountpolicy.Classify(currentAccount, err, req.Model)
 			// 标记账号状态（auth 类错误始终标记，无论是否可重试）
 			if currentAccount != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-				if verdict.Status != "" {
+				if verdict.Scope == accountpolicy.ScopeModel && verdict.Model != "" && verdict.Cooldown > 0 {
+					// WorkBuddy code 6004 is a model-frequency limit. Persist only
+					// that model's cooldown; applying an empty account status here
+					// would either be skipped or accidentally clear unrelated state.
+					store.RecordModelCooldown(currentAccount, verdict.Model, time.Now().Add(verdict.Cooldown))
+					if persistErr := h.loadBalancer.Store.UpdateAccount(r.Context(), currentAccount); persistErr != nil {
+						slog.Warn("persist model cooldown failed", "account_id", currentAccount.ID, "model", verdict.Model, "error", persistErr)
+					}
+				} else if verdict.Status != "" {
 					skipAccountStatusMark := isWarpRequest && verdict.Status == "403" && warpCloudAgentForbidden
 					if skipAccountStatusMark {
 						if verboseDiagnostics {
@@ -1052,14 +1071,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 							// Apply keeps the status and its operator-facing reason
 							// together, so the account table can explain the cooldown.
 							verdict.Apply(currentAccount)
-							// A model-scoped failure is recorded per model: the
-							// account's other models stay in the pool. Persisting it
-							// here means the cooldown survives a restart and is
-							// honoured by every provider's selector, not only by the
-							// client that happened to notice the 429.
-							if verdict.Scope == accountpolicy.ScopeModel && verdict.Model != "" && verdict.Cooldown > 0 {
-								store.RecordModelCooldown(currentAccount, verdict.Model, time.Now().Add(verdict.Cooldown))
-							}
 							h.loadBalancer.MarkAccountStatus(r.Context(), currentAccount, verdict.Status)
 						}
 					}
@@ -1124,19 +1135,19 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					trackedAccountID = 0
 				}
 
-				nextClient, nextAccount, releaseNext, retryErr := h.acquireAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
+				nextClient, nextAccount, releaseNext, nextTrackedAccountID, retryErr := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 					ModelID:               upstreamReq.Model,
 					RequireWarpCloudAgent: requireWarpCloudAgent,
 					PreferredAccountID:    warpContinuationState.accountID,
 				})
-				// A later attempt may replace this client; the deferred release of the
-				// original stays valid because each acquire is independently counted.
-				_ = releaseNext
 				if retryErr == nil {
+					previousRelease := releaseClient
 					apiClient = nextClient
 					currentAccount = nextAccount
+					releaseClient = releaseNext
+					trackedAccountID = nextTrackedAccountID
+					previousRelease()
 					if currentAccount != nil {
-						trackedAccountID = h.acquireTrackedAccount(currentAccount)
 						warpFeatureConfig = h.resolveWarpFeatureConfig(r.Context(), currentAccount, upstreamReq.Model)
 						upstreamReq.WarpCliAgentModel = warpFeatureConfig.CliAgentModel
 						upstreamReq.WarpComputerUseModel = warpFeatureConfig.ComputerUseAgentModel
@@ -1153,9 +1164,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					}
 				} else {
 					if shouldRetryCurrentAccountWhenNoAlternative(errClass.Category) && prevAccount != nil {
+						reacquiredID, acquired := h.tryAcquireTrackedAccount(prevAccount)
+						if !acquired {
+							slog.Error("No account concurrency slot available for retry", "account_id", prevAccount.ID, "category", errClass.Category)
+							sh.InjectNoAvailableAccountError(errStr, retryErr)
+							sh.finishResponse("end_turn")
+							return
+						}
 						apiClient = prevClient
 						currentAccount = prevAccount
-						trackedAccountID = h.acquireTrackedAccount(currentAccount)
+						trackedAccountID = reacquiredID
 						warpFeatureConfig = h.resolveWarpFeatureConfig(r.Context(), currentAccount, upstreamReq.Model)
 						upstreamReq.WarpCliAgentModel = warpFeatureConfig.CliAgentModel
 						upstreamReq.WarpComputerUseModel = warpFeatureConfig.ComputerUseAgentModel

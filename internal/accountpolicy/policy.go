@@ -238,7 +238,8 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 // isModelScopedFailure reports whether the message blames a model rather than
 // the credential or the account's quota.
 func isModelScopedFailure(lower string) bool {
-	return strings.Contains(lower, "model is not found") ||
+	return strings.Contains(lower, "code=6004") ||
+		strings.Contains(lower, "model is not found") ||
 		strings.Contains(lower, "model not found") ||
 		strings.Contains(lower, "no_implementation_available") ||
 		strings.Contains(lower, "context_window_exceeded") ||

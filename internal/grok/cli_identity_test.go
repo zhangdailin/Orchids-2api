@@ -42,3 +42,14 @@ func TestApplyCLIOAuthIdentity(t *testing.T) {
 		t.Fatalf("account=%+v", acc)
 	}
 }
+
+func TestApplyCLIOAuthIdentityTokenUsesIDTokenEmailForGenericLogin(t *testing.T) {
+	acc := &store.Account{Name: "grok-device-login", OAuthAccessToken: jwtWithClaims(t, `{"sub":"user-1","team_id":"team-1"}`)}
+	ApplyCLIOAuthIdentity(acc)
+	if !ApplyCLIOAuthIdentityToken(acc, jwtWithClaims(t, `{"email":"oauth@example.com","preferred_username":"ignored@example.com"}`)) {
+		t.Fatal("expected id_token identity fields to be applied")
+	}
+	if acc.Email != "oauth@example.com" || acc.Name != "oauth@example.com" || acc.UserID != "user-1" {
+		t.Fatalf("account=%+v", acc)
+	}
+}

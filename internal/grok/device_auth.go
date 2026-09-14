@@ -112,15 +112,16 @@ func (a *DeviceAuthenticator) Start(ctx context.Context) (*DeviceAuthorization, 
 	return &value, nil
 }
 
-// Exchange polls the official xAI token endpoint and returns only credentials
-// that the account store needs. id_token is deliberately ignored.
-func (a *DeviceAuthenticator) Exchange(ctx context.Context, deviceCode string) (accessToken, refreshToken string, expiresAt time.Time, err error) {
+// Exchange polls the official xAI token endpoint. identityToken is returned to
+// the caller only long enough to extract non-secret claims such as email; it is
+// never stored as account credential material.
+func (a *DeviceAuthenticator) Exchange(ctx context.Context, deviceCode string) (accessToken, refreshToken, identityToken string, expiresAt time.Time, err error) {
 	if a == nil || a.httpClient == nil {
-		return "", "", time.Time{}, fmt.Errorf("grok device authenticator is not configured")
+		return "", "", "", time.Time{}, fmt.Errorf("grok device authenticator is not configured")
 	}
 	deviceCode = strings.TrimSpace(deviceCode)
 	if deviceCode == "" {
-		return "", "", time.Time{}, fmt.Errorf("missing grok device code")
+		return "", "", "", time.Time{}, fmt.Errorf("missing grok device code")
 	}
 	form := url.Values{
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
@@ -130,20 +131,21 @@ func (a *DeviceAuthenticator) Exchange(ctx context.Context, deviceCode string) (
 	var value struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
 		ExpiresIn    int    `json:"expires_in"`
 	}
 	if err := a.postForm(ctx, a.tokenURL, form, &value); err != nil {
-		return "", "", time.Time{}, err
+		return "", "", "", time.Time{}, err
 	}
 	accessToken = strings.TrimSpace(value.AccessToken)
 	refreshToken = strings.TrimSpace(value.RefreshToken)
 	if accessToken == "" || refreshToken == "" {
-		return "", "", time.Time{}, fmt.Errorf("grok device token response is incomplete")
+		return "", "", "", time.Time{}, fmt.Errorf("grok device token response is incomplete")
 	}
 	if value.ExpiresIn < 1 {
 		value.ExpiresIn = 3600
 	}
-	return accessToken, refreshToken, time.Now().UTC().Add(time.Duration(value.ExpiresIn) * time.Second), nil
+	return accessToken, refreshToken, strings.TrimSpace(value.IDToken), time.Now().UTC().Add(time.Duration(value.ExpiresIn) * time.Second), nil
 }
 
 func (a *DeviceAuthenticator) clientID() string {

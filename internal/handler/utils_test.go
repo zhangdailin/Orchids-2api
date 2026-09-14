@@ -1,11 +1,15 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/goccy/go-json"
+
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/prompt"
 )
 
@@ -92,6 +96,39 @@ func TestConversationKeyForRequestPriority(t *testing.T) {
 				t.Fatalf("conversationKeyForRequest() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExplicitConversationID_AcceptsCamelCaseJSON(t *testing.T) {
+	t.Parallel()
+
+	var payload ClaudeRequest
+	if err := json.Unmarshal([]byte(`{"conversationId":"conv-camel"}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/workbuddy/v1/messages", nil)
+	if got := explicitConversationID(req, payload); got != "conv-camel" {
+		t.Fatalf("explicitConversationID() = %q, want conv-camel", got)
+	}
+}
+
+func TestWorkBuddyConversationRequestID_PrefersInboundAggregationHeader(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/workbuddy/v1/messages", nil)
+	req.Header.Set("X-Conversation-Request-ID", "client-req-1")
+	if got := workBuddyConversationRequestID(req); got != "client-req-1" {
+		t.Fatalf("workBuddyConversationRequestID() = %q, want client-req-1", got)
+	}
+
+	// A request without that header falls back to the trace middleware's stable
+	// request identity. Run the middleware because its context key is private.
+	var got string
+	middleware.TraceMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		got = workBuddyConversationRequestID(r)
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.com", nil))
+	if len(got) != 32 {
+		t.Fatalf("generated aggregation id = %q, want 32 hex", got)
 	}
 }
 

@@ -151,6 +151,7 @@ func main() {
 		grokHandler.SetConfig(next)
 	})
 	if accountTracker != nil {
+		h.SetConnTracker(accountTracker)
 		grokHandler.SetConnTracker(accountTracker)
 	}
 

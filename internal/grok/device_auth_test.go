@@ -33,7 +33,7 @@ func TestDeviceAuthenticatorStartAndExchange(t *testing.T) {
 			if r.Form.Get("device_code") != "device-secret" || r.Form.Get("grant_type") != "urn:ietf:params:oauth:grant-type:device_code" {
 				t.Fatalf("unexpected token form: %s", r.Form.Encode())
 			}
-			_, _ = io.WriteString(w, `{"access_token":"access-secret","refresh_token":"refresh-secret","id_token":"never-store-me","expires_in":3600}`)
+			_, _ = io.WriteString(w, `{"access_token":"access-secret","refresh_token":"refresh-secret","id_token":"header.eyJzdWIiOiJ1c2VyLTEiLCJlbWFpbCI6Im9hdXRoQGV4YW1wbGUuY29tIn0.signature","expires_in":3600}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -49,12 +49,15 @@ func TestDeviceAuthenticatorStartAndExchange(t *testing.T) {
 	if details.DeviceCode != "device-secret" || details.UserCode != "ABCD-EFGH" || details.Interval != 3 {
 		t.Fatalf("details=%+v", details)
 	}
-	access, refresh, expiresAt, err := authenticator.Exchange(context.Background(), details.DeviceCode)
+	access, refresh, identity, expiresAt, err := authenticator.Exchange(context.Background(), details.DeviceCode)
 	if err != nil {
 		t.Fatalf("Exchange() error = %v", err)
 	}
 	if access != "access-secret" || refresh != "refresh-secret" || time.Until(expiresAt) < 59*time.Minute {
 		t.Fatalf("unexpected exchange result access=%q refresh=%q expires=%s", access, refresh, expiresAt)
+	}
+	if identity == "" || strings.Contains(access, identity) || strings.Contains(refresh, identity) {
+		t.Fatalf("identity token was not returned independently: %q", identity)
 	}
 }
 
@@ -66,7 +69,7 @@ func TestDeviceAuthenticatorPendingAndSanitizedError(t *testing.T) {
 	defer server.Close()
 	authenticator := NewDeviceAuthenticator(&config.Config{GrokCLIOAuthTokenURL: server.URL})
 	authenticator.httpClient = server.Client()
-	_, _, _, err := authenticator.Exchange(context.Background(), "device-secret")
+	_, _, _, _, err := authenticator.Exchange(context.Background(), "device-secret")
 	if slowDown, pending := IsDeviceAuthorizationPending(err); !pending || slowDown {
 		t.Fatalf("error=%v pending=%t slowDown=%t", err, pending, slowDown)
 	}

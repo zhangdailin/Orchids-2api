@@ -2,11 +2,12 @@ package workbuddy
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -327,19 +328,83 @@ func applyHeaders(req *http.Request, accessToken, uid, accept string) {
 	req.Header.Set("Referer", originReferer+"/")
 	req.Header.Set("User-Agent", clientUA)
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("X-CodeBuddy-Request", "1")
+	req.Header.Set("Accept-Language", "en-US")
 	if accessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 	} else {
 		req.Header.Set("X-No-Authorization", "1")
 	}
 	if uid != "" {
-		req.Header.Set("X-User-Id", url.QueryEscape(uid))
+		req.Header.Set("X-User-Id", uid)
 	} else {
 		req.Header.Set("X-No-User-Id", "1")
 	}
 	req.Header.Set("X-No-Enterprise-Id", "1")
 	req.Header.Set("X-No-Department-Info", "1")
 	req.Header.Set("X-Product", "SaaS")
+}
+
+// applyChatHeaders matches the current WorkBuddy desktop chat fingerprint.
+// The attribution and request-family headers are not decoration: the upstream
+// uses them to group one user turn and to apply client-specific rate policy.
+func applyChatHeaders(req *http.Request, accessToken, uid, conversationID, requestID, traceID string) {
+	applyHeaders(req, accessToken, uid, "application/json, text/event-stream")
+	req.Header.Del("X-No-Department-Info")
+	req.Header.Set("X-Domain", "www.workbuddy.ai")
+	req.Header.Set("X-Agent-Purpose", "conversation")
+	req.Header.Set("X-IDE-Name", "WorkBuddy")
+	req.Header.Set("X-IDE-Type", "WorkBuddy")
+	req.Header.Set("X-IDE-Version", clientVersion)
+	req.Header.Set("X-Product", "WorkBuddy")
+
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID != "" {
+		req.Header.Set("X-Conversation-ID", conversationID)
+	}
+	conversationRequestID := strings.TrimSpace(requestID)
+	if conversationRequestID == "" {
+		conversationRequestID = newWorkBuddyMessageID()
+	}
+	messageID := newWorkBuddyMessageID()
+	req.Header.Set("X-Conversation-Request-ID", conversationRequestID)
+	req.Header.Set("X-Conversation-Message-ID", messageID)
+	req.Header.Set("X-Request-ID", messageID)
+	req.Header.Set("X-Root-Request-ID", conversationRequestID)
+	traceID = strings.TrimSpace(traceID)
+	if traceID == "" {
+		traceID = conversationRequestID
+	}
+	req.Header.Set("X-Trace-ID", traceID)
+	b3TraceID := validWorkBuddyTraceID(conversationRequestID)
+	if b3TraceID == "" {
+		b3TraceID = messageID
+	}
+	req.Header.Set("X-B3-TraceId", b3TraceID)
+	req.Header.Set("X-B3-SpanId", messageID[:16])
+	req.Header.Set("X-B3-Sampled", "1")
+}
+
+func newWorkBuddyMessageID() string {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err == nil {
+		return hex.EncodeToString(raw)
+	}
+	// The fallback remains a valid 32-hex B3 id. It is deliberately local to
+	// correlation and is never used as authentication material.
+	return fmt.Sprintf("%032x", time.Now().UnixNano())
+}
+
+func validWorkBuddyTraceID(value string) string {
+	if len(value) != 16 && len(value) != 32 {
+		return ""
+	}
+	for _, ch := range value {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+			return ""
+		}
+	}
+	return strings.ToLower(value)
 }
 
 // envelope mirrors the {code,msg,requestId,data} wrapper used by every /v2 and

@@ -907,6 +907,24 @@ test('the Qoder identity column leads with the signed-in address', () => {
   assert.doesNotMatch(token, /eyJhbGciOi/);
 });
 
+test('Grok identity shows the email together with the login method', () => {
+  const { context } = loadUI();
+  assert.equal(context.accountIdentityPrimary({
+    account_type: 'grok',
+    credential_type: 'oauth',
+    email: 'oauth@example.com',
+    name: 'grok-device-login',
+    has_credential: true,
+  }), 'oauth@example.com · OAuth');
+  assert.equal(context.accountIdentityPrimary({
+    account_type: 'grok',
+    credential_type: 'sso',
+    email: 'sso@example.com',
+    name: 'manual-sso',
+    has_credential: true,
+  }), 'sso@example.com · SSO');
+});
+
 test('the Qoder quota tooltip carries the plan, the reset and the upgrade link', () => {
   const source = fs.readFileSync(path.join(__dirname, 'static/js/accounts.js'), 'utf8');
   // The cell's provenance must be reachable without hovering the API.

@@ -1759,11 +1759,14 @@ function accountIdentityPrimary(acc) {
     if (label && label !== "-") return label;
   }
   const email = String(acc?.email || "").trim();
-  if (email) return email;
   const name = String(acc?.name || "").trim();
-  if (name) return name;
   const display = formatTokenDisplay(acc);
-  return display && display !== "-" ? display : "未命名账号";
+  const identity = email || name || (display && display !== "-" ? display : "未命名账号");
+  if (type === "grok") {
+    const mode = String(acc?.credential_type || "sso").trim().toLowerCase() === "oauth" ? "OAuth" : "SSO";
+    return `${identity} · ${mode}`;
+  }
+  return identity;
 }
 
 // buildQuotaMarkup renders the remaining allowance for every channel.

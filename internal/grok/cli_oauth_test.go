@@ -241,9 +241,10 @@ func TestCLIOAuthErrorStatus(t *testing.T) {
 }
 
 func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
+	idToken := jwtWithClaims(t, `{"sub":"stored-user","email":"stored@example.com","team_id":"stored-team"}`)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"access_token":"stored-access","refresh_token":"stored-refresh","expires_in":3600}`))
+		_, _ = w.Write([]byte(`{"access_token":"stored-access","refresh_token":"stored-refresh","id_token":"` + idToken + `","expires_in":3600}`))
 	}))
 	defer server.Close()
 
@@ -291,6 +292,12 @@ func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
 	}
 	if got.OAuthRefreshToken != "stored-refresh" {
 		t.Fatalf("stored refresh=%q", got.OAuthRefreshToken)
+	}
+	if got.Email != "stored@example.com" || got.Name != "stored@example.com" || got.UserID != "stored-user" || got.TeamID != "stored-team" {
+		t.Fatalf("stored OAuth identity=%+v", got)
+	}
+	if strings.Contains(got.OAuthAccessToken, idToken) || strings.Contains(got.OAuthRefreshToken, idToken) {
+		t.Fatal("id_token must not be persisted as a credential")
 	}
 }
 

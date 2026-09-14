@@ -46,8 +46,9 @@ func TestGrokDeviceLogin_AddingOAuthAccountDoesNotDisturbExistingAccounts(t *tes
 			})
 		case "/token":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"access_token":  grokOAuthJWT(t, "user-two", "two@example.com", "team-two"),
+				"access_token":  grokOAuthJWT(t, "user-two", "", "team-two"),
 				"refresh_token": "refresh-two",
+				"id_token":      grokOAuthJWT(t, "user-two", "two@example.com", "team-two"),
 				"expires_in":    3600,
 			})
 		default:
@@ -134,14 +135,17 @@ func TestGrokDeviceLogin_AddingOAuthAccountDoesNotDisturbExistingAccounts(t *tes
 	if err != nil {
 		t.Fatalf("ListAccounts() error = %v", err)
 	}
-	created := false
+	var created *store.Account
 	for _, acc := range accounts {
-		if acc.Name == "grok-device-login" {
-			created = true
+		if acc.UserID == "user-two" {
+			created = acc
 		}
 	}
-	if !created {
+	if created == nil {
 		t.Fatal("the new OAuth account was not created")
+	}
+	if created.Email != "two@example.com" || created.Name != "two@example.com" || created.CredentialType != "oauth" {
+		t.Fatalf("created OAuth identity = %+v", created)
 	}
 
 	// The pre-existing accounts must be untouched.
@@ -178,7 +182,7 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 		if r.URL.Path == "/token" {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"access_token":  grokOAuthJWT(t, "user-one", "one@example.com", "team-one"),
-				"refresh_token": "refresh-one",
+				"refresh_token": "refresh-new",
 				"expires_in":    3600,
 			})
 			return
@@ -191,12 +195,13 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 	ctx := context.Background()
 
 	existing := &store.Account{
-		Name:              "existing-oauth",
+		Name:              "grok-device-login",
 		AccountType:       "grok",
 		CredentialType:    "oauth",
 		GrokProvider:      "build",
+		UserID:            "user-one",
 		OAuthAccessToken:  grokOAuthJWT(t, "user-one", "one@example.com", "team-one"),
-		OAuthRefreshToken: "refresh-one",
+		OAuthRefreshToken: "refresh-old",
 		Enabled:           true,
 		Weight:            1,
 	}
@@ -253,5 +258,12 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 	}
 	if state.accountID != existing.ID {
 		t.Fatalf("login reported account %d, want the existing account %d", state.accountID, existing.ID)
+	}
+	updated, err := s.GetAccount(ctx, existing.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.OAuthRefreshToken != "refresh-new" || updated.Email != "one@example.com" || updated.Name != "one@example.com" {
+		t.Fatalf("existing OAuth row was not refreshed in place: %+v", updated)
 	}
 }

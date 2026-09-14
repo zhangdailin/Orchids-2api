@@ -26,6 +26,11 @@ func TestFindDuplicateAccountUsesStableProviderIdentityAfterTokenRotation(t *tes
 			existing: &store.Account{AccountType: "qoder", QoderUserID: "q-user", QoderRefreshToken: "old-refresh", Enabled: true},
 			login:    &store.Account{AccountType: "qoder", QoderUserID: "q-user", QoderRefreshToken: "new-refresh", Enabled: true},
 		},
+		{
+			name:     "grok oauth user id",
+			existing: &store.Account{AccountType: "grok", CredentialType: "oauth", UserID: "grok-user", OAuthRefreshToken: "old-refresh", Enabled: true},
+			login:    &store.Account{AccountType: "grok", CredentialType: "oauth", UserID: "grok-user", OAuthRefreshToken: "new-refresh", Enabled: true},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

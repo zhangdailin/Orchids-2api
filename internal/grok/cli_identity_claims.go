@@ -16,7 +16,18 @@ func ApplyCLIOAuthIdentity(acc *store.Account) bool {
 	if acc == nil {
 		return false
 	}
-	parts := strings.Split(strings.TrimSpace(acc.OAuthAccessToken), ".")
+	return ApplyCLIOAuthIdentityToken(acc, acc.OAuthAccessToken)
+}
+
+// ApplyCLIOAuthIdentityToken enriches an account from either an access_token or
+// id_token JWT. Device grants commonly put email only in id_token even though
+// the requested scope includes email. The token itself is never persisted by
+// this helper; only the non-secret identity claims are copied.
+func ApplyCLIOAuthIdentityToken(acc *store.Account, token string) bool {
+	if acc == nil {
+		return false
+	}
+	parts := strings.Split(strings.TrimSpace(token), ".")
 	if len(parts) != 3 || strings.TrimSpace(parts[1]) == "" {
 		return false
 	}
@@ -25,9 +36,10 @@ func ApplyCLIOAuthIdentity(acc *store.Account) bool {
 		return false
 	}
 	var claims struct {
-		Subject string `json:"sub"`
-		Email   string `json:"email"`
-		TeamID  string `json:"team_id"`
+		Subject           string `json:"sub"`
+		Email             string `json:"email"`
+		PreferredUsername string `json:"preferred_username"`
+		TeamID            string `json:"team_id"`
 	}
 	if json.Unmarshal(payload, &claims) != nil {
 		return false
@@ -37,8 +49,19 @@ func ApplyCLIOAuthIdentity(acc *store.Account) bool {
 		acc.UserID = value
 		changed = true
 	}
-	if value := strings.TrimSpace(claims.Email); value != "" && strings.TrimSpace(acc.Email) != value {
+	email := strings.TrimSpace(claims.Email)
+	if email == "" {
+		candidate := strings.TrimSpace(claims.PreferredUsername)
+		if strings.Contains(candidate, "@") {
+			email = candidate
+		}
+	}
+	if value := email; value != "" && strings.TrimSpace(acc.Email) != value {
 		acc.Email = value
+		changed = true
+	}
+	if email != "" && (strings.TrimSpace(acc.Name) == "" || strings.EqualFold(strings.TrimSpace(acc.Name), "grok-device-login")) {
+		acc.Name = email
 		changed = true
 	}
 	if value := strings.TrimSpace(claims.TeamID); value != "" && strings.TrimSpace(acc.TeamID) != value {

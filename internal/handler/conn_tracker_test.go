@@ -308,4 +308,52 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 	if localTracker.acquireCalls != 2 {
 		t.Fatalf("expected local tracker acquire twice across account switch, got %d", localTracker.acquireCalls)
 	}
+	if localTracker.releaseCalls != 2 {
+		t.Fatalf("expected both account leases released, got %d releases", localTracker.releaseCalls)
+	}
+	if got := localTracker.GetCount(acc1.ID); got != 0 {
+		t.Fatalf("failed account retained %d connection leases", got)
+	}
+	if got := localTracker.GetCount(acc2.ID); got != 1 {
+		t.Fatalf("successful account count = %d, want original pre-existing lease only", got)
+	}
+}
+
+func TestWorkBuddyDefaultConcurrencyLimitIsThree(t *testing.T) {
+	t.Parallel()
+
+	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "workbuddy"}); got != 3 {
+		t.Fatalf("default WorkBuddy limit = %d, want 3", got)
+	}
+	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "workbuddy", MaxConcurrent: 7}); got != 7 {
+		t.Fatalf("configured WorkBuddy limit = %d, want 7", got)
+	}
+	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "puter"}); got != 0 {
+		t.Fatalf("unconfigured Puter limit = %d, want unlimited", got)
+	}
+}
+
+func TestTryAcquireTrackedAccount_DoesNotAdmitFourthWorkBuddyRequest(t *testing.T) {
+	t.Parallel()
+
+	tracker := loadbalancer.NewMemoryConnTracker()
+	h := &Handler{connTracker: tracker}
+	acc := &store.Account{ID: 42, AccountType: "workbuddy"}
+	for i := 0; i < 3; i++ {
+		if _, ok := h.tryAcquireTrackedAccount(acc); !ok {
+			t.Fatalf("acquire %d unexpectedly rejected", i+1)
+		}
+	}
+	if _, ok := h.tryAcquireTrackedAccount(acc); ok {
+		t.Fatal("fourth WorkBuddy request was admitted")
+	}
+	if got := tracker.GetCount(acc.ID); got != 3 {
+		t.Fatalf("tracked count = %d, want 3", got)
+	}
+	for range 3 {
+		h.releaseTrackedAccount(acc.ID)
+	}
+	if got := tracker.GetCount(acc.ID); got != 0 {
+		t.Fatalf("tracked count after release = %d, want 0", got)
+	}
 }

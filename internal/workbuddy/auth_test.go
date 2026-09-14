@@ -408,6 +408,90 @@ func TestRunChat_SendsSystemFirstAndSurfacesBusinessError(t *testing.T) {
 	}
 }
 
+func TestApplyChatHeaders_MatchesDesktopFingerprintAndReusesTurnID(t *testing.T) {
+	t.Parallel()
+
+	const (
+		conversationID = "conv-camel"
+		turnID         = "client-req-1"
+		traceID        = "client-trace"
+	)
+	headers := make([]http.Header, 0, 2)
+	for range 2 {
+		req := httptest.NewRequest(http.MethodPost, DefaultBaseURL+"/v2/chat/completions", nil)
+		applyChatHeaders(req, "access", "uid-1", conversationID, turnID, traceID)
+		headers = append(headers, req.Header.Clone())
+	}
+
+	want := map[string]string{
+		"Accept":                    "application/json, text/event-stream",
+		"Accept-Language":           "en-US",
+		"Authorization":             "Bearer access",
+		"Origin":                    originReferer,
+		"Referer":                   originReferer + "/",
+		"User-Agent":                clientUA,
+		"X-Agent-Purpose":           "conversation",
+		"X-CodeBuddy-Request":       "1",
+		"X-Conversation-ID":         conversationID,
+		"X-Conversation-Request-ID": turnID,
+		"X-Domain":                  "www.workbuddy.ai",
+		"X-IDE-Name":                "WorkBuddy",
+		"X-IDE-Type":                "WorkBuddy",
+		"X-IDE-Version":             clientVersion,
+		"X-No-Enterprise-Id":        "1",
+		"X-Product":                 "WorkBuddy",
+		"X-Root-Request-ID":         turnID,
+		"X-Trace-ID":                traceID,
+		"X-User-Id":                 "uid-1",
+	}
+	for i, header := range headers {
+		for name, expected := range want {
+			if got := header.Get(name); got != expected {
+				t.Errorf("request %d %s = %q, want %q", i+1, name, got, expected)
+			}
+		}
+		messageID := header.Get("X-Conversation-Message-ID")
+		if len(messageID) != 32 || validWorkBuddyTraceID(messageID) == "" {
+			t.Errorf("request %d message id = %q, want 32 hex", i+1, messageID)
+		}
+		if got := header.Get("X-Request-ID"); got != messageID {
+			t.Errorf("request %d X-Request-ID = %q, want message id %q", i+1, got, messageID)
+		}
+		if got := header.Get("X-B3-TraceId"); len(got) != 32 || validWorkBuddyTraceID(got) == "" {
+			t.Errorf("request %d X-B3-TraceId = %q, want valid fallback", i+1, got)
+		}
+		if got := header.Get("X-B3-SpanId"); got != messageID[:16] {
+			t.Errorf("request %d X-B3-SpanId = %q, want %q", i+1, got, messageID[:16])
+		}
+		if got := header.Get("X-B3-Sampled"); got != "1" {
+			t.Errorf("request %d X-B3-Sampled = %q, want 1", i+1, got)
+		}
+	}
+	if first, second := headers[0].Get("X-Conversation-Message-ID"), headers[1].Get("X-Conversation-Message-ID"); first == second {
+		t.Fatalf("message id was reused across attempts: %q", first)
+	}
+}
+
+func TestBuildBody_IncludesUsageAndCamelCaseConversationID(t *testing.T) {
+	t.Parallel()
+
+	body, err := NewFromAccount(nil, nil).buildBody(upstream.UpstreamRequest{ConversationID: "conv-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded["conversationId"]; got != "conv-1" {
+		t.Fatalf("conversationId = %#v, want conv-1", got)
+	}
+	options, ok := decoded["stream_options"].(map[string]interface{})
+	if !ok || options["include_usage"] != true {
+		t.Fatalf("stream_options = %#v, want include_usage=true", decoded["stream_options"])
+	}
+}
+
 func TestApiError_CarriesStatusAndCode(t *testing.T) {
 	t.Parallel()
 

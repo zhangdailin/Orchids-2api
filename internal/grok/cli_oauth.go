@@ -118,7 +118,7 @@ func cliOAuthLockForAccount(acc *store.Account) *sync.Mutex {
 }
 
 func (o *CLIOAuth) refreshAndPersist(ctx context.Context, acc *store.Account, refreshToken string) (string, error) {
-	accessToken, newRefresh, expiresAt, err := o.refresh(ctx, refreshToken)
+	accessToken, newRefresh, identityToken, expiresAt, err := o.refresh(ctx, refreshToken)
 	if err != nil {
 		return "", err
 	}
@@ -128,6 +128,8 @@ func (o *CLIOAuth) refreshAndPersist(ctx context.Context, acc *store.Account, re
 	if newRefresh != "" && newRefresh != refreshToken {
 		acc.OAuthRefreshToken = newRefresh
 	}
+	ApplyCLIOAuthIdentity(acc)
+	ApplyCLIOAuthIdentityToken(acc, identityToken)
 	if o != nil && o.store != nil && acc.ID != 0 {
 		if updateErr := o.store.UpdateAccount(ctx, acc); updateErr != nil {
 			// Keep serving with the in-memory tokens, but log so operators can
@@ -139,7 +141,7 @@ func (o *CLIOAuth) refreshAndPersist(ctx context.Context, acc *store.Account, re
 }
 
 // refresh performs the OAuth refresh_token grant against auth.x.ai.
-func (o *CLIOAuth) refresh(ctx context.Context, refreshToken string) (accessToken, newRefresh string, expiresAt time.Time, err error) {
+func (o *CLIOAuth) refresh(ctx context.Context, refreshToken string) (accessToken, newRefresh, identityToken string, expiresAt time.Time, err error) {
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("client_id", o.clientID())
@@ -147,43 +149,44 @@ func (o *CLIOAuth) refresh(ctx context.Context, refreshToken string) (accessToke
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.tokenURL(), strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", "", time.Time{}, err
+		return "", "", "", time.Time{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := o.httpClient.Do(req)
 	if err != nil {
-		return "", "", time.Time{}, err
+		return "", "", "", time.Time{}, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, cliOAuthMaxBodyBytes))
 	if err != nil {
-		return "", "", time.Time{}, err
+		return "", "", "", time.Time{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		oauthErr := parseCLIOAuthErrorResponse(body, resp.StatusCode)
-		return "", "", time.Time{}, oauthErr
+		return "", "", "", time.Time{}, oauthErr
 	}
 
 	var value struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
+		IDToken      string `json:"id_token"`
 		ExpiresIn    int    `json:"expires_in"`
 	}
 	if err := json.Unmarshal(body, &value); err != nil {
-		return "", "", time.Time{}, fmt.Errorf("grok cli oauth refresh parse: %w", err)
+		return "", "", "", time.Time{}, fmt.Errorf("grok cli oauth refresh parse: %w", err)
 	}
 	if strings.TrimSpace(value.AccessToken) == "" {
-		return "", "", time.Time{}, &cliOAuthError{status: resp.StatusCode, message: "grok cli oauth response missing access_token"}
+		return "", "", "", time.Time{}, &cliOAuthError{status: resp.StatusCode, message: "grok cli oauth response missing access_token"}
 	}
 	expiresIn := value.ExpiresIn
 	if expiresIn <= 0 {
 		expiresIn = 3600
 	}
 	recordCLIOAuthRefresh()
-	return strings.TrimSpace(value.AccessToken), strings.TrimSpace(value.RefreshToken), time.Now().UTC().Add(time.Duration(expiresIn) * time.Second), nil
+	return strings.TrimSpace(value.AccessToken), strings.TrimSpace(value.RefreshToken), strings.TrimSpace(value.IDToken), time.Now().UTC().Add(time.Duration(expiresIn) * time.Second), nil
 }
 
 func (o *CLIOAuth) clientID() string {

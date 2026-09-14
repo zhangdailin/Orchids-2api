@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/util"
 )
@@ -169,6 +170,9 @@ func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {
 	if req.ConversationID != "" {
 		return req.ConversationID
 	}
+	if req.ConversationIDAlt != "" {
+		return req.ConversationIDAlt
+	}
 	if req.Metadata != nil {
 		if key := metadataString(req.Metadata, "conversation_id", "conversationId", "session_id", "sessionId", "thread_id", "threadId", "chat_id", "chatId"); key != "" {
 			return key
@@ -183,6 +187,38 @@ func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {
 		}
 	}
 	return ""
+}
+
+// explicitConversationID returns only a client-supplied conversation id. It is
+// intentionally narrower than conversationKeyForRequest: user/session fallback
+// keys are useful for local routing but must not be presented to WorkBuddy as a
+// real upstream conversation identifier.
+func explicitConversationID(r *http.Request, req ClaudeRequest) string {
+	if id := strings.TrimSpace(req.ConversationID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(req.ConversationIDAlt); id != "" {
+		return id
+	}
+	if req.Metadata != nil {
+		if id := metadataString(req.Metadata, "conversation_id", "conversationId"); id != "" {
+			return id
+		}
+	}
+	return headerValue(r, "X-Conversation-Id")
+}
+
+// workBuddyConversationRequestID is the turn-level aggregation key. Honour a
+// client that already supplies one; otherwise the middleware-generated request
+// ID is stable for every account switch and retry in this downstream request.
+func workBuddyConversationRequestID(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(r.Header.Get("X-Conversation-Request-ID")); id != "" {
+		return id
+	}
+	return middleware.GetRequestID(r.Context())
 }
 
 func metadataString(metadata map[string]interface{}, keys ...string) string {

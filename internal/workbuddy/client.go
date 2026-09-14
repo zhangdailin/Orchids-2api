@@ -40,10 +40,13 @@ const DefaultBaseURL = "https://www.workbuddy.ai"
 
 const (
 	defaultModel   = "default-model"
-	clientUA       = "WorkBuddyAI/5.5.2 (WorkBuddyAI)"
+	clientVersion  = "5.5.4"
+	cliVersion     = "2.137.1"
+	clientUA       = "WorkBuddy/" + clientVersion + " WorkBuddy AI/" + clientVersion + " CLI/" + cliVersion
 	originReferer  = "https://www.workbuddy.ai"
 	defaultSystem  = "You are a helpful assistant."
 	minRefreshLead = 24 * time.Hour
+	streamIdle     = 5 * time.Minute
 )
 
 // Business error codes observed from the international backend.
@@ -59,6 +62,7 @@ type Client struct {
 	httpClient     *http.Client
 	baseURL        string
 	requestTimeout time.Duration
+	streamIdle     time.Duration
 	account        *store.Account
 	accountStore   AccountUpdater
 
@@ -98,6 +102,7 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		httpClient:     util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
 		baseURL:        baseURL,
 		requestTimeout: timeout,
+		streamIdle:     streamIdle,
 		account:        accountSnapshot,
 		creds:          ResolveCredentials(acc),
 	}
@@ -153,7 +158,7 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 	if err != nil {
 		return fmt.Errorf("failed to create workbuddy request: %w", err)
 	}
-	applyHeaders(httpReq, accessToken, c.creds.UID, "text/event-stream")
+	applyChatHeaders(httpReq, accessToken, c.creds.UID, req.ConversationID, req.RequestID, req.TraceID)
 
 	attempt := debug.BeginUpstream(ctx, httpReq.Method, httpReq.URL.String(), httpReq.Header, body)
 	resp, err := c.httpClient.Do(httpReq)
@@ -164,12 +169,13 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 	if err != nil {
 		return fmt.Errorf("failed to send workbuddy request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		return apiError(resp.StatusCode, raw)
 	}
+	resp.Body = monitorStreamIdle(resp.Body, c.streamIdle, cancel)
 
 	result, err := consumeStream(resp.Body, onMessage)
 	if err != nil {
@@ -210,9 +216,13 @@ func (c *Client) buildBody(req upstream.UpstreamRequest) ([]byte, error) {
 		model = defaultModel
 	}
 	body := map[string]interface{}{
-		"model":    model,
-		"stream":   true,
-		"messages": buildMessages(req),
+		"model":          model,
+		"stream":         true,
+		"stream_options": map[string]interface{}{"include_usage": true},
+		"messages":       buildMessages(req),
+	}
+	if conversationID := strings.TrimSpace(req.ConversationID); conversationID != "" {
+		body["conversationId"] = conversationID
 	}
 	if req.Tools != nil && !req.NoTools {
 		if tools := normalizeToolDefinitions(req.Tools); len(tools) > 0 {

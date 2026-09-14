@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -149,6 +150,39 @@ func (h *Handler) acquireAccountSelection(ctx context.Context, targetChannel str
 		return h.client, nil, func() {}, nil
 	}
 	return nil, nil, func() {}, errors.New("no client configured")
+}
+
+const defaultWorkBuddyMaxConcurrent = 3
+
+// acquireReservedAccountSelection closes the check-then-increment race between
+// account selection and connection tracking. A candidate is not returned until
+// its per-account slot has been atomically reserved; if another request wins the
+// last slot, selection continues with the remaining accounts.
+func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, opts accountSelectionOptions) (UpstreamClient, *store.Account, func(), int64, error) {
+	excluded := append([]int64(nil), failedAccountIDs...)
+	full := make(map[int64]struct{})
+	for {
+		client, account, release, err := h.acquireAccountSelection(ctx, targetChannel, channelRequired, excluded, opts)
+		if err != nil {
+			if len(full) > 0 {
+				return nil, nil, func() {}, 0, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are at their concurrency limit)", targetChannel)
+			}
+			return nil, nil, func() {}, 0, err
+		}
+		accountID, acquired := h.tryAcquireTrackedAccount(account)
+		if acquired {
+			return client, account, release, accountID, nil
+		}
+		release()
+		if account == nil || account.ID == 0 {
+			return nil, nil, func() {}, 0, fmt.Errorf("failed to reserve an account concurrency slot")
+		}
+		if _, seen := full[account.ID]; seen {
+			return nil, nil, func() {}, 0, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are at their concurrency limit)", targetChannel)
+		}
+		full[account.ID] = struct{}{}
+		excluded = append(excluded, account.ID)
+	}
 }
 
 func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChannel string, failedAccountIDs []int64, opts accountSelectionOptions) (*store.Account, error) {
@@ -307,19 +341,47 @@ func (h *Handler) refreshWarpModelConfigAsync(acc *store.Account) {
 	}()
 }
 
-func (h *Handler) acquireTrackedAccount(acc *store.Account) int64 {
-	if acc == nil || acc.ID == 0 {
+func effectiveAccountConcurrencyLimit(acc *store.Account) int64 {
+	if acc == nil {
 		return 0
 	}
-	if h != nil && h.connTracker != nil {
-		h.connTracker.Acquire(acc.ID)
-		return acc.ID
+	if acc.MaxConcurrent > 0 {
+		return int64(acc.MaxConcurrent)
 	}
-	if h != nil && h.loadBalancer != nil {
-		h.loadBalancer.AcquireConnection(acc.ID)
-		return acc.ID
+	// WorkBuddy's reference gateway defaults to three in-flight requests per
+	// account. Treating an omitted value as unlimited is what allowed the live
+	// pool to hit business code 14003 under ordinary parallel use.
+	if strings.EqualFold(strings.TrimSpace(acc.AccountType), "workbuddy") {
+		return defaultWorkBuddyMaxConcurrent
 	}
 	return 0
+}
+
+func (h *Handler) tryAcquireTrackedAccount(acc *store.Account) (int64, bool) {
+	if acc == nil || acc.ID == 0 {
+		return 0, true
+	}
+	limit := effectiveAccountConcurrencyLimit(acc)
+	if h != nil && h.connTracker != nil {
+		if limited, ok := h.connTracker.(loadbalancer.LimitedConnTracker); ok && limit > 0 {
+			if !limited.TryAcquire(acc.ID, limit) {
+				return 0, false
+			}
+			return acc.ID, true
+		}
+		if limit > 0 && h.connTracker.GetCount(acc.ID) >= limit {
+			return 0, false
+		}
+		h.connTracker.Acquire(acc.ID)
+		return acc.ID, true
+	}
+	if h != nil && h.loadBalancer != nil {
+		// The load balancer's built-in tracker is only a compatibility fallback;
+		// production wires a shared tracker directly onto the handler.
+		h.loadBalancer.AcquireConnection(acc.ID)
+		return acc.ID, true
+	}
+	return 0, true
 }
 
 func (h *Handler) releaseTrackedAccount(accountID int64) {

@@ -1238,6 +1238,15 @@ func stableProviderIdentityKey(acc *store.Account) string {
 		return ""
 	}
 	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "grok":
+		if grokAccountIsOAuth(acc) {
+			if userID := strings.TrimSpace(acc.UserID); userID != "" {
+				return "grok:oauth:user:" + userID
+			}
+			if email := strings.ToLower(strings.TrimSpace(acc.Email)); email != "" {
+				return "grok:oauth:email:" + email
+			}
+		}
 	case "workbuddy":
 		if uid := strings.TrimSpace(acc.WorkBuddyUID); uid != "" {
 			return "workbuddy:uid:" + uid
@@ -2613,7 +2622,7 @@ func (a *API) pollGrokDeviceAuthorization(ctx context.Context, id string, authen
 		case <-time.After(login.interval):
 		}
 		requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		accessToken, refreshToken, expiresAt, err := authenticator.Exchange(requestCtx, login.deviceCode)
+		accessToken, refreshToken, identityToken, expiresAt, err := authenticator.Exchange(requestCtx, login.deviceCode)
 		cancel()
 		if err != nil {
 			if slowDown, pending := grok.IsDeviceAuthorizationPending(err); pending {
@@ -2639,6 +2648,7 @@ func (a *API) pollGrokDeviceAuthorization(ctx context.Context, id string, authen
 			NSFWEnabled:       true,
 		}
 		grok.ApplyCLIOAuthIdentity(acc)
+		grok.ApplyCLIOAuthIdentityToken(acc, identityToken)
 		normalizeGrokTokenInput(acc)
 		storeCtx, storeCancel := context.WithTimeout(ctx, 20*time.Second)
 		existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
@@ -2652,7 +2662,41 @@ func (a *API) pollGrokDeviceAuthorization(ctx context.Context, id string, authen
 			return
 		}
 		if existing != nil {
-			a.finishGrokDeviceLogin(id, "complete", "Grok account already exists", existing.ID)
+			// A fresh device grant may rotate the durable refresh token. Update the
+			// matching xAI identity in place and enrich legacy generic rows with the
+			// email obtained from id_token, while retaining operator settings and
+			// accumulated runtime state already held on the row.
+			existing.OAuthAccessToken = acc.OAuthAccessToken
+			existing.OAuthRefreshToken = acc.OAuthRefreshToken
+			existing.OAuthExpiresAt = acc.OAuthExpiresAt
+			existing.CredentialType = "oauth"
+			existing.GrokProvider = grok.ProviderBuild
+			existing.AgentMode = acc.AgentMode
+			if acc.UserID != "" {
+				existing.UserID = acc.UserID
+			}
+			if acc.Email != "" {
+				existing.Email = acc.Email
+				if existing.Name == "" || strings.EqualFold(existing.Name, "grok-device-login") {
+					existing.Name = acc.Email
+				}
+			}
+			if acc.TeamID != "" {
+				existing.TeamID = acc.TeamID
+			}
+			existing.StatusCode = ""
+			existing.StatusMessage = ""
+			existing.LastAttempt = time.Time{}
+			existing.ClearVerifiedAt = true
+			updateCtx, updateCancel := context.WithTimeout(ctx, 20*time.Second)
+			if err := a.store.UpdateAccount(updateCtx, existing); err != nil {
+				updateCancel()
+				slog.Warn("Grok device authorization could not update account", "login_id", id, "account_id", existing.ID, "error", err)
+				a.finishGrokDeviceLogin(id, "failed", "Grok authorization succeeded but account could not be updated", 0)
+				return
+			}
+			updateCancel()
+			a.finishGrokDeviceLogin(id, "complete", "Grok account credentials refreshed", existing.ID)
 			return
 		}
 		a.finishGrokDeviceLogin(id, "complete", "Grok account added", acc.ID)
