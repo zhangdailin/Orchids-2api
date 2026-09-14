@@ -572,6 +572,10 @@ type deviceLogin struct {
 	expiresAt  time.Time
 	interval   time.Duration
 	cancel     context.CancelFunc
+	done       chan struct{}
+	// configSnapshot pins provider endpoints for the whole transaction. A
+	// live config reload must not start a login on one host and poll another.
+	configSnapshot *config.Config
 
 	status    string
 	message   string
@@ -596,7 +600,6 @@ type deviceLoginResponse struct {
 
 type warpDeviceLogin = deviceLogin
 type grokDeviceLogin = deviceLogin
-type workbuddyLogin = deviceLogin
 
 var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 	client := puter.NewFromAccount(acc, cfg)
@@ -1200,7 +1203,8 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 	}
 
 	key := normalizedAccountCredentialKey(acc)
-	if key == "" {
+	identityKey := stableProviderIdentityKey(acc)
+	if key == "" && identityKey == "" {
 		return nil, nil
 	}
 
@@ -1212,7 +1216,10 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 		if existing == nil || existing.ID == excludeID {
 			continue
 		}
-		if normalizedAccountCredentialKey(existing) == key {
+		if identityKey != "" && stableProviderIdentityKey(existing) == identityKey {
+			return existing, nil
+		}
+		if key != "" && normalizedAccountCredentialKey(existing) == key {
 			if grokSSOViewsAreLinked(acc, existing) {
 				continue
 			}
@@ -1220,6 +1227,30 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 		}
 	}
 	return nil, nil
+}
+
+// stableProviderIdentityKey survives OAuth token rotation. WorkBuddy and Qoder
+// issue a new durable token during a fresh login, so token-only deduplication
+// would create a second row for the same upstream user and leave the old row
+// holding a consumed refresh token.
+func stableProviderIdentityKey(acc *store.Account) string {
+	if acc == nil {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "workbuddy":
+		if uid := strings.TrimSpace(acc.WorkBuddyUID); uid != "" {
+			return "workbuddy:uid:" + uid
+		}
+	case "qoder":
+		if uid := strings.TrimSpace(acc.QoderUserID); uid != "" {
+			return "qoder:uid:" + uid
+		}
+		if machineID := strings.TrimSpace(acc.QoderMachineID); machineID != "" {
+			return "qoder:machine:" + machineID
+		}
+	}
+	return ""
 }
 
 func duplicateAccountError(existing *store.Account) error {
@@ -1765,7 +1796,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 	}
 
 	if strings.EqualFold(acc.AccountType, "qoder") {
-		status, httpStatus, verifyErr := verifyQoderAccount(ctx, acc, a.config.Load())
+		status, httpStatus, verifyErr := verifyQoderAccountWithStore(ctx, acc, a.config.Load(), a.store)
 		if verifyErr != nil {
 			if errors.Is(verifyErr, errQoderMissingCredential) {
 				return "", http.StatusBadRequest, fmt.Errorf("failed to verify qoder account: %w", verifyErr)
@@ -1778,7 +1809,7 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 		return status, httpStatus, nil
 	}
 	if strings.EqualFold(acc.AccountType, "workbuddy") {
-		status, httpStatus, verifyErr := verifyWorkBuddyAccount(ctx, acc, a.config.Load())
+		status, httpStatus, verifyErr := verifyWorkBuddyAccountWithStore(ctx, acc, a.config.Load(), a.store)
 		if verifyErr != nil {
 			if errors.Is(verifyErr, errWorkBuddyMissingCredential) {
 				return "", http.StatusBadRequest, fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
@@ -2891,13 +2922,22 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			// The read path redacts the refresh token, so an ordinary edit
 			// arrives without it; keep the stored credential unless a new one
 			// was actually submitted.
+			submitted := resolveWorkBuddyCredentials(&acc)
 			PreserveWorkBuddyCredentialsOnEdit(&acc, existing)
 			if resolveWorkBuddyCredentials(&acc).RefreshToken == "" && resolveWorkBuddyCredentials(&acc).AccessToken == "" {
 				http.Error(w, "missing WorkBuddy credential", http.StatusBadRequest)
 				return
 			}
 			NormalizeWorkBuddyCredentials(&acc)
+			existingCreds := resolveWorkBuddyCredentials(existing)
+			acc.ReplaceWorkBuddyCredentials = submitted.HasCredential() &&
+				(submitted.AccessToken != existingCreds.AccessToken || submitted.RefreshToken != existingCreds.RefreshToken)
+			if acc.ReplaceWorkBuddyCredentials {
+				acc.ClearVerifiedAt = true
+			}
 		} else if strings.EqualFold(acc.AccountType, "qoder") {
+			submitted := qoder.ResolveCredentials(&acc)
+			submittedMachineID := strings.TrimSpace(acc.QoderMachineID)
 			PreserveQoderCredentialsOnEdit(&acc, existing)
 			if !NormalizeQoderCredentials(&acc) {
 				http.Error(w, "missing Qoder credential: sign in again with the browser login", http.StatusBadRequest)
@@ -2906,6 +2946,14 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			if strings.TrimSpace(acc.QoderMachineID) == "" {
 				http.Error(w, "missing Qoder device identity: sign in again", http.StatusBadRequest)
 				return
+			}
+			existingCreds := qoder.ResolveCredentials(existing)
+			acc.ReplaceQoderCredentials = submitted.HasCredential() &&
+				(submitted.AccessToken != existingCreds.AccessToken ||
+					submitted.RefreshToken != existingCreds.RefreshToken ||
+					(submittedMachineID != "" && submittedMachineID != strings.TrimSpace(existing.QoderMachineID)))
+			if acc.ReplaceQoderCredentials {
+				acc.ClearVerifiedAt = true
 			}
 		} else if strings.EqualFold(acc.AccountType, "puter") && strings.EqualFold(existing.AccountType, "puter") && strings.TrimSpace(acc.ClientCookie) == "" && strings.TrimSpace(acc.Token) == "" {
 			acc.ClientCookie = existing.ClientCookie

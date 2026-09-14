@@ -303,246 +303,321 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		return nil
 	}
 
-	existing, err := s.getAccount(ctx, acc.ID)
-	if err == ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	updated := *existing
-	updated.Name = acc.Name
-	if acc.AccountType == "" {
-		updated.AccountType = existing.AccountType
-	} else {
-		updated.AccountType = acc.AccountType
-	}
-	updated.NSFWEnabled = acc.NSFWEnabled
-	updated.SessionID = acc.SessionID
-	updated.ClientCookie = acc.ClientCookie
-	if strings.EqualFold(updated.AccountType, "warp") {
-		if strings.TrimSpace(acc.RefreshToken) == "" {
-			updated.RefreshToken = existing.RefreshToken
+	return s.updateAccountAtomic(ctx, acc.ID, func(existing *Account) error {
+		updated := *existing
+		updated.Name = acc.Name
+		if acc.AccountType == "" {
+			updated.AccountType = existing.AccountType
+		} else {
+			updated.AccountType = acc.AccountType
+		}
+		updated.NSFWEnabled = acc.NSFWEnabled
+		updated.SessionID = acc.SessionID
+		updated.ClientCookie = acc.ClientCookie
+		if strings.EqualFold(updated.AccountType, "warp") {
+			if strings.TrimSpace(acc.RefreshToken) == "" {
+				updated.RefreshToken = existing.RefreshToken
+			} else {
+				updated.RefreshToken = acc.RefreshToken
+			}
+			if strings.TrimSpace(acc.DeviceID) == "" {
+				updated.DeviceID = existing.DeviceID
+			} else {
+				updated.DeviceID = acc.DeviceID
+			}
+			if strings.TrimSpace(acc.RequestID) == "" {
+				updated.RequestID = existing.RequestID
+			} else {
+				updated.RequestID = acc.RequestID
+			}
 		} else {
 			updated.RefreshToken = acc.RefreshToken
-		}
-		if strings.TrimSpace(acc.DeviceID) == "" {
-			updated.DeviceID = existing.DeviceID
-		} else {
 			updated.DeviceID = acc.DeviceID
-		}
-		if strings.TrimSpace(acc.RequestID) == "" {
-			updated.RequestID = existing.RequestID
-		} else {
 			updated.RequestID = acc.RequestID
 		}
-	} else {
-		updated.RefreshToken = acc.RefreshToken
-		updated.DeviceID = acc.DeviceID
-		updated.RequestID = acc.RequestID
-	}
-	if strings.EqualFold(updated.AccountType, "warp") {
-		updated.SessionCookie = ""
-	} else if acc.SessionCookie == "" {
-		updated.SessionCookie = existing.SessionCookie
-	} else {
-		updated.SessionCookie = acc.SessionCookie
-	}
-	updated.ClientUat = acc.ClientUat
-	updated.ProjectID = acc.ProjectID
-	updated.UserID = acc.UserID
-	updated.AgentMode = acc.AgentMode
-	updated.Email = acc.Email
-	updated.Weight = acc.Weight
-	updated.MaxConcurrent = acc.MaxConcurrent
-	updated.Enabled = acc.Enabled
-	updated.Token = acc.Token
-	updated.Subscription = acc.Subscription
-	updated.UsageCurrent = acc.UsageCurrent
-	updated.UsageTotal = acc.UsageTotal
-	updated.UsageLimit = acc.UsageLimit
-	updated.WarpMonthlyLimit = acc.WarpMonthlyLimit
-	updated.WarpMonthlyRemaining = acc.WarpMonthlyRemaining
-	updated.WarpBonusRemaining = acc.WarpBonusRemaining
-	updated.StatusCode = acc.StatusCode
-	// The reason describes the CURRENT status only. It must never outlive the
-	// status it explains, or a recovered account keeps showing a stale error.
-	if strings.TrimSpace(acc.StatusCode) == "" {
-		updated.StatusMessage = ""
-	} else {
-		updated.StatusMessage = acc.StatusMessage
-	}
-	updated.LastAttempt = acc.LastAttempt
-	// A verdict timestamp is monotonic per credential: an unrelated partial
-	// update (request counters, quota rotation) must not un-verify an account.
-	// Replacing a credential clears it explicitly via ClearVerifiedAt.
-	switch {
-	case acc.ClearVerifiedAt:
-		updated.VerifiedAt = time.Time{}
-	case !acc.VerifiedAt.IsZero():
-		updated.VerifiedAt = acc.VerifiedAt
-	}
-	updated.ClearVerifiedAt = false
-	updated.QuotaResetAt = acc.QuotaResetAt
-	updated.MissingThinkingStrikes = acc.MissingThinkingStrikes
-	updated.MissingThinkingLastAt = acc.MissingThinkingLastAt
-	// Grok Build CLI OAuth credentials and identity must survive refresh /
-	// admin updates. Leaving these out would silently drop rotated tokens.
-	if strings.TrimSpace(acc.CredentialType) == "" {
-		updated.CredentialType = existing.CredentialType
-	} else {
-		updated.CredentialType = acc.CredentialType
-	}
-	updated.OAuthAccessToken = acc.OAuthAccessToken
-	updated.OAuthRefreshToken = acc.OAuthRefreshToken
-	updated.OAuthExpiresAt = acc.OAuthExpiresAt
-	if strings.TrimSpace(acc.TeamID) == "" {
-		updated.TeamID = existing.TeamID
-	} else {
-		updated.TeamID = acc.TeamID
-	}
-	if strings.TrimSpace(acc.UpstreamMode) == "" {
-		updated.UpstreamMode = existing.UpstreamMode
-	} else {
-		updated.UpstreamMode = acc.UpstreamMode
-	}
-	if strings.TrimSpace(acc.GrokProvider) == "" {
-		updated.GrokProvider = existing.GrokProvider
-	} else {
-		updated.GrokProvider = acc.GrokProvider
-	}
-	if acc.GrokSSOParentID == 0 {
-		updated.GrokSSOParentID = existing.GrokSSOParentID
-	} else {
-		updated.GrokSSOParentID = acc.GrokSSOParentID
-	}
-	// Account updates are often partial (for example request counters and
-	// credential rotation). Provider snapshots are refreshed independently, so
-	// never erase a successfully observed catalog/billing window with a zero
-	// value from an unrelated update.
-	if acc.GrokModels != nil {
-		updated.GrokModels = append([]string(nil), acc.GrokModels...)
-	}
-	if !acc.GrokModelsSyncedAt.IsZero() {
-		updated.GrokModelsSyncedAt = acc.GrokModelsSyncedAt
-	}
-	if !acc.GrokBilling.SyncedAt.IsZero() {
-		updated.GrokBilling = acc.GrokBilling
-	}
-	if !acc.GrokRateLimits.ObservedAt.IsZero() {
-		updated.GrokRateLimits = acc.GrokRateLimits
-	}
-	if !acc.GrokWebQuota.SyncedAt.IsZero() {
-		updated.GrokWebQuota = acc.GrokWebQuota
-	}
-	if !acc.GrokFreeQuota.ConfirmedAt.IsZero() {
-		updated.GrokFreeQuota = acc.GrokFreeQuota
-	}
-	// Per-model cooldowns are merged rather than replaced: an update written by a
-	// path that did not touch them (a request counter, a quota refresh) must not
-	// drop a cooldown another path just recorded.
-	updated.ModelCooldowns = mergeModelCooldowns(existing.ModelCooldowns, acc.ModelCooldowns)
-	// WorkBuddy credentials are rotated by the upstream (Keycloak rotates the
-	// refresh token on every renewal) and account updates are frequently
-	// partial, so an empty value means "keep what is stored", never "erase".
-	if token := strings.TrimSpace(acc.WorkBuddyAccessToken); token != "" {
-		updated.WorkBuddyAccessToken = token
-	}
-	if token := strings.TrimSpace(acc.WorkBuddyRefreshToken); token != "" {
-		updated.WorkBuddyRefreshToken = token
-	}
-	if token := strings.TrimSpace(acc.WorkBuddyUID); token != "" {
-		updated.WorkBuddyUID = token
-	}
-	if !acc.WorkBuddyExpiresAt.IsZero() {
-		updated.WorkBuddyExpiresAt = acc.WorkBuddyExpiresAt
-	}
-	if len(acc.WorkBuddyModelIDs) > 0 {
-		updated.WorkBuddyModelIDs = append([]string(nil), acc.WorkBuddyModelIDs...)
-	}
-	if !acc.WorkBuddyModelsSyncedAt.IsZero() {
-		updated.WorkBuddyModelsSyncedAt = acc.WorkBuddyModelsSyncedAt
-	}
-	if !acc.WorkBuddyQuota.SyncedAt.IsZero() {
-		updated.WorkBuddyQuota = acc.WorkBuddyQuota
-	}
-	// Qoder credentials are rotated by the upstream and account updates are
-	// frequently partial (a request counter, a quota refresh), so an empty value
-	// means "keep what is stored", never "erase". The derived runtime pair is
-	// written once at login and then reused, which is why it follows the same
-	// keep-on-empty rule instead of being regenerated per request.
-	if token := strings.TrimSpace(acc.QoderAccessToken); token != "" {
-		updated.QoderAccessToken = token
-	}
-	if token := strings.TrimSpace(acc.QoderRefreshToken); token != "" {
-		updated.QoderRefreshToken = token
-	}
-	if token := strings.TrimSpace(acc.QoderMachineID); token != "" {
-		updated.QoderMachineID = token
-	}
-	if token := strings.TrimSpace(acc.QoderUserID); token != "" {
-		updated.QoderUserID = token
-	}
-	if token := strings.TrimSpace(acc.QoderUserName); token != "" {
-		updated.QoderUserName = token
-	}
-	if token := strings.TrimSpace(acc.QoderOrganizationID); token != "" {
-		updated.QoderOrganizationID = token
-	}
-	if len(acc.QoderOrganizationTags) > 0 {
-		updated.QoderOrganizationTags = append([]string(nil), acc.QoderOrganizationTags...)
-	}
-	if acc.QoderDataPolicy {
-		updated.QoderDataPolicy = true
-	}
-	if !acc.QoderExpiresAt.IsZero() {
-		updated.QoderExpiresAt = acc.QoderExpiresAt
-	}
-	if token := strings.TrimSpace(acc.QoderRuntimeInfo); token != "" {
-		updated.QoderRuntimeInfo = token
-	}
-	if token := strings.TrimSpace(acc.QoderRuntimeKey); token != "" {
-		updated.QoderRuntimeKey = token
-	}
-	if len(acc.QoderModelIDs) > 0 {
-		updated.QoderModelIDs = append([]string(nil), acc.QoderModelIDs...)
-	}
-	if !acc.QoderModelsSyncedAt.IsZero() {
-		updated.QoderModelsSyncedAt = acc.QoderModelsSyncedAt
-	}
-	if token := strings.TrimSpace(acc.QoderJobToken); token != "" {
-		updated.QoderJobToken = token
-	}
-	if !acc.QoderJobTokenExpiry.IsZero() {
-		updated.QoderJobTokenExpiry = acc.QoderJobTokenExpiry
-	}
-	if !acc.QoderQuota.SyncedAt.IsZero() {
-		updated.QoderQuota = acc.QoderQuota
-	}
-	updated.UpdatedAt = time.Now()
+		if strings.EqualFold(updated.AccountType, "warp") {
+			updated.SessionCookie = ""
+		} else if acc.SessionCookie == "" {
+			updated.SessionCookie = existing.SessionCookie
+		} else {
+			updated.SessionCookie = acc.SessionCookie
+		}
+		updated.ClientUat = acc.ClientUat
+		updated.ProjectID = acc.ProjectID
+		updated.UserID = acc.UserID
+		updated.AgentMode = acc.AgentMode
+		updated.Email = acc.Email
+		updated.Weight = acc.Weight
+		updated.MaxConcurrent = acc.MaxConcurrent
+		updated.Enabled = acc.Enabled
+		updated.Token = acc.Token
+		updated.Subscription = acc.Subscription
+		updated.UsageCurrent = acc.UsageCurrent
+		updated.UsageTotal = acc.UsageTotal
+		updated.UsageLimit = acc.UsageLimit
+		updated.WarpMonthlyLimit = acc.WarpMonthlyLimit
+		updated.WarpMonthlyRemaining = acc.WarpMonthlyRemaining
+		updated.WarpBonusRemaining = acc.WarpBonusRemaining
+		updated.StatusCode = acc.StatusCode
+		// The reason describes the CURRENT status only. It must never outlive the
+		// status it explains, or a recovered account keeps showing a stale error.
+		if strings.TrimSpace(acc.StatusCode) == "" {
+			updated.StatusMessage = ""
+		} else {
+			updated.StatusMessage = acc.StatusMessage
+		}
+		updated.LastAttempt = acc.LastAttempt
+		// A verdict timestamp is monotonic per credential: an unrelated partial
+		// update (request counters, quota rotation) must not un-verify an account.
+		// Replacing a credential clears it explicitly via ClearVerifiedAt.
+		switch {
+		case acc.ClearVerifiedAt:
+			updated.VerifiedAt = time.Time{}
+		case !acc.VerifiedAt.IsZero():
+			updated.VerifiedAt = acc.VerifiedAt
+		}
+		updated.ClearVerifiedAt = false
+		updated.QuotaResetAt = acc.QuotaResetAt
+		updated.MissingThinkingStrikes = acc.MissingThinkingStrikes
+		updated.MissingThinkingLastAt = acc.MissingThinkingLastAt
+		// Grok Build CLI OAuth credentials and identity must survive refresh /
+		// admin updates. Leaving these out would silently drop rotated tokens.
+		if strings.TrimSpace(acc.CredentialType) == "" {
+			updated.CredentialType = existing.CredentialType
+		} else {
+			updated.CredentialType = acc.CredentialType
+		}
+		updated.OAuthAccessToken = acc.OAuthAccessToken
+		updated.OAuthRefreshToken = acc.OAuthRefreshToken
+		updated.OAuthExpiresAt = acc.OAuthExpiresAt
+		if strings.TrimSpace(acc.TeamID) == "" {
+			updated.TeamID = existing.TeamID
+		} else {
+			updated.TeamID = acc.TeamID
+		}
+		if strings.TrimSpace(acc.UpstreamMode) == "" {
+			updated.UpstreamMode = existing.UpstreamMode
+		} else {
+			updated.UpstreamMode = acc.UpstreamMode
+		}
+		if strings.TrimSpace(acc.GrokProvider) == "" {
+			updated.GrokProvider = existing.GrokProvider
+		} else {
+			updated.GrokProvider = acc.GrokProvider
+		}
+		if acc.GrokSSOParentID == 0 {
+			updated.GrokSSOParentID = existing.GrokSSOParentID
+		} else {
+			updated.GrokSSOParentID = acc.GrokSSOParentID
+		}
+		// Account updates are often partial (for example request counters and
+		// credential rotation). Provider snapshots are refreshed independently, so
+		// never erase a successfully observed catalog/billing window with a zero
+		// value from an unrelated update.
+		if acc.GrokModels != nil {
+			updated.GrokModels = append([]string(nil), acc.GrokModels...)
+		}
+		if !acc.GrokModelsSyncedAt.IsZero() {
+			updated.GrokModelsSyncedAt = acc.GrokModelsSyncedAt
+		}
+		if !acc.GrokBilling.SyncedAt.IsZero() {
+			updated.GrokBilling = acc.GrokBilling
+		}
+		if !acc.GrokRateLimits.ObservedAt.IsZero() {
+			updated.GrokRateLimits = acc.GrokRateLimits
+		}
+		if !acc.GrokWebQuota.SyncedAt.IsZero() {
+			updated.GrokWebQuota = acc.GrokWebQuota
+		}
+		if !acc.GrokFreeQuota.ConfirmedAt.IsZero() {
+			updated.GrokFreeQuota = acc.GrokFreeQuota
+		}
+		// Per-model cooldowns are merged rather than replaced: an update written by a
+		// path that did not touch them (a request counter, a quota refresh) must not
+		// drop a cooldown another path just recorded.
+		updated.ModelCooldowns = mergeModelCooldowns(existing.ModelCooldowns, acc.ModelCooldowns)
+		// WorkBuddy credentials are rotated by the upstream (Keycloak rotates the
+		// refresh token on every renewal) and account updates are frequently
+		// partial, so an empty value means "keep what is stored", never "erase".
+		if acc.ReplaceWorkBuddyCredentials {
+			updated.WorkBuddyAccessToken = strings.TrimSpace(acc.WorkBuddyAccessToken)
+			updated.WorkBuddyRefreshToken = strings.TrimSpace(acc.WorkBuddyRefreshToken)
+			updated.WorkBuddyExpiresAt = acc.WorkBuddyExpiresAt
+		}
+		if token := strings.TrimSpace(acc.WorkBuddyUID); token != "" {
+			updated.WorkBuddyUID = token
+		}
+		if len(acc.WorkBuddyModelIDs) > 0 {
+			updated.WorkBuddyModelIDs = append([]string(nil), acc.WorkBuddyModelIDs...)
+		}
+		if !acc.WorkBuddyModelsSyncedAt.IsZero() {
+			updated.WorkBuddyModelsSyncedAt = acc.WorkBuddyModelsSyncedAt
+		}
+		if !acc.WorkBuddyQuota.SyncedAt.IsZero() {
+			updated.WorkBuddyQuota = acc.WorkBuddyQuota
+		}
+		// Qoder credentials are rotated by the upstream and account updates are
+		// frequently partial (a request counter, a quota refresh), so an empty value
+		// means "keep what is stored", never "erase". The derived runtime pair is
+		// written once at login and then reused, which is why it follows the same
+		// keep-on-empty rule instead of being regenerated per request.
+		if acc.ReplaceQoderCredentials {
+			updated.QoderAccessToken = strings.TrimSpace(acc.QoderAccessToken)
+			updated.QoderRefreshToken = strings.TrimSpace(acc.QoderRefreshToken)
+			updated.QoderExpiresAt = acc.QoderExpiresAt
+			updated.QoderMachineID = strings.TrimSpace(acc.QoderMachineID)
+			updated.QoderRuntimeInfo = strings.TrimSpace(acc.QoderRuntimeInfo)
+			updated.QoderRuntimeKey = strings.TrimSpace(acc.QoderRuntimeKey)
+			updated.QoderJobToken = strings.TrimSpace(acc.QoderJobToken)
+			updated.QoderJobTokenExpiry = acc.QoderJobTokenExpiry
+		}
+		if token := strings.TrimSpace(acc.QoderUserID); token != "" {
+			updated.QoderUserID = token
+		}
+		if token := strings.TrimSpace(acc.QoderUserName); token != "" {
+			updated.QoderUserName = token
+		}
+		if token := strings.TrimSpace(acc.QoderOrganizationID); token != "" {
+			updated.QoderOrganizationID = token
+		}
+		if len(acc.QoderOrganizationTags) > 0 {
+			updated.QoderOrganizationTags = append([]string(nil), acc.QoderOrganizationTags...)
+		}
+		if acc.QoderDataPolicy {
+			updated.QoderDataPolicy = true
+		}
+		if len(acc.QoderModelIDs) > 0 {
+			updated.QoderModelIDs = append([]string(nil), acc.QoderModelIDs...)
+		}
+		if !acc.QoderModelsSyncedAt.IsZero() {
+			updated.QoderModelsSyncedAt = acc.QoderModelsSyncedAt
+		}
+		if !acc.QoderQuota.SyncedAt.IsZero() {
+			updated.QoderQuota = acc.QoderQuota
+		}
+		updated.UpdatedAt = time.Now()
+		*existing = updated
+		return nil
+	})
+}
 
-	data, err := s.marshalAccount(&updated)
-	if err != nil {
-		return err
+// updateAccountAtomic applies a field mutation with optimistic locking. Every
+// account writer uses the same watched key, so a quota/stat update that lands
+// between read and write causes a retry instead of being silently overwritten.
+func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate func(*Account) error) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("redis store not configured")
 	}
+	if id == 0 {
+		return nil
+	}
+	key := s.accountsKey(id)
+	for attempt := 0; attempt < 8; attempt++ {
+		var previous *Account
+		err := s.client.Watch(ctx, func(tx *redis.Tx) error {
+			value, err := tx.Get(ctx, key).Bytes()
+			if err == redis.Nil {
+				return ErrNoRows
+			}
+			if err != nil {
+				return err
+			}
+			current, err := s.unmarshalAccount(value, id)
+			if err != nil {
+				return err
+			}
+			copied := *current
+			previous = &copied
+			if err := mutate(current); err != nil {
+				return err
+			}
+			current.UpdatedAt = time.Now()
+			data, err := s.marshalAccount(current)
+			if err != nil {
+				return err
+			}
+			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, key, data, 0)
+				pipe.SAdd(ctx, s.accountsIDsKey(), id)
+				if current.Enabled {
+					pipe.SAdd(ctx, s.accountsEnabledKey(), id)
+				} else {
+					pipe.SRem(ctx, s.accountsEnabledKey(), id)
+				}
+				return nil
+			})
+			return err
+		}, key)
+		if err == redis.TxFailedErr {
+			continue
+		}
+		if err == ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		s.publishChange(previous, id)
+		return nil
+	}
+	return fmt.Errorf("account %d changed too frequently; update could not be committed", id)
+}
 
-	pipe := s.client.Pipeline()
-	pipe.Set(ctx, s.accountsKey(acc.ID), data, 0)
-	pipe.SAdd(ctx, s.accountsIDsKey(), acc.ID)
-	if updated.Enabled {
-		pipe.SAdd(ctx, s.accountsEnabledKey(), acc.ID)
-	} else {
-		pipe.SRem(ctx, s.accountsEnabledKey(), acc.ID)
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		return err
-	}
-	// Announce only after the write landed. The previous state comes from the
-	// copy read at the start of this method, which is what lets a subscriber see
-	// whether the credential actually moved.
-	s.publishChange(existing, acc.ID)
-	return nil
+func (s *redisStore) UpdateWorkBuddyCredentials(ctx context.Context, id int64, patch WorkBuddyCredentialPatch) error {
+	return s.updateAccountAtomic(ctx, id, func(acc *Account) error {
+		if expected := strings.TrimSpace(patch.ExpectedRefreshToken); expected != "" &&
+			acc.WorkBuddyRefreshToken != expected && acc.WorkBuddyRefreshToken != strings.TrimSpace(patch.RefreshToken) {
+			return fmt.Errorf("workbuddy credential changed concurrently")
+		}
+		if token := strings.TrimSpace(patch.AccessToken); token != "" {
+			acc.WorkBuddyAccessToken = token
+		}
+		if token := strings.TrimSpace(patch.RefreshToken); token != "" {
+			acc.WorkBuddyRefreshToken = token
+			acc.ClientCookie = token
+		}
+		if !patch.ExpiresAt.IsZero() {
+			acc.WorkBuddyExpiresAt = patch.ExpiresAt
+		}
+		if uid := strings.TrimSpace(patch.UID); uid != "" {
+			acc.WorkBuddyUID = uid
+		}
+		if email := strings.TrimSpace(patch.Email); email != "" && strings.TrimSpace(acc.Email) == "" {
+			acc.Email = email
+		}
+		return nil
+	})
+}
+
+func (s *redisStore) UpdateQoderAccount(ctx context.Context, id int64, patch QoderAccountPatch) error {
+	return s.updateAccountAtomic(ctx, id, func(acc *Account) error {
+		if expected := strings.TrimSpace(patch.ExpectedRefreshToken); expected != "" &&
+			acc.QoderRefreshToken != expected && acc.QoderRefreshToken != strings.TrimSpace(patch.RefreshToken) {
+			return fmt.Errorf("qoder credential changed concurrently")
+		}
+		if token := strings.TrimSpace(patch.AccessToken); token != "" {
+			acc.QoderAccessToken = token
+		}
+		if token := strings.TrimSpace(patch.RefreshToken); token != "" {
+			acc.QoderRefreshToken = token
+		}
+		if !patch.ExpiresAt.IsZero() {
+			acc.QoderExpiresAt = patch.ExpiresAt
+		}
+		if uid := strings.TrimSpace(patch.UserID); uid != "" {
+			acc.QoderUserID = uid
+		}
+		if value := strings.TrimSpace(patch.RuntimeInfo); value != "" {
+			acc.QoderRuntimeInfo = value
+		}
+		if value := strings.TrimSpace(patch.RuntimeKey); value != "" {
+			acc.QoderRuntimeKey = value
+		}
+		if patch.ModelIDs != nil {
+			acc.QoderModelIDs = append([]string(nil), patch.ModelIDs...)
+		}
+		return nil
+	})
 }
 
 func (s *redisStore) DeleteAccount(ctx context.Context, id int64) error {

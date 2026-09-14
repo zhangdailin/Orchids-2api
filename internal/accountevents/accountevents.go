@@ -268,6 +268,20 @@ type credentialMaterial struct {
 	wbAccess     string
 	wbRefresh    string
 	wbUID        string
+	wbExpires    int64
+	wbModels     string
+	qoderAccess  string
+	qoderRefresh string
+	qoderExpires int64
+	qoderMachine string
+	qoderUserID  string
+	qoderUser    string
+	qoderOrg     string
+	qoderTags    string
+	qoderPolicy  bool
+	qoderRuntime string
+	qoderKey     string
+	qoderModels  string
 	agentMode    string
 	grokProvider string
 	credType     string
@@ -296,6 +310,20 @@ func materialOf(acc *store.Account) credentialMaterial {
 		wbAccess:     acc.WorkBuddyAccessToken,
 		wbRefresh:    acc.WorkBuddyRefreshToken,
 		wbUID:        acc.WorkBuddyUID,
+		wbExpires:    acc.WorkBuddyExpiresAt.UnixNano(),
+		wbModels:     strings.Join(acc.WorkBuddyModelIDs, "\x00"),
+		qoderAccess:  acc.QoderAccessToken,
+		qoderRefresh: acc.QoderRefreshToken,
+		qoderExpires: acc.QoderExpiresAt.UnixNano(),
+		qoderMachine: acc.QoderMachineID,
+		qoderUserID:  acc.QoderUserID,
+		qoderUser:    acc.QoderUserName,
+		qoderOrg:     acc.QoderOrganizationID,
+		qoderTags:    strings.Join(acc.QoderOrganizationTags, "\x00"),
+		qoderPolicy:  acc.QoderDataPolicy,
+		qoderRuntime: acc.QoderRuntimeInfo,
+		qoderKey:     acc.QoderRuntimeKey,
+		qoderModels:  strings.Join(acc.QoderModelIDs, "\x00"),
 		agentMode:    acc.AgentMode,
 		grokProvider: acc.GrokProvider,
 		credType:     acc.CredentialType,

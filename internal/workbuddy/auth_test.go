@@ -3,11 +3,15 @@ package workbuddy
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -423,13 +427,99 @@ func TestTokenUpdater_PersistsRotatedRefreshToken(t *testing.T) {
 	if updater.saved.WorkBuddyRefreshToken != "new-refresh" {
 		t.Fatalf("persisted refresh token = %q", updater.saved.WorkBuddyRefreshToken)
 	}
-	if acc.WorkBuddyRefreshToken != "new-refresh" || acc.WorkBuddyAccessToken != "new-access" {
-		t.Fatalf("in-memory account = %q/%q", acc.WorkBuddyRefreshToken, acc.WorkBuddyAccessToken)
+	if acc.WorkBuddyRefreshToken != "old-refresh" || acc.WorkBuddyAccessToken != "" {
+		t.Fatalf("refresh mutated the caller-owned account snapshot: %q/%q", acc.WorkBuddyRefreshToken, acc.WorkBuddyAccessToken)
+	}
+}
+
+func TestClientConcurrentFirstUseRefreshesOnlyOnce(t *testing.T) {
+	t.Parallel()
+
+	var refreshes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-access","refreshToken":"new-refresh","expiresIn":172800}}`))
+	}))
+	defer srv.Close()
+
+	client := NewFromAccount(&store.Account{
+		AccountType:           "workbuddy",
+		WorkBuddyRefreshToken: "old-refresh",
+	}, nil)
+	client.SetBaseURLForTest(srv.URL)
+	client.httpClient = srv.Client()
+
+	const callers = 24
+	var wg sync.WaitGroup
+	errs := make(chan error, callers)
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			token, err := client.ensureAccessToken(context.Background())
+			if err == nil && token != "new-access" {
+				err = fmt.Errorf("token = %q", token)
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := refreshes.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
 	}
 }
 
 type fakeUpdater struct {
 	saved *store.Account
+}
+
+type flakyUpdater struct {
+	fail  bool
+	calls int
+}
+
+func (f *flakyUpdater) UpdateAccount(_ context.Context, _ *store.Account) error {
+	f.calls++
+	if f.fail {
+		return errors.New("write failed")
+	}
+	return nil
+}
+
+func TestTokenUpdaterReportsPersistenceFailureAndRetriesWithoutRotatingAgain(t *testing.T) {
+	t.Parallel()
+	refreshes := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes++
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accessToken":"new-access","refreshToken":"new-refresh","expiresIn":172800}}`))
+	}))
+	defer srv.Close()
+
+	storeUpdater := &flakyUpdater{fail: true}
+	updater := newTokenUpdater(srv.URL, srv.Client(), storeUpdater, &store.Account{ID: 1, AccountType: "workbuddy"})
+	if _, err := updater.RefreshNow(context.Background(), Credentials{RefreshToken: "old-refresh"}); err == nil {
+		t.Fatal("RefreshNow succeeded even though the rotated token was not persisted")
+	}
+	storeUpdater.fail = false
+	token, err := updater.Token(context.Background(), Credentials{RefreshToken: "old-refresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "new-access" {
+		t.Fatalf("token = %q", token)
+	}
+	if refreshes != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshes)
+	}
+	if storeUpdater.calls != 2 {
+		t.Fatalf("persistence calls = %d, want failed write plus retry", storeUpdater.calls)
+	}
 }
 
 func (f *fakeUpdater) UpdateAccount(_ context.Context, acc *store.Account) error {

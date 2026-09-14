@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -44,6 +45,19 @@ var newQoderLoginClient = func(acc *store.Account, cfg *config.Config) *qoder.Cl
 	return qoder.NewFromAccount(acc, cfg)
 }
 
+var newQoderLoginClientMu sync.RWMutex
+
+func makeQoderLoginClient(acc *store.Account, cfg *config.Config) *qoder.Client {
+	return qoderLoginClientFactory()(acc, cfg)
+}
+
+func qoderLoginClientFactory() func(*store.Account, *config.Config) *qoder.Client {
+	newQoderLoginClientMu.RLock()
+	factory := newQoderLoginClient
+	newQoderLoginClientMu.RUnlock()
+	return factory
+}
+
 // qoderLoginTransaction is the server-side half of an in-flight login. It is
 // held in the shared device-login map so the flow reuses the console's existing
 // bookkeeping, but the private material never leaves this file.
@@ -59,6 +73,7 @@ type qoderLoginTransaction struct {
 	nonce     string
 	verifier  string
 	machineID string
+	factory   func(*store.Account, *config.Config) *qoder.Client
 }
 
 // HandleQoderLogin starts and observes the official Qoder device authorization
@@ -101,7 +116,9 @@ func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	client := newQoderLoginClient(nil, a.config.Load())
+	cfg := a.config.Load()
+	factory := qoderLoginClientFactory()
+	client := factory(nil, cfg)
 	defer client.Close()
 	transaction, err := client.StartLogin(ctx)
 	if err != nil {
@@ -130,17 +147,19 @@ func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
 			"failed to create login transaction")
 		return
 	}
-	_, pollCancel := context.WithCancel(context.Background())
+	pollContext, pollCancel := context.WithCancel(context.Background())
 	login := &qoderLoginTransaction{
 		deviceLogin: deviceLogin{
-			verifyURI:  qoderVerifyURI(a.config.Load()),
-			verifyFull: transaction.VerifyURL,
-			expiresAt:  transaction.ExpiresAt,
-			interval:   qoderLoginInterval,
-			cancel:     pollCancel,
-			status:     "pending",
-			message:    "Waiting for Qoder authorization",
-			enabled:    enabled,
+			verifyURI:      qoderVerifyURI(cfg),
+			verifyFull:     transaction.VerifyURL,
+			expiresAt:      transaction.ExpiresAt,
+			interval:       qoderLoginInterval,
+			cancel:         pollCancel,
+			done:           make(chan struct{}),
+			configSnapshot: cfg,
+			status:         "pending",
+			message:        "Waiting for Qoder authorization",
+			enabled:        enabled,
 			// The caller always declares the intended state, so the completed
 			// account must honour it instead of defaulting to enabled.
 			enabledKnown: true,
@@ -149,6 +168,7 @@ func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
 		nonce:     transaction.Nonce,
 		verifier:  transaction.Verifier,
 		machineID: transaction.MachineID,
+		factory:   factory,
 	}
 
 	a.qoderLoginMu.Lock()
@@ -162,7 +182,10 @@ func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
 	a.qoderLogins[id] = login
 	a.qoderLoginMu.Unlock()
 
-	go a.pollQoderLogin(id)
+	go func() {
+		defer close(login.done)
+		a.pollQoderLogin(pollContext, id)
+	}()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(newDeviceLoginResponse(id, &login.deviceLogin))
@@ -197,21 +220,24 @@ func (a *API) cancelQoderLogin(w http.ResponseWriter, id string) {
 	}
 	delete(a.qoderLogins, id)
 	finishDeviceLogin(&login.deviceLogin, "cancelled", "Qoder authorization cancelled", 0)
+	done := login.done
 	a.qoderLoginMu.Unlock()
+	waitForLoginPoll(done)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // pollQoderLogin exchanges the device token until the browser step completes,
 // then verifies and persists the account.
-func (a *API) pollQoderLogin(id string) {
-	client := newQoderLoginClient(nil, a.config.Load())
+func (a *API) pollQoderLogin(ctx context.Context, id string) {
+	login, ok := a.qoderLoginForPoll(id)
+	if !ok {
+		return
+	}
+	client := login.factory(nil, login.configSnapshot)
 	defer client.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	for {
-		login, ok := a.qoderLoginForPoll(id)
+		login, ok = a.qoderLoginForPoll(id)
 		if !ok {
 			return
 		}
@@ -248,7 +274,7 @@ func (a *API) pollQoderLogin(id string) {
 			return
 		}
 
-		account, err := a.buildQoderAccountFromCredentials(ctx, id, login.machineID, creds)
+		account, err := a.buildQoderAccountFromCredentialsWithFactory(ctx, id, login.machineID, creds, login.configSnapshot, login.factory)
 		if err != nil {
 			// The reason is carried to the operator because a credential that
 			// arrived but could not be persisted needs one specific action, and
@@ -260,6 +286,12 @@ func (a *API) pollQoderLogin(id string) {
 				"Qoder authorization succeeded but the account could not be saved: "+truncateLoginReason(err), 0)
 			return
 		}
+		if ctx.Err() != nil || !a.qoderLoginPending(id) {
+			return
+		}
+		if login.enabledKnown {
+			account.Enabled = login.enabled
+		}
 		existing, err := a.findDuplicateAccountByCredential(ctx, account, 0)
 		if err != nil {
 			a.finishQoderLogin(id, "failed", "Qoder authorization succeeded but the account could not be saved", 0)
@@ -267,6 +299,7 @@ func (a *API) pollQoderLogin(id string) {
 		}
 		if existing != nil {
 			account.ID = existing.ID
+			account.ReplaceQoderCredentials = true
 			if err := a.store.UpdateAccount(ctx, account); err != nil {
 				a.finishQoderLogin(id, "failed", "Qoder authorization succeeded but the account could not be updated", 0)
 				return
@@ -294,6 +327,14 @@ func (a *API) pollQoderLogin(id string) {
 // serve that path must not cost the operator a valid credential. When the read
 // fails the built-in catalog is installed and the real reason is logged.
 func (a *API) buildQoderAccountFromCredentials(ctx context.Context, loginID, machineID string, creds qoder.Credentials) (*store.Account, error) {
+	return a.buildQoderAccountFromCredentialsWithConfig(ctx, loginID, machineID, creds, a.config.Load())
+}
+
+func (a *API) buildQoderAccountFromCredentialsWithConfig(ctx context.Context, loginID, machineID string, creds qoder.Credentials, cfg *config.Config) (*store.Account, error) {
+	return a.buildQoderAccountFromCredentialsWithFactory(ctx, loginID, machineID, creds, cfg, qoderLoginClientFactory())
+}
+
+func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, loginID, machineID string, creds qoder.Credentials, cfg *config.Config, factory func(*store.Account, *config.Config) *qoder.Client) (*store.Account, error) {
 	normalized := qoder.NormalizeLoginResult(creds, machineID)
 	acc := &store.Account{
 		Name:              "qoder-login",
@@ -312,7 +353,7 @@ func (a *API) buildQoderAccountFromCredentials(ctx context.Context, loginID, mac
 		acc.Email = normalized.Email
 	}
 
-	client := newQoderLoginClient(acc, a.config.Load())
+	client := factory(acc, cfg)
 	defer client.Close()
 
 	// The identity enrichment is optional: a userinfo outage must not invalidate
@@ -405,7 +446,15 @@ func (a *API) qoderLoginForPoll(id string) (*qoderLoginTransaction, bool) {
 	if login == nil || login.status != "pending" {
 		return nil, false
 	}
-	return login, true
+	copyLogin := *login
+	return &copyLogin, true
+}
+
+func (a *API) qoderLoginPending(id string) bool {
+	a.qoderLoginMu.Lock()
+	defer a.qoderLoginMu.Unlock()
+	login := a.qoderLogins[id]
+	return login != nil && login.status == "pending"
 }
 
 func (a *API) finishQoderLogin(id, status, message string, accountID int64) {

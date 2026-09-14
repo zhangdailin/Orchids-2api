@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -63,6 +64,7 @@ type Client struct {
 
 	creds   Credentials
 	updater *tokenUpdater
+	mu      sync.Mutex
 }
 
 // NewFromAccount builds a client for the given account. cfg supplies proxy and
@@ -87,11 +89,16 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 		}
 	}
 
+	var accountSnapshot *store.Account
+	if acc != nil {
+		copied := *acc
+		accountSnapshot = &copied
+	}
 	return &Client{
 		httpClient:     util.GetSharedHTTPClient(proxyKey, timeout, proxyFunc),
 		baseURL:        baseURL,
 		requestTimeout: timeout,
-		account:        acc,
+		account:        accountSnapshot,
 		creds:          ResolveCredentials(acc),
 	}
 }
@@ -102,9 +109,12 @@ func (c *Client) SetAccountStore(s AccountUpdater) {
 	if c == nil {
 		return
 	}
+	c.mu.Lock()
 	c.accountStore = s
-	if c.updater != nil {
-		c.updater.accountStore = s
+	updater := c.updater
+	c.mu.Unlock()
+	if updater != nil {
+		updater.SetAccountStore(s)
 	}
 }
 
@@ -181,10 +191,16 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 // ensureAccessToken returns a usable bearer token, refreshing when the stored
 // access token is missing or about to expire.
 func (c *Client) ensureAccessToken(ctx context.Context) (string, error) {
+	return c.tokenUpdater().Token(ctx, c.creds)
+}
+
+func (c *Client) tokenUpdater() *tokenUpdater {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.updater == nil {
 		c.updater = newTokenUpdater(c.baseURL, c.httpClient, c.accountStore, c.account)
 	}
-	return c.updater.Token(ctx, c.creds)
+	return c.updater
 }
 
 // buildBody renders the OpenAI-shaped request body the upstream expects.
@@ -232,8 +248,5 @@ func (c *Client) RefreshCredentials(ctx context.Context) (Credentials, error) {
 	if c == nil {
 		return Credentials{}, fmt.Errorf("workbuddy client is nil")
 	}
-	if c.updater == nil {
-		c.updater = newTokenUpdater(c.baseURL, c.httpClient, c.accountStore, c.account)
-	}
-	return c.updater.RefreshNow(ctx, c.creds)
+	return c.tokenUpdater().RefreshNow(ctx, c.creds)
 }

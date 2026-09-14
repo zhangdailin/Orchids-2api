@@ -22,6 +22,10 @@ type AccountUpdater interface {
 	UpdateAccount(ctx context.Context, acc *store.Account) error
 }
 
+type credentialUpdater interface {
+	UpdateWorkBuddyCredentials(ctx context.Context, id int64, patch store.WorkBuddyCredentialPatch) error
+}
+
 // Credentials holds the WorkBuddy account material needed to talk to the
 // international backend. RefreshToken is the durable credential: the desktop
 // client stores it beside the access token, and Keycloak rotates it on every
@@ -424,20 +428,41 @@ type tokenUpdater struct {
 	baseURL      string
 	httpClient   *http.Client
 	accountStore AccountUpdater
-	account      *store.Account
+	account      store.Account
+	accountID    int64
 
-	mu    sync.Mutex
-	token string
-	until time.Time
+	mu                   sync.Mutex
+	token                string
+	until                time.Time
+	creds                Credentials
+	initialized          bool
+	dirty                bool
+	dirtyExpectedRefresh string
 }
 
 func newTokenUpdater(baseURL string, httpClient *http.Client, accountStore AccountUpdater, acc *store.Account) *tokenUpdater {
-	return &tokenUpdater{
+	updater := &tokenUpdater{
 		baseURL:      strings.TrimSuffix(baseURL, "/"),
 		httpClient:   httpClient,
 		accountStore: accountStore,
-		account:      acc,
 	}
+	if acc != nil {
+		updater.account = *acc
+		updater.accountID = acc.ID
+	}
+	return updater
+}
+
+func (t *tokenUpdater) SetAccountStore(accountStore AccountUpdater) {
+	t.mu.Lock()
+	t.accountStore = accountStore
+	t.mu.Unlock()
+}
+
+func (t *tokenUpdater) SetBaseURL(baseURL string) {
+	t.mu.Lock()
+	t.baseURL = strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
+	t.mu.Unlock()
 }
 
 // Token returns a valid access token, refreshing only when needed.
@@ -446,6 +471,15 @@ func (t *tokenUpdater) Token(ctx context.Context, creds Credentials) (string, er
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.initialize(creds)
+	if t.dirty {
+		if err := t.persist(ctx, t.creds, t.dirtyExpectedRefresh); err != nil {
+			return "", err
+		}
+		t.dirty = false
+		t.dirtyExpectedRefresh = ""
+	}
+	creds = t.creds
 
 	if t.token != "" && t.until.Sub(now) > minRefreshLead {
 		return t.token, nil
@@ -477,25 +511,56 @@ func (t *tokenUpdater) Token(ctx context.Context, creds Credentials) (string, er
 	}
 	t.token = refreshed.AccessToken
 	t.until = refreshed.ExpiresAt
-	t.persist(refreshed, creds)
+	t.creds = refreshed
+	t.dirty = true
+	t.dirtyExpectedRefresh = creds.RefreshToken
+	if err := t.persist(ctx, refreshed, t.dirtyExpectedRefresh); err != nil {
+		return "", err
+	}
+	t.dirty = false
+	t.dirtyExpectedRefresh = ""
 	return refreshed.AccessToken, nil
 }
 
 // RefreshNow forces one refresh cycle, used by account verification.
 func (t *tokenUpdater) RefreshNow(ctx context.Context, creds Credentials) (Credentials, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.initialize(creds)
+	if t.dirty {
+		if err := t.persist(ctx, t.creds, t.dirtyExpectedRefresh); err != nil {
+			return t.creds, err
+		}
+		t.dirty = false
+		t.dirtyExpectedRefresh = ""
+	}
+	creds = t.creds
 	if strings.TrimSpace(creds.RefreshToken) == "" {
 		return creds, fmt.Errorf("workbuddy account is missing a refresh token")
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	refreshed, err := t.refresh(ctx, creds)
 	if err != nil {
 		return creds, err
 	}
 	t.token = refreshed.AccessToken
 	t.until = refreshed.ExpiresAt
-	t.persist(refreshed, creds)
+	t.creds = refreshed
+	t.dirty = true
+	t.dirtyExpectedRefresh = creds.RefreshToken
+	if err := t.persist(ctx, refreshed, t.dirtyExpectedRefresh); err != nil {
+		return refreshed, err
+	}
+	t.dirty = false
+	t.dirtyExpectedRefresh = ""
 	return refreshed, nil
+}
+
+func (t *tokenUpdater) initialize(creds Credentials) {
+	if t.initialized {
+		return
+	}
+	t.creds = creds
+	t.initialized = true
 }
 
 func (t *tokenUpdater) refresh(ctx context.Context, creds Credentials) (Credentials, error) {
@@ -555,15 +620,30 @@ func (t *tokenUpdater) refresh(ctx context.Context, creds Credentials) (Credenti
 	return out, nil
 }
 
-func (t *tokenUpdater) persist(creds, previous Credentials) {
-	if t.accountStore == nil || t.account == nil || t.account.ID == 0 {
-		return
+func (t *tokenUpdater) persist(parent context.Context, creds Credentials, expectedRefreshToken string) error {
+	if t.accountStore == nil || t.accountID == 0 {
+		return nil
 	}
-	if strings.TrimSpace(creds.AccessToken) == previous.AccessToken &&
-		strings.TrimSpace(creds.RefreshToken) == previous.RefreshToken {
-		return
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
+	defer cancel()
+	patch := store.WorkBuddyCredentialPatch{
+		ExpectedRefreshToken: expectedRefreshToken,
+		AccessToken:          creds.AccessToken,
+		RefreshToken:         creds.RefreshToken,
+		ExpiresAt:            creds.ExpiresAt,
+		UID:                  creds.UID,
+		Email:                creds.Email,
 	}
-	acc := *t.account
+	if updater, ok := t.accountStore.(credentialUpdater); ok {
+		if err := updater.UpdateWorkBuddyCredentials(writeCtx, t.accountID, patch); err != nil {
+			return fmt.Errorf("persist rotated workbuddy credential: %w", err)
+		}
+		return nil
+	}
+
+	// Compatibility path for small test stores and integrations that only
+	// implement the historical full-account method.
+	acc := t.account
 	acc.WorkBuddyAccessToken = creds.AccessToken
 	if strings.TrimSpace(creds.RefreshToken) != "" {
 		acc.WorkBuddyRefreshToken = creds.RefreshToken
@@ -579,19 +659,11 @@ func (t *tokenUpdater) persist(creds, previous Credentials) {
 		acc.Email = creds.Email
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := t.accountStore.UpdateAccount(ctx, &acc); err != nil {
-		return
+	if err := t.accountStore.UpdateAccount(writeCtx, &acc); err != nil {
+		return fmt.Errorf("persist rotated workbuddy credential: %w", err)
 	}
-	// Keep the in-memory snapshot coherent so the next request on this client
-	// does not replay the pre-rotation refresh token.
-	t.account.WorkBuddyAccessToken = acc.WorkBuddyAccessToken
-	t.account.WorkBuddyRefreshToken = acc.WorkBuddyRefreshToken
-	t.account.WorkBuddyExpiresAt = acc.WorkBuddyExpiresAt
-	if acc.ClientCookie != "" {
-		t.account.ClientCookie = acc.ClientCookie
-	}
+	t.account = acc
+	return nil
 }
 
 // WorkBuddyModel is one entry of the /v3/config catalog.

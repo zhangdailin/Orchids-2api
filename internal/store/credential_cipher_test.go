@@ -24,12 +24,19 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 
 	ctx := context.Background()
 	acc := &Account{
-		Name:              "encrypted",
-		AccountType:       "grok",
-		Enabled:           true,
-		ClientCookie:      "sso-secret",
-		OAuthAccessToken:  "access-secret",
-		OAuthRefreshToken: "refresh-secret",
+		Name:                  "encrypted",
+		AccountType:           "grok",
+		Enabled:               true,
+		ClientCookie:          "sso-secret",
+		OAuthAccessToken:      "access-secret",
+		OAuthRefreshToken:     "refresh-secret",
+		WorkBuddyAccessToken:  "wb-access-secret",
+		WorkBuddyRefreshToken: "wb-refresh-secret",
+		QoderAccessToken:      "qoder-access-secret",
+		QoderRefreshToken:     "qoder-refresh-secret",
+		QoderRuntimeInfo:      "qoder-runtime-secret",
+		QoderRuntimeKey:       "qoder-key-secret",
+		QoderJobToken:         "qoder-job-secret",
 	}
 	if err := s.CreateAccount(ctx, acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
@@ -38,7 +45,10 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read raw account: %v", err)
 	}
-	for _, secret := range []string{"sso-secret", "access-secret", "refresh-secret"} {
+	for _, secret := range []string{
+		"sso-secret", "access-secret", "refresh-secret", "wb-access-secret", "wb-refresh-secret",
+		"qoder-access-secret", "qoder-refresh-secret", "qoder-runtime-secret", "qoder-key-secret", "qoder-job-secret",
+	} {
 		if strings.Contains(raw, secret) {
 			t.Fatalf("raw Redis value contains plaintext %q: %s", secret, raw)
 		}
@@ -52,6 +62,10 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 	}
 	if got.ClientCookie != acc.ClientCookie || got.OAuthAccessToken != acc.OAuthAccessToken || got.OAuthRefreshToken != acc.OAuthRefreshToken {
 		t.Fatalf("decrypted credentials mismatch: %#v", got)
+	}
+	if got.WorkBuddyRefreshToken != acc.WorkBuddyRefreshToken || got.QoderRefreshToken != acc.QoderRefreshToken ||
+		got.QoderRuntimeKey != acc.QoderRuntimeKey || got.QoderJobToken != acc.QoderJobToken {
+		t.Fatalf("decrypted provider credentials mismatch: %#v", got)
 	}
 
 	legacy := `{"id":2,"name":"legacy","account_type":"grok","enabled":true,"client_cookie":"legacy-secret"}`

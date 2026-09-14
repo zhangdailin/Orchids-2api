@@ -255,8 +255,12 @@ func (c *Client) SetBaseURLForTest(base string) {
 	if c == nil {
 		return
 	}
-	c.baseURL = strings.TrimSuffix(strings.TrimSpace(base), "/")
-	if c.updater != nil {
-		c.updater.baseURL = c.baseURL
+	base = strings.TrimSuffix(strings.TrimSpace(base), "/")
+	c.mu.Lock()
+	c.baseURL = base
+	updater := c.updater
+	c.mu.Unlock()
+	if updater != nil {
+		updater.SetBaseURL(base)
 	}
 }

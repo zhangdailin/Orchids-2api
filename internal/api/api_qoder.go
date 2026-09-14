@@ -176,6 +176,10 @@ func NormalizeQoderCredentials(acc *store.Account) bool {
 // reported by the chat call itself, in terms the operator can act on, and
 // marking the credential dead over it is exactly the mistake being corrected.
 func verifyQoderAccount(ctx context.Context, acc *store.Account, cfg *config.Config) (string, int, error) {
+	return verifyQoderAccountWithStore(ctx, acc, cfg, nil)
+}
+
+func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *config.Config, accountStore qoder.AccountUpdater) (string, int, error) {
 	if acc == nil {
 		return "", 0, nil
 	}
@@ -189,6 +193,9 @@ func verifyQoderAccount(ctx context.Context, acc *store.Account, cfg *config.Con
 
 	client := qoder.NewFromAccount(acc, cfg)
 	defer client.Close()
+	if accountStore != nil {
+		client.SetAccountStore(accountStore)
+	}
 
 	// The runtime pair encrypts the UID, so it cannot be produced before the
 	// identity is known. A credential imported without one is completed here.

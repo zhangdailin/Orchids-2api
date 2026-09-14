@@ -84,6 +84,13 @@ func accountCredentialFields(acc *Account) []*string {
 		&acc.Token,
 		&acc.OAuthAccessToken,
 		&acc.OAuthRefreshToken,
+		&acc.WorkBuddyAccessToken,
+		&acc.WorkBuddyRefreshToken,
+		&acc.QoderAccessToken,
+		&acc.QoderRefreshToken,
+		&acc.QoderRuntimeInfo,
+		&acc.QoderRuntimeKey,
+		&acc.QoderJobToken,
 	}
 }
 
@@ -171,6 +178,8 @@ func hasLegacyCredential(data []byte) (bool, error) {
 	for _, name := range []string{
 		"session_id", "client_cookie", "refresh_token", "device_id",
 		"session_cookie", "client_uat", "token", "oauth_access_token", "oauth_refresh_token",
+		"workbuddy_access_token", "workbuddy_refresh_token",
+		"qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "qoder_job_token",
 	} {
 		value, _ := values[name].(string)
 		if value != "" && !strings.HasPrefix(value, encryptedCredentialPrefix) {

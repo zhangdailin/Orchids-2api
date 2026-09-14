@@ -3,10 +3,13 @@ package qoder
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +35,146 @@ func signedTestAccount() *store.Account {
 		QoderRuntimeInfo:  "runtime-info",
 		QoderRuntimeKey:   "runtime-key",
 		QoderDataPolicy:   true,
+	}
+}
+
+func TestConcurrentRuntimeDerivationIsSingleFlight(t *testing.T) {
+	t.Parallel()
+
+	acc := signedTestAccount()
+	acc.ID = 0
+	acc.QoderRuntimeInfo = ""
+	acc.QoderRuntimeKey = ""
+	client := NewFromAccount(acc, nil)
+	client.SetEntropyForTest(strings.NewReader(strings.Repeat("runtime-entropy-", 128)))
+
+	const callers = 24
+	results := make(chan RuntimeFields, callers)
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fields, err := client.ensureRuntimeFields(context.Background(), client.currentCredentials())
+			results <- fields
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := <-results
+	if !want.Complete() {
+		t.Fatal("derived runtime fields are incomplete")
+	}
+	for got := range results {
+		if got != want {
+			t.Fatal("concurrent callers observed different runtime fields")
+		}
+	}
+}
+
+func TestConcurrentExpiredCredentialRefreshesOnlyOnce(t *testing.T) {
+	t.Parallel()
+
+	var refreshes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "deviceToken/refresh") {
+			http.NotFound(w, r)
+			return
+		}
+		refreshes.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"device_token":"access-new","refresh_token":"refresh-new","expires_in":7200}`))
+	}))
+	defer server.Close()
+
+	acc := signedTestAccount()
+	acc.ID = 0
+	acc.QoderAccessToken = "access-old"
+	acc.QoderRefreshToken = "refresh-old"
+	acc.QoderExpiresAt = time.Now().Add(-time.Minute)
+	client := NewFromAccount(acc, nil)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+
+	const callers = 24
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			creds, err := client.ensureAccessToken(context.Background())
+			if err == nil && creds.AccessToken != "access-new" {
+				err = fmt.Errorf("access token = %q", creds.AccessToken)
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := refreshes.Load(); got != 1 {
+		t.Fatalf("refresh calls = %d, want 1", got)
+	}
+}
+
+type failingQoderUpdater struct {
+	fail  bool
+	calls int
+}
+
+func (f *failingQoderUpdater) UpdateAccount(context.Context, *store.Account) error {
+	f.calls++
+	if f.fail {
+		return errors.New("write failed")
+	}
+	return nil
+}
+
+func TestRefreshReportsPersistenceFailureAndRetriesWriteBeforeReuse(t *testing.T) {
+	t.Parallel()
+	refreshes := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes++
+		_, _ = w.Write([]byte(`{"device_token":"access-new","refresh_token":"refresh-new","expires_in":7200}`))
+	}))
+	defer server.Close()
+
+	acc := signedTestAccount()
+	acc.QoderAccessToken = "access-old"
+	acc.QoderRefreshToken = "refresh-old"
+	acc.QoderExpiresAt = time.Now().Add(-time.Minute)
+	client := NewFromAccount(acc, nil)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	updater := &failingQoderUpdater{fail: true}
+	client.SetAccountStore(updater)
+	if _, err := client.ensureAccessToken(context.Background()); err == nil {
+		t.Fatal("refresh succeeded even though the rotated token was not persisted")
+	}
+	updater.fail = false
+	creds, err := client.ensureAccessToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.AccessToken != "access-new" {
+		t.Fatalf("access token = %q", creds.AccessToken)
+	}
+	if refreshes != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshes)
+	}
+	if updater.calls != 2 {
+		t.Fatalf("persistence calls = %d, want failed write plus retry", updater.calls)
 	}
 }
 

@@ -43,10 +43,19 @@ var newWorkBuddyLoginClient = func(acc *store.Account, cfg *config.Config) *work
 var newWorkBuddyLoginClientMu sync.RWMutex
 
 func makeWorkBuddyLoginClient(acc *store.Account, cfg *config.Config) *workbuddy.Client {
+	return workBuddyLoginClientFactory()(acc, cfg)
+}
+
+func workBuddyLoginClientFactory() func(*store.Account, *config.Config) *workbuddy.Client {
 	newWorkBuddyLoginClientMu.RLock()
 	factory := newWorkBuddyLoginClient
 	newWorkBuddyLoginClientMu.RUnlock()
-	return factory(acc, cfg)
+	return factory
+}
+
+type workbuddyLogin struct {
+	deviceLogin
+	factory func(*store.Account, *config.Config) *workbuddy.Client
 }
 
 // HandleWorkBuddyLogin starts and observes the official WorkBuddy
@@ -93,7 +102,9 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	client := makeWorkBuddyLoginClient(nil, a.config.Load())
+	cfg := a.config.Load()
+	factory := workBuddyLoginClientFactory()
+	client := factory(nil, cfg)
 	defer client.Close()
 	state, authURL, err := client.StartAuthLogin(ctx, workbuddyClientVersion)
 	if err != nil {
@@ -125,17 +136,22 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	pollContext, pollCancel := context.WithCancel(context.Background())
 	login := &workbuddyLogin{
-		deviceCode: state,
-		verifyFull: authURL,
-		expiresAt:  time.Now().Add(workbuddyLoginTTL),
-		interval:   workbuddyLoginInterval,
-		cancel:     pollCancel,
-		status:     "pending",
-		message:    "Waiting for WorkBuddy authorization",
-		enabled:    enabled,
-		// The caller always declares the intended state, so the completed
-		// account must honour it instead of defaulting to enabled.
-		enabledKnown: true,
+		deviceLogin: deviceLogin{
+			deviceCode:     state,
+			verifyFull:     authURL,
+			expiresAt:      time.Now().Add(workbuddyLoginTTL),
+			interval:       workbuddyLoginInterval,
+			cancel:         pollCancel,
+			done:           make(chan struct{}),
+			configSnapshot: cfg,
+			status:         "pending",
+			message:        "Waiting for WorkBuddy authorization",
+			enabled:        enabled,
+			// The caller always declares the intended state, so the completed
+			// account must honour it instead of defaulting to enabled.
+			enabledKnown: true,
+		},
+		factory: factory,
 	}
 
 	a.workbuddyLoginMu.Lock()
@@ -149,17 +165,23 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 	a.workbuddyLogins[id] = login
 	a.workbuddyLoginMu.Unlock()
 
-	go a.pollWorkBuddyLogin(pollContext, id)
+	go func() {
+		defer close(login.done)
+		a.pollWorkBuddyLogin(pollContext, id)
+	}()
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(newDeviceLoginResponse(id, login))
+	_ = json.NewEncoder(w).Encode(newDeviceLoginResponse(id, &login.deviceLogin))
 }
 
 func (a *API) getWorkBuddyLogin(w http.ResponseWriter, id string) {
 	a.cleanupWorkBuddyLogins(time.Now())
 	a.workbuddyLoginMu.Lock()
 	login := a.workbuddyLogins[id]
-	response := newDeviceLoginResponse(id, login)
+	var response deviceLoginResponse
+	if login != nil {
+		response = newDeviceLoginResponse(id, &login.deviceLogin)
+	}
 	a.workbuddyLoginMu.Unlock()
 	if login == nil {
 		writeWorkBuddyLoginError(w, http.StatusNotFound, "login_not_found",
@@ -179,19 +201,25 @@ func (a *API) cancelWorkBuddyLogin(w http.ResponseWriter, id string) {
 		return
 	}
 	delete(a.workbuddyLogins, id)
-	finishDeviceLogin(login, "cancelled", "WorkBuddy authorization cancelled", 0)
+	finishDeviceLogin(&login.deviceLogin, "cancelled", "WorkBuddy authorization cancelled", 0)
+	done := login.done
 	a.workbuddyLoginMu.Unlock()
+	waitForLoginPoll(done)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // pollWorkBuddyLogin exchanges the authorization state until the browser step
 // completes, then verifies and persists the account.
 func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
-	client := makeWorkBuddyLoginClient(nil, a.config.Load())
+	login, ok := a.workBuddyLoginForPoll(id)
+	if !ok {
+		return
+	}
+	client := login.factory(nil, login.configSnapshot)
 	defer client.Close()
 
 	for {
-		login, ok := a.workBuddyLoginForPoll(id)
+		login, ok = a.workBuddyLoginForPoll(id)
 		if !ok {
 			return
 		}
@@ -222,10 +250,13 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 			return
 		}
 
-		account, err := a.buildWorkBuddyAccountFromCredentials(ctx, id, creds)
+		account, err := a.buildWorkBuddyAccountFromCredentialsWithFactory(ctx, id, creds, login.configSnapshot, login.factory)
 		if err != nil {
 			slog.Warn("WorkBuddy authorization succeeded but verification failed", "login_id", id, "error", err)
 			a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization succeeded but the account could not be verified", 0)
+			return
+		}
+		if ctx.Err() != nil || !a.workBuddyLoginPending(id) {
 			return
 		}
 		if login.enabledKnown {
@@ -238,6 +269,7 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 		}
 		if existing != nil {
 			account.ID = existing.ID
+			account.ReplaceWorkBuddyCredentials = true
 			if err := a.store.UpdateAccount(ctx, account); err != nil {
 				a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization succeeded but the account could not be updated", 0)
 				return
@@ -259,6 +291,14 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 // account record. The model catalog read doubles as the credential check: a
 // token that cannot list the account catalog is never persisted.
 func (a *API) buildWorkBuddyAccountFromCredentials(ctx context.Context, loginID string, creds workbuddy.Credentials) (*store.Account, error) {
+	return a.buildWorkBuddyAccountFromCredentialsWithConfig(ctx, loginID, creds, a.config.Load())
+}
+
+func (a *API) buildWorkBuddyAccountFromCredentialsWithConfig(ctx context.Context, loginID string, creds workbuddy.Credentials, cfg *config.Config) (*store.Account, error) {
+	return a.buildWorkBuddyAccountFromCredentialsWithFactory(ctx, loginID, creds, cfg, workBuddyLoginClientFactory())
+}
+
+func (a *API) buildWorkBuddyAccountFromCredentialsWithFactory(ctx context.Context, loginID string, creds workbuddy.Credentials, cfg *config.Config, factory func(*store.Account, *config.Config) *workbuddy.Client) (*store.Account, error) {
 	acc := &store.Account{
 		Name:                  "workbuddy-login",
 		AccountType:           "workbuddy",
@@ -275,7 +315,7 @@ func (a *API) buildWorkBuddyAccountFromCredentials(ctx context.Context, loginID 
 	}
 
 	state := a.workBuddyLoginState(loginID)
-	client := makeWorkBuddyLoginClient(acc, a.config.Load())
+	client := factory(acc, cfg)
 	defer client.Close()
 
 	// The access-token JWT already proves the identity; the profile endpoint only
@@ -348,7 +388,12 @@ func (a *API) buildWorkBuddyAccountFromCredentials(ctx context.Context, loginID 
 func (a *API) workBuddyLoginForPoll(id string) (*workbuddyLogin, bool) {
 	a.workbuddyLoginMu.Lock()
 	defer a.workbuddyLoginMu.Unlock()
-	return deviceLoginForPoll(a.workbuddyLogins, id)
+	login := a.workbuddyLogins[id]
+	if login == nil || login.status != "pending" || strings.TrimSpace(login.deviceCode) == "" {
+		return nil, false
+	}
+	copyLogin := *login
+	return &copyLogin, true
 }
 
 func (a *API) workBuddyLoginState(id string) string {
@@ -360,10 +405,29 @@ func (a *API) workBuddyLoginState(id string) string {
 	return ""
 }
 
+func (a *API) workBuddyLoginPending(id string) bool {
+	a.workbuddyLoginMu.Lock()
+	defer a.workbuddyLoginMu.Unlock()
+	login := a.workbuddyLogins[id]
+	return login != nil && login.status == "pending"
+}
+
+func waitForLoginPoll(done <-chan struct{}) {
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+	}
+}
+
 func (a *API) finishWorkBuddyLogin(id, status, message string, accountID int64) {
 	a.workbuddyLoginMu.Lock()
 	defer a.workbuddyLoginMu.Unlock()
-	finishDeviceLogin(a.workbuddyLogins[id], status, message, accountID)
+	if login := a.workbuddyLogins[id]; login != nil {
+		finishDeviceLogin(&login.deviceLogin, status, message, accountID)
+	}
 }
 
 func (a *API) cleanupWorkBuddyLogins(now time.Time) {
@@ -372,7 +436,13 @@ func (a *API) cleanupWorkBuddyLogins(now time.Time) {
 	}
 	a.workbuddyLoginMu.Lock()
 	defer a.workbuddyLoginMu.Unlock()
-	cleanupDeviceLogins(a.workbuddyLogins, now, "WorkBuddy authorization timed out; start again")
+	for id, login := range a.workbuddyLogins {
+		if login == nil || !now.After(login.expiresAt) {
+			continue
+		}
+		finishDeviceLogin(&login.deviceLogin, "expired", "WorkBuddy authorization timed out; start again", 0)
+		delete(a.workbuddyLogins, id)
+	}
 }
 
 // writeWorkBuddyLoginError reports a failure with a stable machine-readable code

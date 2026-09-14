@@ -110,3 +110,86 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 		t.Fatalf("created=%d want 2 after credential change", created)
 	}
 }
+
+func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) {
+	t.Parallel()
+
+	base := &store.Account{
+		ID:                    9,
+		AccountType:           "qoder",
+		WorkBuddyAccessToken:  "wb-access",
+		WorkBuddyRefreshToken: "wb-refresh",
+		WorkBuddyUID:          "wb-user",
+		WorkBuddyExpiresAt:    time.Unix(10, 0),
+		WorkBuddyModelIDs:     []string{"wb-model"},
+		QoderAccessToken:      "q-access",
+		QoderRefreshToken:     "q-refresh",
+		QoderExpiresAt:        time.Unix(20, 0),
+		QoderMachineID:        "machine-a",
+		QoderUserID:           "user-a",
+		QoderUserName:         "name-a",
+		QoderOrganizationID:   "org-a",
+		QoderOrganizationTags: []string{"tag-a"},
+		QoderDataPolicy:       true,
+		QoderRuntimeInfo:      "runtime-a",
+		QoderRuntimeKey:       "key-a",
+		QoderModelIDs:         []string{"q-model-a"},
+	}
+	cfg := &config.Config{
+		WorkBuddyBaseURL:    "https://wb-a.example",
+		QoderOAuthBaseURL:   "https://oauth-a.example",
+		QoderOpenAPIBaseURL: "https://open-a.example",
+		QoderInferenceURL:   "https://infer-a.example",
+		QoderAuthBaseURL:    "https://auth-a.example",
+		QoderClientID:       "client-a",
+		QoderClientVersion:  "version-a",
+	}
+	want := accountClientFingerprint(base, cfg)
+
+	accountCases := []struct {
+		name   string
+		mutate func(*store.Account)
+	}{
+		{"workbuddy endpoint credential", func(a *store.Account) { a.WorkBuddyRefreshToken = "wb-refresh-b" }},
+		{"workbuddy expiry", func(a *store.Account) { a.WorkBuddyExpiresAt = time.Unix(11, 0) }},
+		{"workbuddy models", func(a *store.Account) { a.WorkBuddyModelIDs = []string{"wb-model-b"} }},
+		{"qoder access", func(a *store.Account) { a.QoderAccessToken = "q-access-b" }},
+		{"qoder machine", func(a *store.Account) { a.QoderMachineID = "machine-b" }},
+		{"qoder identity", func(a *store.Account) { a.QoderUserID = "user-b" }},
+		{"qoder organization", func(a *store.Account) { a.QoderOrganizationTags = []string{"tag-b"} }},
+		{"qoder policy", func(a *store.Account) { a.QoderDataPolicy = false }},
+		{"qoder runtime", func(a *store.Account) { a.QoderRuntimeKey = "key-b" }},
+		{"qoder models", func(a *store.Account) { a.QoderModelIDs = []string{"q-model-b"} }},
+	}
+	for _, tc := range accountCases {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := *base
+			tc.mutate(&changed)
+			if got := accountClientFingerprint(&changed, cfg); got == want {
+				t.Fatal("fingerprint did not change")
+			}
+		})
+	}
+
+	configCases := []struct {
+		name   string
+		mutate func(*config.Config)
+	}{
+		{"workbuddy base URL", func(c *config.Config) { c.WorkBuddyBaseURL = "https://wb-b.example" }},
+		{"qoder OAuth URL", func(c *config.Config) { c.QoderOAuthBaseURL = "https://oauth-b.example" }},
+		{"qoder OpenAPI URL", func(c *config.Config) { c.QoderOpenAPIBaseURL = "https://open-b.example" }},
+		{"qoder inference URL", func(c *config.Config) { c.QoderInferenceURL = "https://infer-b.example" }},
+		{"qoder auth URL", func(c *config.Config) { c.QoderAuthBaseURL = "https://auth-b.example" }},
+		{"qoder client id", func(c *config.Config) { c.QoderClientID = "client-b" }},
+		{"qoder client version", func(c *config.Config) { c.QoderClientVersion = "version-b" }},
+	}
+	for _, tc := range configCases {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := *cfg
+			tc.mutate(&changed)
+			if got := accountClientFingerprint(base, &changed); got == want {
+				t.Fatal("fingerprint did not change")
+			}
+		})
+	}
+}

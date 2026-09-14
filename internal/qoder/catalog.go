@@ -299,6 +299,8 @@ func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
 	if c == nil {
 		return nil, fmt.Errorf("qoder client is nil")
 	}
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
 	if c.account != nil {
 		if catalog := catalogFromIDs(c.account.QoderModelIDs); catalog.Len() > 0 {
 			return catalog, nil
@@ -321,11 +323,13 @@ func (c *Client) SyncCatalog(ctx context.Context) (*Catalog, error) {
 		return nil, err
 	}
 	ids := catalogToIDs(catalog)
-	c.persist(ctx, func(acc *store.Account) {
-		acc.QoderModelIDs = ids
-	})
-	if c.account != nil {
-		c.account.QoderModelIDs = ids
+	if err := c.persistPatch(ctx, store.QoderAccountPatch{ModelIDs: ids}); err != nil {
+		return nil, err
 	}
+	c.stateMu.Lock()
+	if c.account != nil {
+		c.account.QoderModelIDs = append([]string(nil), ids...)
+	}
+	c.stateMu.Unlock()
 	return catalog, nil
 }

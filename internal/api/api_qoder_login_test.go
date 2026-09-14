@@ -1,12 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,13 +87,19 @@ func newQoderAuthServer(t *testing.T, pollBodies []string) *qoderAuthServer {
 // stubQoderLoginClient redirects the login flow at the stub server.
 func stubQoderLoginClient(t *testing.T, baseURL string) {
 	t.Helper()
+	newQoderLoginClientMu.Lock()
 	previous := newQoderLoginClient
-	t.Cleanup(func() { newQoderLoginClient = previous })
 	newQoderLoginClient = func(acc *store.Account, cfg *config.Config) *qoder.Client {
 		client := qoder.NewFromAccount(acc, cfg)
 		client.SetEndpointsForTest(baseURL, baseURL, baseURL, baseURL)
 		return client
 	}
+	newQoderLoginClientMu.Unlock()
+	t.Cleanup(func() {
+		newQoderLoginClientMu.Lock()
+		newQoderLoginClient = previous
+		newQoderLoginClientMu.Unlock()
+	})
 }
 
 func qoderLoginConfig(baseURL string) *config.Config {
@@ -183,6 +191,114 @@ func TestHandleQoderLogin_StartReturnsOfficialDeviceURL(t *testing.T) {
 	}
 	if polled.Status != "pending" {
 		t.Fatalf("polled status = %q, want pending", polled.Status)
+	}
+}
+
+func TestHandleQoderLogin_CancelStopsBlockedPollAndDoesNotPersist(t *testing.T) {
+	s, _ := newTestStore(t, "qd-cancel:")
+	pollStarted := make(chan struct{})
+	pollCancelled := make(chan struct{})
+	var startedOnce sync.Once
+	var cancelledOnce sync.Once
+	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.WriteHeader(http.StatusOK)
+		case "/api/v1/deviceToken/poll":
+			startedOnce.Do(func() { close(pollStarted) })
+			<-r.Context().Done()
+			cancelledOnce.Do(func() { close(pollCancelled) })
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer auth.Close()
+	stubQoderLoginClient(t, auth.URL)
+
+	a := New(s, "", "", qoderLoginConfig(auth.URL))
+	start := httptest.NewRecorder()
+	a.HandleQoderLogin(start, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
+	var response struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(start.Body.Bytes(), &response); err != nil || response.ID == "" {
+		t.Fatalf("start response = %q", start.Body.String())
+	}
+	// Speed up only this transaction; production keeps the normal two-second
+	// cadence.
+	a.qoderLoginMu.Lock()
+	a.qoderLogins[response.ID].interval = time.Millisecond
+	a.qoderLoginMu.Unlock()
+
+	select {
+	case <-pollStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("poll request did not start")
+	}
+	cancelRec := httptest.NewRecorder()
+	a.HandleQoderLogin(cancelRec, qoderLoginRequest(t, http.MethodDelete, "/api/qoder/login/"+response.ID, ""))
+	if cancelRec.Code != http.StatusNoContent {
+		t.Fatalf("cancel status = %d", cancelRec.Code)
+	}
+	select {
+	case <-pollCancelled:
+	default:
+		t.Fatal("DELETE returned before the blocked upstream poll was cancelled")
+	}
+	accounts, err := s.ListAccounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, acc := range accounts {
+		if strings.EqualFold(acc.AccountType, "qoder") {
+			t.Fatalf("cancelled login persisted an account: %+v", acc)
+		}
+	}
+}
+
+func TestHandleQoderLogin_PreservesDisabledPreference(t *testing.T) {
+	s, _ := newTestStore(t, "qd-disabled:")
+	auth := newQoderAuthServer(t, []string{
+		`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400,"user_id":"uid-disabled","user_name":"operator"}`,
+	})
+	defer auth.Close()
+	stubQoderLoginClient(t, auth.URL)
+	a := New(s, "", "", qoderLoginConfig(auth.URL))
+
+	start := httptest.NewRecorder()
+	a.HandleQoderLogin(start, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"enabled":false}`))
+	var response struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(start.Body.Bytes(), &response); err != nil || response.ID == "" {
+		t.Fatalf("start response = %q", start.Body.String())
+	}
+	a.qoderLoginMu.Lock()
+	a.qoderLogins[response.ID].interval = time.Millisecond
+	a.qoderLoginMu.Unlock()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var final deviceLoginResponse
+	for time.Now().Before(deadline) {
+		poll := httptest.NewRecorder()
+		a.HandleQoderLogin(poll, qoderLoginRequest(t, http.MethodGet, "/api/qoder/login/"+response.ID, ""))
+		if err := json.Unmarshal(poll.Body.Bytes(), &final); err != nil {
+			t.Fatal(err)
+		}
+		if final.Status == "complete" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if final.Status != "complete" {
+		t.Fatalf("final login = %+v", final)
+	}
+	acc, err := s.GetAccount(context.Background(), final.AccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acc.Enabled {
+		t.Fatal("enabled:false was lost when the Qoder account was persisted")
 	}
 }
 

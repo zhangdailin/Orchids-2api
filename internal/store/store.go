@@ -127,6 +127,10 @@ type Account struct {
 	WorkBuddyRefreshToken string    `json:"workbuddy_refresh_token,omitempty"`
 	WorkBuddyExpiresAt    time.Time `json:"workbuddy_expires_at,omitempty"`
 	WorkBuddyUID          string    `json:"workbuddy_uid,omitempty"`
+	// ReplaceWorkBuddyCredentials is an explicit write intent. Ordinary full
+	// account updates carry a snapshot and must not overwrite a refresh token
+	// that rotated after that snapshot was read.
+	ReplaceWorkBuddyCredentials bool `json:"-"`
 	// WorkBuddyModelIDs is the last successful account-scoped /v3/config `cli`
 	// whitelist snapshot. An empty snapshot means "not synced yet", not "the
 	// account supports every model".
@@ -147,9 +151,10 @@ type Account struct {
 	// value must be written back. They live in their own fields rather than the
 	// generic Token/RefreshToken slots so account responses can redact them
 	// without touching another channel's credential.
-	QoderAccessToken  string    `json:"qoder_access_token,omitempty"`
-	QoderRefreshToken string    `json:"qoder_refresh_token,omitempty"`
-	QoderExpiresAt    time.Time `json:"qoder_expires_at,omitempty"`
+	QoderAccessToken        string    `json:"qoder_access_token,omitempty"`
+	QoderRefreshToken       string    `json:"qoder_refresh_token,omitempty"`
+	QoderExpiresAt          time.Time `json:"qoder_expires_at,omitempty"`
+	ReplaceQoderCredentials bool      `json:"-"`
 	// QoderMachineID is the 36-character device identity the CLI sends as
 	// Cosy-MachineId / Cosy-MachineToken. It is bound to the credential: the
 	// upstream rejects a request whose machine id does not match the one that
@@ -442,9 +447,37 @@ type Options struct {
 	CredentialEncryptionKey []byte
 }
 
+// WorkBuddyCredentialPatch contains only the fields owned by a WorkBuddy token
+// refresh. Keeping this mutation narrow prevents a client built from an older
+// account snapshot from overwriting concurrent quota, status or admin edits.
+type WorkBuddyCredentialPatch struct {
+	ExpectedRefreshToken string
+	AccessToken          string
+	RefreshToken         string
+	ExpiresAt            time.Time
+	UID                  string
+	Email                string
+}
+
+// QoderAccountPatch contains the independently refreshed Qoder client state.
+// Nil slices mean "not changed"; the remaining zero values keep the stored
+// value, matching the provider's rotated-credential semantics.
+type QoderAccountPatch struct {
+	ExpectedRefreshToken string
+	AccessToken          string
+	RefreshToken         string
+	ExpiresAt            time.Time
+	UserID               string
+	RuntimeInfo          string
+	RuntimeKey           string
+	ModelIDs             []string
+}
+
 type accountStore interface {
 	CreateAccount(ctx context.Context, acc *Account) error
 	UpdateAccount(ctx context.Context, acc *Account) error
+	UpdateWorkBuddyCredentials(ctx context.Context, id int64, patch WorkBuddyCredentialPatch) error
+	UpdateQoderAccount(ctx context.Context, id int64, patch QoderAccountPatch) error
 	DeleteAccount(ctx context.Context, id int64) error
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	ListAccounts(ctx context.Context) ([]*Account, error)
@@ -828,6 +861,20 @@ func (s *Store) CreateAccount(ctx context.Context, acc *Account) error {
 func (s *Store) UpdateAccount(ctx context.Context, acc *Account) error {
 	if s.accounts != nil {
 		return s.accounts.UpdateAccount(ctx, acc)
+	}
+	return fmt.Errorf("store not configured")
+}
+
+func (s *Store) UpdateWorkBuddyCredentials(ctx context.Context, id int64, patch WorkBuddyCredentialPatch) error {
+	if s.accounts != nil {
+		return s.accounts.UpdateWorkBuddyCredentials(ctx, id, patch)
+	}
+	return fmt.Errorf("store not configured")
+}
+
+func (s *Store) UpdateQoderAccount(ctx context.Context, id int64, patch QoderAccountPatch) error {
+	if s.accounts != nil {
+		return s.accounts.UpdateQoderAccount(ctx, id, patch)
 	}
 	return fmt.Errorf("store not configured")
 }

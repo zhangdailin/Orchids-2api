@@ -148,11 +148,18 @@ func WorkBuddyCredentialKey(acc *store.Account) string {
 // verifyWorkBuddyAccount proves the credential works before it is persisted and
 // applies the account-scoped model catalog and credit meter on the way.
 func verifyWorkBuddyAccount(ctx context.Context, acc *store.Account, cfg *config.Config) (string, int, error) {
+	return verifyWorkBuddyAccountWithStore(ctx, acc, cfg, nil)
+}
+
+func verifyWorkBuddyAccountWithStore(ctx context.Context, acc *store.Account, cfg *config.Config, accountStore workbuddy.AccountUpdater) (string, int, error) {
 	if acc == nil {
 		return "", 0, nil
 	}
 	client := workbuddy.NewFromAccount(acc, cfg)
 	defer client.Close()
+	if accountStore != nil {
+		client.SetAccountStore(accountStore)
+	}
 
 	// Identity first: a credential added before this channel stored the claims (or
 	// pasted as a raw session document) still resolves to a UID and an address, so
