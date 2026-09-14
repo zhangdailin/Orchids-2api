@@ -12,11 +12,12 @@ func TestSessionRefresh_UsesFirebaseWhenSuccessful(t *testing.T) {
 	t.Parallel()
 
 	sess := &session{refreshToken: "token-123"}
+	firebaseTokenURL := "https://firebase.test/v1/token?key=test-key"
 	var seen string
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			seen = req.URL.String()
-			if req.URL.String() != warpFirebaseURL {
+			if req.URL.String() != firebaseTokenURL {
 				t.Fatalf("unexpected refresh URL: %s", req.URL.String())
 			}
 			return &http.Response{
@@ -27,11 +28,11 @@ func TestSessionRefresh_UsesFirebaseWhenSuccessful(t *testing.T) {
 		}),
 	}
 
-	if err := sess.refresh(context.Background(), client); err != nil {
+	if err := sess.refresh(context.Background(), client, firebaseTokenURL); err != nil {
 		t.Fatalf("refresh() error = %v", err)
 	}
-	if seen != warpFirebaseURL {
-		t.Fatalf("endpoint=%q want %q", seen, warpFirebaseURL)
+	if seen != firebaseTokenURL {
+		t.Fatalf("endpoint=%q want %q", seen, firebaseTokenURL)
 	}
 	if sess.currentJWT() != "firebase-jwt" {
 		t.Fatalf("currentJWT=%q want firebase-jwt", sess.currentJWT())
@@ -45,12 +46,13 @@ func TestSessionRefresh_DoesNotFallbackToWarpTokenProxy(t *testing.T) {
 	t.Parallel()
 
 	sess := &session{refreshToken: "token-123"}
+	firebaseTokenURL := "https://firebase.test/v1/token?key=test-key"
 	var seen []string
 	client := &http.Client{
 		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			seen = append(seen, req.URL.String())
 			switch req.URL.String() {
-			case warpFirebaseURL:
+			case firebaseTokenURL:
 				return &http.Response{
 					StatusCode: http.StatusBadGateway,
 					Body:       io.NopCloser(bytes.NewBufferString(`{"error":"firebase unavailable"}`)),
@@ -63,10 +65,10 @@ func TestSessionRefresh_DoesNotFallbackToWarpTokenProxy(t *testing.T) {
 		}),
 	}
 
-	if err := sess.refresh(context.Background(), client); err == nil {
+	if err := sess.refresh(context.Background(), client, firebaseTokenURL); err == nil {
 		t.Fatal("expected refresh error")
 	}
-	if len(seen) != 1 || seen[0] != warpFirebaseURL {
+	if len(seen) != 1 || seen[0] != firebaseTokenURL {
 		t.Fatalf("seen refresh URLs=%v", seen)
 	}
 	if sess.currentJWT() != "" {

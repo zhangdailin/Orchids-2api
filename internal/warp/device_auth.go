@@ -22,7 +22,6 @@ const WarpAgentCLIClientID = "warp-agent-cli"
 var (
 	warpDeviceAuthorizationURL = warpAPIBaseURL + "/api/v1/oauth/device/auth"
 	warpDeviceTokenURL         = warpAPIBaseURL + "/api/v1/oauth/token"
-	warpCustomTokenURL         = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=" + warpFirebaseKey
 )
 
 // DeviceAuthorization is a short-lived Warp device login. DeviceCode is
@@ -51,22 +50,28 @@ func IsDeviceAuthorizationPending(err error) bool {
 // Warp's official Agent CLI. It never reads local Warp files or accepts a
 // password.
 type DeviceAuthenticator struct {
-	httpClient     *http.Client
-	deviceURL      string
-	tokenURL       string
-	customTokenURL string
+	httpClient         *http.Client
+	deviceURL          string
+	tokenURL           string
+	customTokenURL     string
+	configurationError error
 }
 
 func NewDeviceAuthenticator(cfg *config.Config) *DeviceAuthenticator {
+	customTokenURL, configurationError := warpFirebaseCustomTokenURL()
 	return &DeviceAuthenticator{
-		httpClient:     newHTTPClient(20*time.Second, cfg),
-		deviceURL:      warpDeviceAuthorizationURL,
-		tokenURL:       warpDeviceTokenURL,
-		customTokenURL: warpCustomTokenURL,
+		httpClient:         newHTTPClient(20*time.Second, cfg),
+		deviceURL:          warpDeviceAuthorizationURL,
+		tokenURL:           warpDeviceTokenURL,
+		customTokenURL:     customTokenURL,
+		configurationError: configurationError,
 	}
 }
 
 func (a *DeviceAuthenticator) Start(ctx context.Context) (*DeviceAuthorization, error) {
+	if a != nil && a.configurationError != nil {
+		return nil, a.configurationError
+	}
 	var upstreamResponse struct {
 		DeviceCode              string `json:"device_code"`
 		UserCode                string `json:"user_code"`
@@ -102,6 +107,9 @@ func (a *DeviceAuthenticator) Start(ctx context.Context) (*DeviceAuthorization, 
 // the Firebase refresh token, which is the sole credential persisted by this
 // project.
 func (a *DeviceAuthenticator) Exchange(ctx context.Context, deviceCode string) (string, error) {
+	if a != nil && a.configurationError != nil {
+		return "", a.configurationError
+	}
 	deviceCode = strings.TrimSpace(deviceCode)
 	if deviceCode == "" {
 		return "", fmt.Errorf("missing warp device code")

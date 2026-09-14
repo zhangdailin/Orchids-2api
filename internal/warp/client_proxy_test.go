@@ -255,10 +255,15 @@ func TestSendRequestWithPayload_ReturnsModelAvailabilityError(t *testing.T) {
 }
 
 func TestForceRefreshAccount_IgnoresSeededJWT(t *testing.T) {
+	t.Setenv(warpFirebaseAPIKeyEnv, "test-key")
+	firebaseTokenURL, err := warpFirebaseTokenURL()
+	if err != nil {
+		t.Fatalf("warpFirebaseTokenURL() error = %v", err)
+	}
 	client := &Client{
 		authClient: &http.Client{
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				if req.URL.String() != warpFirebaseURL {
+				if req.URL.String() != firebaseTokenURL {
 					t.Fatalf("unexpected refresh url: %s", req.URL.String())
 				}
 				return &http.Response{

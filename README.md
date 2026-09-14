@@ -95,6 +95,7 @@ cp config.example.json config.json
 - 生产部署建议显式设置高强度 `admin_pass`，并保持 `debug_enabled` 为 `false`
 - 运行后若 Redis 中存在 `settings:config`，会覆盖文件配置
 - 首次启动会生成 `data/credential.key`；该文件必须和 Redis 数据一起持久化、备份，丢失后无法解密账号凭据
+- 使用 Warp 登录或刷新账号前，必须通过 `ORCHIDS_WARP_FIREBASE_API_KEY` 环境变量提供当前有效的 Warp Firebase API Key；仓库和编译产物不再内置该值
 - 登录管理端创建 API Key 后，使用 `Authorization: Bearer <API Key>` 调用模型和推理接口；Anthropic SDK 也可使用 `x-api-key`
 
 ### 3. 启动服务

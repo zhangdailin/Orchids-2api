@@ -174,7 +174,7 @@ func (s *session) ensureToken(ctx context.Context, httpClient *http.Client) erro
 	s.refreshDone = make(chan struct{})
 	s.mu.Unlock()
 
-	err := s.refresh(ctx, httpClient)
+	err := s.refresh(ctx, httpClient, "")
 
 	s.mu.Lock()
 	s.refreshing = false
@@ -194,7 +194,7 @@ func (s *session) clearToken() {
 	s.lastLogin = time.Time{}
 }
 
-func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
+func (s *session) refresh(ctx context.Context, httpClient *http.Client, firebaseTokenURL string) error {
 	s.mu.Lock()
 	refreshToken := strings.TrimSpace(strings.Trim(s.refreshToken, "\"'"))
 	s.mu.Unlock()
@@ -202,13 +202,20 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client) error {
 	if refreshToken == "" {
 		return fmt.Errorf("warp refresh token is empty")
 	}
+	if strings.TrimSpace(firebaseTokenURL) == "" {
+		var err error
+		firebaseTokenURL, err = warpFirebaseTokenURL()
+		if err != nil {
+			return err
+		}
+	}
 
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
 	}
 
-	body, err := postWarpTokenForm(ctx, httpClient, warpFirebaseURL, form)
+	body, err := postWarpTokenForm(ctx, httpClient, firebaseTokenURL, form)
 	if err != nil {
 		return err
 	}

@@ -190,6 +190,7 @@ Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress �
 - `admin_pass` 若留空，会在启动时自动生成随机密码并写日志
 - 配置保存在 Redis 后，后续重启会优先使用 Redis 版本
 - 可用 `ORCHIDS_CREDENTIAL_ENCRYPTION_KEY` 提供 Base64、Hex 或 32 字节原始主密钥；环境变量优先于密钥文件
+- Warp 登录与账号 token 刷新需要设置 `ORCHIDS_WARP_FIREBASE_API_KEY`；该值只从进程环境读取，不写入配置文件、Redis 或管理 API
 - 首次启动自动创建主密钥文件，并把已有账号明文凭据迁移为 `enc:v1:` 密文
 - 主密钥不会写入 Redis 或管理 API；必须和 Redis 数据共同备份，切勿在已有账号后更换或删除
 - `data/tmp`、`debug-logs` 等目录是运行期产物，不是配置项

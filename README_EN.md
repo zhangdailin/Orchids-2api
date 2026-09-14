@@ -92,6 +92,7 @@ Notes:
 - in production, set a strong `admin_pass` explicitly and keep `debug_enabled` set to `false`
 - if Redis already contains `settings:config`, that stored config overrides the file on boot
 - the first start creates `data/credential.key`; persist and back it up with Redis, because losing it makes stored account credentials unreadable
+- before using Warp login or account refresh, provide the current authorized Warp Firebase API key through `ORCHIDS_WARP_FIREBASE_API_KEY`; the repository and compiled binaries no longer bundle one
 - create an API key in the admin UI and send it as `Authorization: Bearer <API Key>`; Anthropic SDKs may use `x-api-key`
 
 ### 3. Start the server
