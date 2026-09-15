@@ -157,8 +157,13 @@ func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetCha
 	// Account leases are held for the complete upstream request. When another
 	// request is just finishing, an immediate second selection can observe all
 	// accounts at their hard limit and turn a transient race into a 503. Give
-	// releases a short, cancellable window to become visible before failing.
-	const reservationRetries = 3
+	// releases a bounded, cancellable window to become visible before failing.
+	// The two-second window matches the busy retry used by Qoder and is still
+	// short enough that a genuinely saturated Puter pool fails promptly.
+	const (
+		reservationRetries    = 8
+		reservationRetryDelay = 250 * time.Millisecond
+	)
 	reservationAttempt := 0
 	for {
 		client, account, release, err := h.acquireAccountSelection(ctx, targetChannel, channelRequired, excluded, opts)
@@ -170,7 +175,7 @@ func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetCha
 				// be available again on the next pass.
 				excluded = append([]int64(nil), failedAccountIDs...)
 				clear(full)
-				timer := time.NewTimer(75 * time.Millisecond)
+				timer := time.NewTimer(reservationRetryDelay)
 				select {
 				case <-ctx.Done():
 					if !timer.Stop() {

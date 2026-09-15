@@ -166,6 +166,46 @@ func TestSelectAccount_UsesHandlerConnTracker(t *testing.T) {
 	}
 }
 
+func TestAcquireReservedAccountSelection_WaitsForShortLease(t *testing.T) {
+	s, mini := setupConnTrackerHandlerTest(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	acc := createEnabledTestAccount(t, s, "busy-puter", "puter")
+	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, lb)
+	tracker := newSpyConnTracker(map[int64]int64{acc.ID: 1})
+	h.connTracker = tracker
+	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
+		return &trackerTestUpstream{}
+	})
+
+	// A request finishing on the only account must be visible to the selector;
+	// the old 225ms retry window could return 503 before this release landed.
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		tracker.mu.Lock()
+		tracker.counts[acc.ID] = 0
+		tracker.mu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, selected, release, trackedID, err := h.acquireReservedAccountSelection(ctx, "puter", true, nil, accountSelectionOptions{ModelID: "deepseek-v4-flash"})
+	defer release()
+	if err != nil {
+		t.Fatalf("acquireReservedAccountSelection() error = %v", err)
+	}
+	if selected == nil || selected.ID != acc.ID {
+		t.Fatalf("selected account = %#v, want account %d", selected, acc.ID)
+	}
+	if trackedID != acc.ID {
+		t.Fatalf("tracked account id = %d, want %d", trackedID, acc.ID)
+	}
+}
+
 func TestSelectAccount_WarpUsesAccountModelChoices(t *testing.T) {
 	s, mini := setupConnTrackerHandlerTest(t)
 	defer func() {
