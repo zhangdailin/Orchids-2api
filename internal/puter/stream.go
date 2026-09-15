@@ -232,10 +232,52 @@ func unwrapOpenAIToolArguments(input string) (string, bool) {
 	if s == "" || s == "null" {
 		return "{}", true
 	}
+	// Check the production-only malformed wrapper before strict validation.
+	// This lets us repair the one observed transport artifact without broadly
+	// accepting arbitrary malformed tool arguments.
+	if repaired, ok := repairQuotedToolObjectWithTrailingBrace(s); ok {
+		return repaired, true
+	}
 	if !json.Valid([]byte(s)) {
+		// Puter's DeepSeek adapter has emitted this almost-valid shape in
+		// production:
+		//
+		//   {"arguments":"\"{\\\"command\\\":\\\"...\\\"}\"}"}
+		//
+		// The decoded arguments value is a JSON string followed by one stray
+		// object delimiter. Qoder and WorkBuddy already recursively unwrap
+		// valid argument strings; accept this narrowly-scoped Puter variant as
+		// well so the shared handler receives the intended object instead of
+		// suppressing the tool call as invalid.
 		return "", false
 	}
 	return s, true
+}
+
+// repairQuotedToolObjectWithTrailingBrace removes exactly one stray trailing
+// object delimiter from an otherwise valid JSON string whose decoded value is
+// a JSON object. Keeping the repair this strict avoids guessing at arbitrary
+// malformed tool input or changing a legitimate plain `arguments` field.
+func repairQuotedToolObjectWithTrailingBrace(input string) (string, bool) {
+	trimmed := strings.TrimSpace(input)
+	if len(trimmed) < 3 || trimmed[0] != '"' || !strings.HasSuffix(trimmed, "\"}") {
+		return "", false
+	}
+
+	candidate := strings.TrimSpace(trimmed[:len(trimmed)-1])
+	var decoded string
+	if err := json.Unmarshal([]byte(candidate), &decoded); err != nil {
+		return "", false
+	}
+	decoded = strings.TrimSpace(decoded)
+	if decoded == "" || !json.Valid([]byte(decoded)) {
+		return "", false
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(decoded), &object); err != nil || object == nil {
+		return "", false
+	}
+	return decoded, true
 }
 
 func normalizePuterUsage(raw map[string]interface{}) map[string]interface{} {
@@ -247,7 +289,7 @@ func normalizePuterUsage(raw map[string]interface{}) map[string]interface{} {
 	if !hasInput && !hasOutput {
 		return nil
 	}
-	out := make(map[string]interface{}, 4)
+	out := make(map[string]interface{}, 8)
 	if hasInput {
 		out["inputTokens"] = input
 		out["input_tokens"] = input
@@ -255,6 +297,14 @@ func normalizePuterUsage(raw map[string]interface{}) map[string]interface{} {
 	if hasOutput {
 		out["outputTokens"] = output
 		out["output_tokens"] = output
+	}
+	if cached, ok := firstUsageInt(raw, "cachedTokens", "cached_tokens", "prompt_cache_hit_tokens"); ok {
+		out["cacheReadTokens"] = cached
+		out["cache_read_tokens"] = cached
+	}
+	if usdCents, ok := firstUsageFloat(raw, "usdCents", "usd_cents"); ok {
+		out["usdCents"] = usdCents
+		out["usd_cents"] = usdCents
 	}
 	return out
 }
@@ -267,6 +317,22 @@ func firstUsageInt(values map[string]interface{}, keys ...string) (int, bool) {
 		case json.Number:
 			if parsed, err := typed.Int64(); err == nil {
 				return int(parsed), true
+			}
+		}
+	}
+	return 0, false
+}
+
+func firstUsageFloat(values map[string]interface{}, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		switch typed := values[key].(type) {
+		case float64:
+			return typed, true
+		case int:
+			return float64(typed), true
+		case json.Number:
+			if parsed, err := typed.Float64(); err == nil {
+				return parsed, true
 			}
 		}
 	}

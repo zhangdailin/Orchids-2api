@@ -21,6 +21,9 @@ func TestNormalizeStreamToolInput(t *testing.T) {
 		{name: "openai-wrapper", raw: `{"arguments":"{\"file_path\":\"README.md\"}"}`, want: `{"file_path":"README.md"}`},
 		// 上游把 arguments 又包了一层字面引号（日志中观察到的形态）。
 		{name: "openai-wrapper-quoted", raw: `{"arguments":"\"{\\\"file_path\\\":\\\"README.md\\\"}\""}`, want: `{"file_path":"README.md"}`},
+		// Puter DeepSeek 线上实际返回过：arguments 是带引号的 JSON 对象，
+		// 但引号后又多出一个右花括号。该形态过去会让 Bash 工具调用被抑制。
+		{name: "openai-wrapper-quoted-with-trailing-brace", raw: `{"arguments":"\"{\\\"command\\\":\\\"echo ok\\\",\\\"run_in_background\\\":true}\"}"}`, want: `{"command":"echo ok","run_in_background":true}`},
 		// 再深一层：整个 input 是 JSON 字符串，内容又是 {"arguments":"..."} 包装。
 		{name: "string-wrapped-openai", raw: `"{\"arguments\":\"{\\\"file_path\\\":\\\"README.md\\\"}\"}"`, want: `{"file_path":"README.md"}`},
 		// arguments 不是合法 JSON 时保持原样，不误伤本地工具。
@@ -33,6 +36,32 @@ func TestNormalizeStreamToolInput(t *testing.T) {
 				t.Fatalf("normalizeStreamToolInput(%q) = %q, want %q", tt.raw, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizePuterUsagePreservesCacheAndBilledCost(t *testing.T) {
+	got := normalizePuterUsage(map[string]interface{}{
+		"prompt_tokens":     float64(12464),
+		"completion_tokens": float64(286),
+		"cached_tokens":     float64(11520),
+		"usd_cents":         0.18573,
+	})
+	if got["inputTokens"] != 12464 || got["outputTokens"] != 286 {
+		t.Fatalf("token usage=%#v", got)
+	}
+	if got["cacheReadTokens"] != 11520 || got["cache_read_tokens"] != 11520 {
+		t.Fatalf("cached usage=%#v", got)
+	}
+	if got["usdCents"] != 0.18573 || got["usd_cents"] != 0.18573 {
+		t.Fatalf("billed cost=%#v", got)
+	}
+}
+
+func TestRepairQuotedToolObjectWithTrailingBrace(t *testing.T) {
+	input := `"{\"command\":\"echo ok\",\"run_in_background\":true}"}`
+	got, ok := repairQuotedToolObjectWithTrailingBrace(input)
+	if !ok || got != `{"command":"echo ok","run_in_background":true}` {
+		t.Fatalf("repair(%q) = (%q, %v)", input, got, ok)
 	}
 }
 
