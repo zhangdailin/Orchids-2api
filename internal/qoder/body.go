@@ -1,7 +1,6 @@
 package qoder
 
 import (
-	"bytes"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -42,20 +41,6 @@ func EncodeBody(raw []byte) []byte {
 	encoded := make([]byte, bodyEncoding.EncodedLen(len(raw)))
 	bodyEncoding.Encode(encoded, raw)
 	return swapOuterThirds(encoded)
-}
-
-// DecodeBody reverses EncodeBody. It is exported for tests and diagnostics; the
-// channel never needs to read a body back in production.
-func DecodeBody(encoded []byte) ([]byte, error) {
-	if bytes.IndexByte(encoded, '\r') >= 0 || bytes.IndexByte(encoded, '\n') >= 0 {
-		return nil, fmt.Errorf("encoded body contains a line break")
-	}
-	decoded := make([]byte, bodyEncoding.DecodedLen(len(encoded)))
-	n, err := bodyEncoding.Decode(decoded, swapOuterThirds(encoded))
-	if err != nil {
-		return nil, fmt.Errorf("decode body: %w", err)
-	}
-	return decoded[:n], nil
 }
 
 // swapOuterThirds moves the leading third to the end and the trailing third to

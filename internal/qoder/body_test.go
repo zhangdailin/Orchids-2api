@@ -56,7 +56,7 @@ func TestBodyCodecRoundTrip(t *testing.T) {
 			raw[i] = byte(i * 7 % 251)
 		}
 		encoded := EncodeBody(raw)
-		decoded, err := DecodeBody(encoded)
+		decoded, err := decodeBodyForTest(encoded)
 		if err != nil {
 			t.Fatalf("DecodeBody(len=%d) error = %v", length, err)
 		}
@@ -72,7 +72,7 @@ func TestDecodeBodyRejectsLineBreaks(t *testing.T) {
 	t.Parallel()
 
 	encoded := EncodeBody([]byte(`{"a":1}`))
-	if _, err := DecodeBody(append(encoded[:4], append([]byte{'\n'}, encoded[4:]...)...)); err == nil {
+	if _, err := decodeBodyForTest(append(encoded[:4], append([]byte{'\n'}, encoded[4:]...)...)); err == nil {
 		t.Fatal("DecodeBody() error = nil for a body containing a line break")
 	}
 }

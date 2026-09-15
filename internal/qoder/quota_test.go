@@ -39,7 +39,7 @@ func TestFetchQuotaReadsTheWindowAndPlan(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	quota, err := client.FetchQuota(context.Background())
 	if err != nil {
@@ -104,7 +104,7 @@ func TestQuotaExhaustedWithoutNumbersIsStillExhausted(t *testing.T) {
 	defer server.Close()
 
 	client := NewFromAccount(signedTestAccount(), nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 	quota, err := client.FetchQuota(context.Background())
 	if err != nil {
 		t.Fatalf("FetchQuota() error = %v", err)

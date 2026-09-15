@@ -83,9 +83,9 @@ func stubWorkBuddyLoginClient(t *testing.T, baseURL string) {
 	newWorkBuddyLoginClientMu.Lock()
 	previous := newWorkBuddyLoginClient
 	newWorkBuddyLoginClient = func(acc *store.Account, cfg *config.Config) *workbuddy.Client {
-		client := workbuddy.NewFromAccount(acc, cfg)
-		client.SetBaseURLForTest(baseURL)
-		return client
+		configured := *cfg
+		configured.WorkBuddyBaseURL = baseURL
+		return workbuddy.NewFromAccount(acc, &configured)
 	}
 	newWorkBuddyLoginClientMu.Unlock()
 	t.Cleanup(func() {

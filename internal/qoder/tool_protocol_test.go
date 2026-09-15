@@ -16,7 +16,7 @@ func decodeChatBodyForTest(t *testing.T, req upstream.UpstreamRequest) map[strin
 	if err != nil {
 		t.Fatalf("buildChatBody() error = %v", err)
 	}
-	raw, err := DecodeBody(encoded)
+	raw, err := decodeBodyForTest(encoded)
 	if err != nil {
 		t.Fatalf("DecodeBody() error = %v", err)
 	}

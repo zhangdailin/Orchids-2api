@@ -17,7 +17,7 @@ func TestFetchModelsIsLocalAndNeverFailsForAValidClient(t *testing.T) {
 	acc := signedTestAccount()
 	acc.QoderModelIDs = nil
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	setTestEndpoints(client, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 
 	catalog, err := client.FetchModels(context.Background())
 	if err != nil {
@@ -33,7 +33,7 @@ func TestFetchModelsIsLocalAndNeverFailsForAValidClient(t *testing.T) {
 	// The account snapshot wins when one is stored.
 	acc.QoderModelIDs = []string{"kmodel\tKimi-K2.7-Code"}
 	snapshotClient := NewFromAccount(acc, nil)
-	snapshotClient.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	setTestEndpoints(snapshotClient, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 	snapshot, err := snapshotClient.FetchModels(context.Background())
 	if err != nil {
 		t.Fatalf("FetchModels() with a snapshot error = %v", err)

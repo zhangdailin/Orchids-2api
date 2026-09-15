@@ -108,8 +108,8 @@ func TestSyncAccountState_ClearsLegacyCredentialFields(t *testing.T) {
 		account: account,
 		session: &session{refreshToken: "refresh-token"},
 	}
-	if !client.SyncAccountState() {
-		t.Fatal("SyncAccountState() should clear legacy credential fields")
+	if !client.SyncAccountStateTo(account) {
+		t.Fatal("SyncAccountStateTo() should clear legacy credential fields")
 	}
 	if account.Token != "" || account.ClientCookie != "" || account.SessionCookie != "" {
 		t.Fatalf("legacy fields retained: %#v", account)

@@ -595,7 +595,7 @@ func TestClientConcurrentFirstUseRefreshesOnlyOnce(t *testing.T) {
 		AccountType:           "workbuddy",
 		WorkBuddyRefreshToken: "old-refresh",
 	}, nil)
-	client.SetBaseURLForTest(srv.URL)
+	client.baseURL = srv.URL
 	client.httpClient = srv.Client()
 
 	const callers = 24

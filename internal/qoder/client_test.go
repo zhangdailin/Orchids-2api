@@ -46,7 +46,7 @@ func TestConcurrentRuntimeDerivationIsSingleFlight(t *testing.T) {
 	acc.QoderRuntimeInfo = ""
 	acc.QoderRuntimeKey = ""
 	client := NewFromAccount(acc, nil)
-	client.SetEntropyForTest(strings.NewReader(strings.Repeat("runtime-entropy-", 128)))
+	setTestEntropy(client, strings.NewReader(strings.Repeat("runtime-entropy-", 128)))
 
 	const callers = 24
 	results := make(chan RuntimeFields, callers)
@@ -101,7 +101,7 @@ func TestConcurrentExpiredCredentialRefreshesOnlyOnce(t *testing.T) {
 	acc.QoderRefreshToken = "refresh-old"
 	acc.QoderExpiresAt = time.Now().Add(-time.Minute)
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	const callers = 24
 	errs := make(chan error, callers)
@@ -172,7 +172,7 @@ func TestRefreshReportsPersistenceFailureAndRetriesWriteBeforeReuse(t *testing.T
 	acc.QoderRefreshToken = "refresh-old"
 	acc.QoderExpiresAt = time.Now().Add(-time.Minute)
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 	updater := &failingQoderUpdater{fail: true}
 	client.SetAccountStore(updater)
 	if _, err := client.ensureAccessToken(context.Background()); err == nil {
@@ -218,7 +218,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	var events []upstream.SSEMessage
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
@@ -282,7 +282,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 	}
 
 	// The body is in the private encoding and decodes to the chat payload.
-	decoded, err := DecodeBody(got.body)
+	decoded, err := decodeBodyForTest(got.body)
 	if err != nil {
 		t.Fatalf("DecodeBody() error = %v", err)
 	}
@@ -333,7 +333,7 @@ func TestSendRequestRefreshesOnceOnUnauthorized(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
 		Model:    "Qwen3.7-Max",
@@ -374,7 +374,7 @@ func TestSendRequestDoesNotReplayAfterOutput(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	var events []upstream.SSEMessage
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
@@ -459,7 +459,7 @@ func TestFetchModelsServesTheBuiltInCatalog(t *testing.T) {
 	acc.QoderModelIDs = nil
 	client := NewFromAccount(acc, nil)
 	// Point everything at a closed port: a network read would fail here.
-	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	setTestEndpoints(client, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 
 	catalog, err := client.FetchModels(context.Background())
 	if err != nil {
@@ -545,7 +545,7 @@ func TestVerifyModelRejectsUnsupportedName(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	setTestEndpoints(client, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 	if err := client.VerifyModel(context.Background(), "definitely-not-a-model"); err == nil {
 		t.Fatal("VerifyModel() error = nil for an unsupported model")
 	}
@@ -577,7 +577,7 @@ func TestEnsureRuntimeFieldsDerivesOnce(t *testing.T) {
 	acc.QoderRuntimeInfo = ""
 	acc.QoderRuntimeKey = ""
 	client := NewFromAccount(acc, nil)
-	client.SetEntropyForTest(strings.NewReader(strings.Repeat("\x11", 4096)))
+	setTestEntropy(client, strings.NewReader(strings.Repeat("\x11", 4096)))
 
 	first, err := client.ensureRuntimeFields(context.Background(), credsOf(acc))
 	if err != nil {
@@ -678,7 +678,7 @@ func TestEntitlementRefusalKeepsTheAccountUsable(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	requestErr := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
 		Model:    "Qwen3.7-Max",

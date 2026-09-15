@@ -248,19 +248,3 @@ func (c *Client) ProbeReachability(ctx context.Context) error {
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
 	return nil
 }
-
-// SetBaseURLForTest points the client at a stub server. It exists so handler
-// tests can exercise the login transaction without touching the network.
-func (c *Client) SetBaseURLForTest(base string) {
-	if c == nil {
-		return
-	}
-	base = strings.TrimSuffix(strings.TrimSpace(base), "/")
-	c.mu.Lock()
-	c.baseURL = base
-	updater := c.updater
-	c.mu.Unlock()
-	if updater != nil {
-		updater.SetBaseURL(base)
-	}
-}

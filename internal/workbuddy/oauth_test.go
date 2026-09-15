@@ -19,7 +19,7 @@ func TestStartAuthLogin_ClassifiesUnreachable(t *testing.T) {
 	dead.Close()
 
 	client := NewFromAccount(&store.Account{}, nil)
-	client.SetBaseURLForTest(base)
+	client.baseURL = base
 
 	_, _, err := client.StartAuthLogin(context.Background(), "5.5.2")
 	if err == nil {
@@ -38,7 +38,7 @@ func TestProbeReachability_DetectsBlockedEgress(t *testing.T) {
 	dead.Close()
 
 	client := NewFromAccount(&store.Account{}, nil)
-	client.SetBaseURLForTest(base)
+	client.baseURL = base
 	if err := client.ProbeReachability(context.Background()); err == nil {
 		t.Fatal("ProbeReachability() = nil, want a reachability failure")
 	}
@@ -47,7 +47,7 @@ func TestProbeReachability_DetectsBlockedEgress(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":0,"data":{}}`))
 	}))
 	defer live.Close()
-	client.SetBaseURLForTest(live.URL)
+	client.baseURL = live.URL
 	if err := client.ProbeReachability(context.Background()); err != nil {
 		t.Fatalf("ProbeReachability() error = %v, want success", err)
 	}
@@ -63,7 +63,7 @@ func TestStartAuthLogin_ClassifiesRejection(t *testing.T) {
 	defer srv.Close()
 
 	client := NewFromAccount(&store.Account{}, nil)
-	client.SetBaseURLForTest(srv.URL)
+	client.baseURL = srv.URL
 
 	_, _, err := client.StartAuthLogin(context.Background(), "")
 	if err == nil {
@@ -83,7 +83,7 @@ func TestStartAuthLogin_RejectsForeignLoginHost(t *testing.T) {
 	defer srv.Close()
 
 	client := NewFromAccount(&store.Account{}, nil)
-	client.SetBaseURLForTest(srv.URL)
+	client.baseURL = srv.URL
 
 	_, _, err := client.StartAuthLogin(context.Background(), "")
 	if err == nil {
@@ -109,7 +109,7 @@ func TestStartAuthLogin_AppendsClientVersion(t *testing.T) {
 	defer srv.Close()
 
 	client := NewFromAccount(&store.Account{}, nil)
-	client.SetBaseURLForTest(srv.URL)
+	client.baseURL = srv.URL
 
 	state, authURL, err := client.StartAuthLogin(context.Background(), "5.5.2")
 	if err != nil {

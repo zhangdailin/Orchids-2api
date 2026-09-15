@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +23,37 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 )
+
+func decodeQoderBodyForTest(encoded []byte) ([]byte, error) {
+	if strings.ContainsAny(string(encoded), "\r\n") {
+		return nil, fmt.Errorf("encoded body contains a line break")
+	}
+	const privateAlphabet = "_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!"
+	const standardAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	q := len(encoded) / 3
+	swapped := make([]byte, 0, len(encoded))
+	swapped = append(swapped, encoded[len(encoded)-q:]...)
+	swapped = append(swapped, encoded[q:len(encoded)-q]...)
+	swapped = append(swapped, encoded[:q]...)
+	for i, b := range swapped {
+		switch b {
+		case '$':
+			swapped[i] = '='
+		default:
+			idx := strings.IndexByte(privateAlphabet, b)
+			if idx < 0 {
+				return nil, fmt.Errorf("invalid private alphabet byte %q", b)
+			}
+			swapped[i] = standardAlphabet[idx]
+		}
+	}
+	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(swapped)))
+	n, err := base64.StdEncoding.Decode(decoded, swapped)
+	if err != nil {
+		return nil, err
+	}
+	return decoded[:n], nil
+}
 
 // qoderE2EStub serves every endpoint the Qoder channel touches, so a request can
 // travel the real route table, the real handler and the real client.
@@ -269,7 +302,7 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	if len(stub.chatBody) == 0 {
 		t.Fatal("the upstream request carried no body")
 	}
-	decoded, err := qoder.DecodeBody(stub.chatBody)
+	decoded, err := decodeQoderBodyForTest(stub.chatBody)
 	if err != nil {
 		t.Fatalf("DecodeBody() error = %v", err)
 	}

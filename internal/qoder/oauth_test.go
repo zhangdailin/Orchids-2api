@@ -19,7 +19,7 @@ import (
 func newLoginClient(t *testing.T, oauth, openAPI, inference string) *Client {
 	t.Helper()
 	client := NewFromAccount(nil, nil)
-	client.SetEndpointsForTest(oauth, openAPI, inference)
+	setTestEndpoints(client, oauth, openAPI, inference)
 	return client
 }
 
@@ -38,7 +38,7 @@ func TestStartLoginBuildsOfficialURL(t *testing.T) {
 	defer page.Close()
 
 	client := newLoginClient(t, page.URL, page.URL, page.URL)
-	client.SetEntropyForTest(strings.NewReader(strings.Repeat("\x00", 512)))
+	setTestEntropy(client, strings.NewReader(strings.Repeat("\x00", 512)))
 
 	tx, err := client.StartLogin(context.Background())
 	if err != nil {
@@ -118,7 +118,7 @@ func TestStartLoginClassifiesUnreachable(t *testing.T) {
 	dead.Close()
 
 	client := newLoginClient(t, base, base, base)
-	client.SetEntropyForTest(strings.NewReader(strings.Repeat("\x02", 512)))
+	setTestEntropy(client, strings.NewReader(strings.Repeat("\x02", 512)))
 
 	_, err := client.StartLogin(context.Background())
 	if !errors.Is(err, ErrAuthUnavailable) {
@@ -419,7 +419,7 @@ func TestEnsureAccessTokenSkipsRefreshWhileValid(t *testing.T) {
 		QoderExpiresAt:    time.Now().Add(6 * time.Hour),
 	}
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
+	setTestEndpoints(client, server.URL, server.URL, server.URL)
 
 	creds, err := client.ensureAccessToken(context.Background())
 	if err != nil {

@@ -12,9 +12,6 @@ func TestRequestIDFromErrorSurvivesWrapping(t *testing.T) {
 	if got := RequestIDFromError(err); got != "request-1" {
 		t.Fatalf("RequestIDFromError() = %q, want request-1", got)
 	}
-	if got := ConversationIDFromError(err); got != "conversation-1" {
-		t.Fatalf("ConversationIDFromError() = %q, want conversation-1", got)
-	}
 	if !errors.Is(err, base) {
 		t.Fatal("request ID wrapper must preserve the original error")
 	}

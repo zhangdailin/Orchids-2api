@@ -328,15 +328,6 @@ func (c *Client) refreshAccount(ctx context.Context, force bool) (string, error)
 	return c.session.currentJWT(), nil
 }
 
-func (c *Client) SyncAccountState() bool {
-	if c == nil || c.account == nil || c.session == nil {
-		return false
-	}
-	c.accountMu.Lock()
-	defer c.accountMu.Unlock()
-	return c.syncAccountStateTo(c.account)
-}
-
 // SyncAccountStateTo copies the session's rotated credentials into the
 // request-owned account snapshot. Cached clients can serve concurrent requests,
 // so callers must not rely on the client's original account pointer.

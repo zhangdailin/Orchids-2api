@@ -70,24 +70,6 @@ func newQoderAuthServer(t *testing.T, pollBodies []string) *qoderAuthServer {
 	return stub
 }
 
-// stubQoderLoginClient redirects the login flow at the stub server.
-func stubQoderLoginClient(t *testing.T, baseURL string) {
-	t.Helper()
-	newQoderLoginClientMu.Lock()
-	previous := newQoderLoginClient
-	newQoderLoginClient = func(acc *store.Account, cfg *config.Config) *qoder.Client {
-		client := qoder.NewFromAccount(acc, cfg)
-		client.SetEndpointsForTest(baseURL, baseURL, baseURL)
-		return client
-	}
-	newQoderLoginClientMu.Unlock()
-	t.Cleanup(func() {
-		newQoderLoginClientMu.Lock()
-		newQoderLoginClient = previous
-		newQoderLoginClientMu.Unlock()
-	})
-}
-
 func qoderLoginConfig(baseURL string) *config.Config {
 	return &config.Config{
 		QoderOAuthBaseURL:   baseURL,
@@ -114,8 +96,6 @@ func TestHandleQoderLogin_StartReturnsOfficialDeviceURL(t *testing.T) {
 	s, _ := newTestStore(t, "qd-login:")
 	auth := newQoderAuthServer(t, []string{""})
 	defer auth.Close()
-	stubQoderLoginClient(t, auth.URL)
-
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 	rec := httptest.NewRecorder()
 	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", `{"enabled":true}`))
@@ -198,8 +178,6 @@ func TestHandleQoderLogin_CancelStopsBlockedPollAndDoesNotPersist(t *testing.T) 
 		}
 	}))
 	defer auth.Close()
-	stubQoderLoginClient(t, auth.URL)
-
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 	start := httptest.NewRecorder()
 	a.HandleQoderLogin(start, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
@@ -247,7 +225,6 @@ func TestHandleQoderLogin_PreservesDisabledPreference(t *testing.T) {
 		`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400,"user_id":"uid-disabled","user_name":"operator"}`,
 	})
 	defer auth.Close()
-	stubQoderLoginClient(t, auth.URL)
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 
 	start := httptest.NewRecorder()
@@ -299,8 +276,6 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 		`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400,"refresh_token_expires_in":864000,"user_id":"uid-qoder","user_name":"operator"}`,
 	})
 	defer auth.Close()
-	stubQoderLoginClient(t, auth.URL)
-
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 	rec := httptest.NewRecorder()
 	a.HandleQoderLogin(rec, qoderLoginRequest(t, http.MethodPost, "/api/qoder/login", ""))
@@ -396,8 +371,6 @@ func TestHandleQoderLogin_ReportsUnusableCredential(t *testing.T) {
 		}
 	}))
 	defer auth.Close()
-	stubQoderLoginClient(t, auth.URL)
-
 	a := New(s, "", "", qoderLoginConfig(auth.URL))
 	final := runQoderLoginToCompletion(t, a, s, 15*time.Second)
 	if final.Status != "failed" {
