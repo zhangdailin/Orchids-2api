@@ -29,7 +29,9 @@ func buildQoderSeedModels() []Model {
 // silently bill every request at the highest rate.
 const qoderSeedDefaultModel = "Qwen3.7-Max"
 
-// qoderSeedModelNames mirrors the built-in catalog in internal/qoder. It is
+// qoderSeedModelNames mirrors the built-in catalog in internal/qoder. Keep this
+// list in sync when the desktop client ships a new model so a fresh install and
+// an account refresh expose the same rows. It is
 // duplicated as a plain list rather than imported so the store keeps no
 // dependency on an upstream client package.
 func qoderSeedModelNames() []string {
@@ -46,9 +48,11 @@ func qoderSeedModelNames() []string {
 		"Kimi-K3",
 		"Kimi-K2.7-Code",
 		"GLM-5.3",
+		"GLM-5.3-Flash",
 		"GLM-5.2",
 		"DeepSeek-V4-Pro",
 		"DeepSeek-V4-Flash",
+		"Qwen3.8-Flash",
 		"MiniMax-M3",
 	}
 }

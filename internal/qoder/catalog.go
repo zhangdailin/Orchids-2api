@@ -230,9 +230,11 @@ func seedModels() []modelEntry {
 		{"kmodel_latest", "Kimi-K3", false, 1000000},
 		{"kmodel", "Kimi-K2.7-Code", false, 256000},
 		{"gmodel", "GLM-5.3", true, 1000000},
+		{"gfmodel", "GLM-5.3-Flash", false, 1000000},
 		{"gm51model", "GLM-5.2", true, 1000000},
 		{"dmodel", "DeepSeek-V4-Pro", true, 1000000},
 		{"dfmodel", "DeepSeek-V4-Flash", true, 1000000},
+		{"qfmodel", "Qwen3.8-Flash", false, 1000000},
 		{"mmodel", "MiniMax-M3", false, 1000000},
 	}
 	enabled := true
@@ -266,8 +268,9 @@ func DefaultCatalog() *Catalog {
 // network. Keeping one entry point means a future gateway that does expose an
 // authenticated catalog changes exactly one place.
 //
-// The account snapshot wins when one is stored; otherwise the built-in list is
-// returned. The error is always nil — the chat call, not this list, is what
+// An account snapshot is merged with the current built-in list so an older
+// login cannot hide models shipped by a newer Qoder CLI. Account-specific rows
+// are retained. The error is always nil — the chat call, not this list, is what
 // reports an entitlement problem.
 func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
 	if err := ctx.Err(); err != nil {
@@ -280,8 +283,36 @@ func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
 	defer c.stateMu.RUnlock()
 	if c.account != nil {
 		if catalog := catalogFromIDs(c.account.QoderModelIDs); catalog.Len() > 0 {
-			return catalog, nil
+			// Older snapshots may predate models added by the Qoder CLI. Merge
+			// the current built-in catalog so refreshes do not permanently hide
+			// newly shipped models, while retaining any account-specific rows.
+			return mergeCatalogs(catalog, DefaultCatalog()), nil
 		}
 	}
 	return DefaultCatalog(), nil
+}
+
+func mergeCatalogs(primary, fallback *Catalog) *Catalog {
+	if primary == nil || primary.Len() == 0 {
+		return fallback
+	}
+	entries := primary.Entries()
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		seen[strings.ToLower(strings.TrimSpace(entry.Key))] = struct{}{}
+	}
+	if fallback != nil {
+		for _, entry := range fallback.Entries() {
+			key := strings.ToLower(strings.TrimSpace(entry.Key))
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			entries = append(entries, entry)
+			seen[key] = struct{}{}
+		}
+	}
+	return newCatalog(entries)
 }

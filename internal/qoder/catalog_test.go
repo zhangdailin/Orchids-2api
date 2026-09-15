@@ -30,7 +30,7 @@ func TestFetchModelsIsLocalAndNeverFailsForAValidClient(t *testing.T) {
 		t.Fatalf("the built-in catalog cannot resolve its own models: %v", resolveErr)
 	}
 
-	// The account snapshot wins when one is stored.
+	// An old account snapshot is merged with the current built-in catalog.
 	acc.QoderModelIDs = []string{"kmodel\tKimi-K2.7-Code"}
 	snapshotClient := NewFromAccount(acc, nil)
 	setTestEndpoints(snapshotClient, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
@@ -38,10 +38,15 @@ func TestFetchModelsIsLocalAndNeverFailsForAValidClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchModels() with a snapshot error = %v", err)
 	}
-	if snapshot.Len() != 1 {
-		t.Fatalf("snapshot catalog length = %d, want 1", snapshot.Len())
+	if snapshot.Len() <= 1 {
+		t.Fatalf("snapshot catalog length = %d, want newly added built-in models", snapshot.Len())
 	}
 	if _, resolveErr := snapshot.Resolve("Kimi-K2.7-Code"); resolveErr != nil {
 		t.Fatalf("the snapshot catalog cannot resolve its own model: %v", resolveErr)
+	}
+	for _, name := range []string{"Qwen3.8-Flash", "GLM-5.3-Flash"} {
+		if _, resolveErr := snapshot.Resolve(name); resolveErr != nil {
+			t.Fatalf("merged catalog cannot resolve %s: %v", name, resolveErr)
+		}
 	}
 }
