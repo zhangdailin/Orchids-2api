@@ -246,11 +246,7 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	if err == nil {
 		return account, nil
 	}
-	if opts.RequireWarpCloudAgent {
-		return nil, fmt.Errorf("no enabled accounts available for channel: %s (cloud agent requires a non-free Warp account)", targetChannel)
-	}
-
-	return nil, err
+	return nil, warpSelectionError(err, targetChannel, opts.RequireWarpCloudAgent)
 }
 
 func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccountIDs []int64, targetChannel string, opts accountSelectionOptions, filter func(*store.Account) bool) (*store.Account, error) {
@@ -266,10 +262,21 @@ func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccount
 	if err == nil {
 		return account, nil
 	}
-	if opts.RequireWarpCloudAgent {
-		return nil, fmt.Errorf("no enabled accounts available for channel: %s (cloud agent requires a non-free Warp account)", targetChannel)
+	return nil, warpSelectionError(err, targetChannel, opts.RequireWarpCloudAgent)
+}
+
+func warpSelectionError(err error, channel string, requireCloudAgent bool) error {
+	if err == nil || !requireCloudAgent {
+		return err
 	}
-	return nil, err
+	bareUnavailable := fmt.Sprintf("no enabled accounts available for channel: %s", channel)
+	if err.Error() != bareUnavailable {
+		// Preserve actionable pool state such as concurrency saturation or a
+		// cooldown. Rewriting every selection failure as a plan restriction hid
+		// the real cause when a paid Warp account was merely busy.
+		return err
+	}
+	return fmt.Errorf("%s (cloud agent requires a non-free Warp account)", bareUnavailable)
 }
 
 func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices *warp.AccountModelChoices, modelID string) bool {

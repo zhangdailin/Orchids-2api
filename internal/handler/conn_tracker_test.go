@@ -206,6 +206,54 @@ func TestAcquireReservedAccountSelection_WaitsForShortLease(t *testing.T) {
 	}
 }
 
+func TestAcquireReservedWarpCloudAgent_WaitsForPaidAccountLease(t *testing.T) {
+	s, mini := setupConnTrackerHandlerTest(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	acc := createEnabledTestAccount(t, s, "busy-warp-build", "warp")
+	acc.Subscription = "build/business"
+	acc.WarpMonthlyLimit = 1500
+	acc.WarpMonthlyRemaining = 1152
+	if err := s.UpdateAccount(context.Background(), acc); err != nil {
+		t.Fatalf("UpdateAccount() error = %v", err)
+	}
+
+	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, lb)
+	tracker := newSpyConnTracker(map[int64]int64{acc.ID: 1})
+	h.connTracker = tracker
+	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
+		return &trackerTestUpstream{}
+	})
+
+	go func() {
+		time.Sleep(350 * time.Millisecond)
+		tracker.mu.Lock()
+		tracker.counts[acc.ID] = 0
+		tracker.mu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, selected, release, trackedID, err := h.acquireReservedAccountSelection(ctx, "warp", true, nil, accountSelectionOptions{
+		ModelID:               "auto-open",
+		RequireWarpCloudAgent: true,
+	})
+	defer release()
+	if err != nil {
+		t.Fatalf("acquireReservedAccountSelection() error = %v", err)
+	}
+	if selected == nil || selected.ID != acc.ID {
+		t.Fatalf("selected account = %#v, want account %d", selected, acc.ID)
+	}
+	if trackedID != acc.ID {
+		t.Fatalf("tracked account id = %d, want %d", trackedID, acc.ID)
+	}
+}
+
 func TestSelectAccount_WarpUsesAccountModelChoices(t *testing.T) {
 	s, mini := setupConnTrackerHandlerTest(t)
 	defer func() {
