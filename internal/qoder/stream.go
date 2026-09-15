@@ -402,6 +402,13 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			}
 		}
 		if delta.Content != "" {
+			// Some Qoder plans return account-pool throttling as a successful
+			// HTTP 200 SSE text chunk. Treat it as a model-scoped failure before
+			// forwarding the text, otherwise the gateway reports a false success.
+			if isModelRateLimitText(delta.Content) {
+				streamErr = fmt.Errorf("%w: %s", ErrModelRateLimited, strings.TrimSpace(delta.Content))
+				return false
+			}
 			if !bufferingToolText || sawNativeTools {
 				emitText(delta.Content)
 			} else {
@@ -455,6 +462,17 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 		return result, ErrStreamTruncated
 	}
 	return result, nil
+}
+
+// ErrModelRateLimited marks Qoder's text-form model/account-pool throttle.
+// It is intentionally distinct from a credential failure: other models on the
+// same account remain usable while this model cools down.
+var ErrModelRateLimited = fmt.Errorf("qoder model rate limited")
+
+func isModelRateLimitText(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	return strings.Contains(lower, "available upstream accounts are rate-limited") ||
+		strings.Contains(lower, "available upstream accounts are rate limited")
 }
 
 type textToolCall struct {

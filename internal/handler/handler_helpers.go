@@ -215,6 +215,14 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 		return nil, errors.New("load balancer not configured")
 	}
 	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
+		// Qoder business rate limits are model-scoped. Keep the account usable for
+		// its other models while the affected model cools down.
+		if strings.EqualFold(strings.TrimSpace(targetChannel), "qoder") && strings.TrimSpace(opts.ModelID) != "" {
+			model := strings.TrimSpace(opts.ModelID)
+			return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
+				return store.ModelCooldownRemaining(acc, model, time.Now()) == 0
+			})
+		}
 		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 	}
 

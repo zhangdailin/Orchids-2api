@@ -87,6 +87,19 @@ func TestConsumeStreamDecodesWrappedChunks(t *testing.T) {
 	}
 }
 
+func TestConsumeStreamClassifiesTextRateLimit(t *testing.T) {
+	t.Parallel()
+	body := envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"The available upstream accounts are rate-limited. Retry after the cooldown. Request ID: abc"},"finish_reason":"stop"}]}`) +
+		"event:finish\ndata: {}\n\n"
+	events, _, err := collectStream(t, body)
+	if !errors.Is(err, ErrModelRateLimited) {
+		t.Fatalf("error = %v, want ErrModelRateLimited", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("rate-limit text must not be forwarded as output: %+v", events)
+	}
+}
+
 // TestConsumeStreamRequiresTerminator proves a premature EOF is reported as a
 // truncation instead of as a successful short answer. Silently accepting it
 // would hand the client a cut-off response with no error.

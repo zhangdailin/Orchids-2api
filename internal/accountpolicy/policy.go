@@ -206,6 +206,8 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 func isModelScopedFailure(lower string) bool {
 	return strings.Contains(lower, "code=6004") ||
 		strings.Contains(lower, "qoder agent limit reached") ||
+		strings.Contains(lower, "qoder model rate limited") ||
+		strings.Contains(lower, "available upstream accounts are rate-limited") ||
 		strings.Contains(lower, "agentlimitresettime") ||
 		strings.Contains(lower, "model is not found") ||
 		strings.Contains(lower, "model not found") ||

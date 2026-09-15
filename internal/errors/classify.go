@@ -217,6 +217,8 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "429") ||
 		strings.Contains(lower, "qoder agent limit reached") ||
+		strings.Contains(lower, "qoder model rate limited") ||
+		strings.Contains(lower, "available upstream accounts are rate-limited") ||
 		strings.Contains(lower, "agentlimitresettime") ||
 		strings.Contains(lower, "too many requests") ||
 		strings.Contains(lower, "rate limit") ||
