@@ -135,6 +135,7 @@ func ClassifyAccountStatus(errStr string) string {
 		return "404"
 	case HasExplicitHTTPStatus(lower, "402") ||
 		strings.Contains(lower, "qoder quota exhausted") ||
+		strings.Contains(lower, "no ai credits remaining") ||
 		strings.Contains(lower, "insufficient_funds") ||
 		strings.Contains(lower, "insufficient funding") ||
 		strings.Contains(lower, "available funding is insufficient") ||
@@ -208,6 +209,7 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "402") ||
 		strings.Contains(lower, "qoder quota exhausted") ||
+		strings.Contains(lower, "no ai credits remaining") ||
 		strings.Contains(lower, "insufficient_funds") ||
 		strings.Contains(lower, "insufficient funding") ||
 		strings.Contains(lower, "quota_limit") ||

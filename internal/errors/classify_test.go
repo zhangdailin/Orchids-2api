@@ -41,6 +41,13 @@ func TestClassifyUpstreamError(t *testing.T) {
 			wantSwitch:   true,
 		},
 		{
+			name:         "warp no ai credits is quota exhausted",
+			errStr:       `warp stream request failed: HTTP 429 [OUT_OF_CREDITS]: {"error":"No AI credits remaining"}`,
+			wantCategory: "quota_exhausted",
+			wantRetry:    true,
+			wantSwitch:   true,
+		},
+		{
 			name:         "warp context window is client error",
 			errStr:       "warp stream finished with context_window_exceeded: input is too long",
 			wantCategory: "client",
