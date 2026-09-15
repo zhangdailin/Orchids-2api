@@ -47,26 +47,17 @@ type Config struct {
 	TokenCacheStrategy string   `json:"token_cache_strategy"`
 
 	// ── Hardcoded fields (set unconditionally by ApplyHardcoded) ──
-	DebugLogSSE             bool   `json:"-"`
-	SuppressThinking        bool   `json:"-"`
-	ContextMaxTokens        int    `json:"-"`
-	ContextSummaryMaxTokens int    `json:"-"`
-	ContextKeepTurns        int    `json:"-"`
-	UpstreamURL             string `json:"-"`
-	UpstreamToken           string `json:"-"`
-	UpstreamMode            string `json:"-"`
-	GrokAPIBaseURL          string `json:"-"`
-	GrokUserAgent           string `json:"-"`
-	GrokCFClearance         string `json:"-"`
-	GrokCFBM                string `json:"-"`
-	GrokStatsigID           string `json:"grok_statsig_id,omitempty"`
-	GrokConfigCFClearance   string `json:"grok_cf_clearance,omitempty"`
-	GrokConfigCFBM          string `json:"grok_cf_bm,omitempty"`
-	GrokBaseProxyURL        string `json:"-"`
-	GrokAssetProxyURL       string `json:"-"`
-	GrokTemporary           *bool  `json:"grok_temporary,omitempty"`
-	GrokDisableMemory       *bool  `json:"grok_disable_memory,omitempty"`
-	GrokCustomInstruction   string `json:"grok_custom_instruction,omitempty"`
+	DebugLogSSE           bool   `json:"-"`
+	SuppressThinking      bool   `json:"-"`
+	UpstreamMode          string `json:"-"`
+	GrokAPIBaseURL        string `json:"-"`
+	GrokUserAgent         string `json:"-"`
+	GrokStatsigID         string `json:"grok_statsig_id,omitempty"`
+	GrokConfigCFClearance string `json:"grok_cf_clearance,omitempty"`
+	GrokConfigCFBM        string `json:"grok_cf_bm,omitempty"`
+	GrokTemporary         *bool  `json:"grok_temporary,omitempty"`
+	GrokDisableMemory     *bool  `json:"grok_disable_memory,omitempty"`
+	GrokCustomInstruction string `json:"grok_custom_instruction,omitempty"`
 
 	// ── WorkBuddy international backend (www.workbuddy.ai) ──
 	// Overridable for self-hosted regional deployments and for tests that need a
@@ -84,11 +75,6 @@ type Config struct {
 	QoderOAuthBaseURL   string `json:"qoder_oauth_base_url,omitempty"`
 	QoderOpenAPIBaseURL string `json:"qoder_openapi_base_url,omitempty"`
 	QoderInferenceURL   string `json:"qoder_inference_base_url,omitempty"`
-	// QoderAuthBaseURL answers the optional, PAT-shaped jobToken handshake. It is
-	// auxiliary: the request credential is derived locally, so a deployment that
-	// cannot reach this host still logs in and chats. The operator never supplies
-	// a PAT.
-	QoderAuthBaseURL string `json:"qoder_auth_base_url,omitempty"`
 	// QoderClientID is the public OAuth client id of the Qoder CLI. It is not a
 	// secret, and it is configurable so a future CLI build can be followed
 	// without a code change.
@@ -328,9 +314,6 @@ func ApplyHardcoded(cfg *Config) {
 	// trip. The default stays "enabled" through InferenceAuthEnabled() when the
 	// field is absent.
 	cfg.UpstreamMode = "ws"
-	cfg.ContextMaxTokens = 100000
-	cfg.ContextSummaryMaxTokens = 800
-	cfg.ContextKeepTurns = 6
 	cfg.GrokAPIBaseURL = "https://grok.com"
 	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 	v := false

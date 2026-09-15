@@ -69,13 +69,14 @@ func TestRedisConnTrackerCloseReleasesOwnedLeases(t *testing.T) {
 
 	tracker := NewRedisConnTracker(client, "test:")
 	peer := NewRedisConnTracker(client, "test:")
-	if !tracker.TryAcquire(42, 2) || !tracker.TryAcquire(42, 2) {
+	if !tracker.TryAcquire(42, 2) || !peer.TryAcquire(42, 2) {
 		t.Fatal("failed to acquire owned leases")
 	}
 	tracker.Close()
-	if got := peer.GetCount(42); got != 0 {
-		t.Fatalf("leases remained after close: %d", got)
+	if got := peer.GetCount(42); got != 1 {
+		t.Fatalf("close removed a peer lease: count=%d want=1", got)
 	}
+	peer.Release(42)
 	if tracker.TryAcquire(42, 1) {
 		t.Fatal("closed tracker acquired a new lease")
 	}

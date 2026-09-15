@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"time"
 
 	"github.com/goccy/go-json"
 )
@@ -108,10 +107,4 @@ func signRequest(payloadBase64, runtimeKey, unixSeconds, encodedBody, signedPath
 // composeBearer renders the Authorization header value.
 func composeBearer(payloadBase64, signature string) string {
 	return "Bearer COSY." + payloadBase64 + "." + signature
-}
-
-// nowSeconds renders the request clock. Cosy-Date and the signature must use the
-// same value, so it is read once and passed around.
-func nowSeconds(now time.Time) string {
-	return fmt.Sprintf("%d", now.Unix())
 }

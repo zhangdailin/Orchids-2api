@@ -94,10 +94,8 @@ type Account struct {
 	// GrokModels is the last successful account-specific upstream /v1/models
 	// capability snapshot. An empty snapshot means not synced yet, not that the
 	// account supports every model.
-	GrokModels             []string  `json:"grok_models,omitempty"`
-	GrokModelsSyncedAt     time.Time `json:"grok_models_synced_at,omitempty"`
-	MissingThinkingStrikes int       `json:"missing_thinking_strikes,omitempty"`
-	MissingThinkingLastAt  time.Time `json:"missing_thinking_last_at,omitempty"`
+	GrokModels         []string  `json:"grok_models,omitempty"`
+	GrokModelsSyncedAt time.Time `json:"grok_models_synced_at,omitempty"`
 	// GrokBilling contains only official xAI Build billing information. It is
 	// deliberately separate from GrokRateLimits, whose request/token headers
 	// are short-lived throttling windows rather than subscription allowance.
@@ -180,14 +178,7 @@ type Account struct {
 	// QoderModelIDs is the last successful account-scoped model catalog
 	// snapshot. An empty snapshot means "not synced yet", not that the account
 	// supports every model.
-	QoderModelIDs       []string  `json:"qoder_model_ids,omitempty"`
-	QoderModelsSyncedAt time.Time `json:"qoder_models_synced_at,omitempty"`
-	// QoderJobToken is the short-lived gateway credential the device access
-	// token is exchanged for. It is a derived secret: the durable credential is
-	// still the device refresh token, so this field is redacted on read and is
-	// never required to be present.
-	QoderJobToken       string    `json:"qoder_job_token,omitempty"`
-	QoderJobTokenExpiry time.Time `json:"qoder_job_token_expiry,omitempty"`
+	QoderModelIDs []string `json:"qoder_model_ids,omitempty"`
 	// QoderQuota is the last successful credit/plan snapshot. The generic
 	// UsageLimit/UsageCurrent fields stay authoritative for scheduling; this keeps
 	// the extra detail the gateway reports (plan tier, the exhausted verdict and

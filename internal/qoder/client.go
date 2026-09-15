@@ -2,7 +2,6 @@ package qoder
 
 import (
 	"context"
-	"crypto/md5"
 	"errors"
 	"fmt"
 	"net/http"
@@ -253,7 +252,6 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 // attemptStreamError carries the retry decision an attempt reached.
 type attemptStreamError struct {
 	err       error
-	status    int
 	retryable bool
 	unauth    bool
 	busy      bool
@@ -592,12 +590,6 @@ func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
 	}, nil, nil)
 }
 
-// exchangeSignature reproduces the job token endpoint's date signature.
-func exchangeSignature(date string) string {
-	sum := md5.Sum([]byte(exchangeAppCode + "&" + exchangeSecret + "&" + date))
-	return fmt.Sprintf("%x", sum)
-}
-
 // PrepareRuntimeFields derives the authentication pair if it is not present yet.
 // It exists so a login can prove the derivation works before the credential is
 // persisted, instead of surfacing the failure on the first chat request.
@@ -648,24 +640,4 @@ func NormalizeLoginResult(creds Credentials, machineID string) Credentials {
 // CatalogSnapshot renders a catalog as the account's stored snapshot.
 func CatalogSnapshot(catalog *Catalog) []string {
 	return catalogToIDs(catalog)
-}
-
-// CatalogFromSnapshot rebuilds a catalog from an account's stored snapshot.
-func CatalogFromSnapshot(ids []string) *Catalog {
-	return catalogFromIDs(ids)
-}
-
-// DefaultModelNames returns the fallback catalog's client-facing names.
-func DefaultModelNames() []string {
-	return DefaultCatalog().Names()
-}
-
-// Fingerprint is the redaction-safe identity of a credential pair.
-func Fingerprint(cred Credentials) string {
-	return fingerprintOf(cred)
-}
-
-// HasCredential reports whether the account carries usable device credentials.
-func HasCredential(acc *store.Account) bool {
-	return ResolveCredentials(acc).HasCredential()
 }

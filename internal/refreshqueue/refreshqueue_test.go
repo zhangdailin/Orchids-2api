@@ -23,9 +23,6 @@ func TestHub_CollapsesDuplicateWork(t *testing.T) {
 	if !hub.TryAcquire(7) {
 		t.Fatal("the lease must be reusable after release")
 	}
-	if _, ok := hub.AcquiredAt(7); !ok {
-		t.Fatal("a held lease must report when it started")
-	}
 }
 
 // TestHub_ReleaseIsIdempotent keeps a deferred release from stealing another
@@ -178,7 +175,8 @@ func TestWithLease_MergesConcurrentRefreshes(t *testing.T) {
 // TestDefault_IsSharedAcrossCallers guards the wiring: the scheduler and the API
 // must observe the same set, which is only true if Default() is a singleton.
 func TestDefault_IsSharedAcrossCallers(t *testing.T) {
-	if Default() != Default() {
+	first, second := Default(), Default()
+	if first != second {
 		t.Fatal("Default() must return one process-wide hub")
 	}
 	Default().TryAcquire(99)

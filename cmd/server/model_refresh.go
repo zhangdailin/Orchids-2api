@@ -340,7 +340,6 @@ func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store
 		return
 	}
 	acc.QoderModelIDs = ids
-	acc.QoderModelsSyncedAt = time.Time{}
 	if err := s.UpdateAccount(ctx, acc); err != nil {
 		slog.Warn("failed to persist qoder model snapshot", "account_id", acc.ID, "error", err)
 	}

@@ -86,15 +86,11 @@ func TestApplyDefaultsGeneratesRandomPassword(t *testing.T) {
 
 func TestApplyHardcodedOverridesValues(t *testing.T) {
 	cfg := Config{
-		ContextMaxTokens: 999,
-		MaxRetries:       999,
-		RequestTimeout:   999,
+		MaxRetries:     999,
+		RequestTimeout: 999,
 	}
 	ApplyHardcoded(&cfg)
 
-	if cfg.ContextMaxTokens != 100000 {
-		t.Fatalf("ContextMaxTokens=%d want=100000", cfg.ContextMaxTokens)
-	}
 	if cfg.MaxRetries != 20 {
 		t.Fatalf("MaxRetries=%d want bounded maximum 20", cfg.MaxRetries)
 	}

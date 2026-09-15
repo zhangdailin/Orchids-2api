@@ -44,7 +44,7 @@ func (p *panicUpstream) SendRequestWithPayload(ctx context.Context, req upstream
 }
 
 func TestHandleMessages_CurrentWorkdir_LocalAnthropicJSON(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &panicUpstream{}
 
@@ -76,7 +76,7 @@ func TestHandleMessages_CurrentWorkdir_LocalAnthropicJSON(t *testing.T) {
 }
 
 func TestHandleMessages_CurrentWorkdir_LocalOpenAIStream(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &panicUpstream{}
 
@@ -111,7 +111,7 @@ func TestHandleMessages_CurrentWorkdir_LocalOpenAIStream(t *testing.T) {
 }
 
 func TestHandleMessages_Warp_StreamAndJSON(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "conversation_id", "id": "conv1"}},
@@ -166,7 +166,7 @@ func TestHandleMessages_Warp_StreamAndJSON(t *testing.T) {
 }
 
 func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
@@ -247,7 +247,7 @@ func TestHandleMessages_ForwardsAndEnforcesToolControls(t *testing.T) {
 }
 
 func TestHandleMessages_Puter_PreservesContentByDefault(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	up := &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
 		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "ok"}},
@@ -306,7 +306,7 @@ func TestHandleMessages_Puter_PreservesContentByDefault(t *testing.T) {
 }
 
 func TestHandleMessages_Puter_OpenAIToolCall_StreamAndJSON(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model.tool-call", Event: map[string]any{
@@ -367,7 +367,7 @@ func TestHandleMessages_Puter_OpenAIToolCall_StreamAndJSON(t *testing.T) {
 }
 
 func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &panicUpstream{}
 
@@ -419,7 +419,7 @@ func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
 }
 
 func TestHandleMessages_TitleGeneration_LocalResponse(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &panicUpstream{}
 

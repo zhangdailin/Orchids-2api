@@ -165,15 +165,7 @@ func mgwProxyFunc(client *Client) func(*http.Request) (*url.URL, error) {
 	if client == nil {
 		return nil
 	}
-	proxy := util.ProxyFuncFromConfig(client.cfg)
-	if configured := resolveGrokProxy(client.cfg, strings.TrimSpace(getProxyField(client.cfg, "base"))); configured != nil {
-		var bypass []string
-		if client.cfg != nil {
-			bypass = client.cfg.ProxyBypass
-		}
-		return util.ProxyFuncFromURL(configured, bypass)
-	}
-	return proxy
+	return util.ProxyFuncFromConfig(client.cfg)
 }
 
 func streamMGW(ctx context.Context, connection *websocket.Conn, writer *io.PipeWriter, request MGWChatRequest) {

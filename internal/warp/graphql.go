@@ -8,16 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
-	"golang.org/x/sync/singleflight"
-)
-
-var (
-	warpRefundGroup     singleflight.Group
-	warpRefundedRequest sync.Map
 )
 
 type RequestLimitInfo struct {
@@ -71,15 +64,6 @@ const getRequestLimitInfoQuery = `query GetRequestLimitInfo($requestContext: Req
           message
         }
       }
-    }
-  }
-}`
-
-const refundCreditsMutation = `mutation ProvideNegativeFeedbackResponseForAiConversation($input: ProvideNegativeFeedbackResponseForAiConversationInput!, $requestContext: RequestContext!) {
-  provideNegativeFeedbackResponseForAiConversation(input: $input, requestContext: $requestContext) {
-    __typename
-    ... on RequestsRefundedOutput {
-      requestsRefunded
     }
   }
 }`
@@ -151,63 +135,6 @@ func fetchRequestLimitInfo(ctx context.Context, client *http.Client, jwt string)
 	}, bonuses, nil
 }
 
-func refundCredits(ctx context.Context, client *http.Client, jwt, conversationID string, requestIDs []string) error {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return fmt.Errorf("warp conversation id is empty")
-	}
-	uniqueIDs := make([]string, 0, len(requestIDs))
-	seen := make(map[string]struct{}, len(requestIDs))
-	for _, requestID := range requestIDs {
-		requestID = strings.TrimSpace(requestID)
-		if requestID == "" {
-			continue
-		}
-		if _, exists := seen[requestID]; exists {
-			continue
-		}
-		seen[requestID] = struct{}{}
-		uniqueIDs = append(uniqueIDs, requestID)
-	}
-	if len(uniqueIDs) == 0 {
-		return fmt.Errorf("warp request ids are empty")
-	}
-
-	payload := map[string]interface{}{
-		"query":         refundCreditsMutation,
-		"operationName": "ProvideNegativeFeedbackResponseForAiConversation",
-		"variables": map[string]interface{}{
-			"input": map[string]interface{}{
-				"conversationId": conversationID,
-				"requestIds":     uniqueIDs,
-			},
-			"requestContext": requestContextPayload(),
-		},
-	}
-
-	var resp struct {
-		Data struct {
-			RefundCredits struct {
-				Type             string `json:"__typename"`
-				RequestsRefunded int    `json:"requestsRefunded"`
-			} `json:"provideNegativeFeedbackResponseForAiConversation"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := doGraphQL(ctx, client, warpGraphQLV2URL, jwt, "ProvideNegativeFeedbackResponseForAiConversation", payload, &resp); err != nil {
-		return err
-	}
-	if len(resp.Errors) > 0 {
-		return fmt.Errorf("warp refund: %s", resp.Errors[0].Message)
-	}
-	if resp.Data.RefundCredits.RequestsRefunded < len(uniqueIDs) {
-		return fmt.Errorf("warp refund returned %s with %d/%d requests refunded", resp.Data.RefundCredits.Type, resp.Data.RefundCredits.RequestsRefunded, len(uniqueIDs))
-	}
-	return nil
-}
-
 func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, operationName string, body interface{}, target interface{}) error {
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -275,53 +202,6 @@ func (c *Client) GetRequestLimitInfo(ctx context.Context) (*RequestLimitInfo, []
 		return nil, nil, err
 	}
 	return fetchRequestLimitInfo(ctx, client, c.session.currentJWT())
-}
-
-func (c *Client) RefundCredits(ctx context.Context, conversationID, requestID string) error {
-	return c.RefundCreditRequests(ctx, conversationID, []string{requestID})
-}
-
-func (c *Client) RefundCreditRequests(ctx context.Context, conversationID string, requestIDs []string) error {
-	requestIDs = normalizeRequestIDs(requestIDs)
-	if len(requestIDs) == 0 {
-		return fmt.Errorf("warp refund request ids missing")
-	}
-	client, err := c.ensureAuthenticated(ctx, false)
-	if err != nil {
-		return err
-	}
-	key := strings.TrimSpace(conversationID) + ":" + strings.Join(requestIDs, ",")
-	if _, refunded := warpRefundedRequest.Load(key); refunded {
-		return nil
-	}
-	_, err, _ = warpRefundGroup.Do(key, func() (interface{}, error) {
-		if _, refunded := warpRefundedRequest.Load(key); refunded {
-			return nil, nil
-		}
-		if refundErr := refundCredits(ctx, client, c.session.currentJWT(), conversationID, requestIDs); refundErr != nil {
-			return nil, refundErr
-		}
-		warpRefundedRequest.Store(key, struct{}{})
-		return nil, nil
-	})
-	return err
-}
-
-func normalizeRequestIDs(requestIDs []string) []string {
-	seen := make(map[string]struct{}, len(requestIDs))
-	normalized := make([]string, 0, len(requestIDs))
-	for _, requestID := range requestIDs {
-		requestID = strings.TrimSpace(requestID)
-		if requestID == "" {
-			continue
-		}
-		if _, ok := seen[requestID]; ok {
-			continue
-		}
-		seen[requestID] = struct{}{}
-		normalized = append(normalized, requestID)
-	}
-	return normalized
 }
 
 func requestContextPayload() map[string]interface{} {

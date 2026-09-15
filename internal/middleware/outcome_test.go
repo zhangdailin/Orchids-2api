@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"orchids-api/internal/opsagg"
 )
 
 type recordedOutcome struct {
@@ -19,12 +22,12 @@ type recordedOutcome struct {
 // The recorder is a package global, so these tests must not run in parallel.
 func captureOutcomes(t *testing.T) *[]recordedOutcome {
 	t.Helper()
-	previous := requestOutcomeRecorder
+	previous := detailedOutcomeRecorder
 	outcomes := &[]recordedOutcome{}
-	SetRequestOutcomeRecorder(func(channel, model, statusClass string, durationMS, firstTokenMS int64) {
-		*outcomes = append(*outcomes, recordedOutcome{channel, model, statusClass, durationMS, firstTokenMS})
+	SetDetailedOutcomeRecorder(func(_ context.Context, outcome opsagg.Outcome) {
+		*outcomes = append(*outcomes, recordedOutcome{outcome.Channel, outcome.Model, outcome.Status, outcome.DurationMS, outcome.FirstTokenMS})
 	})
-	t.Cleanup(func() { requestOutcomeRecorder = previous })
+	t.Cleanup(func() { detailedOutcomeRecorder = previous })
 	return outcomes
 }
 

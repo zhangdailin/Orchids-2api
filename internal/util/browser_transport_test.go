@@ -12,7 +12,7 @@ import (
 )
 
 func TestBrowserHTTPClientCustomHeaderDeadlineIsIsolated(t *testing.T) {
-	defaultClient := GetSharedBrowserHTTPClient("header-isolation-test", 10*time.Minute, nil)
+	defaultClient := GetSharedBrowserHTTPClientWithHeaderTimeout("header-isolation-test", 10*time.Minute, responseHeaderTimeoutForClient(10*time.Minute), nil)
 	longClient := GetSharedBrowserHTTPClientWithHeaderTimeout("header-isolation-test", 10*time.Minute, 0, nil)
 	if defaultClient == longClient {
 		t.Fatal("different header deadlines share a cached client")

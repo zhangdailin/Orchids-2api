@@ -27,9 +27,6 @@ const (
 	inferPath  = "/algo/api/v2/service/pro/sse/agent_chat_generation"
 	inferQuery = "?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 
-	catalogPath  = "/algo/api/v2/model/list"
-	catalogQuery = "?Encode=1"
-
 	// sceneBusinessProduct, sceneBusinessType, sceneName and sceneClientID are
 	// the fixed scene the CLI requests. Sending another product would route the
 	// request to a surface this channel does not implement.
@@ -47,11 +44,6 @@ const (
 // chatURL renders the chat endpoint.
 func chatURL(base string) string {
 	return strings.TrimRight(base, "/") + inferPath + inferQuery
-}
-
-// catalogURL renders the model list endpoint.
-func catalogURL(base string) string {
-	return strings.TrimRight(base, "/") + catalogPath + catalogQuery
 }
 
 // chatBody is the request payload. Field order matters only for readability

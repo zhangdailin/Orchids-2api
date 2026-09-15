@@ -147,10 +147,6 @@ func WorkBuddyCredentialKey(acc *store.Account) string {
 
 // verifyWorkBuddyAccount proves the credential works before it is persisted and
 // applies the account-scoped model catalog and credit meter on the way.
-func verifyWorkBuddyAccount(ctx context.Context, acc *store.Account, cfg *config.Config) (string, int, error) {
-	return verifyWorkBuddyAccountWithStore(ctx, acc, cfg, nil)
-}
-
 func verifyWorkBuddyAccountWithStore(ctx context.Context, acc *store.Account, cfg *config.Config, accountStore workbuddy.AccountUpdater) (string, int, error) {
 	if acc == nil {
 		return "", 0, nil

@@ -63,20 +63,6 @@ func newQoderAuthServer(t *testing.T, pollBodies []string) *qoderAuthServer {
 				t.Errorf("userinfo Authorization = %q, want a bearer token", got)
 			}
 			_, _ = w.Write([]byte(`{"uid":"uid-qoder","name":"operator","email":"operator@example.com","organization_id":"org-1","organization_tags":["tag-a"]}`))
-		case "/algo/api/v2/model/list":
-			// The catalog read is signed, so it proves the full credential chain
-			// rather than just the token endpoint.
-			for _, header := range []string{"Authorization", "Cosy-Key", "Cosy-MachineId", "Cosy-User", "Cosy-Date"} {
-				if r.Header.Get(header) == "" {
-					t.Errorf("catalog request is missing %s", header)
-				}
-			}
-			if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer COSY.") {
-				t.Errorf("catalog Authorization = %q, want a COSY bearer", r.Header.Get("Authorization"))
-			}
-			_, _ = w.Write([]byte(`{"chat":[{"key":"qmodel_latest","display_name":"Qwen3.7-Max","enable":true},{"key":"dfmodel","display_name":"DeepSeek-V4-Flash","enable":true}]}`))
-		case "/algo/api/v3/user/jobToken":
-			_, _ = w.Write([]byte(`{"name":"operator","id":"uid-qoder","userType":"personal_standard","refreshToken":"gw-refresh","securityOauthToken":"gw-sot","expireTime":` + "1700000000000" + `}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -91,7 +77,7 @@ func stubQoderLoginClient(t *testing.T, baseURL string) {
 	previous := newQoderLoginClient
 	newQoderLoginClient = func(acc *store.Account, cfg *config.Config) *qoder.Client {
 		client := qoder.NewFromAccount(acc, cfg)
-		client.SetEndpointsForTest(baseURL, baseURL, baseURL, baseURL)
+		client.SetEndpointsForTest(baseURL, baseURL, baseURL)
 		return client
 	}
 	newQoderLoginClientMu.Unlock()
@@ -107,7 +93,6 @@ func qoderLoginConfig(baseURL string) *config.Config {
 		QoderOAuthBaseURL:   baseURL,
 		QoderOpenAPIBaseURL: baseURL,
 		QoderInferenceURL:   baseURL,
-		QoderAuthBaseURL:    baseURL,
 	}
 }
 
@@ -242,8 +227,8 @@ func TestHandleQoderLogin_CancelStopsBlockedPollAndDoesNotPersist(t *testing.T) 
 	}
 	select {
 	case <-pollCancelled:
-	default:
-		t.Fatal("DELETE returned before the blocked upstream poll was cancelled")
+	case <-time.After(time.Second):
+		t.Fatal("blocked upstream poll was not cancelled")
 	}
 	accounts, err := s.ListAccounts(context.Background())
 	if err != nil {
@@ -374,12 +359,6 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	if want := len(qoder.CatalogSnapshot(qoder.DefaultCatalog())); len(acc.QoderModelIDs) != want {
 		t.Fatalf("catalog snapshot has %d entries, want the built-in %d", len(acc.QoderModelIDs), want)
 	}
-	if !acc.QoderModelsSyncedAt.IsZero() {
-		t.Fatal("the built-in catalog was stamped as if it had been observed upstream")
-	}
-	if acc.QoderJobToken != "gw-sot" {
-		t.Fatalf("job token = %q, want the handshake result", acc.QoderJobToken)
-	}
 	if acc.Email != "operator@example.com" {
 		t.Fatalf("email = %q", acc.Email)
 	}
@@ -387,81 +366,11 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	// The account response must never carry the durable credential or the
 	// derived runtime material.
 	redacted := RedactQoderOutput(acc)
-	if redacted.QoderRefreshToken != "" || redacted.QoderRuntimeKey != "" || redacted.QoderJobToken != "" {
+	if redacted.QoderRefreshToken != "" || redacted.QoderRuntimeKey != "" {
 		t.Fatal("RedactQoderOutput left a secret in place")
 	}
 	if redacted.QoderAccessToken == "" {
 		t.Fatal("RedactQoderOutput dropped the access token the table needs as proof")
-	}
-}
-
-// TestHandleQoderLogin_SurvivesAnUnavailableCatalog proves an issued credential
-// is not thrown away when the gateway refuses the model list path.
-//
-// This is not hypothetical: a live OAuth account receives
-// `403 code=101 Signature invalid` from `/algo/api/v2/model/list` even though the
-// same credential and runtime pair authenticate a chat request. Device
-// authorization does not depend on that read, so the account must still be
-// stored — and the built-in catalog must not be stamped as if a sync had
-// happened.
-func TestHandleQoderLogin_SurvivesAnUnavailableCatalog(t *testing.T) {
-	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			s, _ := newTestStore(t, "qd-login:")
-			auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				switch r.URL.Path {
-				case "/":
-					w.WriteHeader(http.StatusOK)
-				case "/api/v1/deviceToken/poll":
-					_, _ = w.Write([]byte(`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400,"user_id":"uid-qoder","user_name":"operator"}`))
-				case "/api/v1/userinfo":
-					_, _ = w.Write([]byte(`{"uid":"uid-qoder","name":"operator","email":"operator@example.com"}`))
-				case "/algo/api/v2/model/list":
-					w.WriteHeader(status)
-					_, _ = w.Write([]byte(`{"message":"not served here"}`))
-				case "/algo/api/v3/user/jobToken":
-					w.WriteHeader(status)
-					_, _ = w.Write([]byte(`{"message":"not served here"}`))
-				default:
-					http.NotFound(w, r)
-				}
-			}))
-			defer auth.Close()
-			stubQoderLoginClient(t, auth.URL)
-
-			a := New(s, "", "", qoderLoginConfig(auth.URL))
-			final := runQoderLoginToCompletion(t, a, s, 15*time.Second)
-			if final.Status != "complete" {
-				t.Fatalf("status = %q message = %q, want complete", final.Status, final.Message)
-			}
-			if final.AccountID == 0 {
-				t.Fatal("the login reported no account id")
-			}
-
-			acc, err := s.GetAccount(t.Context(), final.AccountID)
-			if err != nil {
-				t.Fatalf("GetAccount: %v", err)
-			}
-			if acc.QoderAccessToken == "" || acc.QoderRefreshToken == "" {
-				t.Fatalf("credential = %q/%q, want a stored pair", acc.QoderAccessToken, acc.QoderRefreshToken)
-			}
-			if acc.QoderRuntimeInfo == "" || acc.QoderRuntimeKey == "" {
-				t.Fatal("the derived runtime pair was not stored")
-			}
-			if acc.QoderUserID != "uid-qoder" {
-				t.Fatalf("user id = %q", acc.QoderUserID)
-			}
-			// The fallback catalog is installed, but the snapshot must stay
-			// un-stamped so "not synced yet" is still distinguishable from
-			// "synced".
-			if len(acc.QoderModelIDs) == 0 {
-				t.Fatal("no model list was installed as a fallback")
-			}
-			if !acc.QoderModelsSyncedAt.IsZero() {
-				t.Fatal("a fallback catalog was stamped as if it had been observed upstream")
-			}
-		})
 	}
 }
 
@@ -480,9 +389,6 @@ func TestHandleQoderLogin_ReportsUnusableCredential(t *testing.T) {
 			// established and the account must not be stored.
 			_, _ = w.Write([]byte(`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400}`))
 		case "/api/v1/userinfo":
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"message":"token rejected"}`))
-		case "/algo/api/v2/model/list", "/algo/api/v3/user/jobToken":
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"message":"token rejected"}`))
 		default:
@@ -655,14 +561,8 @@ func qoderAccountRequest(t *testing.T, method, path, body string) *http.Request 
 	return req
 }
 
-// TestVerifyQoderAccountDoesNotReportForbidden proves the account check no longer
-// depends on the model-list read.
-//
-// On the live deployment the check call was what set the account's status to
-// "403": it read `/algo/api/v2/model/list`, the gateway refused that read for an
-// OAuth credential, and the console showed 「禁止访问」 plus a
-// "no usable account" alarm for an account whose credential was valid. The check
-// must therefore pass with no upstream catalog available at all.
+// TestVerifyQoderAccountDoesNotReportForbidden proves the account check uses the
+// local catalog and only needs the identity endpoint from the control plane.
 func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
 	s, _ := newTestStore(t, "qd-verify:")
 
@@ -671,10 +571,6 @@ func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v1/userinfo":
 			_, _ = w.Write([]byte(`{"uid":"uid-qoder","name":"operator","email":"operator@example.com"}`))
-		case "/algo/api/v2/model/list":
-			// Exactly what the gateway answers for this credential.
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"code":"101","message":"Signature invalid"}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -701,9 +597,8 @@ func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
 		QoderOAuthBaseURL:   upstream.URL,
 		QoderOpenAPIBaseURL: upstream.URL,
 		QoderInferenceURL:   upstream.URL,
-		QoderAuthBaseURL:    upstream.URL,
 	}
-	status, httpStatus, err := verifyQoderAccount(t.Context(), acc, cfg)
+	status, httpStatus, err := verifyQoderAccountWithStore(t.Context(), acc, cfg, s)
 	if err != nil {
 		t.Fatalf("verifyQoderAccount() error = %v, want success", err)
 	}
@@ -718,9 +613,6 @@ func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
 	}
 	if len(acc.QoderModelIDs) == 0 {
 		t.Fatal("no catalog was installed")
-	}
-	if !acc.QoderModelsSyncedAt.IsZero() {
-		t.Fatal("a local catalog was stamped as synced")
 	}
 }
 

@@ -42,10 +42,6 @@ var newWorkBuddyLoginClient = func(acc *store.Account, cfg *config.Config) *work
 // the factory while that goroutine is still winding down after cancellation.
 var newWorkBuddyLoginClientMu sync.RWMutex
 
-func makeWorkBuddyLoginClient(acc *store.Account, cfg *config.Config) *workbuddy.Client {
-	return workBuddyLoginClientFactory()(acc, cfg)
-}
-
 func workBuddyLoginClientFactory() func(*store.Account, *config.Config) *workbuddy.Client {
 	newWorkBuddyLoginClientMu.RLock()
 	factory := newWorkBuddyLoginClient
@@ -290,14 +286,6 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 // buildWorkBuddyAccountFromCredentials turns a completed login into a verified
 // account record. The model catalog read doubles as the credential check: a
 // token that cannot list the account catalog is never persisted.
-func (a *API) buildWorkBuddyAccountFromCredentials(ctx context.Context, loginID string, creds workbuddy.Credentials) (*store.Account, error) {
-	return a.buildWorkBuddyAccountFromCredentialsWithConfig(ctx, loginID, creds, a.config.Load())
-}
-
-func (a *API) buildWorkBuddyAccountFromCredentialsWithConfig(ctx context.Context, loginID string, creds workbuddy.Credentials, cfg *config.Config) (*store.Account, error) {
-	return a.buildWorkBuddyAccountFromCredentialsWithFactory(ctx, loginID, creds, cfg, workBuddyLoginClientFactory())
-}
-
 func (a *API) buildWorkBuddyAccountFromCredentialsWithFactory(ctx context.Context, loginID string, creds workbuddy.Credentials, cfg *config.Config, factory func(*store.Account, *config.Config) *workbuddy.Client) (*store.Account, error) {
 	acc := &store.Account{
 		Name:                  "workbuddy-login",

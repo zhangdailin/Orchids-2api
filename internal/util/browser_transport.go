@@ -40,10 +40,6 @@ func (rt *browserLikeRoundTripper) CloseIdleConnections() {
 
 var browserHTTPClientCache = clientPool{clients: make(map[string]*http.Client)}
 
-func GetSharedBrowserHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
-	return GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey, timeout, responseHeaderTimeoutForClient(timeout), proxyFunc)
-}
-
 // A zero headerTimeout leaves header waiting bounded by the HTTP total
 // deadline. Keep it in the cache key so custom long-lived inference clients
 // cannot inherit another caller's shorter HTTP/1 header deadline.

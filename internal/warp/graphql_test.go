@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -104,58 +103,6 @@ func TestFetchRequestLimitInfo_UsesOfficialWarpGraphQLHeaders(t *testing.T) {
 	}
 	if len(bonuses) != 1 || bonuses[0].RequestCreditsRemaining != 7 {
 		t.Fatalf("unexpected bonuses: %+v", bonuses)
-	}
-}
-
-func TestRefundCredits_UsesV2EndpointAndExplicitRequestID(t *testing.T) {
-	t.Parallel()
-
-	client := &http.Client{
-		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			if got := req.URL.String(); got != warpGraphQLV2URL+"?op=ProvideNegativeFeedbackResponseForAiConversation" {
-				t.Fatalf("unexpected refund URL: %s", got)
-			}
-			body, err := io.ReadAll(req.Body)
-			if err != nil {
-				t.Fatalf("read refund request: %v", err)
-			}
-			if !strings.Contains(string(body), `"requestIds":["upstream-request-1"]`) || !strings.Contains(string(body), `"conversationId":"conversation-1"`) {
-				t.Fatalf("refund request does not contain explicit upstream ID: %s", body)
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"data":{"provideNegativeFeedbackResponseForAiConversation":{"__typename":"RequestsRefundedOutput","requestsRefunded":1}}}`)),
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-			}, nil
-		}),
-	}
-
-	if err := refundCredits(context.Background(), client, "jwt", "conversation-1", []string{"upstream-request-1"}); err != nil {
-		t.Fatalf("refundCredits() error = %v", err)
-	}
-}
-
-func TestRefundCredits_SupportsMultipleRequestIDs(t *testing.T) {
-	t.Parallel()
-	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			t.Fatalf("read refund request: %v", err)
-		}
-		if !strings.Contains(string(body), `"requestIds":["request-1","request-2"]`) {
-			t.Fatalf("refund request IDs missing: %s", body)
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"data":{"provideNegativeFeedbackResponseForAiConversation":{"__typename":"RequestsRefundedOutput","requestsRefunded":2}}}`)),
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-		}, nil
-	})}
-	if err := refundCredits(context.Background(), client, "jwt", "conversation-1", []string{"request-1", "request-2"}); err != nil {
-		t.Fatalf("refundCredits() error = %v", err)
-	}
-	if got := normalizeRequestIDs([]string{" request-1 ", "request-1", "", "request-2"}); !slices.Equal(got, []string{"request-1", "request-2"}) {
-		t.Fatalf("normalizeRequestIDs() = %v", got)
 	}
 }
 

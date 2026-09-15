@@ -45,12 +45,9 @@ func TestHandleCountTokens_ReturnsBreakdown(t *testing.T) {
 	t.Parallel()
 
 	h := NewWithLoadBalancer(&config.Config{
-		DebugEnabled:            false,
-		DebugLogSSE:             false,
-		ContextMaxTokens:        12000,
-		RequestTimeout:          30,
-		ContextKeepTurns:        2,
-		ContextSummaryMaxTokens: 256,
+		DebugEnabled:   false,
+		DebugLogSSE:    false,
+		RequestTimeout: 30,
 	}, nil)
 
 	reqBody := map[string]interface{}{
@@ -108,12 +105,9 @@ func TestHandleCountTokens_WarpUsesOfficialProtoEstimator(t *testing.T) {
 	t.Parallel()
 
 	h := NewWithLoadBalancer(&config.Config{
-		DebugEnabled:            false,
-		DebugLogSSE:             false,
-		ContextMaxTokens:        12000,
-		RequestTimeout:          30,
-		ContextKeepTurns:        2,
-		ContextSummaryMaxTokens: 256,
+		DebugEnabled:   false,
+		DebugLogSSE:    false,
+		RequestTimeout: 30,
 	}, nil)
 
 	reqBody := map[string]interface{}{

@@ -126,10 +126,6 @@ func (c *CLIClient) clientIdentifier() string {
 // the raw upstream response (SSE or JSON) for the caller to stream/collect. A
 // confirmed Cloudflare challenge invalidates the egress clearance and retries at
 // most once.
-func (c *CLIClient) doResponses(ctx context.Context, acc *store.Account, payload map[string]interface{}) (*http.Response, error) {
-	return c.doResponsesAt(ctx, acc, "/responses", payload)
-}
-
 func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {
 	if acc == nil {
 		return nil, fmt.Errorf("empty cli account")

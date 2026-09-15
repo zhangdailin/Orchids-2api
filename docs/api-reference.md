@@ -295,7 +295,7 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 
 - 当前刷新是“来源同步”；Puter 会额外使用账号 `test_mode` 逐模型验证
 - WorkBuddy 使用 `GET /v3/config` 的 `cli` 白名单（鉴权成功即视为验证通过，不额外消耗额度），返回 `source=workbuddy_cli_models`
-- Qoder 使用账号级 `GET /algo/api/v2/model/list`（COSY 签名鉴权成功即视为验证通过，不额外消耗额度），返回 `source=qoder_model_list`；对外模型 ID 是**小写化的显示名**（例如 `qwen3.7-max`），内部 key（`qmodel_latest`）在账号快照里保留
+- Qoder 使用本地内置目录，返回 `source=qoder_builtin_catalog`；对外模型 ID 是**小写化的显示名**（例如 `qwen3.7-max`），内部 key（`qmodel_latest`）在账号快照里保留
 - 来源拿不到的模型会被删除
 
 ## 5. 常用请求示例
@@ -461,8 +461,7 @@ curl -s -X DELETE http://127.0.0.1:3002/api/qoder/login/<login-id>
 - PKCE verifier、nonce 与设备 `machine_id` 只保存在服务端；轮询响应里不会出现它们（`user_code` 恒为空）
 - 上游在浏览器步骤完成前对 `GET /api/v1/deviceToken/poll` 返回 **404**，服务端归一为「pending」并按 2s 节奏轮询
 - 授权成功后服务端会派生并保存该账号的 runtime 认证对（`qoder_runtime_info` / `qoder_runtime_key`），登录时即完成，避免第一次聊天才暴露失败
-- **落库条件是「上游签发了设备凭据」+「解析出账号身份」**，不依赖模型目录读取。Qoder CLI 的全部 HTTP 接口只有四个（设备 token 刷新、`userinfo`、PAT jobToken 兑换、聊天 SSE），**不含任何模型清单接口**：它自带内置清单，必要时读本地 `catalog-v6` 缓存
-- 已用真实账号实测：`GET /algo/api/v2/model/list` 对 OAuth 设备凭据返回 `403 {"code":"101","message":"Signature invalid"}`，而**同一凭据、同一 runtime 对**的聊天请求是通过鉴权的（上游返回业务错误而非签名错误）。因此该接口不再被调用，模型清单为本地内置 + 账号快照
+- **落库条件是「上游签发了设备凭据」+「解析出账号身份」**，不依赖模型目录读取。当前使用的 Qoder CLI 链路只有三个接口（设备 token 刷新、`userinfo`、聊天 SSE），**不含任何模型清单接口**；模型清单来自本地内置目录与账号快照
 - 只有确实不可用的凭据才会被拒绝：解析不出账号身份（`userinfo` 被拒且设备 token 未带 `user_id`）或未签发 refreshToken 时，账号不落库，且失败消息会带上具体原因（而不只是「could not be verified」）
 - 模型清单是**本地**的，因此 `POST /api/models/refresh?channel=qoder` 不会因上游不可达而失败，也不会因为某个模型「不在账号目录里」而删除它（`source=qoder_builtin_catalog`）；账号快照不带同步时间戳，因为不存在可观测的上游目录
 
@@ -504,8 +503,7 @@ Qoder 的免费额度是**按账号的每日窗口**发放和重置的，与是�
 - 「qoder 没有可用账号」的池告警不会因为套餐问题而误报
 
 同一账号在官方 CLI 协议下也会返回相同的 `pricingUrl`，因此这是账号侧套餐状态，而非本服务造成的鉴权失败。要真正跑通聊天，需要在 qoder.com 上为该账号开通可用订阅或额度。
-- 设备 refreshToken 由上游轮换，服务端在过期前自动刷新并回写账号记录；管理页面不会返回 refreshToken、runtime 字段或 jobToken
-- 触发了 `POST /algo/api/v3/user/jobToken`（PAT 形态网关握手）时结果只作为辅助字段保存，**不是**推理凭据；握手失败只记日志，不影响登录或推理
+- 设备 refreshToken 由上游轮换，服务端在过期前自动刷新并回写账号记录；管理页面不会返回 refreshToken 或 runtime 字段
 - 同一账号再次登录会更新原账号，不会产生重复记录
 - 需要同源（`Origin` 与 Host 一致）且 HTTPS（本地 `localhost`/`127.0.0.1` 例外）；跨站请求一律 403
 

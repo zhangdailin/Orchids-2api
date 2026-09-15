@@ -246,12 +246,6 @@ func (c *Client) streamWithRetry(ctx context.Context, payload []byte, req upstre
 	return c.handleStreamResponseWithCancel(streamCtx, req, resp, onMessage, logger, cancel)
 }
 
-func (c *Client) handleStreamResponse(ctx context.Context, req upstream.UpstreamRequest, resp *http.Response, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	streamCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	return c.handleStreamResponseWithCancel(streamCtx, req, resp, onMessage, logger, cancel)
-}
-
 func (c *Client) handleStreamResponseWithCancel(ctx context.Context, req upstream.UpstreamRequest, resp *http.Response, onMessage func(upstream.SSEMessage), logger *debug.Logger, cancel context.CancelFunc) error {
 	if resp == nil {
 		return fmt.Errorf("warp stream response is nil")
@@ -307,7 +301,7 @@ func (c *Client) handleStreamResponseWithCancel(ctx context.Context, req upstrea
 	defer resp.Body.Close()
 	body = util.MonitorReadIdle(body, c.config.WarpStreamIdleTimeout(), cancel, "warp")
 
-	return processStreamBody(ctx, body, onMessage, logger)
+	return processStreamBodyWithTaskContext(ctx, body, onMessage, logger, req.WarpTaskContext)
 }
 
 func (c *Client) RefreshAccount(ctx context.Context) (string, error) {

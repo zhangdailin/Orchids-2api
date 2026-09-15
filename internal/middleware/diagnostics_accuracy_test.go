@@ -27,14 +27,12 @@ func TestDiagnosticsUniqueIdentityAndUnifiedCompletion(t *testing.T) {
 	defer client.Close()
 	store := debug.NewDiagnosticStore(client, "identity:")
 	journal := &diagnosticJournal{}
-	previous, oldDetailed, oldSimple := requestJournal, detailedOutcomeRecorder, requestOutcomeRecorder
+	previous, oldDetailed := requestJournal, detailedOutcomeRecorder
 	defer func() {
 		requestJournal = previous
 		detailedOutcomeRecorder = oldDetailed
-		requestOutcomeRecorder = oldSimple
 	}()
 	requestJournal = journal
-	requestOutcomeRecorder = nil
 	var durations []int64
 	detailedOutcomeRecorder = func(_ context.Context, o opsagg.Outcome) {
 		durations = append(durations, o.DurationMS)

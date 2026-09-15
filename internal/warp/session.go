@@ -37,6 +37,7 @@ type session struct {
 	refreshing     bool
 	refreshDone    chan struct{}
 	refreshErr     error
+	refreshErrAt   time.Time
 	loggingIn      bool
 	loginDone      chan struct{}
 	loginErr       error
@@ -53,6 +54,8 @@ type refreshResponse struct {
 }
 
 var sessionCache sync.Map
+
+const refreshFailureCoalesceWindow = 250 * time.Millisecond
 
 func sessionKey(accountID int64, refreshToken string) string {
 	if accountID > 0 {
@@ -84,6 +87,7 @@ func getSession(accountID int64, refreshToken, deviceID, requestID string) *sess
 			sess.loggedIn = false
 			sess.lastLogin = time.Time{}
 			sess.refreshErr = nil
+			sess.refreshErrAt = time.Time{}
 			// A refresh-token replacement denotes a new Firebase/Warp identity.
 			// Cookies and experiment/request identity from the previous login must
 			// not cross that boundary.
@@ -185,15 +189,27 @@ func (s *session) ensureToken(ctx context.Context, httpClient *http.Client) erro
 		}
 		return fmt.Errorf("warp refresh did not produce a valid token")
 	}
+	if s.refreshErr != nil && !s.refreshErrAt.IsZero() && time.Since(s.refreshErrAt) < refreshFailureCoalesceWindow {
+		err := s.refreshErr
+		s.mu.Unlock()
+		return err
+	}
 
 	s.refreshing = true
 	s.refreshDone = make(chan struct{})
+	s.refreshErr = nil
+	s.refreshErrAt = time.Time{}
 	s.mu.Unlock()
 
 	err := s.refresh(ctx, httpClient, "")
 
 	s.mu.Lock()
 	s.refreshErr = err
+	if err != nil && ctx.Err() == nil {
+		s.refreshErrAt = time.Now()
+	} else {
+		s.refreshErrAt = time.Time{}
+	}
 	s.refreshing = false
 	close(s.refreshDone)
 	s.refreshDone = nil

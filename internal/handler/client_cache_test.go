@@ -140,7 +140,6 @@ func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) 
 		QoderOAuthBaseURL:   "https://oauth-a.example",
 		QoderOpenAPIBaseURL: "https://open-a.example",
 		QoderInferenceURL:   "https://infer-a.example",
-		QoderAuthBaseURL:    "https://auth-a.example",
 		QoderClientID:       "client-a",
 		QoderClientVersion:  "version-a",
 	}
@@ -179,7 +178,6 @@ func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) 
 		{"qoder OAuth URL", func(c *config.Config) { c.QoderOAuthBaseURL = "https://oauth-b.example" }},
 		{"qoder OpenAPI URL", func(c *config.Config) { c.QoderOpenAPIBaseURL = "https://open-b.example" }},
 		{"qoder inference URL", func(c *config.Config) { c.QoderInferenceURL = "https://infer-b.example" }},
-		{"qoder auth URL", func(c *config.Config) { c.QoderAuthBaseURL = "https://auth-b.example" }},
 		{"qoder client id", func(c *config.Config) { c.QoderClientID = "client-b" }},
 		{"qoder client version", func(c *config.Config) { c.QoderClientVersion = "version-b" }},
 	}

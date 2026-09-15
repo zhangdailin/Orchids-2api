@@ -49,10 +49,6 @@ func newQoderE2EStub(t *testing.T) *qoderE2EStub {
 			_, _ = w.Write([]byte(`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400,"user_id":"uid-e2e","user_name":"e2e"}`))
 		case "/api/v1/userinfo":
 			_, _ = w.Write([]byte(`{"uid":"uid-e2e","name":"e2e","email":"e2e@example.com"}`))
-		case "/algo/api/v2/model/list":
-			_, _ = w.Write([]byte(`{"chat":[{"key":"qmodel_latest","display_name":"Qwen3.7-Max","enable":true}]}`))
-		case "/algo/api/v3/user/jobToken":
-			_, _ = w.Write([]byte(`{"name":"e2e","id":"uid-e2e","securityOauthToken":"gw-sot"}`))
 		case "/algo/api/v2/service/pro/sse/agent_chat_generation":
 			stub.chatCalls++
 			stub.chatHeaders = r.Header.Clone()
@@ -103,7 +99,6 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 		QoderOAuthBaseURL:   stub.URL,
 		QoderOpenAPIBaseURL: stub.URL,
 		QoderInferenceURL:   stub.URL,
-		QoderAuthBaseURL:    stub.URL,
 	}
 
 	// Wire the provider registry exactly as the server does, so the request path

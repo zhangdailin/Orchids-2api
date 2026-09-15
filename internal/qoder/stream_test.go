@@ -41,7 +41,7 @@ func jsonString(value string) string {
 func collectStream(t *testing.T, body string) ([]upstream.SSEMessage, streamResult, error) {
 	t.Helper()
 	var events []upstream.SSEMessage
-	result, err := consumeStream(strings.NewReader(body), func(msg upstream.SSEMessage) {
+	result, err := consumeStreamWithTools(strings.NewReader(body), false, func(msg upstream.SSEMessage) {
 		events = append(events, msg)
 	})
 	return events, result, err

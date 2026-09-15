@@ -4,20 +4,44 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 	warpapi "github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"orchids-api/internal/debug"
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
+
+// processStreamBody is a test-only shorthand for the production SSE parser.
+// Production callers must use processStreamBodyWithTaskContext so continuation
+// requests can carry the persisted Warp task snapshot.
+func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+	return processStreamBodyWithTaskContext(ctx, reader, onMessage, logger, nil)
+}
+
+type closeBlockedReadCloser struct {
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (r *closeBlockedReadCloser) Read([]byte) (int, error) {
+	<-r.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (r *closeBlockedReadCloser) Close() error {
+	r.once.Do(func() { close(r.closed) })
+	return nil
+}
 
 func warpSSEEventFrame(t *testing.T, event *warpapi.ResponseEvent) string {
 	t.Helper()
@@ -122,19 +146,8 @@ func TestProcessStreamBody_DeduplicatesMessageSnapshotsAndIgnoresMetadataActions
 
 func TestProcessStreamBody_DetectsNonProtobufHTML(t *testing.T) {
 	err := processStreamBody(context.Background(), strings.NewReader("<!doctype html><html><body>challenge</body></html>"), func(upstream.SSEMessage) {}, nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-
-	var nonProtoErr *nonProtobufStreamError
-	if !errors.As(err, &nonProtoErr) {
-		t.Fatalf("expected nonProtobufStreamError, got %T (%v)", err, err)
-	}
-	if nonProtoErr.Kind != "html" {
-		t.Fatalf("kind=%q want html", nonProtoErr.Kind)
-	}
-	if !strings.Contains(nonProtoErr.Preview, "<!doctype html>") {
-		t.Fatalf("preview=%q missing html prefix", nonProtoErr.Preview)
+	if err == nil || !strings.Contains(err.Error(), "without any SSE data events") {
+		t.Fatalf("error=%v want strict SSE parsing error", err)
 	}
 }
 
@@ -353,8 +366,8 @@ func TestProcessStreamBody_ErrorsWhenFramesHaveNoParsedEvents(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected no parsed events error")
 	}
-	if got := err.Error(); !strings.Contains(got, "without parsed response events") {
-		t.Fatalf("error=%q want without parsed response events", got)
+	if got := err.Error(); !strings.Contains(got, "none parsed") {
+		t.Fatalf("error=%q want none parsed response events", got)
 	}
 }
 
@@ -384,6 +397,17 @@ func TestProcessStreamBody_RejectsMissingStreamFinished(t *testing.T) {
 	err := processStreamBody(context.Background(), strings.NewReader(warpSSETextFrame(t, "hi")), func(upstream.SSEMessage) {}, nil)
 	if err == nil || !strings.Contains(err.Error(), "without StreamFinished") {
 		t.Fatalf("error=%v want missing StreamFinished error", err)
+	}
+}
+
+func TestProcessStreamBody_PreservesIdleTimeoutInsteadOfContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	body := util.MonitorReadIdle(&closeBlockedReadCloser{closed: make(chan struct{})}, 20*time.Millisecond, cancel, "warp")
+
+	err := processStreamBody(ctx, body, func(upstream.SSEMessage) {}, nil)
+	if err == nil || !strings.Contains(err.Error(), "warp stream idle timeout") {
+		t.Fatalf("error=%v want warp stream idle timeout", err)
 	}
 }
 
@@ -432,7 +456,9 @@ func TestHandleStreamResponse_AllowsNilOnMessageWithConversationID(t *testing.T)
 	client := &Client{}
 	req := upstream.UpstreamRequest{ChatSessionID: "conv_123"}
 
-	if err := client.handleStreamResponse(context.Background(), req, resp, nil, nil); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := client.handleStreamResponseWithCancel(ctx, req, resp, nil, nil, cancel); err != nil {
 		t.Fatalf("handleStreamResponse(nil onMessage) error: %v", err)
 	}
 }
@@ -563,6 +589,60 @@ func TestProcessStreamBody_AttachesTaskContextToClientToolCall(t *testing.T) {
 	}
 	if got := finalContext.GetTasks()[0].GetSummary(); got != "ready for tool result" {
 		t.Fatalf("final task summary=%q", got)
+	}
+}
+
+func TestProcessStreamBody_AppliesIncrementalActionsToPriorTaskContext(t *testing.T) {
+	taskID := "task-existing"
+	initial := warpapi.Request_TaskContext_builder{Tasks: []*warpapi.Task{
+		warpapi.Task_builder{
+			Id:       stringPtr(taskID),
+			Messages: []*warpapi.Message{warpAgentOutputMessage("prior-message", "already delivered")},
+		}.Build(),
+	}}.Build()
+	initialBytes, err := proto.Marshal(initial)
+	if err != nil {
+		t.Fatalf("marshal initial task context: %v", err)
+	}
+
+	toolID := "incremental-tool"
+	stream := warpSSEActionFrame(t, warpapi.ClientAction_builder{
+		AddMessagesToTask: warpapi.ClientAction_AddMessagesToTask_builder{
+			TaskId: stringPtr(taskID),
+			Messages: []*warpapi.Message{warpapi.Message_builder{
+				Id: stringPtr("tool-message"),
+				ToolCall: warpapi.Message_ToolCall_builder{
+					ToolCallId:      stringPtr(toolID),
+					RunShellCommand: warpapi.Message_ToolCall_RunShellCommand_builder{Command: stringPtr("pwd")}.Build(),
+				}.Build(),
+			}.Build()},
+		}.Build(),
+	}.Build()) + warpSSEFinishFrame(t)
+
+	var encoded string
+	if err := processStreamBodyWithTaskContext(context.Background(), strings.NewReader(stream), func(message upstream.SSEMessage) {
+		if message.Type == "model.tool-call" {
+			encoded, _ = message.Event["warpTaskContext"].(string)
+		}
+	}, nil, initialBytes); err != nil {
+		t.Fatalf("processStreamBodyWithTaskContext error: %v", err)
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode merged task context: %v", err)
+	}
+	var merged warpapi.Request_TaskContext
+	if err := proto.Unmarshal(raw, &merged); err != nil {
+		t.Fatalf("unmarshal merged task context: %v", err)
+	}
+	if len(merged.GetTasks()) != 1 || len(merged.GetTasks()[0].GetMessages()) != 2 {
+		t.Fatalf("merged task context=%#v", merged.GetTasks())
+	}
+	if got := merged.GetTasks()[0].GetMessages()[0].GetAgentOutput().GetText(); got != "already delivered" {
+		t.Fatalf("prior task message=%q", got)
+	}
+	if got := merged.GetTasks()[0].GetMessages()[1].GetToolCall().GetToolCallId(); got != toolID {
+		t.Fatalf("incremental tool id=%q", got)
 	}
 }
 
@@ -862,8 +942,6 @@ func appendTestVarint(buf []byte, v uint64) []byte {
 }
 
 func wrapFrame(payload []byte) []byte {
-	out := make([]byte, 4+len(payload))
-	binary.BigEndian.PutUint32(out[:4], uint32(len(payload)))
-	copy(out[4:], payload)
-	return out
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	return []byte("data: " + encoded + "\n\n")
 }

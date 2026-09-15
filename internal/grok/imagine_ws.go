@@ -104,13 +104,6 @@ func (c *Client) dialImagineWS(ctx context.Context, token string) (*websocket.Co
 		return nil, nil, fmt.Errorf("grok client not configured")
 	}
 	proxyFunc := util.ProxyFuncFromConfig(c.cfg)
-	if proxyURL := resolveGrokProxy(c.cfg, strings.TrimSpace(getProxyField(c.cfg, "base"))); proxyURL != nil {
-		var bypass []string
-		if c.cfg != nil {
-			bypass = c.cfg.ProxyBypass
-		}
-		proxyFunc = util.ProxyFuncFromURL(proxyURL, bypass)
-	}
 	dialer := websocket.Dialer{
 		HandshakeTimeout: imagineWSConnectTimeout,
 		Proxy:            proxyFunc,

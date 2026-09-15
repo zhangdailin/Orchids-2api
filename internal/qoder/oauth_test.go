@@ -16,10 +16,10 @@ import (
 
 // newLoginClient builds an account-less client pointed at stub endpoints. It is
 // the shape the admin login flow uses.
-func newLoginClient(t *testing.T, oauth, openAPI, inference, auth string) *Client {
+func newLoginClient(t *testing.T, oauth, openAPI, inference string) *Client {
 	t.Helper()
 	client := NewFromAccount(nil, nil)
-	client.SetEndpointsForTest(oauth, openAPI, inference, auth)
+	client.SetEndpointsForTest(oauth, openAPI, inference)
 	return client
 }
 
@@ -37,7 +37,7 @@ func TestStartLoginBuildsOfficialURL(t *testing.T) {
 	}))
 	defer page.Close()
 
-	client := newLoginClient(t, page.URL, page.URL, page.URL, page.URL)
+	client := newLoginClient(t, page.URL, page.URL, page.URL)
 	client.SetEntropyForTest(strings.NewReader(strings.Repeat("\x00", 512)))
 
 	tx, err := client.StartLogin(context.Background())
@@ -117,7 +117,7 @@ func TestStartLoginClassifiesUnreachable(t *testing.T) {
 	base := dead.URL
 	dead.Close()
 
-	client := newLoginClient(t, base, base, base, base)
+	client := newLoginClient(t, base, base, base)
 	client.SetEntropyForTest(strings.NewReader(strings.Repeat("\x02", 512)))
 
 	_, err := client.StartLogin(context.Background())
@@ -150,7 +150,7 @@ func TestPollLoginTreats404AsPending(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newLoginClient(t, server.URL, server.URL, server.URL, server.URL)
+	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	tx := &LoginTransaction{Nonce: "n", Verifier: "v", MachineID: "m", ExpiresAt: time.Now().Add(time.Minute)}
 
 	if _, err := client.PollLogin(context.Background(), tx); !errors.Is(err, ErrAuthPending) {
@@ -182,7 +182,7 @@ func TestPollLoginRejectsOtherStatuses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newLoginClient(t, server.URL, server.URL, server.URL, server.URL)
+	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	tx := &LoginTransaction{Nonce: "n", Verifier: "v"}
 	_, err := client.PollLogin(context.Background(), tx)
 	if !errors.Is(err, ErrAuthRejected) {
@@ -201,7 +201,7 @@ func TestPollLoginRejectsTokenlessSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newLoginClient(t, server.URL, server.URL, server.URL, server.URL)
+	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	_, err := client.PollLogin(context.Background(), &LoginTransaction{Nonce: "n", Verifier: "v"})
 	if !errors.Is(err, ErrAuthRejected) {
 		t.Fatalf("error = %v, want ErrAuthRejected", err)
@@ -226,7 +226,7 @@ func TestRefreshAcceptsBothTokenSpellings(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newLoginClient(t, server.URL, server.URL, server.URL, server.URL)
+	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	creds, err := client.Refresh(context.Background(), "refresh-1")
 	if err != nil {
 		t.Fatalf("Refresh() error = %v", err)
@@ -251,7 +251,7 @@ func TestRefreshClassifiesReLoginRequired(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newLoginClient(t, server.URL, server.URL, server.URL, server.URL)
+	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	_, err := client.Refresh(context.Background(), "refresh-1")
 	if !errors.Is(err, ErrReLoginRequired) {
 		t.Fatalf("error = %v, want ErrReLoginRequired", err)
@@ -263,7 +263,7 @@ func TestRefreshClassifiesReLoginRequired(t *testing.T) {
 func TestRefreshWithoutTokenIsMissingCredential(t *testing.T) {
 	t.Parallel()
 
-	client := newLoginClient(t, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	client := newLoginClient(t, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 	if _, err := client.Refresh(context.Background(), "  "); !errors.Is(err, ErrCredentialMissing) {
 		t.Fatalf("error = %v, want ErrCredentialMissing", err)
 	}
@@ -281,7 +281,7 @@ func TestFetchProfileToleratesFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newLoginClient(t, server.URL, server.URL, server.URL, server.URL)
+	client := newLoginClient(t, server.URL, server.URL, server.URL)
 	if _, err := client.FetchProfile(context.Background(), "access-1"); err == nil {
 		t.Fatal("FetchProfile() error = nil for a 500 response")
 	}
@@ -374,79 +374,6 @@ func TestParseExpiryAcceptsBothForms(t *testing.T) {
 	}
 }
 
-// TestExchangeDeviceCredentialsHandshake pins the optional job token
-// handshake: the PAT-shaped envelope, the cosy-* header set and the millisecond
-// expiry.
-func TestExchangeDeviceCredentialsHandshake(t *testing.T) {
-	t.Parallel()
-
-	var sawSignature string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/algo/api/v3/user/jobToken" {
-			t.Errorf("path = %q, want /algo/api/v3/user/jobToken", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("Encode"); got != "1" {
-			t.Errorf("Encode = %q, want 1", got)
-		}
-		if got := r.Header.Get("Appcode"); got != exchangeAppCode {
-			t.Errorf("Appcode = %q, want %q", got, exchangeAppCode)
-		}
-		sawSignature = r.Header.Get("Signature")
-		if want := exchangeSignature(r.Header.Get("Date")); want != r.Header.Get("Signature") {
-			t.Errorf("Signature = %q, want %q for the same Date", r.Header.Get("Signature"), want)
-		}
-		body, _ := io.ReadAll(r.Body)
-		decoded, err := DecodeBody(body)
-		if err != nil {
-			t.Errorf("request body is not in the private encoding: %v", err)
-		}
-		if !strings.Contains(string(decoded), `"encodeVersion":"1"`) {
-			t.Errorf("decoded body = %s, want an encodeVersion envelope", decoded)
-		}
-		if !strings.Contains(string(decoded), `\"personalToken\":\"refresh-1\"`) {
-			t.Errorf("decoded body = %s, want the device token in the personalToken field", decoded)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"name":"tester","id":"uid1","userType":"personal_standard","refreshToken":"gw-refresh","securityOauthToken":"gw-sot","expireTime":1700000000000}`))
-	}))
-	defer server.Close()
-
-	client := newLoginClient(t, server.URL, server.URL, server.URL, server.URL)
-	client.machineID = "11111111-2222-4333-8444-555555555555"
-
-	result, err := client.ExchangeDeviceCredentials(context.Background(), Credentials{RefreshToken: "refresh-1"})
-	if err != nil {
-		t.Fatalf("ExchangeDeviceCredentials() error = %v", err)
-	}
-	if result.SecurityOAuthToken != "gw-sot" || result.RefreshToken != "gw-refresh" {
-		t.Fatalf("result = %+v", result)
-	}
-	if result.UID != "uid1" || result.UserType != "personal_standard" {
-		t.Fatalf("identity = %+v", result)
-	}
-	if result.ExpiresAt.Unix() != 1700000000 {
-		t.Fatalf("ExpiresAt = %v, want 1700000000 (milliseconds normalized)", result.ExpiresAt)
-	}
-	if sawSignature == "" {
-		t.Fatal("request carried no signature")
-	}
-}
-
-// TestExchangeSignatureIsDateBound proves the job token signature covers the
-// date, so a replayed header cannot pass.
-func TestExchangeSignatureIsDateBound(t *testing.T) {
-	t.Parallel()
-
-	first := exchangeSignature("Mon, 02 Jan 2006 15:04:05 GMT")
-	second := exchangeSignature("Tue, 03 Jan 2006 15:04:05 GMT")
-	if first == second {
-		t.Fatal("exchangeSignature() is not bound to the date")
-	}
-	if len(first) != 32 {
-		t.Fatalf("signature length = %d, want 32 hex characters", len(first))
-	}
-}
-
 // TestProbeReachabilityDetectsBlockedEgress covers the startup diagnostic.
 func TestProbeReachabilityDetectsBlockedEgress(t *testing.T) {
 	t.Parallel()
@@ -455,7 +382,7 @@ func TestProbeReachabilityDetectsBlockedEgress(t *testing.T) {
 	base := dead.URL
 	dead.Close()
 
-	client := newLoginClient(t, base, base, base, base)
+	client := newLoginClient(t, base, base, base)
 	if err := client.ProbeReachability(context.Background()); !errors.Is(err, ErrAuthUnavailable) {
 		t.Fatalf("error = %v, want ErrAuthUnavailable", err)
 	}
@@ -464,7 +391,7 @@ func TestProbeReachabilityDetectsBlockedEgress(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer live.Close()
-	client = newLoginClient(t, live.URL, live.URL, live.URL, live.URL)
+	client = newLoginClient(t, live.URL, live.URL, live.URL)
 	if err := client.ProbeReachability(context.Background()); err != nil {
 		t.Fatalf("ProbeReachability() error = %v, want success", err)
 	}
@@ -492,7 +419,7 @@ func TestEnsureAccessTokenSkipsRefreshWhileValid(t *testing.T) {
 		QoderExpiresAt:    time.Now().Add(6 * time.Hour),
 	}
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
 
 	creds, err := client.ensureAccessToken(context.Background())
 	if err != nil {

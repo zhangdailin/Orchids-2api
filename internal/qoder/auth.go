@@ -29,7 +29,6 @@
 package qoder
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strings"
@@ -39,7 +38,6 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
-	"orchids-api/internal/util"
 )
 
 // Default endpoints. The CLI talks to three hosts, and the CN gateway is a
@@ -51,10 +49,6 @@ const (
 	DefaultOpenAPIBaseURL = "https://openapi.qoder.sh"
 	// DefaultInferenceURL serves the chat completion SSE endpoint.
 	DefaultInferenceURL = "https://api2.qoder.sh"
-	// DefaultAuthBaseURL is the gateway that answers the PAT-style jobToken
-	// exchange. It is only used by ExchangeDeviceCredentials.
-	DefaultAuthBaseURL = "https://gateway.qoder.com.cn"
-
 	// DefaultClientID is the public OAuth client id of the Qoder CLI. It is not
 	// a secret.
 	DefaultClientID = "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"
@@ -154,7 +148,6 @@ type endpoints struct {
 	oauth     string
 	openAPI   string
 	inference string
-	auth      string
 }
 
 func resolveEndpoints(cfg *config.Config) endpoints {
@@ -162,7 +155,6 @@ func resolveEndpoints(cfg *config.Config) endpoints {
 		oauth:     DefaultOAuthBaseURL,
 		openAPI:   DefaultOpenAPIBaseURL,
 		inference: DefaultInferenceURL,
-		auth:      DefaultAuthBaseURL,
 	}
 	if cfg == nil {
 		return out
@@ -170,7 +162,6 @@ func resolveEndpoints(cfg *config.Config) endpoints {
 	out.oauth = firstNonEmpty(cfg.QoderOAuthBaseURL, out.oauth)
 	out.openAPI = firstNonEmpty(cfg.QoderOpenAPIBaseURL, out.openAPI)
 	out.inference = firstNonEmpty(cfg.QoderInferenceURL, out.inference)
-	out.auth = firstNonEmpty(cfg.QoderAuthBaseURL, out.auth)
 	return out
 }
 
@@ -519,19 +510,4 @@ func truncate(value string, limit int) string {
 		return value
 	}
 	return value[:limit] + "..."
-}
-
-// decodeStdBase64 decodes the strict standard encoding the upstream uses for
-// its own ciphertext fields. An unpadded or URL-safe variant is not accepted:
-// the field is machine-generated and a mismatch means the payload is not what
-// this protocol expects.
-func decodeStdBase64(value string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(strings.TrimSpace(value))
-}
-
-// fingerprintOf is the redaction-safe identity of a credential, used by the
-// admin API so two accounts can be told apart without either secret leaving the
-// server.
-func fingerprintOf(cred Credentials) string {
-	return util.Fingerprint(firstNonEmptyToken(cred.RefreshToken, cred.AccessToken))
 }

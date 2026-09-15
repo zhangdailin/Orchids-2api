@@ -36,7 +36,6 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 		QoderRefreshToken:     "qoder-refresh-secret",
 		QoderRuntimeInfo:      "qoder-runtime-secret",
 		QoderRuntimeKey:       "qoder-key-secret",
-		QoderJobToken:         "qoder-job-secret",
 	}
 	if err := s.CreateAccount(ctx, acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
@@ -64,7 +63,7 @@ func TestAccountCredentialsEncryptedAndLegacyMigratesOnWrite(t *testing.T) {
 		t.Fatalf("decrypted credentials mismatch: %#v", got)
 	}
 	if got.WorkBuddyRefreshToken != acc.WorkBuddyRefreshToken || got.QoderRefreshToken != acc.QoderRefreshToken ||
-		got.QoderRuntimeKey != acc.QoderRuntimeKey || got.QoderJobToken != acc.QoderJobToken {
+		got.QoderRuntimeKey != acc.QoderRuntimeKey {
 		t.Fatalf("decrypted provider credentials mismatch: %#v", got)
 	}
 

@@ -104,28 +104,6 @@ type Summary struct {
 // keeps probe outcomes out of every real channel's success rate.
 const ProbeChannelLabel = "probe"
 
-// ObserveHTTPRequest implements the middleware's one-observation-per-request
-// hook. Only the status class is known at that layer, so the per-model and token
-// detail comes from the handler audit events; this hook keeps the overview
-// counting every request exactly once, including the ones that never reach a
-// provider.
-func (a *Aggregator) ObserveHTTPRequest(channel, model, statusClass string, durationMS, firstTokenMS int64) {
-	if !a.Enabled() {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	a.Observe(ctx, Outcome{
-		Channel:      channel,
-		Model:        model,
-		Status:       statusClass,
-		OK:           statusClass == "2xx",
-		DurationMS:   durationMS,
-		FirstTokenMS: firstTokenMS,
-		Synthetic:    normalizeChannel(channel) == ProbeChannelLabel,
-	})
-}
-
 // Aggregator writes and reads the per-minute buckets.
 type Aggregator struct {
 	client *redis.Client

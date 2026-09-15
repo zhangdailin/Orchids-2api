@@ -168,7 +168,7 @@ func TestRefreshQoderQuotaClearsFalseAgentExhaustion(t *testing.T) {
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount() error=%v", err)
 	}
-	cfg := &config.Config{QoderOpenAPIBaseURL: upstream.URL, QoderOAuthBaseURL: upstream.URL, QoderAuthBaseURL: upstream.URL, QoderInferenceURL: upstream.URL}
+	cfg := &config.Config{QoderOpenAPIBaseURL: upstream.URL, QoderOAuthBaseURL: upstream.URL, QoderInferenceURL: upstream.URL}
 	refreshQoderQuota(context.Background(), cfg, s, acc)
 
 	after, err := s.GetAccount(context.Background(), acc.ID)

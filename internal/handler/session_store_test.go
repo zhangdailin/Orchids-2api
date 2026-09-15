@@ -53,6 +53,20 @@ func TestRedisSessionStoreConvID(t *testing.T) {
 	}
 }
 
+func TestRedisSessionStoreWarpTaskContext(t *testing.T) {
+	store, _ := setupRedisSessionStore(t)
+	ctx := context.Background()
+
+	if _, ok := store.GetWarpTaskContext(ctx, "session1"); ok {
+		t.Fatal("expected task context miss")
+	}
+	store.SetWarpTaskContext(ctx, "session1", "encoded-task-context")
+	got, ok := store.GetWarpTaskContext(ctx, "session1")
+	if !ok || got != "encoded-task-context" {
+		t.Fatalf("task context=%q ok=%v", got, ok)
+	}
+}
+
 func TestRedisSessionStoreDelete(t *testing.T) {
 	store, _ := setupRedisSessionStore(t)
 	ctx := context.Background()
@@ -123,6 +137,20 @@ func TestMemorySessionStoreWorkdir(t *testing.T) {
 	dir, ok := store.GetWorkdir(ctx, "s1")
 	if !ok || dir != "/home" {
 		t.Fatalf("expected /home, got %q", dir)
+	}
+}
+
+func TestMemorySessionStoreWarpTaskContext(t *testing.T) {
+	store := NewMemorySessionStore(30*time.Minute, 100)
+	ctx := context.Background()
+
+	if _, ok := store.GetWarpTaskContext(ctx, "s1"); ok {
+		t.Fatal("expected task context miss")
+	}
+	store.SetWarpTaskContext(ctx, "s1", "encoded-task-context")
+	got, ok := store.GetWarpTaskContext(ctx, "s1")
+	if !ok || got != "encoded-task-context" {
+		t.Fatalf("task context=%q ok=%v", got, ok)
 	}
 }
 

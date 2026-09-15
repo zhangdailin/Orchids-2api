@@ -206,6 +206,42 @@ func TestWarpToolResultFollowup_ResumesWithoutClientSessionID(t *testing.T) {
 	}
 }
 
+func TestWarpConversationPersistsTaskContextAcrossOrdinaryRequests(t *testing.T) {
+	t.Parallel()
+	taskContext := []byte("complete-task-graph-after-first-turn")
+	encoded := base64.RawURLEncoding.EncodeToString(taskContext)
+	client := &fakePayloadClient{eventsByOp: [][]upstream.SSEMessage{
+		{
+			{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp-upstream-conversation"}},
+			{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn", "warpTaskContext": encoded}},
+		},
+		{
+			{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn", "warpTaskContext": encoded}},
+		},
+	}}
+	h := newTestHandler(client)
+
+	for _, text := range []string{"first", "ordinary second turn"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(makeWarpRequestBody(t, text, "client-conversation")))
+		h.HandleMessages(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %q status=%d body=%s", text, rec.Code, rec.Body.String())
+		}
+	}
+
+	calls := client.snapshotCalls()
+	if len(calls) != 2 {
+		t.Fatalf("calls=%d want 2", len(calls))
+	}
+	if calls[1].ChatSessionID != "warp-upstream-conversation" {
+		t.Fatalf("second conversation id=%q", calls[1].ChatSessionID)
+	}
+	if !bytes.Equal(calls[1].WarpTaskContext, taskContext) {
+		t.Fatalf("second task context=%q want %q", calls[1].WarpTaskContext, taskContext)
+	}
+}
+
 func TestWarpNoToolsWriteIsReturnedAsText(t *testing.T) {
 	t.Parallel()
 

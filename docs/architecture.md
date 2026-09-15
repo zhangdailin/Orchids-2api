@@ -137,7 +137,7 @@ HTTP Request
 - `puter`：Puter 官方模型目录与本地当前代策略的交集，再经账号 `test_mode` 验证
 - `grok`：内置支持表 + 现存模型 + 公共文档探测
 - `workbuddy`：已启用账号的 CLI 模型目录，同时保存账号级模型快照
-- `qoder`：已启用账号的签名模型目录（`GET /algo/api/v2/model/list`），同时保存账号级模型快照；对外模型 ID 为小写显示名，内部 key 由该通道的 resolver 映射
+- `qoder`：本地内置模型目录，同时保存账号级模型快照；对外模型 ID 为小写显示名，内部 key 由该通道的 resolver 映射
 
 当前策略：
 
@@ -177,10 +177,9 @@ Qoder 通道走 `internal/qoder`，特点是：
 - 请求体使用上游私有 Base64 字母表并交换外侧三段，COSY 签名覆盖编码后的字节；签名路径去掉 `/algo` 且不含 query
 - `event:finish` 是权威结束标记；结束标记前的 EOF 判为截断错误，不会伪装成成功
 - 设备 refreshToken 由上游轮换，客户端刷新后回写账号；runtime 认证对在登录时派生并复用（与 CLI 行为一致），不按请求重算
-- **模型清单是本地内置的**：Qoder CLI 的 HTTP 面只有四个接口（device token 刷新、`userinfo`、PAT jobToken、聊天 SSE），不含模型清单接口，且网关对 OAuth 凭据拒绝 `/algo/api/v2/model/list`（`403 code=101`）。因此该接口不再被调用，目录由内置清单 + 账号快照组成
+- **模型清单是本地内置的**：当前使用的 Qoder CLI 链路只有三个接口（device token 刷新、`userinfo`、聊天 SSE），不含模型清单接口；目录由内置清单 + 账号快照组成
 - 上游对「额度耗尽」返回 `403` + `pricingUrl`（HTTP 200 信封内）。该失败被单独分类，**不改账号状态、不重试、不切换账号**，避免把有效凭据误判为「禁止访问」
 - 额度是**按账号的每日窗口**（`/api/v2/quota/usage` + `/api/v2/user/plan`）而不是付费订阅：额度耗尽记 `402` 并按上游 reset 时间挂起，reset 后自动恢复；控制台显示档位、剩余额度与升级链接
-- `POST /algo/api/v3/user/jobToken` 只是可选的辅助握手，不参与推理鉴权
 
 ## 8. 当前已知设计边界
 

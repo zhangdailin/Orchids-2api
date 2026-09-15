@@ -411,8 +411,6 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		case !staleSnapshot:
 			updated.QuotaResetAt = acc.QuotaResetAt
 		}
-		updated.MissingThinkingStrikes = acc.MissingThinkingStrikes
-		updated.MissingThinkingLastAt = acc.MissingThinkingLastAt
 		// Grok Build CLI OAuth credentials and identity must survive refresh /
 		// admin updates. Leaving these out would silently drop rotated tokens.
 		if strings.TrimSpace(acc.CredentialType) == "" {
@@ -501,8 +499,6 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 			updated.QoderMachineID = strings.TrimSpace(acc.QoderMachineID)
 			updated.QoderRuntimeInfo = strings.TrimSpace(acc.QoderRuntimeInfo)
 			updated.QoderRuntimeKey = strings.TrimSpace(acc.QoderRuntimeKey)
-			updated.QoderJobToken = strings.TrimSpace(acc.QoderJobToken)
-			updated.QoderJobTokenExpiry = acc.QoderJobTokenExpiry
 		}
 		if token := strings.TrimSpace(acc.QoderUserID); token != "" {
 			updated.QoderUserID = token
@@ -521,9 +517,6 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		}
 		if len(acc.QoderModelIDs) > 0 {
 			updated.QoderModelIDs = append([]string(nil), acc.QoderModelIDs...)
-		}
-		if !acc.QoderModelsSyncedAt.IsZero() {
-			updated.QoderModelsSyncedAt = acc.QoderModelsSyncedAt
 		}
 		if !acc.QoderQuota.SyncedAt.IsZero() && (existing.QoderQuota.SyncedAt.IsZero() || !acc.QoderQuota.SyncedAt.Before(existing.QoderQuota.SyncedAt)) {
 			updated.QoderQuota = acc.QoderQuota
@@ -579,6 +572,12 @@ func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate f
 				return errAccountUnchanged
 			}
 			current.UpdatedAt = time.Now()
+			if !current.UpdatedAt.After(previous.UpdatedAt) {
+				// Some platforms expose a coarser wall-clock resolution than the
+				// update rate. UpdatedAt is also the stale-snapshot version marker,
+				// so equal timestamps must still advance monotonically.
+				current.UpdatedAt = previous.UpdatedAt.Add(time.Nanosecond)
+			}
 			data, err := s.marshalAccount(current)
 			if err != nil {
 				return err

@@ -61,10 +61,6 @@ func (c *Client) consoleHeaders(token string) http.Header {
 	return h
 }
 
-func (h *Handler) consolePayload(spec ModelSpec, req *ChatCompletionsRequest) (map[string]interface{}, error) {
-	return h.responsesPayloadFromChat(spec, req, false)
-}
-
 func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
 	if len(tools) == 0 {
 		return nil

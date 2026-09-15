@@ -147,7 +147,8 @@ func TestSelectAccount_UsesHandlerConnTracker(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, err := h.selectAccountWithOptions(context.Background(), "puter", true, nil, accountSelectionOptions{})
+	_, selected, release, err := h.acquireAccountSelection(context.Background(), "puter", true, nil, accountSelectionOptions{})
+	defer release()
 	if err != nil {
 		t.Fatalf("selectAccount() error = %v", err)
 	}
@@ -193,7 +194,8 @@ func TestSelectAccount_WarpUsesAccountModelChoices(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, err := h.selectAccountWithOptions(context.Background(), "warp", true, nil, accountSelectionOptions{ModelID: "claude-4-6-opus-high"})
+	_, selected, release, err := h.acquireAccountSelection(context.Background(), "warp", true, nil, accountSelectionOptions{ModelID: "claude-4-6-opus-high"})
+	defer release()
 	if err != nil {
 		t.Fatalf("selectAccount() error = %v", err)
 	}
@@ -232,7 +234,8 @@ func TestSelectAccount_WarpRejectsModelMissingFromCachedPool(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, err := h.selectAccountWithOptions(context.Background(), "warp", true, nil, accountSelectionOptions{ModelID: "claude-4-7-opus-xhigh-fast"})
+	_, selected, release, err := h.acquireAccountSelection(context.Background(), "warp", true, nil, accountSelectionOptions{ModelID: "claude-4-7-opus-xhigh-fast"})
+	defer release()
 	if err == nil {
 		t.Fatal("selectAccount() error = nil, want unavailable model error")
 	}
@@ -263,13 +266,10 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 	lb.SetConnTracker(globalTracker)
 
 	cfg := &config.Config{
-		DebugEnabled:            false,
-		RequestTimeout:          10,
-		MaxRetries:              1,
-		RetryDelay:              0,
-		ContextMaxTokens:        1024,
-		ContextSummaryMaxTokens: 256,
-		ContextKeepTurns:        2,
+		DebugEnabled:   false,
+		RequestTimeout: 10,
+		MaxRetries:     1,
+		RetryDelay:     0,
 	}
 	h := NewWithLoadBalancer(cfg, lb)
 	localTracker := newSpyConnTracker(map[int64]int64{

@@ -73,11 +73,8 @@ func TestDiscoverQoderModels_PersistsAccountSnapshot(t *testing.T) {
 	if len(stored.QoderModelIDs) == 0 {
 		t.Fatalf("account snapshot = %v, want a recorded snapshot", stored.QoderModelIDs)
 	}
-	if !stored.QoderModelsSyncedAt.IsZero() {
-		t.Fatal("a local catalog was stamped as if it had been observed upstream")
-	}
-	// The snapshot round-trips through the channel's own resolver.
-	catalog := qoder.CatalogFromSnapshot(stored.QoderModelIDs)
+	// The stored snapshot uses identifiers advertised by the built-in resolver.
+	catalog := qoder.DefaultCatalog()
 	if entry, err := catalog.Resolve("Qwen3.7-Max"); err != nil || entry.Key != "qmodel_latest" {
 		t.Fatalf("Resolve() = %+v, %v, want the display-name mapping", entry, err)
 	}
@@ -104,7 +101,6 @@ func TestDiscoverQoderModels_DoesNotDependOnTheGateway(t *testing.T) {
 		QoderOAuthBaseURL:   dead,
 		QoderOpenAPIBaseURL: dead,
 		QoderInferenceURL:   dead,
-		QoderAuthBaseURL:    dead,
 	}
 	candidates, source, err := discoverQoderModels(context.Background(), cfg, s)
 	if err != nil {
@@ -144,7 +140,7 @@ func TestNormalizeAdminModelChannel_AcceptsQoder(t *testing.T) {
 // Qoder refresh never prunes: nothing upstream was observed, so a missing row is
 // not evidence that a model became unavailable.
 func TestShouldDeleteMissingModelsOnRefresh_KeepsTheLocalQoderCatalog(t *testing.T) {
-	for _, source := range []string{"qoder_builtin_catalog", "qoder_model_list", "something_else"} {
+	for _, source := range []string{"qoder_builtin_catalog", "something_else"} {
 		if shouldDeleteMissingModelsOnRefresh("qoder", source) {
 			t.Fatalf("source %q pruned the local Qoder catalog", source)
 		}

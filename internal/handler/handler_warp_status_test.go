@@ -65,12 +65,9 @@ func TestHandleMessages_Warp403MarksAccountBlocked(t *testing.T) {
 
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
 	h := NewWithLoadBalancer(&config.Config{
-		DebugEnabled:            false,
-		RequestTimeout:          10,
-		MaxRetries:              0,
-		ContextMaxTokens:        1024,
-		ContextSummaryMaxTokens: 256,
-		ContextKeepTurns:        2,
+		DebugEnabled:   false,
+		RequestTimeout: 10,
+		MaxRetries:     0,
 	}, lb)
 	upstreamCalls := 0
 	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
@@ -165,12 +162,9 @@ func TestHandleMessages_WarpCodingRequestUsesCloudAgentAccount(t *testing.T) {
 
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
 	h := NewWithLoadBalancer(&config.Config{
-		DebugEnabled:            false,
-		RequestTimeout:          10,
-		MaxRetries:              0,
-		ContextMaxTokens:        1024,
-		ContextSummaryMaxTokens: 256,
-		ContextKeepTurns:        2,
+		DebugEnabled:   false,
+		RequestTimeout: 10,
+		MaxRetries:     0,
 	}, lb)
 	seen := []int64{}
 	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
@@ -245,12 +239,9 @@ func TestHandleMessages_WarpChatCodingRequestUsesFreeTextOnly(t *testing.T) {
 
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
 	h := NewWithLoadBalancer(&config.Config{
-		DebugEnabled:            false,
-		RequestTimeout:          10,
-		MaxRetries:              0,
-		ContextMaxTokens:        1024,
-		ContextSummaryMaxTokens: 256,
-		ContextKeepTurns:        2,
+		DebugEnabled:   false,
+		RequestTimeout: 10,
+		MaxRetries:     0,
 	}, lb)
 	h.connTracker = newSpyConnTracker(map[int64]int64{free.ID: 0, paid.ID: 0})
 	seen := []int64{}
@@ -335,12 +326,9 @@ func TestHandleMessages_WarpAgentRequiresCloudAgentAccount(t *testing.T) {
 
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
 	h := NewWithLoadBalancer(&config.Config{
-		DebugEnabled:            false,
-		RequestTimeout:          10,
-		MaxRetries:              0,
-		ContextMaxTokens:        1024,
-		ContextSummaryMaxTokens: 256,
-		ContextKeepTurns:        2,
+		DebugEnabled:   false,
+		RequestTimeout: 10,
+		MaxRetries:     0,
 	}, lb)
 	h.connTracker = newSpyConnTracker(map[int64]int64{free.ID: 0, paid.ID: 10})
 	seen := []int64{}
@@ -404,12 +392,9 @@ func TestHandleMessages_WarpCloudAgent403DoesNotMarkAccountBlocked(t *testing.T)
 
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
 	h := NewWithLoadBalancer(&config.Config{
-		DebugEnabled:            false,
-		RequestTimeout:          10,
-		MaxRetries:              0,
-		ContextMaxTokens:        1024,
-		ContextSummaryMaxTokens: 256,
-		ContextKeepTurns:        2,
+		DebugEnabled:   false,
+		RequestTimeout: 10,
+		MaxRetries:     0,
 	}, lb)
 	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
 		return &errorUpstreamEdge{err: errors.New(`warp stream request failed: HTTP 403: {"error":"not allowed to use the provided cloud agent"}`)}

@@ -156,7 +156,7 @@ func TestWorkBuddyCredentialKey_UsesDurableToken(t *testing.T) {
 func TestVerifyWorkBuddyAccount_RequiresCredential(t *testing.T) {
 	t.Parallel()
 
-	_, httpStatus, err := verifyWorkBuddyAccount(context.Background(), &store.Account{AccountType: "workbuddy"}, &config.Config{})
+	_, httpStatus, err := verifyWorkBuddyAccountWithStore(context.Background(), &store.Account{AccountType: "workbuddy"}, &config.Config{}, nil)
 	if err == nil {
 		t.Fatal("expected an error for a credential-less account")
 	}

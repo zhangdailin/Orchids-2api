@@ -4,13 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/goccy/go-json"
 	warpapi "github.com/warpdotdev/warp-proto-apis/apis/multi_agent/v1/gen/go"
@@ -48,21 +46,6 @@ type finishInfo struct {
 	ShouldRefreshModelConfig bool
 }
 
-type nonProtobufStreamError struct {
-	Kind    string
-	Preview string
-}
-
-func (e *nonProtobufStreamError) Error() string {
-	if e == nil {
-		return "warp returned non-protobuf response"
-	}
-	if e.Preview == "" {
-		return fmt.Sprintf("warp returned non-protobuf %s response", e.Kind)
-	}
-	return fmt.Sprintf("warp returned non-protobuf %s response: %s", e.Kind, e.Preview)
-}
-
 type parsedEvent struct {
 	Recognized     bool
 	ConversationID string
@@ -95,6 +78,54 @@ func newWarpStreamState() *warpStreamState {
 		textByMessage:      make(map[string]*strings.Builder),
 		reasoningByMessage: make(map[string]*strings.Builder),
 		tasks:              make(map[string]*warpapi.Task),
+	}
+}
+
+func newWarpStreamStateWithTaskContext(encoded []byte) (*warpStreamState, error) {
+	state := newWarpStreamState()
+	if len(encoded) == 0 {
+		return state, nil
+	}
+	var context warpapi.Request_TaskContext
+	if err := proto.Unmarshal(encoded, &context); err != nil {
+		return nil, fmt.Errorf("decode initial Warp task context: %w", err)
+	}
+	for _, task := range context.GetTasks() {
+		if task == nil || strings.TrimSpace(task.GetId()) == "" {
+			continue
+		}
+		id := task.GetId()
+		state.taskOrder = append(state.taskOrder, id)
+		state.tasks[id] = proto.Clone(task).(*warpapi.Task)
+		state.seedMessages(task.GetMessages())
+	}
+	return state, nil
+}
+
+func (s *warpStreamState) seedMessages(messages []*warpapi.Message) {
+	for _, message := range messages {
+		if message == nil {
+			continue
+		}
+		id := strings.TrimSpace(message.GetId())
+		if id == "" {
+			id = "primary"
+		}
+		switch message.WhichMessage() {
+		case warpapi.Message_AgentOutput_case:
+			s.textByMessage[id] = &strings.Builder{}
+			s.textByMessage[id].WriteString(message.GetAgentOutput().GetText())
+		case warpapi.Message_AgentReasoning_case:
+			s.reasoningByMessage[id] = &strings.Builder{}
+			s.reasoningByMessage[id].WriteString(message.GetAgentReasoning().GetReasoning())
+		case warpapi.Message_ToolCall_case:
+			if call, ok := parseWarpToolCall(message.GetToolCall()); ok && call.ID != "" {
+				if s.seenToolCalls == nil {
+					s.seenToolCalls = make(map[string]struct{})
+				}
+				s.seenToolCalls[call.ID] = struct{}{}
+			}
+		}
 	}
 }
 
@@ -252,7 +283,7 @@ func (s *warpStreamState) finishReason() string {
 	return "end_turn"
 }
 
-func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+func processStreamBodyWithTaskContext(ctx context.Context, reader io.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger, taskContext []byte) error {
 	if onMessage == nil {
 		onMessage = func(upstream.SSEMessage) {}
 	}
@@ -261,61 +292,20 @@ func processStreamBody(ctx context.Context, reader io.Reader, onMessage func(ups
 		defer stopClose()
 	}
 
-	br := bufio.NewReaderSize(reader, 64*1024)
-	sawFrame := false
-	handledFrame := false
-	state := newWarpStreamState()
-
-	for {
-		frame, err := readFrame(br)
-		if err != nil {
-			var nonProtoErr *nonProtobufStreamError
-			if errors.As(err, &nonProtoErr) && nonProtoErr.Kind == "sse" {
-				return processSSEStreamBody(ctx, br, onMessage, logger)
-			}
-			if err == io.EOF {
-				break
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
-		}
-		sawFrame = true
-		if logger.SSEEnabled() {
-			var event warpapi.ResponseEvent
-			if decodeErr := proto.Unmarshal(frame, &event); decodeErr != nil {
-				logger.LogUpstreamSSE("warp_decode_error", fmt.Sprintf("bytes=%d error=%v", len(frame), decodeErr))
-			} else if raw, marshalErr := protojson.Marshal(&event); marshalErr == nil {
-				logger.LogUpstreamSSE("warp_protobuf_decoded", string(raw))
-			}
-		}
-		handled, done, err := emitWarpPayload(frame, onMessage, state)
-		if err != nil {
-			return err
-		}
-		if handled {
-			handledFrame = true
-		}
-		if done {
-			return nil
-		}
+	state, err := newWarpStreamStateWithTaskContext(taskContext)
+	if err != nil {
+		return err
 	}
-
-	if !sawFrame {
-		return fmt.Errorf("warp stream ended without protobuf frames")
-	}
-	if !handledFrame {
-		return fmt.Errorf("warp stream ended without parsed response events")
-	}
-	return fmt.Errorf("warp stream ended without StreamFinished event")
+	return processSSEStreamBody(ctx, bufio.NewReaderSize(reader, 64*1024), onMessage, logger, state)
 }
 
-func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
+func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage func(upstream.SSEMessage), logger *debug.Logger, state *warpStreamState) error {
 	var dataBuilder strings.Builder
 	dataEventCount := 0
 	parsedEventCount := 0
-	state := newWarpStreamState()
+	if state == nil {
+		state = newWarpStreamState()
+	}
 	finishSent := false
 
 	flush := func() error {
@@ -335,6 +325,14 @@ func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage f
 				logger.LogUpstreamSSE("warp_decode_error", err.Error())
 			}
 			return fmt.Errorf("decode Warp SSE payload: %w", err)
+		}
+		if logger != nil && logger.SSEEnabled() {
+			var event warpapi.ResponseEvent
+			if decodeErr := proto.Unmarshal(payloadBytes, &event); decodeErr != nil {
+				logger.LogUpstreamSSE("warp_decode_error", fmt.Sprintf("bytes=%d error=%v", len(payloadBytes), decodeErr))
+			} else if raw, marshalErr := protojson.Marshal(&event); marshalErr == nil {
+				logger.LogUpstreamSSE("warp_protobuf_decoded", string(raw))
+			}
 		}
 
 		handled, done, err := emitWarpPayload(payloadBytes, onMessage, state)
@@ -362,7 +360,7 @@ func processSSEStreamBody(ctx context.Context, reader *bufio.Reader, onMessage f
 				}
 				break
 			}
-			if ctx.Err() != nil {
+			if ctx.Err() != nil && errors.Is(err, context.Canceled) {
 				return ctx.Err()
 			}
 			return err
@@ -504,37 +502,6 @@ func emitWarpPayload(frame []byte, onMessage func(upstream.SSEMessage), state *w
 	return true, true, nil
 }
 
-func readFrame(reader *bufio.Reader) ([]byte, error) {
-	header, err := reader.Peek(4)
-	if err != nil {
-		return nil, err
-	}
-	size := binary.BigEndian.Uint32(header)
-	if size == 0 {
-		if _, err := reader.Discard(4); err != nil {
-			return nil, err
-		}
-		return nil, io.EOF
-	}
-	if size > 16*1024*1024 {
-		if preview, kind, ok := sniffNonProtobufResponse(reader); ok {
-			return nil, &nonProtobufStreamError{
-				Kind:    kind,
-				Preview: preview,
-			}
-		}
-		return nil, fmt.Errorf("warp protobuf frame too large: %d", size)
-	}
-	if _, err := reader.Discard(4); err != nil {
-		return nil, err
-	}
-	frame := make([]byte, size)
-	if _, err := io.ReadFull(reader, frame); err != nil {
-		return nil, err
-	}
-	return frame, nil
-}
-
 func parseResponseEvent(data []byte) (*parsedEvent, error) {
 	var event warpapi.ResponseEvent
 	if err := proto.Unmarshal(data, &event); err != nil {
@@ -645,77 +612,6 @@ func parseWarpToolCall(call *warpapi.Message_ToolCall) (toolCall, bool) {
 		toolID = derivedWarpToolCallID(toolName, toolInput)
 	}
 	return toolCall{ID: toolID, Name: toolName, Input: toolInput, Type: toolType}, true
-}
-
-func sniffNonProtobufResponse(reader *bufio.Reader) (preview string, kind string, ok bool) {
-	const maxPeek = 256
-	peeked, err := reader.Peek(maxPeek)
-	if err != nil && len(peeked) == 0 {
-		return "", "", false
-	}
-
-	text := sanitizeResponsePreview(peeked)
-	if text == "" {
-		return "", "", false
-	}
-	lower := strings.ToLower(text)
-
-	switch {
-	case strings.HasPrefix(lower, "<!doctype"), strings.HasPrefix(lower, "<html"), strings.HasPrefix(lower, "<?xml"), strings.HasPrefix(lower, "<head"), strings.HasPrefix(lower, "<body"):
-		return text, "html", true
-	case strings.HasPrefix(lower, "data:"), strings.HasPrefix(lower, "event:"), strings.HasPrefix(lower, ":"):
-		return text, "sse", true
-	case strings.HasPrefix(lower, "{"), strings.HasPrefix(lower, "["):
-		return text, "json", true
-	case looksLikeDisplayStringBytes(peeked):
-		return text, "text", true
-	default:
-		return "", "", false
-	}
-}
-
-func sanitizeResponsePreview(data []byte) string {
-	if len(data) == 0 {
-		return ""
-	}
-	text := strings.ToValidUTF8(string(data), "")
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	text = strings.NewReplacer(
-		"\r", "\\r",
-		"\n", "\\n",
-		"\t", "\\t",
-	).Replace(text)
-	if len(text) > 160 {
-		text = text[:160] + "..."
-	}
-	return text
-}
-
-func looksLikeDisplayStringBytes(data []byte) bool {
-	if len(data) == 0 || !utf8.Valid(data) {
-		return false
-	}
-	printable := 0
-	total := 0
-	for len(data) > 0 {
-		r, size := utf8.DecodeRune(data)
-		data = data[size:]
-		total++
-		switch {
-		case r == utf8.RuneError && size == 1:
-			return false
-		case r == 0:
-			return false
-		case r == '\n' || r == '\r' || r == '\t':
-			printable++
-		case r >= 0x20:
-			printable++
-		}
-	}
-	return total > 0 && printable*100/total >= 85
 }
 
 func normalizeWarpToolName(name string) string {

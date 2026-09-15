@@ -240,11 +240,6 @@ func readSSE(reader io.Reader, fn func(sseFrame) bool) error {
 	return nil
 }
 
-// consumeStream parses the SSE body and forwards deltas to the caller.
-func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamResult, error) {
-	return consumeStreamWithTools(body, false, onMessage)
-}
-
 // consumeStreamWithTools also recognizes the text fallback emitted by some
 // Qoder models: `Tool calls: [...]`. Text is buffered only while it can still be
 // that exact prefix; normal answers continue streaming as soon as they diverge.

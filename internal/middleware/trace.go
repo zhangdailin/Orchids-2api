@@ -279,16 +279,6 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RequestOutcomeRecorder receives one observation per finished HTTP request.
-type RequestOutcomeRecorder func(channel, model, statusClass string, durationMS, firstTokenMS int64)
-
-var requestOutcomeRecorder RequestOutcomeRecorder
-
-// SetRequestOutcomeRecorder wires the operations overview into the request path.
-func SetRequestOutcomeRecorder(recorder RequestOutcomeRecorder) {
-	requestOutcomeRecorder = recorder
-}
-
 // requestModelContextKey carries the model a handler resolved for this request.
 // The request path cannot know the model before the body is parsed (and the
 // middleware must not re-read the body), so the handler publishes it on the
@@ -326,7 +316,7 @@ func RequestModelHint(ctx context.Context) (context.Context, func() string) {
 const ProbeHeader = "X-Orchids-Probe"
 
 func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, duration time.Duration, model string) {
-	if (requestOutcomeRecorder == nil && detailedOutcomeRecorder == nil) || r == nil || wrapped == nil {
+	if detailedOutcomeRecorder == nil || r == nil || wrapped == nil {
 		return
 	}
 	durationMS := duration.Milliseconds()
@@ -370,20 +360,6 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 		defer cancel()
 		detailedOutcomeRecorder(ctx, outcome)
 	}
-	if requestOutcomeRecorder == nil {
-		return
-	}
-	if strings.TrimSpace(r.Header.Get(ProbeHeader)) != "" {
-		requestOutcomeRecorder(ProbeChannel, probeModel, statusClass, durationMS, firstTokenMS)
-		return
-	}
-	requestOutcomeRecorder(
-		inferenceRequestChannel(r),
-		model,
-		statusClass,
-		durationMS,
-		firstTokenMS,
-	)
 }
 
 // Reserved synthetic-traffic labels. They are not routable models, so a client

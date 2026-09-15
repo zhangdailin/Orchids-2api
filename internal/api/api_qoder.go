@@ -45,7 +45,6 @@ func RedactQoderOutput(acc *store.Account) *store.Account {
 	out.QoderRefreshToken = ""
 	out.QoderRuntimeInfo = ""
 	out.QoderRuntimeKey = ""
-	out.QoderJobToken = ""
 	// The generic slots are shared with other channels; a Qoder record never
 	// writes them, and clearing them here keeps a legacy row from leaking.
 	out.RefreshToken = ""
@@ -101,7 +100,6 @@ func PreserveQoderCredentialsOnEdit(acc, existing *store.Account) {
 	// The catalog snapshot and its provenance are not editable through the form.
 	if len(acc.QoderModelIDs) == 0 {
 		acc.QoderModelIDs = append([]string(nil), existing.QoderModelIDs...)
-		acc.QoderModelsSyncedAt = existing.QoderModelsSyncedAt
 	}
 	// Provider-observed usage and health are not editable either.
 	acc.UsageLimit = existing.UsageLimit
@@ -175,10 +173,6 @@ func NormalizeQoderCredentials(acc *store.Account) bool {
 // account" alarm. Entitlement is not checked here either: a plan problem is
 // reported by the chat call itself, in terms the operator can act on, and
 // marking the credential dead over it is exactly the mistake being corrected.
-func verifyQoderAccount(ctx context.Context, acc *store.Account, cfg *config.Config) (string, int, error) {
-	return verifyQoderAccountWithStore(ctx, acc, cfg, nil)
-}
-
 func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *config.Config, accountStore qoder.AccountUpdater) (string, int, error) {
 	if acc == nil {
 		return "", 0, nil

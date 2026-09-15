@@ -117,7 +117,7 @@ func TestCLIResponsesRefreshesRejectedUnexpiredTokenOnSameAccount(t *testing.T) 
 	acc := &store.Account{
 		OAuthAccessToken: "old-access", OAuthRefreshToken: "old-refresh", OAuthExpiresAt: time.Now().Add(time.Hour),
 	}
-	resp, err := client.doResponses(context.Background(), acc, map[string]interface{}{"model": "grok-4.6", "input": "hello"})
+	resp, err := client.doResponsesAt(context.Background(), acc, "/responses", map[string]interface{}{"model": "grok-4.6", "input": "hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestCLIResponsesWaitsForTeamModelCooldownBeforeUpstream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	client := &CLIClient{}
-	_, err := client.doResponses(ctx, &store.Account{TeamID: "team-1"}, map[string]interface{}{"model": "grok-4.6"})
+	_, err := client.doResponsesAt(ctx, &store.Account{TeamID: "team-1"}, "/responses", map[string]interface{}{"model": "grok-4.6"})
 	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
 		t.Fatalf("error=%v want cancellable team cooldown", err)
 	}

@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/goccy/go-json"
 )
 
 func TestRefactorAliasMultilineKeepsMetadataAndRestoresNames(t *testing.T) {
@@ -57,26 +55,6 @@ func TestRefactorAliasRejectsOversizedMultilineFrame(t *testing.T) {
 	defer body.Close()
 	if _, err := io.Copy(io.Discard, body); err == nil {
 		t.Fatal("unbounded alias frame accepted")
-	}
-}
-
-func TestRefactorReasoningReplayUsesProtocolItemsAndLatestSignature(t *testing.T) {
-	response := map[string]interface{}{"output": []interface{}{
-		map[string]interface{}{"type": "reasoning", "encrypted_content": "first"},
-		map[string]interface{}{"type": "reasoning", "encrypted_content": "latest"},
-	}}
-	raw, _ := json.Marshal(response)
-	if got := encryptedReasoningFromResponse(raw); got != "latest" {
-		t.Fatal(got)
-	}
-	stream := "data: {\"type\":\"response.output_item.done\",\ndata: \"item\":{\"type\":\"reasoning\",\"encrypted_content\":\"early\"}}\n\n" +
-		"event: response.completed\ndata: {\"response\":\ndata: " + string(raw) + "}\n\n"
-	if got := encryptedReasoningFromResponse([]byte(stream)); got != "latest" {
-		t.Fatal(got)
-	}
-	unrelated := []byte("{\"metadata\":{\"type\":\"reasoning\",\"encrypted_content\":\"not-a-reasoning-item\"}}")
-	if got := encryptedReasoningFromResponse(unrelated); got != "" {
-		t.Fatal("metadata replayed", got)
 	}
 }
 

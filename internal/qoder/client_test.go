@@ -101,7 +101,7 @@ func TestConcurrentExpiredCredentialRefreshesOnlyOnce(t *testing.T) {
 	acc.QoderRefreshToken = "refresh-old"
 	acc.QoderExpiresAt = time.Now().Add(-time.Minute)
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
 
 	const callers = 24
 	errs := make(chan error, callers)
@@ -172,7 +172,7 @@ func TestRefreshReportsPersistenceFailureAndRetriesWriteBeforeReuse(t *testing.T
 	acc.QoderRefreshToken = "refresh-old"
 	acc.QoderExpiresAt = time.Now().Add(-time.Minute)
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
 	updater := &failingQoderUpdater{fail: true}
 	client.SetAccountStore(updater)
 	if _, err := client.ensureAccessToken(context.Background()); err == nil {
@@ -218,7 +218,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
 
 	var events []upstream.SSEMessage
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
@@ -333,7 +333,7 @@ func TestSendRequestRefreshesOnceOnUnauthorized(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
 
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
 		Model:    "Qwen3.7-Max",
@@ -374,7 +374,7 @@ func TestSendRequestDoesNotReplayAfterOutput(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
 
 	var events []upstream.SSEMessage
 	err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
@@ -459,7 +459,7 @@ func TestFetchModelsServesTheBuiltInCatalog(t *testing.T) {
 	acc.QoderModelIDs = nil
 	client := NewFromAccount(acc, nil)
 	// Point everything at a closed port: a network read would fail here.
-	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 
 	catalog, err := client.FetchModels(context.Background())
 	if err != nil {
@@ -545,7 +545,7 @@ func TestVerifyModelRejectsUnsupportedName(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 	if err := client.VerifyModel(context.Background(), "definitely-not-a-model"); err == nil {
 		t.Fatal("VerifyModel() error = nil for an unsupported model")
 	}
@@ -605,7 +605,7 @@ func TestApplyAuthHeadersOmitsOrganizationWhenAbsent(t *testing.T) {
 	creds := credsOf(acc)
 	fields := RuntimeFields{EncryptUserInfo: "info", Key: "key"}
 
-	req, err := http.NewRequest(http.MethodPost, "https://example.invalid/algo/api/v2/model/list?Encode=1", nil)
+	req, err := http.NewRequest(http.MethodPost, "https://example.invalid/algo/api/v2/quota/usage?Encode=1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +616,7 @@ func TestApplyAuthHeadersOmitsOrganizationWhenAbsent(t *testing.T) {
 		t.Errorf("Cosy-Organization-Id = %q, want absent", got)
 	}
 	if got := req.Header.Get("X-Model-Key"); got != "" {
-		t.Errorf("X-Model-Key = %q, want absent for a catalog read", got)
+		t.Errorf("X-Model-Key = %q, want absent for a quota read", got)
 	}
 
 	creds.OrgID = "org-1"
@@ -678,7 +678,7 @@ func TestEntitlementRefusalKeepsTheAccountUsable(t *testing.T) {
 
 	acc := signedTestAccount()
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest(server.URL, server.URL, server.URL, server.URL)
+	client.SetEndpointsForTest(server.URL, server.URL, server.URL)
 
 	requestErr := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
 		Model:    "Qwen3.7-Max",

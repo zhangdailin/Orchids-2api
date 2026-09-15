@@ -16,9 +16,7 @@ import (
 
 func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
 	old := detailedOutcomeRecorder
-	oldSimple := requestOutcomeRecorder
-	defer func() { detailedOutcomeRecorder = old; requestOutcomeRecorder = oldSimple }()
-	requestOutcomeRecorder = nil
+	defer func() { detailedOutcomeRecorder = old }()
 	var outcomes []opsagg.Outcome
 	SetDetailedOutcomeRecorder(func(_ context.Context, o opsagg.Outcome) { outcomes = append(outcomes, o) })
 	server := miniredis.RunT(t)

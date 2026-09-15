@@ -70,16 +70,6 @@ type Verdict struct {
 	At time.Time
 }
 
-// HoldsAccount reports whether the verdict keeps the whole account out of the pool.
-func (v Verdict) HoldsAccount() bool {
-	return v.Scope == ScopeAccount || v.Scope == ScopeCredential
-}
-
-// Healthy reports whether the result left the account usable.
-func (v Verdict) Healthy() bool {
-	return v.Status == "" && (v.Scope == ScopeNone || v.Scope == ScopeModel)
-}
-
 // Success is the verdict for an upstream result that proved the credential
 // works. It always stamps VerifiedAt so "never checked" stays distinguishable
 // from "checked and healthy".
@@ -112,19 +102,6 @@ func (v Verdict) Apply(acc *store.Account) {
 	acc.VerifiedAt = at
 }
 
-// ClearCredentialVerdict drops the status and the verdict stamp because the
-// credential they described has been replaced.
-func ClearCredentialVerdict(acc *store.Account) {
-	if acc == nil {
-		return
-	}
-	acc.StatusCode = ""
-	acc.StatusMessage = ""
-	acc.LastAttempt = time.Time{}
-	acc.VerifiedAt = time.Time{}
-	acc.ClearVerifiedAt = true
-}
-
 // ScopeForStatus maps an already-classified status code to the part of the
 // account it invalidates, so callers that only have the code (a verifier that
 // returned "429", an admin token probe) still produce a complete verdict.
@@ -151,17 +128,6 @@ func Retryable(err error) bool {
 		return false
 	}
 	return apperrors.ClassifyUpstreamError(err.Error()).Retryable
-}
-
-// Cancelled reports whether the failure was the caller going away. A cancelled
-// request must not be retried, must not cool the account down, and must not be
-// reported as an upstream fault.
-func Cancelled(err error) bool {
-	if err == nil {
-		return false
-	}
-	class := apperrors.ClassifyUpstreamError(err.Error())
-	return class.Category == "canceled"
 }
 
 // Classify turns an upstream error into a verdict.

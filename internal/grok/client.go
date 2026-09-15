@@ -69,33 +69,11 @@ type NSFWEnableResult struct {
 
 func New(cfg *config.Config) *Client {
 	timeout := cfg.GrokRequestTimeout(ProviderWeb)
-	baseProxyOverride := strings.TrimSpace(getProxyField(cfg, "base"))
-	assetProxyOverride := strings.TrimSpace(getProxyField(cfg, "asset"))
-	baseProxy := resolveGrokProxy(cfg, baseProxyOverride)
-	assetProxy := resolveGrokProxy(cfg, assetProxyOverride)
-
-	var bypass []string
-	if cfg != nil {
-		bypass = cfg.ProxyBypass
-	}
-	baseProxyFunc := util.ProxyFuncFromConfig(cfg)
-	if baseProxy != nil {
-		baseProxyFunc = util.ProxyFuncFromURL(baseProxy, bypass)
-	}
-	assetProxyFunc := baseProxyFunc
-	if assetProxy != nil {
-		assetProxyFunc = util.ProxyFuncFromURL(assetProxy, bypass)
-	}
-
-	baseClient := newHTTPClient(cfg, timeout, baseProxyFunc)
-	assetClient := baseClient
-	if assetProxy != nil && (baseProxy == nil || assetProxy.String() != baseProxy.String()) {
-		assetClient = newHTTPClient(cfg, timeout, assetProxyFunc)
-	}
+	baseClient := newHTTPClient(cfg, timeout, util.ProxyFuncFromConfig(cfg))
 	client := &Client{
 		cfg:         cfg,
 		httpClient:  baseClient,
-		assetClient: assetClient,
+		assetClient: baseClient,
 		dpop:        newDPoPSessionManager(),
 		egress:      egress.NewManager(cfg),
 	}
@@ -135,13 +113,7 @@ func (c *Client) cloudflareCookies() (string, string) {
 		return "", ""
 	}
 	cfClearance := strings.TrimSpace(c.cfg.GrokConfigCFClearance)
-	if cfClearance == "" {
-		cfClearance = strings.TrimSpace(c.cfg.GrokCFClearance)
-	}
 	cfBM := strings.TrimSpace(c.cfg.GrokConfigCFBM)
-	if cfBM == "" {
-		cfBM = strings.TrimSpace(c.cfg.GrokCFBM)
-	}
 	return cfClearance, cfBM
 }
 
@@ -1553,39 +1525,6 @@ func (c *Client) EnableNSFWDetailed(ctx context.Context, token string) NSFWEnabl
 	result.Success = true
 	result.Error = ""
 	return result
-}
-
-func getProxyField(cfg *config.Config, kind string) string {
-	if cfg == nil {
-		return ""
-	}
-	switch kind {
-	case "base":
-		return cfg.GrokBaseProxyURL
-	case "asset":
-		return cfg.GrokAssetProxyURL
-	default:
-		return ""
-	}
-}
-
-func resolveGrokProxy(cfg *config.Config, proxyAddr string) *url.URL {
-	proxyAddr = strings.TrimSpace(proxyAddr)
-	if proxyAddr == "" {
-		return nil
-	}
-	u, err := url.Parse(proxyAddr)
-	if err != nil {
-		return nil
-	}
-	if cfg != nil && u.User == nil {
-		if base := util.ProxyURLFromConfig(cfg); base != nil && base.User != nil {
-			u.User = base.User
-		} else if strings.TrimSpace(cfg.ProxyUser) != "" {
-			u.User = url.UserPassword(strings.TrimSpace(cfg.ProxyUser), strings.TrimSpace(cfg.ProxyPass))
-		}
-	}
-	return u
 }
 
 func newHTTPClient(cfg *config.Config, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {

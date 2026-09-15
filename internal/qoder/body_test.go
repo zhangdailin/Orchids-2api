@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestEncodeBodyMatchesPrivateAlphabet pins the wire encoding. The signature is
@@ -118,24 +117,13 @@ func TestSignPathStripsAlgoAndQuery(t *testing.T) {
 
 	cases := map[string]string{
 		"https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1": "/api/v2/service/pro/sse/agent_chat_generation",
-		"https://gateway.qoder.com.cn/algo/api/v2/model/list?Encode=1":                                                                     "/api/v2/model/list",
-		"/algo/api/v2/model/list?Encode=1": "/api/v2/model/list",
+		"https://gateway.qoder.com.cn/algo/api/v2/quota/usage?Encode=1":                                                                    "/api/v2/quota/usage",
+		"/algo/api/v2/quota/usage?Encode=1": "/api/v2/quota/usage",
 	}
 	for raw, want := range cases {
 		if got := signPath(raw); got != want {
 			t.Errorf("signPath(%q) = %q, want %q", raw, got, want)
 		}
-	}
-}
-
-// TestNowSecondsMatchesSignatureInput proves the clock is read once: Cosy-Date
-// and the signature must agree or the gateway rejects the request.
-func TestNowSecondsMatchesSignatureInput(t *testing.T) {
-	t.Parallel()
-
-	value := nowSeconds(time.Unix(1700000000, 0))
-	if value != "1700000000" {
-		t.Fatalf("nowSeconds() = %q, want %q", value, "1700000000")
 	}
 }
 
@@ -148,8 +136,5 @@ func TestChatURLCarriesFixedAgentQuery(t *testing.T) {
 	want := "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 	if got != want {
 		t.Fatalf("chatURL() = %q, want %q", got, want)
-	}
-	if got := catalogURL("https://api2.qoder.sh/"); got != "https://api2.qoder.sh/algo/api/v2/model/list?Encode=1" {
-		t.Fatalf("catalogURL() = %q", got)
 	}
 }

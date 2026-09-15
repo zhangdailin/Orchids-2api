@@ -30,14 +30,6 @@ type errorUpstreamEdge struct {
 	calls int
 }
 
-type refundingErrorUpstreamEdge struct {
-	err             error
-	refundErr       error
-	calls           int
-	refundIDs       []string
-	conversationIDs []string
-}
-
 func (m *mockUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	for _, e := range m.events {
 		onMessage(e)
@@ -50,19 +42,8 @@ func (m *errorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upst
 	return m.err
 }
 
-func (m *refundingErrorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
-	m.calls++
-	return m.err
-}
-
-func (m *refundingErrorUpstreamEdge) RefundCredits(ctx context.Context, conversationID, requestID string) error {
-	m.conversationIDs = append(m.conversationIDs, conversationID)
-	m.refundIDs = append(m.refundIDs, requestID)
-	return m.refundErr
-}
-
 func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
@@ -89,38 +70,11 @@ func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_WarpErrorTriggersRefund(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+func TestHandleMessages_WarpRecoverableEmptyStreamRetries(t *testing.T) {
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 2}
 	h := NewWithLoadBalancer(cfg, nil)
-	upstreamClient := &refundingErrorUpstreamEdge{err: warp.AttachRequestMetadata(errors.New("dial tcp: connection reset by peer"), "warp-conversation-1", "warp-request-1")}
-	h.client = upstreamClient
-
-	payload := map[string]any{
-		"model":    "claude-3-5-sonnet",
-		"messages": []map[string]any{{"role": "user", "content": "hi"}},
-		"system":   []any{},
-		"stream":   false,
-	}
-	b, _ := json.Marshal(payload)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(b))
-	h.HandleMessages(rec, req)
-
-	if len(upstreamClient.refundIDs) != 1 || upstreamClient.refundIDs[0] != "warp-request-1" {
-		t.Fatalf("refund request IDs=%#v want warp-request-1", upstreamClient.refundIDs)
-	}
-	if len(upstreamClient.conversationIDs) != 1 || upstreamClient.conversationIDs[0] != "warp-conversation-1" {
-		t.Fatalf("refund conversation IDs=%#v want warp-conversation-1", upstreamClient.conversationIDs)
-	}
-}
-
-func TestHandleMessages_WarpStartedRequestDoesNotRetryWithoutConfirmedRefund(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 2, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
-	h := NewWithLoadBalancer(cfg, nil)
-	upstreamClient := &refundingErrorUpstreamEdge{
-		err:       warp.AttachRequestMetadata(errors.New("dial tcp: connection reset by peer"), "warp-conversation-1", "warp-request-1"),
-		refundErr: errors.New("refund not confirmed"),
+	upstreamClient := &errorUpstreamEdge{
+		err: warp.AttachRequestMetadata(errors.New("dial tcp: connection reset by peer"), "warp-conversation-1", "warp-request-1"),
 	}
 	h.client = upstreamClient
 
@@ -135,8 +89,8 @@ func TestHandleMessages_WarpStartedRequestDoesNotRetryWithoutConfirmedRefund(t *
 	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec, req)
 
-	if upstreamClient.calls != 1 {
-		t.Fatalf("upstream calls=%d want 1; potentially billed request must not retry without confirmed refund", upstreamClient.calls)
+	if upstreamClient.calls != 3 {
+		t.Fatalf("upstream calls=%d want 3 (initial attempt plus two recoveries)", upstreamClient.calls)
 	}
 }
 
@@ -176,7 +130,7 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0}
 	h := NewWithLoadBalancer(cfg, lb)
 	h.connTracker = newSpyConnTracker(map[int64]int64{
 		first.ID:  0,
@@ -226,7 +180,7 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 }
 
 func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
@@ -274,7 +228,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 }
 
 func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
@@ -336,7 +290,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
 }
 
 func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
@@ -399,7 +353,7 @@ func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *tes
 }
 
 func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &errorUpstreamEdge{err: context.Canceled}
 	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
@@ -447,7 +401,7 @@ func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *
 }
 
 func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 3, RetryDelay: 0, ContextMaxTokens: 1024, ContextSummaryMaxTokens: 256, ContextKeepTurns: 2}
+	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 3, RetryDelay: 0}
 	h := NewWithLoadBalancer(cfg, nil)
 	upstreamClient := &errorUpstreamEdge{err: errors.New("puter API error: message=Model not found, please try another model")}
 	h.client = upstreamClient

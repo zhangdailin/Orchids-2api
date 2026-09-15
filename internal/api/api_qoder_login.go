@@ -29,10 +29,6 @@ import (
 // transaction.
 
 const (
-	// qoderLoginTTL is how long one authorization transaction stays alive. The
-	// CLI waits 300s; the console keeps a longer window because the operator may
-	// still have to sign in to the Qoder website first.
-	qoderLoginTTL = 15 * time.Minute
 	// qoderLoginInterval is the upstream poll cadence. The CLI polls every
 	// second; the console polls a little slower so a stalled transaction cannot
 	// hammer the token endpoint for fifteen minutes.
@@ -46,10 +42,6 @@ var newQoderLoginClient = func(acc *store.Account, cfg *config.Config) *qoder.Cl
 }
 
 var newQoderLoginClientMu sync.RWMutex
-
-func makeQoderLoginClient(acc *store.Account, cfg *config.Config) *qoder.Client {
-	return qoderLoginClientFactory()(acc, cfg)
-}
 
 func qoderLoginClientFactory() func(*store.Account, *config.Config) *qoder.Client {
 	newQoderLoginClientMu.RLock()
@@ -326,14 +318,6 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 // its own catalog, the reference reads a local cache), so a gateway that does not
 // serve that path must not cost the operator a valid credential. When the read
 // fails the built-in catalog is installed and the real reason is logged.
-func (a *API) buildQoderAccountFromCredentials(ctx context.Context, loginID, machineID string, creds qoder.Credentials) (*store.Account, error) {
-	return a.buildQoderAccountFromCredentialsWithConfig(ctx, loginID, machineID, creds, a.config.Load())
-}
-
-func (a *API) buildQoderAccountFromCredentialsWithConfig(ctx context.Context, loginID, machineID string, creds qoder.Credentials, cfg *config.Config) (*store.Account, error) {
-	return a.buildQoderAccountFromCredentialsWithFactory(ctx, loginID, machineID, creds, cfg, qoderLoginClientFactory())
-}
-
 func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, loginID, machineID string, creds qoder.Credentials, cfg *config.Config, factory func(*store.Account, *config.Config) *qoder.Client) (*store.Account, error) {
 	normalized := qoder.NormalizeLoginResult(creds, machineID)
 	acc := &store.Account{
@@ -376,19 +360,6 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 		acc.QoderOrganizationTags = profile.OrgTags
 	}
 
-	// The gateway job token handshake is optional enrichment, not the request
-	// credential: the channel signs its own COSY requests from the runtime
-	// fields. A failure is logged and ignored.
-	if exchange, err := client.ExchangeDeviceCredentials(ctx, normalized); err != nil {
-		slog.Debug("Qoder job token handshake was skipped", "login_id", loginID, "error", err)
-	} else {
-		acc.QoderJobToken = exchange.SecurityOAuthToken
-		acc.QoderJobTokenExpiry = exchange.ExpiresAt
-		if acc.QoderUserID == "" {
-			acc.QoderUserID = exchange.UID
-		}
-	}
-
 	if strings.TrimSpace(acc.QoderUserID) == "" {
 		return nil, errors.New("qoder login returned no user id")
 	}
@@ -409,10 +380,9 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 	acc.QoderRuntimeInfo = client.RuntimeFields().EncryptUserInfo
 	acc.QoderRuntimeKey = client.RuntimeFields().Key
 
-	// The catalog is installed from the built-in list. QoderModelsSyncedAt is
-	// deliberately left zero: there is no upstream catalog to observe, so a sync
-	// timestamp would claim a freshness this channel cannot have.
-	models, catalogErr := client.FetchModelsLenient(ctx)
+	// The catalog is installed from the built-in list; there is no upstream
+	// catalog or freshness timestamp to observe.
+	models, catalogErr := client.FetchModels(ctx)
 	if catalogErr != nil {
 		slog.Warn("Qoder catalog read failed; the account was saved with the built-in model list",
 			"login_id", loginID, "error", catalogErr)

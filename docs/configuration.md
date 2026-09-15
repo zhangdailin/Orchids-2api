@@ -111,8 +111,7 @@ cp config.example.json config.json
 | `account_switch_count` | `5` | Grok 账号尝试次数，包含首轮，上限 20；不再误作秒数 |
 | `qoder_oauth_base_url` | `https://qoder.com` | Qoder 设备授权页面地址；配置的 host 会自动加入授权页允许列表 |
 | `qoder_openapi_base_url` | `https://openapi.qoder.sh` | Qoder 设备 token 与 userinfo 控制面地址 |
-| `qoder_inference_base_url` | `https://api2.qoder.sh` | Qoder 聊天 SSE 与模型目录地址（CN 网关可用 `https://gateway.qoder.com.cn`） |
-| `qoder_auth_base_url` | `https://gateway.qoder.com.cn` | Qoder `jobToken` 辅助握手地址（不参与推理鉴权） |
+| `qoder_inference_base_url` | `https://api2.qoder.sh` | Qoder 聊天 SSE 地址（CN 网关可用 `https://gateway.qoder.com.cn`） |
 | `qoder_client_id` | 内置 CLI 公共 client id | 设备授权 client id；非机密，可随 CLI 升级替换 |
 | `qoder_client_version` | `1.1.34` | 发送的 `Cosy-Version` / `User-Agent` 版本号 |
 | `request_timeout` | `600` | 通用请求超时，秒，上限 86400 |

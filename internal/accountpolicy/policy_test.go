@@ -23,7 +23,7 @@ func TestClassify_RefusedCredentialNeedsLogin(t *testing.T) {
 	if v.Scope != ScopeCredential {
 		t.Fatalf("scope = %q, want %q", v.Scope, ScopeCredential)
 	}
-	if !v.NeedsLogin || !v.HoldsAccount() {
+	if !v.NeedsLogin || (v.Scope != ScopeAccount && v.Scope != ScopeCredential) {
 		t.Fatalf("verdict must require a login and hold the account: %+v", v)
 	}
 	if v.Status != "401" || v.Message == "" {
@@ -55,7 +55,7 @@ func TestClassify_ModelScopedFailureKeepsAccount(t *testing.T) {
 		if v.Status != "" {
 			t.Fatalf("%q: a model-scoped failure must not set an account status, got %q", message, v.Status)
 		}
-		if v.HoldsAccount() {
+		if v.Scope == ScopeAccount || v.Scope == ScopeCredential {
 			t.Fatalf("%q: a model-scoped failure must not hold the account", message)
 		}
 		if v.Model != "grok-4.6" {
@@ -84,7 +84,7 @@ func TestClassify_RateLimitIsAccountScopedWithShortCooldown(t *testing.T) {
 func TestClassify_SuccessStampsVerdict(t *testing.T) {
 	acc := grokSSO()
 	verdict := Classify(acc, nil, "grok-4.6")
-	if !verdict.Healthy() {
+	if verdict.Status != "" || (verdict.Scope != ScopeNone && verdict.Scope != ScopeModel) {
 		t.Fatalf("success verdict is not healthy: %+v", verdict)
 	}
 	verdict.Apply(acc)
@@ -121,31 +121,11 @@ func TestApply_KeepsStatusAndReasonTogether(t *testing.T) {
 	}
 }
 
-// TestClearCredentialVerdict_ReleasesTheCredential covers the repair path: once
-// the operator installs a new credential the old verdict must not survive.
-func TestClearCredentialVerdict_ReleasesTheCredential(t *testing.T) {
-	acc := grokSSO()
-	acc.StatusCode = "401"
-	acc.StatusMessage = "rejected"
-	acc.LastAttempt = time.Now()
-	acc.VerifiedAt = time.Now()
-
-	ClearCredentialVerdict(acc)
-	if acc.StatusCode != "" || acc.StatusMessage != "" || !acc.VerifiedAt.IsZero() || !acc.LastAttempt.IsZero() {
-		t.Fatalf("credential replacement must reset the verdict: %+v", acc)
-	}
-	if !acc.ClearVerifiedAt {
-		t.Fatal("the store must be told to drop the persisted verdict stamp")
-	}
-}
-
 // TestAccountLifecycle pins hold/expiry behaviour shared by pool and scheduler.
 func TestAccountLifecycle(t *testing.T) {
-	now := time.Now()
-
 	rejected := grokSSO()
 	Classify(rejected, errors.New("401: grok session unauthenticated"), "").Apply(rejected)
-	now = rejected.VerifiedAt
+	now := rejected.VerifiedAt
 	if !AccountHeld(rejected, now) {
 		t.Fatal("a freshly rejected credential must hold the account")
 	}

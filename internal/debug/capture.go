@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -215,23 +214,4 @@ func (s *DiagnosticStore) Indexes(ctx context.Context, ids []string) (map[string
 		}
 	}
 	return out, nil
-}
-
-// CaptureBody tees the decoded upstream body without buffering or changing Close.
-func CaptureBody(ctx context.Context, body io.ReadCloser) io.ReadCloser {
-	if c := FromContext(ctx); c != nil && body != nil {
-		return &capturedBody{ReadCloser: body, capture: c}
-	}
-	return body
-}
-
-type capturedBody struct {
-	io.ReadCloser
-	capture *Capture
-}
-
-func (b *capturedBody) Read(p []byte) (int, error) {
-	n, err := b.ReadCloser.Read(p)
-	b.capture.Append("4_upstream_sse.jsonl", string(p[:n]))
-	return n, err
 }

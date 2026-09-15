@@ -73,9 +73,10 @@ type ClaudeRequest struct {
 }
 
 type toolCall struct {
-	id    string
-	name  string
-	input string
+	id           string
+	name         string
+	input        string
+	upstreamType string
 }
 
 type openAINonStreamToolCall struct {
@@ -589,6 +590,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	apiClient, currentAccount, releaseClient, trackedAccountID, err := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 		ModelID:               upstreamWarpModelID(req.Model),
 		RequireWarpCloudAgent: requireWarpCloudAgent,
+		PreferWarpFreeAccount: warpChatMode,
 		PreferredAccountID:    warpContinuationState.accountID,
 	})
 	// The client is held for the whole request: a credential change during it
@@ -882,6 +884,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if !isWarpRequest || taskContext == "" {
 			return
 		}
+		if conversationKey != "" {
+			h.sessionStore.SetWarpTaskContext(r.Context(), conversationKey, taskContext)
+		}
 		for id, binding := range activeWarpBindings {
 			binding.TaskContext = taskContext
 			activeWarpBindings[id] = binding
@@ -1030,10 +1035,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			errClass := apperrors.ClassifyUpstreamError(errStr)
 			warpCloudAgentForbidden := isWarpCloudAgentForbiddenError(errStr)
 			warpRequestStarted := isWarpRequest && warp.RequestIDFromError(err) != ""
-			warpRefundConfirmed := false
-			if isWarpRequest {
-				warpRefundConfirmed = h.refundWarpCredits(apiClient, err, errClass.Category)
-			}
 			if sh.hasAnyOutput() {
 				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
 				if !sh.hasVisibleOutput() {
@@ -1042,13 +1043,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				sh.finishResponse("end_turn")
 				return
 			}
-			if warpRequestStarted && shouldRefundWarpCredits(errClass.Category) && !warpRefundConfirmed {
-				slog.Warn("Warp retry suppressed because the started request may have been billed and refund was not confirmed", "trace_id", traceID, "attempt", upstreamReq.Attempt, "category", errClass.Category, "request_id", warp.RequestIDFromError(err))
-				if errClass.Category != "canceled" {
-					sh.InjectErrorText("Suppressing potentially billed Warp retry", fmt.Sprintf("Request failed: %s", strings.TrimSpace(errStr)))
-				}
-				sh.finishResponse("end_turn")
-				return
+			if warpRequestStarted && errClass.Retryable {
+				// A Warp conversation and its task graph belong to the account that
+				// created them. Recoverable stream failures must retry that same
+				// request on the same account, matching Warp's client recovery path.
+				errClass.SwitchAccount = false
 			}
 
 			// Check for non-retriable errors
@@ -1151,6 +1150,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				nextClient, nextAccount, releaseNext, nextTrackedAccountID, retryErr := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 					ModelID:               upstreamReq.Model,
 					RequireWarpCloudAgent: requireWarpCloudAgent,
+					PreferWarpFreeAccount: warpChatMode,
 					PreferredAccountID:    warpContinuationState.accountID,
 				})
 				if retryErr == nil {

@@ -31,6 +31,13 @@ func (h *Handler) resolveWarpContinuation(ctx context.Context, conversationKey s
 	if conversationKey != "" {
 		continuation.conversationID, _ = h.sessionStore.GetConvID(ctx, conversationKey)
 		continuation.accountID, _ = h.sessionStore.GetAccountID(ctx, conversationKey)
+		if encoded, ok := h.sessionStore.GetWarpTaskContext(ctx, conversationKey); ok {
+			decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(encoded))
+			if err != nil {
+				return warpContinuation{}, fmt.Errorf("cannot resume Warp conversation because its task context is invalid")
+			}
+			continuation.taskContext = decoded
+		}
 		h.sessionStore.Touch(ctx, conversationKey)
 	}
 
@@ -61,7 +68,7 @@ func (h *Handler) resolveWarpContinuation(ctx context.Context, conversationKey s
 				return warpContinuation{}, fmt.Errorf("cannot resume Warp tool result %q because its task context is invalid", toolCallID)
 			}
 			if len(continuation.taskContext) > 0 && string(continuation.taskContext) != string(decoded) {
-				return warpContinuation{}, fmt.Errorf("Warp tool results belong to different task contexts")
+				return warpContinuation{}, fmt.Errorf("warp tool results belong to different task contexts")
 			}
 			continuation.taskContext = decoded
 		}

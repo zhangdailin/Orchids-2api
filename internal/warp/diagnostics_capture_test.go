@@ -3,7 +3,7 @@ package warp
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -24,8 +24,9 @@ func TestWarpDiagnosticsContainDecodedProtobuf(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		binary.Write(&stream, binary.BigEndian, uint32(len(raw)))
-		stream.Write(raw)
+		stream.WriteString("data: ")
+		stream.WriteString(base64.RawURLEncoding.EncodeToString(raw))
+		stream.WriteString("\n\n")
 	}
 	if err := processStreamBody(ctx, &stream, nil, logger); err != nil {
 		t.Fatal(err)

@@ -15,11 +15,8 @@ import (
 
 func newPuterRegressionHandler(events []upstream.SSEMessage) *Handler {
 	cfg := &config.Config{
-		DebugEnabled:            false,
-		RequestTimeout:          10,
-		ContextMaxTokens:        1024,
-		ContextSummaryMaxTokens: 256,
-		ContextKeepTurns:        2,
+		DebugEnabled:   false,
+		RequestTimeout: 10,
 	}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstream{events: events}

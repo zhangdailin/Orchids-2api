@@ -948,8 +948,6 @@ func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
 		acc.ClearVerifiedAt = true
 	}
 	acc.QuotaResetAt = existing.QuotaResetAt
-	acc.MissingThinkingStrikes = existing.MissingThinkingStrikes
-	acc.MissingThinkingLastAt = existing.MissingThinkingLastAt
 	acc.GrokModels = append([]string(nil), existing.GrokModels...)
 	acc.GrokModelsSyncedAt = existing.GrokModelsSyncedAt
 	acc.GrokBilling = existing.GrokBilling
@@ -995,12 +993,12 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 	// Credentials are write-only. The account API exposes only their presence,
 	// including for create, update and refresh responses.
 	merged["has_credential"] = o.SessionFingerprint != "" || o.WarpAuthenticated
-	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "qoder_job_token", "session_fingerprint", "warp_authenticated"} {
+	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "session_fingerprint", "warp_authenticated"} {
 		delete(merged, field)
 	}
 	if o.Account != nil {
 		message := o.Account.StatusMessage
-		for _, secret := range []string{o.Account.Token, o.Account.ClientCookie, o.Account.RefreshToken, o.Account.SessionCookie, o.Account.OAuthAccessToken, o.Account.OAuthRefreshToken, o.Account.WorkBuddyAccessToken, o.Account.WorkBuddyRefreshToken, o.Account.QoderAccessToken, o.Account.QoderRefreshToken, o.Account.QoderJobToken} {
+		for _, secret := range []string{o.Account.Token, o.Account.ClientCookie, o.Account.RefreshToken, o.Account.SessionCookie, o.Account.OAuthAccessToken, o.Account.OAuthRefreshToken, o.Account.WorkBuddyAccessToken, o.Account.WorkBuddyRefreshToken, o.Account.QoderAccessToken, o.Account.QoderRefreshToken} {
 			if secret != "" {
 				message = strings.ReplaceAll(message, secret, "[REDACTED]")
 			}
@@ -1030,7 +1028,7 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 	}
 	// Redact before the provider-specific output normalization removes secrets.
 	out.StatusMessage = acc.StatusMessage
-	for _, secret := range []string{acc.Token, acc.ClientCookie, acc.RefreshToken, acc.SessionCookie, acc.SessionID, acc.ClientUat, acc.OAuthAccessToken, acc.OAuthRefreshToken, acc.WorkBuddyAccessToken, acc.WorkBuddyRefreshToken, acc.QoderAccessToken, acc.QoderRefreshToken, acc.QoderJobToken} {
+	for _, secret := range []string{acc.Token, acc.ClientCookie, acc.RefreshToken, acc.SessionCookie, acc.SessionID, acc.ClientUat, acc.OAuthAccessToken, acc.OAuthRefreshToken, acc.WorkBuddyAccessToken, acc.WorkBuddyRefreshToken, acc.QoderAccessToken, acc.QoderRefreshToken} {
 		if secret != "" {
 			out.StatusMessage = strings.ReplaceAll(out.StatusMessage, secret, "[REDACTED]")
 		}
@@ -2761,21 +2759,15 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	isRefresh := len(parts) > 1 && parts[1] == "refresh"
-	isVerify := len(parts) > 1 && parts[1] == "verify"
 	isCheck := len(parts) > 1 && parts[1] == "check"
 	isUsage := len(parts) > 1 && parts[1] == "usage"
-	if len(parts) > 2 || (len(parts) > 1 && !(isRefresh || isVerify || isCheck || isUsage)) {
+	if len(parts) > 2 || (len(parts) > 1 && !(isCheck || isUsage)) {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		if isRefresh || isVerify {
-			http.Error(w, "Deprecated endpoint. Use /api/accounts/{id}/check instead.", http.StatusGone)
-			return
-		}
 		if isUsage {
 			resp := map[string]interface{}{
 				"account_id":     account.ID,

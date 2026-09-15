@@ -270,138 +270,6 @@ func (c *Client) FetchProfile(ctx context.Context, accessToken string) (Profile,
 	return profile, nil
 }
 
-// DeviceExchangeResult is the gateway job token exchange outcome.
-type DeviceExchangeResult struct {
-	// SecurityOAuthToken is the gateway credential the response named.
-	SecurityOAuthToken string
-	// RefreshToken is the gateway refresh token, distinct from the device
-	// refresh token and rotated independently.
-	RefreshToken string
-	// ExpiresAt is when the gateway credential lapses.
-	ExpiresAt time.Time
-	// UID, Name and UserType are the identity the gateway reported.
-	UID      string
-	Name     string
-	UserType string
-}
-
-// ExchangeDeviceCredentials hands the bridge's own device credential to the
-// gateway job token endpoint (POST /algo/api/v3/user/jobToken) in the PAT field
-// and records what the gateway answers.
-//
-// This is optional enrichment, not the request credential: the COSY Bearer is
-// derived locally from the runtime fields, and the channel works without the
-// exchange. It is implemented because the Qoder-2API-Go reference uses this
-// handshake on the CN gateway, and operators comparing the two channels need to
-// see the same call. A failure must never fail a login.
-func (c *Client) ExchangeDeviceCredentials(ctx context.Context, creds Credentials) (*DeviceExchangeResult, error) {
-	if c == nil {
-		return nil, fmt.Errorf("qoder client is nil")
-	}
-	inner, err := json.Marshal(map[string]interface{}{
-		"personalToken":      strings.TrimSpace(credentialsTokenForExchange(creds)),
-		"securityOauthToken": "",
-		"refreshToken":       "",
-		"needRefresh":        false,
-		"authInfo":           map[string]interface{}{},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal exchange payload: %w", err)
-	}
-	outer, err := json.Marshal(map[string]string{
-		"payload":       string(inner),
-		"encodeVersion": "1",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal exchange envelope: %w", err)
-	}
-
-	endpoint := c.endpoints.auth + "/algo/api/v3/user/jobToken?Encode=1"
-	date := time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT")
-	reqCtx, cancel := context.WithTimeout(ctx, authRequestTimeout)
-	defer cancel()
-	body := EncodeBody(outer)
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("build exchange request: %w", err)
-	}
-	applyExchangeHeaders(req, c.machineID, date)
-
-	resp, err := c.control.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrAuthUnavailable, err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	if resp.StatusCode != http.StatusOK {
-		return nil, apiError(http.MethodPost, endpoint, resp.StatusCode, raw)
-	}
-
-	var payload struct {
-		Name               string          `json:"name"`
-		ID                 string          `json:"id"`
-		UserType           string          `json:"userType"`
-		SecurityOauthToken string          `json:"securityOauthToken"`
-		RefreshToken       string          `json:"refreshToken"`
-		ExpireTime         json.RawMessage `json:"expireTime"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("decode exchange response: %w", err)
-	}
-	result := &DeviceExchangeResult{
-		SecurityOAuthToken: strings.TrimSpace(payload.SecurityOauthToken),
-		RefreshToken:       strings.TrimSpace(payload.RefreshToken),
-		UID:                strings.TrimSpace(payload.ID),
-		Name:               strings.TrimSpace(payload.Name),
-		UserType:           strings.TrimSpace(payload.UserType),
-	}
-	// expireTime is Unix milliseconds in the gateway's answer; the shared
-	// normalizer would read it as seconds and disable refresh entirely.
-	if len(payload.ExpireTime) > 0 {
-		var milliseconds float64
-		if err := json.Unmarshal(payload.ExpireTime, &milliseconds); err == nil && milliseconds > 0 {
-			result.ExpiresAt = time.UnixMilli(int64(milliseconds))
-		}
-	}
-	if result.SecurityOAuthToken == "" {
-		return nil, fmt.Errorf("exchange response carried no securityOauthToken")
-	}
-	return result, nil
-}
-
-// credentialsTokenForExchange picks the value handed to the gateway. The
-// refresh token is preferred because the gateway itself is expected to rotate
-// what it is given, and the device access token may already be stale.
-func credentialsTokenForExchange(creds Credentials) string {
-	return firstNonEmptyToken(creds.RefreshToken, creds.AccessToken)
-}
-
-// exchangeAppCode and exchangeSecret reproduce the job token endpoint's own
-// signing scheme. The secret is a fixed value published inside the CLI; it is
-// a protocol constant, not a per-account secret.
-const (
-	exchangeAppCode = "cosy"
-	exchangeSecret  = "d2FyLCB3YXIgbmV2ZXIgY2hhbmdlcw=="
-)
-
-// applyExchangeHeaders sets the job token endpoint's cosy-* header set plus its
-// date and signature pair.
-func applyExchangeHeaders(req *http.Request, machineID, date string) {
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Appcode", exchangeAppCode)
-	req.Header.Set("Cosy-MachineId", machineID)
-	req.Header.Set("Cosy-MachineToken", machineID)
-	req.Header.Set("Cosy-MachineType", sceneClientID)
-	req.Header.Set("Cosy-ClientType", sceneClientID)
-	req.Header.Set("Cosy-Version", "0.1.43")
-	req.Header.Set("Login-Version", "v2")
-	req.Header.Set("Date", date)
-	req.Header.Set("Signature", exchangeSignature(date))
-	req.Header.Set("User-Agent", userAgent(DefaultClientVersion))
-}
-
 // probeHost performs a cheap reachability check against one control host so a
 // blocked egress path is reported at login time instead of as a per-request
 // timeout later.
@@ -474,7 +342,7 @@ func (c *Client) allowedLoginHost(host string) bool {
 //
 // The authorization-host allowlist is deliberately NOT extended by this call:
 // a testing seam must not become a production bypass.
-func (c *Client) SetEndpointsForTest(oauth, openAPI, inference, auth string) {
+func (c *Client) SetEndpointsForTest(oauth, openAPI, inference string) {
 	if c == nil {
 		return
 	}
@@ -486,9 +354,6 @@ func (c *Client) SetEndpointsForTest(oauth, openAPI, inference, auth string) {
 	}
 	if inference != "" {
 		c.endpoints.inference = strings.TrimRight(inference, "/")
-	}
-	if auth != "" {
-		c.endpoints.auth = strings.TrimRight(auth, "/")
 	}
 }
 

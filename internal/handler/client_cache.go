@@ -434,13 +434,10 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 
 	if cfg != nil {
 		writeString(cfg.UpstreamMode)
-		writeString(cfg.UpstreamURL)
-		writeString(cfg.UpstreamToken)
 		writeString(cfg.WorkBuddyBaseURL)
 		writeString(cfg.QoderOAuthBaseURL)
 		writeString(cfg.QoderOpenAPIBaseURL)
 		writeString(cfg.QoderInferenceURL)
-		writeString(cfg.QoderAuthBaseURL)
 		writeString(cfg.QoderClientID)
 		writeString(cfg.QoderClientVersion)
 		writeString(cfg.ProxyURL)

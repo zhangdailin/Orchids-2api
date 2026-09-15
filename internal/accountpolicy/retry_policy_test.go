@@ -38,20 +38,6 @@ func TestRetryable_MatchesTheSharedUpstreamClassification(t *testing.T) {
 	}
 }
 
-// TestCancelled_IsItsOwnVerdict keeps "the caller went away" from being reported
-// as an upstream fault or cooling the account down.
-func TestCancelled_IsItsOwnVerdict(t *testing.T) {
-	if !Cancelled(errors.New("context canceled")) {
-		t.Fatal("a cancelled request must be recognised")
-	}
-	if Cancelled(errors.New("429: too many requests")) {
-		t.Fatal("a rate limit is not a cancellation")
-	}
-	if Cancelled(nil) {
-		t.Fatal("nil is not a cancellation")
-	}
-}
-
 // TestClassify_VerdictMatchesTheSharedRetryRule makes the two systems provably
 // agree: whatever the policy says about retrying is what the shared
 // classification says, for every verdict shape.

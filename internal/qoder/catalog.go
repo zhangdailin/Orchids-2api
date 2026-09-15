@@ -5,32 +5,18 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"orchids-api/internal/store"
 )
 
 // The catalog is local, and that is a property of the protocol rather than a
 // shortcut.
 //
-// The Qoder CLI's entire HTTP surface is four endpoints — the device token
-// refresh, the user profile, the PAT job-token exchange and the chat SSE. It
-// never reads a model list over the network: it carries a built-in catalog and
-// optionally a locally cached `catalog-v6` blob. The OAuth device credential is
-// therefore not accepted by the gateway's `/algo/api/v2/model/list`, which
-// answers `403 code=101 Signature invalid` for a signature that is otherwise
-// proven good by the chat call succeeding.
-//
-// Verified against a live account: a chat request with the same credential and
-// the same runtime pair is authenticated (the gateway answers a business error
-// about a missing subscription), while the model-list read is refused. Reading
-// that endpoint would therefore turn a working credential into a bogus
-// signature failure, so it is not read at all.
+// The active Qoder CLI path uses device-token refresh, user profile and chat
+// SSE endpoints. It never reads a model list over the network: it carries a
+// built-in catalog and optionally a locally cached `catalog-v6` blob.
 //
 //   - The built-in catalog is the authority this channel can actually observe.
 //     The account snapshot records whatever was installed, and the chat call —
 //     not this list — is what reports an entitlement problem.
-//   - CatalogFromSnapshot rebuilds the list from an account record, so an
-//     operator-supplied snapshot keeps working without a network read.
 
 // modelEntry is one catalog row. Key is the internal gateway key; Name is what a
 // client may ask for.
@@ -54,15 +40,6 @@ type modelEntry struct {
 // hide every model from a deployment that omits it.
 func (m modelEntry) enabled() bool {
 	return m.Enable == nil || *m.Enable
-}
-
-// catalogConfig is the nested configuration the gateway sends alongside a model
-// row. It is kept so a catalog snapshot can be round-tripped without losing
-// fields this channel does not read yet.
-type catalogConfig struct {
-	ContextConfig map[string]struct {
-		TokenCount int `json:"token_count"`
-	} `json:"context_config,omitempty"`
 }
 
 // Catalog is a resolved model catalog.
@@ -307,29 +284,4 @@ func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
 		}
 	}
 	return DefaultCatalog(), nil
-}
-
-// FetchModelsLenient is the login-time entry point. It matches FetchModels and
-// always succeeds, so a successfully issued device credential is never discarded
-// over a catalog read.
-func (c *Client) FetchModelsLenient(ctx context.Context) (*Catalog, error) {
-	return c.FetchModels(ctx)
-}
-
-// SyncCatalog installs the catalog snapshot on the account.
-func (c *Client) SyncCatalog(ctx context.Context) (*Catalog, error) {
-	catalog, err := c.FetchModels(ctx)
-	if err != nil {
-		return nil, err
-	}
-	ids := catalogToIDs(catalog)
-	if err := c.persistPatch(ctx, store.QoderAccountPatch{ModelIDs: ids}); err != nil {
-		return nil, err
-	}
-	c.stateMu.Lock()
-	if c.account != nil {
-		c.account.QoderModelIDs = append([]string(nil), ids...)
-	}
-	c.stateMu.Unlock()
-	return catalog, nil
 }

@@ -90,14 +90,6 @@ func pruneDebugLogDirectories(root string, keep int) {
 	}
 }
 
-// CleanupAllLogs 清空所有调试日志（启动时调用）
-func CleanupAllLogs() error {
-	if err := os.RemoveAll("debug-logs"); err != nil {
-		return err
-	}
-	return os.MkdirAll("debug-logs", 0700)
-}
-
 // LogIncomingRequest 记录 1. 进入的 Claude API 请求
 func (l *Logger) LogIncomingRequest(req interface{}) {
 	if !l.enabled {

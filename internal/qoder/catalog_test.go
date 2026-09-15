@@ -17,7 +17,7 @@ func TestFetchModelsIsLocalAndNeverFailsForAValidClient(t *testing.T) {
 	acc := signedTestAccount()
 	acc.QoderModelIDs = nil
 	client := NewFromAccount(acc, nil)
-	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 
 	catalog, err := client.FetchModels(context.Background())
 	if err != nil {
@@ -33,7 +33,7 @@ func TestFetchModelsIsLocalAndNeverFailsForAValidClient(t *testing.T) {
 	// The account snapshot wins when one is stored.
 	acc.QoderModelIDs = []string{"kmodel\tKimi-K2.7-Code"}
 	snapshotClient := NewFromAccount(acc, nil)
-	snapshotClient.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
+	snapshotClient.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 	snapshot, err := snapshotClient.FetchModels(context.Background())
 	if err != nil {
 		t.Fatalf("FetchModels() with a snapshot error = %v", err)
@@ -43,21 +43,5 @@ func TestFetchModelsIsLocalAndNeverFailsForAValidClient(t *testing.T) {
 	}
 	if _, resolveErr := snapshot.Resolve("Kimi-K2.7-Code"); resolveErr != nil {
 		t.Fatalf("the snapshot catalog cannot resolve its own model: %v", resolveErr)
-	}
-}
-
-// TestFetchModelsLenientMatchesStrict proves the login path is not weaker: both
-// always succeed, so a credential is never discarded over a catalog.
-func TestFetchModelsLenientMatchesStrict(t *testing.T) {
-	t.Parallel()
-
-	client := NewFromAccount(signedTestAccount(), nil)
-	client.SetEndpointsForTest("http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
-	catalog, err := client.FetchModelsLenient(context.Background())
-	if err != nil {
-		t.Fatalf("FetchModelsLenient() error = %v", err)
-	}
-	if catalog == nil || catalog.Len() == 0 {
-		t.Fatal("FetchModelsLenient() returned no catalog")
 	}
 }

@@ -113,13 +113,8 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 type accountSelectionOptions struct {
 	ModelID               string
 	RequireWarpCloudAgent bool
+	PreferWarpFreeAccount bool
 	PreferredAccountID    int64
-}
-
-func (h *Handler) selectAccountWithOptions(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, opts accountSelectionOptions) (UpstreamClient, *store.Account, error) {
-	client, account, release, err := h.acquireAccountSelection(ctx, targetChannel, channelRequired, failedAccountIDs, opts)
-	_ = release
-	return client, account, err
 }
 
 // acquireAccountSelection is the form the request path uses: it returns the
@@ -227,6 +222,14 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 }
 
 func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccountIDs []int64, targetChannel string, opts accountSelectionOptions, filter func(*store.Account) bool) (*store.Account, error) {
+	if opts.PreferWarpFreeAccount && opts.PreferredAccountID == 0 {
+		account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
+			return filter(acc) && warp.AccountFreeOnly(acc)
+		})
+		if err == nil {
+			return account, nil
+		}
+	}
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, filter)
 	if err == nil {
 		return account, nil
@@ -468,61 +471,6 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {
 			slog.Warn("同步账号令牌失败", "account", account.Name, "type", account.AccountType, "error", err)
 		}
 	}
-}
-
-type creditRefundClient interface {
-	RefundCredits(ctx context.Context, conversationID, requestID string) error
-}
-
-func shouldRefundWarpCredits(category string) bool {
-	switch strings.TrimSpace(category) {
-	case "canceled", "timeout", "network", "server", "unknown":
-		return true
-	default:
-		return false
-	}
-}
-
-func refundReasonForWarpCategory(category string) string {
-	switch strings.TrimSpace(category) {
-	case "canceled":
-		return "request_canceled"
-	case "timeout":
-		return "request_timeout"
-	case "network":
-		return "network_error"
-	case "server":
-		return "server_error"
-	default:
-		return "upstream_error"
-	}
-}
-
-func (h *Handler) refundWarpCredits(client UpstreamClient, requestErr error, category string) bool {
-	if !shouldRefundWarpCredits(category) {
-		return false
-	}
-
-	refundable, ok := client.(creditRefundClient)
-	if !ok {
-		return false
-	}
-	requestID := warp.RequestIDFromError(requestErr)
-	conversationID := warp.ConversationIDFromError(requestErr)
-	if requestID == "" || conversationID == "" {
-		slog.Warn("Warp refund skipped: upstream request metadata unavailable", "category", category, "has_request_id", requestID != "", "has_conversation_id", conversationID != "")
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-
-	reason := refundReasonForWarpCategory(category)
-	if err := refundable.RefundCredits(ctx, conversationID, requestID); err != nil {
-		slog.Warn("Warp refund credits failed", "category", category, "local_reason", reason, "request_id", requestID, "error", err)
-		return false
-	}
-	slog.Info("Warp credits refunded", "category", category, "local_reason", reason, "request_id", requestID)
-	return true
 }
 
 func computeRetryDelay(base time.Duration, attempt int, category string) time.Duration {

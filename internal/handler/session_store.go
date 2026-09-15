@@ -30,6 +30,8 @@ type SessionStore interface {
 	SetConvID(ctx context.Context, key, convID string)
 	GetAccountID(ctx context.Context, key string) (int64, bool)
 	SetAccountID(ctx context.Context, key string, accountID int64)
+	GetWarpTaskContext(ctx context.Context, key string) (string, bool)
+	SetWarpTaskContext(ctx context.Context, key, taskContext string)
 	// Bindings normally use the caller conversation. Clients that omit one use
 	// an anonymous capability namespace: possession of the server-issued,
 	// unguessable tool-call ID is sufficient to resume that exact call.
@@ -116,6 +118,21 @@ func (s *RedisSessionStore) SetAccountID(ctx context.Context, key string, accoun
 	_, _ = pipe.Exec(ctx)
 }
 
+func (s *RedisSessionStore) GetWarpTaskContext(ctx context.Context, key string) (string, bool) {
+	val, err := s.client.HGet(ctx, s.key(key), "warp_task_context").Result()
+	return val, err == nil && val != ""
+}
+
+func (s *RedisSessionStore) SetWarpTaskContext(ctx context.Context, key, taskContext string) {
+	if key == "" || taskContext == "" {
+		return
+	}
+	pipe := s.client.Pipeline()
+	pipe.HSet(ctx, s.key(key), "warp_task_context", taskContext)
+	pipe.Expire(ctx, s.key(key), s.ttl)
+	_, _ = pipe.Exec(ctx)
+}
+
 func (s *RedisSessionStore) GetWarpToolBinding(ctx context.Context, conversationKey, toolCallID string) (WarpToolBinding, bool) {
 	var binding WarpToolBinding
 	if toolCallID == "" {
@@ -154,10 +171,11 @@ func (s *RedisSessionStore) Cleanup(_ context.Context) {
 // --- Memory Implementation ---
 
 type memorySession struct {
-	workdir    string
-	convID     string
-	accountID  int64
-	lastAccess time.Time
+	workdir     string
+	convID      string
+	accountID   int64
+	taskContext string
+	lastAccess  time.Time
 }
 
 type memoryWarpToolBinding struct {
@@ -260,6 +278,27 @@ func (s *MemorySessionStore) SetAccountID(_ context.Context, key string, account
 	defer s.mu.Unlock()
 	sess := s.getOrCreate(key)
 	sess.accountID = accountID
+	sess.lastAccess = time.Now()
+}
+
+func (s *MemorySessionStore) GetWarpTaskContext(_ context.Context, key string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess, ok := s.sessions[key]
+	if !ok || sess.taskContext == "" {
+		return "", false
+	}
+	return sess.taskContext, true
+}
+
+func (s *MemorySessionStore) SetWarpTaskContext(_ context.Context, key, taskContext string) {
+	if key == "" || taskContext == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.getOrCreate(key)
+	sess.taskContext = taskContext
 	sess.lastAccess = time.Now()
 }
 

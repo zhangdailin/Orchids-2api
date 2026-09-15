@@ -53,14 +53,12 @@ func WithLease(accountID int64, fn func()) bool {
 type Hub struct {
 	mu       sync.Mutex
 	inFlight map[int64]struct{}
-	started  map[int64]time.Time
 }
 
 // NewHub creates an empty refresh hub.
 func NewHub() *Hub {
 	return &Hub{
 		inFlight: map[int64]struct{}{},
-		started:  map[int64]time.Time{},
 	}
 }
 
@@ -77,7 +75,6 @@ func (h *Hub) TryAcquire(accountID int64) bool {
 		return false
 	}
 	h.inFlight[accountID] = struct{}{}
-	h.started[accountID] = time.Now()
 	return true
 }
 
@@ -89,7 +86,6 @@ func (h *Hub) Release(accountID int64) {
 	}
 	h.mu.Lock()
 	delete(h.inFlight, accountID)
-	delete(h.started, accountID)
 	h.mu.Unlock()
 }
 
@@ -102,18 +98,6 @@ func (h *Hub) InFlight(accountID int64) bool {
 	defer h.mu.Unlock()
 	_, busy := h.inFlight[accountID]
 	return busy
-}
-
-// AcquiredAt reports when the current lease started, so a stuck refresh can be
-// reported instead of silently blocking the account forever.
-func (h *Hub) AcquiredAt(accountID int64) (time.Time, bool) {
-	if h == nil {
-		return time.Time{}, false
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	started, ok := h.started[accountID]
-	return started, ok
 }
 
 // Len is the number of accounts currently being refreshed.
