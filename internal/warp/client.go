@@ -363,6 +363,13 @@ func (c *Client) syncAccountStateTo(account *store.Account) bool {
 		account.RefreshToken = refresh
 		changed = true
 	}
+	if email := c.session.currentEmail(); email != "" && email != account.Email {
+		account.Email = email
+		if strings.TrimSpace(account.Name) == "" || account.Name == "warp-device-login" {
+			account.Name = email
+		}
+		changed = true
+	}
 	if deviceID := c.session.currentDeviceID(); deviceID != "" && deviceID != account.DeviceID {
 		account.DeviceID = deviceID
 		changed = true

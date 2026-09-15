@@ -45,6 +45,23 @@ func TestSessionRefresh_UsesFirebaseWhenSuccessful(t *testing.T) {
 	}
 }
 
+func TestSessionRefreshExtractsEmailClaim(t *testing.T) {
+	sess := &session{refreshToken: "token-123"}
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewBufferString(`{"id_token":"eyJhbGciOiJub25lIn0.eyJlbWFpbCI6IndhcnBAZXhhbXBsZS5jb20ifQ.sig","expires_in":"3600"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	if err := sess.refresh(context.Background(), client, "https://firebase.test/v1/token?key=test-key"); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+	if got := sess.currentEmail(); got != "warp@example.com" {
+		t.Fatalf("currentEmail() = %q", got)
+	}
+}
+
 func TestEnsureLoginCoalescesConcurrentRequests(t *testing.T) {
 	var calls atomic.Int32
 	entered := make(chan struct{})

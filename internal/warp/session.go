@@ -26,6 +26,7 @@ type session struct {
 	mu             sync.Mutex
 	refreshToken   string
 	jwt            string
+	email          string
 	expiresAt      time.Time
 	deviceID       string
 	requestID      string
@@ -83,6 +84,7 @@ func getSession(accountID int64, refreshToken, deviceID, requestID string) *sess
 		if refreshToken != "" && sess.refreshToken != refreshToken {
 			sess.refreshToken = refreshToken
 			sess.jwt = ""
+			sess.email = ""
 			sess.expiresAt = time.Time{}
 			sess.loggedIn = false
 			sess.lastLogin = time.Time{}
@@ -222,6 +224,7 @@ func (s *session) clearToken() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.jwt = ""
+	s.email = ""
 	s.expiresAt = time.Time{}
 	s.loggedIn = false
 	s.lastLogin = time.Time{}
@@ -288,6 +291,7 @@ func (s *session) refresh(ctx context.Context, httpClient *http.Client, firebase
 
 	s.mu.Lock()
 	s.jwt = jwt
+	s.email = util.JWTEmail(jwt)
 	s.expiresAt = expiry
 	s.registerExperimentHeadersLocked(jwt)
 	if refresh != "" {
@@ -500,6 +504,15 @@ func (s *session) currentJWT() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return strings.TrimSpace(s.jwt)
+}
+
+func (s *session) currentEmail() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.email
 }
 
 func (s *session) currentRefreshToken() string {
