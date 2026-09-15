@@ -266,12 +266,25 @@ func (t *RedisConnTracker) acquire(accountID, limit int64) (*redisConnLease, boo
 	if t == nil || t.client == nil || accountID == 0 {
 		return nil, false
 	}
-	lease := &redisConnLease{id: newRedisConnLeaseID(), stop: make(chan struct{}), done: make(chan struct{})}
-	now := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	result, err := t.acquireScript.Run(ctx, t.client, []string{t.key(accountID)},
-		limit, now.UnixMilli(), now.Add(redisConnLeaseTTL).UnixMilli(), lease.id, (redisConnLeaseTTL * 2).Milliseconds()).Int64()
-	cancel()
+	// A newly started process can briefly race Redis connection establishment or
+	// script loading. Retry one time so a transport hiccup is not misreported as
+	// a hard account concurrency rejection. A limit rejection (result == 0) is
+	// returned immediately and remains subject to the real per-account limit.
+	var lease *redisConnLease
+	var result int64
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		lease = &redisConnLease{id: newRedisConnLeaseID(), stop: make(chan struct{}), done: make(chan struct{})}
+		now := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		result, err = t.acquireScript.Run(ctx, t.client, []string{t.key(accountID)},
+			limit, now.UnixMilli(), now.Add(redisConnLeaseTTL).UnixMilli(), lease.id, (redisConnLeaseTTL * 2).Milliseconds()).Int64()
+		cancel()
+		if err == nil || result == 0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	if err != nil || result != 1 {
 		return nil, false
 	}

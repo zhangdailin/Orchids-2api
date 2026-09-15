@@ -154,9 +154,36 @@ func (h *Handler) acquireAccountSelection(ctx context.Context, targetChannel str
 func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetChannel string, channelRequired bool, failedAccountIDs []int64, opts accountSelectionOptions) (UpstreamClient, *store.Account, func(), int64, error) {
 	excluded := append([]int64(nil), failedAccountIDs...)
 	full := make(map[int64]struct{})
+	// Account leases are held for the complete upstream request. When another
+	// request is just finishing, an immediate second selection can observe all
+	// accounts at their hard limit and turn a transient race into a 503. Give
+	// releases a short, cancellable window to become visible before failing.
+	const reservationRetries = 3
+	reservationAttempt := 0
 	for {
 		client, account, release, err := h.acquireAccountSelection(ctx, targetChannel, channelRequired, excluded, opts)
 		if err != nil {
+			if reservationAttempt < reservationRetries && strings.Contains(err.Error(), "all matching accounts are at their concurrency limit") {
+				reservationAttempt++
+				// Rebuild the exclusion set from caller-supplied failures. Entries in
+				// full only represent accounts that lost a reservation race and may
+				// be available again on the next pass.
+				excluded = append([]int64(nil), failedAccountIDs...)
+				clear(full)
+				timer := time.NewTimer(75 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					return nil, nil, func() {}, 0, ctx.Err()
+				case <-timer.C:
+				}
+				continue
+			}
 			if len(full) > 0 {
 				return nil, nil, func() {}, 0, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are at their concurrency limit)", targetChannel)
 			}
