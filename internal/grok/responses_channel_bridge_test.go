@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/middleware"
 )
 
 func TestResponsesChatPathMapsTheChannelPrefix(t *testing.T) {
@@ -369,8 +372,8 @@ func TestResponsesDispatcherRoutesByModel(t *testing.T) {
 	bridgedCalls := 0
 	native := func(w http.ResponseWriter, r *http.Request) { nativeCalls++; _, _ = io.WriteString(w, "native") }
 	bridged := func(w http.ResponseWriter, r *http.Request) { bridgedCalls++; _, _ = io.WriteString(w, "bridged") }
-	dispatch := ModelDispatcher(native, bridged, func(model string) bool {
-		return strings.HasPrefix(strings.ToLower(model), "grok-")
+	dispatch := ModelDispatcher(native, bridged, func(_ context.Context, model string) (bool, error) {
+		return strings.HasPrefix(strings.ToLower(model), "grok-"), nil
 	})
 
 	call := func(method, target, body string) *httptest.ResponseRecorder {
@@ -392,3 +395,77 @@ func TestResponsesDispatcherRoutesByModel(t *testing.T) {
 		t.Fatalf("native=%d bridged=%d, want 2/1", nativeCalls, bridgedCalls)
 	}
 }
+
+// A channel lookup that fails must not be read as "not a Grok model": the
+// bridged handler resolves the channel itself and reports a channel-aware error,
+// while the native handler would answer Grok's misleading "model does not
+// exist" for a model that simply belongs to another channel.
+func TestModelDispatcherSendsLookupFailuresToTheBridgedHandler(t *testing.T) {
+	t.Parallel()
+
+	nativeCalls := 0
+	bridgedCalls := 0
+	native := func(w http.ResponseWriter, r *http.Request) { nativeCalls++; _, _ = io.WriteString(w, "native") }
+	bridged := func(w http.ResponseWriter, r *http.Request) { bridgedCalls++; _, _ = io.WriteString(w, "bridged") }
+	dispatch := ModelDispatcher(native, bridged, func(context.Context, string) (bool, error) {
+		return false, fmt.Errorf("redis unavailable")
+	})
+
+	rec := httptest.NewRecorder()
+	dispatch(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"warp-model","input":"hi"}`)))
+	if rec.Body.String() != "bridged" {
+		t.Fatalf("lookup failure routed to %q, want the bridged handler", rec.Body.String())
+	}
+	if nativeCalls != 0 || bridgedCalls != 1 {
+		t.Fatalf("native=%d bridged=%d, want 0/1", nativeCalls, bridgedCalls)
+	}
+}
+
+// The model that decided the routing is published on the context so downstream
+// token accounting and channel resolution reuse it instead of repeating the
+// lookup. The hint box is installed by the tracing middleware before the
+// dispatcher runs, which is what makes the publish visible to the inner handler.
+func TestModelDispatcherPublishesTheResolvedModel(t *testing.T) {
+	t.Parallel()
+
+	var seen string
+	native := func(w http.ResponseWriter, r *http.Request) {}
+	bridged := func(w http.ResponseWriter, r *http.Request) {
+		seen = middleware.RequestModelFromContext(r.Context())
+	}
+	dispatch := ModelDispatcher(native, bridged, func(context.Context, string) (bool, error) {
+		return false, nil
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"GPT-5-6-SOL","messages":[]}`))
+	ctx, _ := middleware.RequestModelHint(req.Context())
+	dispatch(rec, req.WithContext(ctx))
+	if seen != "GPT-5-6-SOL" {
+		t.Fatalf("published model = %q, want the model from the body", seen)
+	}
+}
+
+// An unreadable body is a client-side fault; answering from the native handler
+// would blame the model instead.
+func TestModelDispatcherFailsClosedOnUnreadableBody(t *testing.T) {
+	t.Parallel()
+
+	native := func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "native") }
+	bridged := func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "bridged") }
+	dispatch := ModelDispatcher(native, bridged, func(context.Context, string) (bool, error) {
+		return true, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.Body = io.NopCloser(failingReader{})
+	rec := httptest.NewRecorder()
+	dispatch(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unreadable body status = %d, want 400", rec.Code)
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, fmt.Errorf("boom") }

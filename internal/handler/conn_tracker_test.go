@@ -239,8 +239,7 @@ func TestAcquireReservedWarpCloudAgent_WaitsForPaidAccountLease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_, selected, release, trackedID, err := h.acquireReservedAccountSelection(ctx, "warp", true, nil, accountSelectionOptions{
-		ModelID:               "auto-open",
-		RequireWarpCloudAgent: true,
+		ModelID: "auto-open",
 	})
 	defer release()
 	if err != nil {

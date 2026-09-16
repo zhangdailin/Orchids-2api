@@ -310,6 +310,21 @@ func RequestModelHint(ctx context.Context) (context.Context, func() string) {
 	return context.WithValue(ctx, requestModelContextKey{}, box), func() string { return box.model }
 }
 
+// RequestModelFromContext reads back the model published by an upstream
+// dispatcher. A unified route has to know the model before the body reaches the
+// real handler, so the dispatcher publishes it here and a downstream handler can
+// reuse that single resolution instead of repeating a store lookup.
+func RequestModelFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	box, _ := ctx.Value(requestModelContextKey{}).(*requestModelHintBox)
+	if box == nil {
+		return ""
+	}
+	return box.model
+}
+
 // ProbeHeader marks a request as a synthetic probe. The probe loop sets it; the
 // metric recorder then counts the request apart from real traffic so an injected
 // failure cannot distort the user-facing success rate.

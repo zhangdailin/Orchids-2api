@@ -462,8 +462,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("Request dispatch initialized", "trace_id", traceID, "path", r.URL.Path, "conversation_id", conversationKey, "model", req.Model, "stream", req.Stream)
 	}
 
+	// The path names a channel only on a channel-prefixed route; on the unified
+	// prefix the model does. A model that ends in an effort word is only treated
+	// as such when the path did not already pin a channel (".../models/gpt-5-x-low"
+	// on /warp/v1 is a real row, not a family plus an effort).
 	forcedChannel := channelFromPath(r.URL.Path)
-	req.Model = h.resolveEffortModelVariant(r.Context(), req.Model, requestReasoningEffort(req), forcedChannel)
+	effort := requestReasoningEffort(req)
+	if forcedChannel == "" {
+		if _, level := splitEffortVariantSuffix(normalizeRequestedModelID(req.Model)); level != "" {
+			effort = ""
+		}
+	}
+	req.Model = h.resolveEffortModelVariant(r.Context(), req.Model, effort, forcedChannel)
 	validatedModel, err := h.validateModelAvailability(r.Context(), req.Model, forcedChannel)
 	if err != nil {
 		apperrors.New("invalid_request_error", err.Error(), http.StatusBadRequest).WriteResponse(w)
@@ -472,9 +482,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	targetChannel := strings.TrimSpace(forcedChannel)
 	if targetChannel == "" && validatedModel != nil {
 		targetChannel = strings.TrimSpace(validatedModel.Channel)
-		if targetChannel == "" {
-			targetChannel = ""
-		}
 	}
 	effectiveWorkdir, prevWorkdir, workdirChanged := h.resolveWorkdir(r, req, conversationKey)
 	if workdirChanged {
@@ -514,10 +521,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// request verbatim as the caller sent it.
 	preSelectQoderRequest := strings.EqualFold(targetChannel, "qoder")
 	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest || preSelectWorkBuddyRequest || preSelectQoderRequest
-	// Warp requests use the concrete model ID returned by upstream discovery.
-	// The former synthetic warp-chat/warp-agent modes are intentionally gone.
-	warpChatMode := false
-	warpAgentMode := false
 	suggestionMode := isSuggestionMode(req.Messages)
 	emptyOutputRecoveryPrompt := ""
 	if preSelectWarpRequest {
@@ -572,19 +575,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		toolGateReasons = append(toolGateReasons, "client_no_tools")
 		toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
 	}
-	if warpChatMode {
-		gateNoTools = true
-		effectiveTools = nil
-		toolGateReasons = append(toolGateReasons, "warp_chat_mode")
-		toolGateMessage = warpChatToolGateMessage()
-	}
 	if gateNoTools {
 		effectiveTools = nil
 		if verboseDiagnostics {
 			slog.Debug("tool_gate: disabled tools", "warp", preSelectWarpRequest, "reasons", toolGateReasons)
 		}
 	}
-	requireWarpCloudAgent := preSelectWarpRequest && !warpChatMode && (warpAgentMode || warpRequestRequiresCloudAgent(req.Messages, effectiveTools))
 	warpContinuationState := warpContinuation{}
 	if preSelectWarpRequest {
 		warpContinuationState, err = h.resolveWarpContinuation(r.Context(), conversationKey, req.Messages)
@@ -600,9 +596,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	failedAccountSet := make(map[int64]struct{})
 
 	apiClient, currentAccount, releaseClient, trackedAccountID, err := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
-		ModelID:               upstreamWarpModelID(req.Model),
-		RequireWarpCloudAgent: requireWarpCloudAgent,
-		PreferredAccountID:    warpContinuationState.accountID,
+		ModelID:            upstreamWarpModelID(req.Model),
+		PreferredAccountID: warpContinuationState.accountID,
 	})
 	// The client is held for the whole request: a credential change during it
 	// retires the client and closes it here, after the request finished.
@@ -1141,9 +1136,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				"retries_remaining", retriesRemaining,
 			)
 			if errClass.SwitchAccount && currentAccount != nil && h.loadBalancer != nil {
-				if isWarpRequest && warpCloudAgentForbidden {
-					requireWarpCloudAgent = true
-				}
 				prevClient := apiClient
 				prevAccount := currentAccount
 				if _, ok := failedAccountSet[currentAccount.ID]; !ok {
@@ -1159,9 +1151,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 
 				nextClient, nextAccount, releaseNext, nextTrackedAccountID, retryErr := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
-					ModelID:               upstreamReq.Model,
-					RequireWarpCloudAgent: requireWarpCloudAgent,
-					PreferredAccountID:    warpContinuationState.accountID,
+					ModelID:            upstreamReq.Model,
+					PreferredAccountID: warpContinuationState.accountID,
 				})
 				if retryErr == nil {
 					previousRelease := releaseClient

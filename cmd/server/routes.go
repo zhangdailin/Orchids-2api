@@ -118,11 +118,19 @@ func registerRoutes(
 	registerWithPrefixes(mux, []string{"/grok/v1"}, "/responses", inferenceAuth(limiter.Limit(grokHandler.HandleResponses)))
 	registerWithPrefixes(mux, []string{"/grok/v1"}, "/responses/compact", inferenceAuth(limiter.Limit(grokHandler.HandleResponsesCompact)))
 	registerWithPrefixes(mux, []string{"/grok/v1"}, "/responses/", inferenceAuth(limiter.Limit(grokHandler.HandleResponseResource)))
-	isNativeResponsesModel := func(model string) bool {
+	isNativeResponsesModel := func(ctx context.Context, model string) (bool, error) {
 		if _, ok := grok.ResolveModel(model); ok {
-			return true
+			return true, nil
 		}
-		return strings.EqualFold(h.ChannelForModel(context.Background(), model), "grok")
+		// The channel lookup is a store read: give it the request's lifetime so a
+		// slow or unavailable Redis cannot pin a request thread, and report the
+		// failure instead of silently answering "not native" or "native".
+		channel, err := h.LookupChannelForModel(ctx, model)
+		if err != nil {
+			slog.Warn("Unified route channel lookup failed; using the bridged handler", "model", model, "error", err)
+			return false, err
+		}
+		return strings.EqualFold(channel, "grok"), nil
 	}
 	nativeResponsesSub := func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/responses/compact") {
@@ -136,9 +144,14 @@ func registerRoutes(
 	// goes through the shared pipeline, which picks the channel from the model.
 	mux.HandleFunc("/v1/chat/completions", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleChatCompletions, h.HandleMessages, isNativeResponsesModel))))
 	mux.HandleFunc("/v1/messages", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleMessages, h.HandleMessages, isNativeResponsesModel))))
-	mux.HandleFunc("/v1/messages/count_tokens", inferenceAuth(limiter.Limit(h.HandleCountTokens)))
 	mux.HandleFunc("/v1/responses", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleResponses, channelResponses, isNativeResponsesModel))))
 	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ModelDispatcher(nativeResponsesSub, channelResponsesSub, isNativeResponsesModel))))
+	// count_tokens takes the same dispatch decision as the request it precedes:
+	// /warp/v1 and /puter/v1 have their own token profiles, and a client that
+	// counts against one channel while the completion runs on another plans its
+	// context against the wrong number. On the unified prefix the channel is the
+	// model's, not the path's.
+	mux.HandleFunc("/v1/messages/count_tokens", inferenceAuth(limiter.Limit(grok.ModelDispatcher(h.HandleCountTokens, h.HandleCountTokens, isNativeResponsesModel))))
 	registerWithPrefixes(mux, grokPrefixes, "/images/generations", inferenceAuth(limiter.Limit(grokHandler.HandleImagesGenerations)))
 	registerWithPrefixes(mux, grokPrefixes, "/images/edits", inferenceAuth(limiter.Limit(grokHandler.HandleImagesEdits)))
 	registerWithPrefixes(mux, grokPrefixes, "/videos", inferenceAuth(limiter.Limit(grokHandler.HandleVideosCreate)))

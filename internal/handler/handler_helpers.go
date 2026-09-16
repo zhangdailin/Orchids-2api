@@ -14,6 +14,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -54,11 +55,99 @@ func (h *Handler) resolveModelAliasForChannel(ctx context.Context, channel, mode
 // ChannelForModel reports the channel a model id is registered under, or an
 // empty string when the model is unknown. The unified /v1 routes use it to pick
 // between the native and the bridged implementation.
+//
+// The request model hint is consulted first: the unified entry points publish
+// the exact model string they are about to serve, and a Codex client asks about
+// the *family* name ("gpt-5-6-sol") while the catalog only stores the
+// effort-suffixed variants. Resolving through the hint keeps the answer
+// identical to the one the request path will compute, instead of a second,
+// subtly different lookup.
 func (h *Handler) ChannelForModel(ctx context.Context, modelID string) string {
-	if _, m := h.resolveModelAlias(ctx, modelID); m != nil {
-		return strings.TrimSpace(m.Channel)
+	channel, _ := h.LookupChannelForModel(ctx, modelID)
+	return channel
+}
+
+// LookupChannelForModel is ChannelForModel with the store error preserved. A
+// caller that must choose between two implementations needs to tell "this model
+// belongs to another channel" from "the store could not be read"; collapsing
+// both onto an empty channel is how a Redis hiccup turns into a wrong route.
+func (h *Handler) LookupChannelForModel(ctx context.Context, modelID string) (string, error) {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return "", nil
 	}
-	return ""
+	if hinted := strings.TrimSpace(middleware.RequestModelFromContext(ctx)); hinted != "" {
+		modelID = hinted
+	}
+	modelID = normalizeRequestedModelID(modelID)
+	if modelID == "" {
+		return "", nil
+	}
+	m, err := h.loadBalancer.Store.GetModelByModelID(ctx, modelID)
+	if err == nil && m != nil {
+		return strings.TrimSpace(m.Channel), nil
+	}
+	if err != nil && !isModelMissingError(err) {
+		return "", err
+	}
+	// A family name is not a catalog row. Fall back to the effort variant the
+	// request path would have selected, so "/v1/models/gpt-5-6-sol" and
+	// "/v1/chat/completions" agree on the channel.
+	variant := h.resolveEffortModelVariant(ctx, modelID, "", "")
+	if variant == "" || variant == modelID {
+		return "", nil
+	}
+	m, err = h.loadBalancer.Store.GetModelByModelID(ctx, variant)
+	if err != nil {
+		if isModelMissingError(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	if m == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(m.Channel), nil
+}
+
+// isModelMissingError reports whether a model lookup failed because the row does
+// not exist. The stores signal that both ways — ErrNoRows and a plain
+// "model not found" — and a caller that separates "unknown model" from "store
+// unavailable" has to accept both, or every miss looks like an outage.
+func isModelMissingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, store.ErrNoRows) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "model not found")
+}
+
+// ModelChannel reports the channel a request should be served by. It is the one
+// place that decides between "the path already names a channel" and "the model
+// decides". Every entry point that used to call channelFromPath on a body that
+// carries a model must call this instead: on the unified prefix the path carries
+// no channel at all, so a path-only answer silently degrades to the generic
+// code path (which is how a Warp token count came back with the wrong profile).
+func (h *Handler) ModelChannel(r *http.Request, modelID string) string {
+	if r != nil {
+		if channel := channelFromPath(r.URL.Path); channel != "" {
+			return channel
+		}
+	}
+	if h == nil {
+		return ""
+	}
+	ctx := context.Background()
+	if r != nil {
+		ctx = r.Context()
+	}
+	if modelID == "" {
+		if r != nil {
+			modelID = middleware.RequestModelFromContext(ctx)
+		}
+	}
+	return h.ChannelForModel(ctx, modelID)
 }
 
 // requestReasoningEffort returns the effort a client asked for, from whichever
@@ -126,6 +215,10 @@ var effortVariantOrder = []string{"medium", "high", "low", "xhigh", "max"}
 // reasoning_effort is tried as a suffix and then the default effort order.
 // Without this, "gpt-5-6-sol" is rejected as "model not found" even though the
 // family is available and the client stated which effort it wants.
+//
+// A model that already carries an effort suffix is never suffixed again: the
+// old code would have tried "gpt-5-6-sol-low-low" and then fallen through to
+// "-medium", silently serving an effort the client never asked for.
 func (h *Handler) resolveEffortModelVariant(ctx context.Context, modelID, effort, forcedChannel string) string {
 	modelID = normalizeRequestedModelID(modelID)
 	if modelID == "" || h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
@@ -140,6 +233,12 @@ func (h *Handler) resolveEffortModelVariant(ctx context.Context, modelID, effort
 		return m
 	}
 	if m := lookup(modelID); m != nil {
+		return modelID
+	}
+	// "gpt-5-6-sol-low" is final: it is an exact catalog entry under a name that
+	// happens to end in an effort word, and appending another suffix can only
+	// produce a wrong model.
+	if _, level := splitEffortVariantSuffix(modelID); level != "" {
 		return modelID
 	}
 
@@ -212,9 +311,8 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 }
 
 type accountSelectionOptions struct {
-	ModelID               string
-	RequireWarpCloudAgent bool
-	PreferredAccountID    int64
+	ModelID            string
+	PreferredAccountID int64
 }
 
 // acquireAccountSelection is the form the request path uses: it returns the
@@ -351,7 +449,7 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	if err == nil {
 		return account, nil
 	}
-	return nil, warpSelectionError(err, targetChannel, opts.RequireWarpCloudAgent)
+	return nil, err
 }
 
 func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccountIDs []int64, targetChannel string, opts accountSelectionOptions, filter func(*store.Account) bool) (*store.Account, error) {
@@ -359,13 +457,9 @@ func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccount
 	if err == nil {
 		return account, nil
 	}
-	return nil, warpSelectionError(err, targetChannel, opts.RequireWarpCloudAgent)
-}
-
-func warpSelectionError(err error, channel string, requireCloudAgent bool) error {
-	// Account pricing is not used as a routing restriction. The upstream
-	// response is authoritative for any feature entitlement.
-	return err
+	// Account pricing is not used as a routing restriction: the upstream response
+	// is authoritative for any feature entitlement.
+	return nil, err
 }
 
 func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices *warp.AccountModelChoices, modelID string) bool {

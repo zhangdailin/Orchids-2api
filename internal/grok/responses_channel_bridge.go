@@ -168,16 +168,27 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 // ("/v1") usable for every channel's models.
 //
 // Only POST bodies are inspected, and only to read the model: the body is
-// handed to the chosen handler untouched.
-func ModelDispatcher(native, bridged http.HandlerFunc, isNativeModel func(string) bool) http.HandlerFunc {
+// handed to the chosen handler untouched. The model that decided the routing is
+// published on the context, so the chosen handler and anything it calls can read
+// the same resolution instead of looking it up a second time.
+//
+// isNativeModel errors rather than guessing. A lookup failure means the channel
+// is unknown, and sending an unknown model to the native handler answers with
+// Grok's "model does not exist" — a 400 that hides the real problem (a store
+// outage, or a model that belongs to another channel). Such a request goes to
+// the bridged handler, which resolves channels properly and reports a
+// channel-aware error.
+func ModelDispatcher(native, bridged http.HandlerFunc, isNativeModel func(context.Context, string) (bool, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || isNativeModel == nil {
+		if r.Method != http.MethodPost {
 			native(w, r)
 			return
 		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			native(w, r)
+			// The body is already half-read; neither handler can produce a
+			// meaningful answer, so fail where the fault is.
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body")
 			return
 		}
 		// The body is only inspected to pick a provider; both handlers parse it
@@ -189,12 +200,22 @@ func ModelDispatcher(native, bridged http.HandlerFunc, isNativeModel func(string
 			Model string `json:"model"`
 		}
 		if err := json.Unmarshal(body, &probe); err != nil {
+			// A malformed body has no model to route on. The native handler owns
+			// the error response for its own wire format.
 			native(w, r)
 			return
 		}
-		if isNativeModel(probe.Model) {
-			native(w, r)
-			return
+		if isNativeModel != nil {
+			nativeModel, lookupErr := isNativeModel(r.Context(), probe.Model)
+			if lookupErr == nil {
+				// Publish the model only when the routing decision is trustworthy;
+				// otherwise the bridged handler must resolve the channel itself.
+				r = r.WithContext(middleware.WithRequestModel(r.Context(), probe.Model))
+				if nativeModel {
+					native(w, r)
+					return
+				}
+			}
 		}
 		bridged(w, r)
 	}

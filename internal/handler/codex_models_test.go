@@ -183,3 +183,49 @@ func TestSplitCodexEffortSuffix(t *testing.T) {
 		}
 	}
 }
+
+// A lone "<family>-<effort>" id is not a family. Collapsing it would advertise a
+// slug the store does not have while hiding the one it does, so a client that
+// trusted the catalog would ask for a model that cannot be routed.
+func TestCodexCatalogKeepsASingleEffortVariantUnderItsOwnID(t *testing.T) {
+	catalog := newCodexModelCatalog([]PublicModelResponse{
+		textModel("gpt-5-6-sol-high"),
+		textModel("grok-4.6"),
+	})
+
+	if len(catalog.Models) != 2 {
+		t.Fatalf("catalog has %d entries, want the single variant plus grok-4.6", len(catalog.Models))
+	}
+	entry := codexEntryFor(t, catalog, "gpt-5-6-sol-high")
+	if entry.DefaultReasoningLevel != "none" {
+		t.Fatalf("single variant default level = %q, want none", entry.DefaultReasoningLevel)
+	}
+	if len(entry.SupportedReasoningLevels) != 1 || entry.SupportedReasoningLevels[0].Effort != "none" {
+		t.Fatalf("single variant levels = %+v, want the default none level", entry.SupportedReasoningLevels)
+	}
+}
+
+// The family representative drives visibility, capabilities and metadata. A
+// hidden variant must not mask a family that has a visible one.
+func TestCodexCatalogPrefersAVisibleVariantsMetadata(t *testing.T) {
+	hidden := textModel("gpt-5-6-sol-low")
+	hidden.Capabilities = []string{"chat", "messages", "responses", "image"}
+	visible := textModel("gpt-5-6-sol-high")
+
+	catalog := newCodexModelCatalog([]PublicModelResponse{
+		hidden,
+		visible,
+	})
+
+	family := codexEntryFor(t, catalog, "gpt-5-6-sol")
+	if family.Visibility != "list" {
+		t.Fatalf("family visibility = %q, want list from the visible variant", family.Visibility)
+	}
+	levels := make([]string, 0, len(family.SupportedReasoningLevels))
+	for _, level := range family.SupportedReasoningLevels {
+		levels = append(levels, level.Effort)
+	}
+	if strings.Join(levels, ",") != "low,high" {
+		t.Fatalf("supported levels = %v, want both variants' efforts", levels)
+	}
+}

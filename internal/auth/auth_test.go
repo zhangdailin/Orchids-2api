@@ -104,6 +104,10 @@ func TestDurableSessionSurvivesProcessRestart(t *testing.T) {
 	}
 }
 
+// A backend outage must not sign out a session the process can still vouch for.
+// The process keeps its own mirror of every session it issued, so an
+// unreachable backend degrades to the previous in-process behaviour rather than
+// locking the operator out mid-session.
 func TestValidateFallsBackToInProcessWhenBackendFails(t *testing.T) {
 	resetSessionState(t)
 
@@ -112,10 +116,57 @@ func TestValidateFallsBackToInProcessWhenBackendFails(t *testing.T) {
 		t.Fatalf("GenerateSessionToken() error = %v", err)
 	}
 
+	// The durable write above succeeded, so the process holds a local mirror;
+	// only the backend's read path is broken now.
 	SetSessionBackend(&fakeSessionBackend{hasErr: errors.New("redis unavailable")})
 
 	if !ValidateSessionToken(token) {
 		t.Fatal("a backend outage must not sign out a session this process issued")
+	}
+}
+
+// A session this process never issued stays unvalidatable while the backend is
+// unreachable: an outage must not become an open door for arbitrary cookies.
+func TestValidateStillFailsClosedForUnknownTokensDuringAnOutage(t *testing.T) {
+	resetSessionState(t)
+	SetSessionBackend(&fakeSessionBackend{hasErr: errors.New("redis unavailable")})
+
+	if ValidateSessionToken("token-from-a-previous-process") {
+		t.Fatal("an unknown token must not validate while the backend is unreachable")
+	}
+}
+
+// The backend has to confirm a recovered session once so a later outage can
+// still accept it. Without that record the first Redis blip after a deploy signs
+// the operator out again — exactly the deployment instability the durable store
+// was added to remove.
+func TestBackendConfirmedSessionSurvivesALaterOutage(t *testing.T) {
+	resetSessionState(t)
+	backend := &fakeSessionBackend{}
+	SetSessionBackend(backend)
+
+	token, err := GenerateSessionToken()
+	if err != nil {
+		t.Fatalf("GenerateSessionToken() error = %v", err)
+	}
+
+	// Restart: the in-process mirror is gone and only the backend knows the
+	// session. Confirming it here is what makes the next outage survivable.
+	clearInProcessSessions()
+	if !ValidateSessionToken(token) {
+		t.Fatal("the durable session must validate after a restart")
+	}
+
+	backend.hasErr = errors.New("redis unavailable")
+	if !ValidateSessionToken(token) {
+		t.Fatal("a session the backend confirmed must survive a later backend outage")
+	}
+
+	// Revocation still wins: an authoritative negative clears the record.
+	backend.hasErr = nil
+	delete(backend.sessions, token)
+	if ValidateSessionToken(token) {
+		t.Fatal("a revoked session must be rejected by a healthy backend")
 	}
 }
 

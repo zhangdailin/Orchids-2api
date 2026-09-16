@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"time"
 
@@ -46,7 +47,10 @@ func (b *redisSessionBackend) SaveSession(ctx context.Context, token string, exp
 	}
 	ttl := time.Until(expiry)
 	if ttl <= 0 {
-		return nil
+		// The session is already expired. Reporting success would let the caller
+		// keep a token in its process-local store that the durable store never
+		// accepted, leaving a session that is valid here and nowhere else.
+		return fmt.Errorf("refusing to persist an already expired session")
 	}
 	return b.client.Set(ctx, b.key(token), "1", ttl).Err()
 }

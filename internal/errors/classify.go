@@ -184,6 +184,8 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "local_overload", Retryable: true}
 	case strings.Contains(lower, "model is not found") ||
 		strings.Contains(lower, "model not found") ||
+		strings.Contains(lower, "model is not supported") ||
+		strings.Contains(lower, "model is not allowed") ||
 		strings.Contains(lower, "no_implementation_available") ||
 		strings.Contains(lower, "context_window_exceeded") ||
 		strings.Contains(lower, "max_token_limit") ||

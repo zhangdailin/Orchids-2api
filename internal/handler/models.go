@@ -216,7 +216,21 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	} else {
 		m, err = h.loadBalancer.Store.GetModelByModelID(ctx, id)
 	}
-	if err != nil {
+	if err != nil || m == nil {
+		// The catalog collapses "<family>-<effort>" variants into one entry and
+		// advertises the *family* slug, so a client validating a catalog entry
+		// asks for a name no row carries. Resolve it onto the variant the request
+		// path would use; answering 404 here is what pushes a client back to
+		// guessing suffixes.
+		if variant := h.resolveEffortModelVariant(ctx, id, "", filterChannel); variant != "" && variant != id {
+			if filterChannel != "" {
+				m, err = h.loadBalancer.Store.GetModelByChannelAndModelID(ctx, filterChannel, variant)
+			} else {
+				m, err = h.loadBalancer.Store.GetModelByModelID(ctx, variant)
+			}
+		}
+	}
+	if err != nil || m == nil {
 		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}

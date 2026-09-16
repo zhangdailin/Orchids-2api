@@ -170,15 +170,22 @@ func codexDisplayName(slug string) string {
 // family name back onto the variant the catalog actually has.
 var codexEffortSuffixes = []string{"low", "medium", "high", "xhigh", "max"}
 
-// splitCodexEffortSuffix splits "<family>-<effort>" into its parts. Model ids
-// without a known effort suffix are returned unchanged with an empty level.
-func splitCodexEffortSuffix(modelID string) (family, level string) {
+// splitEffortVariantSuffix splits "<family>-<effort>" into its parts. It is the
+// single definition of "this model id already names an effort variant", shared
+// by the catalog grouping and by the request-path resolution so the two can
+// never disagree about which ids are bare families.
+func splitEffortVariantSuffix(modelID string) (family, level string) {
 	for _, suffix := range codexEffortSuffixes {
 		if strings.HasSuffix(modelID, "-"+suffix) {
 			return strings.TrimSuffix(modelID, "-"+suffix), suffix
 		}
 	}
 	return modelID, ""
+}
+
+// splitCodexEffortSuffix is the catalog-side name for the same split.
+func splitCodexEffortSuffix(modelID string) (family, level string) {
+	return splitEffortVariantSuffix(modelID)
 }
 
 func effortLevelRank(level string) int {
@@ -198,19 +205,32 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 	type effortFamily struct {
 		representative PublicModelResponse
 		levels         []string
+		variants       int
 	}
 
 	families := make(map[string]*effortFamily, len(items))
 	order := make([]string, 0, len(items))
 	for _, item := range items {
 		name, level := splitCodexEffortSuffix(item.ID)
+		if level == "" {
+			// Not an effort variant: it stands alone under its exact id.
+			families[item.ID] = &effortFamily{representative: item, variants: 1}
+			order = append(order, item.ID)
+			continue
+		}
 		entry, exists := families[name]
 		if !exists {
 			entry = &effortFamily{representative: item}
 			families[name] = entry
 			order = append(order, name)
 		}
-		if level != "" && !slices.Contains(entry.levels, level) {
+		entry.variants++
+		// The representative decides visibility, capabilities and metadata, so
+		// prefer a visible variant: a hidden "-low" must not mask the family.
+		if codexVisibilityFor(entry.representative) != "list" && codexVisibilityFor(item) == "list" {
+			entry.representative = item
+		}
+		if !slices.Contains(entry.levels, level) {
 			entry.levels = append(entry.levels, level)
 		}
 	}
@@ -219,6 +239,13 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 	for index, name := range order {
 		entry := families[name]
 		item := entry.representative
+		// A lone "<family>-<effort>" id is not a family: collapsing it would
+		// advertise a slug the store does not have while hiding the one it does.
+		// Only a real set of variants becomes family + supported_reasoning_levels.
+		if entry.variants < 2 {
+			name = item.ID
+			entry.levels = nil
+		}
 		slug := modelpolicy.GrokModelSlug(name)
 		metadata, ok := codexModelMetadataTable[slug]
 		if !ok {

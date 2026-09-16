@@ -74,12 +74,15 @@ func TestRedisSessionBackendExpiresWithTheSession(t *testing.T) {
 	}
 }
 
-func TestRedisSessionBackendIgnoresAlreadyExpiredSessions(t *testing.T) {
+// Persisting an already expired session must fail loudly: reporting success
+// would let the caller keep a token in its process-local mirror that the durable
+// store never accepted, leaving a session that is valid here and nowhere else.
+func TestRedisSessionBackendRejectsAlreadyExpiredSessions(t *testing.T) {
 	mini, backend := newRedisSessionBackendForTest(t)
 	ctx := context.Background()
 
-	if err := backend.SaveSession(ctx, "token-1", time.Now().Add(-time.Minute)); err != nil {
-		t.Fatalf("SaveSession() error = %v", err)
+	if err := backend.SaveSession(ctx, "token-1", time.Now().Add(-time.Minute)); err == nil {
+		t.Fatal("SaveSession() of an expired session must return an error")
 	}
 	if len(mini.Keys()) != 0 {
 		t.Fatalf("keys = %v, want no key written for an expired session", mini.Keys())

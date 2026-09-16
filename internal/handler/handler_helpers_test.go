@@ -13,6 +13,7 @@ import (
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -406,5 +407,116 @@ func TestHandleMessages_ResolvesEffortFromAnthropicHints(t *testing.T) {
 				t.Fatalf("upstream calls = %+v, want model %q", client.calls, tc.want)
 			}
 		})
+	}
+}
+
+// A model id that already names an effort variant must never be suffixed again:
+// the old fallback appended "-<effort>" and then walked the default order, so
+// "gpt-5-6-sol-low" with reasoning_effort "high" was silently served as
+// "gpt-5-6-sol-medium" — an effort the client never asked for.
+func TestResolveEffortModelVariant_DoesNotResuffixAnEffortVariant(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	mustCreateModel(t, s, "320", "Warp", "gpt-5-6-sol-low", store.ModelStatusAvailable)
+	mustCreateModel(t, s, "321", "Warp", "gpt-5-6-sol-medium", store.ModelStatusAvailable)
+	mustCreateModel(t, s, "322", "Warp", "gpt-5-6-sol-high", store.ModelStatusAvailable)
+
+	cases := []struct {
+		name   string
+		model  string
+		effort string
+		want   string
+	}{
+		{"known variant keeps its own effort", "gpt-5-6-sol-low", "high", "gpt-5-6-sol-low"},
+		{"known variant ignores a conflicting default", "gpt-5-6-sol-high", "", "gpt-5-6-sol-high"},
+		{"unknown variant under a known family is unchanged", "gpt-5-6-sol-unknown", "low", "gpt-5-6-sol-unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := h.resolveEffortModelVariant(context.Background(), tc.model, tc.effort, "warp"); got != tc.want {
+				t.Fatalf("resolveEffortModelVariant(%q, %q) = %q, want %q", tc.model, tc.effort, got, tc.want)
+			}
+		})
+	}
+}
+
+// On the unified prefix the path names no channel, so the channel must come from
+// the model. A path-only answer is what made count_tokens estimate every /v1
+// request with the generic profile while the completion ran on Warp.
+func TestModelChannelFallsBackToTheModelOnTheUnifiedPrefix(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	mustCreateModel(t, s, "330", "Warp", "gpt-5-6-sol-low", store.ModelStatusAvailable)
+	mustCreateModel(t, s, "331", "WorkBuddy", "hy3", store.ModelStatusAvailable)
+
+	cases := []struct {
+		path  string
+		model string
+		want  string
+	}{
+		{"/warp/v1/messages/count_tokens", "anything", "warp"},
+		{"/v1/messages/count_tokens", "gpt-5-6-sol-low", "Warp"},
+		{"/v1/messages/count_tokens", "hy3", "WorkBuddy"},
+		{"/v1/messages/count_tokens", "no-such-model", ""},
+	}
+	for _, tc := range cases {
+		r := httptest.NewRequest(http.MethodPost, "http://x"+tc.path, nil)
+		if got := h.ModelChannel(r, tc.model); got != tc.want {
+			t.Fatalf("ModelChannel(%q, %q) = %q, want %q", tc.path, tc.model, got, tc.want)
+		}
+	}
+}
+
+// The catalog advertises the family slug, so the by-id endpoint has to resolve
+// that family onto a variant the store actually has. Answering 404 here is what
+// pushes a Codex client back to guessing suffixes.
+func TestChannelLookupResolvesAnEffortFamilyName(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	mustCreateModel(t, s, "340", "Warp", "gpt-5-6-sol-low", store.ModelStatusAvailable)
+	mustCreateModel(t, s, "341", "Warp", "gpt-5-6-sol-medium", store.ModelStatusAvailable)
+
+	channel, err := h.LookupChannelForModel(context.Background(), "gpt-5-6-sol")
+	if err != nil {
+		t.Fatalf("LookupChannelForModel() error = %v", err)
+	}
+	if channel != "Warp" {
+		t.Fatalf("family channel = %q, want Warp", channel)
+	}
+	if got := h.ChannelForModel(context.Background(), "gpt-5-6-sol"); got != "Warp" {
+		t.Fatalf("ChannelForModel(family) = %q, want Warp", got)
+	}
+	if got := h.ChannelForModel(context.Background(), "gpt-9-unknown"); got != "" {
+		t.Fatalf("ChannelForModel(unknown) = %q, want empty", got)
+	}
+}
+
+// The dispatcher publishes the model it routed on; downstream resolution must
+// prefer that single decision over repeating the lookup with a different name.
+func TestChannelLookupPrefersThePublishedRequestModel(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	mustCreateModel(t, s, "350", "Warp", "gpt-5-6-sol-low", store.ModelStatusAvailable)
+
+	ctx, _ := middleware.RequestModelHint(context.Background())
+	ctx = middleware.WithRequestModel(ctx, "gpt-5-6-sol-low")
+	if got := h.ChannelForModel(ctx, "gpt-5-6-sol"); got != "Warp" {
+		t.Fatalf("ChannelForModel with hint = %q, want Warp", got)
 	}
 }

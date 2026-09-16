@@ -6,6 +6,11 @@ import (
 	"orchids-api/internal/warp"
 )
 
+// warp-chat and warp-agent used to be synthetic virtual models that selected a
+// Warp conversation mode. They are gone: Warp requests route on the concrete
+// model IDs returned by upstream account discovery, so all that remains of them
+// is the id predicate that keeps stale persisted rows out of the catalog and
+// off the by-id endpoint.
 const (
 	warpChatModelID  = "warp-chat"
 	warpAgentModelID = "warp-agent"
@@ -15,16 +20,9 @@ func normalizeWarpPublicModelID(modelID string) string {
 	return strings.ToLower(strings.TrimSpace(modelID))
 }
 
-func isWarpChatModel(modelID string) bool {
-	return normalizeWarpPublicModelID(modelID) == warpChatModelID
-}
-
-func isWarpAgentModel(modelID string) bool {
-	return normalizeWarpPublicModelID(modelID) == warpAgentModelID
-}
-
 func isWarpVirtualModel(modelID string) bool {
-	return isWarpChatModel(modelID) || isWarpAgentModel(modelID)
+	normalized := normalizeWarpPublicModelID(modelID)
+	return normalized == warpChatModelID || normalized == warpAgentModelID
 }
 
 func upstreamWarpModelID(modelID string) string {
@@ -32,8 +30,4 @@ func upstreamWarpModelID(modelID string) string {
 		return warp.DefaultModel()
 	}
 	return strings.TrimSpace(modelID)
-}
-
-func warpChatToolGateMessage() string {
-	return "Answer directly in text only. Do not call tools, do not create or edit files, do not run commands, and do not use Warp agent mode. If the user asks for code, provide the code in the response."
 }

@@ -56,13 +56,19 @@ type SessionStore struct {
 	// login that just succeeded, and they are deliberately not trusted after a
 	// restart.
 	localOnly map[string]time.Time
+	// backendOnly holds sessions this process never issued but the durable store
+	// confirmed. They are the process's proof that a restart recovered a live
+	// operator cookie, so a later backend read failure can still accept it
+	// instead of signing the operator out mid-session.
+	backendOnly map[string]time.Time
 }
 
 // globalSessionStore mirrors every session this process issued. It is the
 // authoritative store when no durable backend is configured.
 var globalSessionStore = &SessionStore{
-	sessions:  make(map[string]time.Time),
-	localOnly: make(map[string]time.Time),
+	sessions:    make(map[string]time.Time),
+	localOnly:   make(map[string]time.Time),
+	backendOnly: make(map[string]time.Time),
 }
 
 func init() {
@@ -106,10 +112,25 @@ func ValidateSessionToken(token string) bool {
 	if backend := durableSessionBackend(); backend != nil {
 		valid, err := backend.HasSession(context.Background(), token)
 		if err == nil {
-			return valid
+			if valid {
+				// Remember that this process positively confirmed the session.
+				// Without it, the next backend blip would reject a cookie the
+				// backend itself handed back after the restart.
+				rememberBackendSession(token)
+				return true
+			}
+			// The backend is reachable and does not know this token. That is an
+			// authoritative negative — it is what makes logout, revocation and an
+			// expired TTL take effect — so it is not a reason to fall back.
+			forgetSession(token)
+			return false
 		}
-		// A backend outage must not sign out a session this process issued.
+		// A backend outage must not sign out a session this process can still
+		// vouch for: it either issued the token itself, or the backend confirmed
+		// it earlier in this process's life. A token with neither record still
+		// fails closed, so an outage never becomes an open door.
 		slog.Warn("Admin session backend unavailable; using the in-process store", "error", err)
+		return backendHasSession(token) || memoryHasSession(token)
 	}
 	return memoryHasSession(token)
 }
@@ -134,6 +155,30 @@ func rememberLocalOnlySession(token string, expiry time.Time) {
 	globalSessionStore.mu.Lock()
 	globalSessionStore.localOnly[token] = expiry
 	globalSessionStore.mu.Unlock()
+}
+
+// rememberBackendSession records a session the durable store confirmed. Its
+// lifetime is bounded by the session TTL because the backend does not report the
+// remaining time; the next successful backend read extends the record.
+func rememberBackendSession(token string) {
+	globalSessionStore.mu.Lock()
+	globalSessionStore.backendOnly[token] = time.Now().Add(sessionTTL)
+	globalSessionStore.mu.Unlock()
+}
+
+func backendHasSession(token string) bool {
+	globalSessionStore.mu.RLock()
+	expiry, exists := globalSessionStore.backendOnly[token]
+	globalSessionStore.mu.RUnlock()
+
+	if !exists {
+		return false
+	}
+	if time.Now().After(expiry) {
+		forgetSession(token)
+		return false
+	}
+	return true
 }
 
 func memoryHasSession(token string) bool {
@@ -174,6 +219,7 @@ func forgetSession(token string) {
 	globalSessionStore.mu.Lock()
 	delete(globalSessionStore.sessions, token)
 	delete(globalSessionStore.localOnly, token)
+	delete(globalSessionStore.backendOnly, token)
 	globalSessionStore.mu.Unlock()
 }
 
@@ -182,14 +228,15 @@ func cleanupExpiredSessions() {
 	defer globalSessionStore.mu.Unlock()
 
 	now := time.Now()
-	for token, expiry := range globalSessionStore.sessions {
-		if now.After(expiry) {
-			delete(globalSessionStore.sessions, token)
-		}
-	}
-	for token, expiry := range globalSessionStore.localOnly {
-		if now.After(expiry) {
-			delete(globalSessionStore.localOnly, token)
+	for _, sessions := range []map[string]time.Time{
+		globalSessionStore.sessions,
+		globalSessionStore.localOnly,
+		globalSessionStore.backendOnly,
+	} {
+		for token, expiry := range sessions {
+			if now.After(expiry) {
+				delete(sessions, token)
+			}
 		}
 	}
 }

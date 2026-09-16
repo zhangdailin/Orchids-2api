@@ -371,6 +371,11 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 				failureCode, failureMessage = "upstream_terminal_missing", "upstream sent [DONE] without a terminal response event"
 			}
 		}
+		// An upstream that rejects the model or the request parameters must not be
+		// reported as a transport wobble: the client would retry a request that can
+		// never succeed. `err` is the protocol error on this path, and the
+		// recorded failure message is the fallback classification input.
+		failureCode, failureMessage = classifySynthesizedFailure(failureCode, failureMessage, err)
 		result.Err = fmt.Errorf("%s", failureMessage)
 		if err != nil && err != io.EOF {
 			result.Err = fmt.Errorf("%s: %w", failureMessage, err)
@@ -433,30 +438,140 @@ func writeResponsesAPIError(w http.ResponseWriter, status int, code, message str
 	})
 }
 
+// upstreamRejectionCode is the code a caller can act on: the upstream refused
+// the request itself, so retrying or resending cannot change the outcome.
+const upstreamRejectionCode = "upstream_rejection"
+
+// upstreamRejectionMessage is the code-less envelope used when a redaction has
+// no error text left to classify (the event carried an empty error object).
+const upstreamRejectionMessage = "upstream_rejection"
+
 // Only protocol error envelopes are rewritten; model output and tool arguments
 // remain byte-for-byte unchanged on successful events.
+//
+// A rejection is redacted differently from a failure. "the upstream refused this
+// model or these parameters" and "the upstream wobbled" are not the same
+// problem, and flattening both onto one code and one message is what leaves a
+// client retrying a request that can never succeed. The category decides: a
+// client-category error keeps the stable upstream_rejection code and the
+// category's public text, everything else keeps the generic upstream_error.
 func redactResponseError(event map[string]interface{}) bool {
 	if event == nil {
 		return false
 	}
 	changed := false
-	if event["error"] != nil {
-		message := fmt.Sprint(event["error"])
-		event["error"] = map[string]interface{}{"code": "upstream_error", "message": apperrors.PublicMessage(message)}
+	if _, exists := event["error"]; exists {
+		code, message := redactedUpstreamError(event["error"])
+		event["error"] = map[string]interface{}{"code": code, "message": message}
 		changed = true
 	}
 	if event["type"] == "error" {
+		code, message := redactedUpstreamError(event["message"])
 		for _, key := range []string{"message", "detail", "code", "param"} {
 			delete(event, key)
 		}
-		event["message"] = apperrors.PublicMessage(fmt.Sprint(event["message"]))
-		event["code"] = "upstream_error"
+		event["code"] = code
+		event["message"] = message
 		changed = true
 	}
+	// A response envelope carries its own status; reconciling the error with it
+	// gives the redacted text the same shape as a failure the gateway detected
+	// itself (as in writeResponsesStreamFailure), so the two paths agree.
 	if response, ok := event["response"].(map[string]interface{}); ok {
 		changed = redactResponseError(response) || changed
+		reconcileResponseErrorEnvelope(response)
 	}
 	return changed
+}
+
+// redactedUpstreamError classifies the raw error value and returns the code and
+// the public message that belong together.
+func redactedUpstreamError(raw interface{}) (code string, message string) {
+	// An error object reached the client unredacted; its text is still upstream
+	// text, so the classification runs on the original before it is dropped.
+	text := strings.TrimSpace(upstreamErrorText(raw))
+	if text == "" {
+		return upstreamRejectionCode, upstreamRejectionMessage
+	}
+	return codeForCategory(apperrors.ClassifyUpstreamError(text).Category), apperrors.PublicMessage(text)
+}
+
+// upstreamErrorText renders the message text of an error value without falling
+// back to Go's map formatting, which would fold a structured error into a
+// "map[...]" string that no classifier recognises.
+func upstreamErrorText(raw interface{}) string {
+	switch value := raw.(type) {
+	case nil:
+		return ""
+	case string:
+		return value
+	case map[string]interface{}:
+		return firstNonEmpty(
+			interfaceString(value["message"]),
+			interfaceString(value["detail"]),
+			interfaceString(value["error"]),
+			interfaceString(value["code"]),
+		)
+	default:
+		return fmt.Sprint(raw)
+	}
+}
+
+// codeForCategory maps a classification onto the stable code a client sees. Only
+// a rejection gets its own code; every other category keeps the generic one, so
+// the already-published upstream_error contract is unchanged for them.
+func codeForCategory(category string) string {
+	if category == "client" {
+		return upstreamRejectionCode
+	}
+	return "upstream_error"
+}
+
+// reconcileResponseErrorEnvelope keeps a failed response envelope consistent:
+// the status stays failed and the error message matches the event that carried
+// it. Statuses other than "failed" are left untouched, so a completed response
+// that merely mentions an error field is never rewritten into a failure.
+//
+// The message itself is never rewritten here: it was written by the redaction
+// that produced the envelope, and re-deriving it from the already-masked text
+// would read the generic wrapper "Upstream request failed" instead of the
+// original upstream detail.
+func reconcileResponseErrorEnvelope(response map[string]interface{}) {
+	if response == nil || !strings.EqualFold(interfaceString(response["status"]), "failed") {
+		return
+	}
+	error_, _ := response["error"].(map[string]interface{})
+	if error_ == nil {
+		return
+	}
+	if strings.TrimSpace(interfaceString(error_["message"])) == "" || strings.TrimSpace(interfaceString(error_["code"])) == "" {
+		return
+	}
+	response["error"] = map[string]interface{}{
+		"code":    interfaceString(error_["code"]),
+		"message": interfaceString(error_["message"]),
+	}
+}
+
+// classifySynthesizedFailure upgrades a gateway-synthesized failure to a
+// rejection when the underlying protocol error says the upstream refused the
+// request. `err` carries the upstream's own words, while the failure message is
+// the gateway's paraphrase, so the error is classified first.
+func classifySynthesizedFailure(code, message string, err error) (string, string) {
+	if code == "" {
+		return code, message
+	}
+	text := strings.TrimSpace(message)
+	if err != nil && err != io.EOF {
+		text = strings.TrimSpace(err.Error())
+	}
+	if text == "" {
+		return code, message
+	}
+	if apperrors.ClassifyUpstreamError(text).Category != "client" {
+		return code, message
+	}
+	return codeForCategory("client"), apperrors.PublicMessage(text)
 }
 
 func writeStoredResponseLookupError(w http.ResponseWriter, err error, notFoundMessage string) {

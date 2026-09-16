@@ -6,6 +6,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
@@ -28,14 +29,26 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A handler without a config still has to answer a token count: the debug
+	// logger is optional, and this endpoint is on the critical path of every
+	// client that budgets its context before sending a completion.
 	cfg := h.configSnapshot()
+	if cfg == nil {
+		cfg = &config.Config{}
+	}
 	logger := debug.NewForContext(r.Context(), cfg.DebugEnabled, cfg.DebugLogSSE)
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
 
 	breakdown := inputTokenBreakdown{}
 	profile := ""
-	channel := channelFromPath(r.URL.Path)
+	// The channel is what picks the token profile, and on the unified prefix the
+	// path names no channel at all — only the model does. A path-only lookup here
+	// silently returned the generic estimate for every /v1 request, so a client
+	// that budgets its context against count_tokens planned against the wrong
+	// number. Channel names are compared case-insensitively everywhere else; the
+	// stored value is whatever the operator's catalog spells, so normalize it.
+	channel := strings.ToLower(h.ModelChannel(r, req.Model))
 	if channel == "warp" {
 		if warpBD, warpProfile, err := estimateWarpInputTokenBreakdown("", req.Model, req.Messages, req.System, req.Tools, len(req.Tools) == 0, ""); err == nil {
 			breakdown = warpBD

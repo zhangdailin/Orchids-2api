@@ -6,7 +6,22 @@ import "strings"
 // message without exposing response bodies, credentials, cookies or provider
 // implementation details. The request ID is returned separately by middleware.
 func PublicMessage(errText string) string {
-	switch ClassifyUpstreamError(errText).Category {
+	return messageForCategory(ClassifyUpstreamError(errText).Category)
+}
+
+// PublicMessageForCategory is PublicMessage for a caller that already classified
+// the error. It exists so a client-visible message and the classification that
+// produced it cannot drift apart — and so a response rebuilt after redaction
+// reports the same text the redaction wrote.
+func PublicMessageForCategory(category string) string {
+	return messageForCategory(category)
+}
+
+// messageForCategory is the single source of truth for the client-visible text
+// of each category. An empty category is the caller that had no error text to
+// classify, and keeps its shorter wording.
+func messageForCategory(category string) string {
+	switch category {
 	case "configuration":
 		return "This provider is not configured correctly. Contact the gateway administrator."
 	case "auth":
@@ -34,7 +49,7 @@ func PublicMessage(errText string) string {
 	case "canceled":
 		return "The request was canceled."
 	default:
-		if strings.TrimSpace(errText) == "" {
+		if strings.TrimSpace(category) == "" {
 			return "The upstream request failed."
 		}
 		return "The upstream request failed. Use the request ID to inspect diagnostics."
