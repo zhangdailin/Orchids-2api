@@ -34,12 +34,6 @@ var verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, a
 	return client.VerifyModel(ctx, modelID)
 }
 
-var probeWarpModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
-	client := warp.NewFromAccount(acc, refreshModelRequestConfig(cfg, "warp"))
-	defer client.Close()
-	return client.ProbeModel(ctx, modelID)
-}
-
 // fetchGrokBuildModelsForRefresh reads the official Build CLI catalog.  It is
 // deliberately kept as an injectable control-plane operation: model refresh
 // must never send a completion simply to discover an account's capabilities.
@@ -819,10 +813,6 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 					}
 					choices := warp.AgentModeModelChoices(features)
 					featureConfig := warp.AccountFeatureConfigFromChoices(features)
-					if warp.AccountFreeOnly(acc) {
-						choices = probeWarpFreeOnlyModelChoices(ctx, cfg, acc, choices)
-						source = appendWarpDiscoverySource(source, "free_probe")
-					}
 					if len(choices) == 0 {
 						continue
 					}
@@ -941,104 +931,6 @@ func warpModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.A
 	return eligible, nil
 }
 
-func probeWarpFreeOnlyModelChoices(ctx context.Context, cfg *config.Config, acc *store.Account, discovered []warp.ModelChoice) []warp.ModelChoice {
-	candidates := warpFreeOnlyProbeCandidates(discovered)
-	out := make([]warp.ModelChoice, 0, len(candidates))
-	for _, choice := range candidates {
-		if err := probeWarpModelForRefresh(ctx, cfg, acc, choice.ID); err != nil {
-			continue
-		}
-		out = append(out, choice)
-	}
-	return out
-}
-
-func appendWarpDiscoverySource(parts ...string) string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		for _, sub := range strings.Split(part, "+") {
-			sub = strings.TrimSpace(sub)
-			if sub == "" {
-				continue
-			}
-			if _, exists := seen[sub]; exists {
-				continue
-			}
-			seen[sub] = struct{}{}
-			out = append(out, sub)
-		}
-	}
-	return strings.Join(out, "+")
-}
-
-func warpFreeOnlyProbeCandidates(discovered []warp.ModelChoice) []warp.ModelChoice {
-	preferred := []string{
-		warp.DefaultModel(),
-		"claude-4-5-haiku",
-		"claude-4-5-sonnet",
-		"claude-4-5-opus",
-		"gpt-5-2-low",
-		"gpt-5-1-low",
-		"gemini-3-5-flash",
-	}
-	byID := make(map[string]warp.ModelChoice, len(discovered)+len(preferred))
-	for _, choice := range discovered {
-		id := warp.NormalizeModelID(choice.ID)
-		if id == "" {
-			continue
-		}
-		choice.ID = id
-		if strings.TrimSpace(choice.Name) == "" {
-			choice.Name = id
-		}
-		byID[id] = choice
-	}
-	out := make([]warp.ModelChoice, 0, len(preferred))
-	seen := map[string]struct{}{}
-	for _, id := range preferred {
-		id = warp.NormalizeModelID(id)
-		if id == "" {
-			continue
-		}
-		choice, ok := byID[id]
-		if !ok {
-			choice = warp.ModelChoice{ID: id, Name: warpProbeModelName(id)}
-			ok = true
-		}
-		if !ok {
-			continue
-		}
-		if _, exists := seen[id]; exists {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, choice)
-	}
-	return out
-}
-
-func warpProbeModelName(id string) string {
-	switch id {
-	case warp.DefaultModel():
-		return "Warp Auto Open"
-	case "claude-4-5-haiku":
-		return "Claude 4.5 Haiku"
-	case "claude-4-5-sonnet":
-		return "Claude 4.5 Sonnet"
-	case "claude-4-5-opus":
-		return "Claude 4.5 Opus"
-	case "gpt-5-2-low":
-		return "GPT-5.2 Low"
-	case "gpt-5-1-low":
-		return "GPT-5.1 Low"
-	case "gemini-3-5-flash":
-		return "Gemini 3.5 Flash"
-	default:
-		return id
-	}
-}
-
 func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoveries []warpAccountDiscovery) {
 	if s == nil {
 		return
@@ -1078,7 +970,7 @@ func joinWarpDiscoverySources(sourceSet map[string]struct{}) string {
 		return "warp_graphql"
 	}
 	ordered := make([]string, 0, 1)
-	for _, part := range []string{"feature_model_choice_all", "feature_model_choice_agent_mode", "free_probe"} {
+	for _, part := range []string{"feature_model_choice_all", "feature_model_choice_agent_mode"} {
 		if _, ok := sourceSet[part]; ok {
 			ordered = append(ordered, part)
 		}

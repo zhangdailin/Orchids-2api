@@ -18,16 +18,10 @@ import (
 
 func normalizeRequestedModelID(modelID string) string {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	if isWarpVirtualModel(modelID) {
-		return upstreamWarpModelID(modelID)
-	}
 	return modelID
 }
 
 func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string, *store.Model) {
-	if m := warpVirtualModelRecord(modelID); m != nil {
-		return m.ModelID, m
-	}
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return modelID, nil
 	}
@@ -42,11 +36,6 @@ func (h *Handler) resolveModelAlias(ctx context.Context, modelID string) (string
 }
 
 func (h *Handler) resolveModelAliasForChannel(ctx context.Context, channel, modelID string) (string, *store.Model) {
-	if strings.EqualFold(strings.TrimSpace(channel), "warp") {
-		if m := warpVirtualModelRecord(modelID); m != nil {
-			return m.ModelID, m
-		}
-	}
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return modelID, nil
 	}
@@ -113,7 +102,6 @@ func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversatio
 type accountSelectionOptions struct {
 	ModelID               string
 	RequireWarpCloudAgent bool
-	PreferWarpFreeAccount bool
 	PreferredAccountID    int64
 }
 
@@ -231,9 +219,6 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 		if opts.PreferredAccountID != 0 && acc.ID != opts.PreferredAccountID {
 			return false
 		}
-		if opts.RequireWarpCloudAgent && !warp.AccountSupportsCloudAgent(acc) {
-			return false
-		}
 		return true
 	}
 	if requestedModel == "" || requestedModel == warp.DefaultModel() {
@@ -249,7 +234,7 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	}
 
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-		return warpFilter(acc) && warp.AccountSupportsModelForAccount(choices, acc, requestedModel)
+		return warpFilter(acc) && warp.AccountSupportsModelForRouting(choices, acc, requestedModel)
 	})
 	if err == nil {
 		return account, nil
@@ -258,14 +243,6 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 }
 
 func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccountIDs []int64, targetChannel string, opts accountSelectionOptions, filter func(*store.Account) bool) (*store.Account, error) {
-	if opts.PreferWarpFreeAccount && opts.PreferredAccountID == 0 {
-		account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-			return filter(acc) && warp.AccountFreeOnly(acc)
-		})
-		if err == nil {
-			return account, nil
-		}
-	}
 	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, filter)
 	if err == nil {
 		return account, nil
@@ -274,17 +251,9 @@ func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccount
 }
 
 func warpSelectionError(err error, channel string, requireCloudAgent bool) error {
-	if err == nil || !requireCloudAgent {
-		return err
-	}
-	bareUnavailable := fmt.Sprintf("no enabled accounts available for channel: %s", channel)
-	if err.Error() != bareUnavailable {
-		// Preserve actionable pool state such as concurrency saturation or a
-		// cooldown. Rewriting every selection failure as a plan restriction hid
-		// the real cause when a paid Warp account was merely busy.
-		return err
-	}
-	return fmt.Errorf("%s (cloud agent requires a non-free Warp account)", bareUnavailable)
+	// Account pricing is not used as a routing restriction. The upstream
+	// response is authoritative for any feature entitlement.
+	return err
 }
 
 func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices *warp.AccountModelChoices, modelID string) bool {
@@ -434,11 +403,6 @@ func (h *Handler) releaseTrackedAccount(accountID int64) {
 }
 
 func (h *Handler) validateModelAvailability(ctx context.Context, modelID, forcedChannel string) (*store.Model, error) {
-	if strings.TrimSpace(forcedChannel) == "" || strings.EqualFold(strings.TrimSpace(forcedChannel), "warp") {
-		if m := warpVirtualModelRecord(modelID); m != nil {
-			return m, nil
-		}
-	}
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return nil, nil
 	}

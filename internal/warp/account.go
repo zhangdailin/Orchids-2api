@@ -89,6 +89,8 @@ func AccountQuotaExhausted(acc *store.Account) bool {
 	return false
 }
 
+// AccountFreeOnly is retained for compatibility with persisted-account
+// diagnostics. Request routing no longer uses this classification.
 func AccountFreeOnly(acc *store.Account) bool {
 	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
 		return false
@@ -107,11 +109,4 @@ func AccountFreeOnly(acc *store.Account) bool {
 		return true
 	}
 	return AccountQuotaExhausted(acc)
-}
-
-func AccountSupportsCloudAgent(acc *store.Account) bool {
-	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-		return false
-	}
-	return !AccountFreeOnly(acc)
 }

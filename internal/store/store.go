@@ -652,6 +652,10 @@ func (s *Store) reconcileLatestPuterModels(ctx context.Context) {
 
 func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
 	deprecatedModelIDs := []string{
+		// Warp virtual modes are no longer public; Warp models must come from
+		// the upstream account discovery cache.
+		"warp-chat",
+		"warp-agent",
 		"grok-4.20-0309-non-reasoning",
 		"grok-4.20-0309",
 		"grok-4.20-0309-reasoning",

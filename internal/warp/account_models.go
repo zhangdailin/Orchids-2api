@@ -131,6 +131,30 @@ func AccountSupportsModelForAccount(choices *AccountModelChoices, acc *store.Acc
 	return false
 }
 
+// AccountSupportsModelForRouting checks the upstream-discovered model cache
+// without applying the legacy free-account capability downgrade. Routing must
+// present the same discovered catalog to free and paid accounts and let Warp
+// decide entitlement at request time.
+func AccountSupportsModelForRouting(choices *AccountModelChoices, acc *store.Account, modelID string) bool {
+	if acc == nil || acc.ID == 0 || choices == nil || len(choices.Accounts) == 0 {
+		return true
+	}
+	modelID = NormalizeModelID(modelID)
+	if modelID == "" {
+		return true
+	}
+	models := choices.Accounts[strconv.FormatInt(acc.ID, 10)]
+	if len(models) == 0 {
+		return true
+	}
+	for _, model := range models {
+		if NormalizeModelID(model) == modelID {
+			return true
+		}
+	}
+	return false
+}
+
 func AccountFeatureConfigFromChoices(features *FeatureModelChoices) AccountFeatureConfig {
 	if features == nil {
 		return AccountFeatureConfig{}

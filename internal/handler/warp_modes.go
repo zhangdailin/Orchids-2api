@@ -3,7 +3,6 @@ package handler
 import (
 	"strings"
 
-	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
 
@@ -33,28 +32,6 @@ func upstreamWarpModelID(modelID string) string {
 		return warp.DefaultModel()
 	}
 	return strings.TrimSpace(modelID)
-}
-
-func warpVirtualModelRecord(modelID string) *store.Model {
-	switch normalizeWarpPublicModelID(modelID) {
-	case warpChatModelID:
-		return &store.Model{
-			Channel:   "Warp",
-			ModelID:   warpChatModelID,
-			Name:      "Warp Chat",
-			Status:    store.ModelStatusAvailable,
-			IsDefault: true,
-		}
-	case warpAgentModelID:
-		return &store.Model{
-			Channel: "Warp",
-			ModelID: warpAgentModelID,
-			Name:    "Warp Agent",
-			Status:  store.ModelStatusAvailable,
-		}
-	default:
-		return nil
-	}
 }
 
 func warpChatToolGateMessage() string {

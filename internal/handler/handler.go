@@ -504,8 +504,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// request verbatim as the caller sent it.
 	preSelectQoderRequest := strings.EqualFold(targetChannel, "qoder")
 	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest || preSelectWorkBuddyRequest || preSelectQoderRequest
-	warpChatMode := preSelectWarpRequest && isWarpChatModel(req.Model)
-	warpAgentMode := preSelectWarpRequest && isWarpAgentModel(req.Model)
+	// Warp requests use the concrete model ID returned by upstream discovery.
+	// The former synthetic warp-chat/warp-agent modes are intentionally gone.
+	warpChatMode := false
+	warpAgentMode := false
 	suggestionMode := isSuggestionMode(req.Messages)
 	emptyOutputRecoveryPrompt := ""
 	if preSelectWarpRequest {
@@ -590,7 +592,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	apiClient, currentAccount, releaseClient, trackedAccountID, err := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 		ModelID:               upstreamWarpModelID(req.Model),
 		RequireWarpCloudAgent: requireWarpCloudAgent,
-		PreferWarpFreeAccount: warpChatMode,
 		PreferredAccountID:    warpContinuationState.accountID,
 	})
 	// The client is held for the whole request: a credential change during it
@@ -1150,7 +1151,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				nextClient, nextAccount, releaseNext, nextTrackedAccountID, retryErr := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
 					ModelID:               upstreamReq.Model,
 					RequireWarpCloudAgent: requireWarpCloudAgent,
-					PreferWarpFreeAccount: warpChatMode,
 					PreferredAccountID:    warpContinuationState.accountID,
 				})
 				if retryErr == nil {

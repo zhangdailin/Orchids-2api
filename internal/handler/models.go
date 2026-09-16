@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -68,7 +69,9 @@ func (h *Handler) visibleWarpModelSet(ctx context.Context) map[string]struct{} {
 		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
 			continue
 		}
-		for _, modelID := range warp.EffectiveAccountModelIDs(acc, choices) {
+		// Public visibility follows the upstream discovery cache for every
+		// account tier; do not reduce free accounts to a synthetic default.
+		for _, modelID := range choices.Accounts[strconv.FormatInt(acc.ID, 10)] {
 			if modelID = strings.TrimSpace(modelID); modelID != "" {
 				out[modelID] = struct{}{}
 			}
@@ -119,19 +122,12 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		warpVisible = h.visibleWarpModelSet(ctx)
 	}
 	var publicModels []PublicModelResponse
-	if filterChannel == "" || strings.EqualFold(filterChannel, "warp") {
-		for _, modelID := range []string{warpChatModelID, warpAgentModelID} {
-			if middleware.APIKeyAllowsModel(ctx, modelID) {
-				publicModels = append(publicModels, publicModelResponse(modelID, "Warp"))
-			}
-		}
-	}
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
 			continue
 		}
-		if strings.EqualFold(mChannel, "warp") && isWarpVirtualModel(m.ModelID) {
+		if isWarpVirtualModel(m.ModelID) {
 			continue
 		}
 		if strings.EqualFold(mChannel, "warp") && warpVisible != nil {
@@ -195,6 +191,10 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("invalid_request_error", "Model ID required", http.StatusBadRequest).WriteResponse(w)
 		return
 	}
+	if isWarpVirtualModel(id) {
+		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
+		return
+	}
 	if !middleware.APIKeyAllowsModel(r.Context(), id) {
 		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
@@ -207,15 +207,6 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filterChannel := channelFromPath(path)
-	if strings.EqualFold(filterChannel, "warp") {
-		if m := warpVirtualModelRecord(id); m != nil {
-			resp := publicModelResponse(m.ModelID, "Warp")
-			if err := json.NewEncoder(w).Encode(resp); err != nil {
-				apperrors.New("api_error", "Failed to encode response", http.StatusInternalServerError).WriteResponse(w)
-			}
-			return
-		}
-	}
 	var (
 		m   *store.Model
 		err error
