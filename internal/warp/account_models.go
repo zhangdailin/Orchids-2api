@@ -91,46 +91,6 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 	return s.SetSetting(ctx, accountModelChoicesSettingKey, string(payload))
 }
 
-func EffectiveAccountModelIDs(acc *store.Account, choices *AccountModelChoices) []string {
-	if AccountFreeOnly(acc) {
-		if choices != nil && acc != nil && acc.ID != 0 && strings.Contains(strings.TrimSpace(choices.Sources[strconv.FormatInt(acc.ID, 10)]), "free_probe") {
-			if models := choices.Accounts[strconv.FormatInt(acc.ID, 10)]; len(models) > 0 {
-				return models
-			}
-		}
-		return []string{defaultModel}
-	}
-	if choices == nil || acc == nil || acc.ID == 0 {
-		return nil
-	}
-	return choices.Accounts[strconv.FormatInt(acc.ID, 10)]
-}
-
-func AccountSupportsModelForAccount(choices *AccountModelChoices, acc *store.Account, modelID string) bool {
-	if acc == nil || acc.ID == 0 {
-		return true
-	}
-	modelID = NormalizeModelID(modelID)
-	if modelID == "" {
-		return true
-	}
-	if choices == nil || len(choices.Accounts) == 0 {
-		if !AccountFreeOnly(acc) {
-			return true
-		}
-	}
-	models := EffectiveAccountModelIDs(acc, choices)
-	if len(models) == 0 {
-		return true
-	}
-	for _, model := range models {
-		if model == modelID {
-			return true
-		}
-	}
-	return false
-}
-
 // AccountSupportsModelForRouting checks the upstream-discovered model cache
 // without applying the legacy free-account capability downgrade. Routing must
 // present the same discovered catalog to free and paid accounts and let Warp

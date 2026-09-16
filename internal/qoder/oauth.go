@@ -27,9 +27,6 @@ import (
 // authRequestTimeout bounds a single control-plane request.
 const authRequestTimeout = 30 * time.Second
 
-// PollInterval is the cadence the CLI uses while waiting for the browser step.
-const PollInterval = time.Second
-
 // LoginTTL bounds one authorization transaction. The CLI waits 300s; the admin
 // console keeps a longer window because the operator may still have to sign in
 // to the Qoder website first.

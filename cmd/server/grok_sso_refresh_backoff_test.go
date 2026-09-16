@@ -10,6 +10,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 )
@@ -185,7 +186,7 @@ func TestGrokRefreshDeadCredential_Window(t *testing.T) {
 		{"clean account", &store.Account{StatusCode: ""}, false},
 		{"401 without a verdict stamp", &store.Account{StatusCode: "401"}, false},
 		{"401 inside window", &store.Account{StatusCode: "401", VerifiedAt: now.Add(-time.Minute)}, true},
-		{"401 outside window", &store.Account{StatusCode: "401", VerifiedAt: now.Add(-grokRefreshDeadCredentialBackoff - time.Minute)}, false},
+		{"401 outside window", &store.Account{StatusCode: "401", VerifiedAt: now.Add(-accountpolicy.CredentialReverify - time.Minute)}, false},
 		{"429 is not a dead credential", &store.Account{StatusCode: "429", VerifiedAt: now}, false},
 	}
 	for _, tc := range cases {

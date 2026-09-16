@@ -32,11 +32,6 @@ func (e *AppError) WriteResponse(w http.ResponseWriter) {
 	w.Write(e.ToJSON())
 }
 
-// 预定义错误码
-const (
-	CodeInvalidRequest = "invalid_request_error"
-)
-
 // New 创建新的应用错误
 func New(code, message string, httpStatus int) *AppError {
 	return &AppError{

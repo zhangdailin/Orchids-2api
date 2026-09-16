@@ -9,14 +9,6 @@ func PublicMessage(errText string) string {
 	return messageForCategory(ClassifyUpstreamError(errText).Category)
 }
 
-// PublicMessageForCategory is PublicMessage for a caller that already classified
-// the error. It exists so a client-visible message and the classification that
-// produced it cannot drift apart — and so a response rebuilt after redaction
-// reports the same text the redaction wrote.
-func PublicMessageForCategory(category string) string {
-	return messageForCategory(category)
-}
-
 // messageForCategory is the single source of truth for the client-visible text
 // of each category. An empty category is the caller that had no error text to
 // classify, and keeps its shorter wording.

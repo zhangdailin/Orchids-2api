@@ -215,16 +215,6 @@ func (b *Bus) Close() {
 	b.stopOnce.Do(func() { close(b.stop) })
 }
 
-// Deliveries reports how many coalesced batches have been delivered.
-func (b *Bus) Deliveries() int64 {
-	if b == nil {
-		return 0
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.delivered
-}
-
 // deliverLoop drains the queue, coalescing by account ID within a window before
 // notifying every subscriber exactly once per batch.
 func (b *Bus) deliverLoop() {

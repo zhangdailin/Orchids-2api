@@ -95,32 +95,6 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) ProbeModel(ctx context.Context, model string) error {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
-	req := upstream.UpstreamRequest{
-		Prompt:  "Reply with ok.",
-		Model:   model,
-		NoTools: true,
-	}
-
-	if _, err := c.ensureAuthenticated(ctx, true); err != nil {
-		return err
-	}
-
-	_, payload, err := buildRequestBytes(req)
-	if err != nil {
-		return err
-	}
-
-	refresh := func() error {
-		_, err := c.ensureAuthenticated(ctx, true)
-		return err
-	}
-	return c.streamWithRetry(ctx, payload, req, func(upstream.SSEMessage) {}, nil, refresh)
-}
-
 func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
 	ctx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout())
 	defer cancel()

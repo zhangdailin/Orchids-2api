@@ -8,7 +8,7 @@ import (
 )
 
 func TestAppError_ToJSON(t *testing.T) {
-	err := New(CodeInvalidRequest, "请求格式无效", http.StatusBadRequest)
+	err := New("invalid_request_error", "请求格式无效", http.StatusBadRequest)
 	json := string(err.ToJSON())
 
 	if json == "" {
@@ -23,7 +23,7 @@ func TestAppError_ToJSON(t *testing.T) {
 }
 
 func TestAppError_WriteResponse(t *testing.T) {
-	err := New(CodeInvalidRequest, "请求格式无效", http.StatusBadRequest)
+	err := New("invalid_request_error", "请求格式无效", http.StatusBadRequest)
 	w := httptest.NewRecorder()
 
 	err.WriteResponse(w)

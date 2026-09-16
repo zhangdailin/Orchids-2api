@@ -57,11 +57,6 @@ const (
 	// Credential expiry checks may tick every minute, but provider identity and
 	// quota probes are materially heavier. New/replaced credentials remain due.
 	providerHealthRefreshInterval = 30 * time.Minute
-	// grokRefreshDeadCredentialBackoff keeps a credential the upstream already
-	// rejected out of the rotation. Re-asking once per tick burns a slot of the
-	// per-cycle budget that a healthy account needs, and the answer cannot change
-	// until the operator installs a new cookie (which resets LastAttempt).
-	grokRefreshDeadCredentialBackoff = accountpolicy.CredentialReverify
 )
 
 // grokRefreshDeadCredential reports whether an account carries a credential the

@@ -97,7 +97,6 @@ deepseek-v4-pro, deepseek-flash, minimax-m3
 - `parseModelList` / `decodeCatalogEntries`：接受实测的 `{"chat":[...]}` 分组形状、
   裸数组、`data`/`models`/`list` 包装、`Encode=1` 的字符串嵌套，以及未列出的分组；
   只把**带 `key` 的行**当作模型，避免把无关对象数组误读成目录。
-- `ProbeModelListRoutes`：诊断接口，逐路由报告状态，并在解析失败时带出原始响应片段
   （上游换形状时不至于只报「解析失败」）。
 - `internal/qoder/catalog.go`：删除 `seedModels()` / `DefaultCatalog()` / `mergeCatalogs`；
   `Resolve()` 在无快照时返回 `ErrNoUpstreamCatalog`（不再回退内置表，也不再 panic）；
@@ -223,7 +222,34 @@ name/status/排序/默认值仍归运营所有）。实测刷新返回 `updated:
 建议：扩容数据盘，或把构建放到 CI/其他机器（release.yml 已经产出 artifact，
 `scripts/deploy-orchids.sh --artifact` 可直接安装），不要在跑服务的机器上编译。
 
-## 五、遗留说明
+## 五、死代码清理
+
+用参考分析（按名字统计每个包级声明的引用，区分非测试文件与 `_test.go`）扫过全部 469 个 Go 文件，
+删除了三类代码：
+
+- **只有测试引用的生产代码**：`warp.AccountSupportsModelForAccount`（生产路由用的是
+  `AccountSupportsModelForRouting`）、`warp.EffectiveAccountModelIDs`、
+  `warp.AccountFreeOnly`、`warp.AccountQuotaExhausted`、`qoder.CatalogFromSnapshot`、
+  `errors.CodeInvalidRequest`、`handler.warpRequestRequiresCloudAgent`
+  （连带 `messagesContainToolExchange`、`looksLikeWarpAgentIntent`、`looksLikeSourceOrCommandSubject`）、
+  `cmd/server.grokRefreshDeadCredentialBackoff`。
+- **完全无人引用的代码**：`modelpolicy.stringSet`（删掉内置白名单后的残留）、
+  `modelpolicy.DefaultWorkBuddyModelID`（`internal/workbuddy` 里有自己的同名常量）、
+  `opsagg.ProbeChannelLabel`、`qoder.Catalog.Names`、`qoder.PollInterval`、
+  `qoder.Quota.ExhaustedNow`、`warp.Client.ProbeModel`、`workbuddy.tokenUpdater.SetBaseURL`、
+  `accountevents.Bus.Deliveries`、`audit.RedisLogger.StreamKey`、
+  `errors.PublicMessageForCategory`，以及 `internal/qoder` 里为一次性探针写的
+  `ProbeModelListRoutes` / `statusFromError` / 原始响应回传。
+- **无用测试声明**：`tokencache.CacheOperation` 类型，以及为已删除代码服务的测试
+  （`TestWarpRequestRequiresCloudAgent`、`TestAccountFreeOnly`、`TestAccountQuotaExhausted`、
+  `TestEffectiveAccountModelIDs`）。
+
+保留：所有 `MarshalJSON` / `UnmarshalJSON` 方法。它们没有名字引用（由 `encoding/json` 通过接口调用），
+但所属类型在请求路径上是活的，属于接口实现而非死代码。
+
+清理后参考分析结果：**只有测试引用的生产代码 0 项，无用测试声明 0 项**。
+
+## 六、遗留说明
 
 - `internal/qoder` 保留 `ErrNoUpstreamCatalog` 这条「未观察」状态。
 - 账号快照已升级为 JSON 行（含 `max_input_tokens`/`is_reasoning` 等），

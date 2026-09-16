@@ -2,13 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 )
 
@@ -105,6 +105,32 @@ func TestDiscoverQoderModelsWithoutAnUpstreamCatalogPublishesNothing(t *testing.
 	}
 }
 
+// qoderCatalogStub answers the signed catalog route the way the gateway does,
+// so the test exercises the real client, its COSY signature and the real parser
+// rather than an injected shortcut.
+func qoderCatalogStub(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/algo/api/v2/model/list" {
+			http.NotFound(w, r)
+			return
+		}
+		// The catalog read must carry the derived auth chain; without it the
+		// gateway refuses and the refresh would report the wrong cause.
+		if auth := r.Header.Get("Authorization"); !strings.HasPrefix(auth, "Bearer COSY.") {
+			t.Errorf("catalog request Authorization = %q, want a COSY bearer", auth)
+		}
+		for _, header := range []string{"Cosy-Key", "Cosy-MachineId", "Cosy-Date"} {
+			if r.Header.Get(header) == "" {
+				t.Errorf("catalog request is missing %s", header)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+}
+
 // TestDiscoverQoderModelsPublishesTheObservedCatalog proves a successful read is
 // what fills model management, and that the account snapshot records the same
 // rows so routing resolves against the published catalog.
@@ -114,22 +140,18 @@ func TestDiscoverQoderModelsPublishesTheObservedCatalog(t *testing.T) {
 	ctx := context.Background()
 	clearModelsForChannel(t, ctx, s, "Qoder")
 
+	stub := qoderCatalogStub(t, http.StatusOK, `{"chat":[
+		{"key":"qmodel_38max","display_name":"Qwen3.8-Max","format":"openai","source":"system","enable":true,"max_input_tokens":1000000},
+		{"key":"dmodel","display_name":"DeepSeek-V4-Pro","format":"openai","source":"system","enable":true,"is_reasoning":true,"max_input_tokens":1000000}
+	]}`)
+	defer stub.Close()
+
 	acc := qoderTestAccount("11111111-2222-4333-8444-555555555555")
-	acc.QoderModelIDs = []string{
-		"qmodel_38max\tQwen3.8-Max",
-		"dmodel\tDeepSeek-V4-Pro",
-	}
 	if err := s.CreateAccount(ctx, acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	prevFetch := fetchQoderUpstreamCatalogForRefresh
-	t.Cleanup(func() { fetchQoderUpstreamCatalogForRefresh = prevFetch })
-	fetchQoderUpstreamCatalogForRefresh = func(context.Context, *config.Config, *store.Account) (*qoder.Catalog, error) {
-		return qoder.CatalogFromSnapshot([]string{"qmodel_38max\tQwen3.8-Max", "dmodel\tDeepSeek-V4-Pro"}), nil
-	}
-
-	items, source, err := discoverQoderModels(ctx, &config.Config{}, s)
+	items, source, err := discoverQoderModels(ctx, &config.Config{QoderInferenceURL: stub.URL}, s)
 	if err != nil {
 		t.Fatalf("discoverQoderModels() error = %v", err)
 	}
@@ -148,6 +170,7 @@ func TestDiscoverQoderModelsPublishesTheObservedCatalog(t *testing.T) {
 		}
 	}
 
+	// The snapshot must carry the wire fields routing rebuilds the request from.
 	stored, getErr := s.GetAccount(ctx, acc.ID)
 	if getErr != nil {
 		t.Fatalf("GetAccount() error = %v", getErr)
@@ -155,33 +178,46 @@ func TestDiscoverQoderModelsPublishesTheObservedCatalog(t *testing.T) {
 	if len(stored.QoderModelIDs) == 0 {
 		t.Fatal("the observed catalog was not recorded on the account")
 	}
+	if !strings.Contains(strings.Join(stored.QoderModelIDs, ""), "max_input_tokens") {
+		t.Fatalf("snapshot lost the routing fields: %v", stored.QoderModelIDs)
+	}
 }
 
 // TestDiscoverQoderModelsReportsTheReadFailure proves a failed read is reported
 // with its cause, so an operator can tell a missing route from a refused
-// credential.
+// credential, and that nothing is published either way.
 func TestDiscoverQoderModelsReportsTheReadFailure(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 	ctx := context.Background()
+	clearModelsForChannel(t, ctx, s, "Qoder")
+
+	stub := qoderCatalogStub(t, http.StatusForbidden, `{"code":101,"message":"signature invalid"}`)
+	defer stub.Close()
 
 	acc := qoderTestAccount("11111111-2222-4333-8444-555555555555")
 	if err := s.CreateAccount(ctx, acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
-	prevFetch := fetchQoderUpstreamCatalogForRefresh
-	t.Cleanup(func() { fetchQoderUpstreamCatalogForRefresh = prevFetch })
-	fetchQoderUpstreamCatalogForRefresh = func(context.Context, *config.Config, *store.Account) (*qoder.Catalog, error) {
-		return nil, errors.New("qoder upstream model list unavailable: status=403 code=101")
-	}
-
-	_, _, err := discoverQoderModels(ctx, &config.Config{}, s)
+	items, source, err := discoverQoderModels(ctx, &config.Config{QoderInferenceURL: stub.URL}, s)
 	if err == nil {
-		t.Fatal("discoverQoderModels() error = nil for a failed read")
+		t.Fatalf("discoverQoderModels() items=%+v source=%q want error", items, source)
 	}
 	if !strings.Contains(err.Error(), "status=403") {
 		t.Fatalf("error=%v does not carry the upstream cause", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items=%+v want none published", items)
+	}
+	models, listErr := s.ListModels(ctx)
+	if listErr != nil {
+		t.Fatalf("ListModels() error = %v", listErr)
+	}
+	for _, model := range models {
+		if strings.EqualFold(strings.TrimSpace(model.Channel), "qoder") {
+			t.Fatalf("a failed read published a model: %+v", model)
+		}
 	}
 }
 

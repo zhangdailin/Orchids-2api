@@ -100,10 +100,6 @@ type Summary struct {
 	Samples int64 `json:"samples"`
 }
 
-// ProbeChannelLabel is the channel name synthetic probes are recorded under. It
-// keeps probe outcomes out of every real channel's success rate.
-const ProbeChannelLabel = "probe"
-
 // Aggregator writes and reads the per-minute buckets.
 type Aggregator struct {
 	client *redis.Client

@@ -54,19 +54,8 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 			t.Fatalf("models=%v want %v", got, want)
 		}
 	}
+
 	paid := &store.Account{ID: 1, AccountType: "warp", WarpMonthlyLimit: 1500, WarpMonthlyRemaining: 100}
-	if AccountSupportsModelForAccount(choices, paid, "claude-4.6-opus") {
-		t.Fatal("expected account to reject missing claude alias")
-	}
-	if AccountSupportsModelForAccount(choices, paid, "gemini-3-pro") {
-		t.Fatal("expected account not to support missing model")
-	}
-	if !AccountSupportsModelForAccount(choices, &store.Account{ID: 2, AccountType: "warp"}, "gemini-3-pro") {
-		t.Fatal("expected missing account cache to fall back open")
-	}
-	if AccountSupportsModelForAccount(choices, paid, DefaultModel()) {
-		t.Fatal("expected default model to require explicit account support when choices are cached")
-	}
 	cfg := EffectiveAccountFeatureConfig(paid, choices, DefaultModel())
 	if cfg.BaseModel != DefaultModel() {
 		t.Fatalf("feature base=%q want %q", cfg.BaseModel, DefaultModel())
@@ -77,40 +66,53 @@ func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 	if cfg.ComputerUseAgentModel != "computer-use-agent-team-auto" {
 		t.Fatalf("computer use agent=%q want computer-use-agent-team-auto", cfg.ComputerUseAgentModel)
 	}
-	exhausted := &store.Account{
-		ID:                   1,
-		AccountType:          "warp",
-		WarpMonthlyLimit:     1500,
-		WarpMonthlyRemaining: 0,
-		WarpBonusRemaining:   0,
+}
+
+// TestAccountSupportsModelForRouting pins the policy the request path applies.
+//
+// Routing answers only "did this account's upstream catalog advertise the model".
+// It deliberately does not downgrade an exhausted or free account the way the
+// retired AccountSupportsModelForAccount did: Warp decides entitlement at request
+// time, so a free account must see the same discovered catalog as a paid one.
+// Both halves are asserted so the distinction cannot drift back unnoticed.
+func TestAccountSupportsModelForRouting(t *testing.T) {
+	choices := &AccountModelChoices{
+		Accounts: map[string][]string{"1": {DefaultModel(), "gpt-5.2-medium"}},
 	}
-	if !AccountSupportsModelForAccount(choices, exhausted, DefaultModel()) {
-		t.Fatal("expected exhausted account to support free-only default model")
+	paid := &store.Account{ID: 1, AccountType: "warp", WarpMonthlyLimit: 1500, WarpMonthlyRemaining: 100}
+
+	if !AccountSupportsModelForRouting(choices, paid, "gpt-5.2-medium") {
+		t.Fatal("expected an advertised model to be routable")
 	}
-	if AccountSupportsModelForAccount(choices, exhausted, "gpt-5.2-medium") {
-		t.Fatal("expected exhausted account to reject paid model despite cached paid pool")
+	if AccountSupportsModelForRouting(choices, paid, "gemini-3-pro") {
+		t.Fatal("expected a model outside the catalog to be refused")
 	}
-	if AccountSupportsModelForAccount(nil, exhausted, "gpt-5.2-medium") {
-		t.Fatal("expected exhausted account to reject paid model even when model choices cache is unavailable")
+
+	// A missing cache falls back open rather than blocking routing.
+	for name, tc := range map[string]struct {
+		choices *AccountModelChoices
+		acc     *store.Account
+	}{
+		"no choices":      {nil, paid},
+		"empty choices":   {&AccountModelChoices{}, paid},
+		"unknown account": {choices, &store.Account{ID: 2, AccountType: "warp"}},
+		"no identity":     {choices, &store.Account{}},
+		"nil account":     {choices, nil},
+	} {
+		if !AccountSupportsModelForRouting(tc.choices, tc.acc, "gemini-3-pro") {
+			t.Fatalf("%s: expected a fallback-open verdict", name)
+		}
 	}
-	free := &store.Account{
-		ID:                   1,
-		AccountType:          "warp",
-		Subscription:         "free",
-		WarpMonthlyLimit:     60,
-		WarpMonthlyRemaining: 58,
+	if !AccountSupportsModelForRouting(choices, paid, "") {
+		t.Fatal("an empty model name resolves to the default, which the catalog carries")
 	}
-	if !AccountSupportsModelForAccount(choices, free, DefaultModel()) {
-		t.Fatal("expected free account to support free-only default model")
-	}
-	if AccountSupportsModelForAccount(choices, free, "gpt-5.2-medium") {
-		t.Fatal("expected free account to reject paid model despite cached paid pool")
-	}
-	probedChoices := &AccountModelChoices{
-		Accounts: map[string][]string{"1": {DefaultModel(), "gpt-5-2-low"}},
-		Sources:  map[string]string{"1": "free_probe"},
-	}
-	if !AccountSupportsModelForAccount(probedChoices, free, "gpt-5-2-low") {
-		t.Fatal("expected free account to support model confirmed by free probe")
+
+	// Tier is not part of the routing verdict.
+	exhausted := &store.Account{ID: 1, AccountType: "warp", WarpMonthlyLimit: 1500, StatusCode: store.AccountStatusWarpQuotaExhausted}
+	free := &store.Account{ID: 1, AccountType: "warp", Subscription: "free", WarpMonthlyLimit: 60}
+	for _, acc := range []*store.Account{exhausted, free} {
+		if !AccountSupportsModelForRouting(choices, acc, "gpt-5.2-medium") {
+			t.Fatalf("account %+v was downgraded for an advertised model", acc)
+		}
 	}
 }

@@ -15,13 +15,6 @@ import (
 // For any cache state, when the cache is full and a new entry is inserted,
 // the evicted entry should be the one with the earliest access time.
 
-// CacheOperation represents a cache operation for property testing
-type CacheOperation struct {
-	OpType string // "put" or "get"
-	Key    string
-	Value  int
-}
-
 // TestLRUEvictionCorrectness tests that the cache always evicts the least recently accessed item
 // when the cache is full.
 func TestLRUEvictionCorrectness(t *testing.T) {

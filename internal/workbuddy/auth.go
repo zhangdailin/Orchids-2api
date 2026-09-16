@@ -524,12 +524,6 @@ func (t *tokenUpdater) SetAccountStore(accountStore AccountUpdater) {
 	t.mu.Unlock()
 }
 
-func (t *tokenUpdater) SetBaseURL(baseURL string) {
-	t.mu.Lock()
-	t.baseURL = strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
-	t.mu.Unlock()
-}
-
 // Token returns a valid access token, refreshing only when needed.
 func (t *tokenUpdater) Token(ctx context.Context, creds Credentials) (string, error) {
 	now := time.Now()

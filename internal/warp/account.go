@@ -75,38 +75,3 @@ func ApplyRequestLimitInfoToAccount(acc *store.Account, info *RequestLimitInfo, 
 		}
 	}
 }
-
-func AccountQuotaExhausted(acc *store.Account) bool {
-	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-		return false
-	}
-	if acc.WarpMonthlyLimit > 0 {
-		return acc.WarpMonthlyRemaining+acc.WarpBonusRemaining <= 0
-	}
-	if acc.UsageLimit > 0 {
-		return acc.UsageLimit-acc.UsageCurrent <= 0
-	}
-	return false
-}
-
-// AccountFreeOnly is retained for compatibility with persisted-account
-// diagnostics. Request routing no longer uses this classification.
-func AccountFreeOnly(acc *store.Account) bool {
-	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-		return false
-	}
-	// A quota-exhaustion response is authoritative even when older imported
-	// accounts do not have populated quota counters. This persisted capability
-	// downgrade prevents paid models/tools from repeatedly hitting the upstream.
-	if strings.TrimSpace(acc.StatusCode) == store.AccountStatusWarpQuotaExhausted {
-		return true
-	}
-	subscription := strings.ToLower(strings.TrimSpace(acc.Subscription))
-	if subscription == "free" || strings.HasPrefix(subscription, "free/") || strings.HasPrefix(subscription, "free ") {
-		return true
-	}
-	if acc.WarpMonthlyLimit > 0 && acc.WarpMonthlyLimit <= 60 {
-		return true
-	}
-	return AccountQuotaExhausted(acc)
-}

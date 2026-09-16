@@ -587,11 +587,11 @@ func TestSaveWarpAccountModelChoices(t *testing.T) {
 		t.Fatal("expected cached choices")
 	}
 	acc := &store.Account{ID: 1, AccountType: "warp", WarpMonthlyLimit: 1500, WarpMonthlyRemaining: 100}
-	if !warp.AccountSupportsModelForAccount(choices, acc, "claude-opus-4-6") {
-		t.Fatal("expected account 1 to support exact Claude model")
+	if !warp.AccountSupportsModelForRouting(choices, acc, "claude-opus-4-6") {
+		t.Fatal("expected account 1 to route the Claude model its catalog advertises")
 	}
-	if warp.AccountSupportsModelForAccount(choices, acc, "gemini-3-pro") {
-		t.Fatal("expected account 1 not to support uncached Gemini model")
+	if warp.AccountSupportsModelForRouting(choices, acc, "gemini-3-pro") {
+		t.Fatal("expected account 1 not to route an uncached Gemini model")
 	}
 	if choices.Sources["1"] != "" {
 		t.Fatalf("source=%q want empty", choices.Sources["1"])

@@ -316,16 +316,6 @@ func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.S
 	return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", lastErr)
 }
 
-// fetchQoderUpstreamCatalogForRefresh reads the account-scoped Qoder catalog
-// from the signed control plane. It is deliberately kept as an injectable
-// control-plane operation: discovering models must never send a chat request,
-// and the catalog read is the only thing that may publish Qoder rows.
-var fetchQoderUpstreamCatalogForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account) (*qoder.Catalog, error) {
-	client := qoder.NewFromAccount(acc, refreshModelRequestConfig(cfg, "qoder"))
-	defer client.Close()
-	return client.FetchUpstreamModels(ctx)
-}
-
 // discoverQoderModels publishes the Qoder channel catalog read from the signed
 // upstream control plane.
 //
@@ -345,7 +335,11 @@ func discoverQoderModels(ctx context.Context, cfg *config.Config, s *store.Store
 
 	var lastErr error
 	for _, acc := range accounts {
-		catalog, fetchErr := fetchQoderUpstreamCatalogForRefresh(ctx, cfg, acc)
+		// The catalog read is the only thing that may publish Qoder rows, and it
+		// never sends a chat request.
+		client := qoder.NewFromAccount(acc, refreshModelRequestConfig(cfg, "qoder"))
+		catalog, fetchErr := client.FetchUpstreamModels(ctx)
+		client.Close()
 		if fetchErr != nil {
 			lastErr = fetchErr
 			continue

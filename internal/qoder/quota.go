@@ -314,11 +314,6 @@ func ApplyQuota(acc *store.Account, quota *Quota) {
 	}
 }
 
-// Exhausted reports whether a stored snapshot says the allowance is spent.
-func (q *Quota) ExhaustedNow() bool {
-	return q != nil && q.Exhausted
-}
-
 func firstPositive(values ...float64) float64 {
 	for _, value := range values {
 		if value > 0 {

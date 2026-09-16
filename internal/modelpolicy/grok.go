@@ -2,14 +2,6 @@ package modelpolicy
 
 import "strings"
 
-func stringSet(values []string) map[string]struct{} {
-	out := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		out[value] = struct{}{}
-	}
-	return out
-}
-
 var deprecatedGrokModelIDs = map[string]struct{}{
 	"grok-4.20-0309-non-reasoning":       {},
 	"grok-4.20-0309":                     {},

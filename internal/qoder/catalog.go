@@ -149,19 +149,6 @@ func (c *Catalog) SupportedList() string {
 	return strings.Join(names, ", ")
 }
 
-// Names returns the sorted client-facing model names.
-func (c *Catalog) Names() []string {
-	if c == nil {
-		return nil
-	}
-	names := make([]string, 0, len(c.entries))
-	for _, entry := range c.entries {
-		names = append(names, entry.Name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 func newCatalog(entries []modelEntry) *Catalog {
 	catalog := &Catalog{
 		byKey:  make(map[string]modelEntry, len(entries)),
@@ -197,13 +184,6 @@ func newCatalog(entries []modelEntry) *Catalog {
 		}
 	}
 	return catalog
-}
-
-// CatalogFromSnapshot rebuilds a catalog from an account's stored snapshot, in
-// the same "<key>\t<display name>" form CatalogSnapshot writes. It is the
-// inverse of CatalogSnapshot and performs no I/O.
-func CatalogFromSnapshot(ids []string) *Catalog {
-	return catalogFromIDs(ids)
 }
 
 // catalogFromIDs rebuilds a catalog from an account's stored snapshot. The

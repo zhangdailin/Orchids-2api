@@ -93,14 +93,6 @@ func NewRedisLogger(client *redis.Client, prefix string, maxLen int64) *RedisLog
 	return l
 }
 
-// StreamKey is the Redis key holding every journal entry.
-func (l *RedisLogger) StreamKey() string {
-	if l == nil {
-		return ""
-	}
-	return l.streamKey
-}
-
 func (l *RedisLogger) Log(_ context.Context, event Event) {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now()
