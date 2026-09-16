@@ -1003,44 +1003,6 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	}
 }
 
-func TestStreamHandler_CoalescesNonTextFlushes_Bytes(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
-	defer sh.release()
-
-	sh.writeSSEBytes("message_start", []byte(`{"type":"message_start"}`))
-	if rec.flushes != 1 {
-		t.Fatalf("expected message_start to flush immediately, got %d", rec.flushes)
-	}
-
-	thinkingData, err := appendSSEContentBlockDeltaThinking(nil, 0, "step")
-	if err != nil {
-		t.Fatalf("marshal thinking delta: %v", err)
-	}
-	for i := 0; i < sseDeferredFlushFrameThreshold-1; i++ {
-		sh.writeSSEBytes("content_block_delta", thinkingData)
-	}
-	if rec.flushes != 1 {
-		t.Fatalf("expected deferred thinking deltas to coalesce, got %d flushes", rec.flushes)
-	}
-	sh.writeSSEBytes("content_block_delta", thinkingData)
-	if rec.flushes != 2 {
-		t.Fatalf("expected deferred threshold flush, got %d", rec.flushes)
-	}
-
-	textData, err := marshalSSEContentBlockDeltaTextBytes(0, "hi")
-	if err != nil {
-		t.Fatalf("marshal text delta: %v", err)
-	}
-	sh.writeSSEBytes("content_block_delta", textData)
-	if rec.flushes != 3 {
-		t.Fatalf("expected text delta to flush immediately, got %d", rec.flushes)
-	}
-}
-
 func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequested(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()

@@ -118,7 +118,6 @@ type Credentials struct {
 	Name    string
 	Email   string
 	OrgID   string
-	OrgName string
 	OrgTags []string
 	// MachineID is the device identity the credential was authorized under. The
 	// upstream rejects a request signed with a different one.

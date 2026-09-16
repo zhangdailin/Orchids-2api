@@ -388,25 +388,6 @@ func TestToolCallAccumulatorPreservesCallsAtReusedIndex(t *testing.T) {
 	}
 }
 
-// TestNormalizeToolInputUnwrapsNestedArguments proves the OpenAI argument
-// wrapping is removed before the tool dispatcher sees the input.
-func TestNormalizeToolInputUnwrapsNestedArguments(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]string{
-		`{"arguments":"{\"a\":1}"}`: `{"a":1}`,
-		`"{\"a\":1}"`:               `{"a":1}`,
-		``:                          `{}`,
-		`null`:                      `{}`,
-		`{"a":1}`:                   `{"a":1}`,
-	}
-	for input, want := range cases {
-		if got := normalizeToolInput(input); got != want {
-			t.Errorf("normalizeToolInput(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
 // TestConsumeStreamRejectsEventError proves an explicit error event terminates
 // with an error rather than an empty success.
 func TestConsumeStreamRejectsEventError(t *testing.T) {

@@ -278,26 +278,7 @@ func TestPublicKeyAuth_MissingBearer(t *testing.T) {
 	}
 }
 
-func TestPublicKeyAuth_AllowsWhenNoKeyAndDisabled(t *testing.T) {
-	called := false
-	handler := PublicKeyAuth("", func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/public/verify", nil)
-	rec := httptest.NewRecorder()
-	handler(rec, req)
-
-	if !called {
-		t.Fatalf("expected handler to be called")
-	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d", rec.Code, http.StatusOK)
-	}
-}
-
-func TestPublicKeyAuth_EnabledWhenNoKey(t *testing.T) {
+func TestPublicKeyAuth_EmptyKeyAllowsEveryRequest(t *testing.T) {
 	called := false
 	handler := PublicKeyAuth("", func(w http.ResponseWriter, r *http.Request) {
 		called = true

@@ -249,6 +249,32 @@ name/status/排序/默认值仍归运营所有）。实测刷新返回 `updated:
 
 清理后参考分析结果：**只有测试引用的生产代码 0 项，无用测试声明 0 项**。
 
+第二轮（更深的检查，覆盖包级声明看不到的层次）：
+
+- **重复实现**：`normalizeToolInput` / `normalizeToolInputDepth` / `unwrapOpenAIArguments`
+  在 `internal/qoder/stream.go` 与 `internal/workbuddy/stream.go` 里逐字节相同，已抽到
+  `internal/util/tool_args.go`（`util.NormalizeToolInput`），两个渠道改为调用共享实现；
+  只有 `NormalizeToolInput` 导出，另两个保持包内。测试随之移到 `internal/util/tool_args_test.go`
+  并补充了「非参数信封形状返回 false」与「递归有上限」两组断言。
+- **废弃测试（同体重复，名字描述了不存在的行为）**：
+  - `TestRefreshAccountState_PuterInsufficientFundsCompletesWith402Status`：名字声称
+    「额度不足 → 402」，实际让用量接口返回通用错误并断言 502，与相邻测试逐字节相同。
+    生产代码里**没有** Puter 刷新返回 402 的路径，即该测试名描述的行为不存在，已删除。
+  - `TestStreamHandler_CoalescesNonTextFlushes_Bytes`：与其上方的非 `_Bytes` 版本逐字节相同，
+    两者都走 `writeSSEBytes`，属纯重复，已删除。
+  - `TestPublicKeyAuth_AllowsWhenNoKeyAndDisabled` 与 `TestPublicKeyAuth_EnabledWhenNoKey`
+    逐字节相同；`PublicKeyAuth` 只有「空 key = 不鉴权」这一条分支，没有 disabled 概念，
+    保留一份并按契约改名为 `TestPublicKeyAuth_EmptyKeyAllowsEveryRequest`。
+- **无人读写的字段**：`qoder.Credentials.OrgName` 从不被写入也不被读取，已删除
+  （`OrgID` 是签名链路要用的，保留）。`qoder.Profile.OrgName` 带 `json` tag，
+  属于上游 userinfo 的报文形状说明，保留。
+- **「不会失败的测试」检查**：启发式报了 4 个，逐个核对后确认 3 个是误报
+  （通过 `waitFor` / `assertBrowserStatsigID` 这类本地 helper 失败），1 个
+  （`TestNopLogger`）是只验证「不 panic」的冒烟测试，panic 即失败，均无需改动。
+  即**没有真正的空转测试**。
+
+第二轮结束后：重复函数体 0 组，无人读写的非 tagged 字段 0 个。
+
 ## 六、遗留说明
 
 - `internal/qoder` 保留 `ErrNoUpstreamCatalog` 这条「未观察」状态。

@@ -15,6 +15,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/upstream"
+	"orchids-api/internal/util"
 )
 
 // The upstream always answers with SSE, and the payload is doubly wrapped: each
@@ -284,7 +285,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			onMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{
 				"toolCallId": id,
 				"toolName":   state.Name,
-				"input":      normalizeToolInput(state.Arguments.String()),
+				"input":      util.NormalizeToolInput(state.Arguments.String()),
 			}})
 		}
 	}
@@ -622,57 +623,6 @@ func newThinkingSignature() string {
 		return "qoder-v1:" + base64.RawURLEncoding.EncodeToString(raw[:])
 	}
 	return fmt.Sprintf("qoder-v1:%d", time.Now().UnixNano())
-}
-
-// normalizeToolInput unwraps the OpenAI `{"arguments":"<json-string>"}` shape so
-// downstream tool dispatch sees a plain JSON object.
-func normalizeToolInput(raw string) string {
-	return normalizeToolInputDepth(raw, 3)
-}
-
-func normalizeToolInputDepth(input string, depth int) string {
-	if depth <= 0 {
-		return strings.TrimSpace(input)
-	}
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" || trimmed == "null" {
-		return "{}"
-	}
-	var text string
-	if json.Unmarshal([]byte(trimmed), &text) == nil {
-		text = strings.TrimSpace(text)
-		if text == "" {
-			return "{}"
-		}
-		return normalizeToolInputDepth(text, depth-1)
-	}
-	if inner, ok := unwrapOpenAIArguments(trimmed); ok {
-		return normalizeToolInputDepth(inner, depth-1)
-	}
-	return trimmed
-}
-
-func unwrapOpenAIArguments(input string) (string, bool) {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(input), &obj); err != nil {
-		return "", false
-	}
-	rawArgs, ok := obj["arguments"]
-	if !ok {
-		return "", false
-	}
-	var text string
-	if err := json.Unmarshal(rawArgs, &text); err != nil {
-		return "", false
-	}
-	text = strings.TrimSpace(text)
-	if text == "" || text == "null" {
-		return "{}", true
-	}
-	if !json.Valid([]byte(text)) {
-		return "", false
-	}
-	return text, true
 }
 
 // normalizeUsage maps the upstream usage object onto the key names the shared

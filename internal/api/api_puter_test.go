@@ -126,25 +126,3 @@ func TestRefreshAccountState_PuterPropagatesUpstreamStatus(t *testing.T) {
 		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusBadGateway)
 	}
 }
-
-func TestRefreshAccountState_PuterInsufficientFundsCompletesWith402Status(t *testing.T) {
-	prevUsage := puterFetchMonthlyUsage
-	t.Cleanup(func() { puterFetchMonthlyUsage = prevUsage })
-
-	puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
-		return nil, errors.New("usage endpoint unavailable")
-	}
-	a := New(nil, "", "", &config.Config{})
-	acc := &store.Account{AccountType: "puter", ClientCookie: "puter-token"}
-
-	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if status != "" {
-		t.Fatalf("status=%q want empty", status)
-	}
-	if httpStatus != http.StatusBadGateway {
-		t.Fatalf("httpStatus=%d want %d", httpStatus, http.StatusBadGateway)
-	}
-}
