@@ -46,7 +46,13 @@ const (
 const defaultModel = "auto-open"
 
 func NormalizeModelID(model string) string {
-	return strings.ToLower(strings.TrimSpace(model))
+	model = strings.ToLower(strings.TrimSpace(model))
+	switch model {
+	case "auto", "auto-efficient", "auto-genius":
+		return defaultModel
+	default:
+		return model
+	}
 }
 
 func applyWarpClientHeaders(req *http.Request) {

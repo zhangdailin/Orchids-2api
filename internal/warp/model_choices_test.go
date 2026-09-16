@@ -181,7 +181,7 @@ func TestMergeWarpModelChoices_DedupesAndMovesDefaultFirst(t *testing.T) {
 	for _, choice := range merged {
 		gotIDs = append(gotIDs, choice.ID)
 	}
-	wantIDs := []string{"gpt-5.1-medium", "claude-4.6-sonnet", "gpt-5-1-medium", "auto"}
+	wantIDs := []string{"gpt-5.1-medium", "claude-4.6-sonnet", "gpt-5-1-medium", "auto-open"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("merged ids=%+v want %+v", gotIDs, wantIDs)
 	}
