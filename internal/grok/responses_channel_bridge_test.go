@@ -369,7 +369,7 @@ func TestResponsesDispatcherRoutesByModel(t *testing.T) {
 	bridgedCalls := 0
 	native := func(w http.ResponseWriter, r *http.Request) { nativeCalls++; _, _ = io.WriteString(w, "native") }
 	bridged := func(w http.ResponseWriter, r *http.Request) { bridgedCalls++; _, _ = io.WriteString(w, "bridged") }
-	dispatch := ResponsesDispatcher(native, bridged, func(model string) bool {
+	dispatch := ModelDispatcher(native, bridged, func(model string) bool {
 		return strings.HasPrefix(strings.ToLower(model), "grok-")
 	})
 

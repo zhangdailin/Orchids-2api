@@ -99,6 +99,27 @@ fi
   fi
 } > "${BINARY_NAME}.deploy-info.txt"
 
+# 3c. Retain only the newest stamped backups. Each deploy copies the ~32MB
+#     binary aside, so without a retention policy they accumulate until the
+#     root filesystem is full — which is how one host reached 95% and started
+#     failing redis writes. Only backups this script created (the
+#     "<name>.backup-<timestamp>" shape) are pruned; hand-named backups such as
+#     "<name>.backup-<label>-<date>" are left alone. Override with
+#     BACKUP_RETAIN=<n>.
+retain="${BACKUP_RETAIN:-3}"
+pruned=0
+while :; do
+  count="$(ls -1d "${BINARY_NAME}".backup-[0-9]* 2>/dev/null | wc -l)"
+  [ "$count" -le "$retain" ] && break
+  victim="$(ls -1dt "${BINARY_NAME}".backup-[0-9]* 2>/dev/null | tail -1)"
+  [ -z "$victim" ] && break
+  rm -f -- "$victim" || break
+  pruned=$((pruned + 1))
+done
+if [ "$pruned" -gt 0 ]; then
+  echo "pruned ${pruned} old backup(s); keeping the newest ${retain}"
+fi
+
 # 4. Restart and verify; roll back on failure.
 systemctl restart "$SERVICE"
 deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))

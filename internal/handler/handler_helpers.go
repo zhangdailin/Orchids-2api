@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/goccy/go-json"
+
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -57,6 +59,60 @@ func (h *Handler) ChannelForModel(ctx context.Context, modelID string) string {
 		return strings.TrimSpace(m.Channel)
 	}
 	return ""
+}
+
+// requestReasoningEffort returns the effort a client asked for, from whichever
+// dialect it used: OpenAI's reasoning_effort or Anthropic's
+// output_config.effort / thinking. A thinking budget without an explicit effort
+// maps onto the same coarse levels so an effort-suffixed catalog can still be
+// resolved.
+func requestReasoningEffort(req ClaudeRequest) string {
+	if effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort)); effort != "" {
+		return effort
+	}
+	for _, config := range []map[string]interface{}{req.OutputConfig, req.Thinking} {
+		value, ok := config["effort"].(string)
+		if !ok {
+			continue
+		}
+		if effort := strings.ToLower(strings.TrimSpace(value)); effort != "" {
+			return effort
+		}
+	}
+	if req.Thinking == nil {
+		return ""
+	}
+	budget, ok := looseNumber(req.Thinking["budget_tokens"])
+	if !ok || budget <= 0 {
+		return ""
+	}
+	switch {
+	case budget < 4096:
+		return "low"
+	case budget < 16384:
+		return "medium"
+	default:
+		return "high"
+	}
+}
+
+// looseNumber accepts the numeric shapes JSON decoding produces.
+func looseNumber(value interface{}) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 // effortVariantOrder is the fallback order tried when a client asks for a model

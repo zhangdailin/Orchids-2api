@@ -109,6 +109,12 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 		"/warp/v1/responses",
 		"/puter/v1/responses",
 		"/qoder/v1/responses",
+		// The unified prefix must serve every channel's models instead of
+		// belonging to the Grok handler alone.
+		"/v1/chat/completions",
+		"/v1/messages",
+		"/v1/messages/count_tokens",
+		"/v1/responses",
 	} {
 		channelReq := httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"model":"hy3","messages":[]}`))
 		channelRec := httptest.NewRecorder()

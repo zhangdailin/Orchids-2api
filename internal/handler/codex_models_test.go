@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -124,5 +125,61 @@ func TestWriteCodexModelCatalogServesETag(t *testing.T) {
 	writeCodexModelCatalog(second, revalidate, catalog)
 	if second.Code != http.StatusNotModified || second.Body.Len() != 0 {
 		t.Fatalf("revalidate status=%d body=%q", second.Code, second.Body.String())
+	}
+}
+
+// Warp publishes one model per effort level (gpt-5-6-sol-low, -medium, ...).
+// The catalog must present that as one reasoning-capable family, otherwise a
+// client has to guess a suffix and any family request is rejected.
+func TestCodexCatalogGroupsEffortVariantsIntoOneFamily(t *testing.T) {
+	catalog := newCodexModelCatalog([]PublicModelResponse{
+		textModel("gpt-5-6-sol-low"),
+		textModel("gpt-5-6-sol-medium"),
+		textModel("gpt-5-6-sol-high"),
+		textModel("gpt-5-6-sol-xhigh"),
+		textModel("auto-open"),
+	})
+
+	if len(catalog.Models) != 2 {
+		t.Fatalf("catalog has %d entries, want the family plus auto-open", len(catalog.Models))
+	}
+	family := codexEntryFor(t, catalog, "gpt-5-6-sol")
+	levels := make([]string, 0, len(family.SupportedReasoningLevels))
+	for _, level := range family.SupportedReasoningLevels {
+		levels = append(levels, level.Effort)
+	}
+	if strings.Join(levels, ",") != "low,medium,high,xhigh" {
+		t.Fatalf("supported levels = %v, want the catalog's effort variants", levels)
+	}
+	if family.DefaultReasoningLevel != "medium" {
+		t.Fatalf("default level = %q, want medium", family.DefaultReasoningLevel)
+	}
+	if !family.SupportsReasoningSummaries || !family.SupportsReasoningSummaryParameter {
+		t.Fatalf("a family with effort levels must advertise reasoning support: %+v", family)
+	}
+
+	plain := codexEntryFor(t, catalog, "auto-open")
+	// Models without effort variants keep the historical single "none" level.
+	if len(plain.SupportedReasoningLevels) != 1 || plain.SupportedReasoningLevels[0].Effort != "none" {
+		t.Fatalf("auto-open levels = %+v, want the default none level", plain.SupportedReasoningLevels)
+	}
+	if plain.DefaultReasoningLevel != "none" {
+		t.Fatalf("auto-open default level = %q, want none", plain.DefaultReasoningLevel)
+	}
+}
+
+func TestSplitCodexEffortSuffix(t *testing.T) {
+	cases := map[string][2]string{
+		"gpt-5-6-sol-low":        {"gpt-5-6-sol", "low"},
+		"gpt-5-3-codex-xhigh":    {"gpt-5-3-codex", "xhigh"},
+		"grok-4.6":               {"grok-4.6", ""},
+		"auto-open":              {"auto-open", ""},
+		"grok-composer-2.5-fast": {"grok-composer-2.5-fast", ""},
+	}
+	for input, want := range cases {
+		family, level := splitCodexEffortSuffix(input)
+		if family != want[0] || level != want[1] {
+			t.Fatalf("splitCodexEffortSuffix(%q) = (%q, %q), want (%q, %q)", input, family, level, want[0], want[1])
+		}
 	}
 }

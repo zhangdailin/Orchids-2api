@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -308,5 +309,102 @@ func TestHandleMessages_WarpResolvesBareModelToEffortVariant(t *testing.T) {
 	}
 	if client.calls[0].Model != "gpt-5-6-sol-low" {
 		t.Fatalf("upstream model = %q, want the effort variant gpt-5-6-sol-low", client.calls[0].Model)
+	}
+}
+
+func TestRequestReasoningEffort(t *testing.T) {
+	cases := []struct {
+		name string
+		req  ClaudeRequest
+		want string
+	}{
+		{"openai field", ClaudeRequest{ReasoningEffort: "LOW"}, "low"},
+		{"output_config effort", ClaudeRequest{OutputConfig: map[string]interface{}{"effort": "High"}}, "high"},
+		{"thinking effort", ClaudeRequest{Thinking: map[string]interface{}{"effort": "medium"}}, "medium"},
+		{"openai field wins", ClaudeRequest{ReasoningEffort: "xhigh", OutputConfig: map[string]interface{}{"effort": "low"}}, "xhigh"},
+		{"small thinking budget", ClaudeRequest{Thinking: map[string]interface{}{"budget_tokens": float64(2048)}}, "low"},
+		{"mid thinking budget", ClaudeRequest{Thinking: map[string]interface{}{"budget_tokens": float64(8192)}}, "medium"},
+		{"large thinking budget", ClaudeRequest{Thinking: map[string]interface{}{"budget_tokens": float64(32000)}}, "high"},
+		{"thinking disabled", ClaudeRequest{Thinking: map[string]interface{}{"type": "disabled"}}, ""},
+		{"no hint", ClaudeRequest{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := requestReasoningEffort(tc.req); got != tc.want {
+				t.Fatalf("requestReasoningEffort() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func newEffortResolutionHandler(t *testing.T, models ...string) (*Handler, *fakePayloadClient) {
+	t.Helper()
+
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+	if err := s.CreateAccount(context.Background(), &store.Account{
+		Name:         "warp-1",
+		AccountType:  "warp",
+		RefreshToken: "rt",
+		Enabled:      true,
+		Weight:       1,
+	}); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	for index, modelID := range models {
+		mustCreateModel(t, s, strconv.Itoa(600+index), "Warp", modelID, store.ModelStatusAvailable)
+	}
+
+	lb := loadbalancer.NewWithCacheTTL(s, 0)
+	h := NewWithLoadBalancer(&config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 0}, lb)
+	client := &fakePayloadClient{}
+	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient { return client })
+	return h, client
+}
+
+func TestHandleMessages_ResolvesEffortFromAnthropicHints(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want string
+	}{
+		"output_config": {
+			`{"model":"gpt-5-6-sol","messages":[{"role":"user","content":"hi"}],"stream":false,"output_config":{"effort":"high"}}`,
+			"gpt-5-6-sol-high",
+		},
+		"thinking": {
+			`{"model":"gpt-5-6-sol","messages":[{"role":"user","content":"hi"}],"stream":false,"thinking":{"effort":"low"}}`,
+			"gpt-5-6-sol-low",
+		},
+		"thinking budget": {
+			`{"model":"gpt-5-6-sol","messages":[{"role":"user","content":"hi"}],"stream":false,"thinking":{"budget_tokens":1024}}`,
+			"gpt-5-6-sol-low",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h, client := newEffortResolutionHandler(t, "gpt-5-6-sol-low", "gpt-5-6-sol-medium", "gpt-5-6-sol-high")
+			rec := httptest.NewRecorder()
+			h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", strings.NewReader(tc.body)))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+			client.mu.Lock()
+			defer client.mu.Unlock()
+			if len(client.calls) != 1 || client.calls[0].Model != tc.want {
+				t.Fatalf("upstream calls = %+v, want model %q", client.calls, tc.want)
+			}
+		})
 	}
 }

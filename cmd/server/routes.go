@@ -110,7 +110,7 @@ func registerRoutes(
 	registerWithPrefixes(mux, channelResponsePrefixes, "/responses", inferenceAuth(limiter.Limit(channelResponses)))
 	registerWithPrefixes(mux, channelResponsePrefixes, "/responses/", inferenceAuth(limiter.Limit(channelResponsesSub)))
 
-	grokPrefixes := []string{"/grok/v1", "/v1"}
+	grokPrefixes := []string{"/grok/v1"}
 	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", inferenceAuth(limiter.Limit(grokHandler.HandleChatCompletions)))
 	registerWithPrefixes(mux, grokPrefixes, "/messages", inferenceAuth(limiter.Limit(grokHandler.HandleMessages)))
 	// /grok/v1 keeps the native Responses implementation; the unified /v1
@@ -131,8 +131,14 @@ func registerRoutes(
 		}
 		grokHandler.HandleResponseResource(w, r)
 	}
-	mux.HandleFunc("/v1/responses", inferenceAuth(limiter.Limit(grok.ResponsesDispatcher(grokHandler.HandleResponses, channelResponses, isNativeResponsesModel))))
-	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ResponsesDispatcher(nativeResponsesSub, channelResponsesSub, isNativeResponsesModel))))
+	// The unified prefix serves every channel's models, so it must not be owned
+	// by one provider: Grok models keep their native handlers, everything else
+	// goes through the shared pipeline, which picks the channel from the model.
+	mux.HandleFunc("/v1/chat/completions", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleChatCompletions, h.HandleMessages, isNativeResponsesModel))))
+	mux.HandleFunc("/v1/messages", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleMessages, h.HandleMessages, isNativeResponsesModel))))
+	mux.HandleFunc("/v1/messages/count_tokens", inferenceAuth(limiter.Limit(h.HandleCountTokens)))
+	mux.HandleFunc("/v1/responses", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleResponses, channelResponses, isNativeResponsesModel))))
+	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ModelDispatcher(nativeResponsesSub, channelResponsesSub, isNativeResponsesModel))))
 	registerWithPrefixes(mux, grokPrefixes, "/images/generations", inferenceAuth(limiter.Limit(grokHandler.HandleImagesGenerations)))
 	registerWithPrefixes(mux, grokPrefixes, "/images/edits", inferenceAuth(limiter.Limit(grokHandler.HandleImagesEdits)))
 	registerWithPrefixes(mux, grokPrefixes, "/videos", inferenceAuth(limiter.Limit(grokHandler.HandleVideosCreate)))

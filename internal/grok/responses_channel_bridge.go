@@ -33,7 +33,9 @@ type ResponsesBridgeOptions struct {
 	TTL time.Duration
 }
 
-func (o ResponsesBridgeOptions) enabled() bool { return o != ResponsesBridgeOptions{} && o.Store != nil }
+func (o ResponsesBridgeOptions) enabled() bool {
+	return o != ResponsesBridgeOptions{} && o.Store != nil
+}
 
 func (o ResponsesBridgeOptions) ttl() time.Duration {
 	if o.TTL > 0 {
@@ -160,10 +162,14 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 	}
 }
 
-// ResponsesDispatcher routes a unified Responses request by model: Grok models
-// keep the native implementation, every other model goes through the chat
-// bridge, which resolves its channel from the model store.
-func ResponsesDispatcher(native, bridged http.HandlerFunc, isNativeModel func(string) bool) http.HandlerFunc {
+// ModelDispatcher routes a unified request by model: models the Grok handler
+// serves natively keep it, every other model goes to the bridged handler, which
+// resolves its channel from the model store. It is what makes a single base URL
+// ("/v1") usable for every channel's models.
+//
+// Only POST bodies are inspected, and only to read the model: the body is
+// handed to the chosen handler untouched.
+func ModelDispatcher(native, bridged http.HandlerFunc, isNativeModel func(string) bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || isNativeModel == nil {
 			native(w, r)

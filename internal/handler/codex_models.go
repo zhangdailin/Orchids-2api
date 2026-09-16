@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -161,15 +162,74 @@ func codexDisplayName(slug string) string {
 	return strings.Join(words, " ")
 }
 
+// codexEffortSuffixes are the effort variants collapsed into one
+// reasoning-capable catalog entry. Warp publishes gpt-5-6-sol-low, -medium,
+// -high and -xhigh as separate models; presenting them as a single family with
+// supported_reasoning_levels is what lets a client ask for the family plus an
+// effort instead of guessing the exact suffix — and the gateway resolves that
+// family name back onto the variant the catalog actually has.
+var codexEffortSuffixes = []string{"low", "medium", "high", "xhigh", "max"}
+
+// splitCodexEffortSuffix splits "<family>-<effort>" into its parts. Model ids
+// without a known effort suffix are returned unchanged with an empty level.
+func splitCodexEffortSuffix(modelID string) (family, level string) {
+	for _, suffix := range codexEffortSuffixes {
+		if strings.HasSuffix(modelID, "-"+suffix) {
+			return strings.TrimSuffix(modelID, "-"+suffix), suffix
+		}
+	}
+	return modelID, ""
+}
+
+func effortLevelRank(level string) int {
+	for index, suffix := range codexEffortSuffixes {
+		if suffix == level {
+			return index
+		}
+	}
+	return len(codexEffortSuffixes)
+}
+
+func sortEffortLevels(levels []string) {
+	slices.SortStableFunc(levels, func(a, b string) int { return effortLevelRank(a) - effortLevelRank(b) })
+}
+
 func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
-	models := make([]codexModelEntry, 0, len(items))
-	for index, item := range items {
-		slug := modelpolicy.GrokModelSlug(item.ID)
+	type effortFamily struct {
+		representative PublicModelResponse
+		levels         []string
+	}
+
+	families := make(map[string]*effortFamily, len(items))
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		name, level := splitCodexEffortSuffix(item.ID)
+		entry, exists := families[name]
+		if !exists {
+			entry = &effortFamily{representative: item}
+			families[name] = entry
+			order = append(order, name)
+		}
+		if level != "" && !slices.Contains(entry.levels, level) {
+			entry.levels = append(entry.levels, level)
+		}
+	}
+
+	models := make([]codexModelEntry, 0, len(order))
+	for index, name := range order {
+		entry := families[name]
+		item := entry.representative
+		slug := modelpolicy.GrokModelSlug(name)
 		metadata, ok := codexModelMetadataTable[slug]
 		if !ok {
 			metadata = codexDefaultMetadata
 		}
-		levels := codexReasoningLevelsFor(item.ID)
+		levels := entry.levels
+		if len(levels) == 0 {
+			levels = codexReasoningLevelsFor(name)
+		} else {
+			sortEffortLevels(levels)
+		}
 		modalities := []string{"text"}
 		if metadata.imageInput {
 			modalities = append(modalities, "image")
@@ -183,7 +243,7 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 		}
 		reasoningSupported := len(levels) > 0
 		models = append(models, codexModelEntry{
-			Slug:                              item.ID,
+			Slug:                              name,
 			DisplayName:                       codexDisplayName(slug),
 			Description:                       metadata.description,
 			DefaultReasoningLevel:             codexDefaultReasoningLevel(levels),
