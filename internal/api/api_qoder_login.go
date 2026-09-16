@@ -103,7 +103,7 @@ func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
 		enabled = *options.Enabled
 	}
 
-	a.cleanupQoderLogins(time.Now())
+	a.qoderLogins.cleanup(time.Now())
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -163,16 +163,12 @@ func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
 		factory:   factory,
 	}
 
-	a.qoderLoginMu.Lock()
-	if len(a.qoderLogins) >= maxDeviceLogins {
-		a.qoderLoginMu.Unlock()
+	if !a.qoderLogins.admit(id, login) {
 		pollCancel()
 		writeQoderLoginError(w, http.StatusTooManyRequests, "too_many_logins",
 			"too many pending Qoder logins; finish or cancel one first")
 		return
 	}
-	a.qoderLogins[id] = login
-	a.qoderLoginMu.Unlock()
 
 	go func() {
 		defer close(login.done)
@@ -184,15 +180,9 @@ func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getQoderLogin(w http.ResponseWriter, id string) {
-	a.cleanupQoderLogins(time.Now())
-	a.qoderLoginMu.Lock()
-	login := a.qoderLogins[id]
-	var response deviceLoginResponse
-	if login != nil {
-		response = newDeviceLoginResponse(id, &login.deviceLogin)
-	}
-	a.qoderLoginMu.Unlock()
-	if login == nil {
+	a.qoderLogins.cleanup(time.Now())
+	response, ok := a.qoderLogins.response(id)
+	if !ok {
 		writeQoderLoginError(w, http.StatusNotFound, "login_not_found",
 			"Qoder login session not found or already finished")
 		return
@@ -202,18 +192,12 @@ func (a *API) getQoderLogin(w http.ResponseWriter, id string) {
 }
 
 func (a *API) cancelQoderLogin(w http.ResponseWriter, id string) {
-	a.qoderLoginMu.Lock()
-	login := a.qoderLogins[id]
-	if login == nil {
-		a.qoderLoginMu.Unlock()
+	done, ok := a.qoderLogins.cancel(id, "Qoder authorization cancelled")
+	if !ok {
 		writeQoderLoginError(w, http.StatusNotFound, "login_not_found",
 			"Qoder login session not found or already finished")
 		return
 	}
-	delete(a.qoderLogins, id)
-	finishDeviceLogin(&login.deviceLogin, "cancelled", "Qoder authorization cancelled", 0)
-	done := login.done
-	a.qoderLoginMu.Unlock()
 	waitForLoginPoll(done)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -221,7 +205,7 @@ func (a *API) cancelQoderLogin(w http.ResponseWriter, id string) {
 // pollQoderLogin exchanges the device token until the browser step completes,
 // then verifies and persists the account.
 func (a *API) pollQoderLogin(ctx context.Context, id string) {
-	login, ok := a.qoderLoginForPoll(id)
+	login, ok := a.qoderLogins.pollable(id)
 	if !ok {
 		return
 	}
@@ -229,12 +213,12 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 	defer client.Close()
 
 	for {
-		login, ok = a.qoderLoginForPoll(id)
+		login, ok = a.qoderLogins.pollable(id)
 		if !ok {
 			return
 		}
 		if time.Now().After(login.expiresAt) {
-			a.finishQoderLogin(id, "expired", "Qoder authorization timed out; start again", 0)
+			a.qoderLogins.finish(id, "expired", "Qoder authorization timed out; start again", 0)
 			return
 		}
 		select {
@@ -262,7 +246,7 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 			// Authorization itself failed (the transaction was consumed,
 			// cancelled, or rejected). Report it without echoing upstream text.
 			slog.Warn("Qoder authorization failed", "login_id", id, "error", err)
-			a.finishQoderLogin(id, "failed", "Qoder authorization failed; start again", 0)
+			a.qoderLogins.finish(id, "failed", "Qoder authorization failed; start again", 0)
 			return
 		}
 
@@ -274,11 +258,11 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 			// built from upstream status/path/business code only; no credential,
 			// verifier or nonce ever enters it.
 			slog.Warn("Qoder authorization succeeded but the account could not be stored", "login_id", id, "error", err)
-			a.finishQoderLogin(id, "failed",
+			a.qoderLogins.finish(id, "failed",
 				"Qoder authorization succeeded but the account could not be saved: "+truncateLoginReason(err), 0)
 			return
 		}
-		if ctx.Err() != nil || !a.qoderLoginPending(id) {
+		if ctx.Err() != nil || !a.qoderLogins.pending(id) {
 			return
 		}
 		if login.enabledKnown {
@@ -286,24 +270,24 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 		}
 		existing, err := a.findDuplicateAccountByCredential(ctx, account, 0)
 		if err != nil {
-			a.finishQoderLogin(id, "failed", "Qoder authorization succeeded but the account could not be saved", 0)
+			a.qoderLogins.finish(id, "failed", "Qoder authorization succeeded but the account could not be saved", 0)
 			return
 		}
 		if existing != nil {
 			account.ID = existing.ID
 			account.ReplaceQoderCredentials = true
 			if err := a.store.UpdateAccount(ctx, account); err != nil {
-				a.finishQoderLogin(id, "failed", "Qoder authorization succeeded but the account could not be updated", 0)
+				a.qoderLogins.finish(id, "failed", "Qoder authorization succeeded but the account could not be updated", 0)
 				return
 			}
-			a.finishQoderLogin(id, "complete", "Qoder account credentials refreshed", account.ID)
+			a.qoderLogins.finish(id, "complete", "Qoder account credentials refreshed", account.ID)
 			return
 		}
 		if err := a.store.CreateAccount(ctx, account); err != nil {
-			a.finishQoderLogin(id, "failed", "Qoder authorization succeeded but the account could not be saved", 0)
+			a.qoderLogins.finish(id, "failed", "Qoder authorization succeeded but the account could not be saved", 0)
 			return
 		}
-		a.finishQoderLogin(id, "complete", "Qoder account added", account.ID)
+		a.qoderLogins.finish(id, "complete", "Qoder account added", account.ID)
 		a.syncAccountAfterCreate(*account)
 		return
 	}
@@ -406,47 +390,6 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 		return nil, errors.New("qoder login returned no refresh token")
 	}
 	return acc, nil
-}
-
-func (a *API) qoderLoginForPoll(id string) (*qoderLoginTransaction, bool) {
-	a.qoderLoginMu.Lock()
-	defer a.qoderLoginMu.Unlock()
-	login := a.qoderLogins[id]
-	if login == nil || login.status != "pending" {
-		return nil, false
-	}
-	copyLogin := *login
-	return &copyLogin, true
-}
-
-func (a *API) qoderLoginPending(id string) bool {
-	a.qoderLoginMu.Lock()
-	defer a.qoderLoginMu.Unlock()
-	login := a.qoderLogins[id]
-	return login != nil && login.status == "pending"
-}
-
-func (a *API) finishQoderLogin(id, status, message string, accountID int64) {
-	a.qoderLoginMu.Lock()
-	defer a.qoderLoginMu.Unlock()
-	if login := a.qoderLogins[id]; login != nil {
-		finishDeviceLogin(&login.deviceLogin, status, message, accountID)
-	}
-}
-
-func (a *API) cleanupQoderLogins(now time.Time) {
-	if a == nil {
-		return
-	}
-	a.qoderLoginMu.Lock()
-	defer a.qoderLoginMu.Unlock()
-	for id, login := range a.qoderLogins {
-		if login == nil || !now.After(login.expiresAt) {
-			continue
-		}
-		finishDeviceLogin(&login.deviceLogin, "expired", "Qoder authorization timed out; start again", 0)
-		delete(a.qoderLogins, id)
-	}
 }
 
 // writeQoderLoginError reports a failure with a stable machine-readable code so

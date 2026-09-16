@@ -93,7 +93,7 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 		enabled = *options.Enabled
 	}
 
-	a.cleanupWorkBuddyLogins(time.Now())
+	a.workbuddyLogins.cleanup(time.Now())
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -150,16 +150,12 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 		factory: factory,
 	}
 
-	a.workbuddyLoginMu.Lock()
-	if len(a.workbuddyLogins) >= maxDeviceLogins {
-		a.workbuddyLoginMu.Unlock()
+	if !a.workbuddyLogins.admit(id, login) {
 		pollCancel()
 		writeWorkBuddyLoginError(w, http.StatusTooManyRequests, "too_many_logins",
 			"too many pending WorkBuddy logins; finish or cancel one first")
 		return
 	}
-	a.workbuddyLogins[id] = login
-	a.workbuddyLoginMu.Unlock()
 
 	go func() {
 		defer close(login.done)
@@ -171,15 +167,9 @@ func (a *API) startWorkBuddyLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) getWorkBuddyLogin(w http.ResponseWriter, id string) {
-	a.cleanupWorkBuddyLogins(time.Now())
-	a.workbuddyLoginMu.Lock()
-	login := a.workbuddyLogins[id]
-	var response deviceLoginResponse
-	if login != nil {
-		response = newDeviceLoginResponse(id, &login.deviceLogin)
-	}
-	a.workbuddyLoginMu.Unlock()
-	if login == nil {
+	a.workbuddyLogins.cleanup(time.Now())
+	response, ok := a.workbuddyLogins.response(id)
+	if !ok {
 		writeWorkBuddyLoginError(w, http.StatusNotFound, "login_not_found",
 			"WorkBuddy login session not found or already finished")
 		return
@@ -188,18 +178,12 @@ func (a *API) getWorkBuddyLogin(w http.ResponseWriter, id string) {
 }
 
 func (a *API) cancelWorkBuddyLogin(w http.ResponseWriter, id string) {
-	a.workbuddyLoginMu.Lock()
-	login := a.workbuddyLogins[id]
-	if login == nil {
-		a.workbuddyLoginMu.Unlock()
+	done, ok := a.workbuddyLogins.cancel(id, "WorkBuddy authorization cancelled")
+	if !ok {
 		writeWorkBuddyLoginError(w, http.StatusNotFound, "login_not_found",
 			"WorkBuddy login session not found or already finished")
 		return
 	}
-	delete(a.workbuddyLogins, id)
-	finishDeviceLogin(&login.deviceLogin, "cancelled", "WorkBuddy authorization cancelled", 0)
-	done := login.done
-	a.workbuddyLoginMu.Unlock()
 	waitForLoginPoll(done)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -207,7 +191,7 @@ func (a *API) cancelWorkBuddyLogin(w http.ResponseWriter, id string) {
 // pollWorkBuddyLogin exchanges the authorization state until the browser step
 // completes, then verifies and persists the account.
 func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
-	login, ok := a.workBuddyLoginForPoll(id)
+	login, ok := a.workbuddyLogins.pollable(id)
 	if !ok {
 		return
 	}
@@ -215,12 +199,12 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 	defer client.Close()
 
 	for {
-		login, ok = a.workBuddyLoginForPoll(id)
+		login, ok = a.workbuddyLogins.pollable(id)
 		if !ok {
 			return
 		}
 		if time.Now().After(login.expiresAt) {
-			a.finishWorkBuddyLogin(id, "expired", "WorkBuddy authorization timed out; start again", 0)
+			a.workbuddyLogins.finish(id, "expired", "WorkBuddy authorization timed out; start again", 0)
 			return
 		}
 		select {
@@ -242,17 +226,17 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 			// Authorization itself failed (state consumed, cancelled, or the
 			// upstream rejected it). Report it without echoing upstream text.
 			slog.Warn("WorkBuddy authorization failed", "login_id", id, "error", err)
-			a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization failed; start again", 0)
+			a.workbuddyLogins.finish(id, "failed", "WorkBuddy authorization failed; start again", 0)
 			return
 		}
 
 		account, err := a.buildWorkBuddyAccountFromCredentialsWithFactory(ctx, id, creds, login.configSnapshot, login.factory)
 		if err != nil {
 			slog.Warn("WorkBuddy authorization succeeded but verification failed", "login_id", id, "error", err)
-			a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization succeeded but the account could not be verified", 0)
+			a.workbuddyLogins.finish(id, "failed", "WorkBuddy authorization succeeded but the account could not be verified", 0)
 			return
 		}
-		if ctx.Err() != nil || !a.workBuddyLoginPending(id) {
+		if ctx.Err() != nil || !a.workbuddyLogins.pending(id) {
 			return
 		}
 		if login.enabledKnown {
@@ -260,24 +244,24 @@ func (a *API) pollWorkBuddyLogin(ctx context.Context, id string) {
 		}
 		existing, err := a.findDuplicateAccountByCredential(ctx, account, 0)
 		if err != nil {
-			a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization succeeded but the account could not be saved", 0)
+			a.workbuddyLogins.finish(id, "failed", "WorkBuddy authorization succeeded but the account could not be saved", 0)
 			return
 		}
 		if existing != nil {
 			account.ID = existing.ID
 			account.ReplaceWorkBuddyCredentials = true
 			if err := a.store.UpdateAccount(ctx, account); err != nil {
-				a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization succeeded but the account could not be updated", 0)
+				a.workbuddyLogins.finish(id, "failed", "WorkBuddy authorization succeeded but the account could not be updated", 0)
 				return
 			}
-			a.finishWorkBuddyLogin(id, "complete", "WorkBuddy account credentials refreshed", account.ID)
+			a.workbuddyLogins.finish(id, "complete", "WorkBuddy account credentials refreshed", account.ID)
 			return
 		}
 		if err := a.store.CreateAccount(ctx, account); err != nil {
-			a.finishWorkBuddyLogin(id, "failed", "WorkBuddy authorization succeeded but the account could not be saved", 0)
+			a.workbuddyLogins.finish(id, "failed", "WorkBuddy authorization succeeded but the account could not be saved", 0)
 			return
 		}
-		a.finishWorkBuddyLogin(id, "complete", "WorkBuddy account added", account.ID)
+		a.workbuddyLogins.finish(id, "complete", "WorkBuddy account added", account.ID)
 		a.syncAccountAfterCreate(*account)
 		return
 	}
@@ -302,7 +286,7 @@ func (a *API) buildWorkBuddyAccountFromCredentialsWithFactory(ctx context.Contex
 		acc.WorkBuddyExpiresAt = creds.ExpiresAt
 	}
 
-	state := a.workBuddyLoginState(loginID)
+	state := a.workbuddyLogins.deviceCode(loginID)
 	client := factory(acc, cfg)
 	defer client.Close()
 
@@ -373,33 +357,6 @@ func (a *API) buildWorkBuddyAccountFromCredentialsWithFactory(ctx context.Contex
 	return acc, nil
 }
 
-func (a *API) workBuddyLoginForPoll(id string) (*workbuddyLogin, bool) {
-	a.workbuddyLoginMu.Lock()
-	defer a.workbuddyLoginMu.Unlock()
-	login := a.workbuddyLogins[id]
-	if login == nil || login.status != "pending" || strings.TrimSpace(login.deviceCode) == "" {
-		return nil, false
-	}
-	copyLogin := *login
-	return &copyLogin, true
-}
-
-func (a *API) workBuddyLoginState(id string) string {
-	a.workbuddyLoginMu.Lock()
-	defer a.workbuddyLoginMu.Unlock()
-	if login := a.workbuddyLogins[id]; login != nil {
-		return login.deviceCode
-	}
-	return ""
-}
-
-func (a *API) workBuddyLoginPending(id string) bool {
-	a.workbuddyLoginMu.Lock()
-	defer a.workbuddyLoginMu.Unlock()
-	login := a.workbuddyLogins[id]
-	return login != nil && login.status == "pending"
-}
-
 func waitForLoginPoll(done <-chan struct{}) {
 	if done == nil {
 		return
@@ -407,29 +364,6 @@ func waitForLoginPoll(done <-chan struct{}) {
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-	}
-}
-
-func (a *API) finishWorkBuddyLogin(id, status, message string, accountID int64) {
-	a.workbuddyLoginMu.Lock()
-	defer a.workbuddyLoginMu.Unlock()
-	if login := a.workbuddyLogins[id]; login != nil {
-		finishDeviceLogin(&login.deviceLogin, status, message, accountID)
-	}
-}
-
-func (a *API) cleanupWorkBuddyLogins(now time.Time) {
-	if a == nil {
-		return
-	}
-	a.workbuddyLoginMu.Lock()
-	defer a.workbuddyLoginMu.Unlock()
-	for id, login := range a.workbuddyLogins {
-		if login == nil || !now.After(login.expiresAt) {
-			continue
-		}
-		finishDeviceLogin(&login.deviceLogin, "expired", "WorkBuddy authorization timed out; start again", 0)
-		delete(a.workbuddyLogins, id)
 	}
 }
 

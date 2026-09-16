@@ -188,9 +188,7 @@ func TestHandleQoderLogin_CancelStopsBlockedPollAndDoesNotPersist(t *testing.T) 
 	}
 	// Speed up only this transaction; production keeps the normal two-second
 	// cadence.
-	a.qoderLoginMu.Lock()
-	a.qoderLogins[response.ID].interval = time.Millisecond
-	a.qoderLoginMu.Unlock()
+	a.qoderLogins.update(response.ID, func(login *qoderLoginTransaction) { login.interval = time.Millisecond })
 
 	select {
 	case <-pollStarted:
@@ -234,9 +232,7 @@ func TestHandleQoderLogin_PreservesDisabledPreference(t *testing.T) {
 	if err := json.Unmarshal(start.Body.Bytes(), &response); err != nil || response.ID == "" {
 		t.Fatalf("start response = %q", start.Body.String())
 	}
-	a.qoderLoginMu.Lock()
-	a.qoderLogins[response.ID].interval = time.Millisecond
-	a.qoderLoginMu.Unlock()
+	a.qoderLogins.update(response.ID, func(login *qoderLoginTransaction) { login.interval = time.Millisecond })
 
 	deadline := time.Now().Add(5 * time.Second)
 	var final deviceLoginResponse

@@ -108,15 +108,15 @@ func TestGrokDeviceLogin_AddingOAuthAccountDoesNotDisturbExistingAccounts(t *tes
 	}
 
 	// Drive the poll loop directly against the stubbed token endpoint.
-	a.grokDeviceLoginMu.Lock()
-	login := a.grokDeviceLogins[started.ID]
-	if login == nil {
-		a.grokDeviceLoginMu.Unlock()
+	registered := false
+	a.grokLogins.update(started.ID, func(login *deviceLogin) {
+		registered = true
+		login.deviceCode = "device-code-1"
+		login.interval = 50 * time.Millisecond
+	})
+	if !registered {
 		t.Fatal("login transaction was not registered")
 	}
-	login.deviceCode = "device-code-1"
-	login.interval = 50 * time.Millisecond
-	a.grokDeviceLoginMu.Unlock()
 
 	pollCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -215,15 +215,13 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 	pollCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	pollCancel := func() {}
-	a.grokDeviceLoginMu.Lock()
-	a.grokDeviceLogins["dup"] = &grokDeviceLogin{
+	a.grokLogins.admit("dup", &deviceLogin{
 		deviceCode: "device-code-1",
 		expiresAt:  time.Now().Add(time.Minute),
 		interval:   20 * time.Millisecond,
 		cancel:     pollCancel,
 		status:     "pending",
-	}
-	a.grokDeviceLoginMu.Unlock()
+	})
 
 	done := make(chan struct{})
 	go func() {
@@ -250,9 +248,8 @@ func TestGrokDeviceLogin_SecondLoginForSameAccountUpdatesInPlace(t *testing.T) {
 		t.Fatalf("grok accounts = %d, want 1: a re-login must not create a duplicate row", grokAccounts)
 	}
 
-	a.grokDeviceLoginMu.Lock()
-	state := a.grokDeviceLogins["dup"]
-	a.grokDeviceLoginMu.Unlock()
+	var state *deviceLogin
+	a.grokLogins.update("dup", func(login *deviceLogin) { state = login })
 	if state == nil || state.status != "complete" {
 		t.Fatalf("login state = %+v, want complete", state)
 	}

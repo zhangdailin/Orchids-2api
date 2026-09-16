@@ -9,19 +9,24 @@ import (
 	"time"
 )
 
+// warpLoginTestAPI is the API the constructor builds, without a store: enough
+// for a handler test to seed one device-login transaction of its choosing.
+func warpLoginTestAPI() *API {
+	return &API{warpLogins: newDeviceLoginRegistry(identityDeviceLogin, nil, "Warp authorization expired")}
+}
+
 func TestHandleWarpDeviceAuthorizationStatusRedactsDeviceCode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a := &API{warpDeviceLogins: map[string]*warpDeviceLogin{
-		"login-id": {
-			deviceCode: "must-not-be-exposed",
-			userCode:   "ABCD-1234",
-			verifyURI:  "https://app.warp.dev/device",
-			expiresAt:  time.Now().Add(time.Minute),
-			status:     "pending",
-			cancel:     cancel,
-		},
-	}}
+	a := warpLoginTestAPI()
+	a.warpLogins.admit("login-id", &deviceLogin{
+		deviceCode: "must-not-be-exposed",
+		userCode:   "ABCD-1234",
+		verifyURI:  "https://app.warp.dev/device",
+		expiresAt:  time.Now().Add(time.Minute),
+		status:     "pending",
+		cancel:     cancel,
+	})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/warp/device-auth/login-id", nil).WithContext(ctx)
 	a.HandleWarpDeviceAuthorization(rec, req)
@@ -40,14 +45,13 @@ func TestHandleWarpDeviceAuthorizationStatusRedactsDeviceCode(t *testing.T) {
 
 func TestHandleWarpDeviceAuthorizationDeleteCancelsAndForgets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &API{warpDeviceLogins: map[string]*warpDeviceLogin{
-		"login-id": {
-			deviceCode: "device-secret",
-			expiresAt:  time.Now().Add(time.Minute),
-			status:     "pending",
-			cancel:     cancel,
-		},
-	}}
+	a := warpLoginTestAPI()
+	a.warpLogins.admit("login-id", &deviceLogin{
+		deviceCode: "device-secret",
+		expiresAt:  time.Now().Add(time.Minute),
+		status:     "pending",
+		cancel:     cancel,
+	})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/warp/device-auth/login-id", nil)
 	a.HandleWarpDeviceAuthorization(rec, req)
@@ -55,7 +59,9 @@ func TestHandleWarpDeviceAuthorizationDeleteCancelsAndForgets(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if _, ok := a.warpDeviceLogins["login-id"]; ok {
+	var remained bool
+	a.warpLogins.update("login-id", func(*deviceLogin) { remained = true })
+	if remained {
 		t.Fatal("cancelled login remained in memory")
 	}
 	select {

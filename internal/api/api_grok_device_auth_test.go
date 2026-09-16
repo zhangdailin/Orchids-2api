@@ -9,12 +9,20 @@ import (
 	"time"
 )
 
+// grokLoginTestAPI is the API the constructor builds, without a store: enough
+// for a handler test to seed one device-login transaction of its choosing.
+func grokLoginTestAPI() *API {
+	return &API{grokLogins: newDeviceLoginRegistry(identityDeviceLogin, nil, "Grok authorization expired")}
+}
+
 func TestHandleGrokDeviceAuthorizationStatusRedactsDeviceCode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	a := &API{grokDeviceLogins: map[string]*grokDeviceLogin{
-		"login-id": {deviceCode: "must-not-be-exposed", userCode: "ABCD-1234", verifyURI: "https://auth.x.ai/device", expiresAt: time.Now().Add(time.Minute), status: "pending", cancel: cancel},
-	}}
+	a := grokLoginTestAPI()
+	a.grokLogins.admit("login-id", &deviceLogin{
+		deviceCode: "must-not-be-exposed", userCode: "ABCD-1234", verifyURI: "https://auth.x.ai/device",
+		expiresAt: time.Now().Add(time.Minute), status: "pending", cancel: cancel,
+	})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/grok/device-auth/login-id", nil).WithContext(ctx)
 	a.HandleGrokDeviceAuthorization(rec, req)
@@ -29,15 +37,18 @@ func TestHandleGrokDeviceAuthorizationStatusRedactsDeviceCode(t *testing.T) {
 
 func TestHandleGrokDeviceAuthorizationDeleteCancelsAndForgets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	a := &API{grokDeviceLogins: map[string]*grokDeviceLogin{
-		"login-id": {deviceCode: "device-secret", expiresAt: time.Now().Add(time.Minute), status: "pending", cancel: cancel},
-	}}
+	a := grokLoginTestAPI()
+	a.grokLogins.admit("login-id", &deviceLogin{
+		deviceCode: "device-secret", expiresAt: time.Now().Add(time.Minute), status: "pending", cancel: cancel,
+	})
 	rec := httptest.NewRecorder()
 	a.HandleGrokDeviceAuthorization(rec, httptest.NewRequest(http.MethodDelete, "/api/grok/device-auth/login-id", nil))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if _, ok := a.grokDeviceLogins["login-id"]; ok {
+	var remained bool
+	a.grokLogins.update("login-id", func(*deviceLogin) { remained = true })
+	if remained {
 		t.Fatal("cancelled login remained in memory")
 	}
 	select {
