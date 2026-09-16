@@ -59,10 +59,11 @@ func decodeQoderBodyForTest(encoded []byte) ([]byte, error) {
 // travel the real route table, the real handler and the real client.
 type qoderE2EStub struct {
 	*httptest.Server
-	chatHeaders http.Header
-	chatBody    []byte
-	chatCalls   int
-	polls       int
+	chatHeaders    http.Header
+	chatBody       []byte
+	chatCalls      int
+	modelListCalls int
+	polls          int
 }
 
 func newQoderE2EStub(t *testing.T) *qoderE2EStub {
@@ -82,6 +83,20 @@ func newQoderE2EStub(t *testing.T) *qoderE2EStub {
 			_, _ = w.Write([]byte(`{"token":"access-1","refresh_token":"refresh-1","expires_in":86400,"user_id":"uid-e2e","user_name":"e2e"}`))
 		case "/api/v1/userinfo":
 			_, _ = w.Write([]byte(`{"uid":"uid-e2e","name":"e2e","email":"e2e@example.com"}`))
+		case "/algo/api/v2/model/list":
+			// The catalog is now read from the signed control plane, so the
+			// refresh depends on this route answering with the account's models.
+			if r.Header.Get("Cosy-Key") == "" || r.Header.Get("Cosy-MachineId") == "" {
+				t.Errorf("model list request is missing the derived auth chain: %v", r.Header)
+			}
+			if auth := r.Header.Get("Authorization"); !strings.HasPrefix(auth, "Bearer COSY.") {
+				t.Errorf("model list Authorization = %q, want a COSY bearer", auth)
+			}
+			stub.modelListCalls++
+			_, _ = w.Write([]byte(`{"code":0,"data":{"models":[` +
+				`{"key":"qmodel_latest","name":"Qwen3.7-Max","display_name":"Qwen3.7-Max","format":"openai","source":"system","enable":true,"is_reasoning":false,"max_input_tokens":1000000},` +
+				`{"key":"dmodel","name":"DeepSeek-V4-Pro","display_name":"DeepSeek-V4-Pro","format":"openai","source":"system","enable":true,"is_reasoning":true,"max_input_tokens":1000000}` +
+				`]}}`))
 		case "/algo/api/v2/service/pro/sse/agent_chat_generation":
 			stub.chatCalls++
 			stub.chatHeaders = r.Header.Clone()
@@ -259,6 +274,17 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	}
 	if refreshed.Channel != "Qoder" || refreshed.Discovered == 0 {
 		t.Fatalf("refresh result = %+v, want a discovered Qoder catalog", refreshed)
+	}
+	// The catalog must have come from the signed upstream read, not from a
+	// compiled-in list.
+	if refreshed.Source != "qoder_upstream_models" {
+		t.Fatalf("refresh source = %q, want qoder_upstream_models", refreshed.Source)
+	}
+	if stub.modelListCalls == 0 {
+		t.Fatal("the refresh did not read the upstream model list")
+	}
+	if refreshed.Verified != refreshed.Discovered {
+		t.Fatalf("verified=%d discovered=%d, want every observed row counted as verified", refreshed.Verified, refreshed.Discovered)
 	}
 
 	// 3. Run one chat completion through the channel route.

@@ -147,26 +147,54 @@ function normalizeModelRefreshResult(data, fallbackChannel) {
     updated: Number(data.updated ?? 0),
     deleted: Number(data.deleted ?? 0),
     offline: Number(data.offline ?? 0),
+    skipped: Boolean(data.skipped),
     deletedModelIDs: sortTextValues(Array.isArray(data.deleted_model_ids) ? data.deleted_model_ids : []),
     offlineModelIDs: sortTextValues(Array.isArray(data.offline_model_ids) ? data.offline_model_ids : []),
   };
 }
 
+// modelRefreshSourceLabel names the source that produced a refresh result.
+//
+// Every publishable source is an upstream catalog read for an active account.
+// A locally cached or compiled-in catalog is never a refresh result, so if one
+// ever appears here it is labelled as non-upstream instead of being dressed up
+// as an observation.
 function modelRefreshSourceLabel(source) {
   const value = String(source || "").trim();
   if (!value) return "未知来源";
   const labels = {
-    upstream_api: "账号上游 API",
-    public_page: "Warp 公开页面",
-    puter_public_models: "Puter 公开模型 API",
-    puter_public_models_test_mode: "Puter 公开 API + 账号验证",
-    puter_public_models_unverified: "Puter 公开 API（未逐个验证）",
-    grok_app_chat_static: "Grok App Chat 模型表",
-    warp_cached_models: "Warp 上次成功目录（官方暂未返回可用模型）",
+    // Upstream catalogs.
+    warp_graphql: "Warp 账号 GraphQL 目录",
+    grok_build_models: "Grok Build OAuth 目录",
+    workbuddy_cli_models: "WorkBuddy /v3/config 白名单",
+    qoder_upstream_models: "Qoder 有符号上游目录",
+    puter_public_models_test_mode: "Puter 公开目录 + 账号探测",
+    // Not an observation: nothing was read from an upstream account.
+    no_active_account: "无 active 账号（未拉取，未发布）",
   };
   if (labels[value]) return labels[value];
-  if (value.startsWith("warp_graphql")) return "Warp 账号 GraphQL";
+  if (value.startsWith("warp_graphql")) return "Warp 账号 GraphQL 目录";
+  if (value.startsWith("grok_build_models")) return "Grok Build OAuth 目录";
+  if (value.startsWith("workbuddy_cli_models")) return "WorkBuddy /v3/config 白名单";
+  if (value.startsWith("qoder_upstream_models")) return "Qoder 有符号上游目录";
+  if (value.startsWith("puter_public_models_test_mode")) return "Puter 公开目录 + 账号探测";
+  // Anything reaching here is a cached or compiled-in list. It must not be
+  // mistaken for a fresh upstream observation.
+  if (value.includes("cached") || value.includes("builtin") || value.endsWith("_unverified")) {
+    return `${value}（非上游目录，不应出现）`;
+  }
   return value;
+}
+
+// isUpstreamModelRefreshSource reports whether a result came from an upstream
+// catalog read. Only those may change the published model list.
+function isUpstreamModelRefreshSource(source) {
+  const value = String(source || "").trim();
+  return value.startsWith("warp_graphql") ||
+    value.startsWith("grok_build_models") ||
+    value.startsWith("workbuddy_cli_models") ||
+    value.startsWith("qoder_upstream_models") ||
+    value.startsWith("puter_public_models_test_mode");
 }
 
 function renderModelRefreshSummary() {
@@ -190,12 +218,18 @@ function renderModelRefreshSummary() {
 
   summary.hidden = false;
   title.textContent = `${result.channel || channel} 最近一次刷新结果`;
-  // "同步 0" is the honest result of a catalog-only refresh, so say why instead
-  // of leaving the operator to wonder whether the refresh ran.
-  const skippedNote = Number(result.verified) === 0
-    ? "主动探测已关闭，本次只读取目录、未向上游逐个验证模型。"
-    : "";
-  meta.textContent = `来源：${modelRefreshSourceLabel(result.source)}。并发数 ${result.concurrency || modelRefreshConcurrency}。${skippedNote}刷新只会补充新模型，已有模型的状态、名称、排序和默认项会保持不变。`;
+  // A refresh that published nothing has two very different causes: no active
+  // account (nothing was read), or a catalog-only read (verified stays 0 on
+  // purpose). Naming the cause is what keeps "同步 0" from looking like a bug.
+  let skippedNote = "";
+  if (result.skipped || result.source === "no_active_account") {
+    skippedNote = "该渠道没有 active 账号，本次未向上游拉取，也未写入任何模型。";
+  } else if (Number(result.verified) === 0) {
+    skippedNote = "本次只读取上游目录，未逐个验证模型可用性。";
+  } else if (!isUpstreamModelRefreshSource(result.source)) {
+    skippedNote = "该来源不是上游目录，结果不会写入模型列表。";
+  }
+  meta.textContent = `来源：${modelRefreshSourceLabel(result.source)}。并发数 ${result.concurrency || modelRefreshConcurrency}。${skippedNote}`;
 
   const stats = [
     { label: "发现", value: result.discovered },
@@ -795,6 +829,11 @@ async function refreshModelsForCurrentChannel() {
     }
 
     await loadModels();
+
+    if (normalized.skipped || data.source === "no_active_account") {
+      showToast(`${channel} 未刷新：该渠道没有 active 账号，未从上游拉取，也未写入模型`, "info");
+      return;
+    }
 
     const parts = [
       `并发 ${data.concurrency ?? modelRefreshConcurrency}`,

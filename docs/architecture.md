@@ -137,7 +137,7 @@ HTTP Request
 - `puter`：Puter 官方模型目录与本地当前代策略的交集，再经账号 `test_mode` 验证
 - `grok`：内置支持表 + 现存模型 + 公共文档探测
 - `workbuddy`：已启用账号的 CLI 模型目录，同时保存账号级模型快照
-- `qoder`：本地内置模型目录，同时保存账号级模型快照；对外模型 ID 为小写显示名，内部 key 由该通道的 resolver 映射
+- `qoder`：模型目录来自有符号上游读取（`GET /algo/api/v2/model/list`），账号快照按 JSON 保存整行；对外模型 ID 为小写显示名，内部 key 由该通道的 resolver 映射
 
 当前策略：
 

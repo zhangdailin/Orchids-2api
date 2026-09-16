@@ -306,11 +306,10 @@ func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error 
 		return nil
 	}
 	if h == nil || h.lb == nil || h.lb.Store == nil {
-		if !modelpolicy.IsPublicGrokModelID(id) {
-			return fmt.Errorf("model not found")
-		}
-		h.cacheValidatedModel(id)
-		return nil
+		// Without a store there is no observed catalog to validate against. A
+		// compiled-in model list is not a substitute: it would accept a model no
+		// active account ever advertised.
+		return fmt.Errorf("model not found")
 	}
 
 	m, err := h.lb.Store.GetModelByChannelAndModelID(ctx, "grok", id)

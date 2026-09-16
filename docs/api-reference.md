@@ -306,10 +306,13 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 
 注意：
 
-- 当前刷新是“来源同步”；Puter 会额外使用账号 `test_mode` 逐模型验证
+- **刷新只发布上游目录**。没有 active 账号时不会拉取，也不会写入任何模型；此时接口返回 `{"skipped":true,"source":"no_active_account"}`，模型列表保持不变
+- 缓存目录与内置目录都不再作为回退：拉取失败即上报失败，已有行按「上次已知状态」保留，不会被当成本次发现重新发布
+- Puter 会额外使用账号 `test_mode` 逐模型验证，返回 `source=puter_public_models_test_mode`；`discovered` 是上游目录条数，`verified` 是探测通过条数
 - WorkBuddy 使用 `GET /v3/config` 的 `cli` 白名单（鉴权成功即视为验证通过，不额外消耗额度），返回 `source=workbuddy_cli_models`
-- Qoder 使用本地内置目录，返回 `source=qoder_builtin_catalog`；对外模型 ID 是**小写化的显示名**（例如 `qwen3.7-max`），内部 key（`qmodel_latest`）在账号快照里保留
-- 来源拿不到的模型会被删除
+- Qoder 使用**有符号上游目录** `GET /algo/api/v2/model/list`（复用聊天链路的 COSY 签名），返回 `source=qoder_upstream_models`；对外模型 ID 是**小写化的显示名**（例如 `qwen3.7-max`），内部 key（`qmodel_latest`）以及 `max_input_tokens`/`is_reasoning` 等字段按 JSON 保存在账号快照里
+- Grok 使用 Build OAuth `GET /v1/models`，返回 `source=grok_build_models`；Warp 使用账号 GraphQL，返回 `source=warp_graphql_*`
+- 仅当本轮确实读到上游目录时，来源中已消失的模型才会被删除
 
 ## 5. 常用请求示例
 
@@ -474,9 +477,9 @@ curl -s -X DELETE http://127.0.0.1:3002/api/qoder/login/<login-id>
 - PKCE verifier、nonce 与设备 `machine_id` 只保存在服务端；轮询响应里不会出现它们（`user_code` 恒为空）
 - 上游在浏览器步骤完成前对 `GET /api/v1/deviceToken/poll` 返回 **404**，服务端归一为「pending」并按 2s 节奏轮询
 - 授权成功后服务端会派生并保存该账号的 runtime 认证对（`qoder_runtime_info` / `qoder_runtime_key`），登录时即完成，避免第一次聊天才暴露失败
-- **落库条件是「上游签发了设备凭据」+「解析出账号身份」**，不依赖模型目录读取。当前使用的 Qoder CLI 链路只有三个接口（设备 token 刷新、`userinfo`、聊天 SSE），**不含任何模型清单接口**；模型清单来自本地内置目录与账号快照
+- **落库条件是「上游签发了设备凭据」+「解析出账号身份」**，不依赖模型目录读取。模型清单由 `GET /algo/api/v2/model/list` 读取（与聊天同一套 COSY 签名），该读取失败**不会**影响登录是否成功
 - 只有确实不可用的凭据才会被拒绝：解析不出账号身份（`userinfo` 被拒且设备 token 未带 `user_id`）或未签发 refreshToken 时，账号不落库，且失败消息会带上具体原因（而不只是「could not be verified」）
-- 模型清单是**本地**的，因此 `POST /api/models/refresh?channel=qoder` 不会因上游不可达而失败，也不会因为某个模型「不在账号目录里」而删除它（`source=qoder_builtin_catalog`）；账号快照不带同步时间戳，因为不存在可观测的上游目录
+- 模型清单是**上游**的：`POST /api/models/refresh?channel=qoder` 使用账号凭据读取 `GET /algo/api/v2/model/list`（实测 HTTP 200，返回按能力分组的 `{"chat":[...]}`），返回 `source=qoder_upstream_models`。读取失败时刷新报错且不写入任何模型（不再回退到任何内置目录），账号快照记录本次观察到的完整行
 
 ### 9.2 套餐与额度（`Free` 计划 / 每日额度）
 

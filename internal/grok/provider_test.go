@@ -2,6 +2,7 @@ package grok
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,25 +91,48 @@ func TestAccountSupportsModelUsesObservedBuildCatalog(t *testing.T) {
 	}
 }
 
-func TestApplyCLIModelsNormalizesSparseBuildCapabilities(t *testing.T) {
+// TestApplyCLIModelsRecordsExactlyTheCatalog proves the capability snapshot is
+// the upstream catalog and nothing else.
+//
+// It used to be padded with a synthetic composer entry, a 4.5 alias whenever 4.6
+// was advertised, and a tier-gated video entry. Those are locally invented
+// capabilities: republishing them would advertise models the account never
+// reported, which is exactly what model management must not do.
+func TestApplyCLIModelsRecordsExactlyTheCatalog(t *testing.T) {
 	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: "super"}
 	ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5", "grok-4.6"}, time.Now())
 
-	for _, want := range []string{"grok-4.6", "grok-4.5", "grok-composer-2.5-fast", "grok-imagine-video-1.5"} {
-		if !AccountSupportsModel(acc, want) {
-			t.Fatalf("normalized catalog %#v is missing %q", acc.GrokModels, want)
+	want := []string{"grok-4.6", "grok-imagine-video-1.5"}
+	if len(acc.GrokModels) != len(want) {
+		t.Fatalf("catalog = %#v, want exactly %#v", acc.GrokModels, want)
+	}
+	for i, model := range want {
+		if !strings.EqualFold(acc.GrokModels[i], model) {
+			t.Fatalf("catalog = %#v, want exactly %#v", acc.GrokModels, want)
 		}
+	}
+	for _, invented := range []string{"grok-composer-2.5-fast", "grok-4.5"} {
+		if AccountSupportsModel(acc, invented) {
+			t.Fatalf("locally invented capability %q survived: %#v", invented, acc.GrokModels)
+		}
+	}
+	if acc.GrokModelsSyncedAt.IsZero() {
+		t.Fatal("the snapshot was not dated")
 	}
 }
 
-func TestApplyCLIModelsRemovesSuperVideoFromLowerTier(t *testing.T) {
-	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: "free"}
-	ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5"}, time.Now())
+// TestApplyCLIModelsDoesNotGateOnSubscriptionTier proves tier is not used to
+// invent or remove capabilities: the catalog decides, not a local policy.
+func TestApplyCLIModelsDoesNotGateOnSubscriptionTier(t *testing.T) {
+	for _, subscription := range []string{"free", "super", ""} {
+		acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: subscription}
+		ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5"}, time.Now())
 
-	if AccountSupportsModel(acc, "grok-imagine-video-1.5") {
-		t.Fatalf("free catalog retained Super-only video model: %#v", acc.GrokModels)
-	}
-	if !AccountSupportsModel(acc, "grok-composer-2.5-fast") {
-		t.Fatalf("free Build catalog is missing composer: %#v", acc.GrokModels)
+		if !AccountSupportsModel(acc, "grok-imagine-video-1.5") {
+			t.Fatalf("subscription %q dropped an advertised model: %#v", subscription, acc.GrokModels)
+		}
+		if AccountSupportsModel(acc, "grok-composer-2.5-fast") {
+			t.Fatalf("subscription %q gained a model the catalog never advertised: %#v", subscription, acc.GrokModels)
+		}
 	}
 }

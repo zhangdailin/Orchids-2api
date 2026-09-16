@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/store"
 )
 
 func TestVoiceModelCapabilitiesAreIsolatedFromConversation(t *testing.T) {
@@ -200,7 +201,22 @@ func TestVideoIDFromGenerationsPath(t *testing.T) {
 }
 
 func TestVoiceOnlyModelsAreRejectedByConversationHandlers(t *testing.T) {
-	h := NewHandler(&config.Config{}, nil)
+	// The catalog is published explicitly: the store starts empty, and a model
+	// has to exist before the handler can reject it for a capability reason
+	// rather than for being unknown.
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+	for _, record := range []*store.Model{
+		{Channel: "Grok", ModelID: "grok-voice-latest", Name: "Grok Voice Latest", Status: store.ModelStatusAvailable, Verified: true, Capabilities: []string{store.CapabilityRealtime, store.CapabilityTTS}},
+		{Channel: "Grok", ModelID: "grok-stt", Name: "Grok Speech to Text", Status: store.ModelStatusAvailable, Verified: true, Capabilities: []string{store.CapabilitySTT}},
+	} {
+		if err := s.CreateModel(context.Background(), record); err != nil {
+			t.Fatalf("CreateModel(%s) error = %v", record.ModelID, err)
+		}
+	}
 	tests := []struct {
 		name string
 		path string
@@ -211,7 +227,9 @@ func TestVoiceOnlyModelsAreRejectedByConversationHandlers(t *testing.T) {
 		{
 			name: "chat", path: "/v1/chat/completions",
 			body: `{"model":"grok-voice-latest","messages":[{"role":"user","content":"hello"}],"stream":false}`,
-			call: h.HandleChatCompletions, want: "does not support chat completions",
+			// The rejection comes from the persisted capability set, which is
+			// the authoritative one now that the catalog records capabilities.
+			call: h.HandleChatCompletions, want: "does not support chat",
 		},
 		{
 			name: "responses", path: "/v1/responses",

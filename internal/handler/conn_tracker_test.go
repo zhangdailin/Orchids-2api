@@ -341,6 +341,7 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 		mini.Close()
 	}()
 
+	publishModel(t, s, &store.Model{Channel: "Puter", ModelID: "claude-opus-5"})
 	acc1 := createEnabledTestAccount(t, s, "acc-1", "puter")
 	acc2 := createEnabledTestAccount(t, s, "acc-2", "puter")
 	acc2.MaxConcurrent = 2

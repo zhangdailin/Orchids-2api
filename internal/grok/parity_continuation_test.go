@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -11,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/store"
 )
 
 func TestResolveNewBuildAndConsoleImageCapabilities(t *testing.T) {
@@ -152,10 +155,25 @@ func TestConsoleImageEditRejectsMoreThanThreeInputs(t *testing.T) {
 		_, _ = part.Write([]byte("png"))
 	}
 	_ = form.Close()
+	// The model must exist in the observed catalog for the request to reach the
+	// input-count check; an empty store now rejects it as unknown first.
+	h, s, mini := setupValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+	if err := s.CreateModel(context.Background(), &store.Model{
+		Channel: "Grok", ModelID: "console/grok-imagine-image-2.0",
+		Name: "Console Grok Imagine Image 2.0", Status: store.ModelStatusAvailable,
+		Verified: true, Capabilities: []string{store.CapabilityImage, store.CapabilityImageEdit},
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+
 	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
 	req.Header.Set("Content-Type", form.FormDataContentType())
 	rec := httptest.NewRecorder()
-	(&Handler{}).HandleImagesEdits(rec, req)
+	h.HandleImagesEdits(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "at most 3") {
 		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
 	}

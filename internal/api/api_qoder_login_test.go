@@ -14,7 +14,6 @@ import (
 
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
-	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 )
 
@@ -329,10 +328,12 @@ func TestHandleQoderLogin_CompletesAndPersistsAccount(t *testing.T) {
 	if acc.QoderRuntimeInfo == "" || acc.QoderRuntimeKey == "" {
 		t.Fatal("the derived runtime pair was not stored")
 	}
-	// The Qoder catalog is local (the gateway refuses the model-list read for an
-	// OAuth credential), so a completed login installs the built-in list.
-	if want := len(qoder.CatalogSnapshot(qoder.DefaultCatalog())); len(acc.QoderModelIDs) != want {
-		t.Fatalf("catalog snapshot has %d entries, want the built-in %d", len(acc.QoderModelIDs), want)
+	// The catalog now comes from the signed upstream control plane. This stub
+	// answers 404 for every catalog route, so the login must save the account
+	// with an empty snapshot: nothing compiled in may be installed as if it had
+	// been observed, and the operator is expected to run a refresh.
+	if len(acc.QoderModelIDs) != 0 {
+		t.Fatalf("catalog snapshot = %v, want empty when the upstream read fails", acc.QoderModelIDs)
 	}
 	if acc.Email != "operator@example.com" {
 		t.Fatalf("email = %q", acc.Email)
@@ -584,8 +585,11 @@ func TestVerifyQoderAccountDoesNotReportForbidden(t *testing.T) {
 	if apperrors.ClassifyAccountStatus("") != "" {
 		t.Fatal("sanity: the classifier must not invent a status")
 	}
-	if len(acc.QoderModelIDs) == 0 {
-		t.Fatal("no catalog was installed")
+	// The catalog is an upstream observation, not a compiled-in list. This stub
+	// answers 404 for every catalog route, so verification must leave the
+	// snapshot empty rather than installing anything.
+	if len(acc.QoderModelIDs) != 0 {
+		t.Fatalf("QoderModelIDs = %v, want empty when the upstream read fails", acc.QoderModelIDs)
 	}
 }
 

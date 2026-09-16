@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
-
-	"orchids-api/internal/modelpolicy"
 )
 
 type puterPublicModelDetailsResponse struct {
@@ -30,9 +28,9 @@ type puterPublicModelChoice struct {
 
 const puterPublicModelDetailsURL = "https://api.puter.com/puterai/chat/models/details"
 
-// fetchPuterPublicModelChoices deliberately uses Puter's documented model
-// catalog as the availability source. The local policy only narrows that
-// catalog to the current generation exposed by this gateway.
+// fetchPuterPublicModelChoices reads Puter's documented model catalog and
+// treats it as the availability source verbatim. Publishing is the catalog's
+// decision; this gateway only decides how a published identifier is routed.
 func fetchPuterPublicModelChoices(ctx context.Context, proxyFunc func(*http.Request) (*url.URL, error)) ([]puterPublicModelChoice, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, puterPublicModelDetailsURL, nil)
 	if err != nil {
@@ -70,9 +68,12 @@ func normalizePuterPublicModelDetails(rawModels []puterPublicModelDetails) []put
 	out := make([]puterPublicModelChoice, 0, len(rawModels))
 	for _, raw := range rawModels {
 		id := strings.ToLower(strings.TrimSpace(raw.ID))
-		if !modelpolicy.IsLatestPuterModelID(id) {
+		if id == "" {
 			continue
 		}
+		// No local narrowing: the upstream catalog is the availability source,
+		// and filtering it through a compiled-in list is what made this channel
+		// publish a fixed generation regardless of what the account could run.
 		if _, exists := seen[id]; exists {
 			continue
 		}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -58,6 +59,7 @@ type modelRefreshResult struct {
 	Updated         int      `json:"updated"`
 	Deleted         int      `json:"deleted"`
 	Offline         int      `json:"offline"`
+	Skipped         bool     `json:"skipped,omitempty"`
 	DefaultModelID  string   `json:"default_model_id,omitempty"`
 	AddedModelIDs   []string `json:"added_model_ids,omitempty"`
 	DeletedModelIDs []string `json:"deleted_model_ids,omitempty"`
@@ -68,6 +70,55 @@ type discoveredModel struct {
 	ID        string
 	Name      string
 	SortOrder int
+	// Verified marks a candidate this refresh actually observed as usable
+	// upstream (a catalog read that succeeded, or a probe that was accepted).
+	// It is set per candidate rather than inferred from the candidate count, so
+	// "discovered" and "verified" stay distinguishable in the admin report.
+	Verified bool
+}
+
+// noActiveAccountsError reports that a channel has no account eligible for an
+// upstream catalog read. Model management publishes nothing in that state:
+// every published row has to be an observation of an upstream catalog, never a
+// locally compiled-in default.
+type noActiveAccountsError struct {
+	Channel string
+}
+
+func (e *noActiveAccountsError) Error() string {
+	return fmt.Sprintf("%s has no active account; model refresh only publishes upstream catalogs", e.Channel)
+}
+
+func isNoActiveAccounts(err error) bool {
+	var target *noActiveAccountsError
+	return errors.As(err, &target)
+}
+
+// upstreamCatalogSources are the only refresh sources allowed to publish model
+// rows. Each one names a catalog that was read from an upstream service for an
+// account that is currently active. A cached list, an unverified public list or
+// a compiled-in catalog is not an observation and must not reach the store.
+//
+// The match is exact rather than by prefix: "grok_build_models" is an
+// observation while "grok_build_models_unavailable_cached" is not, and a prefix
+// test would accept the latter.
+var upstreamCatalogSources = map[string]struct{}{
+	"grok_build_models":             {},
+	"workbuddy_cli_models":          {},
+	"qoder_upstream_models":         {},
+	"puter_public_models_test_mode": {},
+}
+
+// warpGraphQLSourcePrefix is the stable prefix of the Warp catalog source, which
+// names the GraphQL fields that answered and therefore carries a dynamic suffix.
+const warpGraphQLSourcePrefix = "warp_graphql_"
+
+func isUpstreamCatalogSource(source string) bool {
+	source = strings.TrimSpace(source)
+	if _, ok := upstreamCatalogSources[source]; ok {
+		return true
+	}
+	return strings.HasPrefix(source, warpGraphQLSourcePrefix)
 }
 
 type warpAccountDiscovery struct {
@@ -108,6 +159,20 @@ func makeModelRefreshHandler(cfg *config.Config, s *store.Store) http.HandlerFun
 
 		result, err := runModelRefresh(r.Context(), cfg, s, channel, concurrency)
 		if err != nil {
+			// No active account is a legitimate state, not a failure: nothing was
+			// fetched, so nothing is published. It is reported as a skipped
+			// refresh so the admin page can distinguish it from an upstream
+			// outage and from a successful empty refresh.
+			if isNoActiveAccounts(err) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(&modelRefreshResult{
+					Channel:     normalizeAdminModelChannel(channel),
+					Source:      "no_active_account",
+					Concurrency: concurrency,
+					Skipped:     true,
+				})
+				return
+			}
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -225,7 +290,7 @@ func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.S
 		return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", err)
 	}
 	if len(accounts) == 0 {
-		return nil, "", fmt.Errorf("workbuddy has no enabled accounts")
+		return nil, "", &noActiveAccountsError{Channel: "WorkBuddy"}
 	}
 
 	var lastErr error
@@ -251,35 +316,43 @@ func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.S
 	return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", lastErr)
 }
 
-// discoverQoderModels publishes the Qoder channel catalog.
+// fetchQoderUpstreamCatalogForRefresh reads the account-scoped Qoder catalog
+// from the signed control plane. It is deliberately kept as an injectable
+// control-plane operation: discovering models must never send a chat request,
+// and the catalog read is the only thing that may publish Qoder rows.
+var fetchQoderUpstreamCatalogForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account) (*qoder.Catalog, error) {
+	client := qoder.NewFromAccount(acc, refreshModelRequestConfig(cfg, "qoder"))
+	defer client.Close()
+	return client.FetchUpstreamModels(ctx)
+}
+
+// discoverQoderModels publishes the Qoder channel catalog read from the signed
+// upstream control plane.
 //
-// The catalog is local, not fetched: the Qoder CLI's HTTP surface has no model
-// list endpoint and its OAuth credential is refused by the gateway's
-// `/algo/api/v2/model/list` with `403 code=101 Signature invalid`. The built-in
-// list is therefore what this channel can honestly publish, and the per-account
-// snapshot records what was installed.
+// There is no local fallback. This channel previously published a compiled-in
+// catalog because the model-list read was rejected; a built-in list is not an
+// observation of what the account may run, so the refresh now reports the read
+// failure instead of restating a compiled-in default as discovered state.
 func discoverQoderModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	source := "qoder_builtin_catalog"
+	source := "qoder_upstream_models"
 	accounts, err := enabledAccountsByType(ctx, s, "qoder")
 	if err != nil {
 		return nil, "", fmt.Errorf("qoder model discovery failed: %w", err)
 	}
 	if len(accounts) == 0 {
-		return nil, "", fmt.Errorf("qoder has no enabled accounts")
+		return nil, "", &noActiveAccountsError{Channel: "Qoder"}
 	}
 
 	var lastErr error
 	for _, acc := range accounts {
-		client := qoder.NewFromAccount(acc, refreshModelRequestConfig(cfg, "qoder"))
-		catalog, fetchErr := client.FetchModels(ctx)
-		client.Close()
+		catalog, fetchErr := fetchQoderUpstreamCatalogForRefresh(ctx, cfg, acc)
 		if fetchErr != nil {
 			lastErr = fetchErr
 			continue
 		}
 		candidates := qoderCatalogToDiscovered(catalog)
 		if len(candidates) == 0 {
-			lastErr = fmt.Errorf("qoder account #%d returned an empty catalog", acc.ID)
+			lastErr = fmt.Errorf("qoder account #%d returned an empty upstream catalog", acc.ID)
 			continue
 		}
 		persistQoderCatalogSnapshot(ctx, s, acc, catalog)
@@ -315,16 +388,13 @@ func qoderCatalogToDiscovered(catalog *qoder.Catalog) []discoveredModel {
 		// display name are both still accepted at request time, because the
 		// catalog resolves case-insensitively.
 		id = strings.ToLower(id)
-		out = append(out, discoveredModel{ID: id, Name: id, SortOrder: i})
+		out = append(out, discoveredModel{ID: id, Name: id, SortOrder: i, Verified: true})
 	}
 	return out
 }
 
-// persistQoderCatalogSnapshot records the account-scoped catalog so model
-// selection resolves against the same list the channel publishes.
-//
-// No sync timestamp is written: the catalog is local, so dating it would claim an
-// upstream observation that never happened.
+// persistQoderCatalogSnapshot records the account-scoped upstream catalog so
+// model selection resolves against the same list the channel publishes.
 func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store.Account, catalog *qoder.Catalog) {
 	if acc == nil || acc.ID == 0 {
 		return
@@ -350,7 +420,7 @@ func workBuddyCatalogToDiscovered(models []workbuddy.WorkBuddyModel) []discovere
 		if name == "" {
 			name = id
 		}
-		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
+		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i, Verified: true})
 	}
 	return out
 }
@@ -378,16 +448,27 @@ func persistWorkBuddyCatalogSnapshot(ctx context.Context, s *store.Store, acc *s
 }
 
 func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
+	// Puter's public catalog is readable without a credential, but a published
+	// model is only trustworthy when an active account accepted it. Without an
+	// active account the refresh therefore observes nothing and publishes
+	// nothing.
+	accounts, accErr := enabledAccountsByType(ctx, s, "puter")
+	if accErr != nil {
+		return nil, "", fmt.Errorf("puter model discovery failed: %w", accErr)
+	}
+	if len(accounts) == 0 {
+		return nil, "", &noActiveAccountsError{Channel: "Puter"}
+	}
+
 	proxyFunc := http.ProxyFromEnvironment
 	if cfg != nil {
 		proxyFunc = util.ProxyFuncFromConfig(cfg)
 	}
 	items, err := fetchPuterPublicModelChoices(ctx, proxyFunc)
-	source := "puter_public_models"
-	if err != nil || len(items) == 0 {
-		if err != nil {
-			return nil, "", fmt.Errorf("puter public model discovery failed: %w", err)
-		}
+	if err != nil {
+		return nil, "", fmt.Errorf("puter public model discovery failed: %w", err)
+	}
+	if len(items) == 0 {
 		return nil, "", fmt.Errorf("puter public model discovery returned no choices")
 	}
 
@@ -396,23 +477,15 @@ func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *s
 		return nil, "", fmt.Errorf("puter has no discoverable models")
 	}
 
-	accounts, accErr := enabledAccountsByType(ctx, s, "puter")
-	if accErr != nil || len(accounts) == 0 {
-		if accErr != nil {
-			return candidates, source + "_unverified", nil
-		}
-		return candidates, source + "_unverified", nil
-	}
-
 	summary := verifyPuterDiscoveredModelsConcurrent(ctx, cfg, accounts, candidates, concurrency)
 	verified := summary.Verified
 	if len(verified) == 0 && summary.SawInsufficientFunds {
-		return candidates, source + "_quota_limited", nil
+		return nil, "", fmt.Errorf("puter accounts reported insufficient funds; no model could be observed as available")
 	}
 	if len(verified) == 0 {
 		return nil, "", fmt.Errorf("no puter models verified by test_mode")
 	}
-	return verified, source + "_test_mode", nil
+	return verified, "puter_public_models_test_mode", nil
 }
 
 func puterChoicesToDiscovered(items []puterPublicModelChoice) []discoveredModel {
@@ -499,6 +572,7 @@ func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Conf
 			continue
 		}
 		candidate.SortOrder = len(verified)
+		candidate.Verified = true
 		verified = append(verified, candidate)
 	}
 	return puterModelVerificationSummary{Verified: verified, SawInsufficientFunds: sawInsufficientFunds}
@@ -530,6 +604,7 @@ func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, 
 		}
 		if ok {
 			candidate.SortOrder = len(verified)
+			candidate.Verified = true
 			verified = append(verified, candidate)
 		}
 	}
@@ -593,19 +668,17 @@ type grokBuildModelDiscovery struct {
 // account scoped, so every successful response is persisted on that account;
 // only models with a locally implemented Build route are published globally.
 //
-// A failed control-plane read must never erase the last known global catalog.
-// The historical catalog is consequently used only as an outage/no-account
-// fallback, never merged into a successful Build discovery.
+// A failed control-plane read publishes nothing. The historical catalog is not
+// a fallback: the rows already in the store are last known state, not a new
+// observation, and re-publishing them would report a stale catalog as freshly
+// discovered.
 func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
 	accounts, err := grokBuildModelDiscoveryAccounts(ctx, s)
 	if err != nil {
 		return nil, "", err
 	}
 	if len(accounts) == 0 {
-		if cached := cachedGrokModels(ctx, s); len(cached) > 0 {
-			return cached, "grok_cached_models", nil
-		}
-		return nil, "", fmt.Errorf("no enabled Grok Build OAuth accounts or cached models")
+		return nil, "", &noActiveAccountsError{Channel: "Grok"}
 	}
 
 	workerCount := boundedModelRefreshWorkers(len(accounts), concurrency)
@@ -641,8 +714,12 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 	merged := make([]discoveredModel, 0, len(accounts)*2)
 	seen := make(map[string]struct{})
 	successes := 0
+	var lastErr error
 	for _, result := range ordered {
 		if result.account == nil || result.err != nil || len(result.models) == 0 {
+			if result.err != nil {
+				lastErr = result.err
+			}
 			continue
 		}
 		successes++
@@ -672,20 +749,17 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 				continue
 			}
 			seen[key] = struct{}{}
-			merged = append(merged, discoveredModel{ID: spec.ID, Name: util.FirstNonEmpty(spec.Name, spec.ID), SortOrder: len(merged)})
+			merged = append(merged, discoveredModel{ID: spec.ID, Name: util.FirstNonEmpty(spec.Name, spec.ID), SortOrder: len(merged), Verified: true})
 		}
 	}
 	if len(merged) > 0 {
 		return merged, "grok_build_models", nil
 	}
-	if cached := cachedGrokModels(ctx, s); len(cached) > 0 {
-		if successes > 0 {
-			return cached, "grok_build_models_no_routable_models_cached", nil
-		}
-		return cached, "grok_build_models_unavailable_cached", nil
-	}
 	if successes > 0 {
 		return nil, "", fmt.Errorf("official Grok Build catalog contains no locally routable models")
+	}
+	if lastErr != nil {
+		return nil, "", fmt.Errorf("official Grok Build model discovery failed for all enabled OAuth accounts: %w", lastErr)
 	}
 	return nil, "", fmt.Errorf("official Grok Build model discovery failed for all enabled OAuth accounts")
 }
@@ -729,49 +803,21 @@ func grokBuildModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*st
 	return out, nil
 }
 
-func cachedGrokModels(ctx context.Context, s *store.Store) []discoveredModel {
-	if s == nil {
-		return nil
-	}
-	models, err := s.ListModels(ctx)
-	if err != nil {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(models))
-	out := make([]discoveredModel, 0, len(models))
-	for _, model := range models {
-		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
-			continue
-		}
-		id := canonicalGrokRefreshModelID(model.ModelID)
-		if id == "" {
-			continue
-		}
-		key := strings.ToLower(id)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		name := util.FirstNonEmpty(model.Name, id)
-		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
-	}
-	return out
-}
-
 func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
 	if s == nil {
 		return nil, "", fmt.Errorf("store not configured")
 	}
 
-	// Model configuration is read-only metadata, not an inference request.
-	// A quota-exhausted account is usually disabled for routing but can still
-	// expose its official model choices. Prefer enabled accounts, then use a
-	// credential-bearing disabled account as a catalog fallback so the global
-	// model-management page does not become unusable when every paid account is
-	// cooling down or exhausted.
+	// Model configuration is a control-plane read, but only an active account
+	// may supply it: a disabled account is not part of the pool this gateway
+	// serves from, and publishing its catalog would advertise models no request
+	// can actually be routed to.
 	accounts, err := warpModelDiscoveryAccounts(ctx, s)
 	if err != nil {
 		return nil, "", err
+	}
+	if len(accounts) == 0 {
+		return nil, "", &noActiveAccountsError{Channel: "Warp"}
 	}
 
 	seen := map[string]struct{}{}
@@ -791,6 +837,7 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 			ID:        id,
 			Name:      name,
 			SortOrder: len(out),
+			Verified:  true,
 		})
 	}
 
@@ -862,48 +909,17 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 	if len(out) > 0 {
 		return out, joinWarpDiscoverySources(sourceSet), nil
 	}
-	// Warp can temporarily hide every agent-mode choice when all accounts are
-	// exhausted or a workspace is still provisioning. Do not turn that missing
-	// catalog into a destructive refresh. Keep the last verified global catalog
-	// visible and report its source explicitly; a later refresh will replace it
-	// as soon as GraphQL returns choices again.
-	if cached := cachedWarpModels(ctx, s); len(cached) > 0 {
-		return cached, "warp_cached_models", nil
-	}
+	// Warp can temporarily hide every agent-mode choice while a workspace is
+	// still provisioning. The last verified global catalog stays in the store as
+	// last known state, but this refresh observed nothing, so it publishes
+	// nothing and reports the failure instead of restating the old rows as a new
+	// discovery.
 	return nil, "", fmt.Errorf("warp model discovery returned no account choices")
 }
 
-func cachedWarpModels(ctx context.Context, s *store.Store) []discoveredModel {
-	if s == nil {
-		return nil
-	}
-	models, err := s.ListModels(ctx)
-	if err != nil {
-		return nil
-	}
-	out := make([]discoveredModel, 0, len(models))
-	seen := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "warp") {
-			continue
-		}
-		id := warp.NormalizeModelID(model.ModelID)
-		if id == "" {
-			continue
-		}
-		if _, exists := seen[id]; exists {
-			continue
-		}
-		seen[id] = struct{}{}
-		name := strings.TrimSpace(model.Name)
-		if name == "" {
-			name = id
-		}
-		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: len(out)})
-	}
-	return out
-}
-
+// warpModelDiscoveryAccounts returns the Warp accounts a catalog read may use.
+// Only enabled, credential-bearing accounts qualify: a disabled account is not
+// in the serving pool, so its catalog is not this deployment's catalog.
 func warpModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.Account, error) {
 	if s == nil {
 		return nil, fmt.Errorf("store not configured")
@@ -917,17 +933,15 @@ func warpModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.A
 		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
 			continue
 		}
+		if !acc.Enabled {
+			continue
+		}
 		if strings.TrimSpace(warp.RefreshToken(acc)) == "" {
 			continue
 		}
 		eligible = append(eligible, acc)
 	}
-	sort.SliceStable(eligible, func(i, j int) bool {
-		if eligible[i].Enabled != eligible[j].Enabled {
-			return eligible[i].Enabled
-		}
-		return eligible[i].ID < eligible[j].ID
-	})
+	sort.SliceStable(eligible, func(i, j int) bool { return eligible[i].ID < eligible[j].ID })
 	return eligible, nil
 }
 
@@ -1020,6 +1034,13 @@ func enabledAccountsByType(ctx context.Context, s *store.Store, accountType stri
 }
 
 func applyModelRefresh(ctx context.Context, s *store.Store, channel string, source string, candidates []discoveredModel) (*modelRefreshResult, error) {
+	// The single gate that keeps locally compiled-in or cached catalogs out of
+	// model management. Discovery is expected to fail instead of returning a
+	// non-upstream source; this refuses the write if it ever does.
+	if !isUpstreamCatalogSource(source) {
+		return nil, fmt.Errorf("%s refresh refused: %q is not an upstream catalog source", channel, source)
+	}
+
 	existingModels, err := s.ListModels(ctx)
 	if err != nil {
 		return nil, err
@@ -1035,8 +1056,10 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 	fetchedSet := make(map[string]discoveredModel, len(candidates))
 	for _, model := range candidates {
 		fetchedSet[model.ID] = model
+		if model.Verified {
+			result.Verified++
+		}
 	}
-	result.Verified = len(candidates)
 
 	for _, model := range existingModels {
 		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), channel) {
@@ -1050,35 +1073,49 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 
 	for _, model := range candidates {
 		existing := existingByID[model.ID]
-		if existing == nil {
-			record := &store.Model{
-				Channel:   channel,
-				ModelID:   model.ID,
-				Name:      util.FirstNonEmpty(model.Name, model.ID),
-				Status:    store.ModelStatusAvailable,
-				Verified:  true,
-				IsDefault: model.ID == defaultModelID,
-				SortOrder: model.SortOrder,
-			}
-			if strings.EqualFold(strings.TrimSpace(channel), "grok") {
-				store.ApplyGrokRouteDefaults(record)
-				record.Origin = "discovery"
-				record.Provider = grok.ProviderBuild
-				record.UpstreamModel = model.ID
-				if strings.Contains(strings.ToLower(model.ID), "video") {
-					record.Capabilities = []string{store.CapabilityVideo}
-				} else {
-					record.Capabilities = []string{store.CapabilityChat, store.CapabilityMessages, store.CapabilityResponses}
+		if existing != nil {
+			// A refresh that observed this model is what marks it verified.
+			// Creation alone was not enough: a row that predates the observation
+			// kept Verified=false forever, and an unverified Grok row is not
+			// visible, so the channel's own default model disappeared from
+			// /v1/models. Only the flag is touched — name, status, ordering and
+			// default are operator-owned and stay as they are.
+			if model.Verified && !existing.Verified {
+				updated := *existing
+				updated.Verified = true
+				if err := s.UpdateModel(ctx, &updated); err != nil {
+					return nil, err
 				}
-				record.NormalizeRoute()
+				result.Updated++
 			}
-			if err := s.CreateModel(ctx, record); err != nil {
-				return nil, err
-			}
-			result.Added++
-			result.AddedModelIDs = append(result.AddedModelIDs, model.ID)
 			continue
 		}
+		record := &store.Model{
+			Channel:   channel,
+			ModelID:   model.ID,
+			Name:      util.FirstNonEmpty(model.Name, model.ID),
+			Status:    store.ModelStatusAvailable,
+			Verified:  model.Verified,
+			IsDefault: model.ID == defaultModelID,
+			SortOrder: model.SortOrder,
+		}
+		if strings.EqualFold(strings.TrimSpace(channel), "grok") {
+			store.ApplyGrokRouteDefaults(record)
+			record.Origin = "discovery"
+			record.Provider = grok.ProviderBuild
+			record.UpstreamModel = model.ID
+			if strings.Contains(strings.ToLower(model.ID), "video") {
+				record.Capabilities = []string{store.CapabilityVideo}
+			} else {
+				record.Capabilities = []string{store.CapabilityChat, store.CapabilityMessages, store.CapabilityResponses}
+			}
+			record.NormalizeRoute()
+		}
+		if err := s.CreateModel(ctx, record); err != nil {
+			return nil, err
+		}
+		result.Added++
+		result.AddedModelIDs = append(result.AddedModelIDs, model.ID)
 	}
 	if shouldForceWarpDefault(channel, defaultModelID) {
 		if existing := existingByID[defaultModelID]; existing != nil && !existing.IsDefault {
@@ -1113,25 +1150,24 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 	return result, nil
 }
 
+// shouldDeleteMissingModelsOnRefresh reports whether a refresh may prune rows
+// that the upstream catalog no longer advertises.
+//
+// Pruning is only allowed on a source that is authoritative for the whole
+// channel. It is refused for two different reasons:
+//
+//   - A non-upstream source observed nothing, so a missing row is not evidence.
+//   - The Grok Build OAuth read is a *text-model* catalog. It deliberately omits
+//     the Composer capability and every media, voice and STT route the channel
+//     implements, so a row missing from it may still be perfectly routable.
+//     Pruning on it deleted 16 working models in production, which is why the
+//     Build source is excluded here.
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
-	if strings.EqualFold(strings.TrimSpace(channel), "puter") {
-		return strings.HasPrefix(strings.TrimSpace(source), "puter_public_models")
-	}
-	if strings.EqualFold(strings.TrimSpace(channel), "workbuddy") {
-		// GET /v3/config is the authoritative cli whitelist for the account, so
-		// models that disappeared from it must not stay routable.
-		return strings.HasPrefix(strings.TrimSpace(source), "workbuddy_cli_models")
-	}
-	if strings.EqualFold(strings.TrimSpace(channel), "qoder") {
-		// The Qoder catalog is local, so a refresh observes nothing new about the
-		// account's entitlements. Pruning on it would delete models for no reason.
-		return false
-	}
-	if !strings.EqualFold(strings.TrimSpace(channel), "warp") {
-		return false
-	}
 	source = strings.TrimSpace(source)
-	return strings.Contains(source, "feature_model_choice_agent_mode") || strings.Contains(source, "feature_model_choice_all")
+	if source == "grok_build_models" {
+		return false
+	}
+	return isUpstreamCatalogSource(source)
 }
 
 func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Model, ordered []discoveredModel) string {

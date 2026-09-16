@@ -128,6 +128,8 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 		t.Fatalf("CreateAccount(second) error = %v", err)
 	}
 
+	publishModel(t, s, &store.Model{Channel: "Puter", ModelID: "claude-opus-5"})
+
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 1, RetryDelay: 0}

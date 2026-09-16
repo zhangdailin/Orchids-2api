@@ -23,6 +23,17 @@ import (
 
 // signedTestAccount builds an account whose credential and derived pair are
 // complete, so a request can be assembled without touching the token endpoints.
+// observedSnapshot renders the snapshot an upstream refresh records, including
+// the wire fields the chat request's model block is rebuilt from.
+func observedSnapshot() []string {
+	enabled := true
+	return CatalogSnapshot(newCatalog([]modelEntry{
+		{Key: "qmodel_latest", Name: "Qwen3.7-Max", Format: "openai", Source: "system", Enable: &enabled, MaxInputTokens: 1000000},
+		{Key: "qmodel_38max", Name: "Qwen3.8-Max", Format: "openai", Source: "system", Enable: &enabled, IsReasoning: true, MaxInputTokens: 1000000},
+		{Key: "dmodel", Name: "DeepSeek-V4-Pro", Format: "openai", Source: "system", Enable: &enabled, IsReasoning: true, MaxInputTokens: 1000000},
+	}))
+}
+
 func signedTestAccount() *store.Account {
 	return &store.Account{
 		ID:                1,
@@ -35,6 +46,9 @@ func signedTestAccount() *store.Account {
 		QoderRuntimeInfo:  "runtime-info",
 		QoderRuntimeKey:   "runtime-key",
 		QoderDataPolicy:   true,
+		// Routing resolves against the observed catalog, so a client that signs
+		// a request needs the snapshot a refresh would have recorded.
+		QoderModelIDs: observedSnapshot(),
 	}
 }
 
@@ -446,95 +460,6 @@ func TestBusyWaitIsCapped(t *testing.T) {
 	}
 	if got := busyWait("not-a-number", nil); got != 2*time.Second {
 		t.Fatalf("busyWait() = %v, want the 2s default", got)
-	}
-}
-
-// TestFetchModelsServesTheBuiltInCatalog proves the channel serves a usable
-// catalog with no network access at all, which is what makes the device login
-// independent of the gateway's model-list endpoint.
-func TestFetchModelsServesTheBuiltInCatalog(t *testing.T) {
-	t.Parallel()
-
-	acc := signedTestAccount()
-	acc.QoderModelIDs = nil
-	client := NewFromAccount(acc, nil)
-	// Point everything at a closed port: a network read would fail here.
-	setTestEndpoints(client, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
-
-	catalog, err := client.FetchModels(context.Background())
-	if err != nil {
-		t.Fatalf("FetchModels() error = %v", err)
-	}
-	if catalog.Len() == 0 {
-		t.Fatal("the built-in catalog is empty")
-	}
-	entry, err := catalog.Resolve("Qwen3.7-Max")
-	if err != nil {
-		t.Fatalf("Resolve(display name) error = %v", err)
-	}
-	if entry.Key != "qmodel_latest" {
-		t.Fatalf("resolved key = %q, want qmodel_latest", entry.Key)
-	}
-	if entry, err = catalog.Resolve("qmodel_latest"); err != nil || entry.Name != "Qwen3.7-Max" {
-		t.Fatalf("Resolve(internal key) = %+v, %v, want the same row", entry, err)
-	}
-	if _, err := catalog.Resolve("not-a-model"); err == nil {
-		t.Fatal("Resolve(unknown) error = nil")
-	}
-}
-
-// TestCatalogSnapshotRoundTrip proves the stored snapshot preserves the display
-// name, so a restart does not turn a display name into a key.
-func TestCatalogSnapshotRoundTrip(t *testing.T) {
-	t.Parallel()
-
-	original := newCatalog([]modelEntry{{Key: "kmodel", Name: "Kimi-K2.7-Code"}, {Key: "dmodel", Name: "dmodel"}})
-	ids := catalogToIDs(original)
-	restored := catalogFromIDs(ids)
-	if got := restored.Len(); got != 2 {
-		t.Fatalf("restored length = %d, want 2", got)
-	}
-	entry, err := restored.Resolve("Kimi-K2.7-Code")
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	if entry.Key != "kmodel" {
-		t.Fatalf("restored key = %q, want kmodel", entry.Key)
-	}
-	// A bare key snapshot (an imported or hand-edited value) still resolves.
-	imported := catalogFromIDs([]string{"qmodel_38max"})
-	if entry, err := imported.Resolve("qmodel_38max"); err != nil || entry.Key != "qmodel_38max" {
-		t.Fatalf("Resolve(bare key) = %+v, %v", entry, err)
-	}
-}
-
-// TestDefaultCatalogResolvesEverythingItAdvertises proves the fallback catalog
-// is self-consistent, since a fresh account serves its first request from it.
-func TestDefaultCatalogResolvesEverythingItAdvertises(t *testing.T) {
-	t.Parallel()
-
-	catalog := DefaultCatalog()
-	if catalog.Len() == 0 {
-		t.Fatal("the fallback catalog is empty")
-	}
-	for _, name := range catalog.Names() {
-		if _, err := catalog.Resolve(name); err != nil {
-			t.Errorf("Resolve(%q) error = %v", name, err)
-		}
-	}
-	for _, key := range []string{"qmodel_38max", "dmodel", "mmodel"} {
-		entry, err := catalog.Resolve(key)
-		if err != nil {
-			t.Errorf("Resolve(%q) error = %v", key, err)
-			continue
-		}
-		if entry.Key != key {
-			t.Errorf("Resolve(%q).Key = %q", key, entry.Key)
-		}
-	}
-	// The default entry must not be the flagship when a cheaper tier exists.
-	if entry := catalog.defaultEntry(); entry.Key == "ultimate" {
-		t.Errorf("default model = %q, want a cheaper tier", entry.Key)
 	}
 }
 

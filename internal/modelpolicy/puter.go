@@ -1,37 +1,34 @@
 package modelpolicy
 
-import (
-	"slices"
-	"strings"
-)
+import "strings"
 
+// DefaultPuterModelID is the gateway-side default used when a request arrives
+// without a model name. It is a routing default, not a catalog: which models
+// exist is always decided by the upstream model list read during a refresh.
 const DefaultPuterModelID = "claude-opus-5"
 
-// latestPuterModelIDs is deliberately small. Puter's public catalog contains
-// historical aliases and hundreds of routed models; the gateway only exposes
-// the current generation from each directly supported provider.
-var latestPuterModelIDs = []string{
-	"claude-opus-5",
-	"claude-sonnet-5",
-	"claude-fable-5",
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gemini-3.5-flash",
-	"grok-4.5",
-	"deepseek-v4-pro",
-	"deepseek-v4-flash",
-	"mistral-small-2603",
-}
-
-var latestPuterModelAllowlist = stringSet(latestPuterModelIDs)
-
-func LatestPuterModelIDs() []string {
-	return slices.Clone(latestPuterModelIDs)
-}
-
-func IsLatestPuterModelID(modelID string) bool {
+// PuterServiceForModel derives the upstream service that serves a model.
+//
+// The service is a property of the identifier the upstream catalog advertised,
+// so it is derived from the prefix rather than looked up in a compiled-in list.
+// A prefix this gateway does not know how to route is refused: publishing the
+// model is the catalog's decision, but routing it is this gateway's.
+func PuterServiceForModel(modelID string) (string, bool) {
 	id := strings.ToLower(strings.TrimSpace(modelID))
-	_, ok := latestPuterModelAllowlist[id]
-	return ok
+	switch {
+	case strings.HasPrefix(id, "claude-"):
+		return "claude", true
+	case strings.HasPrefix(id, "gpt-"):
+		return "openai", true
+	case strings.HasPrefix(id, "gemini-"):
+		return "google", true
+	case strings.HasPrefix(id, "grok-"):
+		return "x-ai", true
+	case strings.HasPrefix(id, "deepseek-"):
+		return "deepseek", true
+	case strings.HasPrefix(id, "mistral-"):
+		return "mistral", true
+	default:
+		return "", false
+	}
 }

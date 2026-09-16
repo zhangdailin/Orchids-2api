@@ -334,7 +334,13 @@ func TestChatHeadersAreMinimal(t *testing.T) {
 	}
 }
 
-func TestServiceForCurrentModelsAndRejectsLegacyRoutes(t *testing.T) {
+// TestServiceForModelDerivesFromTheIdentifier proves routing follows the model
+// identifier instead of a compiled-in allowlist.
+//
+// The allowlist used to gate this, so a model the upstream catalog added stayed
+// unroutable until this repository was edited. The mapping is now derived from
+// the prefix, and an identifier with no known upstream service is still refused.
+func TestServiceForModelDerivesFromTheIdentifier(t *testing.T) {
 	tests := []struct{ model, want string }{
 		{"claude-opus-5", "claude"},
 		{"gpt-5.6-sol", "openai"},
@@ -342,6 +348,9 @@ func TestServiceForCurrentModelsAndRejectsLegacyRoutes(t *testing.T) {
 		{"grok-4.5", "x-ai"},
 		{"deepseek-v4-flash", "deepseek"},
 		{"mistral-small-2603", "mistral"},
+		// Not on the old policy list, but a real upstream identifier.
+		{"claude-opus-4-6", "claude"},
+		{"CLAUDE-OPUS-4-6", "claude"},
 	}
 	for _, tt := range tests {
 		got, err := serviceForModel(tt.model)
@@ -349,9 +358,9 @@ func TestServiceForCurrentModelsAndRejectsLegacyRoutes(t *testing.T) {
 			t.Fatalf("serviceForModel(%q)=(%q,%v) want %q", tt.model, got, err, tt.want)
 		}
 	}
-	for _, legacy := range []string{"claude-opus-4-6", "openrouter:openai/gpt-5.6", "togetherai:qwen/model", "o3", "unknown"} {
-		if _, err := serviceForModel(legacy); err == nil {
-			t.Fatalf("serviceForModel(%q) unexpectedly succeeded", legacy)
+	for _, unmappable := range []string{"openrouter:openai/gpt-5.6", "togetherai:qwen/model", "o3", "unknown", ""} {
+		if _, err := serviceForModel(unmappable); err == nil {
+			t.Fatalf("serviceForModel(%q) unexpectedly succeeded", unmappable)
 		}
 	}
 }

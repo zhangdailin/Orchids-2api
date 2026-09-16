@@ -326,27 +326,16 @@ func normalizePuterToolControls(req upstream.UpstreamRequest, service string, to
 	return nil, parallel
 }
 
+// serviceForModel maps a model identifier onto the upstream service that serves
+// it. The mapping follows the identifier the upstream catalog advertised rather
+// than a compiled-in allowlist, so a model the catalog added is routable without
+// a code change while an identifier this gateway cannot map is still refused.
 func serviceForModel(modelID string) (string, error) {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	if !modelpolicy.IsLatestPuterModelID(modelID) {
-		return "", fmt.Errorf("unsupported puter model %q", modelID)
+	if service, ok := modelpolicy.PuterServiceForModel(modelID); ok {
+		return service, nil
 	}
-	switch {
-	case strings.HasPrefix(modelID, "claude-"):
-		return "claude", nil
-	case strings.HasPrefix(modelID, "gpt-"):
-		return "openai", nil
-	case strings.HasPrefix(modelID, "gemini-"):
-		return "google", nil
-	case strings.HasPrefix(modelID, "grok-"):
-		return "x-ai", nil
-	case strings.HasPrefix(modelID, "deepseek-"):
-		return "deepseek", nil
-	case strings.HasPrefix(modelID, "mistral-"):
-		return "mistral", nil
-	default:
-		return "", fmt.Errorf("puter model %q has no configured service", modelID)
-	}
+	return "", fmt.Errorf("puter model %q has no configured service", modelID)
 }
 
 func formatPuterAPIError(apiErr *ErrorPayload, raw string) error {

@@ -452,9 +452,13 @@ func (c *Client) resolveModel(req upstream.UpstreamRequest) (modelEntry, error) 
 	return entry, nil
 }
 
-// loadCatalog returns the account's cached catalog, falling back to the built-in
-// seed. It never performs I/O: a chat request must not depend on a catalog read,
-// and the handler refreshes the catalog out of band.
+// loadCatalog returns the account's observed catalog. It never performs I/O: a
+// chat request must not depend on a catalog read, and the handler refreshes the
+// catalog out of band.
+//
+// With no observation the catalog is empty on purpose. Resolving against a
+// compiled-in list would accept a model the account never advertised; an empty
+// catalog makes Resolve report ErrNoUpstreamCatalog instead.
 func (c *Client) loadCatalog() *Catalog {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
@@ -463,7 +467,7 @@ func (c *Client) loadCatalog() *Catalog {
 			return catalog
 		}
 	}
-	return DefaultCatalog()
+	return newCatalog(nil)
 }
 
 // currentCredentials returns the live credential snapshot.

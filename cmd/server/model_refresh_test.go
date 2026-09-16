@@ -100,12 +100,21 @@ func TestSyncModelsForChannelConcurrent_WarpRequiresAccountDiscovery(t *testing.
 	if err == nil {
 		t.Fatalf("syncModelsForChannelConcurrent() result=%+v want error", result)
 	}
-	if !strings.Contains(err.Error(), "warp model discovery returned no account choices") {
-		t.Fatalf("error=%v want warp discovery failure", err)
+	// Without an active account nothing is read and nothing is published: the
+	// refresh reports the missing account rather than a cached catalog.
+	if !isNoActiveAccounts(err) {
+		t.Fatalf("error=%v want a no-active-account report", err)
+	}
+	models, listErr := s.ListModels(ctx)
+	if listErr != nil {
+		t.Fatalf("ListModels() error = %v", listErr)
+	}
+	if len(models) != 0 {
+		t.Fatalf("models=%+v want none published", models)
 	}
 }
 
-func TestWarpModelDiscoveryAccountsUsesDisabledCredentialAsReadOnlyFallback(t *testing.T) {
+func TestWarpModelDiscoveryAccountsRequiresAnEnabledAccount(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -125,21 +134,43 @@ func TestWarpModelDiscoveryAccountsUsesDisabledCredentialAsReadOnlyFallback(t *t
 	if err != nil {
 		t.Fatalf("warpModelDiscoveryAccounts() error = %v", err)
 	}
-	if len(accounts) != 2 || accounts[0].Name != "enabled" || accounts[1].Name != "disabled" {
-		t.Fatalf("accounts=%#v want enabled then disabled credential-bearing Warp accounts", accounts)
+	// Only the enabled account is in the serving pool, so only it may supply a
+	// catalog. A disabled credential is not a read-only fallback: publishing its
+	// models would advertise routes no request can reach.
+	if len(accounts) != 1 || accounts[0].Name != "enabled" {
+		t.Fatalf("accounts=%#v want only the enabled Warp account", accounts)
 	}
 }
 
-func TestCachedWarpModelsPreservesCatalogWhenDiscoveryIsTemporarilyUnavailable(t *testing.T) {
+// TestWarpRefreshDoesNotRepublishStoredCatalogOnFailure proves the stored rows
+// are last known state, not a fallback: when the upstream read yields nothing,
+// the refresh reports that and leaves the rows exactly as they were.
+func TestWarpRefreshDoesNotRepublishStoredCatalogOnFailure(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 	ctx := context.Background()
 	clearModelsForChannel(t, ctx, s, "Warp")
-	if err := s.CreateModel(ctx, &store.Model{Channel: "Warp", ModelID: "auto-open", Name: "Warp Auto", Status: store.ModelStatusAvailable}); err != nil {
+	if err := s.CreateModel(ctx, &store.Model{
+		Channel: "Warp", ModelID: "auto-open", Name: "Warp Auto",
+		Status: store.ModelStatusAvailable, Verified: true, Origin: "discovery",
+	}); err != nil {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
-	if cached := cachedWarpModels(ctx, s); len(cached) != 1 || cached[0].ID != "auto-open" {
-		t.Fatalf("cachedWarpModels()=%+v want auto-open", cached)
+
+	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Warp", 4)
+	if err == nil {
+		t.Fatalf("syncModelsForChannelConcurrent() result=%+v want error", result)
+	}
+	if !isNoActiveAccounts(err) {
+		t.Fatalf("error=%v want a no-active-account report", err)
+	}
+
+	stored, getErr := s.GetModelByChannelAndModelID(ctx, "Warp", "auto-open")
+	if getErr != nil || stored == nil {
+		t.Fatalf("stored row was destroyed by a failed refresh: %v", getErr)
+	}
+	if stored.Status != store.ModelStatusAvailable || !stored.Verified {
+		t.Fatalf("stored row was modified by a failed refresh: %+v", stored)
 	}
 }
 
@@ -266,26 +297,21 @@ func TestVerifyPuterDiscoveredModelsSerial_RequiresAcceptedProbe(t *testing.T) {
 	}
 }
 
-func TestDiscoverGrokModelsUsesHistoricalCatalogWithoutBuildOAuth(t *testing.T) {
+// TestDiscoverGrokModelsWithoutActiveAccountReportsNoAccount proves the channel
+// no longer has a historical-catalog fallback.
+func TestDiscoverGrokModelsWithoutActiveAccountReportsNoAccount(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
 	items, source, err := discoverGrokModelsConcurrent(context.Background(), &config.Config{}, s, 4)
-	if err != nil {
-		t.Fatalf("discoverGrokModelsConcurrent() error = %v", err)
+	if err == nil {
+		t.Fatalf("discoverGrokModelsConcurrent() items=%+v source=%q want error", items, source)
 	}
-	if source != "grok_cached_models" {
-		t.Fatalf("source=%q want grok_cached_models", source)
+	if !isNoActiveAccounts(err) {
+		t.Fatalf("error=%v want a no-active-account report", err)
 	}
-
-	gotSet := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		gotSet[item.ID] = struct{}{}
-	}
-	for _, id := range []string{"grok-4.5", "grok-4.6"} {
-		if _, ok := gotSet[id]; !ok {
-			t.Fatalf("expected cached Grok model %q in %+v", id, items)
-		}
+	if len(items) != 0 {
+		t.Fatalf("items=%+v want none published", items)
 	}
 }
 
@@ -330,8 +356,8 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	for _, item := range items {
 		gotIDs = append(gotIDs, item.ID)
 	}
-	if strings.Join(gotIDs, ",") != "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast" {
-		t.Fatalf("public IDs=%v want dynamic Build catalog", gotIDs)
+	if strings.Join(gotIDs, ",") != "grok-4.6,future-private-model,grok-4.5" {
+		t.Fatalf("public IDs=%v want exactly the upstream catalog", gotIDs)
 	}
 
 	persisted, err := s.GetAccount(ctx, acc.ID)
@@ -341,7 +367,7 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	if persisted.GrokProvider != "build" || persisted.GrokModelsSyncedAt.IsZero() {
 		t.Fatalf("provider/catalog not persisted: %+v", persisted)
 	}
-	if strings.Join(persisted.GrokModels, ",") != "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast" {
+	if strings.Join(persisted.GrokModels, ",") != "grok-4.6,future-private-model,grok-4.5" {
 		t.Fatalf("account capability snapshot=%v", persisted.GrokModels)
 	}
 }
@@ -352,7 +378,7 @@ func TestCanonicalGrokRefreshModelIDKeepsBuildVideoProvider(t *testing.T) {
 	}
 }
 
-func TestDiscoverGrokModelsKeepsCachedCatalogWhenBuildControlPlaneFails(t *testing.T) {
+func TestDiscoverGrokModelsWithoutUpstreamCatalogPublishesNothing(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -367,76 +393,125 @@ func TestDiscoverGrokModelsKeepsCachedCatalogWhenBuildControlPlaneFails(t *testi
 	}
 
 	items, source, err := discoverGrokModelsConcurrent(ctx, &config.Config{}, s, 1)
-	if err != nil {
-		t.Fatalf("discoverGrokModelsConcurrent() error = %v", err)
+	if err == nil {
+		t.Fatalf("discoverGrokModelsConcurrent() items=%+v source=%q want error", items, source)
 	}
-	if source != "grok_build_models_unavailable_cached" {
-		t.Fatalf("source=%q want grok_build_models_unavailable_cached", source)
+	if source != "" {
+		t.Fatalf("source=%q want no source for a failed read", source)
 	}
-	if len(items) == 0 {
-		t.Fatal("expected historical catalog to survive control-plane failure")
+	if len(items) != 0 {
+		t.Fatalf("items=%+v want none published on a failed read", items)
+	}
+	// The failure must not be reported as a cached observation.
+	if strings.Contains(err.Error(), "cached") {
+		t.Fatalf("error=%v must not describe a cached catalog", err)
 	}
 }
 
-func TestApplyModelRefresh_PreservesModelsMissingFromUnreliableDiscoveredList(t *testing.T) {
-	testCases := []struct {
-		channel string
-		modelID string
-	}{
-		{channel: "Puter", modelID: "puter-unavailable-model"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.channel, func(t *testing.T) {
+// TestApplyModelRefresh_RefusesNonUpstreamSources is the gate that keeps a
+// cached or compiled-in catalog out of model management: only a source that
+// names an upstream catalog read may write.
+func TestApplyModelRefresh_RefusesNonUpstreamSources(t *testing.T) {
+	for _, source := range []string{
+		"test",
+		"qoder_builtin_catalog",
+		"warp_cached_models",
+		"grok_build_models_unavailable_cached",
+		"puter_public_models_unverified",
+		"",
+	} {
+		t.Run(source, func(t *testing.T) {
 			s, cleanup := setupModelRefreshStore(t)
 			defer cleanup()
 
 			ctx := context.Background()
-			clearModelsForChannel(t, ctx, s, tc.channel)
-			record := &store.Model{
-				Channel:   tc.channel,
-				ModelID:   tc.modelID,
-				Name:      tc.modelID,
-				Status:    store.ModelStatusAvailable,
-				Verified:  true,
-				IsDefault: true,
-				SortOrder: 999,
-			}
-			if err := s.CreateModel(ctx, record); err != nil {
+			clearModelsForChannel(t, ctx, s, "Puter")
+			if err := s.CreateModel(ctx, &store.Model{
+				Channel: "Puter", ModelID: "existing", Name: "existing",
+				Status: store.ModelStatusAvailable, Verified: true, IsDefault: true,
+			}); err != nil {
 				t.Fatalf("CreateModel() error = %v", err)
 			}
 
-			result, err := applyModelRefresh(ctx, s, tc.channel, "test", nil)
-			if err != nil {
-				t.Fatalf("applyModelRefresh() error = %v", err)
+			result, err := applyModelRefresh(ctx, s, "Puter", source, []discoveredModel{{ID: "injected", Name: "injected", Verified: true}})
+			if err == nil {
+				t.Fatalf("applyModelRefresh() result=%+v want a refusal for source %q", result, source)
 			}
-			if result.Deleted != 0 {
-				t.Fatalf("Deleted=%d want 0", result.Deleted)
+			if _, getErr := s.GetModelByChannelAndModelID(ctx, "Puter", "injected"); getErr == nil {
+				t.Fatal("a non-upstream source published a model")
 			}
-			if result.Offline != 0 {
-				t.Fatalf("Offline=%d want 0", result.Offline)
-			}
-			if len(result.OfflineModelIDs) != 0 {
-				t.Fatalf("OfflineModelIDs=%v want empty", result.OfflineModelIDs)
-			}
-
-			model, err := s.GetModelByChannelAndModelID(ctx, tc.channel, tc.modelID)
-			if err != nil {
-				t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
-			}
-			if model == nil {
-				t.Fatalf("expected %s to remain offline", tc.modelID)
-			}
-			if model.Status != store.ModelStatusAvailable {
-				t.Fatalf("Status=%q want %q", model.Status, store.ModelStatusAvailable)
-			}
-			if !model.Verified {
-				t.Fatal("Verified=false want true")
-			}
-			if !model.IsDefault {
-				t.Fatal("IsDefault=false want true")
+			if _, getErr := s.GetModelByChannelAndModelID(ctx, "Puter", "existing"); getErr != nil {
+				t.Fatalf("a refused refresh mutated the stored catalog: %v", getErr)
 			}
 		})
+	}
+}
+
+// TestApplyModelRefresh_IsUpstreamCatalogSource pins the allowlist itself.
+func TestApplyModelRefresh_IsUpstreamCatalogSource(t *testing.T) {
+	allowed := []string{
+		"warp_graphql_feature_model_choice_agent_mode",
+		"grok_build_models",
+		"workbuddy_cli_models",
+		"qoder_upstream_models",
+		"puter_public_models_test_mode",
+	}
+	for _, source := range allowed {
+		if !isUpstreamCatalogSource(source) {
+			t.Fatalf("isUpstreamCatalogSource(%q) = false, want true", source)
+		}
+	}
+	refused := []string{
+		"",
+		"test",
+		"qoder_builtin_catalog",
+		"grok_cached_models",
+		"warp_cached_models",
+		"puter_public_models_unverified",
+		"grok_build_models_unavailable_cached",
+	}
+	for _, source := range refused {
+		if isUpstreamCatalogSource(source) {
+			t.Fatalf("isUpstreamCatalogSource(%q) = true, want false", source)
+		}
+	}
+}
+
+// TestApplyModelRefresh_CountsVerifiedSeparately proves the report distinguishes
+// "advertised by the catalog" from "observed as usable".
+func TestApplyModelRefresh_CountsVerifiedSeparately(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	clearModelsForChannel(t, ctx, s, "Puter")
+
+	result, err := applyModelRefresh(ctx, s, "Puter", "puter_public_models_test_mode", []discoveredModel{
+		{ID: "probed", Name: "probed", Verified: true},
+		{ID: "listed-only", Name: "listed-only"},
+	})
+	if err != nil {
+		t.Fatalf("applyModelRefresh() error = %v", err)
+	}
+	if result.Discovered != 2 {
+		t.Fatalf("Discovered=%d want 2", result.Discovered)
+	}
+	if result.Verified != 1 {
+		t.Fatalf("Verified=%d want 1", result.Verified)
+	}
+	listed, err := s.GetModelByChannelAndModelID(ctx, "Puter", "listed-only")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID(listed-only) error = %v", err)
+	}
+	if listed.Verified {
+		t.Fatal("a candidate that was never probed was recorded as verified")
+	}
+	probed, err := s.GetModelByChannelAndModelID(ctx, "Puter", "probed")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID(probed) error = %v", err)
+	}
+	if !probed.Verified {
+		t.Fatal("a probed candidate was recorded as unverified")
 	}
 }
 
@@ -550,7 +625,7 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 	}
 
 	candidates := []discoveredModel{{ID: "claude-4-5-sonnet", Name: "Claude 4.5 Sonnet (Warp)", SortOrder: 0}}
-	result, err := applyModelRefresh(ctx, s, "Warp", "test", candidates)
+	result, err := applyModelRefresh(ctx, s, "Warp", "warp_graphql_feature_model_choice_agent_mode", candidates)
 	if err != nil {
 		t.Fatalf("applyModelRefresh() error = %v", err)
 	}
@@ -616,5 +691,75 @@ func clearModelsForChannel(t *testing.T, ctx context.Context, s *store.Store, ch
 		if err := s.DeleteModel(ctx, model.ID); err != nil {
 			t.Fatalf("DeleteModel(%q) error = %v", model.ID, err)
 		}
+	}
+}
+
+// TestShouldDeleteMissingModelsOnRefresh_NeverPrunesOnTheBuildTextCatalog pins
+// the regression guard: the Grok Build read is a text-model catalog and cannot
+// speak for the media, voice and STT routes the channel implements.
+func TestShouldDeleteMissingModelsOnRefresh_NeverPrunesOnTheBuildTextCatalog(t *testing.T) {
+	if shouldDeleteMissingModelsOnRefresh("Grok", "grok_build_models") {
+		t.Fatal("a Build text-catalog read must not prune the channel catalog")
+	}
+	// The channels whose source is the whole catalog for that channel still prune.
+	for _, tc := range []struct{ channel, source string }{
+		{"Warp", "warp_graphql_feature_model_choice_agent_mode"},
+		{"Puter", "puter_public_models_test_mode"},
+		{"WorkBuddy", "workbuddy_cli_models"},
+		{"Qoder", "qoder_upstream_models"},
+	} {
+		if !shouldDeleteMissingModelsOnRefresh(tc.channel, tc.source) {
+			t.Fatalf("%s/%s must be allowed to prune", tc.channel, tc.source)
+		}
+	}
+	// A non-upstream source never prunes.
+	for _, source := range []string{"", "test", "warp_cached_models", "grok_build_models_unavailable_cached"} {
+		if shouldDeleteMissingModelsOnRefresh("Grok", source) {
+			t.Fatalf("source %q must not prune", source)
+		}
+	}
+}
+
+// TestApplyModelRefresh_MarksObservedExistingRowsVerified proves a refresh that
+// observes an existing row promotes it to verified.
+//
+// Creation-only verification left rows that predate the observation permanently
+// unverified, and an unverified Grok row is not visible — which is how the
+// channel's own default model vanished from /v1/models.
+func TestApplyModelRefresh_MarksObservedExistingRowsVerified(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	clearModelsForChannel(t, ctx, s, "Grok")
+	if err := s.CreateModel(ctx, &store.Model{
+		Channel: "Grok", ModelID: "grok-4.6", Name: "Grok 4.6",
+		Status: store.ModelStatusAvailable, Verified: false, IsDefault: true,
+		Provider: "build", UpstreamModel: "grok-4.6", Origin: "catalog",
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+
+	result, err := applyModelRefresh(ctx, s, "Grok", "grok_build_models", []discoveredModel{
+		{ID: "grok-4.6", Name: "Grok 4.6", Verified: true},
+	})
+	if err != nil {
+		t.Fatalf("applyModelRefresh() error = %v", err)
+	}
+	if result.Updated != 1 {
+		t.Fatalf("Updated=%d want 1 for the promoted row", result.Updated)
+	}
+	stored, err := s.GetModelByChannelAndModelID(ctx, "Grok", "grok-4.6")
+	if err != nil {
+		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
+	}
+	if !stored.Verified {
+		t.Fatal("an observed row was not marked verified")
+	}
+	if !stored.IsDefault {
+		t.Fatal("the operator-owned default was changed by the promotion")
+	}
+	if stored.Origin != "catalog" {
+		t.Fatalf("origin=%q, want the operator-owned value preserved", stored.Origin)
 	}
 }

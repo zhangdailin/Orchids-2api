@@ -44,6 +44,8 @@ func TestHandleMessages_Warp403MarksAccountBlocked(t *testing.T) {
 		t.Fatalf("CreateAccount() error = %v", err)
 	}
 
+	publishModel(t, s, &store.Model{Channel: "Warp", ModelID: "auto-open"})
+
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
 	h := NewWithLoadBalancer(&config.Config{
 		DebugEnabled:   false,

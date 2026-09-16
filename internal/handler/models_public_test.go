@@ -19,6 +19,13 @@ func TestHandleModels_FiltersAPIKeyModelAllowlist(t *testing.T) {
 		mini.Close()
 	}()
 
+	// The catalog is published explicitly: the store starts empty now.
+	publishModel(t, s,
+		&store.Model{Channel: "Grok", ModelID: "grok-4.6"},
+		&store.Model{Channel: "Grok", ModelID: "grok-4.5"},
+		&store.Model{Channel: "Grok", ModelID: "grok-imagine-image"},
+	)
+
 	wrapper := middleware.APIKeyAuth(
 		func() bool { return true },
 		func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
@@ -90,6 +97,7 @@ func TestHandleModelByID_ReturnsVisibleModel(t *testing.T) {
 		mini.Close()
 	}()
 
+	publishModel(t, s, &store.Model{Channel: "Grok", ModelID: "grok-4.5"})
 	if err := s.CreateAccount(context.Background(), &store.Account{
 		AccountType:  "grok",
 		ClientCookie: "sso=super-token",
@@ -151,6 +159,11 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenOnlyBasicPoolExists(t *testing.T
 		mini.Close()
 	}()
 
+	publishModel(t, s,
+		&store.Model{Channel: "Grok", ModelID: "grok-4.5"},
+		&store.Model{Channel: "Grok", ModelID: "grok-imagine-image"},
+		&store.Model{Channel: "Grok", ModelID: "grok-imagine-video"},
+	)
 	if err := s.CreateAccount(context.Background(), &store.Account{
 		AccountType:  "grok",
 		ClientCookie: "sso=basic-token",
@@ -184,6 +197,15 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenAccountsHaveStatusCode(t *testin
 		mini.Close()
 	}()
 
+	// The withdrawn identifiers are published too, so "stays hidden" is proven
+	// against the deprecated-name rule rather than against an empty store.
+	publishModel(t, s,
+		&store.Model{Channel: "Grok", ModelID: "grok-4.5"},
+		&store.Model{Channel: "Grok", ModelID: "grok-imagine-image"},
+		&store.Model{Channel: "Grok", ModelID: "grok-4.20-0309-non-reasoning"},
+		&store.Model{Channel: "Grok", ModelID: "grok-4.3-beta"},
+		&store.Model{Channel: "Grok", ModelID: "grok-build-0.1"},
+	)
 	if err := s.CreateAccount(context.Background(), &store.Account{
 		AccountType:  "grok",
 		ClientCookie: "sso=super-token",
@@ -235,6 +257,11 @@ func TestHandleModels_WarpUsesAccountModelPool(t *testing.T) {
 	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open"}}}); err != nil {
 		t.Fatalf("SaveAccountModelChoices() error = %v", err)
 	}
+	publishModel(t, s,
+		&store.Model{Channel: "Warp", ModelID: "auto-open"},
+		&store.Model{Channel: "Warp", ModelID: "gpt-5-2-medium"},
+		&store.Model{Channel: "Warp", ModelID: "gpt-5-2-high"},
+	)
 
 	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -290,6 +317,7 @@ func TestHandleModelByID_ReturnsGrokModelWithoutRequiredPool(t *testing.T) {
 		mini.Close()
 	}()
 
+	publishModel(t, s, &store.Model{Channel: "Grok", ModelID: "grok-imagine-video"})
 	if err := s.CreateAccount(context.Background(), &store.Account{
 		AccountType:  "grok",
 		ClientCookie: "sso=basic-token",

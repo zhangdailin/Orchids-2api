@@ -222,30 +222,12 @@ func ApplyCLIModels(acc *store.Account, models []string, now time.Time) bool {
 		appendModel(model)
 	}
 
-	// Build's /models response is intentionally sparse. grok2api treats the
-	// composer as a stable OAuth capability and exposes the 4.5 compatibility
-	// alias whenever the account advertises 4.6.
-	if ProviderForAccount(acc) == ProviderBuild {
-		appendModel("grok-composer-2.5-fast")
-		if _, ok := seen["grok-4.6"]; ok {
-			appendModel("grok-4.5")
-		}
-		// Video 1.5 is a Super-only Build capability and is not reliable in the
-		// catalog response. Do not retain an advertised value on lower tiers.
-		videoID := "grok-imagine-video-1.5"
-		if strings.Contains(strings.ToLower(strings.TrimSpace(acc.Subscription)), "super") {
-			appendModel(videoID)
-		} else if _, ok := seen[videoID]; ok {
-			delete(seen, videoID)
-			filtered := normalized[:0]
-			for _, model := range normalized {
-				if !strings.EqualFold(model, videoID) {
-					filtered = append(filtered, model)
-				}
-			}
-			normalized = filtered
-		}
-	}
+	// The snapshot records exactly what the upstream catalog returned. It used
+	// to be padded with a synthetic composer entry, a 4.5 alias whenever 4.6 was
+	// advertised, and a tier-gated video entry; those are locally invented
+	// capabilities, and a refresh that republishes them would advertise models
+	// the account never reported. Capability truth now comes from the catalog
+	// alone, so a model the catalog omits is simply absent.
 	if len(normalized) == 0 {
 		return false
 	}

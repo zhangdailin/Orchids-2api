@@ -2,21 +2,32 @@ package qoder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/goccy/go-json"
 )
 
-// The catalog is local, and that is a property of the protocol rather than a
-// shortcut.
+// The catalog is an upstream observation, not a compiled-in list.
 //
-// The active Qoder CLI path uses device-token refresh, user profile and chat
-// SSE endpoints. It never reads a model list over the network: it carries a
-// built-in catalog and optionally a locally cached `catalog-v6` blob.
+// The active Qoder CLI path uses device-token refresh, user profile and a
+// COSY-signed chat endpoint. The model catalog is read from that same signed
+// control plane by FetchUpstreamModels, and the account snapshot records what
+// the read returned.
 //
-//   - The built-in catalog is the authority this channel can actually observe.
-//     The account snapshot records whatever was installed, and the chat call —
-//     not this list — is what reports an entitlement problem.
+//   - There is deliberately no built-in fallback. A compiled-in list is not an
+//     observation of what the account may run: publishing it would advertise
+//     models the account never had, and it would hide a gateway that stopped
+//     answering the catalog read.
+//   - With no snapshot, routing reports ErrNoUpstreamCatalog, so the operator
+//     sees "refresh models" instead of a model that cannot be served.
+
+// ErrNoUpstreamCatalog reports that no upstream catalog has been observed for
+// the account. It is a state rather than a failure: the fix is a model refresh
+// with an active account.
+var ErrNoUpstreamCatalog = errors.New("qoder account has no upstream model catalog; refresh models with an active account")
 
 // modelEntry is one catalog row. Key is the internal gateway key; Name is what a
 // client may ask for.
@@ -73,11 +84,18 @@ func (c *Catalog) Entries() []modelEntry {
 // operators reasonably paste either form.
 func (c *Catalog) Resolve(requested string) (modelEntry, error) {
 	if c == nil || len(c.entries) == 0 {
-		c = DefaultCatalog()
+		// A compiled-in catalog is not what the account may run. Resolving
+		// against it would accept a model the account never advertised, so an
+		// unknown catalog is reported instead.
+		return modelEntry{}, ErrNoUpstreamCatalog
 	}
 	name := strings.TrimSpace(requested)
 	if name == "" {
-		return c.defaultEntry(), nil
+		entry, ok := c.defaultEntry()
+		if !ok {
+			return modelEntry{}, ErrNoUpstreamCatalog
+		}
+		return entry, nil
 	}
 	if entry, ok := c.byKey[name]; ok {
 		return entry, nil
@@ -97,10 +115,13 @@ func (c *Catalog) Resolve(requested string) (modelEntry, error) {
 	return modelEntry{}, fmt.Errorf("unsupported qoder model %q; available: %s", requested, c.SupportedList())
 }
 
-func (c *Catalog) defaultEntry() modelEntry {
+func (c *Catalog) defaultEntry() (modelEntry, bool) {
+	if c == nil || len(c.entries) == 0 {
+		return modelEntry{}, false
+	}
 	for _, entry := range c.entries {
 		if entry.IsDefault {
-			return entry
+			return entry, true
 		}
 	}
 	// Prefer the cheapest capable tier rather than the flagship, so an empty
@@ -108,11 +129,11 @@ func (c *Catalog) defaultEntry() modelEntry {
 	for _, needle := range []string{"flash", "lite", "efficient", "plus"} {
 		for _, entry := range c.entries {
 			if strings.Contains(strings.ToLower(entry.Name), needle) {
-				return entry
+				return entry, true
 			}
 		}
 	}
-	return c.entries[0]
+	return c.entries[0], true
 }
 
 // SupportedList renders the catalog for an error message.
@@ -178,6 +199,13 @@ func newCatalog(entries []modelEntry) *Catalog {
 	return catalog
 }
 
+// CatalogFromSnapshot rebuilds a catalog from an account's stored snapshot, in
+// the same "<key>\t<display name>" form CatalogSnapshot writes. It is the
+// inverse of CatalogSnapshot and performs no I/O.
+func CatalogFromSnapshot(ids []string) *Catalog {
+	return catalogFromIDs(ids)
+}
+
 // catalogFromIDs rebuilds a catalog from an account's stored snapshot. The
 // snapshot stores "<key>\t<display name>" so a display name that differs from
 // the key round-trips, and a bare key (a hand-edited or imported snapshot) still
@@ -185,7 +213,23 @@ func newCatalog(entries []modelEntry) *Catalog {
 func catalogFromIDs(ids []string) *Catalog {
 	entries := make([]modelEntry, 0, len(ids))
 	for _, id := range ids {
-		key, name, _ := strings.Cut(strings.TrimSpace(id), "\t")
+		trimmed := strings.TrimSpace(id)
+		if trimmed == "" {
+			continue
+		}
+		// The stored form is one JSON row per model, which is what preserves the
+		// wire fields routing needs (max_input_tokens, is_reasoning, is_vl,
+		// price_factor). A "<key>\t<display name>" row from an older deployment is
+		// still accepted so an upgraded install keeps resolving its snapshot.
+		if strings.HasPrefix(trimmed, "{") {
+			var entry modelEntry
+			if err := json.Unmarshal([]byte(trimmed), &entry); err != nil {
+				continue
+			}
+			entries = append(entries, entry)
+			continue
+		}
+		key, name, _ := strings.Cut(trimmed, "\t")
 		if strings.TrimSpace(key) == "" {
 			continue
 		}
@@ -195,83 +239,36 @@ func catalogFromIDs(ids []string) *Catalog {
 }
 
 // catalogToIDs projects a catalog onto the stored snapshot form.
+//
+// Each row is stored as its own JSON object rather than the older
+// "<key>\t<display name>" pair. Routing rebuilds the request's model block from
+// this snapshot, and that block carries max_input_tokens, is_reasoning and is_vl;
+// a two-field snapshot would silently drop them and the gateway would receive a
+// request with no context length.
 func catalogToIDs(catalog *Catalog) []string {
 	if catalog == nil {
 		return nil
 	}
 	ids := make([]string, 0, len(catalog.entries))
 	for _, entry := range catalog.entries {
-		if strings.TrimSpace(entry.Name) == "" || entry.Name == entry.Key {
-			ids = append(ids, entry.Key)
+		if strings.TrimSpace(entry.Key) == "" {
 			continue
 		}
-		ids = append(ids, entry.Key+"\t"+entry.Name)
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, string(raw))
 	}
 	return ids
 }
 
-// seedModels is the built-in fallback catalog. It mirrors the CLI's own built-in
-// list; actual availability always follows the account's fetched snapshot.
-func seedModels() []modelEntry {
-	specs := []struct {
-		key, name string
-		reasoning bool
-		maxInput  int
-	}{
-		{"auto", "Auto", false, 180000},
-		{"ultimate", "Ultimate", true, 1000000},
-		{"performance", "Performance", false, 1000000},
-		{"efficient", "Efficient", false, 180000},
-		{"lite", "Lite", false, 180000},
-		{"cmodel", "Cantus", true, 1000000},
-		{"qmodel_38max", "Qwen3.8-Max", true, 1000000},
-		{"qmodel_latest", "Qwen3.7-Max", false, 1000000},
-		{"qmodel", "Qwen3.7-Plus", false, 1000000},
-		{"kmodel_latest", "Kimi-K3", false, 1000000},
-		{"kmodel", "Kimi-K2.7-Code", false, 256000},
-		{"gmodel", "GLM-5.3", true, 1000000},
-		{"gfmodel", "GLM-5.3-Flash", false, 1000000},
-		{"gm51model", "GLM-5.2", true, 1000000},
-		{"dmodel", "DeepSeek-V4-Pro", true, 1000000},
-		{"dfmodel", "DeepSeek-V4-Flash", true, 1000000},
-		{"qfmodel", "Qwen3.8-Flash", false, 1000000},
-		{"mmodel", "MiniMax-M3", false, 1000000},
-	}
-	enabled := true
-	entries := make([]modelEntry, 0, len(specs))
-	for _, spec := range specs {
-		entries = append(entries, modelEntry{
-			Key:            spec.key,
-			Name:           spec.name,
-			Format:         "openai",
-			Source:         "system",
-			Enable:         &enabled,
-			IsVL:           true,
-			IsReasoning:    spec.reasoning,
-			IsDefault:      spec.key == "auto",
-			PriceFactor:    1,
-			MaxInputTokens: spec.maxInput,
-		})
-	}
-	return entries
-}
-
-// DefaultCatalog returns the built-in fallback catalog.
-func DefaultCatalog() *Catalog {
-	return newCatalog(seedModels())
-}
-
-// FetchModels returns the catalog this channel can serve.
+// FetchModels returns the catalog already observed for this account.
 //
-// It is local by construction: the OAuth device credential is not accepted by
-// the gateway's model-list endpoint, so there is nothing to fetch over the
-// network. Keeping one entry point means a future gateway that does expose an
-// authenticated catalog changes exactly one place.
-//
-// An account snapshot is merged with the current built-in list so an older
-// login cannot hide models shipped by a newer Qoder CLI. Account-specific rows
-// are retained. The error is always nil — the chat call, not this list, is what
-// reports an entitlement problem.
+// It is a pure read of the account snapshot: the catalog is written by
+// FetchUpstreamModels during a refresh, and a chat request must not perform
+// catalog I/O. With no snapshot there is nothing to resolve against, so the
+// read reports that instead of substituting a compiled-in list.
 func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -283,36 +280,8 @@ func (c *Client) FetchModels(ctx context.Context) (*Catalog, error) {
 	defer c.stateMu.RUnlock()
 	if c.account != nil {
 		if catalog := catalogFromIDs(c.account.QoderModelIDs); catalog.Len() > 0 {
-			// Older snapshots may predate models added by the Qoder CLI. Merge
-			// the current built-in catalog so refreshes do not permanently hide
-			// newly shipped models, while retaining any account-specific rows.
-			return mergeCatalogs(catalog, DefaultCatalog()), nil
+			return catalog, nil
 		}
 	}
-	return DefaultCatalog(), nil
-}
-
-func mergeCatalogs(primary, fallback *Catalog) *Catalog {
-	if primary == nil || primary.Len() == 0 {
-		return fallback
-	}
-	entries := primary.Entries()
-	seen := make(map[string]struct{}, len(entries))
-	for _, entry := range entries {
-		seen[strings.ToLower(strings.TrimSpace(entry.Key))] = struct{}{}
-	}
-	if fallback != nil {
-		for _, entry := range fallback.Entries() {
-			key := strings.ToLower(strings.TrimSpace(entry.Key))
-			if key == "" {
-				continue
-			}
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			entries = append(entries, entry)
-			seen[key] = struct{}{}
-		}
-	}
-	return newCatalog(entries)
+	return nil, ErrNoUpstreamCatalog
 }

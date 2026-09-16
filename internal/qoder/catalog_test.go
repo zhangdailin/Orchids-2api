@@ -2,51 +2,62 @@ package qoder
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
-// TestFetchModelsIsLocalAndNeverFailsForAValidClient proves the catalog entry
-// point cannot fail because of an upstream read: the OAuth credential is not
-// accepted by the gateway's model-list endpoint, so no such read is attempted and
-// a device login can never be discarded over it.
-func TestFetchModelsIsLocalAndNeverFailsForAValidClient(t *testing.T) {
+// TestFetchModelsReadsOnlyTheObservedSnapshot pins the catalog contract: the
+// read is a pure snapshot lookup.
+//
+// No network is attempted and there is no compiled-in fallback, so a client
+// pointed at a dead host with no snapshot reports that state instead of
+// inventing a catalog.
+func TestFetchModelsReadsOnlyTheObservedSnapshot(t *testing.T) {
 	t.Parallel()
 
-	// A client pointed at a dead host must still hand back a catalog: if it
-	// reached the network at all, this would fail.
 	acc := signedTestAccount()
 	acc.QoderModelIDs = nil
 	client := NewFromAccount(acc, nil)
 	setTestEndpoints(client, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 
-	catalog, err := client.FetchModels(context.Background())
-	if err != nil {
-		t.Fatalf("FetchModels() error = %v, want the built-in catalog", err)
-	}
-	if catalog == nil || catalog.Len() == 0 {
-		t.Fatal("FetchModels() returned no catalog")
-	}
-	if _, resolveErr := catalog.Resolve("Qwen3.7-Max"); resolveErr != nil {
-		t.Fatalf("the built-in catalog cannot resolve its own models: %v", resolveErr)
+	if _, err := client.FetchModels(context.Background()); !errors.Is(err, ErrNoUpstreamCatalog) {
+		t.Fatalf("FetchModels() with no snapshot error = %v, want ErrNoUpstreamCatalog", err)
 	}
 
-	// An old account snapshot is merged with the current built-in catalog.
-	acc.QoderModelIDs = []string{"kmodel\tKimi-K2.7-Code"}
+	// A recorded snapshot is served verbatim.
+	acc.QoderModelIDs = []string{
+		"kmodel\tKimi-K2.7-Code",
+		"qmodel_38max\tQwen3.8-Max",
+	}
 	snapshotClient := NewFromAccount(acc, nil)
 	setTestEndpoints(snapshotClient, "http://127.0.0.1:1", "http://127.0.0.1:1", "http://127.0.0.1:1")
 	snapshot, err := snapshotClient.FetchModels(context.Background())
 	if err != nil {
 		t.Fatalf("FetchModels() with a snapshot error = %v", err)
 	}
-	if snapshot.Len() <= 1 {
-		t.Fatalf("snapshot catalog length = %d, want newly added built-in models", snapshot.Len())
+	if snapshot.Len() != 2 {
+		t.Fatalf("snapshot catalog length = %d, want exactly the 2 recorded rows", snapshot.Len())
 	}
 	if _, resolveErr := snapshot.Resolve("Kimi-K2.7-Code"); resolveErr != nil {
 		t.Fatalf("the snapshot catalog cannot resolve its own model: %v", resolveErr)
 	}
-	for _, name := range []string{"Qwen3.8-Flash", "GLM-5.3-Flash"} {
-		if _, resolveErr := snapshot.Resolve(name); resolveErr != nil {
-			t.Fatalf("merged catalog cannot resolve %s: %v", name, resolveErr)
-		}
+	// A model the snapshot does not carry must not resolve, even though a
+	// compiled-in list used to contain it.
+	if _, resolveErr := snapshot.Resolve("GLM-5.3-Flash"); resolveErr == nil {
+		t.Fatal("a model absent from the snapshot resolved anyway")
+	}
+}
+
+// TestLoadCatalogWithoutSnapshotYieldsErrNoUpstreamCatalog proves the chat path
+// has no compiled-in catalog either: routing against an empty catalog reports
+// that no catalog was observed.
+func TestLoadCatalogWithoutSnapshotYieldsErrNoUpstreamCatalog(t *testing.T) {
+	t.Parallel()
+
+	acc := signedTestAccount()
+	acc.QoderModelIDs = nil
+	client := NewFromAccount(acc, nil)
+	if _, err := client.loadCatalog().Resolve("Qwen3.7-Max"); !errors.Is(err, ErrNoUpstreamCatalog) {
+		t.Fatalf("loadCatalog().Resolve() error = %v, want ErrNoUpstreamCatalog", err)
 	}
 }

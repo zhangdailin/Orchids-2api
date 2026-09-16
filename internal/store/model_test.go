@@ -76,6 +76,22 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 
 	ctx := context.Background()
 
+	// The store publishes nothing on its own, so the two channels' fixtures are
+	// created explicitly. The point of the test is that the lookup index is keyed
+	// by channel *and* model id, not that either channel has a catalog.
+	if err := s.CreateModel(ctx, &Model{
+		Channel: "Puter", ModelID: "deepseek-v4-pro", Name: "deepseek-v4-pro",
+		Status: ModelStatusAvailable, Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel(puter) error = %v", err)
+	}
+	if err := s.CreateModel(ctx, &Model{
+		Channel: "Warp", ModelID: "auto-open", Name: "Warp Auto Open",
+		Status: ModelStatusAvailable, Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel(warp) error = %v", err)
+	}
+
 	puterModel, err := s.GetModelByChannelAndModelID(ctx, "puter", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID(puter) error = %v", err)
@@ -96,7 +112,14 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 	}
 }
 
-func TestStoreNew_SeedsGrokImagineModels(t *testing.T) {
+// TestStoreNew_PublishesNoBuiltInModels pins the startup contract: a new store
+// carries no model rows at all.
+//
+// Model management publishes only catalogs read from upstream for an active
+// account, so a fresh deployment starts empty. A compiled-in seed here would
+// make the admin page report models no account ever advertised, and would keep
+// them served after an upstream withdrew them.
+func TestStoreNew_PublishesNoBuiltInModels(t *testing.T) {
 	t.Parallel()
 
 	mini := miniredis.RunT(t)
@@ -115,21 +138,29 @@ func TestStoreNew_SeedsGrokImagineModels(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	model, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-imagine-image")
+	models, err := s.ListModels(ctx)
 	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(grok, grok-imagine-image) error = %v", err)
+		t.Fatalf("ListModels() error = %v", err)
 	}
-	if model == nil {
-		t.Fatal("expected grok imagine model to be seeded")
+	if len(models) != 0 {
+		t.Fatalf("ListModels() = %d rows, want none: %+v", len(models), models)
 	}
-	if model.Channel != "Grok" {
-		t.Fatalf("model.Channel=%q want %q", model.Channel, "Grok")
-	}
-	if model.Status != ModelStatusAvailable {
-		t.Fatalf("model.Status=%q want %q", model.Status, ModelStatusAvailable)
+	for _, probe := range []struct{ channel, modelID string }{
+		{"Grok", "grok-4.5"},
+		{"Grok", "grok-imagine-image"},
+		{"Warp", "auto-open"},
+		{"Puter", "claude-opus-5"},
+		{"WorkBuddy", "default-model"},
+		{"Qoder", "Qwen3.7-Max"},
+	} {
+		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err == nil {
+			t.Fatalf("%s/%s was published at startup, want an empty catalog", probe.channel, probe.modelID)
+		}
 	}
 }
 
+// TestStoreNew_PreservesExistingModelList proves a restart does not resurrect a
+// deleted row: nothing recreates model records at startup.
 func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +177,12 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	}
 
 	ctx := context.Background()
+	if err := s.CreateModel(ctx, &Model{
+		Channel: "Puter", ModelID: "deepseek-v4-pro", Name: "deepseek-v4-pro",
+		Status: ModelStatusAvailable, Verified: true,
+	}); err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
 	model, err := s.GetModelByChannelAndModelID(ctx, "puter", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
@@ -169,7 +206,10 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 	}
 }
 
-func TestStoreNew_PuterCleanupDoesNotRecreateDeletedModels(t *testing.T) {
+// TestStoreNew_KeepsUpstreamDiscoveredModels proves startup maintenance never
+// prunes a row that an upstream refresh published. Pruning is the refresh's job:
+// it knows which catalog it just read, while startup knows nothing.
+func TestStoreNew_KeepsUpstreamDiscoveredModels(t *testing.T) {
 	t.Parallel()
 
 	mini := miniredis.RunT(t)
@@ -184,21 +224,17 @@ func TestStoreNew_PuterCleanupDoesNotRecreateDeletedModels(t *testing.T) {
 		t.Fatalf("store.New() error = %v", err)
 	}
 	ctx := context.Background()
-	current, err := s.GetModelByChannelAndModelID(ctx, "puter", "claude-opus-5")
-	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(current) error = %v", err)
-	}
-	if err := s.DeleteModel(ctx, current.ID); err != nil {
-		t.Fatalf("DeleteModel(current) error = %v", err)
+	if err := s.CreateModel(ctx, &Model{
+		Channel: "Puter", ModelID: "claude-opus-5", Name: "claude-opus-5",
+		Status: ModelStatusAvailable, Verified: true, Origin: "discovery",
+	}); err != nil {
+		t.Fatalf("CreateModel(discovered) error = %v", err)
 	}
 	if err := s.CreateModel(ctx, &Model{
-		Channel:  "Puter",
-		ModelID:  "claude-opus-5-fast",
-		Name:     "removed catalog alias",
-		Status:   ModelStatusAvailable,
-		Verified: true,
+		Channel: "Grok", ModelID: "grok-4.6", Name: "Grok 4.6",
+		Status: ModelStatusAvailable, Verified: true, Origin: "discovery",
 	}); err != nil {
-		t.Fatalf("CreateModel(removed alias) error = %v", err)
+		t.Fatalf("CreateModel(grok discovered) error = %v", err)
 	}
 	_ = s.Close()
 
@@ -210,15 +246,25 @@ func TestStoreNew_PuterCleanupDoesNotRecreateDeletedModels(t *testing.T) {
 		_ = s.Close()
 		mini.Close()
 	})
-	if _, err := s.GetModelByChannelAndModelID(ctx, "puter", "claude-opus-5"); err == nil {
-		t.Fatal("deleted current Puter model was unexpectedly recreated")
-	}
-	if _, err := s.GetModelByChannelAndModelID(ctx, "puter", "claude-opus-5-fast"); err == nil {
-		t.Fatal("catalog-missing Puter alias was not cleaned up")
+
+	for _, probe := range []struct{ channel, modelID string }{
+		{"Puter", "claude-opus-5"},
+		{"Grok", "grok-4.6"},
+	} {
+		model, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID)
+		if err != nil || model == nil {
+			t.Fatalf("discovered model %s/%s did not survive a restart: %v", probe.channel, probe.modelID, err)
+		}
+		if !model.Verified {
+			t.Fatalf("%s/%s lost its verified flag", probe.channel, probe.modelID)
+		}
 	}
 }
 
-func TestStoreNew_SeedsCurrentGrokModelsWithoutConsoleLegacyModels(t *testing.T) {
+// TestStoreNew_RemovesDeprecatedGrokModelsOnly proves startup cleanup is limited
+// to identifiers known to be dead. Nothing is added, and a verified row that is
+// not on the deprecated list survives untouched.
+func TestStoreNew_RemovesDeprecatedGrokModelsOnly(t *testing.T) {
 	t.Parallel()
 
 	mini := miniredis.RunT(t)
@@ -234,23 +280,15 @@ func TestStoreNew_SeedsCurrentGrokModelsWithoutConsoleLegacyModels(t *testing.T)
 	}
 
 	ctx := context.Background()
-	for _, id := range []string{"grok-4.5", "grok-imagine-image-quality"} {
-		model, err := s.GetModelByChannelAndModelID(ctx, "grok", id)
-		if err != nil {
-			t.Fatalf("GetModelByChannelAndModelID(%s) error = %v", id, err)
+	for _, record := range []*Model{
+		{Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
+		{Channel: "Grok", ModelID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
+		{Channel: "Grok", ModelID: "grok-4.3", Name: "legacy console model", Status: ModelStatusAvailable, Verified: true},
+		{Channel: "Grok", ModelID: "grok-user-custom", Name: "User Custom", Status: ModelStatusAvailable, Verified: true},
+	} {
+		if err := s.CreateModel(ctx, record); err != nil {
+			t.Fatalf("CreateModel(%s) error = %v", record.ModelID, err)
 		}
-		if err := s.DeleteModel(ctx, model.ID); err != nil {
-			t.Fatalf("DeleteModel(%s) error = %v", id, err)
-		}
-	}
-	if err := s.CreateModel(ctx, &Model{
-		Channel:  "Grok",
-		ModelID:  "grok-user-custom",
-		Name:     "User Custom",
-		Status:   ModelStatusAvailable,
-		Verified: true,
-	}); err != nil {
-		t.Fatalf("CreateModel() error = %v", err)
 	}
 	_ = s.Close()
 
@@ -263,17 +301,69 @@ func TestStoreNew_SeedsCurrentGrokModelsWithoutConsoleLegacyModels(t *testing.T)
 		mini.Close()
 	})
 
-	for _, id := range []string{"grok-4.5", "grok-4.6", "grok-imagine-image-quality"} {
+	for _, id := range []string{"grok-4.5", "grok-imagine-image-quality", "grok-user-custom"} {
 		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err != nil {
-			t.Fatalf("expected current model %s to be seeded after restart: %v", id, err)
+			t.Fatalf("expected %s to survive startup cleanup: %v", id, err)
 		}
 	}
-	for _, id := range []string{"grok-4.3", "grok-4.3-beta", "grok-imagine-image-pro"} {
-		if _, err := s.GetModelByChannelAndModelID(ctx, "grok", id); err == nil {
-			t.Fatalf("expected console legacy model %s to stay removed", id)
+	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-4.3"); err == nil {
+		t.Fatal("expected deprecated grok-4.3 to be removed")
+	}
+}
+
+// TestCleanupDeprecatedModelIDsIsChannelScoped proves a retired identifier is
+// only removed from the channel that retired it.
+//
+// The cleanup used to match by identifier alone, which deleted working models:
+// the Puter and Warp upstream catalogs legitimately advertise grok-4.3 and
+// grok-build-0.1, so every restart removed rows a refresh had just published.
+func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{
+		StoreMode:   "redis",
+		RedisAddr:   mini.Addr(),
+		RedisDB:     0,
+		RedisPrefix: "test:",
+	})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	ctx := context.Background()
+	for _, record := range []*Model{
+		{Channel: "Grok", ModelID: "grok-4.3", Name: "retired Grok route", Status: ModelStatusAvailable, Verified: true},
+		{Channel: "Puter", ModelID: "grok-4.3", Name: "upstream Puter route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
+		{Channel: "Warp", ModelID: "grok-build-0.1", Name: "upstream Warp route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
+		{Channel: "Grok", ModelID: "grok-build-0.1", Name: "retired Grok route", Status: ModelStatusAvailable, Verified: true},
+		{Channel: "Warp", ModelID: "warp-chat", Name: "retired virtual mode", Status: ModelStatusAvailable, Verified: true},
+	} {
+		if err := s.CreateModel(ctx, record); err != nil {
+			t.Fatalf("CreateModel(%s/%s) error = %v", record.Channel, record.ModelID, err)
 		}
 	}
-	if _, err := s.GetModelByChannelAndModelID(ctx, "grok", "grok-user-custom"); err != nil {
-		t.Fatalf("expected user custom model to remain: %v", err)
+	t.Cleanup(func() {
+		_ = s.Close()
+		mini.Close()
+	})
+
+	s.cleanupDeprecatedModelIDs(ctx)
+
+	for _, probe := range []struct{ channel, modelID string }{
+		{"Puter", "grok-4.3"},
+		{"Warp", "grok-build-0.1"},
+	} {
+		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err != nil {
+			t.Fatalf("%s/%s was deleted from a channel that did not retire it: %v", probe.channel, probe.modelID, err)
+		}
+	}
+	for _, probe := range []struct{ channel, modelID string }{
+		{"Grok", "grok-4.3"},
+		{"Grok", "grok-build-0.1"},
+		{"Warp", "warp-chat"},
+	} {
+		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err == nil {
+			t.Fatalf("%s/%s was not retired", probe.channel, probe.modelID)
+		}
 	}
 }

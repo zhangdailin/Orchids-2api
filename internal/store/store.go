@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-
-	"orchids-api/internal/modelpolicy"
 )
 
 var (
@@ -567,47 +565,25 @@ func New(opts Options) (*Store, error) {
 		_ = redisStore.Close()
 		return nil, fmt.Errorf("failed to migrate account credentials: %w", err)
 	}
-	store.seedModels()
+	store.prepareModels()
 	return store, nil
 }
 
-func (s *Store) seedModels() {
+// prepareModels performs the startup maintenance model management needs.
+//
+// It deliberately creates no model rows. Every published model is an
+// observation of an upstream catalog made by a refresh with an active account,
+// so a fresh deployment starts with an empty catalog and fills it from
+// upstream. Seeding a compiled-in list here would make model management report
+// models that no account ever advertised, and would keep them served after the
+// upstream withdrew them.
+func (s *Store) prepareModels() {
 	ctx := context.Background()
+	// Deprecated identifiers are removed because they are known-dead names that
+	// must not stay routable; this inspects stored rows and never adds any.
 	s.cleanupDeprecatedModelIDs(ctx)
-	s.reconcileLatestPuterModels(ctx)
-	s.reconcileLatestWorkBuddyModels(ctx)
-	existing, err := s.ListModels(ctx)
-	if err == nil && len(existing) > 0 {
-		s.ensureRequiredGrokChatModels(ctx)
-		s.backfillGrokRouteMetadata(ctx)
-		slog.Debug("Model seed skipped; existing model records preserved", "count", len(existing))
-		return
-	}
-	if err != nil {
-		slog.Warn("failed to inspect existing models before seed", "error", err)
-	}
-
-	models := BuildWarpSeedModels()
-	models = append(models, buildGrokSeedModels()...)
-	models = append(models, buildPuterSeedModels()...)
-	models = append(models, buildWorkBuddySeedModels()...)
-	models = append(models, buildQoderSeedModels()...)
-
-	for _, m := range models {
-		if _, err := s.GetModelByChannelAndModelID(ctx, m.Channel, m.ModelID); err == nil {
-			continue
-		}
-		if err := s.CreateModel(ctx, &m); err != nil {
-			slog.Warn("Failed to seed model", "model_id", m.ModelID, "error", err)
-		} else {
-			slog.Debug("Seeded model", "model_id", m.ModelID)
-		}
-	}
-
-	s.cleanupDeprecatedModelIDs(ctx)
-	s.reconcileLatestPuterModels(ctx)
-	s.reconcileLatestWorkBuddyModels(ctx)
-
+	// Route metadata for stored Grok rows is repaired in place.
+	s.backfillGrokRouteMetadata(ctx)
 }
 
 func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
@@ -640,28 +616,24 @@ func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
 	}
 }
 
-func (s *Store) reconcileLatestPuterModels(ctx context.Context) {
-	models, err := s.ListModels(ctx)
-	if err != nil {
-		slog.Warn("Failed to inspect Puter models for reconciliation", "error", err)
-		return
-	}
-	for _, model := range models {
-		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "puter") || modelpolicy.IsLatestPuterModelID(model.ModelID) {
-			continue
-		}
-		if err := s.DeleteModel(ctx, model.ID); err != nil {
-			slog.Warn("Failed to remove old Puter model", "model_id", model.ModelID, "error", err)
-		}
-	}
-}
-
-func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
-	deprecatedModelIDs := []string{
+// deprecatedModelIDsAreChannelScoped documents the rule below: a retired
+// identifier is retired *within a channel's namespace*, not everywhere.
+//
+// The list used to be applied by identifier alone. That deleted working models:
+// the Puter and Warp upstream catalogs legitimately advertise grok-4.3,
+// grok-4.20-* and grok-build-0.1 (they route xAI models), so every restart
+// removed rows a refresh had just published, and a refresh put them back. The
+// channel is therefore part of the entry.
+var deprecatedModelIDsByChannel = map[string][]string{
+	"Warp": {
 		// Warp virtual modes are no longer public; Warp models must come from
-		// the upstream account discovery cache.
+		// the upstream account catalog.
 		"warp-chat",
 		"warp-agent",
+	},
+	"Grok": {
+		// Retired Grok console and web routes. These names are only retired for
+		// the Grok channel.
 		"grok-4.20-0309-non-reasoning",
 		"grok-4.20-0309",
 		"grok-4.20-0309-reasoning",
@@ -708,75 +680,25 @@ func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
 		"grok-2.1",
 		"grok-3.1",
 		"grok-4.21",
-	}
-	for _, modelID := range deprecatedModelIDs {
-		m, err := s.GetModelByModelID(ctx, modelID)
-		if err != nil || m == nil {
-			continue
-		}
-		if err := s.DeleteModel(ctx, m.ID); err != nil {
-			slog.Warn("Failed to remove deprecated model", "model_id", modelID, "error", err)
-			continue
-		}
-		slog.Debug("Removed deprecated model", "model_id", modelID)
-	}
+	},
 }
 
-func (s *Store) ensureRequiredGrokChatModels(ctx context.Context) {
-	for _, src := range buildGrokSeedModels() {
-		if _, err := s.GetModelByChannelAndModelID(ctx, src.Channel, src.ModelID); err == nil {
-			continue
+// cleanupDeprecatedModelIDs removes retired identifiers from the channel whose
+// namespace retired them. It inspects stored rows and never adds any.
+func (s *Store) cleanupDeprecatedModelIDs(ctx context.Context) {
+	for channel, modelIDs := range deprecatedModelIDsByChannel {
+		for _, modelID := range modelIDs {
+			m, err := s.GetModelByChannelAndModelID(ctx, channel, modelID)
+			if err != nil || m == nil {
+				continue
+			}
+			if err := s.DeleteModel(ctx, m.ID); err != nil {
+				slog.Warn("Failed to remove deprecated model", "channel", channel, "model_id", modelID, "error", err)
+				continue
+			}
+			slog.Debug("Removed deprecated model", "channel", channel, "model_id", modelID)
 		}
-		record := src
-		record.ID = ""
-		if err := s.CreateModel(ctx, &record); err != nil {
-			slog.Warn("Failed to ensure Grok app-chat model", "model_id", src.ModelID, "error", err)
-			continue
-		}
-		slog.Debug("Ensured Grok app-chat model", "model_id", src.ModelID)
 	}
-}
-
-func buildGrokSeedModels() []Model {
-	items := []struct {
-		id   string
-		name string
-	}{
-		{"grok-composer-2.5-fast", "Grok Composer 2.5 Fast"},
-		{"grok-4.6", "Grok 4.6"},
-		{"grok-4.5", "Grok 4.5"},
-		{"console/grok-imagine-image", "Console Grok Imagine Image"},
-		{"console/grok-imagine-image-quality", "Console Grok Imagine Image Quality"},
-		{"console/grok-imagine-image-2.0", "Console Grok Imagine Image 2.0"},
-		{"grok-imagine-image-lite", "Grok Imagine Image Lite"},
-		{"grok-imagine-image", "Grok Imagine Image"},
-		{"grok-imagine-image-2.0", "Grok Imagine Image 2.0"},
-		{"grok-imagine-image-quality", "Grok Imagine Image Quality"},
-		{"grok-imagine-image-edit", "Grok Imagine Image Edit"},
-		{"grok-imagine-video", "Grok Imagine Video"},
-		{"grok-imagine-video-1.5", "Grok Imagine Video 1.5"},
-		{"build/grok-imagine-video-1.5", "Build Grok Imagine Video 1.5"},
-		{"grok-voice-latest", "Grok Voice Latest"},
-		{"grok-voice-think-fast-2.0", "Grok Voice Think Fast 2.0"},
-		{"grok-voice-think-fast-1.0", "Grok Voice Think Fast 1.0"},
-		{"grok-stt", "Grok Speech to Text"},
-	}
-	models := make([]Model, 0, len(items))
-	for i, item := range items {
-		model := Model{
-			ID:        fmt.Sprintf("grok-%03d", i+1),
-			Channel:   "Grok",
-			ModelID:   item.id,
-			Name:      item.name,
-			Status:    ModelStatusAvailable,
-			Verified:  true,
-			IsDefault: i == 0,
-			SortOrder: i,
-		}
-		applyGrokRouteDefaults(&model)
-		models = append(models, model)
-	}
-	return models
 }
 
 func applyGrokRouteDefaults(model *Model) {

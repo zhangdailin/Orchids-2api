@@ -59,6 +59,37 @@ func setupModelValidationHandler(t *testing.T) (*Handler, *store.Store, *minired
 	return h, s, mini
 }
 
+// publishModel inserts a model row the way an upstream refresh would.
+//
+// The store no longer starts with a compiled-in catalog, so a test that needs a
+// model to exist publishes it. Records default to verified/available with the
+// discovery origin, which is what a catalog read produces.
+func publishModel(t *testing.T, s *store.Store, records ...*store.Model) {
+	t.Helper()
+	ctx := context.Background()
+	for _, record := range records {
+		if record == nil {
+			continue
+		}
+		if record.Channel == "" {
+			record.Channel = "Grok"
+		}
+		if record.Name == "" {
+			record.Name = record.ModelID
+		}
+		if record.Status == "" {
+			record.Status = store.ModelStatusAvailable
+		}
+		if record.Origin == "" {
+			record.Origin = "discovery"
+		}
+		record.Verified = true
+		if err := s.CreateModel(ctx, record); err != nil {
+			t.Fatalf("CreateModel(%s/%s) error = %v", record.Channel, record.ModelID, err)
+		}
+	}
+}
+
 func TestValidateModelAvailability_PuterUsesChannelSpecificModel(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() {
@@ -67,6 +98,7 @@ func TestValidateModelAvailability_PuterUsesChannelSpecificModel(t *testing.T) {
 	}()
 
 	ctx := context.Background()
+	publishModel(t, s, &store.Model{Channel: "Puter", ModelID: "claude-opus-5"})
 
 	got, err := h.validateModelAvailability(ctx, "claude-opus-5", "puter")
 	if err != nil {

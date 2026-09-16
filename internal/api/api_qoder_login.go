@@ -313,11 +313,10 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 //
 // What makes a login succeed is the device credential plus a resolved identity:
 // the upstream issued the token and named the account, and both are durable. The
-// model list read is enrichment, not a credential check — neither the Qoder CLI
-// nor the Qoder-2API-Go reference fetches it over the network (the CLI carries
-// its own catalog, the reference reads a local cache), so a gateway that does not
-// serve that path must not cost the operator a valid credential. When the read
-// fails the built-in catalog is installed and the real reason is logged.
+// model list read is enrichment, not a credential check, so a gateway that does
+// not answer it must not cost the operator a valid credential. The catalog is
+// read from the signed control plane; when that read fails the snapshot is left
+// empty, the real reason is logged, and the operator runs a model refresh.
 func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, loginID, machineID string, creds qoder.Credentials, cfg *config.Config, factory func(*store.Account, *config.Config) *qoder.Client) (*store.Account, error) {
 	normalized := qoder.NormalizeLoginResult(creds, machineID)
 	acc := &store.Account{
@@ -380,15 +379,15 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 	acc.QoderRuntimeInfo = client.RuntimeFields().EncryptUserInfo
 	acc.QoderRuntimeKey = client.RuntimeFields().Key
 
-	// The catalog is installed from the built-in list; there is no upstream
-	// catalog or freshness timestamp to observe.
-	models, catalogErr := client.FetchModels(ctx)
-	if catalogErr != nil {
-		slog.Warn("Qoder catalog read failed; the account was saved with the built-in model list",
+	// The catalog is read from the signed upstream control plane at login. A
+	// failed read leaves the snapshot empty on purpose: the account is saved and
+	// a later refresh records the catalog, but nothing compiled in is installed
+	// as if it had been observed.
+	if models, catalogErr := client.FetchUpstreamModels(ctx); catalogErr != nil {
+		slog.Warn("Qoder upstream catalog read failed at login; leaving the snapshot empty",
 			"login_id", loginID, "error", catalogErr)
-	}
-	if acc.QoderModelIDs = qoder.CatalogSnapshot(models); len(acc.QoderModelIDs) == 0 {
-		acc.QoderModelIDs = qoder.CatalogSnapshot(qoder.DefaultCatalog())
+	} else {
+		acc.QoderModelIDs = qoder.CatalogSnapshot(models)
 	}
 
 	// Record the allowance at login so the account table can show the plan and

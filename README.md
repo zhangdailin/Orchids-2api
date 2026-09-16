@@ -11,7 +11,7 @@
 - 模型管理支持按通道刷新：`/api/models/refresh`
 - Puter 非流式 Claude Messages 已覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归
 - WorkBuddy 通道对接国际版 `www.workbuddy.ai`，账号级模型目录从 `GET /v3/config` 同步，refreshToken 自动轮换并回写
-- Qoder 通道对接 `qoder.com` CLI 设备授权流（**只支持 OAuth 登录，不提供 PAT 入口**），使用本地内置模型目录，设备 refreshToken 自动轮换并回写
+- Qoder 通道对接 `qoder.com` CLI 设备授权流（**只支持 OAuth 登录，不提供 PAT 入口**），模型目录由 `GET /algo/api/v2/model/list` 读取（复用聊天链路的 COSY 签名，无内置回退），设备 refreshToken 自动轮换并回写
 
 ## 核心能力
 
