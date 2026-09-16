@@ -130,6 +130,11 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		AccountID:  sess.acc.ID,
 		Model:      spec.UpstreamModel,
 		Provider:   ProviderBuild,
+		// Build keeps the response body upstream, so the input items are the only
+		// part of the exchange the gateway can serve back itself. Persisting them
+		// lets GET /responses/{id}/input_items answer locally instead of doing a
+		// second upstream round trip for data it already had.
+		InputItems: responsesInputItemsJSON(payload["input"]),
 	}); err != nil {
 		slog.Error("failed to save response ownership", "response_id", responseID, "account_id", sess.acc.ID, "error", err)
 	}
@@ -165,7 +170,15 @@ func (h *Handler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request)
 
 // HandleResponseResource retrieves or deletes a stored Build Responses
 // resource through the exact account that created it.
+//
+// The sibling endpoints below a response id are dispatched first: they are
+// resources of a response, so the id parser must never mistake the trailing
+// action for part of the id.
 func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request) {
+	if action := responsesSubResourceAction(r.URL.Path); action != "" {
+		responsesSubResourceHandler(action, h.bridgeOptions())(w, r)
+		return
+	}
 	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
 		w.Header().Set("Allow", "GET, DELETE")
 		writeResponsesAPIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
@@ -228,6 +241,24 @@ func (h *Handler) getStoredResponse(r *http.Request, responseID, ownerHash strin
 		return nil, errors.New("response store not configured")
 	}
 	return h.lb.Store.GetStoredResponse(r.Context(), responseID, ownerHash)
+}
+
+// bridgeOptions describes the response store the shared Responses helpers should
+// use for this handler.
+//
+// The native handler and the unified bridge are wired to the same store, so
+// handing the native path the bridge's options lets one implementation of cancel
+// and input_items serve records written by either of them.
+func (h *Handler) bridgeOptions() ResponsesBridgeOptions {
+	opts := ResponsesBridgeOptions{}
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		return opts
+	}
+	opts.Store = h.lb.Store
+	if cfg := h.configSnapshot(); cfg != nil && cfg.ResponseStoreTTL > 0 {
+		opts.TTL = time.Duration(cfg.ResponseStoreTTL) * time.Hour
+	}
+	return opts
 }
 
 func (h *Handler) saveStoredResponse(r *http.Request, response *store.StoredResponse) error {

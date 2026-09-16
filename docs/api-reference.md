@@ -29,14 +29,27 @@
 
 ### 1.3 OpenAI Responses 风格
 
+所有渠道的模型都可经统一前缀 `/v1` 使用 Responses API：Grok 模型走原生实现，其余渠道（Warp / Puter / WorkBuddy / Qoder）由 Responses→Chat 桥接提供。渠道前缀（`/warp/v1`、`/puter/v1`、`/workbuddy/v1`、`/qoder/v1`、`/grok/v1`）同样可用。
+
 | 路径 | 方法 | 说明 |
 |---|---|---|
 | `/grok/v1/responses`、`/v1/responses` | POST | 创建 Response；Build 原生支持 `store`、`previous_response_id` |
-| `/grok/v1/responses/compact`、`/v1/responses/compact` | POST | Build 原生上下文压缩，强制非流式 |
-| `/grok/v1/responses/{response_id}`、`/v1/responses/{response_id}` | GET | 查询 stored Response |
+| `/{渠道}/v1/responses` | POST | 桥接到同渠道 Chat Completions；同样支持 `store`、`previous_response_id` |
+| `/v1/responses/compact`、`/grok/v1/responses/compact` | POST | Build 原生上下文压缩，强制非流式 |
+| `/v1/responses/{response_id}`、`/grok/v1/responses/{response_id}` | GET | 查询 stored Response |
 | 同上 | DELETE | 删除 stored Response |
+| `/responses/{response_id}/cancel` | POST | 取消 Response，幂等；返回带 `status=cancelled` 的对象 |
+| `/responses/{response_id}/input_items` | GET | 返回该 Response 创建时的输入项列表 |
 
-stored Response 归属记录按客户端 API Key 隔离。连续请求和资源管理会固定使用创建该 Response 的 Build OAuth 账号；归属记录过期或账号不可用时不会切换到其他账号。
+上表的 `cancel` / `input_items` 在 `/v1`、`/grok/v1`、`/warp/v1`、`/puter/v1`、`/workbuddy/v1`、`/qoder/v1` 六个前缀下均已注册，且不经过按模型分发的 dispatcher：cancel 请求体不含 `model`，按请求体分发会让「发送 `{}`」与「不发送请求体」落到不同实现，因此这两个端点显式注册，统一读取同一个 response store。
+
+stored Response 归属记录按客户端 API Key 隔离。连续请求和资源管理会固定使用创建该 Response 的 Build OAuth 账号；归属记录过期或账号不可用时不会切换到其他账号。统一前缀下的 `GET`/`DELETE` 由存储记录决定由谁处理：Build 记录交给原生 handler（只有它能用创建该记录的账号访问上游），其余记录交给写入它的桥接实现。
+
+对从未存储过的 id，`GET`/`DELETE`/`cancel`/`input_items` 一律返回 `response_not_found`，不再回落到原生 handler；因此原生 handler 未配置存储时不会把「记录不存在」变成 `response_store_unavailable`。只有真正的存储读取失败才返回后者。Build 记录的响应体留在上游，`cancel` 因此返回网关确实掌握的身份信息（`id`、`model`、`created_at`、`status=cancelled`），而不是伪造一次无法验证的上游变更。
+
+未配置共享 response store 时，桥接回退到进程内存储，`store=true`、`previous_response_id` 与资源查询在本进程内继续可用；多副本部署必须配置 Redis，因为进程内记录仅对写入它的副本可见。回退时会输出一条 WARN 日志。
+
+桥接会把 `include`、`text`（含 `text.format`）与 `response_format` 原样透传给 Chat 层；两者同时出现时以 Responses 规范的 `text.format` 为准。不支持 Responses 的模型（图片、视频、TTS、STT、Realtime 等 `MediaAPIOnly` 模型）以 Responses 错误信封返回 400，错误信息为 `model <id> does not support responses; use the model's dedicated endpoint instead`；`/v1/models` 的 `capabilities` 字段已排除 `responses`，客户端可提前判断。
 
 Build 原生 `context_management`、压缩输入和推理密文保留转发；`/responses/compact` 不可用时直接返回上游错误，不再调用模型生成本地摘要。中转层不按模型白名单降级 `reasoning.effort`，也不补写未指定的 `temperature` / `top_p`；具体值是否支持由上游决定。会话缓存键仍按租户隔离。
 

@@ -61,6 +61,16 @@ type ResponsesCreateRequest struct {
 	Include            []string                 `json:"include,omitempty"`
 	Background         *bool                    `json:"background,omitempty"`
 	PromptCacheKey     string                   `json:"prompt_cache_key,omitempty"`
+	// Text carries the Responses text controls, whose only member is the output
+	// format (`text.format`). The chat-only channels express the same thing as
+	// `response_format`, so the bridge passes the object through unchanged and
+	// lets the chat layer decide how much of it the upstream honors.
+	Text map[string]interface{} `json:"text,omitempty"`
+	// ResponseFormat accepts the chat-shaped field as well. Clients that were
+	// written against the chat API and later migrated to Responses keep sending
+	// it, and silently dropping it used to turn a structured-output request into
+	// free-form prose.
+	ResponseFormat map[string]interface{} `json:"response_format,omitempty"`
 }
 
 func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
@@ -83,6 +93,8 @@ func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 		Include            []string                 `json:"include,omitempty"`
 		Background         interface{}              `json:"background,omitempty"`
 		PromptCacheKey     interface{}              `json:"prompt_cache_key,omitempty"`
+		Text               map[string]interface{}   `json:"text,omitempty"`
+		ResponseFormat     map[string]interface{}   `json:"response_format,omitempty"`
 	}
 
 	var raw rawResponsesCreateRequest
@@ -156,6 +168,8 @@ func (r *ResponsesCreateRequest) UnmarshalJSON(data []byte) error {
 	r.Include = raw.Include
 	r.Background = background
 	r.PromptCacheKey = parseLooseStringAny(raw.PromptCacheKey)
+	r.Text = raw.Text
+	r.ResponseFormat = raw.ResponseFormat
 	return nil
 }
 
@@ -208,11 +222,18 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !resolved {
-		http.Error(w, modelNotFoundMessage(req.Model), http.StatusBadRequest)
+		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", modelNotFoundMessage(req.Model))
 		return
 	}
 	if !spec.SupportsConversation() {
-		http.Error(w, fmt.Sprintf("model %s does not support responses", req.Model), http.StatusBadRequest)
+		// The Responses wire format is a conversation API, so a media-only model
+		// (image, video, TTS, STT, realtime) genuinely cannot serve it. Report
+		// that in the Responses envelope rather than as plain text: a Codex-style
+		// client parses the body to tell "wrong model" from "gateway is down", and
+		// /v1/models already advertises the capability so the choice can be made
+		// before the request.
+		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error",
+			fmt.Sprintf("model %s does not support responses; use the model's dedicated endpoint instead", req.Model))
 		return
 	}
 	if previousID := strings.TrimSpace(req.PreviousResponseID); previousID != "" {
@@ -317,6 +338,9 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 			ResponseID: parseLooseStringAny(response["id"]), OwnerHash: owner, Model: req.Model,
 			Provider: providerForModelSpec(spec), PromptCacheKey: sessionFromContext(r.Context()).Key,
 			ContentType: "application/json", Body: encoded,
+			// The expanded input, not the raw one: a continuation replays what the
+			// upstream actually received, which is what input_items reports.
+			InputItems: responsesInputItemsJSON(req.Input),
 		}); saveErr != nil {
 			http.Error(w, "failed to store response", http.StatusServiceUnavailable)
 			return
@@ -462,8 +486,42 @@ func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsReques
 		ParallelToolCalls: req.ParallelToolCalls,
 		MaxTokens:         req.MaxOutputTokens,
 		PromptCacheKey:    req.PromptCacheKey,
+		// Include and the output format used to be dropped here while the native
+		// Grok path forwarded them, so the same request produced reasoning
+		// summaries and structured output on one channel and neither on the
+		// others. They are carried through instead of re-derived: the chat layer
+		// already knows which of them its upstream honors.
+		Include:        append([]string(nil), req.Include...),
+		ResponseText:   responsesTextControls(req),
+		ResponseFormat: responsesOutputFormat(req),
 	}
 	return out, nil
+}
+
+// responsesTextControls reports the `text` object to hand to the chat layer.
+//
+// Responses spells the output format as text.format while chat spells it as
+// response_format. Both are forwarded unchanged — the chat layer normalizes the
+// shape it receives — so a bridge that receives either one keeps the caller's
+// intent, including the `text.verbosity` control the format object may carry.
+func responsesTextControls(req ResponsesCreateRequest) map[string]interface{} {
+	if len(req.Text) == 0 {
+		return nil
+	}
+	return cloneStringInterfaceMap(req.Text)
+}
+
+// responsesOutputFormat derives the chat `response_format` from either spelling.
+// `text.format` wins when both are present because it is the field the Responses
+// API defines.
+func responsesOutputFormat(req ResponsesCreateRequest) map[string]interface{} {
+	if format, ok := req.Text["format"].(map[string]interface{}); ok && len(format) > 0 {
+		return cloneStringInterfaceMap(format)
+	}
+	if len(req.ResponseFormat) > 0 {
+		return cloneStringInterfaceMap(req.ResponseFormat)
+	}
+	return nil
 }
 
 func responsesInputToMessages(input interface{}) ([]ChatMessage, error) {

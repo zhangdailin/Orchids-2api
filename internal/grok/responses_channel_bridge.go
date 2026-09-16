@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -21,20 +22,48 @@ import (
 // so this label is what keeps a bridged response apart from a native one.
 const bridgedResponseProvider = "chat-bridge"
 
+// ResponsesStore is the persistence the bridge needs to store a Response, serve
+// it back and delete it. *store.Store satisfies it against Redis;
+// store.MemoryResponseStore satisfies it in-process.
+type ResponsesStore interface {
+	SaveStoredResponse(ctx context.Context, response *store.StoredResponse, ttl time.Duration) error
+	GetStoredResponse(ctx context.Context, responseID, ownerHash string) (*store.StoredResponse, error)
+	DeleteStoredResponse(ctx context.Context, responseID, ownerHash string) error
+}
+
 // ResponsesBridgeOptions configures the bridge's response store.
 //
-// Without a store the bridge still serves stateless requests, which is what
-// Codex does by default (it resends the whole conversation every turn). With a
-// store, store=true, previous_response_id and GET/DELETE /responses/{id} work
-// on channels that have no native Responses storage.
+// The store is what makes store=true, previous_response_id and
+// GET/DELETE /responses/{id} work on channels that have no native Responses
+// storage. Without one the bridge still serves stateless requests, which is what
+// Codex does by default (it resends the whole conversation every turn).
 type ResponsesBridgeOptions struct {
-	Store *store.Store
+	// Store is the shared response store. Nil falls back to the process-wide
+	// in-process store, so the bridge keeps store=true, previous_response_id and
+	// resource retrieval working on a gateway started without a response
+	// backend. A multi-replica gateway must pass the shared store: an in-process
+	// record is only visible to the replica that wrote it.
+	Store ResponsesStore
 	// TTL overrides the stored-response lifetime; zero uses the default.
 	TTL time.Duration
 }
 
-func (o ResponsesBridgeOptions) enabled() bool {
-	return o != ResponsesBridgeOptions{} && o.Store != nil
+// memoryFallbackWarned keeps the "no shared store" warning to one line per
+// process instead of one per request.
+var memoryFallbackWarned sync.Once
+
+// store returns the response store the bridge reads and writes. It is never nil:
+// a gateway with no response backend gets the in-process fallback rather than a
+// hard failure on every stored-response request.
+func (o ResponsesBridgeOptions) store() ResponsesStore {
+	if o.Store != nil {
+		return o.Store
+	}
+	memoryFallbackWarned.Do(func() {
+		slog.Warn("Responses bridge has no shared response store; falling back to an in-process store. " +
+			"stored responses are only visible to this process — configure Redis for a multi-replica deployment")
+	})
+	return store.DefaultMemoryResponseStore()
 }
 
 func (o ResponsesBridgeOptions) ttl() time.Duration {
@@ -94,7 +123,9 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		if !requireAPIKeyModel(w, r, req.Model) {
 			return
 		}
-		if err := validateResponsesCompatibilityFor(req, opts.enabled()); err != nil {
+		// The bridge can always persist a response, streamed or not, because it
+		// writes the terminal object the client saw rather than the raw stream.
+		if err := validateResponsesCompatibilityFor(req, true); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -152,7 +183,7 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		}
 		response := responsesObjectFromChat(req.Model, chatBody)
 		applyBridgedResponseExtras(response, req)
-		if storeRequested(req) && opts.enabled() {
+		if storeRequested(req) {
 			if err := saveBridgedResponse(r, req, response, opts); err != nil {
 				http.Error(w, "failed to store response", http.StatusServiceUnavailable)
 				return
@@ -221,12 +252,20 @@ func ModelDispatcher(native, bridged http.HandlerFunc, isNativeModel func(contex
 	}
 }
 
-// ResponsesResourceHandler retrieves or deletes a stored response. Records
-// written by the bridge are served from the shared store; without a store the
-// endpoint reports the standard response_not_found envelope instead of Go's
-// plain-text 404, so a client can tell "not stored here" from "no such route".
+// ResponsesResourceHandler retrieves or deletes a stored response. Records are
+// served from the bridge's store, which is the shared Redis store when one is
+// configured and the in-process fallback otherwise. A miss answers with the
+// Responses response_not_found envelope instead of Go's plain-text 404, so a
+// client can tell "not stored here" from "no such route".
+//
+// The path is parsed before the method so the sibling endpoints below a response
+// id (/cancel, /input_items) never look like a response id themselves.
 func ResponsesResourceHandler(opts ResponsesBridgeOptions) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if action := responsesSubResourceAction(r.URL.Path); action != "" {
+			responsesSubResourceHandler(action, opts)(w, r)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodDelete {
 			w.Header().Set("Allow", "GET, DELETE")
 			writeResponsesAPIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
@@ -237,19 +276,15 @@ func ResponsesResourceHandler(opts ResponsesBridgeOptions) http.HandlerFunc {
 			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "response_id is required")
 			return
 		}
-		if !opts.enabled() {
-			writeResponsesAPIError(w, http.StatusNotFound, "response_not_found",
-				"this channel does not store responses; send the full conversation with every request")
-			return
-		}
+		st := opts.store()
 		owner := responsesOwnerHash(r.Context())
-		record, err := opts.Store.GetStoredResponse(r.Context(), responseID, owner)
+		record, err := st.GetStoredResponse(r.Context(), responseID, owner)
 		if err != nil {
 			writeStoredResponseLookupError(w, err, "response not found")
 			return
 		}
 		if r.Method == http.MethodDelete {
-			if err := opts.Store.DeleteStoredResponse(r.Context(), responseID, owner); err != nil {
+			if err := st.DeleteStoredResponse(r.Context(), responseID, owner); err != nil {
 				http.Error(w, "failed to delete response", http.StatusServiceUnavailable)
 				return
 			}
@@ -278,6 +313,8 @@ func ResponsesResourceHandler(opts ResponsesBridgeOptions) http.HandlerFunc {
 //     completion: these channels have no native compact endpoint, and the
 //     client's payload is a normal summarisation turn
 //   - GET|DELETE /responses/{id}  served from the response store
+//   - POST /responses/{id}/cancel and GET /responses/{id}/input_items
+//     served from the response store (see responses_subresource.go)
 func ResponsesChannelSubpath(chat http.HandlerFunc, opts ResponsesBridgeOptions) http.HandlerFunc {
 	create := ResponsesBridgeHandler(chat, opts)
 	resource := ResponsesResourceHandler(opts)
@@ -312,13 +349,14 @@ func saveBridgedResponse(r *http.Request, req ResponsesCreateRequest, response m
 	if err != nil {
 		return err
 	}
-	return opts.Store.SaveStoredResponse(r.Context(), &store.StoredResponse{
+	return opts.store().SaveStoredResponse(r.Context(), &store.StoredResponse{
 		ResponseID:  parseLooseStringAny(response["id"]),
 		OwnerHash:   responsesOwnerHash(r.Context()),
 		Model:       req.Model,
 		Provider:    bridgedResponseProvider,
 		ContentType: "application/json",
 		Body:        encoded,
+		InputItems:  responsesInputItemsJSON(req.Input),
 	}, opts.ttl())
 }
 
@@ -326,7 +364,7 @@ func saveBridgedResponse(r *http.Request, req ResponsesCreateRequest, response m
 // A stream cannot report a storage failure to the client any more, so the
 // failure is logged and the next turn sees response_not_found.
 func bridgedResponseRecorder(r *http.Request, req ResponsesCreateRequest, opts ResponsesBridgeOptions) func(map[string]interface{}) {
-	if !storeRequested(req) || !opts.enabled() {
+	if !storeRequested(req) {
 		return nil
 	}
 	return func(response map[string]interface{}) {
@@ -348,12 +386,7 @@ func expandBridgedPreviousResponse(w http.ResponseWriter, r *http.Request, req *
 	if previousID == "" {
 		return true
 	}
-	if !opts.enabled() {
-		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error",
-			"previous_response_id requires a response store; send the full conversation instead")
-		return false
-	}
-	previous, err := opts.Store.GetStoredResponse(r.Context(), previousID, responsesOwnerHash(r.Context()))
+	previous, err := opts.store().GetStoredResponse(r.Context(), previousID, responsesOwnerHash(r.Context()))
 	if err != nil {
 		if errors.Is(err, store.ErrNoRows) {
 			writeResponsesAPIError(w, http.StatusNotFound, "response_not_found", "previous response not found")

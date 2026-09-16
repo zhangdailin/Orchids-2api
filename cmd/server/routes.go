@@ -109,6 +109,17 @@ func registerRoutes(
 	channelResponsePrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1"}
 	registerWithPrefixes(mux, channelResponsePrefixes, "/responses", inferenceAuth(limiter.Limit(channelResponses)))
 	registerWithPrefixes(mux, channelResponsePrefixes, "/responses/", inferenceAuth(limiter.Limit(channelResponsesSub)))
+	// The sibling endpoints below a response id are registered explicitly on
+	// every prefix. Going through the model dispatcher would route them by the
+	// body, and a cancel body carries no model: the same request would land on
+	// the native handler or the bridge depending on whether the client sent `{}`
+	// or nothing at all. Both answers come from the shared response store, so
+	// they are the same implementation whichever channel wrote the record.
+	responsesResourcePrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1", "/grok/v1", "/v1"}
+	registerWithPrefixes(mux, responsesResourcePrefixes, "/responses/{response_id}/cancel",
+		inferenceAuth(limiter.Limit(grok.ResponsesCancelHandler(bridgeOptions))))
+	registerWithPrefixes(mux, responsesResourcePrefixes, "/responses/{response_id}/input_items",
+		inferenceAuth(limiter.Limit(grok.ResponsesInputItemsHandler(bridgeOptions))))
 
 	grokPrefixes := []string{"/grok/v1"}
 	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", inferenceAuth(limiter.Limit(grokHandler.HandleChatCompletions)))
@@ -145,7 +156,10 @@ func registerRoutes(
 	mux.HandleFunc("/v1/chat/completions", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleChatCompletions, h.HandleMessages, isNativeResponsesModel))))
 	mux.HandleFunc("/v1/messages", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleMessages, h.HandleMessages, isNativeResponsesModel))))
 	mux.HandleFunc("/v1/responses", inferenceAuth(limiter.Limit(grok.ModelDispatcher(grokHandler.HandleResponses, channelResponses, isNativeResponsesModel))))
-	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ModelDispatcher(nativeResponsesSub, channelResponsesSub, isNativeResponsesModel))))
+	// POST is dispatched by model, but GET and DELETE have no model to read: the
+	// stored record decides instead, so a bridged record is served by the bridge
+	// that wrote it rather than by Grok's handler accepting a foreign record.
+	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ResponsesUnifiedResource(nativeResponsesSub, bridgeOptions))))
 	// count_tokens takes the same dispatch decision as the request it precedes:
 	// /warp/v1 and /puter/v1 have their own token profiles, and a client that
 	// counts against one channel while the completion runs on another plans its

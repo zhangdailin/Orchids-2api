@@ -218,8 +218,12 @@ WB_LIVE=1 WB_AUTH_FILE=/path/to/auths/workbuddy-<uid>.json go test ./internal/wo
 - `POST /grok/v1/responses/compact`
 - `GET /grok/v1/responses/{response_id}`
 - `DELETE /grok/v1/responses/{response_id}`
+- `POST /responses/{response_id}/cancel`
+- `GET /responses/{response_id}/input_items`
 
-Build stored Responses 会按客户端 API Key 隔离，并固定回创建该 Response 的 OAuth 账号；归属记录默认保留 720 小时。
+统一前缀 `/v1` 下以上端点对所有渠道的模型可用：Grok 模型走原生实现，Warp / Puter / WorkBuddy / Qoder 由 Responses→Chat 桥接提供；`cancel` 与 `input_items` 在六个前缀（含 `/grok/v1`）下均已注册，读取同一个 response store。未配置 Redis 时桥接回退到进程内存储并输出 WARN 日志，多副本部署必须配置 Redis。
+
+Build stored Responses 会按客户端 API Key 隔离，并固定回创建该 Response 的 OAuth 账号；归属记录默认保留 720 小时。详见 [docs/api-reference.md](docs/api-reference.md#13-openai-responses-风格)。
 
 ### Grok 图片与文件
 

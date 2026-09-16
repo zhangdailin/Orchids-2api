@@ -327,17 +327,23 @@ type ApiKey struct {
 // StoredResponse records the ownership needed to continue or manage an
 // upstream Responses resource without retaining the request or response body.
 type StoredResponse struct {
-	ResponseID     string    `json:"response_id"`
-	OwnerHash      string    `json:"owner_hash"`
-	AccountID      int64     `json:"account_id"`
-	Model          string    `json:"model"`
-	Provider       string    `json:"provider"`
-	PromptCacheKey string    `json:"prompt_cache_key,omitempty"`
-	ContentType    string    `json:"content_type,omitempty"`
-	Body           []byte    `json:"body,omitempty"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ResponseID     string `json:"response_id"`
+	OwnerHash      string `json:"owner_hash"`
+	AccountID      int64  `json:"account_id"`
+	Model          string `json:"model"`
+	Provider       string `json:"provider"`
+	PromptCacheKey string `json:"prompt_cache_key,omitempty"`
+	ContentType    string `json:"content_type,omitempty"`
+	Body           []byte `json:"body,omitempty"`
+	// InputItems is the request input the response was created from, normalized
+	// to the Responses item shape. GET /responses/{id}/input_items serves it
+	// back. Records written before this field existed simply report an empty
+	// list rather than failing, and previous_response_id expansion is unaffected
+	// because it reads Body.
+	InputItems json.RawMessage `json:"input_items,omitempty"`
+	ExpiresAt  time.Time       `json:"expires_at"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
 // StoredReasoningReplay contains one opaque encrypted reasoning item. The key
