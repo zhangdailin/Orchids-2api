@@ -30,9 +30,10 @@ func (w *streamingChatWriter) Write(data []byte) (int, error) {
 }
 func (w *streamingChatWriter) Flush() { w.WriteHeader(http.StatusOK) }
 
-// withChatStream owns the internal request and pipe lifecycle for both public
-// protocol bridges. Returning from consume also cancels the upstream producer.
-func (h *Handler) withChatStream(req *http.Request, consume func(int, http.Header, io.Reader)) {
+// streamThroughChat runs chat with a streaming ResponseWriter and hands the
+// status, the committed headers and the body reader to consume. The producer is
+// cancelled when consume returns, so a client disconnect stops the upstream.
+func streamThroughChat(req *http.Request, chat http.HandlerFunc, consume func(int, http.Header, io.Reader)) {
 	ctx, cancel := context.WithCancel(req.Context())
 	defer cancel()
 	reader, writer := io.Pipe()
@@ -40,7 +41,7 @@ func (h *Handler) withChatStream(req *http.Request, consume func(int, http.Heade
 	streamWriter := newStreamingChatWriter(writer)
 	go func() {
 		defer writer.Close()
-		h.HandleChatCompletions(streamWriter, req.Clone(ctx))
+		chat(streamWriter, req.Clone(ctx))
 		streamWriter.WriteHeader(http.StatusOK)
 	}()
 	select {
@@ -48,4 +49,10 @@ func (h *Handler) withChatStream(req *http.Request, consume func(int, http.Heade
 		consume(streamWriter.status, streamWriter.committedHeader, reader)
 	case <-ctx.Done():
 	}
+}
+
+// withChatStream owns the internal request and pipe lifecycle for both public
+// protocol bridges. Returning from consume also cancels the upstream producer.
+func (h *Handler) withChatStream(req *http.Request, consume func(int, http.Header, io.Reader)) {
+	streamThroughChat(req, h.HandleChatCompletions, consume)
 }

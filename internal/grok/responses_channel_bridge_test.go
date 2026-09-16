@@ -1,0 +1,193 @@
+package grok
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/goccy/go-json"
+)
+
+func TestResponsesChatPathMapsTheChannelPrefix(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"/workbuddy/v1/responses": "/workbuddy/v1/chat/completions",
+		"/warp/v1/responses/":     "/warp/v1/chat/completions",
+		"/v1/responses":           "/v1/chat/completions",
+		"  /qoder/v1/responses  ": "/qoder/v1/chat/completions",
+		"/something/else":         "/v1/chat/completions",
+	}
+	for path, want := range cases {
+		if got := responsesChatPath(path); got != want {
+			t.Fatalf("responsesChatPath(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+type recordedChatCall struct {
+	path string
+	body map[string]interface{}
+}
+
+// recordingChat captures the inner chat request and replies with a complete
+// chat-completions SSE stream, which is what the shared handler emits.
+func recordingChat(t *testing.T, calls *[]recordedChatCall, mu *sync.Mutex) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("inner chat body: %v", err)
+		}
+		var decoded map[string]interface{}
+		_ = json.Unmarshal(raw, &decoded)
+		mu.Lock()
+		*calls = append(*calls, recordedChatCall{path: r.URL.Path, body: decoded})
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for _, frame := range []string{
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"delta":{"content":"hello"}}]}`,
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		} {
+			_, _ = io.WriteString(w, frame+"\n\n")
+		}
+	}
+}
+
+func TestResponsesBridgeStreamsChatAsResponses(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	calls := []recordedChatCall{}
+	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu))
+
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
+		strings.NewReader(`{"model":"gpt-5.6-luna","instructions":"be brief","input":"say hi","stream":true}`))
+	rec := httptest.NewRecorder()
+	bridge(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	out := rec.Body.String()
+	for _, want := range []string{"event: response.created", "response.output_text.delta", `"hello"`, "event: response.completed"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stream is missing %q: %s", want, out)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("inner chat calls = %d, want 1", len(calls))
+	}
+	if calls[0].path != "/workbuddy/v1/chat/completions" {
+		t.Fatalf("inner chat path = %q, want the same channel prefix", calls[0].path)
+	}
+	messages, _ := calls[0].body["messages"].([]interface{})
+	if len(messages) != 2 {
+		t.Fatalf("inner messages = %#v, want instructions plus the input turn", calls[0].body["messages"])
+	}
+	first, _ := messages[0].(map[string]interface{})
+	if first["role"] != "system" || first["content"] != "be brief" {
+		t.Fatalf("first inner message = %#v, want the instructions as a system turn", first)
+	}
+	if stream, _ := calls[0].body["stream"].(bool); !stream {
+		t.Fatalf("inner stream = %#v, want true", calls[0].body["stream"])
+	}
+}
+
+func TestResponsesBridgeNonStreamReturnsAResponseObject(t *testing.T) {
+	t.Parallel()
+
+	chat := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
+	}
+	bridge := ResponsesBridgeHandler(chat)
+
+	req := httptest.NewRequest(http.MethodPost, "/puter/v1/responses",
+		strings.NewReader(`{"model":"gpt-5.6-luna","input":"say hi"}`))
+	rec := httptest.NewRecorder()
+	bridge(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode response object: %v (%s)", err, rec.Body.String())
+	}
+	if decoded["object"] != "response" || decoded["model"] != "gpt-5.6-luna" {
+		t.Fatalf("response object = %#v", decoded)
+	}
+	if !strings.Contains(rec.Body.String(), "hello") {
+		t.Fatalf("response is missing the assistant text: %s", rec.Body.String())
+	}
+}
+
+func TestResponsesBridgeForwardsChatErrors(t *testing.T) {
+	t.Parallel()
+
+	chat := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"error":{"message":"model not found","type":"invalid_request_error"}}`)
+	}
+	bridge := ResponsesBridgeHandler(chat)
+
+	req := httptest.NewRequest(http.MethodPost, "/warp/v1/responses",
+		strings.NewReader(`{"model":"does-not-exist","input":"hi","stream":true}`))
+	rec := httptest.NewRecorder()
+	bridge(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want the inner 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "model not found") {
+		t.Fatalf("error body was not forwarded: %s", rec.Body.String())
+	}
+}
+
+func TestResponsesBridgeRejectsInvalidRequests(t *testing.T) {
+	t.Parallel()
+
+	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner chat handler must not run for an invalid request")
+	})
+
+	for name, body := range map[string]string{
+		"missing_model": `{"input":"hi"}`,
+		"missing_input": `{"model":"gpt-5.6-luna"}`,
+		"broken_json":   `{"model":`,
+		"background":    `{"model":"gpt-5.6-luna","input":"hi","background":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses", strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			bridge(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status = %d, want 400 (body=%s)", name, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestResponsesBridgeRejectsNonPost(t *testing.T) {
+	t.Parallel()
+
+	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {})
+	rec := httptest.NewRecorder()
+	bridge(rec, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}

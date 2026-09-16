@@ -96,8 +96,18 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 
 	// The WorkBuddy channel entry points are routed for both protocols. Without
 	// an API key the inference auth layer rejects the request, which still proves
-	// the path is registered rather than unknown.
-	for _, target := range []string{"/workbuddy/v1/messages", "/workbuddy/v1/chat/completions", "/workbuddy/v1/models"} {
+	// the path is registered rather than unknown. The Responses endpoints matter
+	// specifically because Codex defaults to that wire API, so a 404 there breaks
+	// every Codex client pointed at a channel prefix.
+	for _, target := range []string{
+		"/workbuddy/v1/messages",
+		"/workbuddy/v1/chat/completions",
+		"/workbuddy/v1/models",
+		"/workbuddy/v1/responses",
+		"/warp/v1/responses",
+		"/puter/v1/responses",
+		"/qoder/v1/responses",
+	} {
 		channelReq := httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"model":"hy3","messages":[]}`))
 		channelRec := httptest.NewRecorder()
 		mux.ServeHTTP(channelRec, channelReq)
