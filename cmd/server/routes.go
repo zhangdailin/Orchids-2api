@@ -94,9 +94,13 @@ func registerRoutes(
 	// Codex defaults to the Responses wire API, so without this bridge every
 	// channel except Grok answers 404 on /responses. The bridge forwards to the
 	// same channel's chat handler, which keeps account selection and retries in
-	// one place.
+	// one place. The subtree below /responses/ carries the sibling endpoints
+	// (trailing slash, compact, resource retrieval).
 	channelResponses := grok.ResponsesBridgeHandler(h.HandleMessages)
-	registerWithPrefixes(mux, []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1"}, "/responses", inferenceAuth(limiter.Limit(channelResponses)))
+	channelResponsesSub := grok.ResponsesChannelSubpath(h.HandleMessages)
+	channelResponsePrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1"}
+	registerWithPrefixes(mux, channelResponsePrefixes, "/responses", inferenceAuth(limiter.Limit(channelResponses)))
+	registerWithPrefixes(mux, channelResponsePrefixes, "/responses/", inferenceAuth(limiter.Limit(channelResponsesSub)))
 
 	grokPrefixes := []string{"/grok/v1", "/v1"}
 	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", inferenceAuth(limiter.Limit(grokHandler.HandleChatCompletions)))

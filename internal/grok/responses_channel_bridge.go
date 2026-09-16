@@ -18,8 +18,10 @@ import (
 // upstream pool the request uses.
 func responsesChatPath(path string) string {
 	trimmed := strings.TrimRight(strings.TrimSpace(path), "/")
-	if strings.HasSuffix(trimmed, "/responses") {
-		return strings.TrimSuffix(trimmed, "/responses") + "/chat/completions"
+	for _, suffix := range []string{"/responses/compact", "/responses"} {
+		if strings.HasSuffix(trimmed, suffix) {
+			return strings.TrimSuffix(trimmed, suffix) + "/chat/completions"
+		}
 	}
 	return "/v1/chat/completions"
 }
@@ -105,5 +107,46 @@ func ResponsesBridgeHandler(chat http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, responsesObjectFromChat(req.Model, chatBody))
+	}
+}
+
+// ResponsesResourceHandler answers /responses/{id} for a channel that does not
+// persist responses. GET and DELETE report the standard `response_not_found`
+// error body instead of Go's plain-text 404, so a client can tell "this gateway
+// does not store responses" apart from "this route does not exist".
+func ResponsesResourceHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodDelete {
+			w.Header().Set("Allow", "GET, DELETE")
+			writeResponsesAPIError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
+			return
+		}
+		if responseIDFromResourcePath(r.URL.Path) == "" {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "response_id is required")
+			return
+		}
+		writeResponsesAPIError(w, http.StatusNotFound, "response_not_found",
+			"this channel does not store responses; send the full conversation with every request")
+	}
+}
+
+// ResponsesChannelSubpath serves the Responses endpoints that hang off
+// /responses for a chat-completions-only channel:
+//
+//   - POST /responses/            behaves like POST /responses (trailing slash)
+//   - POST /responses/compact     runs the compaction request as an ordinary
+//     completion: these channels have no native compact endpoint, and the
+//     client's payload is a normal summarisation turn
+//   - GET|DELETE /responses/{id}  reports response_not_found (no response store)
+func ResponsesChannelSubpath(chat http.HandlerFunc) http.HandlerFunc {
+	create := ResponsesBridgeHandler(chat)
+	resource := ResponsesResourceHandler()
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimRight(strings.TrimSpace(r.URL.Path), "/")
+		if strings.HasSuffix(path, "/responses") || strings.HasSuffix(path, "/responses/compact") {
+			create(w, r)
+			return
+		}
+		resource(w, r)
 	}
 }

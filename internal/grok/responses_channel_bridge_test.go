@@ -15,11 +15,12 @@ func TestResponsesChatPathMapsTheChannelPrefix(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"/workbuddy/v1/responses": "/workbuddy/v1/chat/completions",
-		"/warp/v1/responses/":     "/warp/v1/chat/completions",
-		"/v1/responses":           "/v1/chat/completions",
-		"  /qoder/v1/responses  ": "/qoder/v1/chat/completions",
-		"/something/else":         "/v1/chat/completions",
+		"/workbuddy/v1/responses":         "/workbuddy/v1/chat/completions",
+		"/workbuddy/v1/responses/compact": "/workbuddy/v1/chat/completions",
+		"/warp/v1/responses/":             "/warp/v1/chat/completions",
+		"/v1/responses":                   "/v1/chat/completions",
+		"  /qoder/v1/responses  ":         "/qoder/v1/chat/completions",
+		"/something/else":                 "/v1/chat/completions",
 	}
 	for path, want := range cases {
 		if got := responsesChatPath(path); got != want {
@@ -189,5 +190,76 @@ func TestResponsesBridgeRejectsNonPost(t *testing.T) {
 	bridge(rec, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+}
+
+func TestResponsesChannelSubpathServesCompactAndTrailingSlash(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	calls := []recordedChatCall{}
+	handler := ResponsesChannelSubpath(recordingChat(t, &calls, &mu))
+
+	for name, target := range map[string]string{
+		"trailing_slash": "/warp/v1/responses/",
+		"compact":        "/workbuddy/v1/responses/compact",
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"model":"gpt-5.6-luna","input":"summarise the thread","stream":true}`))
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "event: response.completed") {
+				t.Fatalf("missing completion event: %s", rec.Body.String())
+			}
+		})
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 2 {
+		t.Fatalf("inner chat calls = %d, want 2", len(calls))
+	}
+	// The sub-tests run in map order, so compare the set of paths.
+	paths := map[string]bool{}
+	for _, call := range calls {
+		paths[call.path] = true
+	}
+	if !paths["/warp/v1/chat/completions"] || !paths["/workbuddy/v1/chat/completions"] {
+		t.Fatalf("inner chat paths = %v, want the same channel prefix as the request", paths)
+	}
+}
+
+// The chat-only channels keep no response store, so /responses/{id} must answer
+// with the Responses error envelope instead of Go's plain-text 404.
+func TestResponsesChannelSubpathReportsUnstoredResponses(t *testing.T) {
+	t.Parallel()
+
+	handler := ResponsesChannelSubpath(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("the create handler must not serve a resource path")
+	})
+
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		req := httptest.NewRequest(method, "/warp/v1/responses/resp_123", nil)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s status = %d, want 404", method, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "response_not_found") {
+			t.Fatalf("%s body = %s, want a response_not_found error", method, rec.Body.String())
+		}
+	}
+
+	put := httptest.NewRequest(http.MethodPut, "/warp/v1/responses/resp_123", nil)
+	rec := httptest.NewRecorder()
+	handler(rec, put)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("PUT status = %d, want 405", rec.Code)
+	}
+	if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") || !strings.Contains(allow, "DELETE") {
+		t.Fatalf("Allow = %q, want GET and DELETE", allow)
 	}
 }

@@ -104,6 +104,8 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 		"/workbuddy/v1/chat/completions",
 		"/workbuddy/v1/models",
 		"/workbuddy/v1/responses",
+		"/workbuddy/v1/responses/",
+		"/workbuddy/v1/responses/compact",
 		"/warp/v1/responses",
 		"/puter/v1/responses",
 		"/qoder/v1/responses",
