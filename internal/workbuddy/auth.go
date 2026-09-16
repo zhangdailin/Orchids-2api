@@ -418,7 +418,7 @@ type envelope struct {
 var errorHints = map[int]string{
 	CodeLoginPending:  "workbuddy login has not completed; finish the browser authorization",
 	CodeModelThrottle: "this model hit the per-model frequency limit; wait for the window reset or use another model",
-	CodeSystemFirst:   "workbuddy requires messages[0] to be a system message",
+	CodePolicyBlocked: "workbuddy blocked the request by security policy (unapproved channel); the prompt may carry a client identity marker",
 	CodeSessionDead:   "workbuddy session is dead (Offline user session not found); re-login the account",
 }
 

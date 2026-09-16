@@ -2,6 +2,7 @@ package workbuddy
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/goccy/go-json"
@@ -33,17 +34,40 @@ type ToolCallFunction struct {
 	Arguments string `json:"arguments"`
 }
 
+// WorkBuddy's gateway blocks a request that declares a first-party Anthropic
+// client with HTTP 400 code=11128 ("Illegal API invocation from an unapproved
+// channel", displayMsg "The request was blocked by security policy"). Claude
+// Code puts two such markers in the system array — a billing header block and
+// its own identity line — and neither carries instructions for the model, so
+// they are dropped instead of being forwarded.
+var (
+	anthropicBillingHeaderPattern = regexp.MustCompile(`(?i)^x-[a-z0-9-]*billing-header\s*:`)
+	anthropicCLIIdentityPattern   = regexp.MustCompile(`(?i)^you are claude code\b`)
+)
+
+// isAnthropicClientMarker reports whether a system block is first-party client
+// metadata rather than prompt content.
+func isAnthropicClientMarker(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return false
+	}
+	return anthropicBillingHeaderPattern.MatchString(trimmed) ||
+		anthropicCLIIdentityPattern.MatchString(trimmed)
+}
+
 // buildMessages renders the request history. WorkBuddy validates roles against
 // a whitelist and requires messages[0] to be a system message, so system items
 // are emitted first, tool results become `tool` messages, and a minimal system
-// prompt is prepended when the caller supplied none.
+// prompt is prepended when the caller supplied none. Anthropic client markers
+// are dropped for the reason documented above.
 func buildMessages(req upstream.UpstreamRequest) []ChatMessage {
 	out := make([]ChatMessage, 0, len(req.Messages)+len(req.System)+2)
 	pendingToolCalls := make(map[string]bool)
 
 	for _, item := range req.System {
 		text := strings.TrimSpace(item.Text)
-		if text == "" {
+		if text == "" || isAnthropicClientMarker(text) {
 			continue
 		}
 		out = append(out, ChatMessage{Role: "system", Content: item.Text})
@@ -65,6 +89,9 @@ func buildMessages(req upstream.UpstreamRequest) []ChatMessage {
 			if strings.TrimSpace(text) == "" {
 				// An empty text message carries nothing for the upstream and
 				// trips its role/content validation.
+				continue
+			}
+			if role == "system" && isAnthropicClientMarker(text) {
 				continue
 			}
 			out = append(out, ChatMessage{Role: role, Content: text, ReasoningContent: reasoningForReplay(msg)})

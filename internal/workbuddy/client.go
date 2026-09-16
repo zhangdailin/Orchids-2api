@@ -4,8 +4,11 @@
 // The wire protocol is OpenAI-shaped but not OpenAI-compatible in three ways
 // that the client must honour:
 //
-//  1. messages[0] must be a system message, otherwise the upstream answers
-//     HTTP 400 code=11128 ("first message is not system prompt").
+//  1. messages[0] must be a system message; this client always emits one. Code
+//     11128 is the upstream's policy gate, not a message-order error: it answers
+//     "Illegal API invocation from an unapproved channel" with displayMsg "The
+//     request was blocked by security policy", and it also fires when the
+//     prompt carries a first-party Anthropic client marker (see messages.go).
 //  2. stream must be true; the endpoint always answers with SSE.
 //  3. tool_choice is a plain string (an object form is rejected with
 //     code=11101), and the "developer" role is not in the accepted role
@@ -53,7 +56,10 @@ const (
 const (
 	CodeLoginPending  = 11217
 	CodeModelThrottle = 6004
-	CodeSystemFirst   = 11128
+	// CodePolicyBlocked is the upstream's content/security gate. It answers
+	// "Illegal API invocation from an unapproved channel" and is what a request
+	// carrying a first-party Anthropic client marker gets back.
+	CodePolicyBlocked = 11128
 	CodeSessionDead   = 12153
 )
 
