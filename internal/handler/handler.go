@@ -70,6 +70,10 @@ type ClaudeRequest struct {
 	ConversationID    string                 `json:"conversation_id"`
 	ConversationIDAlt string                 `json:"conversationId"`
 	Metadata          map[string]interface{} `json:"metadata"`
+	// ReasoningEffort is the OpenAI-style effort hint. Warp publishes models as
+	// "<family>-<effort>", so a client that asks for the family name plus an
+	// effort must have it resolved onto the catalog entry.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type toolCall struct {
@@ -454,6 +458,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	forcedChannel := channelFromPath(r.URL.Path)
+	req.Model = h.resolveEffortModelVariant(r.Context(), req.Model, req.ReasoningEffort, forcedChannel)
 	validatedModel, err := h.validateModelAvailability(r.Context(), req.Model, forcedChannel)
 	if err != nil {
 		apperrors.New("invalid_request_error", err.Error(), http.StatusBadRequest).WriteResponse(w)
