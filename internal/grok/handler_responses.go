@@ -408,7 +408,15 @@ func streamNativeCLIResponse(w http.ResponseWriter, body io.Reader) {
 }
 
 func validateResponsesCompatibility(req ResponsesCreateRequest) error {
-	if req.Store != nil && *req.Store && req.Stream {
+	return validateResponsesCompatibilityFor(req, false)
+}
+
+// validateResponsesCompatibilityFor validates a Responses request.
+// allowStreamedStore is true for a provider that can persist a streamed
+// response (the chat bridge when a response store is configured); Grok's native
+// path cannot, so it keeps rejecting store=true with stream=true.
+func validateResponsesCompatibilityFor(req ResponsesCreateRequest, allowStreamedStore bool) error {
+	if req.Store != nil && *req.Store && req.Stream && !allowStreamedStore {
 		return fmt.Errorf("store=true requires stream=false for this provider")
 	}
 	if truncation := strings.ToLower(strings.TrimSpace(req.Truncation)); truncation != "" && truncation != "auto" && truncation != "disabled" {

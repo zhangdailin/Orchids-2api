@@ -49,6 +49,16 @@ func (h *Handler) resolveModelAliasForChannel(ctx context.Context, channel, mode
 	return modelID, nil
 }
 
+// ChannelForModel reports the channel a model id is registered under, or an
+// empty string when the model is unknown. The unified /v1 routes use it to pick
+// between the native and the bridged implementation.
+func (h *Handler) ChannelForModel(ctx context.Context, modelID string) string {
+	if _, m := h.resolveModelAlias(ctx, modelID); m != nil {
+		return strings.TrimSpace(m.Channel)
+	}
+	return ""
+}
+
 // effortVariantOrder is the fallback order tried when a client asks for a model
 // family by its bare name and the catalog only exposes effort-suffixed
 // variants. Warp publishes models as "<family>-<effort>" (gpt-5-6-sol-low),

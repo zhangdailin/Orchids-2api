@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -94,10 +95,17 @@ func registerRoutes(
 	// Codex defaults to the Responses wire API, so without this bridge every
 	// channel except Grok answers 404 on /responses. The bridge forwards to the
 	// same channel's chat handler, which keeps account selection and retries in
-	// one place. The subtree below /responses/ carries the sibling endpoints
+	// one place. Records are persisted in the shared response store, so
+	// store=true, previous_response_id and GET/DELETE /responses/{id} work here
+	// too. The subtree below /responses/ carries the sibling endpoints
 	// (trailing slash, compact, resource retrieval).
-	channelResponses := grok.ResponsesBridgeHandler(h.HandleMessages)
-	channelResponsesSub := grok.ResponsesChannelSubpath(h.HandleMessages)
+	responseStoreTTL := time.Duration(0)
+	if cfg != nil && cfg.ResponseStoreTTL > 0 {
+		responseStoreTTL = time.Duration(cfg.ResponseStoreTTL) * time.Hour
+	}
+	bridgeOptions := grok.ResponsesBridgeOptions{Store: s, TTL: responseStoreTTL}
+	channelResponses := grok.ResponsesBridgeHandler(h.HandleMessages, bridgeOptions)
+	channelResponsesSub := grok.ResponsesChannelSubpath(h.HandleMessages, bridgeOptions)
 	channelResponsePrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1"}
 	registerWithPrefixes(mux, channelResponsePrefixes, "/responses", inferenceAuth(limiter.Limit(channelResponses)))
 	registerWithPrefixes(mux, channelResponsePrefixes, "/responses/", inferenceAuth(limiter.Limit(channelResponsesSub)))
@@ -105,9 +113,26 @@ func registerRoutes(
 	grokPrefixes := []string{"/grok/v1", "/v1"}
 	registerWithPrefixes(mux, grokPrefixes, "/chat/completions", inferenceAuth(limiter.Limit(grokHandler.HandleChatCompletions)))
 	registerWithPrefixes(mux, grokPrefixes, "/messages", inferenceAuth(limiter.Limit(grokHandler.HandleMessages)))
-	registerWithPrefixes(mux, grokPrefixes, "/responses", inferenceAuth(limiter.Limit(grokHandler.HandleResponses)))
-	registerWithPrefixes(mux, grokPrefixes, "/responses/compact", inferenceAuth(limiter.Limit(grokHandler.HandleResponsesCompact)))
-	registerWithPrefixes(mux, grokPrefixes, "/responses/", inferenceAuth(limiter.Limit(grokHandler.HandleResponseResource)))
+	// /grok/v1 keeps the native Responses implementation; the unified /v1
+	// prefix dispatches by model so a Codex client can point at one base URL.
+	registerWithPrefixes(mux, []string{"/grok/v1"}, "/responses", inferenceAuth(limiter.Limit(grokHandler.HandleResponses)))
+	registerWithPrefixes(mux, []string{"/grok/v1"}, "/responses/compact", inferenceAuth(limiter.Limit(grokHandler.HandleResponsesCompact)))
+	registerWithPrefixes(mux, []string{"/grok/v1"}, "/responses/", inferenceAuth(limiter.Limit(grokHandler.HandleResponseResource)))
+	isNativeResponsesModel := func(model string) bool {
+		if _, ok := grok.ResolveModel(model); ok {
+			return true
+		}
+		return strings.EqualFold(h.ChannelForModel(context.Background(), model), "grok")
+	}
+	nativeResponsesSub := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/responses/compact") {
+			grokHandler.HandleResponsesCompact(w, r)
+			return
+		}
+		grokHandler.HandleResponseResource(w, r)
+	}
+	mux.HandleFunc("/v1/responses", inferenceAuth(limiter.Limit(grok.ResponsesDispatcher(grokHandler.HandleResponses, channelResponses, isNativeResponsesModel))))
+	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ResponsesDispatcher(nativeResponsesSub, channelResponsesSub, isNativeResponsesModel))))
 	registerWithPrefixes(mux, grokPrefixes, "/images/generations", inferenceAuth(limiter.Limit(grokHandler.HandleImagesGenerations)))
 	registerWithPrefixes(mux, grokPrefixes, "/images/edits", inferenceAuth(limiter.Limit(grokHandler.HandleImagesEdits)))
 	registerWithPrefixes(mux, grokPrefixes, "/videos", inferenceAuth(limiter.Limit(grokHandler.HandleVideosCreate)))

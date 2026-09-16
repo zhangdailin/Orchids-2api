@@ -21,6 +21,14 @@ type chatResponseItem struct {
 }
 
 func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request ResponsesCreateRequest, reader io.Reader) {
+	writeResponsesStreamFromChatReaderRequestWithHook(w, request, reader, nil)
+}
+
+// writeResponsesStreamFromChatReaderRequestWithHook is the same translation
+// with an optional terminal hook. onComplete receives the final response object
+// (the one carried by response.completed / failed / incomplete) so a caller
+// that promised to store the response can persist exactly what the client saw.
+func writeResponsesStreamFromChatReaderRequestWithHook(w http.ResponseWriter, request ResponsesCreateRequest, reader io.Reader, onComplete func(map[string]interface{})) {
 	streamResponseHeaders(w)
 	writer := &checkedStreamWriter{target: w}
 	id := "resp_" + randomHex(12)
@@ -343,6 +351,9 @@ func writeResponsesStreamFromChatReaderRequest(w http.ResponseWriter, request Re
 	v := response(status)
 	if details != nil {
 		v["incomplete_details"] = details
+	}
+	if onComplete != nil {
+		onComplete(v)
 	}
 	emit("response."+status, map[string]interface{}{"response": v})
 	_, _ = io.WriteString(writer, "data: [DONE]\n\n")

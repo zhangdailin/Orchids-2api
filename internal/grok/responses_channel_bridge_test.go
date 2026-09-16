@@ -1,9 +1,11 @@
 package grok
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -67,7 +69,7 @@ func TestResponsesBridgeStreamsChatAsResponses(t *testing.T) {
 
 	var mu sync.Mutex
 	calls := []recordedChatCall{}
-	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu))
+	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu), ResponsesBridgeOptions{})
 
 	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","instructions":"be brief","input":"say hi","stream":true}`))
@@ -113,7 +115,7 @@ func TestResponsesBridgeNonStreamReturnsAResponseObject(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, `{"id":"chatcmpl-2","object":"chat.completion","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)
 	}
-	bridge := ResponsesBridgeHandler(chat)
+	bridge := ResponsesBridgeHandler(chat, ResponsesBridgeOptions{})
 
 	req := httptest.NewRequest(http.MethodPost, "/puter/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"say hi"}`))
@@ -143,7 +145,7 @@ func TestResponsesBridgeForwardsChatErrors(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = io.WriteString(w, `{"error":{"message":"model not found","type":"invalid_request_error"}}`)
 	}
-	bridge := ResponsesBridgeHandler(chat)
+	bridge := ResponsesBridgeHandler(chat, ResponsesBridgeOptions{})
 
 	req := httptest.NewRequest(http.MethodPost, "/warp/v1/responses",
 		strings.NewReader(`{"model":"does-not-exist","input":"hi","stream":true}`))
@@ -163,7 +165,7 @@ func TestResponsesBridgeRejectsInvalidRequests(t *testing.T) {
 
 	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("inner chat handler must not run for an invalid request")
-	})
+	}, ResponsesBridgeOptions{})
 
 	for name, body := range map[string]string{
 		"missing_model": `{"input":"hi"}`,
@@ -185,7 +187,7 @@ func TestResponsesBridgeRejectsInvalidRequests(t *testing.T) {
 func TestResponsesBridgeRejectsNonPost(t *testing.T) {
 	t.Parallel()
 
-	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {})
+	bridge := ResponsesBridgeHandler(func(w http.ResponseWriter, r *http.Request) {}, ResponsesBridgeOptions{})
 	rec := httptest.NewRecorder()
 	bridge(rec, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -198,7 +200,7 @@ func TestResponsesChannelSubpathServesCompactAndTrailingSlash(t *testing.T) {
 
 	var mu sync.Mutex
 	calls := []recordedChatCall{}
-	handler := ResponsesChannelSubpath(recordingChat(t, &calls, &mu))
+	handler := ResponsesChannelSubpath(recordingChat(t, &calls, &mu), ResponsesBridgeOptions{})
 
 	for name, target := range map[string]string{
 		"trailing_slash": "/warp/v1/responses/",
@@ -239,7 +241,7 @@ func TestResponsesChannelSubpathReportsUnstoredResponses(t *testing.T) {
 
 	handler := ResponsesChannelSubpath(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("the create handler must not serve a resource path")
-	})
+	}, ResponsesBridgeOptions{})
 
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/warp/v1/responses/resp_123", nil)
@@ -261,5 +263,132 @@ func TestResponsesChannelSubpathReportsUnstoredResponses(t *testing.T) {
 	}
 	if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") || !strings.Contains(allow, "DELETE") {
 		t.Fatalf("Allow = %q, want GET and DELETE", allow)
+	}
+}
+
+func TestResponsesBridgeStoresAndServesResponses(t *testing.T) {
+	_, s, mini := setupValidationHandler(t)
+	defer func() { _ = s.Close(); mini.Close() }()
+
+	var mu sync.Mutex
+	var chatBodies []map[string]interface{}
+	chat := func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var decoded map[string]interface{}
+		_ = json.Unmarshal(raw, &decoded)
+		mu.Lock()
+		chatBodies = append(chatBodies, decoded)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-9","object":"chat.completion","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"message":{"role":"assistant","content":"stored-answer"},"finish_reason":"stop"}]}`)
+	}
+	opts := ResponsesBridgeOptions{Store: s}
+	bridge := ResponsesBridgeHandler(chat, opts)
+	resource := ResponsesResourceHandler(opts)
+
+	create := httptest.NewRecorder()
+	bridge(create, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
+		strings.NewReader(`{"model":"gpt-5.6-luna","input":"hi","store":true}`)))
+	if create.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var created map[string]interface{}
+	if err := json.Unmarshal(create.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created response: %v (%s)", err, create.Body.String())
+	}
+	responseID, _ := created["id"].(string)
+	if !strings.HasPrefix(responseID, "resp_") {
+		t.Fatalf("response id = %q, want a resp_ id", responseID)
+	}
+
+	get := httptest.NewRecorder()
+	resource(get, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID, nil))
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), "stored-answer") {
+		t.Fatalf("get status=%d body=%s", get.Code, get.Body.String())
+	}
+
+	// A continuation must replay the stored conversation upstream.
+	continuation := httptest.NewRecorder()
+	bridge(continuation, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
+		strings.NewReader(`{"model":"gpt-5.6-luna","input":"again","previous_response_id":"`+responseID+`"}`)))
+	if continuation.Code != http.StatusOK {
+		t.Fatalf("continuation status=%d body=%s", continuation.Code, continuation.Body.String())
+	}
+	mu.Lock()
+	last := chatBodies[len(chatBodies)-1]
+	mu.Unlock()
+	if !strings.Contains(fmt.Sprint(last["messages"]), "stored-answer") {
+		t.Fatalf("continuation did not replay the stored output: %#v", last["messages"])
+	}
+
+	deleted := httptest.NewRecorder()
+	resource(deleted, httptest.NewRequest(http.MethodDelete, "/workbuddy/v1/responses/"+responseID, nil))
+	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`) {
+		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	gone := httptest.NewRecorder()
+	resource(gone, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID, nil))
+	if gone.Code != http.StatusNotFound {
+		t.Fatalf("after delete status=%d body=%s", gone.Code, gone.Body.String())
+	}
+}
+
+func TestResponsesBridgeStoresStreamedResponse(t *testing.T) {
+	_, s, mini := setupValidationHandler(t)
+	defer func() { _ = s.Close(); mini.Close() }()
+
+	var mu sync.Mutex
+	calls := []recordedChatCall{}
+	opts := ResponsesBridgeOptions{Store: s}
+	bridge := ResponsesBridgeHandler(recordingChat(t, &calls, &mu), opts)
+	resource := ResponsesResourceHandler(opts)
+
+	stream := httptest.NewRecorder()
+	bridge(stream, httptest.NewRequest(http.MethodPost, "/warp/v1/responses",
+		strings.NewReader(`{"model":"gpt-5-6-sol-low","input":"hi","stream":true,"store":true}`)))
+	if stream.Code != http.StatusOK || !strings.Contains(stream.Body.String(), "event: response.completed") {
+		t.Fatalf("stream status=%d body=%s", stream.Code, stream.Body.String())
+	}
+	match := regexp.MustCompile(`"id":"(resp_[0-9a-f]+)"`).FindStringSubmatch(stream.Body.String())
+	if len(match) < 2 {
+		t.Fatalf("stream carries no response id: %s", stream.Body.String())
+	}
+
+	get := httptest.NewRecorder()
+	resource(get, httptest.NewRequest(http.MethodGet, "/warp/v1/responses/"+match[1], nil))
+	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), "hello") {
+		t.Fatalf("stored streamed response status=%d body=%s", get.Code, get.Body.String())
+	}
+}
+
+func TestResponsesDispatcherRoutesByModel(t *testing.T) {
+	t.Parallel()
+
+	nativeCalls := 0
+	bridgedCalls := 0
+	native := func(w http.ResponseWriter, r *http.Request) { nativeCalls++; _, _ = io.WriteString(w, "native") }
+	bridged := func(w http.ResponseWriter, r *http.Request) { bridgedCalls++; _, _ = io.WriteString(w, "bridged") }
+	dispatch := ResponsesDispatcher(native, bridged, func(model string) bool {
+		return strings.HasPrefix(strings.ToLower(model), "grok-")
+	})
+
+	call := func(method, target, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		dispatch(rec, httptest.NewRequest(method, target, strings.NewReader(body)))
+		return rec
+	}
+
+	if rec := call(http.MethodPost, "/v1/responses", `{"model":"grok-4.6","input":"hi"}`); rec.Body.String() != "native" {
+		t.Fatalf("grok model routed to %q, want native", rec.Body.String())
+	}
+	if rec := call(http.MethodPost, "/v1/responses", `{"model":"gpt-5.6-luna","input":"hi"}`); rec.Body.String() != "bridged" {
+		t.Fatalf("non-grok model routed to %q, want bridged", rec.Body.String())
+	}
+	if rec := call(http.MethodGet, "/v1/responses/resp_1", ""); rec.Body.String() != "native" {
+		t.Fatalf("resource request routed to %q, want the native handler", rec.Body.String())
+	}
+	if nativeCalls != 2 || bridgedCalls != 1 {
+		t.Fatalf("native=%d bridged=%d, want 2/1", nativeCalls, bridgedCalls)
 	}
 }
