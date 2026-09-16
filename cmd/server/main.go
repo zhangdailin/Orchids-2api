@@ -16,6 +16,7 @@ import (
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/api"
 	"orchids-api/internal/audit"
+	"orchids-api/internal/auth"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/grok"
@@ -136,6 +137,14 @@ func main() {
 		accountTracker = redisAccountTracker
 		lb.SetConnTracker(accountTracker)
 		slog.Debug("Connection tracker initialized", "backend", "redis")
+	}
+
+	// Admin sessions are persisted in Redis so a restart — every deploy — no
+	// longer signs every operator out of the admin UI. Without a client the
+	// in-process store stays in place as the fallback.
+	if sessionBackend := auth.NewRedisSessionBackend(s.RedisClient(), s.RedisPrefix()); sessionBackend != nil {
+		auth.SetSessionBackend(sessionBackend)
+		slog.Debug("Admin sessions persisted", "backend", "redis")
 	}
 
 	apiHandler := api.New(s, cfg.AdminUser, cfg.AdminPass, cfg)
