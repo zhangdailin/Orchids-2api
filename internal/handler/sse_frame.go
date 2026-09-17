@@ -249,3 +249,54 @@ func marshalSSEMessageDeltaBytes(stopReason string, outputTokens int) ([]byte, e
 func marshalSSEMessageStopBytes() ([]byte, error) {
 	return sseMessageStopBytes, nil
 }
+
+// appendAnthropicError renders the Anthropic protocol's in-band failure event.
+//
+// The wire protocol carries a failure as `event: error` with an
+// {"type":"error","error":{...}} payload. It is the only report available once a
+// stream has sent its message_start: the HTTP status is already 200 and can never
+// be revisited, so a stream that invents an assistant message saying "the accounts
+// have exhausted their quota" is indistinguishable from one that answered.
+func appendAnthropicError(dst []byte, code, message string) ([]byte, error) {
+	dst = append(dst, `{"type":"error","error":{"type":`...)
+	var err error
+	if dst, err = appendJSONBytes(dst, code); err != nil {
+		return nil, err
+	}
+	dst = append(dst, `,"message":`...)
+	if dst, err = appendJSONBytes(dst, message); err != nil {
+		return nil, err
+	}
+	dst = append(dst, `}}`...)
+	return dst, nil
+}
+
+func marshalAnthropicErrorBytes(code, message string) ([]byte, error) {
+	return appendAnthropicError(make([]byte, 0, 64+len(code)+len(message)), code, message)
+}
+
+// appendOpenAIError renders the failure an OpenAI-compatible stream client looks
+// for: a single data frame whose payload is an error object. The terminal [DONE]
+// sentinel follows it, so a client that reads to the end of the stream terminates
+// instead of waiting for a chunk that will never come.
+func appendOpenAIError(dst []byte, code, message string) ([]byte, error) {
+	dst = append(dst, `{"error":{"message":`...)
+	var err error
+	if dst, err = appendJSONBytes(dst, message); err != nil {
+		return nil, err
+	}
+	dst = append(dst, `,"type":`...)
+	if dst, err = appendJSONBytes(dst, code); err != nil {
+		return nil, err
+	}
+	dst = append(dst, `,"code":`...)
+	if dst, err = appendJSONBytes(dst, code); err != nil {
+		return nil, err
+	}
+	dst = append(dst, `}}`...)
+	return dst, nil
+}
+
+func marshalOpenAIErrorBytes(code, message string) ([]byte, error) {
+	return appendOpenAIError(make([]byte, 0, 96+len(code)+len(message)), code, message)
+}

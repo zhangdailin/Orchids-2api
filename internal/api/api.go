@@ -3319,6 +3319,17 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 	if verdict.Scope = accountpolicy.ScopeForStatus(status); verdict.Scope == accountpolicy.ScopeCredential {
 		verdict.NeedsLogin = true
 	}
+	// A verifier that reports only a status has no better explanation than the one
+	// already on the record. The reason is the operator's only signal — the account
+	// table shows a bare code without it — so an unchanged verdict keeps the
+	// specific wording (Puter's verifier returns "402" with nothing else, and a
+	// manual check used to wipe the upstream's own explanation).
+	//
+	// The carry-over is limited to the same status: a new code means the old reason
+	// described a different problem and would mislead.
+	if strings.TrimSpace(verdict.Message) == "" && strings.TrimSpace(acc.StatusCode) == status {
+		verdict.Message = strings.TrimSpace(acc.StatusMessage)
+	}
 	verdict.Apply(acc)
 }
 

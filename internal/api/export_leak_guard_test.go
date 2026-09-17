@@ -242,3 +242,35 @@ func TestAccountCheckKeepsASpentAllowanceVerdict(t *testing.T) {
 		t.Fatalf("StatusCode = %q, want a plain cooldown cleared by a successful check", cooldown.StatusCode)
 	}
 }
+
+// TestAccountCheckKeepsTheReasonForAnUnchangedVerdict pins that a bare status from
+// a verifier does not erase the explanation an operator already has.
+//
+// Puter's verify path reports "402" with no message of its own. A manual check used
+// to replace the upstream's "No usage left for request" with an empty string, so the
+// account stayed parked and the table stopped saying why.
+func TestAccountCheckKeepsTheReasonForAnUnchangedVerdict(t *testing.T) {
+	reason := "puter API error: status=402, body={\"code\":\"insufficient_funds\"}"
+
+	// Same status: the specific reason survives.
+	same := &store.Account{AccountType: "puter", StatusCode: "402", StatusMessage: reason}
+	applySuccessfulAccountRefreshStatus(same, "402")
+	if same.StatusMessage != reason {
+		t.Fatalf("message = %q, want the existing reason kept", same.StatusMessage)
+	}
+
+	// Different status: an old reason described a different problem and must not be
+	// carried onto the new one.
+	different := &store.Account{AccountType: "puter", StatusCode: "401", StatusMessage: "session expired"}
+	applySuccessfulAccountRefreshStatus(different, "402")
+	if strings.Contains(different.StatusMessage, "session expired") {
+		t.Fatalf("message = %q, want a stale reason dropped when the status changes", different.StatusMessage)
+	}
+
+	// A verifier with something to say keeps its own wording.
+	explicit := &store.Account{AccountType: "qoder", StatusCode: "402", StatusMessage: "old"}
+	applySuccessfulAccountRefreshStatus(explicit, "402")
+	if explicit.StatusMessage != "old" {
+		t.Fatalf("message = %q, want the carried reason", explicit.StatusMessage)
+	}
+}

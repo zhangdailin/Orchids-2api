@@ -221,10 +221,13 @@ func TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral(t *testi
 	}
 }
 
-// TestInjectNoAvailableAccountError_StreamingKeepsInBandText is the other half of
-// the contract: a stream sent its message_start before the attempt, so its status
-// is already 200 and can never be revisited. It must still report the failure.
-func TestInjectNoAvailableAccountError_StreamingKeepsInBandText(t *testing.T) {
+// TestInjectNoAvailableAccountError_StreamingReportsInBandError is the other half
+// of the contract: a stream sent its message_start before the attempt, so its
+// status is already 200 and can never be revisited.
+//
+// It must not pretend to be an answer either. The report is the protocol's error
+// event, and the stream ends there rather than with a normal stop.
+func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic, "")
 
@@ -233,24 +236,40 @@ func TestInjectNoAvailableAccountError_StreamingKeepsInBandText(t *testing.T) {
 		errors.New("no enabled accounts available for channel: puter (all matching accounts are rate-limited or cooling down)"),
 	)
 
-	// A stream reports in band, so the message arrives as an SSE frame rather than
-	// as a status code.
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want the already-committed 200", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "rate-limited") {
-		t.Fatalf("expected the in-band rate-limit text, got: %s", body)
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, `"type":"error"`) {
+		t.Fatalf("expected the protocol error event, got: %s", body)
 	}
-	// The message the gateway composed must reach the client intact. It used to be
-	// re-classified, and because the selector detail was appended to it the
-	// classifier recognised that detail's "status=429" instead — the wording the
-	// client saw depended on internal text being included.
-	if !strings.Contains(body, "currently rate-limited") {
-		t.Fatalf("expected the composed rate-limit wording, got: %s", body)
+	// The failure must not be dressed as assistant text.
+	if strings.Contains(body, "content_block_delta") {
+		t.Fatalf("the failure was delivered as assistant content: %s", body)
 	}
 	if strings.Contains(body, "no enabled accounts available for channel") {
 		t.Fatalf("selector detail leaked into the stream: %s", body)
+	}
+}
+
+// TestStreamError_OpenAIFormatEndsTheStream pins the OpenAI shape: a data frame
+// carrying an error object, followed by the sentinel that terminates the stream, so
+// a client reading to the end is not left waiting for a chunk that never comes.
+func TestStreamError_OpenAIFormatEndsTheStream(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatOpenAI, "")
+
+	sh.InjectNoAvailableAccountError(`upstream API error: status=429`, errors.New("no enabled accounts available"))
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"error":{`) || !strings.Contains(body, "rate-limited") {
+		t.Fatalf("expected an error object in the stream, got: %s", body)
+	}
+	if !strings.Contains(body, "[DONE]") {
+		t.Fatalf("expected the terminal sentinel after the error, got: %s", body)
+	}
+	if strings.Contains(body, `"delta"`) {
+		t.Fatalf("the failure was delivered as a choice delta: %s", body)
 	}
 }
 

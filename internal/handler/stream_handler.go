@@ -2834,7 +2834,10 @@ func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
 		slog.Debug(logMsg, "category", category, "message", message)
 	}
 	if h.isStream {
-		h.injectMessageText(logMsg, message)
+		h.writeStreamError(category, message)
+		if logutil.VerboseDiagnosticsEnabled() {
+			slog.Debug(logMsg+" (in band: the status is already committed)", "category", category)
+		}
 		return
 	}
 	h.mu.Lock()
@@ -2847,6 +2850,51 @@ func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
 	h.hasReturn = true
 	h.mu.Unlock()
 	apperrors.New(category, message, apperrors.StatusForCategory(category)).WriteResponse(h.w)
+}
+
+// writeStreamError reports a failure inside a stream that has already started.
+//
+// The status cannot be changed — message_start is on the wire — so the report goes
+// in band, in the shape each protocol defines for it. The stream is then closed
+// here rather than by finishResponse, so a normal stop does not follow the error
+// and a client cannot mistake the failure for a completed answer.
+func (h *streamHandler) writeStreamError(category, message string) {
+	if h == nil || h.w == nil || !h.isStream {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.hasReturn {
+		return
+	}
+	h.hasReturn = true
+
+	if h.responseFormat == adapter.FormatOpenAI {
+		data, err := marshalOpenAIErrorBytes(category, message)
+		if err != nil {
+			slog.Error("Failed to marshal stream error", "error", err)
+			return
+		}
+		if err := writeOpenAIFrame(h.w, data); err != nil {
+			slog.Warn("Failed to write stream error", "error", err)
+			return
+		}
+		if _, err := h.w.Write(sseDoneLineBytes); err != nil {
+			slog.Warn("Failed to terminate stream after an error", "error", err)
+		}
+	} else {
+		data, err := marshalAnthropicErrorBytes(category, message)
+		if err != nil {
+			slog.Error("Failed to marshal stream error", "error", err)
+			return
+		}
+		if err := writeSSEFrameBytes(h.w, "error", data); err != nil {
+			slog.Warn("Failed to write stream error", "error", err)
+		}
+	}
+	if h.flusher != nil {
+		h.flusher.Flush()
+	}
 }
 
 func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr error) {
