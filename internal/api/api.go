@@ -1220,6 +1220,25 @@ func isSupportedAccountType(accountType string) bool {
 	}
 }
 
+// validateAccountType rejects an account whose type is missing or unknown.
+//
+// The create and update surfaces both take an account type from the request
+// body, and both have to answer the same two questions before touching the
+// store: is a type present, and is it one this gateway serves. Reporting the
+// error and writing the response belongs here so the two surfaces cannot drift
+// into giving different answers about the same input.
+func validateAccountType(w http.ResponseWriter, accountType string) bool {
+	if strings.TrimSpace(accountType) == "" {
+		http.Error(w, "account_type is required", http.StatusBadRequest)
+		return false
+	}
+	if !isSupportedAccountType(accountType) {
+		http.Error(w, "unsupported account type", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
 func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.Account, excludeID int64) (*store.Account, error) {
 	if a == nil || a.store == nil || acc == nil {
 		return nil, nil
@@ -1250,6 +1269,25 @@ func (a *API) findDuplicateAccountByCredential(ctx context.Context, acc *store.A
 		}
 	}
 	return nil, nil
+}
+
+// saveNewAccountUnlessDuplicate stores a freshly authenticated account, or
+// returns the row that already carries its credential.
+//
+// A completed device login and a completed browser login reach the same
+// decision — an upstream may hand out a second grant for an account this
+// gateway already has, and inserting it would give the scheduler two rows for
+// one allowance. The duplicate check and the insert share a single deadline
+// because they are one step: leaving it to the caller's context would let a
+// login hold a store round-trip open for the whole poll lifetime.
+func (a *API) saveNewAccountUnlessDuplicate(ctx context.Context, acc *store.Account) (*store.Account, error) {
+	storeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
+	if err == nil && existing == nil {
+		err = a.store.CreateAccount(storeCtx, acc)
+	}
+	return existing, err
 }
 
 // stableProviderIdentityKey survives OAuth token rotation. WorkBuddy and Qoder
@@ -1491,33 +1529,40 @@ func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (stri
 	}
 
 	if strings.EqualFold(acc.AccountType, "qoder") {
-		status, httpStatus, verifyErr := verifyQoderAccountWithStore(ctx, acc, a.config.Load(), a.store)
-		if verifyErr != nil {
-			if errors.Is(verifyErr, errQoderMissingCredential) {
-				return "", http.StatusBadRequest, fmt.Errorf("failed to verify qoder account: %w", verifyErr)
-			}
-			if classified := apperrors.ClassifyAccountStatus(verifyErr.Error()); classified != "" {
-				return classified, httpStatusFromAccountStatus(classified), fmt.Errorf("failed to verify qoder account: %w", verifyErr)
-			}
-			return status, httpStatus, fmt.Errorf("failed to verify qoder account: %w", verifyErr)
-		}
-		return status, httpStatus, nil
+		return verifyThroughStore("qoder", errQoderMissingCredential, func() (string, int, error) {
+			return verifyQoderAccountWithStore(ctx, acc, a.config.Load(), a.store)
+		})
 	}
 	if strings.EqualFold(acc.AccountType, "workbuddy") {
-		status, httpStatus, verifyErr := verifyWorkBuddyAccountWithStore(ctx, acc, a.config.Load(), a.store)
-		if verifyErr != nil {
-			if errors.Is(verifyErr, errWorkBuddyMissingCredential) {
-				return "", http.StatusBadRequest, fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
-			}
-			if classified := apperrors.ClassifyAccountStatus(verifyErr.Error()); classified != "" {
-				return classified, httpStatusFromAccountStatus(classified), fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
-			}
-			return status, httpStatus, fmt.Errorf("failed to verify workbuddy account: %w", verifyErr)
-		}
-		return status, httpStatus, nil
+		return verifyThroughStore("workbuddy", errWorkBuddyMissingCredential, func() (string, int, error) {
+			return verifyWorkBuddyAccountWithStore(ctx, acc, a.config.Load(), a.store)
+		})
 	}
 
 	return "", http.StatusBadRequest, fmt.Errorf("unsupported account type %q", acc.AccountType)
+}
+
+// verifyThroughStore runs a channel's verification and maps its failure onto the
+// account status the scheduler records.
+//
+// Qoder and WorkBuddy prove a credential the same way and report through the same
+// store, and both have to tell three failures apart: a missing credential is an
+// operator error (400), an upstream verdict the classifier recognises carries its
+// own status, and anything else keeps whatever the verify path reported. Only the
+// channel's name differs, so the mapping is written once here.
+func verifyThroughStore(channel string, missingCredential error, verify func() (string, int, error)) (string, int, error) {
+	status, httpStatus, verifyErr := verify()
+	if verifyErr == nil {
+		return status, httpStatus, nil
+	}
+	failure := fmt.Errorf("failed to verify %s account: %w", channel, verifyErr)
+	if errors.Is(verifyErr, missingCredential) {
+		return "", http.StatusBadRequest, failure
+	}
+	if classified := apperrors.ClassifyAccountStatus(verifyErr.Error()); classified != "" {
+		return classified, httpStatusFromAccountStatus(classified), failure
+	}
+	return status, httpStatus, failure
 }
 
 type ExportData struct {
@@ -1843,12 +1888,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		}
 		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
 		acc.GrokSSOParentID = 0
-		if strings.TrimSpace(acc.AccountType) == "" {
-			http.Error(w, "account_type is required", http.StatusBadRequest)
-			return
-		}
-		if !isSupportedAccountType(acc.AccountType) {
-			http.Error(w, "unsupported account type", http.StatusBadRequest)
+		if !validateAccountType(w, acc.AccountType) {
 			return
 		}
 		if strings.EqualFold(acc.AccountType, "warp") {
@@ -2081,12 +2121,7 @@ func (a *API) pollWarpDeviceAuthorization(ctx context.Context, id string, authen
 			Enabled:      true,
 		}
 		normalizeWarpTokenInput(acc)
-		storeCtx, storeCancel := context.WithTimeout(ctx, 20*time.Second)
-		existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
-		if err == nil && existing == nil {
-			err = a.store.CreateAccount(storeCtx, acc)
-		}
-		storeCancel()
+		existing, err := a.saveNewAccountUnlessDuplicate(ctx, acc)
 		if err != nil {
 			slog.Warn("Warp device authorization could not save account", "login_id", id, "error", err)
 			a.warpLogins.finish(id, "failed", "Warp authorization succeeded but account could not be saved", 0)
@@ -2268,12 +2303,7 @@ func (a *API) pollGrokDeviceAuthorization(ctx context.Context, id string, authen
 		grok.ApplyCLIOAuthIdentity(acc)
 		grok.ApplyCLIOAuthIdentityToken(acc, identityToken)
 		normalizeGrokTokenInput(acc)
-		storeCtx, storeCancel := context.WithTimeout(ctx, 20*time.Second)
-		existing, err := a.findDuplicateAccountByCredential(storeCtx, acc, 0)
-		if err == nil && existing == nil {
-			err = a.store.CreateAccount(storeCtx, acc)
-		}
-		storeCancel()
+		existing, err := a.saveNewAccountUnlessDuplicate(ctx, acc)
 		if err != nil {
 			slog.Warn("Grok device authorization could not save account", "login_id", id, "error", err)
 			a.grokLogins.finish(id, "failed", "Grok authorization succeeded but account could not be saved", 0)
@@ -2492,12 +2522,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Warp login accounts cannot change account type", http.StatusBadRequest)
 			return
 		}
-		if strings.TrimSpace(acc.AccountType) == "" {
-			http.Error(w, "account_type is required", http.StatusBadRequest)
-			return
-		}
-		if !isSupportedAccountType(acc.AccountType) {
-			http.Error(w, "unsupported account type", http.StatusBadRequest)
+		if !validateAccountType(w, acc.AccountType) {
 			return
 		}
 		if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
