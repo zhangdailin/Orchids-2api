@@ -5,12 +5,19 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  # Dependency advisories are published against code that is already shipped,
+  # so the security jobs must re-run on a schedule instead of only when a
+  # commit lands. Weekly is enough: nothing here fixes a deployed build.
+  schedule:
+    - cron: '37 3 * * 1'
 
 permissions:
   contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Pinned so a newer tool release cannot silently change what CI enforces.
+  GOVULNCHECK_VERSION: v1.8.0
 
 jobs:
   test:
@@ -30,8 +37,11 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Run tests with race detector
-        run: go test -race ./... -cover -count=1 -p 1
+      # The race detector lives in its own job (see `race`): keeping the fast
+      # suite free of -race means a race failure is unambiguous in the checks
+      # list, and the two jobs can be required independently on main.
+      - name: Run tests
+        run: go test ./... -cover -count=1 -p 1
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -51,3 +61,149 @@ jobs:
           node --test web/ops_ui.test.cjs
           node --test web/ops_render.test.cjs
           node --test web/logs_paging.test.cjs
+
+  race:
+    name: Go test (race detector)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go (toolchain from go.mod)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      # -race needs cgo and a C toolchain; ubuntu-latest ships gcc, and the
+      # runner's default CGO_ENABLED=1 is exactly what the detector needs.
+      # -p 1 keeps the suite serial because tests share ports and Redis state;
+      # -timeout is raised above the 10m default since instrumentation roughly
+      # doubles wall-clock time.
+      - name: Run tests under the race detector
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race -count=1 -p 1 -timeout 15m ./...
+
+  vulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Needed to publish SARIF into the Security tab.
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go (toolchain from go.mod)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Install govulncheck ${{ env.GOVULNCHECK_VERSION }}
+        run: |
+          go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The SARIF report is generated first on purpose: the gate below fails the
+      # job, and a failed step would otherwise skip the report that explains it.
+      # Upload is best-effort — fork PRs hold a read-only token and cannot write
+      # code-scanning results, and that must not be what turns CI red.
+      - name: Produce SARIF report
+        if: github.event_name != 'pull_request'
+        run: govulncheck -scan=symbol -format=sarif ./... > govulncheck.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF to code scanning
+        if: github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck
+        continue-on-error: true
+
+      # -scan=symbol reports only vulnerabilities the code can actually reach,
+      # so a hit here is actionable rather than noise from unused packages.
+      # govulncheck exits non-zero when it finds any, which is the gate.
+      - name: Fail on reachable vulnerabilities
+        run: govulncheck -scan=symbol ./...
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go (toolchain from go.mod)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Plain `go mod download` (no `all`) does not write go.sum, so it cannot
+      # perturb the tidy gate below. `go mod download all` would: it records
+      # hashes for the whole module graph, including test deps of deps, which
+      # `tidy` then reports as removable drift.
+      - name: Download dependencies
+        run: go mod download
+
+      # Detects a tampered or corrupted module cache: hashes must match go.sum.
+      - name: Verify modules against go.sum
+        run: go mod verify
+
+      # -diff makes `tidy` non-mutating: it prints the required change and exits
+      # non-zero instead of rewriting go.mod/go.sum and hiding the drift.
+      - name: Assert go.mod/go.sum match the source tree
+        run: go mod tidy -diff
+
+      # A retracted version is a maintainer telling us not to use it (usually a
+      # yanked release). `-retracted` lists modules even when nothing is
+      # retracted, so match the marker go prints for an actual retraction
+      # ("example.com/m v1.2.3 (retracted)") rather than any occurrence of the
+      # word, which a module path could also contain.
+      # Retraction metadata lives in *newer* versions' go.mod files, which a
+      # tidy go.sum has no entry for, so this lookup needs -mod=mod to record
+      # those hashes. The tidy gate above already ran, so the lines this adds
+      # cannot mask drift, and CI never commits them.
+      - name: Fail on retracted dependency versions
+        env:
+          GOFLAGS: -mod=mod
+        run: |
+          if ! out="$(go list -m -retracted all 2>&1)"; then
+            printf '%s\n' "$out"
+            echo "::error::could not read retraction metadata; the check did not run"
+            exit 1
+          fi
+          report="$(printf '%s\n' "$out" | grep -F '(retracted)' || true)"
+          if [ -n "$report" ]; then
+            printf '%s\n' "$report"
+            echo "::error::selected dependency versions are retracted upstream"
+            exit 1
+          fi
+          echo "no retracted selections"
+
+      # Informational, never a gate: upgrading a dependency is a code change
+      # with its own review, not something CI should block a PR on. Only modules
+      # this repo declares are listed — graph-only and test-only deps would just
+      # be noise, and they cannot be bumped without a dependency change anyway.
+      - name: Report outdated dependencies
+        run: |
+          {
+            echo '### Declared Go modules with an available update'
+            echo
+            echo '```'
+            go list -m -u -f '{{if and (not .Main) (not .Indirect) .Update}}{{.Path}} {{.Version}} -> {{.Update.Version}}{{end}}' all 2>&1 | grep -v '^$' || echo 'none: every declared module is current'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

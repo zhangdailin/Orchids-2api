@@ -1,0 +1,28 @@
+# Keeps the dependency audit in ci.yml actionable: CI proves a version is not
+# vulnerable *today*, Dependabot is what moves it forward. Updates are grouped
+# so a routine bump arrives as one reviewable PR instead of a dozen.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:47'
+    open-pull-requests-limit: 5
+    groups:
+      go-dependencies:
+        patterns:
+          - '*'
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '03:47'
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - '*'

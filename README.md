@@ -146,6 +146,31 @@ curl -s http://127.0.0.1:3002/health
 curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 ```
 
+## 安全检查（CI 与本地复现）
+
+CI 在 `.github/workflows/ci.yml` 中把三类检查拆成独立任务，本地逐条复现：
+
+```bash
+# 数据竞争检测（需要 gcc，CGO_ENABLED=1）
+go test -race -count=1 -p 1 -timeout 15m ./...
+
+# 可达漏洞扫描：只报告代码真正调用到的漏洞，命中即失败
+go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+govulncheck -scan=symbol ./...
+
+# 依赖审计
+go mod verify                                    # 模块缓存与 go.sum 哈希一致
+go mod tidy -diff                                # 有差异即退出码非 0（不修改文件）
+go list -m -retracted all | grep -i retracted    # 命中被撤回版本即失败
+go list -m -u all                                # 可升级清单，仅信息、不阻断
+```
+
+说明：
+
+- `govulncheck` 在 push/定时任务上还会输出 SARIF 上传到 GitHub Security 标签页；fork PR 只有只读令牌，上传失败不会让 CI 变红。
+- 漏洞是在代码发布**之后**才被披露的，所以这几个安全任务除 push/PR 外，每周一 03:37 也会在 `main` 上重跑一次。
+- 依赖升级由 Dependabot（`.github/dependabot.yml`）分组提 PR，CI 只负责「当前版本现在有没有问题」，不阻断升级评审。
+
 ## 模型管理说明
 
 - 管理接口：`POST /api/models/refresh`
