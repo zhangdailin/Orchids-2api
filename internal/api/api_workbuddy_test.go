@@ -392,10 +392,15 @@ func TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable(t *testi
 	}
 }
 
-// TestHandleAccounts_CheckWorkBuddySpentMeterClearsLegacyPark covers the upgrade
-// path: an account already carrying the old synthetic "402" must be released by
-// the next check instead of waiting out the 24h payment cooldown.
-func TestHandleAccounts_CheckWorkBuddySpentMeterClearsLegacyPark(t *testing.T) {
+// TestHandleAccounts_CheckWorkBuddySpentMeterKeepsThePark covers an account parked
+// for a spent allowance.
+//
+// The check verifies the credential, and the credential is fine — what parked the
+// account is the upstream refusing an actual request. The next check must therefore
+// not clear the marker while the meter still reports the allowance spent, or the
+// console shows an account turning green and failing again on the next request.
+// The release that matters is covered by ...ClearsParkOnceToppedUp below.
+func TestHandleAccounts_CheckWorkBuddySpentMeterKeepsThePark(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -441,8 +446,70 @@ func TestHandleAccounts_CheckWorkBuddySpentMeterClearsLegacyPark(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAccount() error = %v", err)
 	}
+	if stored.StatusCode != "402" {
+		t.Fatalf("StatusCode = %q, want the spent-allowance park kept while the meter is empty", stored.StatusCode)
+	}
+	if stored.StatusMessage == "" {
+		t.Fatal("the operator-facing reason must survive the check")
+	}
+	if stored.VerifiedAt.IsZero() {
+		t.Fatal("the check must still record that the credential was exercised")
+	}
+}
+
+// TestHandleAccounts_CheckWorkBuddyClearsParkOnceToppedUp is the release half, and
+// the reason the rule reads the meter rather than only the reset time: an operator
+// who buys credits must get the account back on the next check, not at the cycle
+// boundary the reset time names.
+func TestHandleAccounts_CheckWorkBuddyClearsParkOnceToppedUp(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/config":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"models":[{"id":"hy3"}],"agents":[{"name":"cli","models":["hy3"]}]}}`))
+		case "/v2/billing/meter/get-user-resource":
+			// The same package and cycle, but with credits added.
+			_, _ = w.Write([]byte(`{"code":0,"data":{"Response":{"Data":{"TotalCount":1,"Accounts":[{
+				"PackageName":"Free Plan Subscription","CapacityUnit":"credit",
+				"CapacitySize":250,"CapacityRemain":250,"CapacityRemainPrecise":"250",
+				"CycleCapacitySize":250,"CycleCapacityRemain":250,
+				"CycleCapacitySizePrecise":"250","CycleCapacityRemainPrecise":"250",
+				"CycleEndTime":"2026-09-26 00:13:42","Status":0}]}}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	s, _ := newTestStore(t, "wb-topup:")
+	ctx := context.Background()
+	acc := &store.Account{
+		AccountType:           "workbuddy",
+		Enabled:               true,
+		Weight:                1,
+		WorkBuddyAccessToken:  "access-token",
+		WorkBuddyRefreshToken: "refresh-token",
+		StatusCode:            "402",
+		StatusMessage:         "credits exhausted",
+		LastAttempt:           time.Now(),
+	}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	a := New(s, "", "", &config.Config{WorkBuddyBaseURL: srv.URL})
+	rec := httptest.NewRecorder()
+	a.HandleAccountByID(rec, httptest.NewRequest(http.MethodGet, "/api/accounts/"+strconv.FormatInt(acc.ID, 10)+"/check", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	stored, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
 	if stored.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want the legacy 402 park released", stored.StatusCode)
+		t.Fatalf("StatusCode = %q, want the park released once the meter shows credits", stored.StatusCode)
 	}
 }
 

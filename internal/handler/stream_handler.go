@@ -2762,7 +2762,17 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 // InjectErrorText injects an error message as a text delta into the stream or buffer.
 func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
-	errorMsg = apperrors.PublicMessage(errorMsg)
+	h.injectMessageText(logMsg, apperrors.PublicMessage(errorMsg))
+}
+
+// injectMessageText writes an already client-facing message into the stream or the
+// buffer.
+//
+// It exists so a message the gateway composed itself is not run through
+// PublicMessage a second time. PublicMessage recognises *upstream* error text, and
+// it replaces anything it does not recognise with a generic sentence — so passing
+// an operator-facing message through it silently discards it.
+func (h *streamHandler) injectMessageText(logMsg, errorMsg string) {
 	if h != nil && h.w != nil {
 		if requestID := strings.TrimSpace(h.w.Header().Get("X-Orchids-Request-ID")); requestID != "" {
 			errorMsg += " Request ID: " + requestID
@@ -2788,40 +2798,88 @@ func (h *streamHandler) InjectErrorText(logMsg, errorMsg string) {
 }
 
 func (h *streamHandler) InjectAuthError(errStr string) {
-	var errorMsg string
+	var errorMsg, category string
 	switch {
 	case strings.Contains(errStr, "401"):
+		category = "auth"
 		errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
 	case strings.Contains(errStr, "403"):
+		category = "auth_blocked"
 		errorMsg = "Access Forbidden (403): This account cannot use the requested AI feature right now. It may be unavailable for the current plan, quota, or Warp AI feature status."
 	default:
-		errorMsg = fmt.Sprintf("Request Failed: %s. Please check your account status.", errStr)
+		category = "auth"
+		errorMsg = "Request Failed. Please check your account status."
 	}
-	h.InjectErrorText("Injecting auth error to client", errorMsg)
+	h.reportRequestFailure("Injecting auth error to client", category, errorMsg)
+}
+
+// reportRequestFailure tells the client the request failed without producing an
+// answer.
+//
+// A completion whose content is "the available upstream accounts have exhausted
+// their quota" is indistinguishable from an answer: clients persist it, agents
+// feed it back as context, and nothing downstream retries or alerts on it. The
+// failure belongs to the gateway, so it is reported as one.
+//
+// A non-streaming request has committed nothing by this point, so the report is an
+// HTTP error carrying the status StatusForCategory assigns to the category. A
+// stream has already sent its message_start — the status is 200 and cannot be
+// revisited — so its report has to stay in band, but it carries the same
+// operator-facing message rather than a re-classified one.
+func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
+	if h == nil || h.w == nil {
+		return
+	}
+	if logutil.VerboseDiagnosticsEnabled() {
+		slog.Debug(logMsg, "category", category, "message", message)
+	}
+	if h.isStream {
+		h.injectMessageText(logMsg, message)
+		return
+	}
+	h.mu.Lock()
+	if h.hasReturn {
+		h.mu.Unlock()
+		return
+	}
+	// Claim the response under the lock so a concurrent finisher cannot also write
+	// a body; finishResponse then returns early and leaves the error in place.
+	h.hasReturn = true
+	h.mu.Unlock()
+	apperrors.New(category, message, apperrors.StatusForCategory(category)).WriteResponse(h.w)
 }
 
 func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr error) {
 	errorMsg := "Request failed: retries exhausted and no available accounts. Please check account statuses in Admin UI or add valid accounts."
+	category := apperrors.ClassifyUpstreamError(lastErr).Category
 	selectErrText := ""
 	if selectErr != nil {
 		selectErrText = strings.ToLower(selectErr.Error())
 	}
 	lowerLastErr := strings.ToLower(lastErr)
-	if strings.Contains(lowerLastErr, "no ai credits remaining") ||
-		strings.Contains(lowerLastErr, "out of credits") ||
-		strings.Contains(lowerLastErr, "credits exhausted") {
-		errorMsg = "Request failed: the Warp account has no AI credits remaining. Wait for the quota reset, add credits, or enable another Warp account."
-	} else if strings.Contains(lowerLastErr, "qoder agent limit reached") ||
-		strings.Contains(strings.ToLower(lastErr), "qoder model rate limited") ||
-		strings.Contains(strings.ToLower(lastErr), "model cooldown") {
+	switch {
+	case apperrors.IsCreditExhaustion(lowerLastErr):
+		// The channel's accounts are out of allowance rather than busy, so the
+		// action is to add credits or capacity. This used to name Warp whatever
+		// channel had actually run out.
+		category = "quota_exhausted"
+		errorMsg = "Request failed: every account for this channel has exhausted its allowance. Add credits or accounts, or wait for the quota reset."
+	case strings.Contains(lowerLastErr, "qoder agent limit reached") ||
+		strings.Contains(lowerLastErr, "qoder model rate limited") ||
+		strings.Contains(lowerLastErr, "model cooldown"):
+		category = "rate_limit"
 		errorMsg = "Request failed: the requested Qoder model is temporarily rate-limited. Please retry after its cooldown or choose another model."
-	} else if apperrors.ClassifyUpstreamError(lastErr).Category == "rate_limit" || strings.Contains(selectErrText, "rate-limited") {
+	case category == "rate_limit" || strings.Contains(selectErrText, "rate-limited"):
+		category = "rate_limit"
 		errorMsg = "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account."
 	}
-	if selectErr != nil {
-		errorMsg = fmt.Sprintf("%s (selector: %v, last error: %s)", errorMsg, selectErr, lastErr)
+	// The selector error and the last upstream error are diagnostics. They go to
+	// the log rather than into the response, which a client may show to a user and
+	// which is now an error body rather than a completion.
+	if selectErr != nil || strings.TrimSpace(lastErr) != "" {
+		slog.Warn("Reporting that no account could serve the request", "select_error", selectErr, "last_error", lastErr)
 	}
-	h.InjectErrorText("Injecting no available account error to client", errorMsg)
+	h.reportRequestFailure("Injecting no available account error to client", category, errorMsg)
 }
 
 // Tool shape validation is independent of whether another call had the same input.

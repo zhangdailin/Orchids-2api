@@ -1,12 +1,44 @@
 package errors
 
-import "strings"
+import (
+	"net/http"
+	"strings"
+)
 
 // PublicMessage converts an internal/upstream error into a stable, actionable
 // message without exposing response bodies, credentials, cookies or provider
 // implementation details. The request ID is returned separately by middleware.
 func PublicMessage(errText string) string {
 	return messageForCategory(ClassifyUpstreamError(errText).Category)
+}
+
+// StatusForCategory maps an error category to the HTTP status a client should
+// see. It sits beside messageForCategory so the status and the text a client
+// receives cannot disagree about what went wrong.
+//
+// The statuses follow the convention an OpenAI-compatible client already acts on:
+// 429 is where it looks for a retryable capacity problem (and for a quota, where
+// it stops), 401 for a credential it must replace, 400 for a request the upstream
+// rejected on its merits, and 5xx for the gateway's or the upstream's own fault.
+func StatusForCategory(category string) int {
+	switch category {
+	case "quota_exhausted", "rate_limit":
+		return http.StatusTooManyRequests
+	case "auth", "auth_blocked":
+		return http.StatusUnauthorized
+	case "client":
+		return http.StatusBadRequest
+	case "model_unavailable":
+		return http.StatusNotFound
+	case "configuration":
+		return http.StatusServiceUnavailable
+	case "timeout":
+		return http.StatusGatewayTimeout
+	case "network", "server", "protocol", "local_overload":
+		return http.StatusBadGateway
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 // messageForCategory is the single source of truth for the client-visible text

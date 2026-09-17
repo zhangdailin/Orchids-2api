@@ -3303,6 +3303,15 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 	// scheduler can tell a verified account from one that was never checked. The
 	// policy package owns that pairing so every entrance behaves identically.
 	if status == "" {
+		// A successful check proves the *credential* works; it says nothing about the
+		// allowance. Clearing a spent-allowance verdict here is what made the console
+		// show a green account that failed again on the very next request — the check
+		// answered for the token, while the verdict that parked the account came from
+		// the upstream refusing an actual request.
+		if accountHoldsAllowanceVerdict(acc, time.Now()) && allowanceStillSpent(acc) {
+			acc.VerifiedAt = time.Now()
+			return
+		}
 		accountpolicy.Success(time.Now()).Apply(acc)
 		return
 	}
@@ -3311,6 +3320,41 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 		verdict.NeedsLogin = true
 	}
 	verdict.Apply(acc)
+}
+
+// accountHoldsAllowanceVerdict reports whether the account is parked for an
+// allowance the upstream refused, with its reset time still ahead.
+//
+// The question is "would the selector still hold this account?", so the answer has
+// to match the selector: a 402 with a future reset time is out of rotation, and a
+// check that cleared the marker would only make the next request re-park it — which
+// is what the console showed as an account turning green and then red again.
+func accountHoldsAllowanceVerdict(acc *store.Account, now time.Time) bool {
+	if acc == nil || strings.TrimSpace(acc.StatusCode) != "402" {
+		return false
+	}
+	if acc.QuotaResetAt.IsZero() {
+		return false
+	}
+	return now.Before(acc.QuotaResetAt)
+}
+
+// allowanceStillSpent reports whether the meter still says the allowance is gone.
+//
+// This is the half that keeps the rule from stranding an account: an operator who
+// buys credits is released by the next check rather than waiting for the cycle
+// boundary the reset time names. It reads the snapshot the check just refreshed,
+// so a top-up is visible immediately.
+//
+// A failed meter read leaves the previous snapshot in place, and a stale "spent"
+// answer holds the account until its reset time. That is the conservative
+// direction: the alternative is re-offering an account whose allowance was last
+// observed to be gone.
+func allowanceStillSpent(acc *store.Account) bool {
+	if acc == nil {
+		return false
+	}
+	return acc.UsageLimit > 0 && acc.UsageCurrent <= 0
 }
 
 func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config) error {

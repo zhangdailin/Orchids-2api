@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
@@ -183,5 +184,61 @@ func TestExportCarriesTheDurableCredentialForReimport(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAccountCheckKeepsASpentAllowanceVerdict pins the console behaviour: a check
+// must not clear a verdict the selector still enforces.
+//
+// The check verifies the credential, and the credential is genuinely fine — what
+// parked the account was the upstream refusing an actual request for lack of
+// allowance. Clearing the marker on a successful check made the account turn green
+// and then fail again on the very next request, which reads as a flapping gateway
+// rather than an exhausted one.
+func TestAccountCheckKeepsASpentAllowanceVerdict(t *testing.T) {
+	now := time.Now()
+	parked := &store.Account{
+		ID: 1, AccountType: "workbuddy", StatusCode: "402",
+		StatusMessage: "Credits exhausted. Please visit the link below to purchase add-on packs",
+		LastAttempt:   now.Add(-time.Minute),
+		QuotaResetAt:  now.Add(24 * time.Hour),
+		UsageLimit:    250, UsageCurrent: 0, // the fresh meter still reports it spent
+	}
+	applySuccessfulAccountRefreshStatus(parked, "")
+	if parked.StatusCode != "402" {
+		t.Fatalf("StatusCode = %q, want the spent-allowance verdict kept", parked.StatusCode)
+	}
+	if parked.StatusMessage == "" {
+		t.Fatal("the operator-facing reason must survive the check")
+	}
+	if parked.VerifiedAt.IsZero() {
+		t.Fatal("the check must still record that the credential was exercised")
+	}
+
+	// Once the reset time has passed the selector would release the account, so the
+	// check must be free to clear the marker too.
+	reset := now.Add(-time.Minute)
+	expired := &store.Account{ID: 2, AccountType: "workbuddy", StatusCode: "402", QuotaResetAt: reset,
+		UsageLimit: 250, UsageCurrent: 0}
+	applySuccessfulAccountRefreshStatus(expired, "")
+	if expired.StatusCode != "" {
+		t.Fatalf("StatusCode = %q, want the marker cleared after the reset time", expired.StatusCode)
+	}
+
+	// A meter that reports credits again releases the park immediately, so an
+	// operator who tops up does not wait for the cycle boundary.
+	toppedUp := &store.Account{ID: 4, AccountType: "workbuddy", StatusCode: "402",
+		QuotaResetAt: now.Add(24 * time.Hour), UsageLimit: 250, UsageCurrent: 250}
+	applySuccessfulAccountRefreshStatus(toppedUp, "")
+	if toppedUp.StatusCode != "" {
+		t.Fatalf("StatusCode = %q, want the park released once the meter shows credits", toppedUp.StatusCode)
+	}
+
+	// A verdict with no reset time is a cooldown, not an allowance: the check still
+	// clears it.
+	cooldown := &store.Account{ID: 3, AccountType: "workbuddy", StatusCode: "402"}
+	applySuccessfulAccountRefreshStatus(cooldown, "")
+	if cooldown.StatusCode != "" {
+		t.Fatalf("StatusCode = %q, want a plain cooldown cleared by a successful check", cooldown.StatusCode)
 	}
 }
