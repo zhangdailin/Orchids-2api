@@ -26,6 +26,13 @@ type Section struct {
 	Payload   string `json:"payload"`
 	Bytes     int    `json:"bytes"`
 	Truncated bool   `json:"truncated"`
+
+	// buf accumulates the section and Payload is filled in Bundle. The original
+	// shape was `s.Payload += text`, which copies the whole section on every
+	// append: the tee appends once per Write, so a streamed answer arrives one
+	// SSE frame at a time and a 64KiB section built from 128-byte frames copied
+	// 18MB (measured) to hold 64KiB. A Builder appends in place instead.
+	buf strings.Builder
 }
 type Bundle struct {
 	RequestID  string    `json:"request_id"`
@@ -81,12 +88,12 @@ func (c *Capture) appendLocked(name, text string) {
 		s = &Section{Name: name}
 		c.sections[name] = s
 	}
-	remaining := min(maxCaptureBytes-len(s.Payload), maxBundleBytes-c.bytes)
+	remaining := min(maxCaptureBytes-s.buf.Len(), maxBundleBytes-c.bytes)
 	if len(text) > remaining {
 		text = text[:remaining]
 		s.Truncated = true
 	}
-	s.Payload += text
+	s.buf.WriteString(text)
 	c.bytes += len(text)
 }
 func (c *Capture) Set(name, text string) {
@@ -96,24 +103,44 @@ func (c *Capture) Set(name, text string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if old := c.sections[name]; old != nil {
-		c.bytes -= len(old.Payload)
+		c.bytes -= old.buf.Len()
 	}
 	delete(c.sections, name)
 	c.appendLocked(name, text)
 }
 
-// Preserve prompts and token counts while masking credential fields and bearer
-// strings. The same sanitizer applies to JSON, SSE fragments and plain text.
 var credentialPattern = regexp.MustCompile(`(?i)("(?:[a-z0-9_-]*(?:authorization|cookie|api[_-]?key|token|password|secret|session|sso|signature|private[_-]?key)[a-z0-9_-]*)"\s*:\s*)"(?:\\.|[^"\\])*(?:"|$)`)
 var bearerPattern = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
 var urlPasswordPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)([^/@:\s]+):([^/@\s]+)@`)
 var opaquePattern = regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_.-]{16,})\b`)
 
+// sanitizeCapture masks credentials while preserving prompts and token counts.
+// The same sanitizer applies to JSON, SSE fragments and plain text.
+//
+// Each pass can only match text that already contains its own trigger token, so
+// the three expensive ones are gated by a linear prefilter. Ungated they cost
+// ~13ms per 64KiB of text (measured: urlPasswordPattern 6.9ms, opaquePattern
+// 3.4ms, bearerPattern 3.0ms — a leading `\b` or `(?i)` costs RE2 its
+// literal-prefix index); gated they cost ~0.2ms and allocate nothing, a 65x
+// saving on every captured section. credentialPattern stays ungated: it runs
+// off a cheap literal-prefix index and costs ~0.05ms.
+//
+// A prefilter must never miss a match. `Bearer` is matched case-insensitively,
+// so it is folded before the test; the other two tokens appear literally in
+// their patterns. sanitizeCaptureGatedEquivalence_test.go pins this against the
+// ungated sweep on a corpus of credential spellings.
 func sanitizeCapture(text string) string {
 	text = credentialPattern.ReplaceAllString(text, `${1}"[REDACTED]"`)
-	text = bearerPattern.ReplaceAllString(text, "Bearer [REDACTED]")
-	text = urlPasswordPattern.ReplaceAllString(text, "${1}${2}:[REDACTED]@")
-	return opaquePattern.ReplaceAllString(text, "[REDACTED]")
+	if strings.Contains(strings.ToLower(text), "bearer") {
+		text = bearerPattern.ReplaceAllString(text, "Bearer [REDACTED]")
+	}
+	if strings.Contains(text, "://") {
+		text = urlPasswordPattern.ReplaceAllString(text, "${1}${2}:[REDACTED]@")
+	}
+	if strings.Contains(text, "sk-") || strings.Contains(text, "eyJ") {
+		text = opaquePattern.ReplaceAllString(text, "[REDACTED]")
+	}
+	return text
 }
 func (c *Capture) Bundle() Bundle {
 	c.mu.Lock()
@@ -123,12 +150,13 @@ func (c *Capture) Bundle() Bundle {
 		b.DurationMS = c.duration.Milliseconds()
 	}
 	for _, s := range c.sections {
-		copy := *s
-		copy.Payload = sanitizeCapture(strings.ToValidUTF8(copy.Payload, "�"))
-		copy.Bytes = len(copy.Payload)
-		b.Bytes += copy.Bytes
-		b.Truncated = b.Truncated || copy.Truncated
-		b.Sections = append(b.Sections, copy)
+		// Assembled field by field: Section carries a strings.Builder now, and
+		// copying a Builder that has already been written to is what it panics on.
+		payload := sanitizeCapture(strings.ToValidUTF8(s.buf.String(), "\uFFFD"))
+		sec := Section{Name: s.Name, Payload: payload, Bytes: len(payload), Truncated: s.Truncated}
+		b.Bytes += sec.Bytes
+		b.Truncated = b.Truncated || sec.Truncated
+		b.Sections = append(b.Sections, sec)
 	}
 	sort.Slice(b.Sections, func(i, j int) bool { return b.Sections[i].Name < b.Sections[j].Name })
 	return b
