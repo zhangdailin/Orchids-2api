@@ -195,17 +195,21 @@ func verifyWorkBuddyAccountWithStore(ctx context.Context, acc *store.Account, cf
 	// The credit meter is a separate, optional endpoint. A failure must not turn
 	// an otherwise usable account into an error; it only leaves the quota
 	// unavailable until the next sync.
-	quotaStatus := ""
 	if quota, quotaErr := client.FetchQuota(ctx); quotaErr != nil {
 		slog.Warn("WorkBuddy credit meter sync failed; leaving quota unavailable",
 			"account_id", acc.ID, "error", quotaErr)
 	} else {
 		workbuddy.ApplyQuota(acc, quota)
 		if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
-			// The plan is exhausted: keep the account but mark it so the
-			// scheduler backs off instead of hammering a dead allowance.
-			quotaStatus = "402"
+			// A spent credit package is NOT a scheduling verdict. WorkBuddy keeps
+			// serving its free models after the metered allowance is gone, so the
+			// synthetic "402" this path used to return parked the whole account for
+			// the 24h payment cooldown and took those free models out of rotation
+			// with it. The meter snapshot already carries remaining=0, which is what
+			// the 配额 column renders, so the operator still sees the spent package.
+			slog.Info("WorkBuddy credit package is spent; keeping the account schedulable (free models do not consume credits)",
+				"account_id", acc.ID, "plan", quota.PackageName, "usage_limit", acc.UsageLimit, "reset_at", acc.QuotaResetAt)
 		}
 	}
-	return quotaStatus, 0, nil
+	return "", 0, nil
 }

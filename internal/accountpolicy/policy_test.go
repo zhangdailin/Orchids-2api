@@ -165,6 +165,10 @@ func TestCooldownFor_MatchesPoolValues(t *testing.T) {
 		{&store.Account{StatusCode: "429"}, 1 * time.Minute},
 		{&store.Account{StatusCode: "402"}, 24 * time.Hour},
 		{&store.Account{StatusCode: "402", AccountType: "puter"}, 15 * time.Minute},
+		// WorkBuddy's free models survive a spent credit package, so a payment
+		// verdict never holds the account: zero cooldown keeps it in rotation and
+		// releases a marker persisted before that rule existed.
+		{&store.Account{StatusCode: "402", AccountType: "workbuddy"}, 0},
 		{&store.Account{StatusCode: "403"}, 24 * time.Hour},
 		{&store.Account{StatusCode: "403", AccountType: "grok"}, 10 * time.Minute},
 		{&store.Account{StatusCode: "weird"}, 5 * time.Minute},
@@ -173,6 +177,38 @@ func TestCooldownFor_MatchesPoolValues(t *testing.T) {
 		if got := CooldownFor(tc.acc); got != tc.want {
 			t.Fatalf("CooldownFor(%s/%s) = %v, want %v", tc.acc.AccountType, tc.acc.StatusCode, got, tc.want)
 		}
+	}
+}
+
+// TestClassify_WorkBuddyPaymentRefusalIsModelScoped pins the reported behaviour:
+// WorkBuddy's free models keep working once the metered credit package is spent,
+// so a payment refusal must cool down only the model that was asked for instead
+// of parking the whole account (and its free models) for the 24h payment cooldown.
+func TestClassify_WorkBuddyPaymentRefusalIsModelScoped(t *testing.T) {
+	acc := &store.Account{ID: 1, AccountType: "workbuddy", Enabled: true}
+	verdict := Classify(acc, errors.New("workbuddy API error: status=402 message=insufficient credits for model"), "claude-sonnet-4.5")
+
+	if verdict.Scope != ScopeModel || verdict.Model != "claude-sonnet-4.5" {
+		t.Fatalf("verdict = %+v, want a model-scoped cooldown", verdict)
+	}
+	if verdict.Status != "" {
+		t.Fatalf("status = %q, want no account status for a spent credit package", verdict.Status)
+	}
+	if verdict.Cooldown <= 0 || verdict.Cooldown >= CooldownPayment {
+		t.Fatalf("cooldown = %v, want the short model window", verdict.Cooldown)
+	}
+	verdict.Apply(acc)
+	if acc.StatusCode != "" {
+		t.Fatalf("StatusCode = %q, want the account left schedulable", acc.StatusCode)
+	}
+	if AccountHeld(acc, time.Now()) {
+		t.Fatal("a WorkBuddy payment refusal must not hold the account")
+	}
+	// Without a model to name there is nothing to cool down, and the account must
+	// still not be parked.
+	anonymous := Classify(&store.Account{AccountType: "workbuddy"}, errors.New("status=402 insufficient credits"), "")
+	if anonymous.Status != "" || AccountHeld(&store.Account{AccountType: "workbuddy", StatusCode: anonymous.Status}, time.Now()) {
+		t.Fatalf("anonymous verdict = %+v, want the account left alone", anonymous)
 	}
 }
 

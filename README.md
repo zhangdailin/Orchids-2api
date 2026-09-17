@@ -171,6 +171,7 @@ curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 - 账号凭据只存放于 `workbuddy_access_token` / `workbuddy_refresh_token` 专用字段，refreshToken 不下发到管理页面；Keycloak 每次刷新都会轮换 refreshToken，服务器自动持久化新值
 - **额度（真实计量）**：账号状态同步会调用 `POST /v2/billing/meter/get-user-resource`（`p_tcaca`）。账号表格里的「等级」显示上游计量包名（如 `Free Plan Subscription` / `Bonus Pack`），「配额」显示当前周期剩余/上限（如 `147.28 / 350`，上游支持小数），并给出周期重置时间；「调用」在无请求计数的该通道下显示计量已消耗额度。多个计量包会按同一周期聚合
 - `quota_*` 字段合并进所有账号响应（列表/创建/编辑/检查）
+- **额度用尽不摘除调度**：计量包/积分用完后 WorkBuddy 仍可正常使用免费模型，所以账号同步不再把「额度用尽」写成 `402`（旧行为会让整个账号进入支付冷却 24 小时，免费模型跟着一起下线）。剩余额度仍照常写进配额列（显示 `0 / 350` 与周期重置时间）；若上游对某个付费模型返回 `402`，只对该模型做短冷却，账号继续留在调度池里。历史遗留的 `402` 标记会在下一次账号检查或调度选取时自动释放
 - **账号页自动同步**：打开/刷新账号管理页时，会对「上次同步超过 30 分钟」的启用账号自动跑一次账号检查（顺序 + 200ms 间隔，结果逐行刷新），**不再需要逐个手点 Sync**。判断依据优先用渠道自带的快照时间（WorkBuddy `workbuddy_quota.synced_at`、Grok `grok_billing.synced_at` / `grok_web_quota.synced_at` / `grok_models_synced_at`）；Warp 与 Puter 这两个渠道不上报快照时间，则用浏览器本地账本（`localStorage` 的 `orchids_account_sync_v1`）记录上次成功同步时间。同步失败不会写入账本，下次打开页面会重试- 「账号 / 邮箱」列对 WorkBuddy 显示登录邮箱（由 accessToken 的 Keycloak claims 推导，官方登录与手填会话 JSON 一致）
 - 手填方式仅保留在 API 层（用于迁移/脚本化导入）：`POST /api/accounts` 仍接受 `client_cookie` 里的会话 `refreshToken` 或整段 auth JSON；管理页面不再暴露该通道的凭证输入框
 

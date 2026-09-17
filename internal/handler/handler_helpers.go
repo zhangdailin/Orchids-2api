@@ -408,15 +408,29 @@ func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetCha
 	}
 }
 
+// honorsModelCooldown reports whether a channel's selection consults the
+// per-model cooldown its own verdicts write. Qoder and WorkBuddy both scope a
+// refusal to a single model while the account stays usable for the others.
+func honorsModelCooldown(channel string) bool {
+	switch strings.ToLower(strings.TrimSpace(channel)) {
+	case "qoder", "workbuddy":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChannel string, failedAccountIDs []int64, opts accountSelectionOptions) (*store.Account, error) {
 	if h == nil || h.loadBalancer == nil {
 		return nil, errors.New("load balancer not configured")
 	}
 	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
-		// Qoder business rate limits are model-scoped. Keep the account usable for
-		// its other models while the affected model cools down.
-		if strings.EqualFold(strings.TrimSpace(targetChannel), "qoder") && strings.TrimSpace(opts.ModelID) != "" {
-			model := strings.TrimSpace(opts.ModelID)
+		// A per-model cooldown must be honoured by the channel that wrote it: Qoder
+		// business rate limits and WorkBuddy payment refusals both leave the account
+		// usable for its other models (WorkBuddy's free models keep working after the
+		// credit package is spent), and both record a model-scoped cooldown. Park the
+		// model, never the account.
+		if model := strings.TrimSpace(opts.ModelID); model != "" && honorsModelCooldown(targetChannel) {
 			return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
 				return store.ModelCooldownRemaining(acc, model, time.Now()) == 0
 			})

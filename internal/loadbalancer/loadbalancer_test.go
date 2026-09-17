@@ -261,6 +261,29 @@ func TestIsAccountAvailable_402UsesPuterProbeCooldown(t *testing.T) {
 	}
 }
 
+func TestIsAccountAvailable_WorkBuddyQuotaExhaustedRemainsSchedulable(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{
+		ID:            1,
+		AccountType:   "workbuddy",
+		StatusCode:    "402",
+		StatusMessage: "credits exhausted",
+		LastAttempt:   time.Now(),
+		UsageLimit:    250,
+		UsageCurrent:  0,
+	}
+
+	if !lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected a credit-exhausted WorkBuddy account to stay in rotation for its free models")
+	}
+	if acc.StatusCode != "" {
+		t.Fatalf("expected the leftover payment marker to be released, got %q", acc.StatusCode)
+	}
+}
+
+// TestIsAccountAvailable_402KeepsLongCooldownForOtherChannels pins that the
+// WorkBuddy release above is channel-scoped: every other provider keeps the
+// payment cooldown.
 func TestIsAccountAvailable_402KeepsLongCooldownForOtherChannels(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{

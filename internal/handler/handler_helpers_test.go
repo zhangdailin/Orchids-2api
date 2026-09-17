@@ -178,6 +178,51 @@ func TestSelectAccountRecord_WarpContinuationPinsIssuingAccount(t *testing.T) {
 	}
 }
 
+// TestSelectAccountRecord_WorkBuddyParksModelNotAccount is the routing half of
+// the reported behaviour: a paid-model refusal cools down that model only, so the
+// account keeps serving WorkBuddy's free models. Before this rule the refusal was
+// account-scoped (or the whole pool was skipped), which took the free models down
+// with the paid one.
+func TestSelectAccountRecord_WorkBuddyParksModelNotAccount(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+
+	ctx := context.Background()
+	refused := &store.Account{Name: "wb-paid", AccountType: "workbuddy", WorkBuddyAccessToken: "paid-token", Enabled: true, Weight: 1}
+	spare := &store.Account{Name: "wb-spare", AccountType: "workbuddy", WorkBuddyAccessToken: "spare-token", Enabled: true, Weight: 1}
+	for _, acc := range []*store.Account{refused, spare} {
+		if err := s.CreateAccount(ctx, acc); err != nil {
+			t.Fatalf("CreateAccount(%s) error = %v", acc.Name, err)
+		}
+	}
+
+	// The paid model was refused with 402 on the first account.
+	store.RecordModelCooldown(refused, "paid-model", time.Now().Add(time.Minute))
+	if err := s.UpdateAccount(ctx, refused); err != nil {
+		t.Fatalf("UpdateAccount() error = %v", err)
+	}
+
+	account, err := h.selectAccountRecordWithOptions(ctx, "workbuddy", nil, accountSelectionOptions{ModelID: "paid-model"})
+	if err != nil {
+		t.Fatalf("selectAccountRecordWithOptions() error = %v", err)
+	}
+	if account.ID != spare.ID {
+		t.Fatalf("selected account %d for the refused model, want the healthy account %d", account.ID, spare.ID)
+	}
+
+	// Only the named model is parked: the refused account still serves free models.
+	account, err = h.selectAccountRecordWithOptions(ctx, "workbuddy", []int64{spare.ID}, accountSelectionOptions{ModelID: "free-model"})
+	if err != nil {
+		t.Fatalf("selectAccountRecordWithOptions(free-model) error = %v", err)
+	}
+	if account.ID != refused.ID {
+		t.Fatalf("selected account %d for a free model, want the credit-exhausted account %d to stay in rotation", account.ID, refused.ID)
+	}
+}
+
 // mustCreateModel inserts a model directly (avoiding reliance on seed data).
 func mustCreateModel(t *testing.T, s *store.Store, id string, channel, modelID string, status store.ModelStatus) *store.Model {
 	t.Helper()

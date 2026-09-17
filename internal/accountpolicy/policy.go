@@ -176,6 +176,25 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 			Cooldown: cooldown, At: now,
 		}
 	case "402":
+		if isWorkBuddy(acc) {
+			// WorkBuddy's free models keep working after the metered credit package
+			// is spent, so a payment refusal must not park the whole account for the
+			// 24h payment cooldown — that would take the free models down with the
+			// paid ones. Cool down the requested model and leave the account in
+			// rotation. With no model to name there is nothing to cool down at all,
+			// which is why no account status is written either.
+			return Verdict{
+				Scope:     ScopeModel,
+				Model:     model,
+				Message:   message,
+				Retryable: Retryable(err),
+				// The refusal says nothing about the credential or the other models,
+				// so the pool may keep using this account for them.
+				SwitchAccount: true,
+				Cooldown:      CooldownRateLimit,
+				At:            now,
+			}
+		}
 		cooldown := CooldownPayment
 		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "puter") {
 			cooldown = CooldownPuterQuota
@@ -235,6 +254,10 @@ func isGrok(acc *store.Account) bool {
 	return acc != nil && strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok")
 }
 
+func isWorkBuddy(acc *store.Account) bool {
+	return acc != nil && strings.EqualFold(strings.TrimSpace(acc.AccountType), "workbuddy")
+}
+
 func accountType(acc *store.Account) string {
 	if acc == nil {
 		return ""
@@ -269,6 +292,13 @@ func CooldownFor(acc *store.Account) time.Duration {
 	case "429":
 		return CooldownRateLimit
 	case "402":
+		if isWorkBuddy(acc) {
+			// A WorkBuddy payment refusal is model-scoped (see Classify): the free
+			// models stay usable, so the account is never held. Returning the zero
+			// cooldown is also the release path for a "402" persisted before this
+			// rule existed — the scheduler sees it as due at once and re-verifies it.
+			return 0
+		}
 		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "puter") {
 			return CooldownPuterQuota
 		}

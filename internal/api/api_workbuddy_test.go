@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -330,6 +331,118 @@ func TestRefreshAccountState_WorkBuddySyncsModelsAndQuota(t *testing.T) {
 	}
 	if used, ok := fields["quota_used"].(float64); !ok || math.Abs(used-202.72) > 0.01 {
 		t.Fatalf("quota_used = %v, want the derived consumption (202.72)", fields["quota_used"])
+	}
+}
+
+// TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable pins the
+// reported behaviour: WorkBuddy's free models keep working after the metered
+// credit package is spent, so a spent meter must NOT become an account status.
+// The old synthetic "402" parked the account for the 24h payment cooldown every
+// time the admin page synced it, which took the free models out of rotation too.
+func TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/config":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"models":[{"id":"hy3"}],"agents":[{"name":"cli","models":["hy3"]}]}}`))
+		case "/v2/billing/meter/get-user-resource":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"Response":{"Data":{"TotalCount":1,"Accounts":[{
+				"PackageName":"Free Plan Subscription",
+				"CapacityUnit":"credit",
+				"CapacitySize":250,"CapacityRemain":0,
+				"CapacityRemainPrecise":"0",
+				"CycleCapacitySize":250,"CycleCapacityRemain":0,
+				"CycleCapacitySizePrecise":"250","CycleCapacityRemainPrecise":"0",
+				"CycleEndTime":"2026-09-26 00:13:42","Status":0}]}}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	a := New(nil, "", "", &config.Config{WorkBuddyBaseURL: srv.URL})
+	acc := &store.Account{
+		ID:                    5,
+		AccountType:           "workbuddy",
+		WorkBuddyAccessToken:  "access-token",
+		WorkBuddyRefreshToken: "refresh-token",
+		Enabled:               true,
+	}
+
+	status, httpStatus, err := a.refreshAccountState(context.Background(), acc)
+	if err != nil {
+		t.Fatalf("refreshAccountState() error = %v", err)
+	}
+	if status != "" || httpStatus != 0 {
+		t.Fatalf("status = %q httpStatus = %d, want no verdict from a spent credit meter", status, httpStatus)
+	}
+	if acc.StatusCode != "" {
+		t.Fatalf("StatusCode = %q, want the account left schedulable", acc.StatusCode)
+	}
+	// The spent package must still be visible: the 配额 column renders remaining=0.
+	if acc.UsageLimit != 250 || acc.UsageCurrent != 0 {
+		t.Fatalf("usage = %v/%v, want 0 remaining of 250", acc.UsageCurrent, acc.UsageLimit)
+	}
+	if acc.WorkBuddyQuota.SyncedAt.IsZero() || acc.WorkBuddyQuota.Remaining != 0 {
+		t.Fatalf("workbuddy_quota = %+v, want a synced snapshot with remaining 0", acc.WorkBuddyQuota)
+	}
+	fields := buildQuotaResponseFields(acc)
+	if fields["quota_remaining"] != 0.0 || fields["quota_supported"] != true {
+		t.Fatalf("quota_remaining/quota_supported = %v/%v", fields["quota_remaining"], fields["quota_supported"])
+	}
+}
+
+// TestHandleAccounts_CheckWorkBuddySpentMeterClearsLegacyPark covers the upgrade
+// path: an account already carrying the old synthetic "402" must be released by
+// the next check instead of waiting out the 24h payment cooldown.
+func TestHandleAccounts_CheckWorkBuddySpentMeterClearsLegacyPark(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/config":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"models":[{"id":"hy3"}],"agents":[{"name":"cli","models":["hy3"]}]}}`))
+		case "/v2/billing/meter/get-user-resource":
+			_, _ = w.Write([]byte(`{"code":0,"data":{"Response":{"Data":{"TotalCount":1,"Accounts":[{
+				"PackageName":"Free Plan Subscription","CapacityUnit":"credit",
+				"CapacitySize":250,"CapacityRemain":0,"CapacityRemainPrecise":"0",
+				"CycleCapacitySize":250,"CycleCapacityRemain":0,
+				"CycleCapacitySizePrecise":"250","CycleCapacityRemainPrecise":"0",
+				"CycleEndTime":"2026-09-26 00:13:42","Status":0}]}}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	s, _ := newTestStore(t, "wb-park:")
+	ctx := context.Background()
+	acc := &store.Account{
+		AccountType:           "workbuddy",
+		Enabled:               true,
+		Weight:                1,
+		WorkBuddyAccessToken:  "access-token",
+		WorkBuddyRefreshToken: "refresh-token",
+		StatusCode:            "402",
+		StatusMessage:         "credits exhausted",
+		LastAttempt:           time.Now(),
+	}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+
+	a := New(s, "", "", &config.Config{WorkBuddyBaseURL: srv.URL})
+	rec := httptest.NewRecorder()
+	a.HandleAccountByID(rec, httptest.NewRequest(http.MethodGet, "/api/accounts/"+strconv.FormatInt(acc.ID, 10)+"/check", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	stored, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if stored.StatusCode != "" {
+		t.Fatalf("StatusCode = %q, want the legacy 402 park released", stored.StatusCode)
 	}
 }
 

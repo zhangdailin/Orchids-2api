@@ -339,6 +339,15 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		return false
 	case "402":
+		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "workbuddy") {
+			// WorkBuddy keeps serving its free models after the metered credit
+			// package is spent, so a payment verdict must never park the account.
+			// The verify path no longer writes one; clearing it here also releases
+			// accounts that carry a marker persisted before that change, instead of
+			// leaving them out of rotation for the 24h payment cooldown.
+			lb.clearAccountStatus(ctx, acc, "WorkBuddy 额度用尽不再摘除调度，恢复可调度")
+			return true
+		}
 		// 402 通常表示余额/credits 不足。若上游给出 reset 时间则优先尊重，
 		// 否则使用更长的冷却，避免调度器持续撞到同一个无额度账号。
 		if !acc.QuotaResetAt.IsZero() {
