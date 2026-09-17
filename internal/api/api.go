@@ -986,15 +986,47 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 		delete(merged, field)
 	}
 	if o.Account != nil {
-		message := o.Account.StatusMessage
-		for _, secret := range []string{o.Account.Token, o.Account.ClientCookie, o.Account.RefreshToken, o.Account.SessionCookie, o.Account.OAuthAccessToken, o.Account.OAuthRefreshToken, o.Account.WorkBuddyAccessToken, o.Account.WorkBuddyRefreshToken, o.Account.QoderAccessToken, o.Account.QoderRefreshToken} {
-			if secret != "" {
-				message = strings.ReplaceAll(message, secret, "[REDACTED]")
-			}
-		}
-		merged["status_message"] = message
+		merged["status_message"] = redactAccountSecrets(o.Account.StatusMessage, o.Account)
 	}
 	return json.Marshal(merged)
+}
+
+// accountSecrets reads every credential-bearing value on an account.
+//
+// It is the one list both redaction layers use. Keeping it in one place is the
+// point: two hand-maintained copies had already drifted, and a credential that is
+// missing from the list is a credential that reaches the management API.
+func accountSecrets(acc *store.Account) []string {
+	if acc == nil {
+		return nil
+	}
+	return []string{
+		acc.Token,
+		acc.ClientCookie,
+		acc.RefreshToken,
+		acc.SessionCookie,
+		acc.SessionID,
+		acc.ClientUat,
+		acc.OAuthAccessToken,
+		acc.OAuthRefreshToken,
+		acc.WorkBuddyAccessToken,
+		acc.WorkBuddyRefreshToken,
+		acc.QoderAccessToken,
+		acc.QoderRefreshToken,
+		acc.QoderRuntimeInfo,
+		acc.QoderRuntimeKey,
+	}
+}
+
+// redactAccountSecrets replaces every credential value an account holds with a
+// placeholder, so a text field that quotes upstream output cannot publish one.
+func redactAccountSecrets(message string, acc *store.Account) string {
+	for _, secret := range accountSecrets(acc) {
+		if secret = strings.TrimSpace(secret); secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
+	}
+	return message
 }
 
 func normalizeAccountOutput(acc *store.Account) *accountOutput {
@@ -1015,13 +1047,11 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 	if out == nil {
 		return nil
 	}
-	// Redact before the provider-specific output normalization removes secrets.
-	out.StatusMessage = acc.StatusMessage
-	for _, secret := range []string{acc.Token, acc.ClientCookie, acc.RefreshToken, acc.SessionCookie, acc.SessionID, acc.ClientUat, acc.OAuthAccessToken, acc.OAuthRefreshToken, acc.WorkBuddyAccessToken, acc.WorkBuddyRefreshToken, acc.QoderAccessToken, acc.QoderRefreshToken} {
-		if secret != "" {
-			out.StatusMessage = strings.ReplaceAll(out.StatusMessage, secret, "[REDACTED]")
-		}
-	}
+	// The message is redacted with the same list the final render uses. The two
+	// used to differ: this one omitted Qoder's access token and runtime pair, and
+	// it ran before the channel projection cleared them, so an upstream error that
+	// echoed a Qoder token published it in status_message.
+	out.StatusMessage = redactAccountSecrets(acc.StatusMessage, acc)
 	if strings.EqualFold(out.AccountType, "warp") && out.WarpMonthlyLimit > 0 {
 		out.Subscription = warp.InferSubscriptionFromRequestLimit(&warp.RequestLimitInfo{
 			RequestLimit: int(out.WarpMonthlyLimit),
