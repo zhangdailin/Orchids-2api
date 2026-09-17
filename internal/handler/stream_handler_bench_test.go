@@ -3,11 +3,14 @@ package handler
 import (
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"testing"
 
 	"orchids-api/internal/adapter"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/upstream"
 )
 
 type discardStringByteWriter struct{}
@@ -350,5 +353,36 @@ func BenchmarkSanitizeToolInput_WriteAlreadyNormalized(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = sanitizeToolInput("Write", input)
+	}
+}
+
+// Per-frame cost of the streaming relay end to end: one upstream text delta, from
+// handleMessage through the client-facing SSE write, carrying the block state it
+// actually touches. The benchmarks above measure the marshalling helpers in
+// isolation; this is what a long answer pays per frame, so a per-frame allocation
+// or a per-frame copy shows up here as a number instead of as a guess.
+func BenchmarkStreamingRelayTextDeltaFrame(b *testing.B) {
+	const framesPerRun = 512
+	cfg := &config.Config{DebugEnabled: false}
+	logger := debug.New(false, false)
+	defer logger.Close()
+
+	for _, size := range []int{8, 24, 128} {
+		b.Run("delta="+strconv.Itoa(size), func(b *testing.B) {
+			msg := upstream.SSEMessage{
+				Type:  "model.text-delta",
+				Event: map[string]interface{}{"delta": strings.Repeat("x", size)},
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				sh := newStreamHandler(cfg, newDiscardFlushResponseWriter(), logger, false, true, adapter.FormatAnthropic, "")
+				for j := 0; j < framesPerRun; j++ {
+					sh.handleMessage(msg)
+				}
+				sh.release()
+			}
+			b.ReportMetric(float64(framesPerRun), "frames/op")
+		})
 	}
 }

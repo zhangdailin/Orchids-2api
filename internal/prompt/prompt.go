@@ -55,27 +55,60 @@ type MessageContent struct {
 }
 
 func (mc *MessageContent) UnmarshalJSON(data []byte) error {
-	if len(data) == 0 || string(data) == "null" {
+	if len(data) == 0 {
+		mc.Text = ""
+		mc.Blocks = nil
+		return nil
+	}
+	trimmed := trimLeadingJSONSpace(data)
+	if len(trimmed) == 0 {
+		return fmt.Errorf("content must be string or array of content blocks")
+	}
+	if string(trimmed) == "null" {
 		mc.Text = ""
 		mc.Blocks = nil
 		return nil
 	}
 
-	var text string
-	if err := json.Unmarshal(data, &text); err == nil {
+	// Dispatch on the first byte rather than trial-unmarshalling. The array form is
+	// the common one for a coding harness, and answering a `string` target with an
+	// array makes encoding/json skip the whole array before reporting the type
+	// error, so every block-carrying message body was scanned twice — and the
+	// conversation is the bulk of a request that re-sends it on every turn.
+	// SystemItems already dispatches this way; this is the same shape applied to
+	// the larger field.
+	switch trimmed[0] {
+	case '"':
+		var text string
+		if err := json.Unmarshal(trimmed, &text); err != nil {
+			return err
+		}
 		mc.Text = text
 		mc.Blocks = nil
 		return nil
-	}
-
-	var blocks []ContentBlock
-	if err := json.Unmarshal(data, &blocks); err == nil {
-		mc.Text = ""
-		mc.Blocks = blocks
-		return nil
+	case '[':
+		var blocks []ContentBlock
+		if err := json.Unmarshal(trimmed, &blocks); err == nil {
+			mc.Text = ""
+			mc.Blocks = blocks
+			return nil
+		}
 	}
 
 	return fmt.Errorf("content must be string or array of content blocks")
+}
+
+// trimLeadingJSONSpace returns data without its leading JSON whitespace. It is a
+// subslice, not a copy, so the dispatch above costs nothing.
+func trimLeadingJSONSpace(data []byte) []byte {
+	for i := 0; i < len(data); i++ {
+		switch data[i] {
+		case ' ', '\t', '\n', '\r':
+			continue
+		}
+		return data[i:]
+	}
+	return nil
 }
 
 func (mc MessageContent) MarshalJSON() ([]byte, error) {
