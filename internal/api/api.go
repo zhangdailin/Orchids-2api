@@ -2616,6 +2616,8 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 			normalized.OAuthRefreshToken = acc.OAuthRefreshToken
 			normalized.OAuthExpiresAt = acc.OAuthExpiresAt
 		}
+		// An exported row may carry only its own channel's credential.
+		redactForeignCredentials(&normalized)
 		normalized.ID = 0
 		normalized.RequestCount = 0
 		exportData.Accounts = append(exportData.Accounts, normalized)
@@ -2624,6 +2626,48 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=accounts_export.json")
 	json.NewEncoder(w).Encode(exportData)
+}
+
+// redactForeignCredentials clears the credential fields of channels other than
+// the account's own.
+//
+// The account read path gets this for free: accountOutput.MarshalJSON deletes the
+// credential keys from the response object, whichever channel they belong to. The
+// export marshals the stored record instead of going through that marshaler, so
+// it needs the same guarantee expressed as data. It matters because a legacy row
+// can hold a value in a slot its own channel never writes — the reason
+// RedactQoderOutput clears the generic slots at all — and without this the export
+// would publish it.
+//
+// The generic Token/RefreshToken/ClientCookie/SessionCookie/SessionID/ClientUat
+// slots are deliberately left alone. They are not "foreign" for WorkBuddy and
+// Qoder: both resolvers fall back to them to parse a credential document written
+// before the channel had fields of its own, so clearing them here would drop a
+// legacy credential from the export instead of protecting it.
+func redactForeignCredentials(acc *store.Account) {
+	if acc == nil {
+		return
+	}
+	channel := strings.ToLower(strings.TrimSpace(acc.AccountType))
+	// Grok's OAuth pair is restored above for an OAuth account specifically, so
+	// an SSO row is treated like any other row that has no claim to it.
+	if !(channel == "grok" && grokAccountIsOAuth(acc)) {
+		acc.OAuthAccessToken = ""
+		acc.OAuthRefreshToken = ""
+		acc.OAuthExpiresAt = time.Time{}
+	}
+	if channel != "workbuddy" {
+		acc.WorkBuddyAccessToken = ""
+		acc.WorkBuddyRefreshToken = ""
+		acc.WorkBuddyExpiresAt = time.Time{}
+	}
+	if channel != "qoder" {
+		acc.QoderAccessToken = ""
+		acc.QoderRefreshToken = ""
+		acc.QoderExpiresAt = time.Time{}
+		acc.QoderRuntimeInfo = ""
+		acc.QoderRuntimeKey = ""
+	}
 }
 
 func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
