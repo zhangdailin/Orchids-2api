@@ -2608,15 +2608,13 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		normalized := *normalizeAccountOutput(acc).Account
-		// Export must preserve OAuth credentials (normalizeAccountOutput hides
-		// them for list/query responses); an OAuth export that drops them is
-		// unusable on re-import.
-		if grokAccountIsOAuth(acc) {
-			normalized.OAuthAccessToken = acc.OAuthAccessToken
-			normalized.OAuthRefreshToken = acc.OAuthRefreshToken
-			normalized.OAuthExpiresAt = acc.OAuthExpiresAt
-		}
-		// An exported row may carry only its own channel's credential.
+		// Restore the durable credential the read path hides, then drop anything
+		// that belongs to another channel. An export that drops a channel's
+		// durable credential is unusable on re-import: both WorkBuddy and Qoder
+		// rotate a refresh token that is the only way to renew, so an account
+		// restored from such a file works until its access token expires and then
+		// cannot recover.
+		restoreExportCredentials(&normalized, acc)
 		redactForeignCredentials(&normalized)
 		normalized.ID = 0
 		normalized.RequestCount = 0
@@ -2626,6 +2624,43 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=accounts_export.json")
 	json.NewEncoder(w).Encode(exportData)
+}
+
+// restoreExportCredentials puts back the credential a channel needs to be usable
+// after import.
+//
+// normalizeAccountOutput hides these for list and query responses, so the export
+// has to restore them explicitly. Everything restored here is the channel's own
+// credential; a value that belongs to a different channel is cleared right after
+// by redactForeignCredentials, so the two steps compose to "this row exports
+// exactly the credential it can legitimately hold".
+func restoreExportCredentials(out, acc *store.Account) {
+	if out == nil || acc == nil {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
+	case "grok":
+		if grokAccountIsOAuth(acc) {
+			out.OAuthAccessToken = acc.OAuthAccessToken
+			out.OAuthRefreshToken = acc.OAuthRefreshToken
+			out.OAuthExpiresAt = acc.OAuthExpiresAt
+		}
+	case "workbuddy":
+		// The access token is short-lived; the refresh token is the durable
+		// credential Keycloak rotates.
+		out.WorkBuddyAccessToken = acc.WorkBuddyAccessToken
+		out.WorkBuddyRefreshToken = acc.WorkBuddyRefreshToken
+		out.WorkBuddyExpiresAt = acc.WorkBuddyExpiresAt
+	case "qoder":
+		// The refresh token is the durable credential, and the runtime pair is
+		// derived from it at use time but is what the gateway requires on every
+		// request, so both travel with the account.
+		out.QoderAccessToken = acc.QoderAccessToken
+		out.QoderRefreshToken = acc.QoderRefreshToken
+		out.QoderExpiresAt = acc.QoderExpiresAt
+		out.QoderRuntimeInfo = acc.QoderRuntimeInfo
+		out.QoderRuntimeKey = acc.QoderRuntimeKey
+	}
 }
 
 // redactForeignCredentials clears the credential fields of channels other than

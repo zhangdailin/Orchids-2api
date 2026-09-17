@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -782,35 +784,89 @@ func (c *Client) FetchModels(ctx context.Context) ([]WorkBuddyModel, error) {
 		return nil, fmt.Errorf("failed to decode workbuddy config: %w", err)
 	}
 
-	allow := make(map[string]struct{}, len(cfg.Models))
+	allow := make(map[string]struct{})
 	for _, agent := range cfg.Agents {
 		if !strings.EqualFold(strings.TrimSpace(agent.Name), "cli") {
 			continue
 		}
 		for _, id := range agent.Models {
-			allow[strings.TrimSpace(id)] = struct{}{}
+			if id = strings.TrimSpace(id); id != "" {
+				allow[id] = struct{}{}
+			}
 		}
 	}
 
-	out := make([]WorkBuddyModel, 0, len(cfg.Models))
+	// advertised is everything the account may run, before the CLI restriction.
+	advertised := make([]WorkBuddyModel, 0, len(cfg.Models))
 	for _, model := range cfg.Models {
 		id := strings.TrimSpace(model.ID)
 		if id == "" || model.Disabled {
 			continue
 		}
-		if len(allow) > 0 {
-			if _, ok := allow[id]; !ok {
-				continue
-			}
-		}
 		model.ID = id
 		if strings.TrimSpace(model.Name) == "" {
 			model.Name = id
 		}
-		out = append(out, model)
+		advertised = append(advertised, model)
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("workbuddy config returned no cli models")
+	if len(advertised) == 0 {
+		return nil, fmt.Errorf("workbuddy config advertised no enabled models")
 	}
-	return out, nil
+
+	// No CLI restriction declared: the account may run what it advertises.
+	if len(allow) == 0 {
+		return advertised, nil
+	}
+
+	out := make([]WorkBuddyModel, 0, len(advertised))
+	for _, model := range advertised {
+		if _, ok := allow[model.ID]; ok {
+			out = append(out, model)
+		}
+	}
+	if len(out) > 0 {
+		return out, nil
+	}
+
+	// The whitelist named models that share no identifier with the advertised
+	// ones. That is an id-space mismatch between two upstream lists, not an empty
+	// catalog, and the difference matters: reporting it as "no models" failed the
+	// whole channel's model refresh, so no WorkBuddy model could be published, no
+	// request could be routed to the channel, and the entire channel went dark
+	// over a naming change. The upstream still refuses a model the account may not
+	// run, so serving the advertised list is the safe direction to fail in — and
+	// the mismatch is logged loudly enough to be corrected upstream.
+	slog.Warn("workbuddy cli whitelist matches no advertised model; serving the advertised list instead",
+		"advertised_count", len(advertised),
+		"cli_whitelist_count", len(allow),
+		"advertised_sample", sampleModelIDs(advertised, 5),
+		"cli_whitelist_sample", sampleSetKeys(allow, 5))
+	return advertised, nil
+}
+
+// sampleModelIDs returns up to limit model ids, so a diagnostic that names both
+// sides of a mismatch stays bounded.
+func sampleModelIDs(models []WorkBuddyModel, limit int) []string {
+	out := make([]string, 0, limit)
+	for _, model := range models {
+		if len(out) == limit {
+			break
+		}
+		out = append(out, model.ID)
+	}
+	return out
+}
+
+// sampleSetKeys returns up to limit keys of a set, sorted so the log line is
+// stable across runs and can be compared between them.
+func sampleSetKeys(set map[string]struct{}, limit int) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	return keys
 }
