@@ -1,39 +1,56 @@
-// Package provider defines a minimal registry for upstream providers.
-// It replaces hardcoded type-switch logic with a table-driven dispatch.
+// Package provider maps an account type to the upstream client that serves it.
+//
+// Every channel builds its client the same way — NewFromAccount(acc, cfg) — and
+// every one of them satisfies handler.UpstreamClient once built, so a provider is
+// a name and a constructor and nothing else. The table below is the whole
+// mapping. It used to be spread over four files, each declaring an empty struct
+// with the same two methods over a different constructor, plus an interface and a
+// registry to hold them; the indirection only moved the type switch it was meant
+// to remove, and no caller ever added a provider at runtime.
 package provider
 
 import (
 	"strings"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/puter"
+	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
+	"orchids-api/internal/warp"
+	"orchids-api/internal/workbuddy"
 )
 
-// Provider abstracts the creation of upstream clients for a given account type.
-type Provider interface {
-	// Name returns the provider identifier (for example, "warp" or "puter").
-	Name() string
-	// NewClient creates an upstream client for the given account and config.
-	// The returned value must satisfy the handler.UpstreamClient interface.
-	NewClient(acc *store.Account, cfg *config.Config) interface{}
+// Factory builds the upstream client for one account. The result is asserted to
+// handler.UpstreamClient by the caller, which is the only thing it can be.
+type Factory func(acc *store.Account, cfg *config.Config) interface{}
+
+// factories maps an account type to its client constructor. Grok is absent on
+// purpose: it has its own handler and is never built through this seam.
+//
+// Each entry is a closure because a constructor returns its own concrete client
+// type and Go will not widen that on assignment; the closure is the single line
+// that would otherwise be a whole file.
+var factories = map[string]Factory{
+	"warp": func(acc *store.Account, cfg *config.Config) interface{} {
+		return warp.NewFromAccount(acc, cfg)
+	},
+	"puter": func(acc *store.Account, cfg *config.Config) interface{} {
+		return puter.NewFromAccount(acc, cfg)
+	},
+	"workbuddy": func(acc *store.Account, cfg *config.Config) interface{} {
+		return workbuddy.NewFromAccount(acc, cfg)
+	},
+	"qoder": func(acc *store.Account, cfg *config.Config) interface{} {
+		return qoder.NewFromAccount(acc, cfg)
+	},
 }
 
-// Registry maps account types to provider implementations.
-type Registry struct {
-	providers map[string]Provider
-}
-
-// NewRegistry creates an empty provider registry.
-func NewRegistry() *Registry {
-	return &Registry{providers: make(map[string]Provider)}
-}
-
-// Register adds a provider under the given name (case-insensitive).
-func (r *Registry) Register(name string, p Provider) {
-	r.providers[strings.ToLower(name)] = p
-}
-
-// Get retrieves a provider by name. Returns nil if not found.
-func (r *Registry) Get(name string) Provider {
-	return r.providers[strings.ToLower(name)]
+// Get returns the client constructor for an account type.
+//
+// The lookup is case-insensitive because account types are normalized to lower
+// case when stored but reach this seam from an operator, an import file, or a
+// URL path in whatever case they were written.
+func Get(accountType string) (Factory, bool) {
+	factory, ok := factories[strings.ToLower(strings.TrimSpace(accountType))]
+	return factory, ok
 }

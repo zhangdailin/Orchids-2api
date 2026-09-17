@@ -149,21 +149,18 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 		QoderInferenceURL:   stub.URL,
 	}
 
-	// Wire the provider registry exactly as the server does, so the request path
-	// builds its client through the same seam production uses.
-	registry := provider.NewRegistry()
-	registry.Register("qoder", provider.NewQoderProvider())
-
+	// Build the client through the same provider table the server uses, so the
+	// request path exercises the real seam.
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
 	h := handler.NewWithLoadBalancer(cfg, lb)
 	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {
-		p := registry.Get(acc.AccountType)
-		if p == nil {
+		factory, ok := provider.Get(acc.AccountType)
+		if !ok {
 			t.Fatalf("no provider registered for %q", acc.AccountType)
 		}
-		client, ok := p.NewClient(acc, c).(handler.UpstreamClient)
+		client, ok := factory(acc, c).(handler.UpstreamClient)
 		if !ok {
-			t.Fatalf("provider %q returned an unusable client", p.Name())
+			t.Fatalf("provider %q returned an unusable client", acc.AccountType)
 		}
 		if setter, ok := client.(interface {
 			SetAccountStore(qoder.AccountUpdater)

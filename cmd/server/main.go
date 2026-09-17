@@ -237,15 +237,10 @@ func main() {
 		slog.Debug("Audit logger initialized", "backend", "redis")
 	}
 
-	// Provider registry for decoupled client creation
-	registry := provider.NewRegistry()
-	registry.Register("warp", provider.NewWarpProvider())
-	registry.Register("puter", provider.NewPuterProvider())
-	registry.Register("workbuddy", provider.NewWorkBuddyProvider())
-	registry.Register("qoder", provider.NewQoderProvider())
+	// Every channel's upstream client is built through the provider table.
 	h.SetClientFactory(func(acc *store.Account, c *config.Config) handler.UpstreamClient {
-		if p := registry.Get(acc.AccountType); p != nil {
-			if client, ok := p.NewClient(acc, c).(handler.UpstreamClient); ok {
+		if factory, ok := provider.Get(acc.AccountType); ok {
+			if client, ok := factory(acc, c).(handler.UpstreamClient); ok {
 				// WorkBuddy rotates its refresh token on every renewal; give the
 				// client the store so the rotated credential survives the call.
 				if wb, ok := client.(interface {
