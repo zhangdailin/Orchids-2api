@@ -294,7 +294,7 @@
    5. Concurrency, trends
    -------------------------------------------------------------------------- */
 .ops-grid { margin-bottom: var(--space-4); }
-.ops-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+.ops-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
 .ops-grid-3 > .ops-card:last-child { grid-column: span 1; }
 
 .ops-concurrency { display: flex; flex-direction: column; gap: var(--space-3); }
@@ -325,8 +325,34 @@
 .ops-platform-badges { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .ops-platform-empty { color: var(--text-muted); font-size: 0.78rem; }
 
-.ops-chart { position: relative; height: 150px; }
-.ops-chart-tall { height: 190px; }
+/* Height follows the card instead of being a fixed 150px: the same chart is ~440px
+   wide in a laptop column and ~1100px wide on a 27" panel, and a fixed height
+   turns the wide case into a letterbox. The SVG is drawn at the measured pixel
+   size (chartBox in ops.js), so these numbers are the layout contract and the
+   script only reads them back — change one, change the other.
+
+   aspect-ratio is clamped, not authoritative: below ~480px of card the ratio
+   would ask for less than the 150px the axis labels need, and on a full-width
+   trend it would ask for more height than a dashboard should spend. */
+.ops-chart {
+  position: relative;
+  /* `width` is not decoration here. With `width: auto` and `aspect-ratio` plus
+     `min-height`, Chrome sizes the box from the ratio and the floor rather than from
+     its parent: at 2.6/1 and min-height 190px the chart came out 494px wide inside a
+     336px card, and the page then clipped it (overflow-x: hidden) — the right third
+     of every trend on a phone was simply gone. Stating the width pins the box to its
+     card and leaves the ratio to decide only the height. */
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3.2 / 1;
+  min-height: 150px;
+  max-height: 300px;
+}
+.ops-chart-tall {
+  aspect-ratio: 2.6 / 1;
+  min-height: 190px;
+  max-height: 360px;
+}
 .ops-chart svg { width: 100%; height: 100%; display: block; }
 .ops-chart .grid-line { stroke: var(--border-color); stroke-width: 1; }
 .ops-chart .axis-text { fill: var(--text-faint); font-size: 9px; font-family: var(--font-sans); }
@@ -361,7 +387,15 @@
 /* -----------------------------------------------------------------------------
    6. Distributions
    -------------------------------------------------------------------------- */
-.ops-histogram { display: flex; align-items: flex-end; gap: var(--space-2); height: 170px; }
+.ops-histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  /* The bars are percentage heights, so the box needs a definite height — it
+     cannot be `auto` the way .ops-chart's can. Clamped rather than fixed for the
+     same reason as the charts: a 170px band inside an 1100px card is a letterbox. */
+  height: clamp(170px, 13vw, 260px);
+}
 .ops-histogram-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--space-1); height: 100%; justify-content: flex-end; }
 .ops-histogram-bar { width: 100%; min-height: 3px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(180deg, var(--info), rgba(108, 182, 255, 0.35)); }
 .ops-histogram-count { color: var(--text-soft); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
@@ -802,20 +836,133 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
   .logs-cell-action .logs-badge { margin-top: var(--space-1); }
 
   .table-empty-cell { display: block; padding: var(--space-4); text-align: center; }
+}
 
-  /* The matrices keep their horizontal scroll, but the row label travels with it:
-     scrolled to the 历史 column, a row without its channel name is a row of numbers
-     with no owner. */
-  .ops-table td:first-child,
-  .ops-table th:first-child {
-    position: sticky;
-    left: 0;
-    z-index: 3;
-    background: var(--surface-2);
-    box-shadow: 1px 0 0 var(--border-color);
+/* --- Channel × model matrix, and the alert list, as records -------------------
+   Both tables are wider than the space a phone or a small tablet leaves them: the
+   matrix holds eight columns and 40 minute-blocks of history, the alert list six.
+   Measured, the matrix does not merely get ugly below 900px, it collapses: at
+   700px the 40 history blocks claim the width the columns need and every cell
+   computes to 0px wide. Above that, a scrolled matrix showed the channel and about
+   two columns, and a row read as numbers with no owner.
+
+   900px is the width the shell already uses to turn the sidebar into a drawer, so
+   the console changes shape once rather than twice as the window narrows. Each row
+   becomes a card and the cells are placed by the classes ops.js stamps on them
+   (MATRIX_CELLS / ALERT_CELLS); the per-cell labels come from `data-label`, not from
+   a ::before with hard-coded text, so the header a reader sees in the card cannot
+   drift from the <th> the same column shows on a desktop. */
+@media (max-width: 900px) {
+  .ops-table-wrap {
+    border: 0;
+    background: none;
+    overflow: visible;
   }
 
-  .ops-table thead th:first-child { z-index: 4; }
+  .ops-table,
+  .ops-table tbody,
+  .ops-table tr,
+  .ops-table td { display: block; }
+
+  .ops-table thead { display: none; }
+
+  /* One card per row. The two-column grid a value, its label and a sparkline all
+     fit in: a single column spent a whole line on "1 / 1". */
+  .ops-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--surface-1);
+  }
+
+  /* The stacked cells are painted transparent, as in the log list: the per-cell
+     padding and bottom border that separate table columns would draw a bordered
+     box around every value inside the card. */
+  .ops-table tbody td,
+  .ops-table tbody tr:hover td {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    white-space: normal;
+  }
+
+  /* A channel row is the card's own heading; a model row keeps its indent as a
+     left rule, which is all that separates "the channel" from "one of its models"
+     once the columns are gone. */
+  .ops-table tbody tr.is-channel { border-color: var(--border-strong); }
+
+  .ops-table tbody tr.is-model {
+    margin-left: var(--space-4);
+    box-shadow: inset 3px 0 0 var(--border-strong);
+  }
+
+  .ops-table tbody tr:hover { background: var(--surface-2); }
+
+  /* Cell, value, label. Spelled out on each cell rather than inherited from a
+     shared rule: `tbody tr > td` on its own cannot tell the name apart from an
+     empty history cell, and one of them must stay plain. */
+  .ops-table tbody td.ops-matrix-name,
+  .ops-table tbody td.ops-mx-accounts,
+  .ops-table tbody td.ops-mx-requests,
+  .ops-table tbody td.ops-mx-rate,
+  .ops-table tbody td.ops-mx-ttft,
+  .ops-table tbody td.ops-mx-duration,
+  .ops-table tbody td.ops-mx-throttled,
+  .ops-table tbody td.ops-alert-time,
+  .ops-table tbody td.ops-alert-status,
+  .ops-table tbody td.ops-alert-level,
+  .ops-table tbody td.ops-alert-channel,
+  .ops-table tbody td.ops-alert-target,
+  .ops-table tbody td.ops-alert-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .ops-table tbody tr > td::before {
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    /* A label that wraps to two lines pushed its own value down and left the two
+       columns of a metric row misaligned. */
+    white-space: nowrap;
+    content: attr(data-label);
+  }
+
+  .ops-table tbody td.ops-matrix-name,
+  .ops-table tbody td.ops-alert-detail { grid-column: 1 / -1; }
+
+  /* The row label is the heading of the card. The class's desktop indent is dropped
+     here — the card has no columns to align to, and the model rows carry their own
+     left rule instead — and the dotted underline the page already uses for "this
+     opens something" is what marks it as the drill-down. */
+  .ops-table tbody td.ops-matrix-name {
+    padding-left: 0;
+    color: var(--text-main);
+    font-size: 0.86rem;
+  }
+
+  /* The 40 minute-blocks get their own full-width row, unframed: they are a
+     sparkline, not a value, and a bordered box around sixty small squares reads as
+     a broken image. */
+  .ops-table tbody td.ops-history-cells {
+    grid-column: 1 / -1;
+    display: block;
+  }
+
+  /* An alert's message is a sentence; it gets a line of its own. */
+  .ops-table tbody td.ops-alert-detail {
+    color: var(--text-soft);
+  }
+
+  .ops-table tbody td.ops-alert-level { justify-self: start; }
+  .ops-table tbody td.ops-alert-status { color: var(--text-main); }
 }
 
 /* Keep the live panel wide enough for its gauge and values; breakpoints follow
@@ -841,3 +988,43 @@ button.ops-error-row { width: 100%; border: 0; background: none; text-align: lef
 .ops-page.main-content { width: calc(100% - var(--sidebar-w)); flex: 0 1 auto; box-sizing: border-box; }
 .ops-spark .axis-text { fill: var(--text-secondary); font-size: 11px; font-family: var(--font-sans); }
 @media (max-width: 900px) { .ops-page.main-content { width: 100%; } }
+
+/* -----------------------------------------------------------------------------
+   12. Wide screens
+   --------------------------------------------------------------------------
+   main.css now stretches the content column on a 27" monitor, but the grids
+   inside it are still built for ~1440px: six KPI cards in a 3x2 block, six
+   runtime metrics in one row, 150px charts. On a wide panel that reads as three
+   very wide cards per line with a lot of air above each chart, so the extra
+   width buys nothing.
+
+   Column counts are chosen to divide the card counts evenly — six KPI cards get
+   six columns, never four or five, because a fixed-count grid leaves the tail of
+   the last row empty while `auto-fit` collapses it.
+
+   Breakpoints are viewport-based, matching the one existing min-width query
+   above. min-width only: the phone rules in section 11 are max-width and must
+   keep winning on a small screen.
+   -------------------------------------------------------------------------- */
+
+/* 1920 and the 2000px-class 27"/32" panels. */
+@media (min-width: 1800px) {
+  .ops-resources { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+}
+
+/* 2560x1440 — the 27" this was reported against — and 2560x1600. ~2270px of
+   content: six KPI cards fit one row. The charts get no height here: they are
+   aspect-ratio driven, so they already grow with their own card. */
+@media (min-width: 2200px) {
+  .ops-kpi-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .ops-resources { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .logs-filters { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .ops-spark { height: 88px; }
+  .ops-spark svg { height: 88px; }
+}
+
+/* 4K / ultrawide: the column stopped growing at 3200px, so the only thing left
+   to widen is the metric row. */
+@media (min-width: 3200px) {
+  .ops-resources { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+}

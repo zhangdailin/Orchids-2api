@@ -56,6 +56,7 @@ jobs:
           node --test web/ops_ui.test.cjs
           node --test web/ops_render.test.cjs
           node --test web/logs_paging.test.cjs
+          node --test web/layout_phone.test.cjs
 
       - name: Run Go tests
         run: go test ./... -count=1 -p 1

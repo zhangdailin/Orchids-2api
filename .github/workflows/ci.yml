@@ -61,6 +61,7 @@ jobs:
           node --test web/ops_ui.test.cjs
           node --test web/ops_render.test.cjs
           node --test web/logs_paging.test.cjs
+          node --test web/layout_phone.test.cjs
 
   race:
     name: Go test (race detector)

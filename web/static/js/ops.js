@@ -41,6 +41,20 @@
     info: '提示',
   };
 
+  // ALERT_CELLS names each alert column, in the order the row builds its cells. Desktop
+  // hides the distinction inside a table; a phone turns the row into a card and places
+  // the cells by these classes (see the alert card rules in ops.css). The column header
+  // travels with the cell as data-label so the card can print it: the phone view has no
+  // header row, and two unlabelled values in a card are unreadable.
+  const ALERT_CELLS = [
+    { className: 'ops-alert-time', label: '时间' },
+    { className: 'ops-alert-status', label: '状态' },
+    { className: 'ops-alert-level', label: '严重级别' },
+    { className: 'ops-alert-channel', label: '渠道' },
+    { className: 'ops-alert-target', label: '对象' },
+    { className: 'ops-alert-detail', label: '说明' },
+  ];
+
   function outcomeTab(key) {
     return OUTCOME_TABS.filter((tab) => tab.key === key)[0] || OUTCOME_TABS[0];
   }
@@ -184,6 +198,20 @@
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
+  // The chart boxes are sized by CSS (aspect-ratio with a min/max clamp — see
+  // .ops-chart in ops.css), so the drawing has to measure the box it landed in
+  // instead of assuming a height. Drawing at the measured pixel size is what
+  // keeps the 9px axis labels 9px: the old fixed `width = 640` viewBox blown up
+  // to 1100 CSS pixels stretched every glyph and every stroke by 1.7x.
+  function chartBox(container, fallbackHeight) {
+    const rect = container && typeof container.getBoundingClientRect === 'function'
+      ? container.getBoundingClientRect()
+      : null;
+    const width = Math.max(240, Math.round((rect && rect.width) || 0) || 640);
+    const height = Math.max(120, Math.round((rect && rect.height) || 0) || fallbackHeight);
+    return { width, height };
+  }
+
   function svgEl(name, attrs) {
     const node = document.createElementNS(SVG_NS, name);
     Object.keys(attrs || {}).forEach((key) => node.setAttribute(key, String(attrs[key])));
@@ -198,8 +226,9 @@
       emptyChart(container, options.emptyText || '这段时间没有样本。');
       return;
     }
-    const width = 640;
-    const height = options.height || 150;
+    const box = chartBox(container, options.height || 150);
+    const width = box.width;
+    const height = box.height;
     const padLeft = 34;
     const padRight = options.rightAxis ? 34 : 10;
     const padTop = 8;
@@ -282,8 +311,9 @@
       emptyChart(container, (options && options.emptyText) || '这段时间没有样本。');
       return;
     }
-    const width = 640;
-    const height = (options && options.height) || 150;
+    const box = chartBox(container, (options && options.height) || 150);
+    const width = box.width;
+    const height = box.height;
     const padLeft = 30;
     const padBottom = 20;
     const plotW = width - padLeft - 8;
@@ -1002,10 +1032,15 @@
           event.error || event.details || '—',
         ];
         cells.forEach((value, index) => {
+          const cell = ALERT_CELLS[index];
           const td = document.createElement('td');
           td.textContent = value;
+          // Named so the phone layout can place each cell: six columns cannot fit a
+          // 360px screen, and the card view in ops.css positions these by class.
+          td.className = cell.className;
+          td.dataset.label = cell.label;
           if (index === 2) {
-            td.className = 'ops-alert-severity ' + (severity === 'critical' ? 'is-critical' : severity === 'warning' ? 'is-warning' : '');
+            td.className += ' ops-alert-severity ' + (severity === 'critical' ? 'is-critical' : severity === 'warning' ? 'is-warning' : '');
           }
           tr.appendChild(td);
         });
@@ -1056,6 +1091,18 @@
     return cell;
   }
 
+  // MATRIX_CELLS names the matrix columns after the row label, in build order. The
+  // channel/model card on a phone prints these as the label of each value: the header
+  // row is hidden there, and a column of bare numbers has no owner.
+  const MATRIX_CELLS = [
+    { className: 'ops-mx-accounts', label: '可用账号' },
+    { className: 'ops-mx-requests', label: '请求' },
+    { className: 'ops-mx-rate', label: '成功率' },
+    { className: 'ops-mx-ttft', label: '首 Token P95' },
+    { className: 'ops-mx-duration', label: '总耗时 P95' },
+    { className: 'ops-mx-throttled', label: '限流' },
+  ];
+
   function matrixRow(label, row, options) {
     const tr = document.createElement('tr');
     tr.className = options.isModel ? 'is-model' : 'is-channel';
@@ -1063,6 +1110,9 @@
     const name = document.createElement('td');
     name.className = 'ops-matrix-name';
     name.textContent = label;
+    // No data-label here on purpose: the card prints the cell's label above its value,
+    // and this cell's value is the channel or model name — "渠道 / 模型 / warp-main"
+    // labelled the heading twice. The other seven cells carry theirs.
     // The row name is the drill-down: a channel opens its own traffic, a model its
     // channel-and-model traffic, both over the window the page is showing.
     name.classList.add('is-clickable');
@@ -1120,6 +1170,14 @@
     tr.appendChild(throttled);
 
     tr.appendChild(historyCells(options.isModel ? row.history : row.series));
+    // The seven value cells were named as they were built; stamp the header label on
+    // each one now. Both card layouts (in ops.css) read it, and the desktop table
+    // ignores it because its own <thead> is visible.
+    MATRIX_CELLS.forEach((cell, index) => {
+      const td = tr.children[index + 1];
+      td.classList.add(cell.className);
+      td.dataset.label = cell.label;
+    });
     return tr;
   }
 
@@ -1277,6 +1335,24 @@
   }
 
   function bind() {
+    // The charts are drawn at their measured pixel size, so a window resize (or a
+    // rotate, or the sidebar collapsing) invalidates every one of them: the SVG
+    // keeps its old viewBox and stretches. Debounced, because a drag-resize fires
+    // continuously and each redraw rebuilds three SVGs and an histogram.
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      let resizeTimer = 0;
+      window.addEventListener('resize', () => {
+        if (resizeTimer && typeof clearTimeout === 'function') clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          resizeTimer = 0;
+          if (state.overview) {
+            renderTrends(state.overview);
+            renderDistributions(state.overview);
+          }
+        }, 160);
+      });
+    }
+
     const windowSelect = el('opsWindow');
     if (windowSelect) {
       windowSelect.addEventListener('change', () => {
