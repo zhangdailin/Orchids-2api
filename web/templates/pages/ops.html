@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260918-phonefix1">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260918-phonefix3">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/ops.css?v=20260918-opsrows1">
 </head>
 
 <body>
@@ -108,6 +108,10 @@
 
     <section class="ops-resources" id="opsResources" aria-live="polite"></section>
 
+    <!-- The two rows are grouped by the height each card actually renders at, not
+         by topic: the three tall cards share the first row and the three trend
+         charts share the second. Mixing them left a rectangular hole in the
+         middle of a row — a ~150px chart card beside a ~560px list card. -->
     <section class="ops-grid ops-grid-3">
       <article class="ops-card">
         <div class="ops-card-head">
@@ -117,6 +121,24 @@
         <div class="ops-concurrency" id="opsConcurrency"></div>
       </article>
 
+      <article class="ops-card">
+        <div class="ops-card-head">
+          <h2>错误分布</h2>
+          <span class="ops-hint" id="opsErrorMixHint">—</span>
+        </div>
+        <div class="ops-errors" id="opsErrorMix"></div>
+      </article>
+
+      <article class="ops-card">
+        <div class="ops-card-head">
+          <h2>请求时长分布</h2>
+          <span class="ops-hint" id="opsHistogramHint">—</span>
+        </div>
+        <div class="ops-histogram" id="opsHistogram"></div>
+      </article>
+    </section>
+
+    <section class="ops-grid ops-grid-3">
       <article class="ops-card">
         <div class="ops-card-head">
           <h2>平均账号切换趋势</h2>
@@ -136,24 +158,6 @@
           </div>
         </div>
         <div class="ops-chart ops-chart-tall" id="opsThroughput"></div>
-      </article>
-    </section>
-
-    <section class="ops-grid ops-grid-3">
-      <article class="ops-card">
-        <div class="ops-card-head">
-          <h2>请求时长分布</h2>
-          <span class="ops-hint" id="opsHistogramHint">—</span>
-        </div>
-        <div class="ops-histogram" id="opsHistogram"></div>
-      </article>
-
-      <article class="ops-card">
-        <div class="ops-card-head">
-          <h2>错误分布</h2>
-          <span class="ops-hint" id="opsErrorMixHint">—</span>
-        </div>
-        <div class="ops-errors" id="opsErrorMix"></div>
       </article>
 
       <article class="ops-card">

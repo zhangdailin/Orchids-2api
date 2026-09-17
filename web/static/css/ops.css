@@ -294,8 +294,23 @@
    5. Concurrency, trends
    -------------------------------------------------------------------------- */
 .ops-grid { margin-bottom: var(--space-4); }
-.ops-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
+
+/* Both rows group cards that already render at a similar height, but a row is
+   only as even as its tallest card. `align-items: start` let the shorter ones
+   stop early, which left a rectangular hole in the middle of the row (a ~150px
+   chart beside a ~560px platform list). Stretching closes the row, and the card's
+   content box grows with it, so the height a card gained is spent on its content
+   instead of sitting blank underneath: the list rows spread out and the histogram
+   bars gain the room. The content box is selected by position rather than by class
+   because the phone layout test reads the first trend-chart declaration in this
+   file by first match, and a `> .ops-chart` rule declared up here would be the one
+   it read. */
+.ops-grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); align-items: stretch; }
 .ops-grid-3 > .ops-card:last-child { grid-column: span 1; }
+.ops-grid-3 > .ops-card { display: flex; flex-direction: column; }
+.ops-grid-3 > .ops-card > :last-child { flex: 1 1 auto; }
+.ops-grid-3 > .ops-card > .ops-concurrency,
+.ops-grid-3 > .ops-card > .ops-errors { justify-content: space-between; }
 
 .ops-concurrency { display: flex; flex-direction: column; gap: var(--space-3); }
 
