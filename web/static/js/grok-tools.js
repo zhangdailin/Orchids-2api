@@ -3216,11 +3216,11 @@
           <td style="text-align:center;">
             <input type="checkbox" class="cache-online-check" data-token="${encodeURIComponent(row.token)}" ${checked} />
           </td>
-          <td><code>${row.token_masked || formatTokenMask(row.token)}</code></td>
-          <td><span class="tag">${row.pool || "-"}</span></td>
-          <td>${countText}</td>
-          <td>${statusText}${accountStatusText ? `<br><small>${accountStatusText}</small>` : ""}</td>
-          <td>${lastClear}</td>
+          <td><code>${escapeHTML(row.token_masked || formatTokenMask(row.token))}</code></td>
+          <td><span class="tag">${escapeHTML(row.pool || "-")}</span></td>
+          <td>${escapeHTML(countText)}</td>
+          <td>${escapeHTML(statusText)}${accountStatusText ? `<br><small>${escapeHTML(accountStatusText)}</small>` : ""}</td>
+          <td>${escapeHTML(lastClear)}</td>
           <td>
             <button class="btn btn-danger-outline cache-online-clear-btn" data-token="${encodeURIComponent(row.token)}" style="padding:4px 8px;">清理</button>
           </td>
@@ -3324,10 +3324,10 @@
       const updatedAt = formatDateTime(item.mtime_ms || item.updated_at || 0);
       return `
         <tr>
-          <td><span class="tag">${mediaType}</span></td>
-          <td><a href="${url}" target="_blank" rel="noopener"><code>${name}</code></a></td>
-          <td>${size}</td>
-          <td>${updatedAt}</td>
+          <td><span class="tag">${escapeHTML(mediaType)}</span></td>
+          <td>${isSafeLinkURL(url) ? `<a href="${escapeHTML(url)}" target="_blank" rel="noopener"><code>${escapeHTML(name)}</code></a>` : `<code>${escapeHTML(name)}</code>`}</td>
+          <td>${escapeHTML(size)}</td>
+          <td>${escapeHTML(updatedAt)}</td>
           <td>
             <button class="btn btn-danger-outline cache-delete-btn" data-media-type="${encodeURIComponent(mediaType)}" data-name="${encodeURIComponent(name)}" style="padding:4px 8px;">删除</button>
           </td>

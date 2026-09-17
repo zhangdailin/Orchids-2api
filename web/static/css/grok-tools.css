@@ -206,7 +206,6 @@
 .composer-shell,
 .settings-panel,
 .model-dropdown,
-.imagine-card,
 .video-card,
 .voice-card {
   min-width: 0;
@@ -308,10 +307,8 @@
 .chat-title,
 .chat-sidebar .sidebar-header,
 .status-header,
-.status-header-row,
 .voice-log-header,
-.video-preview-header,
-.waterfall-header {
+.video-preview-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -323,19 +320,15 @@
 .function-actions,
 .composer-actions,
 .sidebar-actions,
-.video-actions,
 .voice-actions,
 .preview-actions,
 .cache-batch-actions,
 .cache-batch-progress,
 .cache-inline-actions,
 .selection-toolbar,
-.waterfall-actions,
 .voice-log-actions,
-.ref-actions,
 .imagine-header-actions,
 .imagine-masonry-actions,
-.imagine-masonry-controls,
 .imagine-masonry-toolbar {
   display: flex;
   align-items: center;
@@ -358,8 +351,6 @@
   align-items: start;
   min-width: 0;
 }
-
-.function-settings-grid,
 .settings-grid {
   display: grid;
   gap: 12px;
@@ -373,10 +364,6 @@
   gap: 12px;
 }
 
-.function-settings-row.triple {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .grok-form-grid .full,
 .settings-block-full,
 .prompt-block,
@@ -386,10 +373,8 @@
 
 .function-settings-block,
 .settings-block,
-.settings-field,
 .voice-primary,
-.voice-side,
-.preview-stage {
+.voice-side {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -398,16 +383,11 @@
 
 .grok-kv,
 .meta-item,
-.toggle-row,
-.mode-switch,
-.imagine-connection-block,
 .chat-thread,
 .voice-log,
-.raw-log,
 .visualizer,
 .audio-root,
 .video-empty,
-.preview-stage,
 .video-stage,
 .cache-list {
   border: 1px solid var(--border-color);
@@ -416,8 +396,7 @@
 }
 
 .grok-kv,
-.meta-item,
-.toggle-row {
+.meta-item {
   min-height: 58px;
   padding: 12px;
 }
@@ -437,7 +416,6 @@
 }
 
 .status-text,
-.image-status,
 .selected-count {
   display: inline-flex;
   align-items: center;
@@ -450,20 +428,17 @@
   font-weight: 700;
 }
 
-.status-text.connected,
-.image-status.done {
+.status-text.connected {
   color: var(--accent-green);
   background: rgba(52, 211, 153, 0.1);
 }
 
-.status-text.connecting,
-.image-status.running {
+.status-text.connecting {
   color: var(--accent-orange);
   background: rgba(251, 191, 36, 0.1);
 }
 
-.status-text.error,
-.image-status.error {
+.status-text.error {
   color: var(--accent-red);
   background: rgba(248, 113, 113, 0.1);
 }
@@ -969,8 +944,6 @@
   background: var(--accent);
   transition: width 0.2s ease;
 }
-
-.waterfall-meta,
 .imagine-masonry-tile-label {
   padding: var(--space-2) var(--space-3);
   color: var(--text-secondary);
@@ -1089,8 +1062,7 @@
   background: var(--surface-3);
 }
 
-.imagine-masonry-toggle-btn,
-.mode-btn {
+.imagine-masonry-toggle-btn {
   min-height: var(--control-h-sm);
   padding: 0 var(--space-3);
   border: 0;
@@ -1102,8 +1074,7 @@
   cursor: pointer;
 }
 
-.imagine-masonry-toggle-btn.is-active,
-.mode-btn.active {
+.imagine-masonry-toggle-btn.is-active {
   color: var(--text-on-accent);
   background: var(--accent);
 }
@@ -1258,8 +1229,7 @@
 .video-empty,
 .audio-root,
 .visualizer,
-.voice-log,
-.raw-log {
+.voice-log {
   padding: 14px;
 }
 
@@ -1285,8 +1255,7 @@
   background: var(--bg-app);
 }
 
-.voice-log,
-.raw-log {
+.voice-log {
   min-height: 220px;
   white-space: pre-wrap;
   overflow: auto;
@@ -1426,7 +1395,6 @@
   }
 
   .function-settings-row,
-  .function-settings-row.triple,
   .meta-grid,
   .grok-form-grid {
     grid-template-columns: 1fr;
@@ -1438,8 +1406,7 @@
   }
 
   .composer-actions,
-  .imagine-masonry-actions,
-  .imagine-masonry-controls {
+  .imagine-masonry-actions {
     width: 100%;
   }
 
@@ -1536,12 +1503,10 @@
 .composer-input,
 .imagine-masonry-input-shell,
 .video-empty,
-.preview-stage,
 .video-stage,
 .audio-root,
 .visualizer,
 .voice-log,
-.raw-log,
 .cache-list {
   border-color: var(--grok-card-border);
 }
@@ -1557,7 +1522,6 @@
 .chat-title,
 .chat-sidebar .sidebar-header,
 .status-header,
-.status-header-row,
 .voice-log-header,
 .video-preview-header {
   gap: 10px;
@@ -1684,7 +1648,6 @@
 }
 
 .status-text,
-.image-status,
 .selected-count {
   min-height: 22px;
   padding: 3px 8px;
@@ -1718,8 +1681,6 @@
 .imagine-masonry-tile:hover img {
   transform: scale(1.015);
 }
-
-.waterfall-meta,
 .imagine-masonry-tile-label {
   background: var(--bg-surface);
   border-top: 1px solid var(--border-color);
@@ -1740,14 +1701,11 @@
 
 .grok-kv,
 .meta-item,
-.toggle-row,
 .video-empty,
-.preview-stage,
 .video-stage,
 .audio-root,
 .visualizer,
 .voice-log,
-.raw-log,
 .cache-list {
   border-radius: 10px;
   background: var(--bg-surface-hover);

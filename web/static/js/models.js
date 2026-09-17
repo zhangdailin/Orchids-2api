@@ -915,10 +915,21 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (searchInput) {
+    // Every keystroke rebuilt the whole table: the search box filters a list that
+    // can hold thousands of rows, and renderModels() also rebuilds pagination and
+    // the mobile card list. Deferring collapses a burst of typing (or a paste)
+    // into a single render.
+    let searchDebounceTimer = 0;
     searchInput.addEventListener("input", (event) => {
-      modelSearchTerm = String(event.target.value || "").trim();
+      const value = String(event.target.value || "").trim();
+      if (value === modelSearchTerm) return;
+      modelSearchTerm = value;
       modelCurrentPage = 1;
-      renderModels();
+      if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = setTimeout(() => {
+        searchDebounceTimer = 0;
+        renderModels();
+      }, 160);
     });
   }
 

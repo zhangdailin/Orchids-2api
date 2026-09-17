@@ -12,6 +12,9 @@
     refreshSeconds: 15,
     countdown: 15,
     timer: null,
+    // Set when a refresh interval elapses while the tab is hidden; the work is
+    // deferred to the moment the operator looks at the dashboard again.
+    refreshPending: false,
     overview: null,
     series: [],
     // outcome selects which cohort the latency cards describe: every request, the
@@ -1374,13 +1377,31 @@
 
   function tick() {
     state.countdown -= 1;
-    if (state.countdown <= 0) {
-      state.countdown = state.refreshSeconds;
-      load();
-      loadAlertEvents();
+    if (state.countdown > 0) {
+      setText('opsCountdown', String(state.countdown));
       return;
     }
-    setText('opsCountdown', String(state.countdown));
+    state.countdown = state.refreshSeconds;
+    // A background tab keeps no one informed: the dashboard it refreshes is not
+    // on screen, so the poll only burns the operator's quota and the server's
+    // aggregation budget. The backlog is fetched as soon as the tab is shown.
+    if (typeof document !== 'undefined' && document.hidden) {
+      state.refreshPending = true;
+      return;
+    }
+    state.refreshPending = false;
+    load();
+    loadAlertEvents();
+  }
+
+  // Returning to the tab has to catch up immediately: without this the operator
+  // can sit down to a dashboard that is up to a full refresh interval stale.
+  function flushPendingRefresh() {
+    if (typeof document === 'undefined' || document.hidden || !state.refreshPending) return;
+    state.refreshPending = false;
+    state.countdown = state.refreshSeconds;
+    load();
+    loadAlertEvents();
   }
 
   // applyUrlState puts the page back where the URL says it should be: the filters
@@ -1402,6 +1423,9 @@
     bind();
     load();
     loadAlertEvents();
+  }
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', flushPendingRefresh);
   }
   state.timer = setInterval(tick, 1000);
 })();

@@ -223,8 +223,7 @@
 
 /* A card's own name never breaks: CJK text can break between any two characters, so a
    squeezed flex item becomes a one-character-wide column instead of wrapping sensibly. */
-.ops-kpi-head > span:first-child,
-.ops-kpi-title { flex: none; white-space: nowrap; }
+.ops-kpi-head > span:first-child { flex: none; white-space: nowrap; }
 
 .ops-kpi-head > .ops-hint { flex: none; white-space: nowrap; }
 
@@ -257,8 +256,6 @@
 .ops-kpi-row span:first-child { color: var(--text-secondary); }
 .ops-kpi-row span:last-child { color: var(--text-soft); font-variant-numeric: tabular-nums; }
 .ops-kpi-row.is-strong span:last-child { color: var(--text-main); font-weight: 650; }
-
-.ops-kpi-note { color: var(--text-secondary); font-size: 0.76rem; }
 
 .ops-kpi-meter { height: 6px; border-radius: var(--radius-pill); background: var(--bg-inset); overflow: hidden; }
 .ops-kpi-meter > span { display: block; height: 100%; border-radius: var(--radius-pill); background: var(--ok); }
@@ -420,10 +417,6 @@
 .ops-table tbody tr.is-model td:first-child { padding-left: var(--space-8); font-family: var(--font-mono); }
 .ops-table tbody tr:hover td { background: var(--surface-3); }
 
-.ops-bar { display: inline-block; height: 10px; min-width: 3px; border-radius: 2px; background: rgba(74, 222, 155, 0.75); vertical-align: middle; }
-.ops-bar.is-warn { background: rgba(245, 194, 100, 0.85); }
-.ops-bar.is-bad { background: rgba(251, 113, 133, 0.85); }
-
 .ops-coverage-fold {
   margin-top: var(--space-4);
   border: 1px solid var(--border-color);
@@ -444,8 +437,6 @@
 /* -----------------------------------------------------------------------------
    9. Log centre (shares this stylesheet)
    -------------------------------------------------------------------------- */
-.ops-subtitle { color: var(--text-secondary); font-size: 0.84rem; }
-
 .logs-tabs { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
 .logs-tab { height: var(--control-h); padding: 0 var(--space-4); font-size: 0.82rem; border-radius: var(--radius-pill); }
 .logs-tab.is-active { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }

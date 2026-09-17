@@ -381,11 +381,16 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // Centralized utility helper functions
+// escapeHtml is on the hot path of every table render (the account list calls it
+// per cell per row), so it maps the five entities directly instead of building a
+// detached <div> for every value: that allocated one element per cell and forced
+// a serialization round-trip for text that is already a string.
+const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const HTML_ESCAPE_RE = /[&<>"']/g;
+
 function escapeHtml(text) {
-  if (text === null || text === undefined) return '';
-  const div = document.createElement("div");
-  div.textContent = String(text);
-  return div.innerHTML;
+  if (text === null || text === undefined) return "";
+  return String(text).replace(HTML_ESCAPE_RE, (ch) => HTML_ESCAPE_MAP[ch]);
 }
 
 function encodeData(value) {

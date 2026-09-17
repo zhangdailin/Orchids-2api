@@ -17,7 +17,7 @@
    4. Page-specific rules go in that page's stylesheet (ops.css, accounts.css,
       models.css, config.css, tutorial.css), never here.
    5. Layout primitives in this file: .page, .page-head, .toolbar, .card, .kpi,
-      .data-table, .badge, .btn, .drawer, .empty-state, .skeleton.
+      .badge, .btn, .drawer, .empty-state, .skeleton.
 
    Sections: 1 tokens · 2 reset · 3 shell · 4 page head · 5 buttons · 6 forms
    7 surfaces · 8 metrics · 9 tables · 10 badges · 11 tabs · 12 overlays
@@ -360,16 +360,6 @@ body::before,
 .footer-stat-value.normal { color: var(--ok); }
 .footer-stat-value.abnormal { color: var(--bad); }
 
-/* Which build rendered this page. Small, but the first thing to check when the
-   console looks outdated. */
-.sidebar-build {
-  margin: 0 0 var(--space-3);
-  color: var(--text-faint);
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  word-break: break-all;
-}
-
 .sidebar-logout {
   width: 100%;
   justify-content: center;
@@ -456,14 +446,12 @@ body::before,
 
 /* The title block never shrinks below its text: a page title that wraps to two
    lines ("运维总 / 览") was the symptom of a two-column head with no basis. */
-.header-section > div:first-child,
-.page-head-text {
+.header-section > div:first-child {
   flex: 0 1 auto;
   min-width: max-content;
 }
 
-.header-section h1,
-.page-title {
+.header-section h1 {
   margin-bottom: var(--space-1);
   font-size: 1.5rem;
   font-weight: 700;
@@ -497,20 +485,7 @@ body::before,
   border-radius: var(--radius-md);
   background: var(--surface-1);
 }
-
-.toolbar-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin-left: auto;
-}
-
-.toolbar-actions-spread { justify-content: space-between; }
 .toolbar-compact { padding: var(--space-2) var(--space-3); }
-.toolbar-divider { width: 1px; height: 22px; background: var(--border-color); }
-.toolbar-group { display: flex; align-items: center; gap: var(--space-2); }
-.toolbar-spacer { flex: 1 1 auto; }
 
 /* -----------------------------------------------------------------------------
    5. Buttons
@@ -527,12 +502,10 @@ body::before,
 .btn-icon,
 .icon-btn,
 .action-icon,
-.ops-refresh,
 .ops-chip,
 .chip,
 .send-btn,
 .models-primary-action,
-.models-refresh-action,
 .models-action-btn,
 .capability-action,
 .panel-close-btn {
@@ -579,8 +552,7 @@ body::before,
 .btn-primary,
 .btn-save,
 .send-btn,
-.models-primary-action,
-.models-refresh-action {
+.models-primary-action {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--text-on-accent);
@@ -590,8 +562,7 @@ body::before,
 .btn-primary:hover,
 .btn-save:hover,
 .send-btn:hover,
-.models-primary-action:hover,
-.models-refresh-action:hover {
+.models-primary-action:hover {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
   color: var(--text-on-accent);
@@ -624,8 +595,7 @@ body::before,
   color: var(--bad);
 }
 
-.btn-xs,
-.models-action-btn.mobile-only {
+.btn-xs {
   height: 24px;
   padding: 0 var(--space-2);
   font-size: 0.72rem;
@@ -695,8 +665,7 @@ body::before,
 input,
 select,
 textarea,
-.form-input,
-.form-control {
+.form-input {
   width: 100%;
   min-height: var(--control-h);
   padding: 0 var(--space-3);
@@ -778,8 +747,7 @@ input[type="range"],
 }
 
 .form-group,
-.field,
-.config-field { display: flex; flex-direction: column; gap: var(--space-2); }
+.field { display: flex; flex-direction: column; gap: var(--space-2); }
 
 .form-label,
 .field-label,
@@ -793,8 +761,7 @@ input[type="range"],
   font-weight: 600;
 }
 
-.form-row,
-.field-row {
+.form-row {
   display: grid;
   grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
   gap: var(--space-4);
@@ -802,7 +769,6 @@ input[type="range"],
 }
 
 .helper-text,
-.form-hint,
 .field-hint {
   color: var(--text-muted);
   font-size: 0.75rem;
@@ -944,9 +910,7 @@ details.collapsible > summary {
    -------------------------------------------------------------------------- */
 .content-card,
 .card,
-.dr-card,
 .ops-card,
-.models-filter-panel,
 .models-results-card,
 .grok-panel,
 .settings-panel,
@@ -968,8 +932,6 @@ details.collapsible > summary {
 
 .card-head,
 .section-head,
-.models-results-head,
-.models-filter-top,
 .config-key-head,
 .settings-panel-head {
   display: flex;
@@ -991,11 +953,9 @@ details.collapsible > summary {
 }
 
 .card-body,
-.section-body,
-.settings-panel-body { padding: var(--space-4) var(--space-5); }
+.section-body { padding: var(--space-4) var(--space-5); }
 
-.card-title,
-.doc-title {
+.card-title {
   font-size: 0.98rem;
   font-weight: 650;
 }
@@ -1004,32 +964,8 @@ details.collapsible > summary {
 .stat-icon.total { background: var(--info-soft); color: var(--info); }
 .stat-icon.selected { background: rgba(167, 139, 250, 0.14); color: var(--accent-purple); }
 
-.settings-panel-spaced { margin-top: var(--space-5); }
-
-.settings-panel-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-top: var(--space-4);
-}
-
-/* The save bar that closes a settings panel. On the config page this is the
-   sticky .sticky-actions bar instead. */
-.save-footer {
-  display: flex;
-  justify-content: flex-end;
-  padding: var(--space-4) var(--space-5);
-  border-top: 1px solid var(--border-color);
-  background: var(--surface-1);
-}
-
 .config-section-shell { padding: var(--space-5); }
 .config-subsection { margin-top: var(--space-3); }
-.config-grid { display: grid; gap: var(--space-5); }
-.config-grid-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.config-grid-gap-sm { gap: var(--space-4); }
 
 .estimate-card-green { border-color: rgba(74, 222, 155, 0.28); background: var(--ok-soft); }
 .estimate-card-blue { border-color: rgba(108, 182, 255, 0.28); background: var(--info-soft); }
@@ -1043,12 +979,6 @@ details.collapsible > summary {
   margin-top: var(--space-2);
   color: var(--text-muted);
   font-size: 0.74rem;
-}
-
-.doc-callout-inline {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
 }
 
 .modal-close {
@@ -1068,11 +998,9 @@ details.collapsible > summary {
 .modal-close:hover { background: var(--surface-3); color: var(--text-main); }
 
 .hint,
-.card-hint,
 .helper,
 .ops-hint,
-.meta-text,
-.meta-text-xs {
+.meta-text {
   color: var(--text-muted);
   font-size: 0.75rem;
   line-height: 1.6;
@@ -1090,8 +1018,6 @@ details.collapsible > summary {
 }
 
 .settings-block-full { grid-column: 1 / -1; }
-
-.settings-block-head,
 .function-header-row {
   display: flex;
   align-items: center;
@@ -1099,8 +1025,6 @@ details.collapsible > summary {
   gap: var(--space-3);
   margin-bottom: var(--space-3);
 }
-
-.settings-block-title,
 .function-title { font-size: 0.86rem; font-weight: 650; }
 
 .settings-grid,
@@ -1257,15 +1181,13 @@ details.collapsible > summary {
 .table-wrap,
 .models-table-wrap,
 .ops-table-wrap,
-.doc-table-wrap,
-.logs-list-wrap {
+.doc-table-wrap {
   width: 100%;
   overflow-x: auto;
 }
 
 table,
 .table,
-.data-table,
 .models-table,
 .ops-table,
 .logs-table {
@@ -1276,7 +1198,6 @@ table,
 }
 
 table thead th,
-.data-table thead th,
 .models-table thead th,
 .ops-table thead th,
 .logs-table thead th {
@@ -1294,7 +1215,6 @@ table thead th,
 }
 
 table tbody td,
-.data-table tbody td,
 .models-table tbody td,
 .ops-table tbody td,
 .logs-table tbody td {
@@ -1304,22 +1224,10 @@ table tbody td,
   vertical-align: middle;
 }
 
-table tbody tr:hover td,
-.data-table tbody tr:hover td { background: var(--surface-2); }
+table tbody tr:hover td { background: var(--surface-2); }
 
 table tbody tr:last-child td { border-bottom: 0; }
-
-.data-table tbody tr.is-selected td,
 .logs-table tbody tr.is-selected td { background: var(--accent-soft); }
-
-.data-table tbody tr.is-group td {
-  background: var(--surface-2);
-  color: var(--text-main);
-  font-weight: 650;
-}
-
-.data-table tbody tr.is-child td:first-child { padding-left: var(--space-8); }
-.data-table tbody tr.is-child td { color: var(--text-secondary); }
 
 .table-empty-cell,
 .table-empty {
@@ -1338,8 +1246,7 @@ table tbody tr:last-child td { border-bottom: 0; }
 .col-token { max-width: 260px; }
 
 .num,
-td.num,
-.metrics-value { font-variant-numeric: tabular-nums; text-align: right; }
+td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 .pagination-shell {
   display: flex;
@@ -1361,7 +1268,6 @@ td.num,
 .badge,
 .status-badge,
 .tag,
-.tag-mini,
 .mini-badge,
 .models-status-badge,
 .models-default-badge,
@@ -1556,7 +1462,6 @@ td.num,
 }
 
 .drawer-body { flex: 1; padding: var(--space-5); overflow-y: auto; }
-.drawer-foot { padding: var(--space-4) var(--space-5); border-top: 1px solid var(--border-color); }
 
 .drawer-backdrop {
   position: fixed;
@@ -1666,8 +1571,7 @@ td.num,
 
 /* Loading is a skeleton shimmer, never a grey veil over live content: a veil
    reads as "the page is broken". */
-.loading,
-.is-loading-block {
+.loading {
   position: relative;
   min-height: 60px;
   border-radius: var(--radius-md);
@@ -1684,7 +1588,6 @@ td.num,
 .skeleton-line { height: 12px; margin-bottom: var(--space-2); }
 .skeleton-line.w-40 { width: 40%; }
 .skeleton-line.w-70 { width: 70%; }
-.skeleton-card { height: 92px; border-radius: var(--radius-lg); }
 
 @keyframes skeleton-shimmer {
   from { background-position: 100% 50%; }
@@ -1781,11 +1684,6 @@ td.num,
 /* -----------------------------------------------------------------------------
    15. Documentation blocks (使用教程)
    -------------------------------------------------------------------------- */
-.doc-shell {
-  display: grid;
-  gap: var(--space-5);
-}
-
 .doc-callout {
   display: flex;
   flex-direction: column;
@@ -1793,13 +1691,7 @@ td.num,
   padding: var(--space-4) var(--space-5);
   border-left: 3px solid var(--info);
 }
-
-.doc-callout-head { font-weight: 650; }
 .doc-callout-amber { border-left-color: var(--warn); }
-.doc-callout-cyan { border-left-color: var(--info); }
-.doc-callout-green { border-left-color: var(--ok); }
-
-.doc-code-block,
 .code-block,
 .clear-block,
 .length-block,
@@ -1823,10 +1715,7 @@ td.num,
 .doc-inline-code,
 .inline-code,
 .inline-code,
-.doc-inline-code-green,
-.doc-inline-code-amber,
 .doc-inline-code-red,
-.doc-link-code,
 .doc-model-code {
   padding: 1px 6px;
   border: 1px solid var(--border-color);
@@ -1836,21 +1725,7 @@ td.num,
   font-family: var(--font-mono);
   font-size: 0.78rem;
 }
-
-.doc-inline-code-green { color: var(--ok); }
-.doc-inline-code-amber { color: var(--warn); }
 .doc-inline-code-red { color: var(--bad); }
-.doc-strong { color: var(--text-main); font-weight: 650; }
-.doc-strong-green { color: var(--ok); font-weight: 650; }
-.doc-strong-amber { color: var(--warn); font-weight: 650; }
-.doc-strong-red { color: var(--bad); font-weight: 650; }
-.doc-mark,
-.doc-mark-amber,
-.doc-mark-cyan,
-.doc-mark-green {
-  color: var(--accent);
-  font-weight: 650;
-}
 
 /* -----------------------------------------------------------------------------
    16. Utilities
@@ -1871,7 +1746,6 @@ td.num,
 .inline-actions { display: flex; align-items: center; gap: var(--space-2); }
 .eq { display: flex; align-items: center; }
 .has-url { word-break: break-all; }
-.nowrap { white-space: nowrap; }
 .muted { color: var(--text-muted); }
 .normal { color: var(--text-soft); }
 .abnormal { color: var(--bad); }
@@ -1916,15 +1790,11 @@ td.num,
   .page-actions { margin-left: 0; }
   .toolbar { padding: var(--space-3); }
   .form-row,
-  .field-row,
-  .config-grid-two,
   .estimate-grid { grid-template-columns: 1fr; gap: var(--space-2); }
 
   .pagination-shell,
   .settings-panel-head,
-  .settings-panel-foot,
-  .section-head,
-  .doc-callout-inline {
+  .section-head {
     flex-direction: column;
     align-items: stretch;
   }
@@ -1936,7 +1806,6 @@ td.num,
   .stats-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
   .modal { padding: var(--space-3); }
   .drawer { width: 100vw; }
-  .toolbar-actions { width: 100%; margin-left: 0; }
 }
 
 /* -----------------------------------------------------------------------------
@@ -1972,11 +1841,9 @@ td.num,
     gap: var(--space-3);
   }
 
-  .header-section > div:first-child,
-  .page-head-text { min-width: 0; }
+  .header-section > div:first-child { min-width: 0; }
 
-  .header-section h1,
-  .page-title { white-space: normal; }
+  .header-section h1 { white-space: normal; }
 
   .header-section p,
   .page-sub { max-width: none; }
@@ -2006,7 +1873,6 @@ td.num,
   input:not([type='checkbox']):not([type='radio']):not([type='hidden']),
   textarea,
   .form-input,
-  .form-control,
   .compact-select,
   .btn,
   .btn-primary,
@@ -2020,7 +1886,6 @@ td.num,
   .btn-icon,
   .icon-btn,
   .action-icon,
-  .ops-refresh,
   .chip,
   .ops-chip,
   .tab-item,
@@ -2050,8 +1915,7 @@ td.num,
   .modal-close,
   .btn-icon,
   .icon-btn,
-  .action-icon,
-  .ops-refresh { min-width: 44px; }
+  .action-icon { min-width: 44px; }
 
   .mobile-menu-btn { width: 44px; height: 44px; padding: 13px; }
   .sidebar-link { min-height: 48px; padding: 0 var(--space-3); }
@@ -2072,8 +1936,7 @@ td.num,
   input,
   select,
   textarea,
-  .form-input,
-  .form-control { font-size: 16px !important; }
+  .form-input { font-size: 16px !important; }
 
   /* Sheets read better than centred dialogs on a phone. */
   .modal {
@@ -2139,15 +2002,11 @@ td.num,
   }
 
   .pagination-info { text-align: center; }
-
-  .table-actions,
   .inline-actions { flex-wrap: wrap; }
 
-  .filters,
-  .toolbar-filters { flex-direction: column; align-items: stretch; }
+  .filters { flex-direction: column; align-items: stretch; }
 
-  .filters > *,
-  .toolbar-filters > * { width: 100%; }
+  .filters > * { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
