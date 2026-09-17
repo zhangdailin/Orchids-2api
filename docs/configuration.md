@@ -132,7 +132,7 @@ cp config.example.json config.json
 
 总超时与空闲超时是不同边界。长回答需要同时满足入口 `concurrency_timeout` 和目标 provider HTTP 超时。中转层已删除思考质量门控、额外质量重试和缺失思考惩罚；历史 `grok_quality_*` / `grok_missing_thinking_cooldown_seconds` 配置不再生效。存储会话仍保留账号绑定。
 
-未显式设置账号 `max_concurrent` 时，WorkBuddy 默认每账号 3 路，Warp、Puter、Grok 默认每账号 1 路；显式正数会覆盖默认值。Redis 部署使用带过期与续租的分布式连接租约，进程异常退出后遗留计数会自动回收。
+未显式设置账号 `max_concurrent` 时，所有 provider（WorkBuddy、Warp、Puter、Qoder、Grok）默认每账号 10 路；显式正数会覆盖默认值，未知账号类型不受限。单一账号的渠道因此不再因为只有 1 路而把并发请求判成过载。Redis 部署使用带过期与续租的分布式连接租约，进程异常退出后遗留计数会自动回收。
 
 Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress 固定 120 秒总超时或共享客户端 HTTP/1 固定 120 秒响应头上限影响；等待响应头仍受 HTTP 总超时约束。其他模型继续使用原有共享客户端策略。
 

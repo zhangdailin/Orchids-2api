@@ -19,8 +19,20 @@ import (
 
 const defaultCacheTTL = 5 * time.Second
 
-// EffectiveAccountConcurrencyLimit supplies conservative defaults for
-// consumer credentials. An explicit per-account value always wins.
+// DefaultAccountConcurrency is the per-account in-flight ceiling every provider
+// falls back to when the account carries no explicit max_concurrent. A single
+// provider slot is too narrow for a gateway that multiplexes a chat turn with
+// its client's side calls: with one slot the second concurrent request waits out
+// the whole reservation window and then fails as an overload, even though the
+// upstream account is healthy. Providers used to differ here (WorkBuddy 3, the
+// others 1, Qoder unlimited); they now share one explicit value so the pool's
+// capacity is a deliberate setting rather than a per-channel accident.
+const DefaultAccountConcurrency int64 = 10
+
+// EffectiveAccountConcurrencyLimit resolves the in-flight ceiling for one
+// account. An explicit per-account value always wins; a known provider falls
+// back to DefaultAccountConcurrency; an unknown account type stays unlimited so
+// a future channel is not silently throttled before it has a documented limit.
 func EffectiveAccountConcurrencyLimit(acc *store.Account) int64 {
 	if acc == nil {
 		return 0
@@ -29,10 +41,8 @@ func EffectiveAccountConcurrencyLimit(acc *store.Account) int64 {
 		return int64(acc.MaxConcurrent)
 	}
 	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
-	case "workbuddy":
-		return 3
-	case "warp", "puter", "grok":
-		return 1
+	case "warp", "puter", "workbuddy", "qoder", "grok":
+		return DefaultAccountConcurrency
 	default:
 		return 0
 	}

@@ -411,43 +411,44 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 	}
 }
 
-func TestWorkBuddyDefaultConcurrencyLimitIsThree(t *testing.T) {
+func TestDefaultAccountConcurrencyLimitIsTen(t *testing.T) {
 	t.Parallel()
 
-	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "workbuddy"}); got != 3 {
-		t.Fatalf("default WorkBuddy limit = %d, want 3", got)
+	// Every provider shares one default. The per-channel values this replaced
+	// (WorkBuddy 3, Warp/Puter/Grok 1, Qoder unlimited) made a channel's
+	// capacity depend on which switch arm it happened to fall into.
+	for _, accountType := range []string{"warp", "puter", "workbuddy", "qoder", "grok"} {
+		if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: accountType}); got != 10 {
+			t.Fatalf("unconfigured %s limit = %d, want 10", accountType, got)
+		}
 	}
 	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "workbuddy", MaxConcurrent: 7}); got != 7 {
 		t.Fatalf("configured WorkBuddy limit = %d, want 7", got)
-	}
-	for _, accountType := range []string{"puter", "warp", "grok"} {
-		if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: accountType}); got != 1 {
-			t.Fatalf("unconfigured %s limit = %d, want 1", accountType, got)
-		}
 	}
 	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "puter", MaxConcurrent: 4}); got != 4 {
 		t.Fatalf("configured Puter limit = %d, want 4", got)
 	}
 }
 
-func TestTryAcquireTrackedAccount_DoesNotAdmitFourthWorkBuddyRequest(t *testing.T) {
+func TestTryAcquireTrackedAccount_DoesNotAdmitRequestPastLimit(t *testing.T) {
 	t.Parallel()
 
+	const limit = 10
 	tracker := loadbalancer.NewMemoryConnTracker()
 	h := &Handler{connTracker: tracker}
 	acc := &store.Account{ID: 42, AccountType: "workbuddy"}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < limit; i++ {
 		if _, ok := h.tryAcquireTrackedAccount(acc); !ok {
 			t.Fatalf("acquire %d unexpectedly rejected", i+1)
 		}
 	}
 	if _, ok := h.tryAcquireTrackedAccount(acc); ok {
-		t.Fatal("fourth WorkBuddy request was admitted")
+		t.Fatalf("request %d was admitted past the %d-slot limit", limit+1, limit)
 	}
-	if got := tracker.GetCount(acc.ID); got != 3 {
-		t.Fatalf("tracked count = %d, want 3", got)
+	if got := tracker.GetCount(acc.ID); got != limit {
+		t.Fatalf("tracked count = %d, want %d", got, limit)
 	}
-	for range 3 {
+	for range limit {
 		h.releaseTrackedAccount(acc.ID)
 	}
 	if got := tracker.GetCount(acc.ID); got != 0 {
