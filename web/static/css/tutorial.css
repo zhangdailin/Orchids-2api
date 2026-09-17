@@ -283,3 +283,28 @@
   .tut-table td:first-child small { display: block; margin-top: var(--space-1); }
   .tut-address { width: 100%; justify-content: space-between; }
 }
+
+/* -----------------------------------------------------------------------------
+   Wide screens
+   --------------------------------------------------------------------------
+   Three steps and two route rules were laid out for a 1440px column; on a 27"
+   panel each step became a 700px-wide card holding two short lines. The step
+   strip keeps its one-row-per-number order and gains columns, and the code
+   sample — the thing actually copied on this page — stops being a narrow
+   letterbox inside a wide card.
+
+   min-width only: the phone rules above are max-width and keep winning there.
+   -------------------------------------------------------------------------- */
+@media (min-width: 1800px) {
+  .tut-steps { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .tut-route-rules { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  .tut-section-body { padding: var(--space-6); gap: var(--space-5); }
+}
+
+@media (min-width: 2200px) {
+  .tut-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); }
+  .tut-route-rules { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+  .tut-section-body { padding: var(--space-8); gap: var(--space-6); }
+  .tut-code { font-size: 0.84rem; }
+  .tut-table td:first-child { min-width: 190px; }
+}

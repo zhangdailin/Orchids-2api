@@ -2322,6 +2322,14 @@
 
   .capability-badges {
     margin-left: 0;
+    /* Five ~68px badges are 356px of nowrap flex: wider than the 336px banner at
+       360px, so the strip ran past its card and its right edge was clipped by the
+       page's overflow-x. Taking the full line and wrapping keeps every capability
+       visible; right alignment holds the badges on the same edge as the desktop
+       strip, where margin-left: auto already pushed them there. */
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .capability-action {
@@ -2359,4 +2367,50 @@
   .video-generation-actions .btn {
     flex: 1 1 auto;
   }
+}
+
+/* -----------------------------------------------------------------------------
+   Wide screens (27" 2560x1440, 4K, ultrawide)
+   --------------------------------------------------------------------------
+   This page must not restate the shell: .grok-tools-page deliberately sets no
+   width and no margin, because re-adding them slides the page under the fixed
+   sidebar and clips its left edge. main.css already stretches the column, so
+   everything below is density inside a column that is ~2270px wide at 2560.
+
+   min-width only: the phone rules above (1080 / 760) are max-width and keep
+   winning on a small screen.
+   -------------------------------------------------------------------------- */
+
+/* 1920 and the 2000px-class panels. */
+@media (min-width: 1800px) {
+  .function-top-grid,
+  .video-top-grid,
+  .voice-grid { grid-template-columns: minmax(0, 1.55fr) minmax(360px, 0.9fr); }
+
+  .imagine-masonry-grid,
+  #imagineGrid .imagine-masonry-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+
+  .grok-tools-page .header-section h1 { font-size: 1.3rem; }
+}
+
+/* 2560x1440 / 2560x1600. */
+@media (min-width: 2200px) {
+  .function-top-grid,
+  .video-top-grid,
+  .voice-grid { grid-template-columns: minmax(0, 2.1fr) minmax(420px, 0.9fr); gap: 20px; }
+
+  .meta-grid,
+  .grok-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+
+  .imagine-masonry-grid,
+  #imagineGrid .imagine-masonry-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--space-4); }
+
+  /* The rail is fixed-width by design — a wider one just pushes the transcript
+     off centre on a 4K panel. */
+  .chat-layout { grid-template-columns: 260px minmax(0, 1fr); gap: 16px; }
+}
+
+@media (min-width: 3200px) {
+  .imagine-masonry-grid,
+  #imagineGrid .imagine-masonry-grid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 }

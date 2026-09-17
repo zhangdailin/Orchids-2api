@@ -464,3 +464,29 @@
   .config-save-actions { width: 100%; }
   .config-save-actions .btn { flex: 1; }
 }
+
+/* -----------------------------------------------------------------------------
+   9. Wide screens
+   --------------------------------------------------------------------------
+   A 560px input is a comfortable measure at 1440px of content; at 2270px — a
+   27" panel — a short value sat in a 560px box with the rest of the row empty
+   and the eye had to travel back the full width to find the next label. The cap
+   is raised with the window and removed once the row is wide enough that the
+   control column is its own measure.
+
+   min-width only: section 8's phone rules are max-width and keep winning there.
+   -------------------------------------------------------------------------- */
+@media (min-width: 1800px) {
+  .form-row-control > .form-input,
+  .form-row-control > .input-wrapper,
+  .form-row-control > .config-subsection { max-width: 720px; }
+}
+
+@media (min-width: 2200px) {
+  .form-row-control > .form-input,
+  .form-row-control > .input-wrapper,
+  .form-row-control > .config-subsection { max-width: 900px; }
+
+  .config-layout { grid-template-columns: minmax(200px, 240px) minmax(0, 1fr); gap: var(--space-5); }
+  .settings-card-body { padding: var(--space-5) var(--space-6) var(--space-6); gap: var(--space-6); }
+}

@@ -115,8 +115,24 @@
   --control-h-sm: 28px;
   --control-h-lg: 40px;
 
-  --sidebar-w: 248px;
-  --content-max: 1440px;
+  /* The sidebar grows with the window instead of jumping at a breakpoint: 248px
+     on a laptop, ~266px at 1920, 288px from 2560 up. A fixed 248px rail beside a
+     2560px window read as a thin strip. */
+  --sidebar-w: clamp(248px, calc(3.6vw + 196px), 288px);
+
+  /* Fluid content column: as wide as the space left beside the sidebar, so a
+     27" panel (2560px) is filled instead of leaving ~870px of empty background
+     to the right of a 1440px column. The 3200px ceiling stops the growth on a
+     4K / ultrawide panel at 100% scaling, where an unbounded column would
+     stretch every line past a readable measure.
+
+     The sidebar offset is subtracted because max-width applies to the element,
+     not to the row: without it the column would be 100% of the viewport *plus*
+     the 248px it is already pushed right by.
+
+     `100%`, not `100vw`: a percentage resolves against the containing block, so
+     a vertical scrollbar cannot push the column into a horizontal one. */
+  --content-max: min(3200px, calc(100% - var(--sidebar-w)));
   --table-row-h: 42px;
 
   --font-sans: 'Outfit', 'Geist Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -1753,6 +1769,78 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .compact-select { width: auto; }
 
 /* -----------------------------------------------------------------------------
+   16.5 Wide screens (27" 2560x1440, 4K, ultrawide)
+   --------------------------------------------------------------------------
+   --content-max now tracks the window, so the column already fills a 27" panel.
+   What still reads as "a laptop page on a big monitor" is the *inside* of that
+   column: 14px text, 42px table rows, 200px minmax cards and a 620px dialog
+   were all tuned against 1440px of content. These steps scale the type, the
+   control heights and the card minimums so the extra width buys density rather
+   than empty gutters.
+
+   Only min-width queries appear here. Section 18's phone contract is
+   max-width + !important and must keep winning on a small screen, so nothing
+   below may rely on a max-width neighbour to undo it.
+   -------------------------------------------------------------------------- */
+
+/* 1920 and up: FHD and the 2000px-class 27"/32" panels. */
+@media (min-width: 1800px) {
+  body { font-size: 15px; }
+
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+  .meta-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .estimate-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+
+  .modal-content { max-width: 700px; }
+  .modal-content-md { max-width: 700px; }
+  .modal-content-lg { max-width: 1040px; }
+}
+
+/* 2560x1440 — the 27" this was reported against — and 2560x1600. */
+@media (min-width: 2200px) {
+  :root {
+    --control-h: 36px;
+    --control-h-sm: 30px;
+    --control-h-lg: 42px;
+    --table-row-h: 46px;
+  }
+
+  body { font-size: 16px; }
+
+  .main-content { padding: var(--space-8) var(--space-10) var(--space-10); }
+  .header-section h1 { font-size: 1.65rem; }
+
+  .stats-grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .meta-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .estimate-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+  .modal-content,
+  .modal-content-md { max-width: 780px; }
+  .modal-content-lg { max-width: 1240px; }
+}
+
+/* 4K / 5K at 100% scaling: the column stopped growing at 3200px, so add gutter
+   and measure back rather than more width. */
+@media (min-width: 3400px) {
+  .main-content { padding: var(--space-10) calc(var(--space-10) + var(--space-6)) calc(var(--space-10) + var(--space-8)); }
+}
+
+/* The login card is a fixed 400px by design — a password field has no reason to
+   grow — but a 400px card on a 27" panel is a postage stamp, and 14px text on a
+   5K display is unreadable. This page has no sidebar and no content column, so
+   --content-max does nothing for it and it needs its own step. */
+@media (min-width: 1800px) {
+  .login-card { max-width: 440px; padding: var(--space-10) var(--space-8); }
+  .login-body { font-size: 15px; }
+}
+
+@media (min-width: 2200px) {
+  .login-card { max-width: 480px; }
+  .login-body { font-size: 16px; }
+  .login-hero h1 { font-size: 1.9rem; }
+}
+
+/* -----------------------------------------------------------------------------
    17. Responsive
    -------------------------------------------------------------------------- */
 @media (max-width: 1200px) {
@@ -1781,8 +1869,16 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
   body.sidebar-open { overflow: hidden; }
 
+  /* Below this breakpoint the sidebar is a drawer, so it occupies no room in the
+     flow and --content-max must stop subtracting it. --content-max is
+     `min(3200px, 100% - var(--sidebar-w))`: at 390px that caps the page column at
+     142px and every page renders as a narrow strip of wrapped text beside an
+     empty screen. The column is simply the whole viewport here, and the 3200px
+     ceiling is inert at this size — `none` says that without restating it. */
   .main-content {
     margin: 0;
+    width: 100%;
+    max-width: none;
     padding: 72px var(--space-4) var(--space-8);
   }
 

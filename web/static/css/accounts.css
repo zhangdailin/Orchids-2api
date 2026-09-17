@@ -308,3 +308,37 @@
 @media (max-width: 640px) {
   .account-mobile-grid { grid-template-columns: 1fr; }
 }
+
+/* -----------------------------------------------------------------------------
+   Wide screens (27" 2560x1440, 4K, ultrawide)
+   --------------------------------------------------------------------------
+   The table has fixed-width columns for tier / quota / status / actions plus a
+   fluid identity cell, so on a 2270px column the identity cell absorbs ~1700px
+   and the row reads as one very long email. Raising the fixed columns hands the
+   extra width to the structured cells and gives the identity cell a sane
+   measure; the row height comes from main.css's own density step.
+
+   min-width only: the phone rules above are max-width and keep winning there.
+   -------------------------------------------------------------------------- */
+@media (min-width: 1800px) {
+  .accounts-table { font-size: 0.86rem; }
+  .accounts-table .col-tier { width: 160px; }
+  .accounts-table .col-quota { width: 180px; }
+  .accounts-table .col-status { width: 150px; }
+  .accounts-table .col-capability { width: 120px; }
+  .accounts-table .col-usage { width: 120px; }
+  .accounts-table .col-actions { width: 230px; }
+}
+
+@media (min-width: 2200px) {
+  .accounts-table { font-size: 0.9rem; }
+  .accounts-table thead th { padding: 12px var(--space-4); font-size: 0.76rem; }
+  .accounts-table tbody td { padding: 10px var(--space-4); }
+  .accounts-table .col-id { width: 68px; }
+  .accounts-table .col-tier { width: 190px; }
+  .accounts-table .col-quota { width: 220px; }
+  .accounts-table .col-status { width: 170px; }
+  .accounts-table .col-capability { width: 150px; }
+  .accounts-table .col-usage { width: 150px; }
+  .accounts-table .col-actions { width: 270px; }
+}
