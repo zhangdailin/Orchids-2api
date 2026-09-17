@@ -75,3 +75,9 @@ test/
 # Local staticcheck cache (used when the default cache directory is not writable)
 .sccache/
 
+# Local Go module cache and GOPATH, used when the shared locations are not
+# writable. They hold a full copy of every dependency plus a vendor tree, so a
+# stray `git add -A` would stage hundreds of megabytes of third-party source.
+.gomodcache/
+.gopath/
+
