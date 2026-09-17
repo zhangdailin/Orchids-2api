@@ -176,25 +176,32 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 			Cooldown: cooldown, At: now,
 		}
 	case "402":
-		if isWorkBuddy(acc) {
-			// WorkBuddy's free models keep working after the metered credit package
-			// is spent, so a payment refusal must not park the whole account for the
-			// 24h payment cooldown — that would take the free models down with the
-			// paid ones. Cool down the requested model and leave the account in
-			// rotation. With no model to name there is nothing to cool down at all,
-			// which is why no account status is written either.
+		if isWorkBuddy(acc) && !apperrors.IsCreditExhaustion(message) {
+			// A model-scoped payment refusal: the caller asked for something this
+			// plan does not cover while the account's own allowance is intact, so
+			// cool down the requested model and leave the account in rotation. The
+			// refusal says nothing about the credential or the other models, so the
+			// pool may keep using this account for them.
 			return Verdict{
-				Scope:     ScopeModel,
-				Model:     model,
-				Message:   message,
-				Retryable: Retryable(err),
-				// The refusal says nothing about the credential or the other models,
-				// so the pool may keep using this account for them.
+				Scope:         ScopeModel,
+				Model:         model,
+				Message:       message,
+				Retryable:     Retryable(err),
 				SwitchAccount: true,
 				Cooldown:      CooldownRateLimit,
 				At:            now,
 			}
 		}
+		// An exhausted allowance is a fact about the whole account: the upstream
+		// refuses it whatever the model is asked for, so leaving it in rotation is
+		// what made every request retry a pool of dead accounts and return an error
+		// with nothing in the account table to explain it. Parking it stops the
+		// retries and puts the reason in front of the operator; isAccountAvailable
+		// honours QuotaResetAt, so the account returns when its allowance does.
+		//
+		// This is also the release path for a "402" persisted under the old rule,
+		// which held nothing: such a marker is now held, but only until the reset
+		// time it was written with has passed.
 		cooldown := CooldownPayment
 		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "puter") {
 			cooldown = CooldownPuterQuota
@@ -292,13 +299,11 @@ func CooldownFor(acc *store.Account) time.Duration {
 	case "429":
 		return CooldownRateLimit
 	case "402":
-		if isWorkBuddy(acc) {
-			// A WorkBuddy payment refusal is model-scoped (see Classify): the free
-			// models stay usable, so the account is never held. Returning the zero
-			// cooldown is also the release path for a "402" persisted before this
-			// rule existed — the scheduler sees it as due at once and re-verifies it.
-			return 0
-		}
+		// WorkBuddy reaches this with a status only when its allowance is gone: a
+		// model-scoped refusal writes no status at all (see Classify), so there is
+		// nothing here to release early. The account is held for the payment
+		// cooldown, and isAccountAvailable releases it sooner when QuotaResetAt
+		// says the allowance is back.
 		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "puter") {
 			return CooldownPuterQuota
 		}

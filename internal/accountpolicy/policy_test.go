@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
 )
 
@@ -165,10 +166,11 @@ func TestCooldownFor_MatchesPoolValues(t *testing.T) {
 		{&store.Account{StatusCode: "429"}, 1 * time.Minute},
 		{&store.Account{StatusCode: "402"}, 24 * time.Hour},
 		{&store.Account{StatusCode: "402", AccountType: "puter"}, 15 * time.Minute},
-		// WorkBuddy's free models survive a spent credit package, so a payment
-		// verdict never holds the account: zero cooldown keeps it in rotation and
-		// releases a marker persisted before that rule existed.
-		{&store.Account{StatusCode: "402", AccountType: "workbuddy"}, 0},
+		// A WorkBuddy account reaches status 402 only when its allowance is gone
+		// (a model-scoped refusal writes no status), so it is held like any other
+		// payment verdict — and released early by isAccountAvailable once
+		// QuotaResetAt says the allowance is back.
+		{&store.Account{StatusCode: "402", AccountType: "workbuddy"}, 24 * time.Hour},
 		{&store.Account{StatusCode: "403"}, 24 * time.Hour},
 		{&store.Account{StatusCode: "403", AccountType: "grok"}, 10 * time.Minute},
 		{&store.Account{StatusCode: "weird"}, 5 * time.Minute},
@@ -221,5 +223,66 @@ func TestCredentialMessageIsProviderAware(t *testing.T) {
 	other := Classify(&store.Account{AccountType: "warp"}, errors.New("401: expired"), "")
 	if other.Message == "" || other.NeedsLogin == false {
 		t.Fatalf("warp verdict = %+v", other)
+	}
+}
+
+// TestClassify_WorkBuddyCreditExhaustionParksTheAccount is the regression test for
+// the outage the model-scoped rule produced.
+//
+// The upstream's real refusal for a spent allowance is code 14018, whose text is
+// "Credits exhausted. Please visit the link below to purchase add-on packs". That
+// is a fact about the whole account — it is returned for every model — but it was
+// read as a model-scoped payment refusal, so the account stayed in rotation, every
+// request retried the whole pool, and the account table carried no reason for it.
+func TestClassify_WorkBuddyCreditExhaustionParksTheAccount(t *testing.T) {
+	// The production message, verbatim in shape: the upstream wraps it in JSON and
+	// the transport wraps that in a status.
+	production := `workbuddy API error: status=429, message={"error":{"data":{"code":14018,` +
+		`"msg":"Credits exhausted. Please visit the link below to purchase add-on packs and ` +
+		`get more credits: https://www.codebuddy.ai/profile/usage ","requestId":"abc"}}}`
+
+	acc := &store.Account{ID: 1, AccountType: "workbuddy", Enabled: true}
+	verdict := Classify(acc, errors.New(production), "fast-model")
+
+	if verdict.Scope != ScopeAccount {
+		t.Fatalf("scope = %v, want an account-scoped verdict: an exhausted allowance refuses every model", verdict.Scope)
+	}
+	if verdict.Status != "402" {
+		t.Fatalf("status = %q, want 402 so the account table can explain the account", verdict.Status)
+	}
+	verdict.Apply(acc)
+	if !AccountHeld(acc, time.Now()) {
+		t.Fatal("a credit-exhausted account must be held, or every request retries it")
+	}
+	// The reason reaches the operator, including what to do about it.
+	if !strings.Contains(acc.StatusMessage, "codebuddy.ai/profile/usage") {
+		t.Fatalf("status message = %q, want the upstream's purchase link", acc.StatusMessage)
+	}
+}
+
+// TestIsCreditExhaustion_SeparatesTheTwoRefusals pins the distinction the rule
+// rests on: both refusals arrive as 402, and only the wording says which one is
+// about the account rather than about one request.
+func TestIsCreditExhaustion_SeparatesTheTwoRefusals(t *testing.T) {
+	exhausted := []string{
+		"workbuddy API error: status=429, message=...Credits exhausted. Please visit the link below...",
+		"status=402 no AI credits remaining",
+		"available funding is insufficient to complete this request",
+		"402 out of credits",
+	}
+	for _, message := range exhausted {
+		if !apperrors.IsCreditExhaustion(message) {
+			t.Errorf("IsCreditExhaustion(%q) = false, want true", message)
+		}
+	}
+	modelScoped := []string{
+		"workbuddy API error: status=402 message=insufficient credits for model",
+		"status=402 message=this model requires a paid plan",
+		"workbuddy API error: status=429, code=14003, message=too many requests",
+	}
+	for _, message := range modelScoped {
+		if apperrors.IsCreditExhaustion(message) {
+			t.Errorf("IsCreditExhaustion(%q) = true, want false", message)
+		}
 	}
 }

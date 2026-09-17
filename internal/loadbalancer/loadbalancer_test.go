@@ -261,7 +261,15 @@ func TestIsAccountAvailable_402UsesPuterProbeCooldown(t *testing.T) {
 	}
 }
 
-func TestIsAccountAvailable_WorkBuddyQuotaExhaustedRemainsSchedulable(t *testing.T) {
+// TestIsAccountAvailable_WorkBuddyCreditExhaustionIsHeld pins that an exhausted
+// WorkBuddy allowance takes the account out of rotation.
+//
+// Keeping it in rotation is what turned a spent allowance into a permanent outage:
+// every request retried the whole pool, every attempt was refused upstream, and the
+// account table showed no reason because a model-scoped verdict writes no status.
+// The upstream refuses an exhausted account for every model, so there is no free
+// capacity to protect by leaving it in.
+func TestIsAccountAvailable_WorkBuddyCreditExhaustionIsHeld(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{
 		ID:            1,
@@ -269,15 +277,35 @@ func TestIsAccountAvailable_WorkBuddyQuotaExhaustedRemainsSchedulable(t *testing
 		StatusCode:    "402",
 		StatusMessage: "credits exhausted",
 		LastAttempt:   time.Now(),
-		UsageLimit:    250,
-		UsageCurrent:  0,
+		QuotaResetAt:  time.Now().Add(48 * time.Hour),
+	}
+
+	if lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("expected a credit-exhausted WorkBuddy account to be out of rotation")
+	}
+	if acc.StatusCode != "402" {
+		t.Fatalf("expected the verdict to stand, got %q", acc.StatusCode)
+	}
+}
+
+// TestIsAccountAvailable_WorkBuddyCreditExhaustionReturnsAtReset is the recovery
+// half: the account comes back on its own when the allowance does, without an
+// operator having to clear anything.
+func TestIsAccountAvailable_WorkBuddyCreditExhaustionReturnsAtReset(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{
+		ID:           1,
+		AccountType:  "workbuddy",
+		StatusCode:   "402",
+		LastAttempt:  time.Now().Add(-time.Hour),
+		QuotaResetAt: time.Now().Add(-time.Minute),
 	}
 
 	if !lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected a credit-exhausted WorkBuddy account to stay in rotation for its free models")
+		t.Fatal("expected the account to return to rotation once its quota reset time passed")
 	}
 	if acc.StatusCode != "" {
-		t.Fatalf("expected the leftover payment marker to be released, got %q", acc.StatusCode)
+		t.Fatalf("expected the spent-allowance marker to be cleared, got %q", acc.StatusCode)
 	}
 }
 

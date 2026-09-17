@@ -134,14 +134,7 @@ func ClassifyAccountStatus(errStr string) string {
 	case HasExplicitHTTPStatus(lower, "404"):
 		return "404"
 	case HasExplicitHTTPStatus(lower, "402") ||
-		strings.Contains(lower, "qoder quota exhausted") ||
-		strings.Contains(lower, "no ai credits remaining") ||
-		strings.Contains(lower, "insufficient_funds") ||
-		strings.Contains(lower, "insufficient funding") ||
-		strings.Contains(lower, "available funding is insufficient") ||
-		strings.Contains(lower, "out of credits") ||
-		strings.Contains(lower, "credits exhausted") ||
-		strings.Contains(lower, "run out of credits") ||
+		IsCreditExhaustion(lower) ||
 		strings.Contains(lower, "quota_limit"):
 		return "402"
 	case
@@ -210,14 +203,8 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	case strings.Contains(lower, "input is too long") || HasExplicitHTTPStatus(lower, "400"):
 		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "402") ||
-		strings.Contains(lower, "qoder quota exhausted") ||
-		strings.Contains(lower, "no ai credits remaining") ||
-		strings.Contains(lower, "insufficient_funds") ||
-		strings.Contains(lower, "insufficient funding") ||
-		strings.Contains(lower, "quota_limit") ||
-		strings.Contains(lower, "out of credits") ||
-		strings.Contains(lower, "credits exhausted") ||
-		strings.Contains(lower, "run out of credits"):
+		IsCreditExhaustion(lower) ||
+		strings.Contains(lower, "quota_limit"):
 		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "429") ||
 		strings.Contains(lower, "qoder agent limit reached") ||
@@ -252,4 +239,37 @@ func isWarpModelUnavailableError(lower string) bool {
 	return strings.Contains(lower, "requested base model") &&
 		(strings.Contains(lower, "not allowed") || strings.Contains(lower, "no model available")) ||
 		strings.Contains(lower, "llm_unavailable") || strings.Contains(lower, "model unavailable")
+}
+
+// IsCreditExhaustion reports whether a message says the account's allowance is
+// gone, rather than that one request needs payment.
+//
+// The distinction decides whether a channel keeps using the account. An exhausted
+// allowance is a fact about the account — the upstream refuses every request for
+// it, whatever the model — while a per-request payment refusal may just mean the
+// caller asked for a paid model on a free plan. Only the first should take the
+// account out of rotation, so the phrasing has to be recognised rather than
+// inferred from the status code: both arrive as 402, and WorkBuddy's real refusal
+// ("Credits exhausted. Please visit the link below to purchase add-on packs")
+// reads nothing like a model-scoped one ("insufficient credits for model").
+//
+// The list lives here so the status classifier and the account policy cannot
+// disagree about what "out of credits" means.
+func IsCreditExhaustion(errStr string) bool {
+	lower := strings.ToLower(errStr)
+	for _, phrase := range []string{
+		"qoder quota exhausted",
+		"no ai credits remaining",
+		"insufficient_funds",
+		"insufficient funding",
+		"available funding is insufficient",
+		"out of credits",
+		"credits exhausted",
+		"run out of credits",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	return false
 }
