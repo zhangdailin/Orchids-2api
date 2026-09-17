@@ -3,14 +3,11 @@ package api
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/qoder"
@@ -71,39 +68,14 @@ type qoderLoginTransaction struct {
 // HandleQoderLogin starts and observes the official Qoder device authorization
 // flow. The handler is registered behind the administrator session middleware.
 func (a *API) HandleQoderLogin(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/qoder/login"), "/")
-	switch {
-	case r.Method == http.MethodPost && path == "":
-		a.startQoderLogin(w, r)
-	case r.Method == http.MethodGet && path != "":
-		a.getQoderLogin(w, path)
-	case r.Method == http.MethodDelete && path != "":
-		a.cancelQoderLogin(w, path)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
+	routeBrowserLogin(w, r, "/api/qoder/login", a.startQoderLogin, a.getQoderLogin, a.cancelQoderLogin)
 }
 
 func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
-	if a == nil || a.store == nil {
-		writeQoderLoginError(w, http.StatusServiceUnavailable, "store_unavailable",
-			"account store is not configured")
-		return
-	}
-	if !sameOriginAdminRequest(w, r, "Qoder") {
-		return
-	}
-	options, ok := parseQoderLoginOptions(w, r)
+	enabled, ok := beginBrowserLogin(w, r, a, "Qoder", a.qoderLogins)
 	if !ok {
 		return
 	}
-	enabled := true
-	if options.Enabled != nil {
-		enabled = *options.Enabled
-	}
-
-	a.qoderLogins.cleanup(time.Now())
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -114,92 +86,44 @@ func (a *API) startQoderLogin(w http.ResponseWriter, r *http.Request) {
 	defer client.Close()
 	transaction, err := client.StartLogin(ctx)
 	if err != nil {
-		// Upstream failures can echo request material, so only the classified
-		// cause reaches the browser; the detail goes to the server log.
-		switch {
-		case errors.Is(err, qoder.ErrAuthUnavailable):
-			slog.Warn("Qoder authorization endpoint is unreachable", "error", err)
-			writeQoderLoginError(w, http.StatusBadGateway, "upstream_unreachable",
-				"the server cannot reach the Qoder authorization endpoint")
-		case errors.Is(err, qoder.ErrAuthRejected):
-			slog.Warn("Qoder authorization was rejected by the upstream", "error", err)
-			writeQoderLoginError(w, http.StatusBadGateway, "upstream_rejected",
-				"Qoder refused to start a login transaction")
-		default:
-			slog.Warn("Qoder authorization could not be started", "error", err)
-			writeQoderLoginError(w, http.StatusBadGateway, "upstream_error",
-				"failed to start Qoder authorization")
+		writeAuthorizationStartFailure(w, err, authorizationFailure{
+			channel:           "Qoder",
+			unreachableDetail: "the server cannot reach the Qoder authorization endpoint",
+			unavailable:       qoder.ErrAuthUnavailable,
+			rejected:          qoder.ErrAuthRejected,
+		})
+		return
+	}
+
+	admitBrowserLogin(w, a.qoderLogins, "Qoder", loginSeed{
+		verifyURI:  qoderVerifyURI(cfg),
+		verifyFull: transaction.VerifyURL,
+		expiresAt:  transaction.ExpiresAt,
+		interval:   qoderLoginInterval,
+		message:    "Waiting for Qoder authorization",
+		enabled:    enabled,
+		cfg:        cfg,
+	}, func(shared deviceLogin) *qoderLoginTransaction {
+		// The verifier and the nonce stay out of the embedded state: that part is
+		// serialized into the polling response, and a nonce the browser could read
+		// would let a third party complete the transaction.
+		return &qoderLoginTransaction{
+			deviceLogin: shared,
+			verifyURL:   transaction.VerifyURL,
+			nonce:       transaction.Nonce,
+			verifier:    transaction.Verifier,
+			machineID:   transaction.MachineID,
+			factory:     factory,
 		}
-		return
-	}
-
-	id, err := newDeviceLoginID()
-	if err != nil {
-		writeQoderLoginError(w, http.StatusInternalServerError, "transaction_failed",
-			"failed to create login transaction")
-		return
-	}
-	pollContext, pollCancel := context.WithCancel(context.Background())
-	login := &qoderLoginTransaction{
-		deviceLogin: deviceLogin{
-			verifyURI:      qoderVerifyURI(cfg),
-			verifyFull:     transaction.VerifyURL,
-			expiresAt:      transaction.ExpiresAt,
-			interval:       qoderLoginInterval,
-			cancel:         pollCancel,
-			done:           make(chan struct{}),
-			configSnapshot: cfg,
-			status:         "pending",
-			message:        "Waiting for Qoder authorization",
-			enabled:        enabled,
-			// The caller always declares the intended state, so the completed
-			// account must honour it instead of defaulting to enabled.
-			enabledKnown: true,
-		},
-		verifyURL: transaction.VerifyURL,
-		nonce:     transaction.Nonce,
-		verifier:  transaction.Verifier,
-		machineID: transaction.MachineID,
-		factory:   factory,
-	}
-
-	if !a.qoderLogins.admit(id, login) {
-		pollCancel()
-		writeQoderLoginError(w, http.StatusTooManyRequests, "too_many_logins",
-			"too many pending Qoder logins; finish or cancel one first")
-		return
-	}
-
-	go func() {
-		defer close(login.done)
-		a.pollQoderLogin(pollContext, id)
-	}()
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(newDeviceLoginResponse(id, &login.deviceLogin))
+	}, a.pollQoderLogin)
 }
 
 func (a *API) getQoderLogin(w http.ResponseWriter, id string) {
-	a.qoderLogins.cleanup(time.Now())
-	response, ok := a.qoderLogins.response(id)
-	if !ok {
-		writeQoderLoginError(w, http.StatusNotFound, "login_not_found",
-			"Qoder login session not found or already finished")
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(response)
+	respondLoginStatus(w, a.qoderLogins, id, "Qoder")
 }
 
 func (a *API) cancelQoderLogin(w http.ResponseWriter, id string) {
-	done, ok := a.qoderLogins.cancel(id, "Qoder authorization cancelled")
-	if !ok {
-		writeQoderLoginError(w, http.StatusNotFound, "login_not_found",
-			"Qoder login session not found or already finished")
-		return
-	}
-	waitForLoginPoll(done)
-	w.WriteHeader(http.StatusNoContent)
+	abandonLogin(w, a.qoderLogins, id, "Qoder")
 }
 
 // pollQoderLogin exchanges the device token until the browser step completes,
@@ -213,18 +137,9 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 	defer client.Close()
 
 	for {
-		login, ok = a.qoderLogins.pollable(id)
+		login, ok := awaitLoginPoll(ctx, a.qoderLogins, id, "Qoder")
 		if !ok {
 			return
-		}
-		if time.Now().After(login.expiresAt) {
-			a.qoderLogins.finish(id, "expired", "Qoder authorization timed out; start again", 0)
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(login.interval):
 		}
 
 		reqCtx, reqCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -268,27 +183,9 @@ func (a *API) pollQoderLogin(ctx context.Context, id string) {
 		if login.enabledKnown {
 			account.Enabled = login.enabled
 		}
-		existing, err := a.findDuplicateAccountByCredential(ctx, account, 0)
-		if err != nil {
-			a.qoderLogins.finish(id, "failed", "Qoder authorization succeeded but the account could not be saved", 0)
-			return
-		}
-		if existing != nil {
-			account.ID = existing.ID
-			account.ReplaceQoderCredentials = true
-			if err := a.store.UpdateAccount(ctx, account); err != nil {
-				a.qoderLogins.finish(id, "failed", "Qoder authorization succeeded but the account could not be updated", 0)
-				return
-			}
-			a.qoderLogins.finish(id, "complete", "Qoder account credentials refreshed", account.ID)
-			return
-		}
-		if err := a.store.CreateAccount(ctx, account); err != nil {
-			a.qoderLogins.finish(id, "failed", "Qoder authorization succeeded but the account could not be saved", 0)
-			return
-		}
-		a.qoderLogins.finish(id, "complete", "Qoder account added", account.ID)
-		a.syncAccountAfterCreate(*account)
+		finishBrowserLogin(a, ctx, a.qoderLogins, id, "Qoder", account, func(acc *store.Account) {
+			acc.ReplaceQoderCredentials = true
+		})
 		return
 	}
 }
@@ -392,15 +289,6 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 	return acc, nil
 }
 
-// writeQoderLoginError reports a failure with a stable machine-readable code so
-// the admin UI can explain the actual cause instead of guessing. The message is
-// operator-facing and never contains credentials or upstream error text.
-func writeQoderLoginError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"code": code, "error": message})
-}
-
 // qoderVerifyURI is the human-facing authorization page. It is what the console
 // shows as a link, while verifyFull carries the single-use challenge.
 func qoderVerifyURI(cfg *config.Config) string {
@@ -410,48 +298,4 @@ func qoderVerifyURI(cfg *config.Config) string {
 		}
 	}
 	return qoder.DefaultOAuthBaseURL + "/device/selectAccounts"
-}
-
-// truncateLoginReason bounds the reason shown in the console. It is deliberately
-// short: the full detail is already in the server log.
-func truncateLoginReason(err error) string {
-	if err == nil {
-		return "unknown error"
-	}
-	reason := strings.TrimSpace(err.Error())
-	if reason == "" {
-		return "unknown error"
-	}
-	const limit = 200
-	if len(reason) > limit {
-		reason = reason[:limit] + "..."
-	}
-	return reason
-}
-
-// qoderLoginOptions parses the optional start body.
-type qoderLoginOptions struct {
-	Enabled *bool `json:"enabled"`
-}
-
-func parseQoderLoginOptions(w http.ResponseWriter, r *http.Request) (qoderLoginOptions, bool) {
-	var options qoderLoginOptions
-	if r.Body == nil {
-		return options, true
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<10))
-	if err != nil {
-		http.Error(w, "invalid login payload", http.StatusBadRequest)
-		return options, false
-	}
-	if strings.TrimSpace(string(body)) == "" {
-		return options, true
-	}
-	decoder := json.NewDecoder(strings.NewReader(string(body)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&options); err != nil {
-		http.Error(w, "invalid login payload", http.StatusBadRequest)
-		return qoderLoginOptions{}, false
-	}
-	return options, true
 }
