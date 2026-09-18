@@ -991,37 +991,10 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 	return json.Marshal(merged)
 }
 
-// accountSecrets reads every credential-bearing value on an account.
-//
-// It is the one list both redaction layers use. Keeping it in one place is the
-// point: two hand-maintained copies had already drifted, and a credential that is
-// missing from the list is a credential that reaches the management API.
-func accountSecrets(acc *store.Account) []string {
-	if acc == nil {
-		return nil
-	}
-	return []string{
-		acc.Token,
-		acc.ClientCookie,
-		acc.RefreshToken,
-		acc.SessionCookie,
-		acc.SessionID,
-		acc.ClientUat,
-		acc.OAuthAccessToken,
-		acc.OAuthRefreshToken,
-		acc.WorkBuddyAccessToken,
-		acc.WorkBuddyRefreshToken,
-		acc.QoderAccessToken,
-		acc.QoderRefreshToken,
-		acc.QoderRuntimeInfo,
-		acc.QoderRuntimeKey,
-	}
-}
-
 // redactAccountSecrets replaces every credential value an account holds with a
 // placeholder, so a text field that quotes upstream output cannot publish one.
 func redactAccountSecrets(message string, acc *store.Account) string {
-	for _, secret := range accountSecrets(acc) {
+	for _, secret := range acc.Secrets() {
 		if secret = strings.TrimSpace(secret); secret != "" {
 			message = strings.ReplaceAll(message, secret, "[REDACTED]")
 		}

@@ -1133,3 +1133,36 @@ func (s *Store) ListModels(ctx context.Context) ([]*Model, error) {
 	}
 	return nil, fmt.Errorf("models store not configured")
 }
+
+// Secrets returns every credential-bearing value the account holds.
+//
+// It lives beside the type because the type is what grows new credential fields,
+// and it is the one list every redactor must use. There were three hand-maintained
+// copies: the account response redactor, the attempt-diagnostics scrubber and this
+// one. They had already drifted — diagnostics redacted seven of the fourteen values
+// — and each copy is a place where a newly added credential field is silently
+// published.
+//
+// Callers that redact free text should replace each returned value, quoted or not:
+// upstream errors echo credentials back in both forms.
+func (a *Account) Secrets() []string {
+	if a == nil {
+		return nil
+	}
+	return []string{
+		a.Token,
+		a.ClientCookie,
+		a.RefreshToken,
+		a.SessionCookie,
+		a.SessionID,
+		a.ClientUat,
+		a.OAuthAccessToken,
+		a.OAuthRefreshToken,
+		a.WorkBuddyAccessToken,
+		a.WorkBuddyRefreshToken,
+		a.QoderAccessToken,
+		a.QoderRefreshToken,
+		a.QoderRuntimeInfo,
+		a.QoderRuntimeKey,
+	}
+}
