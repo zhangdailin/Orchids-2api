@@ -1097,16 +1097,14 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 			if !verdict.Retryable {
 				slog.Error("Aborting retries for non-retriable error", "error", err, "category", errClass.Category)
-				if errClass.Category == "auth_blocked" || errClass.Category == "auth" {
-					sh.InjectAuthError(errStr)
-				} else if errClass.Category != "canceled" {
-					sh.InjectErrorText("Injecting upstream error to client", fmt.Sprintf("Request failed: %s", strings.TrimSpace(errStr)))
-				}
+				// A failure before any output is a failure, not an answer. The
+				// raw upstream text goes to the log; the client gets the category.
 				if errClass.Category == "canceled" {
 					sh.finishResponse("end_turn")
 					return
 				}
-				sh.finishResponse("end_turn")
+				sh.reportRequestFailure("Reporting non-retriable upstream failure",
+					errClass.Category, apperrors.PublicMessage(errStr))
 				return
 			}
 
@@ -1118,12 +1116,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				if currentAccount != nil && h.loadBalancer != nil {
 					slog.Error("Account request failed, max retries reached", "account", currentAccount.Name)
 				}
-				if errClass.Category == "auth" || errClass.Category == "auth_blocked" {
-					sh.InjectAuthError(errStr)
-				} else {
-					sh.InjectErrorText("Injecting retry exhausted error to client", fmt.Sprintf("Request failed: retries exhausted. Last error: %s", errStr))
-				}
-				sh.finishResponse("end_turn")
+				// Same rule as the non-retriable branch above: with nothing sent yet
+				// this is a gateway failure, and the client sees it as one.
+				sh.reportRequestFailure("Reporting that retries are exhausted",
+					errClass.Category, apperrors.PublicMessage(errStr))
 				return
 			}
 			retriesRemaining--

@@ -1295,3 +1295,24 @@ func TestStreamHandler_ReasoningCountsAsUpstreamOutputWhenSuppressed(t *testing.
 		t.Fatal("suppressed reasoning must not become visible client output")
 	}
 }
+
+// TestReportRequestFailure_ClientRejectionAnswers400 pins the branch the
+// non-retryable upstream failure takes: a rejection of the request itself is 400,
+// and the client still gets the operator-facing text.
+//
+// This path used to answer 200 with the message as assistant content, which is
+// indistinguishable from an answer.
+func TestReportRequestFailure_ClientRejectionAnswers400(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
+
+	sh.reportRequestFailure("probe", "client", "The upstream rejected the request parameters or model. Check the request and model selection.")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "rejected the request parameters") {
+		t.Fatalf("expected the client-rejection envelope, got: %s", body)
+	}
+}

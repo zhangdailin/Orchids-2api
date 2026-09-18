@@ -419,8 +419,11 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	// A failure with nothing sent yet is a failure. Answering 200 with the error as
+	// assistant content is what made a client unable to tell a rejection from an
+	// answer.
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a client-side rejection, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if upstreamClient.calls != 1 {
 		t.Fatalf("expected exactly one upstream call, got %d", upstreamClient.calls)
