@@ -93,7 +93,7 @@
 
 ## 三、未修（需要整块移植或产品决策）
 
-第四轮结束后的未修条目（35 条：P2×25、P3×10），以及为什么：
+第四轮结束后的未修条目（现为 29 条：P2×21、P3×8），以及为什么：
 
 | 编号 | 仍未修的原因 |
 | --- | --- |
@@ -106,6 +106,7 @@
 | A5-29 | **已在第四轮以加法方式修复**（新增管理面 `/api/media/inputs`，原推理面端点保持兼容） |
 | A7-2 | statsig 的**签名**需要外部签名服务（上游由首页 metaContent + 签名器生成），本项目没有该依赖：已改为"配置有效则沿用、否则安全省略"，不再伪造 |
 | A2-6 | 原生 Responses 流的 `[DONE]`/重新分帧：项目的 relay 测试明确要求保留该行为（字节透明契约），见"保留差异" |
+| A5-42 | 无 `[]` 的 `timestamp_granularities`：本项目明确 400 而不是静默忽略（宁可报错也不静默丢选项），属有意保留 |
 | 其余 P2/P3 | 多为文案/字段集/边角校验差异（如流式图片事件 `size` 恒 auto、`/tts/voices` 未归一化、无 `[]` 的 `timestamp_granularities` 语义等），逐条列在 `docs/grok2api-parity-audit.md` 对应章节 |
 
 按批次给出后续方案，工作量从大到小：
@@ -326,3 +327,8 @@
 | A3-11（收尾） | Build 请求头补 `x-grok-client-version`（与既有 trace 身份头一并） | `cli.go` |
 
 复核确认（此前发现已不成立）：**A5-44** 的 `Retry-After` 与 **A5-17/A5-18/A5-19/A5-37/A5-38/A5-39/A5-43** 已在并行实现中修复，详见上一节"复核补记"。
+
+| A8-8 | 请求执行超时默认 600s→7200s（对齐上游 2 小时）：真正的长推理/长工具链不再被 10 分钟截断；停滞的流仍由按通道配置的 stream-idle 看门狗兜住，边界仍允许运维调低 | `internal/config/config.go` |
+| A1-9 | `stop` 序列只在本地下发（控制台流/非流各有一个 stopFilter），不再同时写进上游 Responses 载荷：上游一旦自己截断，匹配到的 token 不会回来，客户端就拿不到 `stop_sequence`，而且该字段本不属于 Build/Console 线契约 | `responses_normalize.go` |
+| A5-41 | 复核：转录"不支持参数"已返回 `unsupported_parameter`（此前审计基于旧版本） | `handler_voice.go` |
+| A5-21 | 复核：Console DPoP 与媒体请求在 403 时都会 `lease.InvalidateClearance()` 并向出口层反馈 challenge，clearance 会重建（此前审计基于旧版本） | `dpop.go`、`client.go` |

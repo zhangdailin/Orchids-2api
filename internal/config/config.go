@@ -335,7 +335,11 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.MaxRetries = boundedDefault(cfg.MaxRetries, 3, 20)
 	cfg.RetryDelay = boundedDefault(cfg.RetryDelay, 1000, 60000)
 	cfg.AccountSwitchCount = boundedDefault(cfg.AccountSwitchCount, 5, 20)
-	cfg.RequestTimeout = boundedDefault(cfg.RequestTimeout, 600, 86400)
+	// A long reasoning or tool-using turn is legitimate: the reference
+	// implementation allows two hours, and a ten minute ceiling cut such a turn
+	// short while the per-channel stream-idle watchdog already bounds a stalled
+	// one. The bounds still let an operator lower it.
+	cfg.RequestTimeout = boundedDefault(cfg.RequestTimeout, 7200, 86400)
 	cfg.Retry429Interval = boundedDefault(cfg.Retry429Interval, 60, 3600)
 	cfg.TokenRefreshInterval = 1
 	cfg.AutoRefreshToken = true

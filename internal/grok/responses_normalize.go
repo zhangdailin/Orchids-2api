@@ -161,9 +161,12 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	if reasoning := chatReasoningControls(req); len(reasoning) > 0 {
 		payload["reasoning"] = reasoning
 	}
-	if len(req.Stop) > 0 {
-		payload["stop"] = append([]string(nil), req.Stop...)
-	}
+	// Stop sequences are enforced locally (the console chat/stream writers run a
+	// stopFilter over the generated text). Sending them upstream as well makes
+	// the upstream truncate the turn, so the matched sequence never reaches the
+	// gateway and the client loses the stop_sequence it asked to be told about —
+	// and the field is not part of the Build/Console wire contract.
+
 	if value := strings.TrimSpace(req.SafetyIdentifier); value != "" {
 		payload["safety_identifier"] = value
 	}
