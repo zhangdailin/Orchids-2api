@@ -111,7 +111,7 @@
 - 新增测试：SSRF 防护（含元数据地址、loopback、私网、userinfo）、日志脱敏、CDN 匿名下载、nsfw 门控、错误对象形状与状态映射、上游正文不泄漏、doom-loop 阈值与合法重复、私有控制事件、模型级 403/免费额度识别
 - 改动规模：36 个文件，+1148/−266
 
-## 五、第二轮修复（16 条）
+## 五、第二轮修复（19 条）
 
 ### Anthropic Messages 语义（5）
 
@@ -159,6 +159,7 @@
 
 | 编号 | 修复 | 位置 |
 | --- | --- | --- |
+| A9-3 | `consoleUsage` 归一化时保留上游的 `cost_in_usd_ticks`/`num_sources_used`/`num_server_side_tools_used`/`context_details`，不再只用 token 计数重建对象（这是下游能看到成本与上下文用量的唯一来源） | `console.go` |
 | A5-3 | 图像响应每条 data 补 `mime_type`（data URI 前缀 / URL 扩展名推导，缺省 image/png），`revised_prompt` 由 `null` 改为 `""`（严格反序列化的客户端不再解析失败）；流式 `image_generation.completed` 同样带 `mime_type` | `handler_image_helpers.go`、`handler_images.go` |
 | A1-18 | Chat/Messages 转 Responses 的图片 part 未指定时补 `detail:"auto"`（显式值保留），请求不再依赖上游默认值 | `responses_normalize.go` |
 
