@@ -1,10 +1,12 @@
 package grok
 
 import (
+	"fmt"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -50,19 +52,23 @@ func parseFilesPath(rawPath string) (mediaType string, fileName string, ok bool)
 }
 
 func (h *Handler) HandleFiles(w http.ResponseWriter, r *http.Request) {
-	if !requireMethod(w, r, http.MethodGet) {
+	// HEAD is the probe a client (and grok2api's /v1/media endpoint) uses to
+	// check a cached asset exists before downloading it; refusing it forces a
+	// full transfer for every existence check.
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeGrokError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	mediaType, fileName, ok := parseFilesPath(r.URL.Path)
 	if !ok {
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "file not found")
 		return
 	}
 
 	fullPath := filepath.Join(cacheBaseDir, mediaType, fileName)
 	info, err := os.Stat(fullPath)
 	if err != nil || !info.Mode().IsRegular() {
-		http.Error(w, "file not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "file not found")
 		return
 	}
 
@@ -75,6 +81,37 @@ func (h *Handler) HandleFiles(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", ctype)
+	// A cached asset is identified by a content hash, so it never changes: an
+	// ETag lets a client skip re-downloading it, and nosniff stops a browser
+	// from reinterpreting the bytes.
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if etag := cachedFileETag(info); etag != "" {
+		w.Header().Set("ETag", etag)
+		// http.ServeContent evaluates the conditional request against the
+		// Content-Type and range handling below; ServeFile does not.
+		if ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match")); ifNoneMatch != "" {
+			for _, candidate := range strings.Split(ifNoneMatch, ",") {
+				if strings.TrimSpace(candidate) == etag || strings.TrimSpace(candidate) == "*" {
+					w.WriteHeader(http.StatusNotModified)
+					return
+				}
+			}
+		}
+	}
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	http.ServeFile(w, r, fullPath)
+}
+
+// cachedFileETag is a weak validator derived from the file's identity: it is
+// stable across requests and changes whenever the bytes change.
+func cachedFileETag(info os.FileInfo) string {
+	if info == nil {
+		return ""
+	}
+	return fmt.Sprintf(`W/"%x-%x"`, info.ModTime().Unix(), info.Size())
 }

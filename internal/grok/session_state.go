@@ -53,15 +53,35 @@ func withGrokSession(ctx context.Context, session grokSessionContext) context.Co
 // identity. Explicit client identities permit encrypted reasoning replay;
 // message-prefix fallback identities are affinity-only.
 func prepareGrokSession(r *http.Request, model, explicit string, messages []ChatMessage) grokSessionContext {
-	seed := strings.TrimSpace(explicit)
+	seed, agentHint := strings.TrimSpace(explicit), ""
 	if seed == "" && r != nil {
-		for _, header := range []string{"x-grok-session-id", "x-grok-conv-id", "x-session-id", "session-id"} {
+		// The explicit identities an agent client already sends. grok2api reads
+		// the same ones: without them a Claude Code or Codex session never gets a
+		// stable key, so prompt caching and encrypted-reasoning replay silently
+		// stay off for the clients that need them most.
+		for _, header := range []string{
+			"x-claude-code-session-id",
+			"x-codex-session-id",
+			"x-codex-conversation-id",
+			"x-codex-window-id",
+			"x-grok-session-id",
+			"x-grok-conv-id",
+			"x-conversation-id",
+			"x-session-id",
+			"session-id",
+		} {
 			if seed = strings.TrimSpace(r.Header.Get(header)); seed != "" {
+				agentHint = header
 				break
 			}
 		}
 	}
 	explicitSession := seed != ""
+	if agentHint != "" {
+		// Qualify the seed by its source: two clients that happen to use the same
+		// identifier string must not share an upstream session.
+		seed = agentHint + ":" + seed
+	}
 	if seed == "" {
 		var system, firstUser string
 		for _, message := range messages {

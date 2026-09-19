@@ -422,12 +422,12 @@ func (h *Handler) HandleAdminCache(w http.ResponseWriter, r *http.Request) {
 	}
 	images, imageSize, err := listCachedEntries("image")
 	if err != nil {
-		http.Error(w, "failed to list cache", http.StatusInternalServerError)
+		writeGrokError(w, http.StatusInternalServerError, "failed to list cache")
 		return
 	}
 	videos, videoSize, err := listCachedEntries("video")
 	if err != nil {
-		http.Error(w, "failed to list cache", http.StatusInternalServerError)
+		writeGrokError(w, http.StatusInternalServerError, "failed to list cache")
 		return
 	}
 
@@ -531,12 +531,12 @@ func (h *Handler) HandleAdminCacheList(w http.ResponseWriter, r *http.Request) {
 		mediaType = "image"
 	}
 	if !validCacheMediaType(mediaType) {
-		http.Error(w, "invalid media_type", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "invalid media_type")
 		return
 	}
 	entries, _, err := listCachedEntries(mediaType)
 	if err != nil {
-		http.Error(w, "failed to list cache", http.StatusInternalServerError)
+		writeGrokError(w, http.StatusInternalServerError, "failed to list cache")
 		return
 	}
 
@@ -573,7 +573,7 @@ func (h *Handler) HandleAdminCacheClear(w http.ResponseWriter, r *http.Request) 
 	if targetType != "" {
 		typ := targetType
 		if !validCacheMediaType(typ) {
-			http.Error(w, "invalid media_type", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "invalid media_type")
 			return
 		}
 		mediaTypes = []string{typ}
@@ -584,18 +584,18 @@ func (h *Handler) HandleAdminCacheClear(w http.ResponseWriter, r *http.Request) 
 	for _, typ := range mediaTypes {
 		list, size, err := listCachedEntries(typ)
 		if err != nil {
-			http.Error(w, "failed to read cache", http.StatusInternalServerError)
+			writeGrokError(w, http.StatusInternalServerError, "failed to read cache")
 			return
 		}
 		removedFiles += len(list)
 		removedBytes += size
 		dir := filepath.Join(cacheBaseDir, typ)
 		if err := os.RemoveAll(dir); err != nil {
-			http.Error(w, "failed to clear cache", http.StatusInternalServerError)
+			writeGrokError(w, http.StatusInternalServerError, "failed to clear cache")
 			return
 		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			http.Error(w, "failed to recreate cache dir", http.StatusInternalServerError)
+			writeGrokError(w, http.StatusInternalServerError, "failed to recreate cache dir")
 			return
 		}
 	}
@@ -623,7 +623,7 @@ func (h *Handler) HandleAdminCacheItemDelete(w http.ResponseWriter, r *http.Requ
 	}
 	mediaType, name, ok := parseCacheDeleteTarget(req)
 	if !ok {
-		http.Error(w, "invalid delete target", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "invalid delete target")
 		return
 	}
 
@@ -634,7 +634,7 @@ func (h *Handler) HandleAdminCacheItemDelete(w http.ResponseWriter, r *http.Requ
 		if os.IsNotExist(err) {
 			removed = false
 		} else {
-			http.Error(w, "failed to delete cache item", http.StatusInternalServerError)
+			writeGrokError(w, http.StatusInternalServerError, "failed to delete cache item")
 			return
 		}
 	}
@@ -665,7 +665,7 @@ func (h *Handler) HandleAdminCacheOnlineClear(w http.ResponseWriter, r *http.Req
 
 	tokens, clearMode, errMsg := resolveCacheOnlineClearTargets(req, h.listCacheOnlineAccounts(r))
 	if errMsg != "" {
-		http.Error(w, errMsg, http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, errMsg)
 		return
 	}
 
@@ -793,7 +793,7 @@ func (h *Handler) HandleAdminCacheOnlineLoadAsync(w http.ResponseWriter, r *http
 
 	tokens, scope, onlineAccounts := h.resolveCacheOnlineLoadTargets(r, req)
 	if len(tokens) == 0 {
-		http.Error(w, "no tokens provided", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "no tokens provided")
 		return
 	}
 
@@ -876,7 +876,7 @@ func (h *Handler) HandleAdminCacheOnlineClearAsync(w http.ResponseWriter, r *htt
 	tokens = append(tokens, req.Tokens...)
 	tokens = normalizeOnlineTokenList(tokens)
 	if len(tokens) == 0 {
-		http.Error(w, "no tokens provided", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "no tokens provided")
 		return
 	}
 

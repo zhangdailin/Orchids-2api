@@ -216,12 +216,32 @@ func (c *CLIClient) noteConfirmedFreeQuota(ctx context.Context, acc *store.Accou
 	if c == nil || c.oauth == nil || c.oauth.store == nil || acc == nil || acc.ID == 0 {
 		return
 	}
+	// A refusal that names one model ("... free usage for model X") is not an
+	// account-wide exhaustion. Cooling the whole credential for 24h also removed
+	// it from video, image and every other model it could still serve.
+	if model := requestModelFromContext(ctx); model != "" && modelScopedFreeQuotaRefusal(body) {
+		store.RecordModelCooldown(acc, model, time.Now().Add(FreeBuildUsageWindow))
+		if err := c.oauth.store.UpdateAccount(ctx, acc); err != nil {
+			slog.Warn("grok cli: failed to persist the model-scoped free quota window", "account_id", acc.ID, "model", model, "error", err)
+		}
+		return
+	}
 	if !ApplyFreeQuotaExhaustion(acc, body) {
 		return
 	}
 	if err := c.oauth.store.UpdateAccount(ctx, acc); err != nil {
 		slog.Warn("grok cli: failed to persist the confirmed free quota window", "account_id", acc.ID, "error", err)
 	}
+}
+
+// modelScopedFreeQuotaRefusal reports whether a spent Free allowance refusal
+// names a single model rather than the account's whole included window.
+func modelScopedFreeQuotaRefusal(body []byte) bool {
+	text := strings.ToLower(string(body))
+	if !strings.Contains(text, "free usage") {
+		return false
+	}
+	return strings.Contains(text, "for model") || strings.Contains(text, "model:")
 }
 
 func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {

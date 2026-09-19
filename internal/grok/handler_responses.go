@@ -180,14 +180,13 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	// Keep the original object for the Build CLI route.  The CLI upstream
 	// speaks Responses natively, so translating it through Chat Completions
 	// would drop valid fields such as previous_response_id and metadata.
-	body, err := io.ReadAll(r.Body)
+	body, err := readBoundedJSONBody(w, r)
 	if err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 	var req ResponsesCreateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 	req.Model = normalizeModelID(req.Model)
@@ -200,7 +199,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	h.applyDefaultResponsesStream(&req)
 	var nativePayload map[string]interface{}
 	if err := json.Unmarshal(body, &nativePayload); err != nil || nativePayload == nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 	if _, provided := nativePayload["stream"]; !provided {
@@ -266,17 +265,17 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := validateResponsesCompatibility(req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	chatReq, err := chatRequestFromResponses(req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	raw, err := json.Marshal(chatReq)
 	if err != nil {
-		http.Error(w, "failed to build chat request", http.StatusInternalServerError)
+		writeGrokError(w, http.StatusInternalServerError, "failed to build chat request")
 		return
 	}
 
@@ -314,7 +313,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	var chat map[string]interface{}
 	if err := json.Unmarshal(rec.body.Bytes(), &chat); err != nil {
-		http.Error(w, "chat response parse error: "+err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	response := responsesObjectFromChat(req.Model, chat)
@@ -327,7 +326,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	if req.Store != nil && *req.Store {
 		encoded, encodeErr := json.Marshal(response)
 		if encodeErr != nil {
-			http.Error(w, "failed to store response", http.StatusInternalServerError)
+			writeGrokError(w, http.StatusInternalServerError, "failed to store response")
 			return
 		}
 		owner := strings.TrimSpace(middleware.APIKeyFingerprint(r.Context()))
@@ -342,7 +341,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 			// upstream actually received, which is what input_items reports.
 			InputItems: responsesInputItemsJSON(req.Input),
 		}); saveErr != nil {
-			http.Error(w, "failed to store response", http.StatusServiceUnavailable)
+			writeGrokError(w, http.StatusServiceUnavailable, "failed to store response")
 			return
 		}
 	}

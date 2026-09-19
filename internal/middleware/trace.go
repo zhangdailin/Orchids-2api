@@ -56,8 +56,11 @@ func TraceMiddleware(next http.Handler) http.Handler {
 			traceID = requestID
 		}
 
-		// 将 trace ID 添加到响应头
+		// 将 trace ID 添加到响应头。 X-Request-ID is the header an
+		// OpenAI-compatible SDK reads when it reports a failed request, so it is
+		// echoed alongside the gateway's own trace headers.
 		w.Header().Set(TraceIDHeader, traceID)
+		w.Header().Set(RequestIDHeader, traceID)
 
 		// 将 trace ID 添加到 context
 		ctx := context.WithValue(r.Context(), traceIDKey{}, traceID)

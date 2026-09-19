@@ -168,41 +168,41 @@ func registerRoutes(
 	// context against the wrong number. On the unified prefix the channel is the
 	// model's, not the path's.
 	mux.HandleFunc("/v1/messages/count_tokens", inferenceAuth(limiter.Limit(grok.ModelDispatcher(h.HandleCountTokens, h.HandleCountTokens, isNativeResponsesModel))))
-	registerWithPrefixes(mux, grokPrefixes, "/images/generations", inferenceAuth(limiter.Limit(grokHandler.HandleImagesGenerations)))
-	registerWithPrefixes(mux, grokPrefixes, "/images/edits", inferenceAuth(limiter.Limit(grokHandler.HandleImagesEdits)))
-	registerWithPrefixes(mux, grokPrefixes, "/videos", inferenceAuth(limiter.Limit(grokHandler.HandleVideosCreate)))
-	registerWithPrefixes(mux, grokPrefixes, "/videos/generations", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosGenerate)))
-	registerWithPrefixes(mux, grokPrefixes, "/videos/edits", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosEdit)))
-	registerWithPrefixes(mux, grokPrefixes, "/videos/extensions", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosExtend)))
-	registerWithPrefixes(mux, grokPrefixes, "/videos/", inferenceAuth(limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
+	registerWithPrefixes(mux, allPrefixes, "/images/generations", inferenceAuth(limiter.Limit(grokHandler.HandleImagesGenerations)))
+	registerWithPrefixes(mux, allPrefixes, "/images/edits", inferenceAuth(limiter.Limit(grokHandler.HandleImagesEdits)))
+	registerWithPrefixes(mux, allPrefixes, "/videos", inferenceAuth(limiter.Limit(grokHandler.HandleVideosCreate)))
+	registerWithPrefixes(mux, allPrefixes, "/videos/generations", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosGenerate)))
+	registerWithPrefixes(mux, allPrefixes, "/videos/edits", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosEdit)))
+	registerWithPrefixes(mux, allPrefixes, "/videos/extensions", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosExtend)))
+	registerWithPrefixes(mux, allPrefixes, "/videos/", inferenceAuth(limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/content") {
 			grokHandler.HandleVideosContent(w, r)
 			return
 		}
 		grokHandler.HandleVideosRetrieve(w, r)
 	})))
-	registerWithPrefixes(mux, grokPrefixes, "/files/", inferenceAuth(grokHandler.HandleFiles))
-	registerWithPrefixes(mux, grokPrefixes, "/media/inputs", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputs)))
-	registerWithPrefixes(mux, grokPrefixes, "/media/inputs/", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputResource)))
+	registerWithPrefixes(mux, allPrefixes, "/files/", inferenceAuth(grokHandler.HandleFiles))
+	registerWithPrefixes(mux, allPrefixes, "/media/inputs", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputs)))
+	registerWithPrefixes(mux, allPrefixes, "/media/inputs/", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputResource)))
 	// One-time, unguessable callback used by the xAI video fallback. The token
 	// is the authorization boundary, so this endpoint must not require a client key.
 	mux.HandleFunc("/media/uploads/", grokHandler.HandleVideoUpload)
-	registerWithPrefixes(mux, grokPrefixes, "/tts", inferenceAuth(limiter.Limit(grokHandler.HandleTTS)))
-	registerWithPrefixes(mux, grokPrefixes, "/tts/voices", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
-	registerWithPrefixes(mux, grokPrefixes, "/tts/voices/", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
+	registerWithPrefixes(mux, allPrefixes, "/tts", inferenceAuth(limiter.Limit(grokHandler.HandleTTS)))
+	registerWithPrefixes(mux, allPrefixes, "/tts/voices", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
+	registerWithPrefixes(mux, allPrefixes, "/tts/voices/", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
 	sttHTTP := limiter.Limit(grokHandler.HandleSTT)
 	sttWebSocket := limiter.LimitLongLived(grokHandler.HandleSTT)
-	registerWithPrefixes(mux, grokPrefixes, "/stt", inferenceAuth(func(w http.ResponseWriter, r *http.Request) {
+	registerWithPrefixes(mux, allPrefixes, "/stt", inferenceAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			sttWebSocket(w, r)
 			return
 		}
 		sttHTTP(w, r)
 	}))
-	registerWithPrefixes(mux, grokPrefixes, "/audio/speech", inferenceAuth(limiter.Limit(grokHandler.HandleAudioSpeech)))
-	registerWithPrefixes(mux, grokPrefixes, "/audio/tasks", inferenceAuth(limiter.Limit(grokHandler.HandleAudioSpeech)))
-	registerWithPrefixes(mux, grokPrefixes, "/audio/transcriptions", inferenceAuth(limiter.Limit(grokHandler.HandleAudioTranscriptions)))
-	registerWithPrefixes(mux, grokPrefixes, "/realtime", inferenceAuth(limiter.LimitLongLived(grokHandler.HandleRealtime)))
+	registerWithPrefixes(mux, allPrefixes, "/audio/speech", inferenceAuth(limiter.Limit(grokHandler.HandleAudioSpeech)))
+	registerWithPrefixes(mux, allPrefixes, "/audio/tasks", inferenceAuth(limiter.Limit(grokHandler.HandleAudioSpeech)))
+	registerWithPrefixes(mux, allPrefixes, "/audio/transcriptions", inferenceAuth(limiter.Limit(grokHandler.HandleAudioTranscriptions)))
+	registerWithPrefixes(mux, allPrefixes, "/realtime", inferenceAuth(limiter.LimitLongLived(grokHandler.HandleRealtime)))
 
 	// --- Public auth/login (no prefix duplication) ---
 	mux.HandleFunc("/api/login", apiHandler.HandleLogin)

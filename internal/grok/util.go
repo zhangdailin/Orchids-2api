@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -116,6 +117,13 @@ var (
 		"image_url":   {},
 		"input_audio": {},
 		"file":        {},
+		// The Anthropic Messages front end lowers its blocks onto this same
+		// validator, so the Responses-shaped parts it produces are valid here
+		// too. Without them a document or a multi-part tool_result is rejected
+		// before the request ever reaches the upstream.
+		"input_text":  {},
+		"input_image": {},
+		"input_file":  {},
 	}
 	videoAspectRatioMap = map[string]string{
 		"1280x720":  "16:9",
@@ -451,16 +459,20 @@ func fetchRemoteAsDataURI(rawURL string, timeout time.Duration, proxyFunc func(*
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	client := &http.Client{Timeout: timeout}
-	if proxyFunc != nil {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.Proxy = proxyFunc
-		client.Transport = transport
-	}
-	req, err := http.NewRequest(http.MethodGet, u, nil)
+	// The URL comes from the caller's message payload, so it is untrusted: the
+	// target must resolve to a public address before the gateway dials it.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	target, err := checkRemoteFetchTarget(ctx, u, proxyFunc != nil)
 	if err != nil {
 		return "", err
 	}
+	client := newRemoteFetchClient(timeout, proxyFunc)
+	req, err := http.NewRequest(http.MethodGet, target.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	req = req.WithContext(ctx)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

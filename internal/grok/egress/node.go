@@ -92,7 +92,10 @@ func nodesFromConfig(cfg *config.Config) []Node {
 		if err != nil {
 			// Fail closed: a node that cannot be validated must not silently
 			// route direct. Skip it; if the pool ends up empty Acquire errors.
-			slog.Warn("egress node skipped: invalid proxy URL", "node", strings.TrimSpace(n.Name), "url", strings.TrimSpace(n.URL), "error", err)
+			// The configured URL usually carries proxy credentials, so it must
+			// not reach the log stream verbatim. The validation error itself
+			// only names the offending scheme/host, never the userinfo.
+			slog.Warn("egress node skipped: invalid proxy URL", "node", strings.TrimSpace(n.Name), "url", sanitizeFlareSolverrMessage(n.URL), "error", err)
 			continue
 		}
 		out = append(out, Node{

@@ -89,7 +89,8 @@ func accumulatePromptContentUsage(out *chatUsageEstimate, content interface{}) {
 		case "input_audio":
 			out.promptAudioTokens += estimatedAudioPromptTokens
 		case "file":
-			out.promptImageTokens += estimatedImagePromptTokens
+			// A file block is a document, not an image: charging it 256 image
+			// tokens invented usage the upstream never reported.
 			if fileData, ok := v["file"].(map[string]interface{}); ok {
 				out.promptTextTokens += approxTokenCount(parseLooseStringAny(fileData["filename"]))
 			}
@@ -106,10 +107,12 @@ func accumulatePromptContentUsage(out *chatUsageEstimate, content interface{}) {
 func estimateCompletionUsage(finalContent string, toolCalls []map[string]interface{}) chatUsageEstimate {
 	var out chatUsageEstimate
 	out.completionTextTokens += approxTokenCount(finalContent)
-	if len(toolCalls) > 0 {
-		if raw, err := json.Marshal(toolCalls); err == nil {
-			out.completionTextTokens += approxTokenCount(string(raw))
-		}
+	// Count the generated payload, not its JSON envelope: key names, quotes and
+	// commas are serialization overhead, not tokens the model produced.
+	for _, call := range toolCalls {
+		function, _ := call["function"].(map[string]interface{})
+		out.completionTextTokens += approxTokenCount(parseLooseStringAny(function["name"]))
+		out.completionTextTokens += approxTokenCount(stringifyToolArguments(function["arguments"]))
 	}
 	return out
 }
@@ -157,9 +160,13 @@ func addReasoningUsage(usage map[string]interface{}, reasoning string) map[strin
 	return usage
 }
 
+// buildImageUsagePayload reports the prompt tokens the gateway can actually
+// account for. Image generation is not a token-metered operation upstream, so
+// the completion side is reported as zero rather than a fabricated per-image
+// constant (grok2api reports 0 / omits usage entirely).
 func buildImageUsagePayload(prompt string, imageCount int) map[string]interface{} {
 	promptTokens := approxTokenCount(prompt)
-	completionTokens := max(0, imageCount) * 64
+	completionTokens := 0
 	return map[string]interface{}{
 		"total_tokens":  promptTokens + completionTokens,
 		"input_tokens":  promptTokens,

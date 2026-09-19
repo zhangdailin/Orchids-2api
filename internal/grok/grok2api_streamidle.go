@@ -13,7 +13,15 @@ import (
 	"time"
 )
 
-var errGrokSemanticIdle = errors.New("upstream stream idle timeout")
+// ErrGrokSemanticIdle is the shared sentinel for "the upstream stopped
+// producing generated output". It is exported so callers can classify the
+// condition with errors.Is and answer each protocol with its own dedicated
+// code instead of a generic stream read/parse error.
+var ErrGrokSemanticIdle = errors.New("upstream stream idle timeout")
+
+// errGrokSemanticIdle is kept as an alias so the ported file's internals, its
+// tests and any existing string matchers keep working unchanged.
+var errGrokSemanticIdle = ErrGrokSemanticIdle
 
 var buildGeneratedDeltaEvents = map[string]struct{}{
 	"response.output_text.delta":             {},

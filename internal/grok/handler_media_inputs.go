@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -81,12 +83,19 @@ func (h *Handler) HandleMediaInputs(w http.ResponseWriter, r *http.Request) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_media", err.Error())
 		return
 	}
+	if used, err := mediaInputUsageBytes(); err == nil && used+int64(len(data)) > maxMediaInputTotalBytes {
+		// The TTL frees a record, but nothing reclaims the bytes until the
+		// sweeper runs; without a ceiling repeated uploads can fill the volume.
+		writeResponsesAPIError(w, http.StatusInsufficientStorage, "media_storage_full",
+			"media input storage is full; retry after the expired inputs are reclaimed")
+		return
+	}
 	id, err := newMediaInputID()
 	if err != nil {
 		writeResponsesAPIError(w, http.StatusInternalServerError, "internal_error", "failed to allocate media input")
 		return
 	}
-	name, err := h.cacheMediaBytes("input:"+id, kind, data, mimeType)
+	name, err := h.cacheMediaInputBytes(id, kind, data, mimeType)
 	if err != nil {
 		writeResponsesAPIError(w, http.StatusInternalServerError, "internal_error", "failed to cache media input")
 		return
@@ -108,6 +117,76 @@ func (h *Handler) HandleMediaInputs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// mediaInputFilePrefix namespaces uploaded media inputs inside the shared image
+// and video cache directories. The background sweeper reclaims files that carry
+// this prefix once their store record has expired; generated media never does,
+// so a sweep can never delete an asset a client or a completed video job still
+// points at.
+const mediaInputFilePrefix = "input-"
+
+// maxMediaInputTotalBytes caps the bytes held by live media inputs. grok2api
+// refuses an upload past a configured total (507) rather than filling the disk
+// and discovering it later.
+const maxMediaInputTotalBytes = 2 << 30
+
+// mediaInputUsageBytes sums the size of the namespaced media input files.
+func mediaInputUsageBytes() (int64, error) {
+	var total int64
+	for _, kind := range []string{"image", "video"} {
+		entries, err := os.ReadDir(filepath.Join(cacheBaseDir, kind))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return total, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasPrefix(entry.Name(), mediaInputFilePrefix) {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			total += info.Size()
+		}
+	}
+	return total, nil
+}
+
+// cacheMediaInputBytes stores an uploaded media input under the namespaced name.
+// The content hash keeps the write idempotent, and the atomic rename keeps a
+// partially written file from ever being served.
+func (h *Handler) cacheMediaInputBytes(id, kind string, data []byte, mimeType string) (string, error) {
+	mediaType := strings.ToLower(strings.TrimSpace(kind))
+	if mediaType != "video" {
+		mediaType = "image"
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("empty media data")
+	}
+	dir := filepath.Join(cacheBaseDir, mediaType)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	sum := sha1.Sum([]byte("input:" + strings.TrimSpace(id)))
+	name := mediaInputFilePrefix + hex.EncodeToString(sum[:]) + mediaExtFromMime(mediaType, mimeType, "")
+	fullPath := filepath.Join(dir, name)
+	if info, statErr := os.Stat(fullPath); statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
+		return name, nil
+	}
+	tmp := fullPath + ".tmp-" + randomHex(4)
+	if writeErr := os.WriteFile(tmp, data, 0o644); writeErr != nil {
+		_ = os.Remove(tmp)
+		return "", writeErr
+	}
+	if renameErr := os.Rename(tmp, fullPath); renameErr != nil {
+		_ = os.Remove(tmp)
+		return "", renameErr
+	}
+	return name, nil
+}
+
 func (h *Handler) HandleMediaInputResource(w http.ResponseWriter, r *http.Request) {
 	if h == nil || h.lb == nil || h.lb.Store == nil {
 		writeResponsesAPIError(w, http.StatusServiceUnavailable, "service_unavailable", "media input store is not configured")
@@ -115,13 +194,13 @@ func (h *Handler) HandleMediaInputResource(w http.ResponseWriter, r *http.Reques
 	}
 	id := mediaInputIDFromPath(r.URL.Path)
 	if !validMediaInputID(id) {
-		http.Error(w, "media input not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "media input not found")
 		return
 	}
 	owner := videoRequestOwner(r)
 	input, err := h.lb.Store.GetStoredMediaInput(r.Context(), id, owner)
 	if err != nil {
-		http.Error(w, "media input not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "media input not found")
 		return
 	}
 	switch r.Method {
@@ -132,7 +211,7 @@ func (h *Handler) HandleMediaInputResource(w http.ResponseWriter, r *http.Reques
 		})
 	case http.MethodDelete:
 		if err := h.lb.Store.DeleteStoredMediaInput(r.Context(), id, owner); err != nil {
-			http.Error(w, "media input not found", http.StatusNotFound)
+			writeGrokError(w, http.StatusNotFound, "media input not found")
 			return
 		}
 		if validCachedMediaContentPath(input.ContentPath, input.Kind) {
@@ -140,7 +219,7 @@ func (h *Handler) HandleMediaInputResource(w http.ResponseWriter, r *http.Reques
 		}
 		writeJSON(w, map[string]interface{}{"id": id, "object": "file", "deleted": true})
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeGrokError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -184,12 +263,40 @@ func detectMediaInput(data []byte, declared string) (string, string, error) {
 		if declared == "video/quicktime" {
 			return "video", declared, nil
 		}
-		return "video", "video/mp4", nil
+		// An ISO base-media box by itself says nothing about the codec: HEIC,
+		// AVIF and other still images share the "ftyp" signature. Only accept it
+		// as video when the major brand (or the caller's own declaration) says
+		// so — otherwise a photo would be forwarded to the upstream as video/mp4.
+		brand := strings.ToLower(strings.TrimSpace(string(data[8:12])))
+		if strings.HasPrefix(declared, "video/") || videoISOBrand(brand) {
+			if strings.HasPrefix(declared, "video/") {
+				return "video", declared, nil
+			}
+			return "video", "video/mp4", nil
+		}
+		return "", "", fmt.Errorf("only valid jpeg, png, webp, gif, mp4, webm, or quicktime media is supported")
 	}
 	if len(data) >= 4 && bytes.Equal(data[:4], []byte{0x1a, 0x45, 0xdf, 0xa3}) {
 		return "video", "video/webm", nil
 	}
 	return "", "", fmt.Errorf("only valid jpeg, png, webp, gif, mp4, webm, or quicktime media is supported")
+}
+
+// videoISOBrand reports whether an ISO base-media brand identifies a video
+// container rather than a still image codec family (heic/heif/avif/mif1...).
+func videoISOBrand(brand string) bool {
+	switch brand {
+	case "heic", "heix", "hevc", "hevx", "heim", "heis", "hevm", "hevs",
+		"avif", "avis", "mif1", "msf1", "qt  ", "crx ", "jp2 ":
+		return false
+	}
+	switch {
+	case strings.HasPrefix(brand, "mp4"), strings.HasPrefix(brand, "isom"),
+		strings.HasPrefix(brand, "avc1"), strings.HasPrefix(brand, "dash"),
+		strings.HasPrefix(brand, "3gp"), strings.HasPrefix(brand, "mmp4"):
+		return true
+	}
+	return false
 }
 
 func validCachedMediaContentPath(path, kind string) bool {

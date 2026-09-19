@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 )
@@ -122,11 +124,30 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 			return ChatCompletionsRequest{}, fmt.Errorf("stop_sequences[%d] must not be empty", index)
 		}
 	}
+	// A message-level system/developer role is not part of the Anthropic wire
+	// contract but some clients (and OpenAI-style payloads relayed through this
+	// endpoint) send it. Fold it into the instructions instead of rejecting the
+	// whole request.
+	systemText := anthropicSystemText(req.System)
+	for _, message := range req.Messages {
+		if !isAnthropicInstructionRole(message.Role) {
+			continue
+		}
+		if text := strings.TrimSpace(anthropicBlockContentText(message.Content)); text != "" {
+			if systemText != "" {
+				systemText += "\n\n"
+			}
+			systemText += text
+		}
+	}
 	messages := make([]ChatMessage, 0, len(req.Messages)+1)
-	if system := anthropicSystemText(req.System); system != "" {
-		messages = append(messages, ChatMessage{Role: "system", Content: system})
+	if systemText != "" {
+		messages = append(messages, ChatMessage{Role: "system", Content: systemText})
 	}
 	for _, message := range req.Messages {
+		if isAnthropicInstructionRole(message.Role) {
+			continue
+		}
 		converted, err := anthropicMessageToChat(message)
 		if err != nil {
 			return ChatCompletionsRequest{}, err
@@ -193,6 +214,16 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 	if err != nil {
 		return ChatCompletionsRequest{}, err
 	}
+	// A thinking request must also ask the upstream for a summary: without it
+	// the streamed thinking block would carry only a signature and the client
+	// (Claude Code included) would show no reasoning text at all. grok2api
+	// requests a detailed summary for thinking requests.
+	var reasoningSummary *string
+	switch strings.ToLower(strings.TrimSpace(fmt.Sprint(req.Thinking["type"]))) {
+	case "enabled", "adaptive":
+		summary := "detailed"
+		reasoningSummary = &summary
+	}
 	return ChatCompletionsRequest{
 		sourceOperation:   "messages",
 		Model:             req.Model,
@@ -208,6 +239,7 @@ func anthropicRequestToChat(req anthropicMessagesRequest) (ChatCompletionsReques
 		ToolChoice:        anthropicToolChoiceToOpenAI(req.ToolChoice),
 		ParallelToolCalls: parallel,
 		ReasoningEffort:   reasoningEffort,
+		ReasoningSummary:  reasoningSummary,
 		Stop:              append([]string(nil), req.StopSequences...),
 		PromptCacheKey:    promptCacheKey,
 		SafetyIdentifier:  parseLooseStringAny(req.Metadata["user_id"]),
@@ -366,12 +398,16 @@ func validateChatToolSequence(messages []ChatMessage) error {
 }
 
 func anthropicReasoningEffort(thinking, outputConfig map[string]interface{}) *string {
-	if effort := strings.ToLower(strings.TrimSpace(fmt.Sprint(outputConfig["effort"]))); effort != "" && effort != "<nil>" {
-		return &effort
-	}
+	// An explicit `thinking: {"type":"disabled"}` wins over output_config: a
+	// client that asked for no reasoning must not silently get reasoning just
+	// because a stale effort value was also present (grok2api resolves it the
+	// same way).
 	typeName := strings.ToLower(strings.TrimSpace(fmt.Sprint(thinking["type"])))
 	if typeName == "disabled" {
 		effort := "none"
+		return &effort
+	}
+	if effort := strings.ToLower(strings.TrimSpace(fmt.Sprint(outputConfig["effort"]))); effort != "" && effort != "<nil>" {
 		return &effort
 	}
 	if typeName == "enabled" || typeName == "adaptive" {
@@ -413,13 +449,13 @@ func cloneStringInterfaceMap(value map[string]interface{}) map[string]interface{
 func anthropicSystemText(value interface{}) string {
 	switch v := value.(type) {
 	case string:
-		return strings.TrimSpace(v)
+		return stripAnthropicBillingHeader(v)
 	case []interface{}:
 		parts := make([]string, 0, len(v))
 		for _, raw := range v {
 			block, _ := raw.(map[string]interface{})
 			if strings.EqualFold(strings.TrimSpace(fmt.Sprint(block["type"])), "text") {
-				if text := strings.TrimSpace(fmt.Sprint(block["text"])); text != "" {
+				if text := stripAnthropicBillingHeader(fmt.Sprint(block["text"])); text != "" {
 					parts = append(parts, text)
 				}
 			}
@@ -428,6 +464,25 @@ func anthropicSystemText(value interface{}) string {
 	default:
 		return ""
 	}
+}
+
+// stripAnthropicBillingHeader removes the per-request Claude Code billing
+// header. It changes on every request, and because the system prompt sits at the
+// very front of the upstream prefix, keeping it defeats the provider's prompt
+// cache (grok2api strips it for exactly that reason).
+func stripAnthropicBillingHeader(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || !strings.Contains(strings.ToLower(trimmed), "x-anthropic-billing-header") {
+		return trimmed
+	}
+	kept := make([]string, 0, strings.Count(trimmed, "\n")+1)
+	for _, line := range strings.Split(trimmed, "\n") {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "x-anthropic-billing-header") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 func anthropicMessageToChat(message anthropicMessage) ([]ChatMessage, error) {
@@ -679,6 +734,7 @@ func anthropicParallelToolCalls(raw interface{}) *bool {
 func anthropicResponseFromChat(model string, chat map[string]interface{}) map[string]interface{} {
 	content := make([]interface{}, 0)
 	stopReason := "end_turn"
+	sawRefusal := false
 	stopSequence := ""
 	choices, _ := chat["choices"].([]interface{})
 	if len(choices) > 0 {
@@ -719,6 +775,7 @@ func anthropicResponseFromChat(model string, chat map[string]interface{}) map[st
 		toolCalls, _ := message["tool_calls"].([]interface{})
 		if refusal := streamString(message["refusal"]); refusal != "" {
 			content = append(content, map[string]interface{}{"type": "text", "text": refusal})
+			sawRefusal = true
 		}
 		for _, raw := range toolCalls {
 			call, _ := raw.(map[string]interface{})
@@ -737,6 +794,9 @@ func anthropicResponseFromChat(model string, chat map[string]interface{}) map[st
 		}
 		stopReason = openAIFinishToAnthropic(fmt.Sprint(choice["finish_reason"]))
 	}
+	if sawRefusal && stopReason == "end_turn" {
+		stopReason = "refusal"
+	}
 	if stopSequence != "" {
 		stopReason = "stop_sequence"
 	}
@@ -745,11 +805,32 @@ func anthropicResponseFromChat(model string, chat map[string]interface{}) map[st
 	}
 	usage, _ := chat["usage"].(map[string]interface{})
 	return map[string]interface{}{
-		"id":   firstNonEmpty(interfaceString(chat["id"]), "msg_"+randomHex(12)),
+		// The id the Chat Completions layer produced is a chatcmpl_* value; the
+		// Anthropic contract uses msg_*. Handing the caller a chatcmpl_ message
+		// id broke every client that validates the prefix and lost the upstream
+		// identity, so an Anthropic-shaped id is generated instead.
+		"id":   anthropicMessageID(interfaceString(chat["id"])),
 		"type": "message", "role": "assistant", "model": model,
 		"content": content, "stop_reason": stopReason, "stop_sequence": nullableProtocolString(stopSequence),
 		"usage": anthropicUsageFromOpenAI(usage),
 	}
+}
+
+// anthropicMessageID returns an Anthropic-shaped message id.
+//
+// The internal relay answers with a Chat Completions id (chatcmpl_*). That is
+// not an Anthropic message id: a client that validates the prefix rejects it,
+// and the upstream identity is lost. Such an id is re-shaped; any other
+// upstream id is kept as-is so callers can correlate with the upstream.
+func anthropicMessageID(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "msg_" + randomHex(12)
+	}
+	if strings.HasPrefix(trimmed, "chatcmpl_") {
+		return "msg_" + strings.TrimPrefix(trimmed, "chatcmpl_")
+	}
+	return trimmed
 }
 
 func firstDefined(values ...interface{}) interface{} {
@@ -774,6 +855,11 @@ func openAIFinishToAnthropic(value string) string {
 		return "tool_use"
 	case "length", "max_tokens":
 		return "max_tokens"
+	case "content_filter", "refusal":
+		// A safety refusal is not a normal completion; Anthropic has a dedicated
+		// stop reason for it, and a caller that only sees end_turn treats the
+		// refusal as a real answer.
+		return "refusal"
 	case "stop", "end_turn", "", "<nil>":
 		return "end_turn"
 	default:
@@ -783,16 +869,33 @@ func openAIFinishToAnthropic(value string) string {
 
 func anthropicUsageFromOpenAI(usage map[string]interface{}) map[string]interface{} {
 	input := max(0, interfaceToInt(usage["prompt_tokens"]))
-	result := map[string]interface{}{
-		"input_tokens":  input,
-		"output_tokens": interfaceToInt(usage["completion_tokens"]),
-	}
+	cached := 0
 	if details, ok := usage["prompt_tokens_details"].(map[string]interface{}); ok {
-		if cached := interfaceToInt(details["cached_tokens"]); cached > 0 {
-			cached = min(cached, input)
-			result["input_tokens"] = input - cached
-			result["cache_read_input_tokens"] = cached
-		}
+		cached = max(0, interfaceToInt(details["cached_tokens"]))
+	}
+	cached = min(cached, input)
+	output := max(0, interfaceToInt(usage["completion_tokens"]))
+	result := map[string]interface{}{
+		"input_tokens": input - cached,
+		// Anthropic reports both cache counters unconditionally, with 0 meaning
+		// "no cache". Omitting them made a caller unable to tell "no cache" from
+		// "field missing" (Claude Code's /cost and cache statistics read them).
+		"cache_read_input_tokens":     cached,
+		"cache_creation_input_tokens": 0,
+		"output_tokens":               output,
+	}
+	reasoning := 0
+	if details, ok := usage["completion_tokens_details"].(map[string]interface{}); ok {
+		reasoning = max(0, interfaceToInt(details["reasoning_tokens"]))
+	}
+	result["output_tokens_details"] = map[string]interface{}{
+		"thinking_tokens": min(output, reasoning),
+	}
+	if cost := interfaceToInt(usage["cost_in_usd_ticks"]); cost > 0 {
+		result["cost_in_usd_ticks"] = cost
+	}
+	if sources := interfaceToInt(firstDefined(usage["num_sources_used"], usage["num_server_side_tools_used"])); sources > 0 {
+		result["num_sources_used"] = sources
 	}
 	return result
 }
@@ -815,7 +918,10 @@ func (h *Handler) serveAnthropicMessageStream(w http.ResponseWriter, req *http.R
 }
 
 type anthropicStreamState struct {
-	id               string
+	id string
+	// sawRefusal marks that the model refused the request, so a normal "stop"
+	// finish reason is reported as the dedicated refusal stop reason.
+	sawRefusal       bool
 	model            string
 	nextIndex        int
 	textIndex        int
@@ -838,11 +944,17 @@ func translateOpenAIChatStreamToAnthropic(w io.Writer, reader io.Reader, model s
 	w = tracked
 	state := &anthropicStreamState{
 		id: "msg_" + randomHex(12), model: model, textIndex: -1, thinkIndex: -1,
-		toolIndexes: map[int]int{}, open: map[int]bool{}, usage: map[string]interface{}{"input_tokens": 0, "output_tokens": 0},
+		toolIndexes: map[int]int{}, open: map[int]bool{},
+		// message_start is emitted before the upstream reports usage, so its
+		// counters are necessarily zero. They still carry the complete
+		// Anthropic shape (cache + thinking), otherwise a caller reading
+		// cache_read_input_tokens or thinking_tokens at message_start sees a
+		// missing field instead of 0.
+		usage:    anthropicUsageFromOpenAI(map[string]interface{}{"prompt_tokens": 0, "completion_tokens": 0}),
 		searches: map[string]*messageSearchState{}, citations: map[string]bool{},
 	}
 	writeAnthropicSSE(w, "message_start", map[string]interface{}{
-		"type": "message_start", "message": map[string]interface{}{"id": state.id, "type": "message", "role": "assistant", "model": model,
+		"type": "message_start", "message": map[string]interface{}{"id": state.id, "type": "message", "role": "assistant", "model": model, "created_at": time.Now().Unix(),
 			"content": []interface{}{}, "stop_reason": nil, "stop_sequence": nil, "usage": state.usage},
 	})
 	if tracked.err != nil {
@@ -897,6 +1009,10 @@ func translateOpenAIChatStreamToAnthropic(w io.Writer, reader io.Reader, model s
 			}
 			if refusal := streamString(delta["refusal"]); refusal != "" {
 				state.writeText(w, refusal)
+				state.sawRefusal = true
+				if state.stopReason == "end_turn" {
+					state.stopReason = "refusal"
+				}
 			}
 			for _, call := range interfaceSlice(delta["tool_calls"]) {
 				if err := state.writeToolCall(w, call); err != nil {
@@ -1110,9 +1226,24 @@ func writeAnthropicUpstreamError(w http.ResponseWriter, status int, body string)
 	if status < 400 {
 		status = http.StatusBadGateway
 	}
-	message := strings.TrimSpace(body)
-	if message == "" {
+	// The raw body is the upstream's own words: it names the account, the team
+	// and the refusal reason. It belongs in the logs, never in the client's
+	// error envelope.
+	message := apperrors.PublicMessage(body)
+	if strings.TrimSpace(message) == "" {
 		message = http.StatusText(status)
 	}
 	writeAnthropicError(w, status, message)
+}
+
+// isAnthropicInstructionRole reports whether a message-level role carries
+// instructions rather than conversation turns. Anthropic has no such role in
+// `messages`; the text belongs in the system prompt.
+func isAnthropicInstructionRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "system", "developer":
+		return true
+	default:
+		return false
+	}
 }

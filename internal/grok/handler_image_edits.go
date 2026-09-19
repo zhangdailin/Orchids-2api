@@ -96,7 +96,7 @@ func (h *Handler) handleChatImageEdit(
 	publicBase string,
 ) {
 	if len(imageURLs) == 0 {
-		http.Error(w, "image_url is required for image edits", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "image_url is required for image edits")
 		return
 	}
 	if len(imageURLs) > 7 {
@@ -113,19 +113,19 @@ func (h *Handler) handleChatImageEdit(
 		n = 1
 	}
 	if n > 2 {
-		http.Error(w, "image_config.n must be between 1 and 2 for image edit", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "image_config.n must be between 1 and 2 for image edit")
 		return
 	}
 	responseFormat := normalizeImageResponseFormat(imageCfg.ResponseFormat)
 	if _, err := normalizeImageEditSize(imageCfg.Size); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	ratio, _ := normalizeImageAspectRatio("", imageCfg.Size)
 
 	sess, err := h.openChatAccountSessionForModel(ctx, spec)
 	if err != nil {
-		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+		writeGrokNoAccountError(w, err)
 		return
 	}
 	defer sess.Close()
@@ -135,7 +135,7 @@ func (h *Handler) handleChatImageEdit(
 		if skipExternalAttachmentFetchGrokAccountStatus(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	rebuildPayload := func(token string) (map[string]interface{}, error) {
@@ -145,7 +145,7 @@ func (h *Handler) handleChatImageEdit(
 	if req.Stream {
 		resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, &rawPayload, rebuildPayload)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 		defer resp.Body.Close()
@@ -176,13 +176,13 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseMultipartForm(80 << 20); err != nil {
-		http.Error(w, "invalid multipart form", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "invalid multipart form")
 		return
 	}
 
 	prompt := strings.TrimSpace(r.FormValue("prompt"))
 	if prompt == "" {
-		http.Error(w, "prompt is required", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
 	model := strings.TrimSpace(r.FormValue("model"))
@@ -196,11 +196,11 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 	spec, ok := ResolveModel(model)
 	consoleEdit := ok && spec.IsImage && spec.Upstream == UpstreamConsole
 	if !isImageEditModel(model) && !consoleEdit {
-		http.Error(w, "image edit model must be grok-imagine-image-edit or a Console image model", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "image edit model must be grok-imagine-image-edit or a Console image model")
 		return
 	}
 	if r.MultipartForm != nil && len(r.MultipartForm.File["mask"]) > 0 {
-		http.Error(w, "mask is not supported yet", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "mask is not supported yet")
 		return
 	}
 	n := parseIntLoose(r.FormValue("n"), 1)
@@ -209,49 +209,49 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		maxN = 10
 	}
 	if n < 1 || n > maxN {
-		http.Error(w, fmt.Sprintf("n must be between 1 and %d for image edit", maxN), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("n must be between 1 and %d for image edit", maxN))
 		return
 	}
 	if consoleEdit {
 		if _, err := normalizeConsoleImageAspectRatio(r.FormValue("aspect_ratio"), r.FormValue("size")); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 	} else {
 		if _, err := normalizeImageEditSize(r.FormValue("size")); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 		if _, err := normalizeImageAspectRatio(r.FormValue("aspect_ratio"), r.FormValue("size")); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 	}
 	stream := parseBoolLoose(r.FormValue("stream"), false)
 	partialImages := parseIntLoose(r.FormValue("partial_images"), 0)
 	if consoleEdit && (stream || partialImages != 0) {
-		http.Error(w, "Grok Console image edit does not support stream or partial_images", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "Grok Console image edit does not support stream or partial_images")
 		return
 	}
 	if stream && n > 2 {
-		http.Error(w, "streaming is only supported when n=1 or n=2", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "streaming is only supported when n=1 or n=2")
 		return
 	}
 	rawResponseFormat := strings.ToLower(strings.TrimSpace(r.FormValue("response_format")))
 	if rawResponseFormat != "" && rawResponseFormat != "url" && rawResponseFormat != "b64_json" && rawResponseFormat != "base64" {
-		http.Error(w, "response_format must be url or b64_json", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "response_format must be url or b64_json")
 		return
 	}
 	responseFormat := normalizeImageResponseFormat(rawResponseFormat)
 	publicBase := detectPublicBaseURL(r)
 
 	if !ok || !spec.IsImage || (!isImageEditModel(spec.ID) && spec.Upstream != UpstreamConsole) {
-		http.Error(w, "image edit model is not supported", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "image edit model is not supported")
 		return
 	}
 	spec = h.applyPersistedRoute(r.Context(), spec)
 	if err := h.ensureModelCapability(r.Context(), model, store.CapabilityImageEdit); err != nil {
-		http.Error(w, modelValidationMessage(model, err), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, modelValidationMessage(model, err))
 		return
 	}
 
@@ -260,11 +260,11 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		files = r.MultipartForm.File["image[]"]
 	}
 	if len(files) == 0 {
-		http.Error(w, "image is required", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "image is required")
 		return
 	}
 	if consoleEdit && len(files) > 3 {
-		http.Error(w, "Console image edit supports at most 3 images", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "Console image edit supports at most 3 images")
 		return
 	}
 	if !consoleEdit && len(files) > 7 {
@@ -275,21 +275,21 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 	for _, fh := range files {
 		file, err := fh.Open()
 		if err != nil {
-			http.Error(w, "failed to read image file", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "failed to read image file")
 			return
 		}
 		data, err := io.ReadAll(io.LimitReader(file, maxEditImageBytes+1))
 		file.Close()
 		if err != nil {
-			http.Error(w, "failed to read image file", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "failed to read image file")
 			return
 		}
 		if len(data) == 0 {
-			http.Error(w, "file content is empty", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "file content is empty")
 			return
 		}
 		if len(data) > maxEditImageBytes {
-			http.Error(w, "image file too large. maximum is 50MB", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "image file too large. maximum is 50MB")
 			return
 		}
 		mime := strings.ToLower(strings.TrimSpace(fh.Header.Get("Content-Type")))
@@ -303,7 +303,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !isAllowedEditImageMime(mime) {
-			http.Error(w, "unsupported image type. supported: png, jpg, webp", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "unsupported image type. supported: png, jpg, webp")
 			return
 		}
 		uploads = append(uploads, imageEditUploadInput{
@@ -320,7 +320,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
 	if err != nil {
-		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+		writeGrokNoAccountError(w, err)
 		return
 	}
 	defer sess.Close()
@@ -331,7 +331,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		if skipExternalAttachmentFetchGrokAccountStatus(err) {
 			h.markAccountStatus(r.Context(), sess.acc, err)
 		}
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	rebuildPayload := func(token string) (map[string]interface{}, error) {
@@ -341,7 +341,7 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 	if stream {
 		resp, err := h.doChatWithAutoSwitchRebuild(r.Context(), sess, &rawPayload, rebuildPayload)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 		defer resp.Body.Close()

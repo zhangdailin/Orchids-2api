@@ -99,6 +99,11 @@ func collectBuildToolAliases(payload map[string]interface{}) map[string]buildToo
 				}
 			case "apply_patch":
 				aliases["apply_patch"] = buildToolAliasIdentity{Kind: "apply_patch", Name: "apply_patch", Declaration: cloneStringInterfaceMap(tool)}
+			case "custom":
+				name := strings.TrimSpace(fmt.Sprint(tool["name"]))
+				if name != "" && name != "<nil>" {
+					aliases[buildToolAlias(namespace, name)] = buildToolAliasIdentity{Kind: "custom", Namespace: namespace, Name: name, Declaration: cloneStringInterfaceMap(tool)}
+				}
 			}
 		}
 	}
@@ -177,14 +182,30 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	}
 	tools := append([]map[string]interface{}(nil), req.ResponsesTools...)
 	tools = append(tools, consoleToolsFromOpenAI(req.Tools)...)
+	// OpenAI's web_search_options has no function form: it means "run the
+	// hosted search tool". Lower it to the native tool the Responses planes
+	// understand (grok2api does the same) when the caller did not already
+	// declare a search tool.
+	if len(req.WebSearchOptions) > 0 && !hasNativeSearchTool(tools) {
+		tools = append(tools, map[string]interface{}{"type": "web_search"})
+	}
 	if len(tools) > 0 {
 		payload["tools"] = tools
 		if choice := consoleToolChoiceFromOpenAI(req.ToolChoice); choice != nil {
 			payload["tool_choice"] = choice
 		}
-		if req.ParallelToolCalls != nil {
-			payload["parallel_tool_calls"] = *req.ParallelToolCalls
-		}
+	}
+	// These are forwarded unconditionally, exactly like grok2api: a caller that
+	// asks for a service tier or attaches metadata must not have it dropped
+	// just because the request declared no tools.
+	if req.ParallelToolCalls != nil {
+		payload["parallel_tool_calls"] = *req.ParallelToolCalls
+	}
+	if len(req.Metadata) > 0 {
+		payload["metadata"] = cloneStringInterfaceMap(req.Metadata)
+	}
+	if tier := strings.TrimSpace(req.ServiceTier); tier != "" {
+		payload["service_tier"] = tier
 	}
 	if err := validatePayloadReasoning(payload); err != nil {
 		return nil, err
@@ -320,9 +341,13 @@ func responsesMessageParts(content interface{}, assistant bool) []interface{} {
 					if nested, ok := block["image_url"].(map[string]interface{}); ok && detail == "" {
 						detail = parseLooseStringAny(nested["detail"])
 					}
-					if detail != "" {
-						part["detail"] = detail
+					if detail == "" {
+						// The upstream treats an absent detail as its own default,
+						// which is not "auto"; stating it makes the request
+						// deterministic and matches what grok2api sends.
+						detail = "auto"
 					}
+					part["detail"] = detail
 					parts = append(parts, part)
 				}
 			case "file_url", "input_file":
@@ -417,6 +442,13 @@ func interfaceMaps(value interface{}) []map[string]interface{} {
 
 func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 	state := newBuildToolNormalizationState()
+	// NOTE: the native Build relay is intentionally byte-transparent (see
+	// relay_policy_test.go: a client payload must reach the upstream unchanged,
+	// and only prompt_cache_key is rewritten). grok2api instead injects
+	// `store:false` and `reasoning.encrypted_content` here; doing that in this
+	// gateway would break the documented transparency contract, so the two
+	// defaults stay a deliberate deviation. The chat->Responses bridge, which
+	// builds its own payload, does request encrypted reasoning.
 	if raw, ok := payload["response_format"].(map[string]interface{}); ok {
 		delete(payload, "response_format")
 		if _, exists := payload["text"]; !exists {
@@ -473,6 +505,17 @@ func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 	payload["tools"] = normalized
 	normalizeBuildToolChoice(payload, state)
 	for _, item := range interfaceMaps(payload["input"]) {
+		// A client that echoes back the calls this layer emulates (custom_tool_call,
+		// apply_patch_call and their outputs) is lowered onto the emulated function
+		// shape, otherwise the upstream rejects an unknown item type.
+		switch strings.ToLower(strings.TrimSpace(parseLooseStringAny(item["type"]))) {
+		case "custom_tool_call", "apply_patch_call":
+			lowerEmulatedCallItem(item, state)
+			continue
+		case "custom_tool_call_output", "apply_patch_call_output":
+			item["type"] = "function_call_output"
+			continue
+		}
 		if parseLooseStringAny(item["type"]) != "function_call" {
 			continue
 		}
@@ -541,9 +584,30 @@ func normalizeBuildTool(tool map[string]interface{}, namespace string, clientSea
 	case "tool_search":
 		return nil, nil
 	case "apply_patch":
+		// The emulated function mirrors the upstream-compatible contract used
+		// by grok2api: one structured V4A operation, so the response side can
+		// restore `operation` on the apply_patch_call without parsing a patch.
+		state.addWarning("apply_patch_emulated")
 		return []map[string]interface{}{{
-			"type": "function", "name": "apply_patch", "description": "Apply a patch to workspace files.",
-			"parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"patch": map[string]interface{}{"type": "string"}}, "required": []interface{}{"patch"}},
+			"type": "function", "name": "apply_patch",
+			"description": "Create, update, or delete one file using a structured V4A patch operation. " +
+				"create_file and update_file require path and diff; delete_file requires path.",
+			"parameters": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"operation": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"type": map[string]interface{}{"type": "string", "enum": []interface{}{"create_file", "update_file", "delete_file"}},
+							"path": map[string]interface{}{"type": "string", "minLength": 1},
+							"diff": map[string]interface{}{"type": "string"},
+						},
+						"required": []interface{}{"type", "path"}, "additionalProperties": false,
+					},
+				},
+				"required": []interface{}{"operation"}, "additionalProperties": false,
+			},
+			"strict": true,
 		}}, nil
 	case "local_shell":
 		state.addWarning("local_shell_normalized")
@@ -555,7 +619,39 @@ func normalizeBuildTool(tool map[string]interface{}, namespace string, clientSea
 		out := cloneStringInterfaceMap(tool)
 		out["type"] = "web_search"
 		return []map[string]interface{}{out}, nil
-	case "mcp", "shell", "custom", "x_search", "web_search", "image_generation", "collections_search", "file_search", "code_execution", "code_interpreter":
+	case "custom":
+		// A freeform/grammar tool has no upstream equivalent. Emulate it as a
+		// function that takes the raw input string (grok2api does the same) and
+		// restore custom_tool_call on the way back.
+		name := strings.TrimSpace(fmt.Sprint(tool["name"]))
+		if name == "" || name == "<nil>" {
+			return nil, fmt.Errorf("%s.name is required", param)
+		}
+		if _, exists := tool["format"]; exists {
+			state.addWarning("custom_tool_format_downgraded")
+		}
+		state.addWarning("custom_tool_emulated")
+		description := strings.TrimSpace(parseLooseStringAny(tool["description"]))
+		if description != "" {
+			description += "\n"
+		}
+		description += "Provide the custom tool input in the input string field."
+		return []map[string]interface{}{{
+			"type": "function", "name": buildToolAlias(namespace, name), "description": description,
+			"parameters": map[string]interface{}{
+				"type":                 "object",
+				"properties":           map[string]interface{}{"input": map[string]interface{}{"type": "string"}},
+				"required":             []interface{}{"input"},
+				"additionalProperties": false,
+			},
+		}}, nil
+	case "x_search", "web_search":
+		out := cloneStringInterfaceMap(tool)
+		if stripWebSearchControlFields(out) {
+			state.addWarning("web_search_controls_downgraded")
+		}
+		return []map[string]interface{}{out}, nil
+	case "mcp", "shell", "image_generation", "collections_search", "file_search", "code_execution", "code_interpreter":
 		return []map[string]interface{}{cloneStringInterfaceMap(tool)}, nil
 	case "computer_use_preview":
 		return nil, fmt.Errorf("%s.type computer_use_preview is not supported by Grok Build", param)
@@ -715,9 +811,69 @@ func normalizeBuildReasoningEffort(payload map[string]interface{}, model string)
 // normalizeConsoleReasoningEffort applies the Console wire aliases: minimal
 // collapses to low, and both xhigh and the client-only max alias become xhigh.
 // Any other value is forwarded unchanged rather than silently downgraded.
+// consoleModelSemantics is the per-model Console contract grok2api drives from
+// its catalog (console/catalog.go): whether a model reasons at all, whether it
+// accepts an effort level, the effort to use when none is sent, and the output
+// ceiling to inject when the caller did not set one.
+//
+// Without it a relay forwards `reasoning` to models that reject it, forwards
+// `effort` to models with a fixed reasoning budget, and lets the upstream pick
+// its own (shorter) output limit.
+type consoleModelSemantics struct {
+	SupportsReasoning       bool
+	SupportsReasoningEffort bool
+	DefaultReasoningEffort  string
+	MaxOutputTokens         int
+}
+
+// consoleModelSemanticsFor resolves the Console semantics for a model id. The
+// id may carry the "console/" route prefix this gateway's catalog uses.
+func consoleModelSemanticsFor(model string) (consoleModelSemantics, bool) {
+	id := strings.ToLower(strings.TrimSpace(model))
+	id = strings.TrimPrefix(id, "console/")
+	switch id {
+	case "grok-4.3", "grok-4.5", "grok-4.20-multi-agent-0309":
+		return consoleModelSemantics{SupportsReasoning: true, SupportsReasoningEffort: true, DefaultReasoningEffort: "medium", MaxOutputTokens: 1_000_000}, true
+	case "grok-4.20-0309-reasoning":
+		// Fixed reasoning budget: an effort is not accepted.
+		return consoleModelSemantics{SupportsReasoning: true, MaxOutputTokens: 1_000_000}, true
+	case "grok-4.20-0309-non-reasoning", "grok-build-0.1":
+		return consoleModelSemantics{MaxOutputTokens: 256_000}, true
+	}
+	return consoleModelSemantics{}, false
+}
+
+// normalizeConsoleReasoningEffort applies the Console wire aliases and the
+// per-model Contract Console actually enforces.
 func normalizeConsoleReasoningEffort(payload map[string]interface{}, model string) {
+	// The output ceiling is injected for any Console model that declares one,
+	// independent of reasoning, so it runs before the reasoning switch.
+	if spec, ok := consoleModelSemanticsFor(model); ok && spec.MaxOutputTokens > 0 {
+		if _, exists := payload["max_output_tokens"]; !exists {
+			payload["max_output_tokens"] = spec.MaxOutputTokens
+		}
+	}
+	spec, known := consoleModelSemanticsFor(model)
 	reasoning, _ := payload["reasoning"].(map[string]interface{})
+	if known && !spec.SupportsReasoning {
+		// The model rejects the reasoning object outright.
+		delete(payload, "reasoning")
+		return
+	}
 	if reasoning == nil {
+		if !known || spec.DefaultReasoningEffort == "" {
+			return
+		}
+		reasoning = map[string]interface{}{}
+	}
+	if known && !spec.SupportsReasoningEffort {
+		// Fixed reasoning budget: keep any other reasoning control, drop effort.
+		delete(reasoning, "effort")
+		if len(reasoning) == 0 {
+			delete(payload, "reasoning")
+		} else {
+			payload["reasoning"] = reasoning
+		}
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(interfaceString(reasoning["effort"]))) {
@@ -729,7 +885,12 @@ func normalizeConsoleReasoningEffort(payload map[string]interface{}, model strin
 		reasoning["effort"] = "high"
 	case "xhigh", "max":
 		reasoning["effort"] = "xhigh"
+	default:
+		if known && spec.DefaultReasoningEffort != "" {
+			reasoning["effort"] = spec.DefaultReasoningEffort
+		}
 	}
+	payload["reasoning"] = reasoning
 }
 
 // Validate structure only. Upstreams, not the relay's model catalog, decide
@@ -752,4 +913,77 @@ func validatePayloadReasoning(payload map[string]interface{}) error {
 		}
 	}
 	return nil
+}
+
+// hasNativeSearchTool reports whether the tool list already declares a hosted
+// search tool, so web_search_options does not duplicate it.
+func hasNativeSearchTool(tools []map[string]interface{}) bool {
+	for _, tool := range tools {
+		switch strings.ToLower(strings.TrimSpace(fmt.Sprint(tool["type"]))) {
+		case "web_search", "x_search":
+			return true
+		}
+	}
+	return false
+}
+
+// webSearchCompatibilityFields are newer OpenAI/Codex controls that the Grok
+// Build wire contract rejects. grok2api drops them (keeping only the native
+// minimal search tool) instead of letting the whole request fail; the
+// operator's intent — a web search — is preserved either way.
+var webSearchCompatibilityFields = []string{
+	"external_web_access",
+	"indexed_web_access",
+	"search_content_types",
+	"search_context_size",
+	"user_location",
+	"max_search_results",
+	"safe_search",
+}
+
+// stripWebSearchControlFields removes the controls above from a hosted search
+// tool, returning true when anything was removed.
+func stripWebSearchControlFields(tool map[string]interface{}) bool {
+	changed := false
+	for _, field := range webSearchCompatibilityFields {
+		if _, exists := tool[field]; exists {
+			delete(tool, field)
+			changed = true
+		}
+	}
+	return changed
+}
+
+// lowerEmulatedCallItem rewrites a client-side custom_tool_call / apply_patch_call
+// history item into the emulated function_call the Build plane accepts, so a
+// multi-turn agent loop keeps working after the tool declaration was emulated.
+func lowerEmulatedCallItem(item map[string]interface{}, state *buildToolNormalizationState) {
+	switch strings.ToLower(strings.TrimSpace(parseLooseStringAny(item["type"]))) {
+	case "custom_tool_call":
+		name := strings.TrimSpace(parseLooseStringAny(item["name"]))
+		if name == "" {
+			return
+		}
+		arguments, err := json.Marshal(map[string]interface{}{"input": parseLooseStringAny(item["input"])})
+		if err != nil {
+			return
+		}
+		item["type"] = "function_call"
+		item["name"] = buildToolAlias("", name)
+		item["arguments"] = string(arguments)
+		delete(item, "input")
+	case "apply_patch_call":
+		operation, ok := item["operation"].(map[string]interface{})
+		if !ok {
+			return
+		}
+		arguments, err := json.Marshal(map[string]interface{}{"operation": operation})
+		if err != nil {
+			return
+		}
+		item["type"] = "function_call"
+		item["name"] = "apply_patch"
+		item["arguments"] = string(arguments)
+		delete(item, "operation")
+	}
 }

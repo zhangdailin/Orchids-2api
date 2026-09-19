@@ -338,9 +338,10 @@ func (m *Manager) FeedbackOutcome(nodeID string, outcome FeedbackOutcome) {
 		// first failure, and a cooldown window lets it retry/recover later.
 		m.health[nodeID] = score*0.5 - 0.1
 		m.unhealthy[nodeID] = time.Now().Add(nodeCooldown)
-		if wasDegraded {
-			recordNodeFailure(m.scopeForNodeLocked(nodeID), outcomeReason(outcome))
-		}
+		// Count the failure itself, not only a repeat failure of an already
+		// degraded node: the healthy->degraded transition is the event an
+		// operator alert is about.
+		recordNodeFailure(m.scopeForNodeLocked(nodeID), outcomeReason(outcome))
 	case OutcomeRateLimited, OutcomeAccountBlock, OutcomeForbidden:
 		// No health change: the request failed for account/team-level reasons.
 	}

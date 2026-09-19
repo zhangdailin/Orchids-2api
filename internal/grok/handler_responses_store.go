@@ -339,6 +339,7 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 	target := io.MultiWriter(w, fullCapture)
 	terminal, done := false, false
 	failureCode, failureMessage := "", ""
+	tracker := &streamRepeatTracker{}
 	err := consumeCompatibleSSE(body, func(frame compatibleSSEEvent) error {
 		var event map[string]interface{}
 		kind := ""
@@ -353,9 +354,23 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 				return fmt.Errorf("%s", failureMessage)
 			}
 			kind = firstNonEmpty(interfaceString(event["type"]), frame.Event)
+			// response.doom_loop_check is a private Grok control event: it is
+			// not part of the Responses schema, and a strict client (Codex,
+			// Grok TUI) treats an unknown type as a protocol error. It never
+			// crosses the public boundary (grok2api filters it the same way).
+			if isPrivateBuildControlEvent(kind) {
+				return nil
+			}
 			response, _ := event["response"].(map[string]interface{})
 			if id := interfaceString(response["id"]); id != "" {
 				responseID = id
+			}
+			// Stop a degenerate upstream that repeats one delta forever; it
+			// would otherwise run until the request deadline while consuming
+			// quota and flooding the caller's context.
+			if loopErr := tracker.observe(event, frame.Event); loopErr != nil {
+				failureCode, failureMessage = "upstream_output_loop", loopErr.Error()
+				return loopErr
 			}
 		}
 		if redactResponseError(event) {
@@ -411,10 +426,13 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		if err != nil && err != io.EOF {
 			result.Err = fmt.Errorf("%s: %w", failureMessage, err)
 		}
+		now := time.Now().Unix()
 		failure, _ := json.Marshal(map[string]interface{}{
 			"type": "response.failed", "response": map[string]interface{}{
 				"id": responseID, "object": "response", "status": "failed", "model": model,
-				"error": map[string]interface{}{"code": failureCode, "message": failureMessage},
+				"created_at": now, "completed_at": now,
+				"output": []interface{}{},
+				"error":  map[string]interface{}{"code": failureCode, "message": failureMessage},
 			},
 		})
 		frame := compatibleSSEEvent{Event: "response.failed", data: []string{string(failure)}}
@@ -589,6 +607,13 @@ func reconcileResponseErrorEnvelope(response map[string]interface{}) {
 // request. `err` carries the upstream's own words, while the failure message is
 // the gateway's paraphrase, so the error is classified first.
 func classifySynthesizedFailure(code, message string, err error) (string, string) {
+	// An idle timeout is its own condition: a client has to be able to tell
+	// "the upstream stalled" from "the stream was malformed", and the Responses
+	// plane has a dedicated code for it (grok2api reports
+	// upstream_stream_idle_timeout rather than a generic read error).
+	if err != nil && errors.Is(err, ErrGrokSemanticIdle) {
+		return "upstream_stream_idle_timeout", "upstream stream timed out while waiting for generated output"
+	}
 	if code == "" {
 		return code, message
 	}

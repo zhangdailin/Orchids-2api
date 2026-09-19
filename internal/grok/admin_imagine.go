@@ -416,7 +416,7 @@ func (h *Handler) HandleAdminImagineStart(w http.ResponseWriter, r *http.Request
 	}
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
-		http.Error(w, "prompt cannot be empty", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "prompt cannot be empty")
 		return
 	}
 	ratio := resolveAspectRatio(strings.TrimSpace(req.AspectRatio))
@@ -460,7 +460,7 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 	if taskID != "" {
 		session, ok := getImagineSession(taskID)
 		if !ok {
-			http.Error(w, "task not found", http.StatusNotFound)
+			writeGrokError(w, http.StatusNotFound, "task not found")
 			return
 		}
 		prompt = session.Prompt
@@ -471,7 +471,7 @@ func (h *Handler) HandleAdminImagineSSE(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if prompt == "" {
-		http.Error(w, "prompt cannot be empty", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "prompt cannot be empty")
 		return
 	}
 	ratio = resolveAspectRatio(ratio)
@@ -493,7 +493,7 @@ func (h *Handler) HandleAdminImagineWS(w http.ResponseWriter, r *http.Request) {
 	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 	if taskID != "" {
 		if _, ok := getImagineSession(taskID); !ok {
-			http.Error(w, "task not found", http.StatusNotFound)
+			writeGrokError(w, http.StatusNotFound, "task not found")
 			return
 		}
 	}

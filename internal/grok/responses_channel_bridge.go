@@ -108,14 +108,13 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		if !requireMethod(w, r, http.MethodPost) {
 			return
 		}
-		body, err := io.ReadAll(r.Body)
+		body, err := readBoundedJSONBody(w, r)
 		if err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
 		var req ResponsesCreateRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "invalid json")
 			return
 		}
 		req.Model = normalizeModelID(req.Model)
@@ -126,7 +125,7 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		// The bridge can always persist a response, streamed or not, because it
 		// writes the terminal object the client saw rather than the raw stream.
 		if err := validateResponsesCompatibilityFor(req, true); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 		if !expandBridgedPreviousResponse(w, r, &req, opts) {
@@ -134,12 +133,12 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		}
 		chatReq, err := chatRequestFromResponses(req)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 		raw, err := json.Marshal(chatReq)
 		if err != nil {
-			http.Error(w, "failed to build chat request", http.StatusInternalServerError)
+			writeGrokError(w, http.StatusInternalServerError, "failed to build chat request")
 			return
 		}
 
@@ -178,14 +177,14 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		}
 		var chatBody map[string]interface{}
 		if err := json.Unmarshal(rec.body.Bytes(), &chatBody); err != nil {
-			http.Error(w, "chat response parse error: "+err.Error(), http.StatusBadGateway)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 		response := responsesObjectFromChat(req.Model, chatBody)
 		applyBridgedResponseExtras(response, req)
 		if storeRequested(req) {
 			if err := saveBridgedResponse(r, req, response, opts); err != nil {
-				http.Error(w, "failed to store response", http.StatusServiceUnavailable)
+				writeGrokError(w, http.StatusServiceUnavailable, "failed to store response")
 				return
 			}
 		}
@@ -285,7 +284,7 @@ func ResponsesResourceHandler(opts ResponsesBridgeOptions) http.HandlerFunc {
 		}
 		if r.Method == http.MethodDelete {
 			if err := st.DeleteStoredResponse(r.Context(), responseID, owner); err != nil {
-				http.Error(w, "failed to delete response", http.StatusServiceUnavailable)
+				writeGrokError(w, http.StatusServiceUnavailable, "failed to delete response")
 				return
 			}
 			writeJSON(w, map[string]interface{}{"id": responseID, "object": "response.deleted", "deleted": true})

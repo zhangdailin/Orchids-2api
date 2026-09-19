@@ -67,6 +67,20 @@ func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
 	}
 	out := make([]map[string]interface{}, 0, len(tools))
 	for _, tool := range tools {
+		// A hosted tool (web_search / x_search) is forwarded as-is: it is the
+		// server-side search the caller asked for, not a function to call back.
+		if normalized, native := nativeToolTypes[strings.ToLower(strings.TrimSpace(tool.Type))]; native {
+			item := map[string]interface{}{"type": normalized}
+			for key, value := range tool.Raw {
+				switch key {
+				case "type", "function":
+				default:
+					item[key] = value
+				}
+			}
+			out = append(out, item)
+			continue
+		}
 		if !strings.EqualFold(strings.TrimSpace(tool.Type), "function") {
 			continue
 		}
@@ -335,7 +349,7 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 	}
 	inputDetails, _ := firstDefined(raw["input_tokens_details"], raw["prompt_tokens_details"]).(map[string]interface{})
 	cached := min(max(interfaceToInt(inputDetails["cached_tokens"]), 0), max(prompt, 0))
-	return map[string]interface{}{
+	normalized := map[string]interface{}{
 		"prompt_tokens":     prompt,
 		"completion_tokens": completion,
 		"total_tokens":      total,
@@ -351,6 +365,18 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 			"reasoning_tokens": reasoning,
 		},
 	}
+	// Rebuilding the usage object used to drop everything outside the four
+	// counts. The upstream also reports what the request cost and how much
+	// context it used; grok2api passes those through, and they are the only
+	// source for those figures downstream.
+	for _, key := range []string{
+		"cost_in_usd_ticks", "num_sources_used", "num_server_side_tools_used", "context_details",
+	} {
+		if value, exists := raw[key]; exists && value != nil {
+			normalized[key] = value
+		}
+	}
+	return normalized
 }
 
 // finishUpstreamChat completes a chat response after an upstream call: error
@@ -367,7 +393,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
-		http.Error(w, err.Error(), upstreamHTTPResponseStatus(err))
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -391,7 +417,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 
 func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger, build bool) {
 	if h == nil || sess == nil || sess.acc == nil || (build && h.buildClient() == nil) || (!build && h.webClient() == nil) {
-		http.Error(w, "grok upstream client or account not configured", http.StatusServiceUnavailable)
+		writeGrokError(w, http.StatusServiceUnavailable, "grok upstream client or account not configured")
 		return
 	}
 	if req.startedAt.IsZero() {
@@ -399,7 +425,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 	}
 	payload, err := h.responsesPayloadFromChat(spec, req, build)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	provider, endpoint, model := ProviderConsole, h.consoleURL("responses"), req.Model
@@ -516,12 +542,12 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 	var raw map[string]interface{}
 	if err := json.NewDecoder(body).Decode(&raw); err != nil {
 		outcome.Err = err
-		http.Error(w, "console response parse error: "+err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	if raw["error"] != nil || interfaceString(raw["status"]) == "failed" {
 		outcome.Err = responseFailure(raw)
-		http.Error(w, outcome.Err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, outcome.Err)
 		return
 	}
 	text := consoleExtractMessageText(raw)
@@ -543,7 +569,7 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 		args, validArgs := item["arguments"].(string)
 		if id == "" || id == "<nil>" || name == "" || name == "<nil>" || seen[id] || !validArgs || !json.Valid([]byte(args)) {
 			outcome.Err = fmt.Errorf("invalid or duplicate upstream function_call")
-			http.Error(w, outcome.Err.Error(), http.StatusBadGateway)
+			writeGrokUpstreamError(w, outcome.Err)
 			return
 		}
 		seen[id] = true
@@ -602,7 +628,7 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 	}
 	if text == "" && refusal == "" && len(toolCalls) == 0 && finishReason != "length" && filter.matched == "" {
 		outcome.Err = fmt.Errorf("upstream completed response with no content or tool calls")
-		http.Error(w, outcome.Err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, outcome.Err)
 		return
 	}
 	outcome.Usage = firstUsage(consoleUsage(raw), addReasoningUsage(buildChatUsagePayload(req, text+refusal, toolCalls), reasoning))

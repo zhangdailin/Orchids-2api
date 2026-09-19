@@ -541,7 +541,49 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 		}
 		acc.QuotaResetAt = time.Now().Add(cooldown)
 	}
+	// A refusal that names one model ("access to the chat endpoint is denied",
+	// "not available for model X") is a capability problem for that model only.
+	// Cooling the whole credential took every other model out of the pool for
+	// ten minutes; the model cooldown map exists for exactly this case
+	// (grok2api marks the model, not the account).
+	if acc != nil && isModelScopedRefusal(err) {
+		if model := requestModelFromContext(ctx); model != "" {
+			store.RecordModelCooldown(acc, model, time.Now().Add(modelScopedRefusalCooldown))
+			if h.lb != nil && h.lb.Store != nil {
+				_ = h.lb.Store.UpdateAccount(ctx, acc)
+			}
+			return
+		}
+	}
 	h.base.MarkAccountStatus(ctx, acc, err)
+}
+
+// modelScopedRefusalCooldown is how long one model stays out of rotation after
+// the upstream refused it for this credential.
+const modelScopedRefusalCooldown = 5 * time.Minute
+
+// isModelScopedRefusal reports whether an upstream failure refused one model
+// rather than the credential itself.
+func isModelScopedRefusal(err error) bool {
+	if err == nil {
+		return false
+	}
+	if parseUpstreamStatus(err) != 403 {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"access to the chat endpoint is denied",
+		"for model",
+		"model is not available",
+		"not available for model",
+		"model_not_available",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func isResourceExhaustedError(err error) bool {

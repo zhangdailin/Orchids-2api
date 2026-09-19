@@ -71,7 +71,8 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 			"type":           "image_generation.completed",
 			field:            val,
 			"index":          i,
-			"revised_prompt": nil,
+			"revised_prompt": "",
+			"mime_type":      imageMimeTypeForValue(field, val),
 			"usage":          buildImageUsagePayload(prompt, len(urls)),
 		}
 		writeSSE(w, flusher, "image_generation.completed", encodeJSONBytes(data))
@@ -94,56 +95,56 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	}
 	rawResponseFormat := strings.ToLower(strings.TrimSpace(req.ResponseFormat))
 	if rawResponseFormat != "" && rawResponseFormat != "url" && rawResponseFormat != "b64_json" && rawResponseFormat != "base64" {
-		http.Error(w, "response_format must be url or b64_json", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "response_format must be url or b64_json")
 		return
 	}
 	req.ResponseFormat = normalizeImageResponseFormat(req.ResponseFormat)
 	if !isImageGenerationModel(req.Model) {
-		http.Error(w, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0, grok-imagine-image-quality, grok-imagine-image-pro]", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0, grok-imagine-image-quality, grok-imagine-image-pro]")
 		return
 	}
 	ratio, ratioErr := normalizeImageAspectRatio(req.AspectRatio, req.Size)
 	if ratioErr != nil {
-		http.Error(w, ratioErr.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, ratioErr)
 		return
 	}
 	req.AspectRatio = ratio
 	req.Size = strings.ToLower(strings.TrimSpace(req.Size))
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" {
-		http.Error(w, "prompt is required", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
 	if req.N < 1 || req.N > 10 {
-		http.Error(w, "n must be between 1 and 10", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "n must be between 1 and 10")
 		return
 	}
 	if req.Stream && req.N != 1 {
-		http.Error(w, "Streaming is only supported with n=1.", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "Streaming is only supported with n=1.")
 		return
 	}
 	if req.Stream && normalizeModelID(req.Model) == "grok-imagine-image-lite" {
-		http.Error(w, "grok-imagine-image-lite does not support stream", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "grok-imagine-image-lite does not support stream")
 		return
 	}
 	if req.PartialImages != nil {
 		if *req.PartialImages < 0 || *req.PartialImages > 3 {
-			http.Error(w, "partial_images must be between 0 and 3", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "partial_images must be between 0 and 3")
 			return
 		}
 		if *req.PartialImages > 0 && !req.Stream {
-			http.Error(w, "partial_images requires stream=true", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "partial_images requires stream=true")
 			return
 		}
 	}
 	quality := strings.ToLower(strings.TrimSpace(req.Quality))
 	if quality != "" && quality != "low" && quality != "medium" {
-		http.Error(w, "quality must be low or medium", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "quality must be low or medium")
 		return
 	}
 	req.Quality = quality
 	if raw := strings.TrimSpace(string(req.StorageOptions)); raw != "" && raw != "null" {
-		http.Error(w, "storage_options is not supported", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "storage_options is not supported")
 		return
 	}
 	h.serveImagesGenerations(r.Context(), w, req, detectPublicBaseURL(r))
@@ -151,13 +152,13 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 
 func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWriter, req ImagesGenerationsRequest, publicBase string) {
 	if err := h.ensureModelCapability(ctx, req.Model, store.CapabilityImage); err != nil {
-		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, modelValidationMessage(req.Model, err))
 		return
 	}
 
 	spec, ok := ResolveModel(req.Model)
 	if !ok || !spec.IsImage || !isImageGenerationModel(spec.ID) {
-		http.Error(w, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0, grok-imagine-image-quality, grok-imagine-image-pro]", req.Model), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0, grok-imagine-image-quality, grok-imagine-image-pro]", req.Model))
 		return
 	}
 	spec = h.applyPersistedRoute(ctx, spec)
@@ -170,7 +171,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	var err error
 	sess, err = h.openChatAccountSessionForModel(ctx, spec)
 	if err != nil {
-		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+		writeGrokNoAccountError(w, err)
 		return
 	}
 	defer func() {
@@ -191,11 +192,11 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	}
 	urls, err := h.collectAppChatImageURLs(ctx, sess, spec, req, true)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	if len(urls) == 0 {
-		http.Error(w, "no image generated", http.StatusBadGateway)
+		writeGrokError(w, http.StatusBadGateway, "no image generated")
 		return
 	}
 
@@ -218,11 +219,25 @@ func imagePartialCount(req ImagesGenerationsRequest) int {
 	return *req.PartialImages
 }
 
+// imagineNSFWAllowed decides whether a client-supplied `nsfw: true` may reach
+// the upstream Imagine socket. The operator's configuration is the ceiling:
+// a caller can never enable unfiltered generation on a deployment that turned
+// it off (mirrors grok2api, where enable_nsfw comes from server config only).
+func (h *Handler) imagineNSFWAllowed(requested *bool) bool {
+	if requested == nil || !*requested {
+		return false
+	}
+	if h == nil || h.configSnapshot() == nil {
+		return false
+	}
+	return h.configSnapshot().PublicImagineNSFW()
+}
+
 func (h *Handler) streamImagineWSGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	flusher := streamResponseHeaders(w)
-	nsfw := req.NSFW != nil && *req.NSFW
+	nsfw := h.imagineNSFWAllowed(req.NSFW)
 	events, errs := h.streamImagineWSImages(ctx, sess, req.Prompt, req.AspectRatio, req.N, nsfw, imagineWSProModel(spec.ID))
 	partialLimit := imagePartialCount(req)
 	partialIndex := 0
@@ -270,7 +285,7 @@ func (h *Handler) streamImagineWSGeneration(ctx context.Context, w http.Response
 func (h *Handler) collectImagineWSGeneration(ctx context.Context, w http.ResponseWriter, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, publicBase string) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	nsfw := req.NSFW != nil && *req.NSFW
+	nsfw := h.imagineNSFWAllowed(req.NSFW)
 	events, errs := h.streamImagineWSImages(ctx, sess, req.Prompt, req.AspectRatio, req.N, nsfw, imagineWSProModel(spec.ID))
 	field := imageResponseField(req.ResponseFormat)
 	data := make([]map[string]interface{}, 0, req.N)
@@ -280,20 +295,24 @@ func (h *Handler) collectImagineWSGeneration(ctx context.Context, w http.Respons
 		}
 		value, err := h.imagineImageOutputValue(ctx, sess.token, ev, req.ResponseFormat)
 		if err != nil {
-			http.Error(w, "image conversion failed: "+err.Error(), http.StatusBadGateway)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 		if field == "url" && publicBase != "" && strings.HasPrefix(value, "/") {
 			value = publicBase + value
 		}
-		data = append(data, map[string]interface{}{field: value, "revised_prompt": nil})
+		data = append(data, map[string]interface{}{
+			field:            value,
+			"revised_prompt": "",
+			"mime_type":      imageMimeTypeForValue(field, value),
+		})
 	}
 	if err := <-errs; err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	if len(data) == 0 {
-		http.Error(w, "no image generated", http.StatusBadGateway)
+		writeGrokError(w, http.StatusBadGateway, "no image generated")
 		return
 	}
 	writeJSON(w, map[string]interface{}{
@@ -312,7 +331,7 @@ func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.Resp
 			"status", parseUpstreamStatus(err),
 			"error", err,
 		)
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	defer resp.Body.Close()

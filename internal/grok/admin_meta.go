@@ -45,7 +45,7 @@ func (h *Handler) HandleAdminVoiceToken(w http.ResponseWriter, r *http.Request) 
 		raw, _ := io.ReadAll(io.LimitReader(r.Body, 64*1024))
 		if len(strings.TrimSpace(string(raw))) > 0 {
 			if err := json.Unmarshal(raw, &body); err != nil {
-				http.Error(w, "invalid voice token request: "+err.Error(), http.StatusBadRequest)
+				writeGrokError(w, http.StatusBadRequest, "invalid voice token request")
 				return
 			}
 		}
@@ -67,25 +67,25 @@ func (h *Handler) HandleAdminVoiceToken(w http.ResponseWriter, r *http.Request) 
 
 	acc, token, err := h.selectAccount(r.Context())
 	if err != nil {
-		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+		writeGrokNoAccountError(w, err)
 		return
 	}
 
 	client := h.currentClient()
 	if client == nil {
-		http.Error(w, "grok client not configured", http.StatusServiceUnavailable)
+		writeGrokError(w, http.StatusServiceUnavailable, "grok client not configured")
 		return
 	}
 	data, err := client.getVoiceToken(r.Context(), token, voice, personality, speed, instruction)
 	if err != nil {
 		h.markAccountStatus(r.Context(), acc, err)
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	respToken, _ := data["token"].(string)
 	respToken = strings.TrimSpace(respToken)
 	if respToken == "" {
-		http.Error(w, "upstream returned no voice token", http.StatusBadGateway)
+		writeGrokError(w, http.StatusBadGateway, "upstream returned no voice token")
 		return
 	}
 

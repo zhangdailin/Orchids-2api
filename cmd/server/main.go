@@ -307,6 +307,9 @@ func main() {
 	startProbeLoop(ctx, s, apiHandler.ConfigSnapshot, wiredAuditLogger, cfg.Port)
 	logWorkBuddyReachability(cfg)
 	logQoderReachability(cfg)
+	// Cached media inputs outlive their Redis records; without this sweep the
+	// files accumulate on disk forever.
+	startMediaInputSweeper(ctx, s, grok.CacheBaseDir())
 
 	// Graceful shutdown
 	idleConnsClosed := make(chan struct{})

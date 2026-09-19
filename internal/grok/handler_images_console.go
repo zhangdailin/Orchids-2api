@@ -18,17 +18,17 @@ const (
 
 func (h *Handler) serveConsoleImagesGeneration(ctx context.Context, w http.ResponseWriter, spec ModelSpec, req ImagesGenerationsRequest, publicBase string) {
 	if req.Stream || imagePartialCount(req) != 0 {
-		http.Error(w, "Grok Console image generation does not support stream or partial_images", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "Grok Console image generation does not support stream or partial_images")
 		return
 	}
 	ratio, err := normalizeConsoleImageAspectRatio(req.AspectRatio, req.Size)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	resolution, quality, err := normalizeConsoleImageOptions(spec, req.Resolution, req.Quality)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 
@@ -52,17 +52,17 @@ func (h *Handler) serveConsoleImagesGeneration(ctx context.Context, w http.Respo
 
 func (h *Handler) serveConsoleImagesEdit(ctx context.Context, w http.ResponseWriter, spec ModelSpec, prompt string, uploads []imageEditUploadInput, n int, aspectRatio, size, resolution, quality, responseFormat, publicBase string) {
 	if len(uploads) < 1 || len(uploads) > 3 {
-		http.Error(w, "Console image edit requires between 1 and 3 images", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "Console image edit requires between 1 and 3 images")
 		return
 	}
 	ratio, err := normalizeConsoleImageAspectRatio(aspectRatio, size)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	resolution, quality, err = normalizeConsoleImageOptions(spec, resolution, quality)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	images := make([]map[string]interface{}, 0, len(uploads))
@@ -127,17 +127,17 @@ func normalizeConsoleImageAspectRatio(aspectRatio, size string) (string, error) 
 func (h *Handler) forwardConsoleImageRequest(ctx context.Context, w http.ResponseWriter, modelID, path string, payload map[string]interface{}, responseFormat, publicBase string) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	client := h.currentClient()
 	if client == nil {
-		http.Error(w, "Grok Console client is not configured", http.StatusServiceUnavailable)
+		writeGrokError(w, http.StatusServiceUnavailable, "Grok Console client is not configured")
 		return
 	}
 	sess, err := h.openConsoleAccountSession(ctx, nil, modelID)
 	if err != nil {
-		http.Error(w, "no available Grok Console account: "+err.Error(), http.StatusServiceUnavailable)
+		writeGrokNoAccountError(w, err)
 		return
 	}
 	defer sess.Close()
@@ -149,23 +149,23 @@ func (h *Handler) forwardConsoleImageRequest(ctx context.Context, w http.Respons
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxConsoleImageResponseBytes+1))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	if len(data) > maxConsoleImageResponseBytes {
-		http.Error(w, "Console image response exceeds 128 MiB", http.StatusBadGateway)
+		writeGrokError(w, http.StatusBadGateway, "Console image response exceeds 128 MiB")
 		return
 	}
 	if normalizeImageResponseFormat(responseFormat) == "url" {
 		data, err = h.localizeConsoleImageResponse(ctx, sess.token, data, publicBase)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 	}

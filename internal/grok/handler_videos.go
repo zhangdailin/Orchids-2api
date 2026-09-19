@@ -1,7 +1,6 @@
 package grok
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -78,6 +77,20 @@ func (j *videoJob) toMap() map[string]interface{} {
 	return out
 }
 
+// videoContentURL builds the reachable content self-link for a video job.
+func videoContentURL(id string) string {
+	prefix := strings.TrimRight(strings.TrimSpace(grokMediaRoutePrefix), "/")
+	if prefix == "" {
+		prefix = "/v1"
+	}
+	return prefix + "/videos/" + strings.TrimSpace(id) + "/content"
+}
+
+// grokMediaRoutePrefix is the prefix the media routes are registered under.
+// Both the grok-native and the unified prefix are served, so a link built here
+// resolves on either; it is overridable for a deployment behind a path rewrite.
+var grokMediaRoutePrefix = "/v1"
+
 func (j *videoJob) toStandardMap() map[string]interface{} {
 	if j == nil {
 		return map[string]interface{}{"status": "failed", "error": map[string]interface{}{"code": "internal_error", "message": "video job is unavailable"}}
@@ -85,7 +98,10 @@ func (j *videoJob) toStandardMap() map[string]interface{} {
 	switch j.Status {
 	case "completed":
 		video := map[string]interface{}{
-			"url":                "/v1/videos/" + j.ID + "/content",
+			// The self-link must resolve: it is emitted with the same prefix the
+			// client called, so a /grok/v1 caller is not handed a /v1 path it
+			// never configured.
+			"url":                videoContentURL(j.ID),
 			"respect_moderation": true,
 		}
 		if j.Operation == "generate" && j.Seconds > 0 {
@@ -366,7 +382,7 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 	}()
 	req, err := parseVideosRequest(r)
 	if err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 	req.Model = normalizeModelID(firstNonEmpty(req.Model, "grok-imagine-video"))
@@ -375,22 +391,22 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Prompt = strings.TrimSpace(req.Prompt)
 	if req.Prompt == "" {
-		http.Error(w, "prompt cannot be empty", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "prompt cannot be empty")
 		return
 	}
 	spec, ok := ResolveModel(req.Model)
 	if !ok || !spec.IsVideo {
-		http.Error(w, fmt.Sprintf("Model %q is not a video model", req.Model), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("Model %q is not a video model", req.Model))
 		return
 	}
 	spec = h.applyPersistedRoute(r.Context(), spec)
 	if err := h.ensureModelCapability(r.Context(), req.Model, store.CapabilityVideo); err != nil {
-		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, modelValidationMessage(req.Model, err))
 		return
 	}
 	if spec.Upstream == UpstreamAppChat || (spec.Upstream == UpstreamAuto && !requiresConsoleResponses(spec)) {
 		if len(req.InputReferences) > 0 {
-			http.Error(w, "web video generation currently supports text-to-video only; use a Console/Build video model for image references", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "web video generation currently supports text-to-video only; use a Console/Build video model for image references")
 			return
 		}
 	}
@@ -401,7 +417,7 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		Size:           firstNonEmpty(req.Size, "720x1280"),
 	}, spec, len(req.InputReferences))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	maxReferences := 7
@@ -409,13 +425,13 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		maxReferences = 8
 	}
 	if len(req.InputReferences) > maxReferences {
-		http.Error(w, fmt.Sprintf("input_references supports at most %d images for this model", maxReferences), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("input_references supports at most %d images for this model", maxReferences))
 		return
 	}
 	if spec.Upstream == UpstreamCLI {
 		req.InputReferences, err = h.resolveBuildVideoReferences(r.Context(), req.InputReferences, videoRequestOwner(r))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 	}
@@ -531,7 +547,7 @@ func (h *Handler) HandleVideosRetrieve(w http.ResponseWriter, r *http.Request) {
 	}
 	job, ok := h.lookupVideoJob(r.Context(), videoID, videoRequestOwner(r))
 	if !ok {
-		http.Error(w, "video not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "video not found")
 		return
 	}
 	writeJSON(w, job.toMap())
@@ -544,20 +560,32 @@ func (h *Handler) HandleVideosContent(w http.ResponseWriter, r *http.Request) {
 	videoID := videoIDFromPath(r.URL.Path)
 	job, ok := h.lookupVideoJob(r.Context(), videoID, videoRequestOwner(r))
 	if !ok {
-		http.Error(w, "video not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "video not found")
 		return
 	}
 	if job.Status != "completed" || strings.TrimSpace(job.ContentPath) == "" {
-		http.Error(w, "video content is not ready yet", http.StatusConflict)
+		writeGrokError(w, http.StatusConflict, "video content is not ready yet")
 		return
 	}
-	data, err := os.ReadFile(job.ContentPath)
+	file, err := os.Open(job.ContentPath)
 	if err != nil {
-		http.Error(w, "video content not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "video content not found")
 		return
 	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		writeGrokError(w, http.StatusNotFound, "video content not found")
+		return
+	}
+	// Stream the file instead of reading it whole: a finished video can be
+	// hundreds of megabytes, and several concurrent downloads used to multiply
+	// that in memory. ServeContent also gives Range requests and conditional
+	// GETs for free.
 	w.Header().Set("Content-Type", "video/mp4")
-	http.ServeContent(w, r, videoID+".mp4", time.Now(), bytes.NewReader(data))
+	w.Header().Set("Content-Disposition", `inline; filename="`+sanitizeCachedFilename(videoID)+`.mp4"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, videoID+".mp4", info.ModTime(), file)
 }
 
 func videoIDFromPath(path string) string {

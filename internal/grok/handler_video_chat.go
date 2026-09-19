@@ -32,7 +32,7 @@ func (h *Handler) serveVideoChatCompletion(
 ) {
 	sess, err := h.openChatAccountSessionForModel(ctx, spec)
 	if err != nil {
-		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+		writeGrokNoAccountError(w, err)
 		return
 	}
 	defer sess.Close()
@@ -264,7 +264,7 @@ func (h *Handler) collectVideoChatCompletion(
 		reasoning = append(reasoning, fmt.Sprintf("视频正在生成 %d%%", progress))
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	content := h.videoOutputURL(ctx, sess.token, artifact.URL, publicBase)

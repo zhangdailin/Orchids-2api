@@ -391,11 +391,7 @@ func (h *Handler) HandleAdminNSFWEnable(w http.ResponseWriter, r *http.Request) 
 	}
 	req, targets, tokenAccounts, err := h.resolveNSFWTargets(r)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(strings.ToLower(err.Error()), "failed to list accounts") {
-			status = http.StatusInternalServerError
-		}
-		http.Error(w, err.Error(), status)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 
@@ -421,11 +417,7 @@ func (h *Handler) HandleAdminNSFWEnableAsync(w http.ResponseWriter, r *http.Requ
 	}
 	req, targets, tokenAccounts, err := h.resolveNSFWTargets(r)
 	if err != nil {
-		status := http.StatusBadRequest
-		if strings.Contains(strings.ToLower(err.Error()), "failed to list accounts") {
-			status = http.StatusInternalServerError
-		}
-		http.Error(w, err.Error(), status)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 
@@ -450,12 +442,12 @@ func (h *Handler) HandleAdminNSFWEnableAsync(w http.ResponseWriter, r *http.Requ
 func (h *Handler) HandleAdminBatchTask(w http.ResponseWriter, r *http.Request) {
 	taskID, action, ok := parseBatchTaskPath(r.URL.Path)
 	if !ok {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "task not found")
 		return
 	}
 	task, exists := getNSFWBatchTask(taskID)
 	if !exists {
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "task not found")
 		return
 	}
 
@@ -519,7 +511,7 @@ func (h *Handler) HandleAdminBatchTask(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	default:
-		http.Error(w, "task not found", http.StatusNotFound)
+		writeGrokError(w, http.StatusNotFound, "task not found")
 		return
 	}
 }

@@ -33,15 +33,20 @@ type ChatCompletionsRequest struct {
 	ImageConfig         *ImageConfig             `json:"image_config,omitempty"`
 	Tools               []ToolDef                `json:"tools,omitempty"`
 	ToolChoice          interface{}              `json:"tool_choice,omitempty"`
-	ParallelToolCalls   *bool                    `json:"parallel_tool_calls,omitempty"`
-	Stop                []string                 `json:"stop,omitempty"`
-	PromptCacheKey      string                   `json:"prompt_cache_key,omitempty"`
-	MCPServers          []map[string]interface{} `json:"mcp_servers,omitempty"`
-	OutputConfig        map[string]interface{}   `json:"output_config,omitempty"`
-	ThinkingConfig      map[string]interface{}   `json:"thinking_config,omitempty"`
-	ReasoningReplay     bool                     `json:"-"`
-	startedAt           time.Time
-	sourceOperation     string
+	// WebSearchOptions is the OpenAI-style switch for the hosted search tool.
+	// It is lowered to a native web_search tool on the Responses planes.
+	WebSearchOptions  map[string]interface{}   `json:"web_search_options,omitempty"`
+	ParallelToolCalls *bool                    `json:"parallel_tool_calls,omitempty"`
+	Stop              []string                 `json:"stop,omitempty"`
+	PromptCacheKey    string                   `json:"prompt_cache_key,omitempty"`
+	MCPServers        []map[string]interface{} `json:"mcp_servers,omitempty"`
+	Metadata          map[string]interface{}   `json:"metadata,omitempty"`
+	ServiceTier       string                   `json:"service_tier,omitempty"`
+	OutputConfig      map[string]interface{}   `json:"output_config,omitempty"`
+	ThinkingConfig    map[string]interface{}   `json:"thinking_config,omitempty"`
+	ReasoningReplay   bool                     `json:"-"`
+	startedAt         time.Time
+	sourceOperation   string
 }
 
 type ChatMessage struct {
@@ -57,6 +62,25 @@ type ChatMessage struct {
 type ToolDef struct {
 	Type     string                 `json:"type"`
 	Function map[string]interface{} `json:"function,omitempty"`
+	// Raw keeps every field of the declaration. Hosted tool types (web_search,
+	// x_search, …) carry their own parameters outside `function`, and dropping
+	// them would silently disable the feature the caller asked for.
+	Raw map[string]interface{} `json:"-"`
+}
+
+// UnmarshalJSON keeps the whole declaration so native (non-function) tools can
+// be forwarded with their own fields intact.
+func (t *ToolDef) UnmarshalJSON(data []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	t.Raw = raw
+	t.Type = strings.TrimSpace(parseLooseStringAny(raw["type"]))
+	if fn, ok := raw["function"].(map[string]interface{}); ok {
+		t.Function = fn
+	}
+	return nil
 }
 
 type ToolCall struct {
@@ -400,9 +424,9 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	}
 	if _, ok := rawMap["max_completion_tokens"]; ok {
 		r.MaxCompletionTokens = &maxCompletionTokens
-		if r.MaxTokens == nil {
-			r.MaxTokens = &maxCompletionTokens
-		}
+		// max_tokens is deprecated in favour of max_completion_tokens, so when a
+		// caller sends both the newer field decides the output budget.
+		r.MaxTokens = &maxCompletionTokens
 	}
 	r.ResponseFormat = raw.ResponseFormat
 	r.SafetyIdentifier = firstNonEmpty(parseLooseStringAny(raw.SafetyIdentifier), parseLooseStringAny(raw.User))
@@ -571,11 +595,30 @@ const (
 
 var grokToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// nativeToolTypes are the hosted (server-side) tools an OpenAI-compatible
+// client may declare in `tools`. They have no `function` object; they are
+// forwarded to the upstream Responses plane as native tools.
+var nativeToolTypes = map[string]string{
+	"web_search":                    "web_search",
+	"web_search_preview":            "web_search",
+	"web_search_preview_2025_03_11": "web_search",
+	"web_search_2025_08_26":         "web_search",
+	"x_search":                      "x_search",
+}
+
 func validateToolDefinitions(tools []ToolDef) error {
 	seen := make(map[string]struct{}, len(tools))
 	for i, tool := range tools {
+		if normalized, native := nativeToolTypes[strings.ToLower(strings.TrimSpace(tool.Type))]; native {
+			key := normalized
+			if _, exists := seen[key]; exists {
+				return fmt.Errorf("tools.%d.type duplicates %q", i, normalized)
+			}
+			seen[key] = struct{}{}
+			continue
+		}
 		if !strings.EqualFold(strings.TrimSpace(tool.Type), "function") {
-			return fmt.Errorf("tools.%d.type must be function", i)
+			return fmt.Errorf("tools.%d.type must be function, web_search or x_search", i)
 		}
 		if tool.Function == nil {
 			return fmt.Errorf("tools.%d.function is required", i)
@@ -641,7 +684,7 @@ func (r *ChatCompletionsRequest) Validate() error {
 			switch strings.ToLower(strings.TrimSpace(v)) {
 			case "auto", "none":
 			case "required":
-				if len(r.Tools) == 0 {
+				if len(r.toolChoiceNameSet()) == 0 {
 					return fmt.Errorf("tool_choice required needs at least one defined tool")
 				}
 			default:
@@ -654,14 +697,9 @@ func (r *ChatCompletionsRequest) Validate() error {
 			if strings.TrimSpace(fmt.Sprint(v["type"])) != "function" || name == "" {
 				return fmt.Errorf("tool_choice object must have type=function and function.name")
 			}
-			found := false
-			for _, tool := range r.Tools {
-				if strings.TrimSpace(fmt.Sprint(tool.Function["name"])) == name {
-					found = true
-					break
-				}
-			}
-			if !found {
+			// Hosted tools (web_search / x_search) live in ResponsesTools, not
+			// in the function list, so both sets decide whether the name exists.
+			if _, found := r.toolChoiceNameSet()[name]; !found {
 				return fmt.Errorf("tool_choice.function.name must reference a defined tool")
 			}
 		default:
@@ -742,4 +780,33 @@ func (v *VideoConfig) Normalize() {
 	if strings.TrimSpace(v.Preset) == "" {
 		v.Preset = "custom"
 	}
+}
+
+// toolChoiceNameSet collects every tool name a tool_choice may refer to: the
+// function tools plus the hosted tools (whose name is their type, e.g.
+// web_search) that otherwise live only in ResponsesTools.
+func (r *ChatCompletionsRequest) toolChoiceNameSet() map[string]struct{} {
+	if r == nil {
+		return nil
+	}
+	names := make(map[string]struct{}, len(r.Tools)+len(r.ResponsesTools))
+	for _, tool := range r.Tools {
+		if tool.Function == nil {
+			if normalized, native := nativeToolTypes[strings.ToLower(strings.TrimSpace(tool.Type))]; native {
+				names[normalized] = struct{}{}
+			}
+			continue
+		}
+		if name := strings.TrimSpace(fmt.Sprint(tool.Function["name"])); name != "" && name != "<nil>" {
+			names[name] = struct{}{}
+		}
+	}
+	for _, tool := range r.ResponsesTools {
+		for _, key := range []string{"name", "type"} {
+			if name := strings.TrimSpace(parseLooseStringAny(tool[key])); name != "" {
+				names[name] = struct{}{}
+			}
+		}
+	}
+	return names
 }

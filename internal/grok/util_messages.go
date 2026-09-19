@@ -236,7 +236,7 @@ func validateChatMessages(messages []ChatMessage) error {
 					if _, ok := userContentTypes[blockType]; !ok {
 						return fmt.Errorf("invalid content block type: '%s'", blockTypeRaw)
 					}
-				} else if blockType != "text" && !((role == "assistant" || role == "tool") && blockType == "image_url") {
+				} else if blockType != "text" && !isToolResultContentType(role, blockType) {
 					return fmt.Errorf("the '%s' role only supports 'text' type, got '%s'", role, blockTypeRaw)
 				}
 
@@ -271,6 +271,37 @@ func validateChatMessages(messages []ChatMessage) error {
 					}
 					dataVal, _ := fileData["file_data"].(string)
 					if err := validateMediaInput(dataVal, "file.file_data"); err != nil {
+						return err
+					}
+				case "input_text":
+					text, _ := m["text"].(string)
+					if strings.TrimSpace(text) == "" {
+						return fmt.Errorf("input_text content cannot be empty")
+					}
+				case "input_image":
+					// The Anthropic front end writes the image URL under
+					// image_url; accept both spellings of the same wire part.
+					urlVal := parseLooseStringAny(m["image_url"])
+					if urlVal == "" {
+						if nested, ok := m["image_url"].(map[string]interface{}); ok {
+							urlVal = parseLooseStringAny(nested["url"])
+						}
+					}
+					if urlVal == "" {
+						return fmt.Errorf("input_image must have an 'image_url' field")
+					}
+					if err := validateMediaInput(urlVal, "input_image.image_url"); err != nil {
+						return err
+					}
+				case "input_file":
+					dataVal := parseLooseStringAny(m["file_data"])
+					if dataVal == "" {
+						dataVal = parseLooseStringAny(m["file_url"])
+					}
+					if dataVal == "" {
+						return fmt.Errorf("input_file must have a 'file_data' or 'file_url' field")
+					}
+					if err := validateMediaInput(dataVal, "input_file"); err != nil {
 						return err
 					}
 				}
@@ -432,4 +463,21 @@ func extractVideoPromptAndAttachments(messages []ChatMessage) (string, []Attachm
 		}
 	}
 	return "", nil, fmt.Errorf("video prompt cannot be empty")
+}
+
+// isToolResultContentType reports whether a non-text block type is allowed on a
+// non-user role. `tool` and `assistant` messages carry tool results and model
+// output, and the Anthropic front end lowers those to Responses-shaped parts
+// (input_text/input_image/input_file) plus the native image_url form. Rejecting
+// them made an ordinary Claude Code tool_result array a hard 400.
+func isToolResultContentType(role, blockType string) bool {
+	if role != "tool" && role != "assistant" {
+		return false
+	}
+	switch blockType {
+	case "image_url", "input_text", "input_image", "input_file":
+		return true
+	default:
+		return false
+	}
 }

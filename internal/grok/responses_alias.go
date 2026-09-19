@@ -54,6 +54,34 @@ func rewriteBuildToolAliasJSONBody(dst io.Writer, source io.Reader, aliases map[
 
 func rewriteBuildToolAliasSSE(dst io.Writer, source io.Reader, aliases map[string]buildToolAliasIdentity) error {
 	calls := map[string]*strings.Builder{}
+	// callNames remembers which tool a call_id belongs to, so an arguments event
+	// (which carries no name) can still be normalized against that tool's schema.
+	callNames := map[string]string{}
+	rememberName := func(item map[string]interface{}, payload map[string]interface{}) {
+		name := firstNonEmpty(interfaceString(item["name"]), interfaceString(payload["name"]))
+		if name == "" {
+			return
+		}
+		for _, key := range []string{interfaceString(item["id"]), interfaceString(item["call_id"]), interfaceString(payload["item_id"]), interfaceString(payload["call_id"])} {
+			if key != "" {
+				callNames[key] = name
+			}
+		}
+	}
+	// normalizeArguments rewrites float-form integers the model produced for an
+	// integer-typed argument; a strict client decoder rejects those.
+	normalizeArguments := func(nameKey string, raw interface{}) interface{} {
+		text, ok := raw.(string)
+		if !ok || text == "" {
+			return raw
+		}
+		name := firstNonEmpty(callNames[nameKey], nameKey)
+		normalized, changed := normalizeAliasedFunctionArguments(name, text, aliases)
+		if !changed {
+			return raw
+		}
+		return normalized
+	}
 	return consumeCompatibleSSE(source, func(frame compatibleSSEEvent) error {
 		if !frame.HasData() || string(frame.Data()) == "[DONE]" {
 			return frame.writeTo(dst)
@@ -65,7 +93,11 @@ func rewriteBuildToolAliasSSE(dst io.Writer, source io.Reader, aliases map[strin
 		kind := firstNonEmpty(interfaceString(payload["type"]), frame.Event)
 		item, _ := payload["item"].(map[string]interface{})
 		id, callID := interfaceString(item["id"]), interfaceString(item["call_id"])
-		if identity, ok := aliases[interfaceString(item["name"])]; ok && identity.Kind == "tool_search" {
+		switch kind {
+		case "response.output_item.added", "response.output_item.done", "response.function_call_arguments.delta", "response.function_call_arguments.done":
+			rememberName(item, payload)
+		}
+		if identity, ok := aliases[interfaceString(item["name"])]; ok && (identity.Kind == "tool_search" || identity.Kind == "custom") {
 			call := calls[firstNonEmpty(id, callID)]
 			if call == nil {
 				call = &strings.Builder{}
@@ -94,9 +126,16 @@ func rewriteBuildToolAliasSSE(dst io.Writer, source io.Reader, aliases map[strin
 				return nil // Internal search arguments become one public tool_search_call.
 			}
 		}
+		callKey := firstNonEmpty(interfaceString(payload["item_id"]), interfaceString(payload["call_id"]))
+		if callKey != "" && interfaceString(payload["type"]) == "response.function_call_arguments.done" {
+			payload["arguments"] = normalizeArguments(callKey, payload["arguments"])
+		}
 		if kind == "response.output_item.done" {
 			if call := calls[firstNonEmpty(id, callID)]; call != nil && call.Len() > 0 && interfaceString(item["arguments"]) == "" {
 				item["arguments"] = call.String()
+			}
+			if len(item) > 0 {
+				item["arguments"] = normalizeArguments(firstNonEmpty(id, callID), item["arguments"])
 			}
 			delete(calls, id)
 			delete(calls, callID)
@@ -147,6 +186,11 @@ func rewriteBuildToolAliasValue(value interface{}, aliases map[string]buildToolA
 			if identity.Namespace != "" {
 				typed["namespace"] = identity.Namespace
 			}
+			if arguments, ok := typed["arguments"].(string); ok {
+				if normalized, changed := normalizeFunctionArguments(arguments, aliasParameterSchema(identity)); changed {
+					typed["arguments"] = normalized
+				}
+			}
 		case "tool_search":
 			typed["type"] = "tool_search_call"
 			typed["execution"] = "client"
@@ -157,9 +201,26 @@ func rewriteBuildToolAliasValue(value interface{}, aliases map[string]buildToolA
 				}
 			}
 			delete(typed, "name")
+		case "custom":
+			// A freeform/grammar tool is emulated as a function taking one
+			// string; the model's {"input": "..."} wrapper is unwrapped again so
+			// the client sees the custom_tool_call it declared.
+			typed["type"] = "custom_tool_call"
+			typed["name"] = identity.Name
+			if input, ok := decodeCustomToolInputValue(typed["arguments"]); ok {
+				typed["input"] = input
+			}
+			delete(typed, "arguments")
 		case "apply_patch":
 			typed["type"] = "apply_patch_call"
 			delete(typed, "name")
+			// apply_patch forces a "patch" argument; expose the patch object the
+			// client's apply_patch tool actually declared instead of leaving a
+			// raw argument string on a call with no operation.
+			if operation, ok := decodeApplyPatchOperation(typed["arguments"]); ok {
+				typed["operation"] = operation
+				delete(typed, "arguments")
+			}
 		}
 	case []interface{}:
 		for _, child := range typed {
@@ -217,4 +278,57 @@ func restoreBuildToolDeclarations(tools []interface{}, aliases map[string]buildT
 		out = append(out, map[string]interface{}{"type": "namespace", "name": identity.Namespace, "tools": []interface{}{declaration}})
 	}
 	return out
+}
+
+// decodeCustomToolInputValue unwraps the {"input": "..."} object the emulated
+// custom-tool function returns. A client that already sends the bare string is
+// passed through unchanged.
+func decodeCustomToolInputValue(arguments interface{}) (string, bool) {
+	switch typed := arguments.(type) {
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return "", false
+		}
+		var wrapper map[string]interface{}
+		if json.Unmarshal([]byte(trimmed), &wrapper) == nil {
+			if input, ok := wrapper["input"].(string); ok {
+				return input, true
+			}
+		}
+		return trimmed, true
+	case map[string]interface{}:
+		if input, ok := typed["input"].(string); ok {
+			return input, true
+		}
+	}
+	return "", false
+}
+
+// decodeApplyPatchOperation extracts the structured operation from the
+// emulated apply_patch function arguments so the restored apply_patch_call
+// carries `operation` instead of an opaque argument string.
+func decodeApplyPatchOperation(arguments interface{}) (map[string]interface{}, bool) {
+	raw, ok := arguments.(string)
+	if !ok {
+		if direct, isMap := arguments.(map[string]interface{}); isMap {
+			if operation, hasOperation := direct["operation"].(map[string]interface{}); hasOperation {
+				return operation, true
+			}
+			return direct, true
+		}
+		return nil, false
+	}
+	var wrapper map[string]interface{}
+	if json.Unmarshal([]byte(strings.TrimSpace(raw)), &wrapper) != nil {
+		return nil, false
+	}
+	operation, ok := wrapper["operation"].(map[string]interface{})
+	if !ok || len(operation) == 0 {
+		return nil, false
+	}
+	if strings.TrimSpace(parseLooseStringAny(operation["type"])) == "" {
+		return nil, false
+	}
+	return operation, true
 }

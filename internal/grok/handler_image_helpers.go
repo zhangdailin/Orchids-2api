@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -33,6 +34,35 @@ func imageResponseField(format string) string {
 		return "b64_json"
 	}
 	return "url"
+}
+
+// imageMimeTypeForValue reports the media type of an image response entry.
+// grok2api always states it; a client that trusts the declared type instead of
+// sniffing the bytes needs the field to be present.
+func imageMimeTypeForValue(field, value string) string {
+	trimmed := strings.TrimSpace(value)
+	if field == "b64_json" {
+		if strings.HasPrefix(strings.ToLower(trimmed), "data:image/") {
+			rest := trimmed[len("data:"):]
+			if idx := strings.Index(rest, ";"); idx > 0 {
+				return strings.ToLower(rest[:idx])
+			}
+		}
+		return "image/" + imageOutputFormatFromBase64(trimmed)
+	}
+	if parsed, err := url.Parse(trimmed); err == nil {
+		switch strings.ToLower(path.Ext(parsed.Path)) {
+		case ".jpg", ".jpeg":
+			return "image/jpeg"
+		case ".webp":
+			return "image/webp"
+		case ".gif":
+			return "image/gif"
+		case ".png":
+			return "image/png"
+		}
+	}
+	return "image/png"
 }
 
 func imageOutputFormatFromBase64(value string) string {
@@ -235,7 +265,7 @@ func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, 
 			if field == "url" && (!strict || !mustCacheImageURL(u)) {
 				val = u
 			} else if strict {
-				http.Error(w, "image cache failed: "+err.Error(), http.StatusBadGateway)
+				writeGrokUpstreamError(w, err)
 				return
 			}
 		}
@@ -243,8 +273,12 @@ func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, 
 			val = publicBase + val
 		}
 		data = append(data, map[string]interface{}{
-			field:            val,
-			"revised_prompt": nil,
+			field: val,
+			// Both fields are always present in grok2api's response: an empty
+			// string (not null) for the unused revised prompt, and an explicit
+			// media type.
+			"revised_prompt": "",
+			"mime_type":      imageMimeTypeForValue(field, val),
 		})
 	}
 	writeJSON(w, map[string]interface{}{
@@ -266,7 +300,7 @@ func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWrite
 	for i := 0; i < callsNeeded; i++ {
 		resp, err := h.doChatWithAutoSwitchRebuild(ctx, sess, rawPayload, rebuildPayload)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			writeGrokUpstreamError(w, err)
 			return nil, false
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)
@@ -276,13 +310,13 @@ func (h *Handler) collectImageChatURLs(ctx context.Context, w http.ResponseWrite
 		})
 		resp.Body.Close()
 		if err != nil {
-			http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
+			writeGrokUpstreamError(w, err)
 			return nil, false
 		}
 	}
 	urls = normalizeGeneratedImageURLs(urls, n)
 	if len(urls) == 0 {
-		http.Error(w, "no image generated", http.StatusBadGateway)
+		writeGrokError(w, http.StatusBadGateway, "no image generated")
 		return nil, false
 	}
 	return urls, true

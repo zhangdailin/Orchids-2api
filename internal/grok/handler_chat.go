@@ -2,15 +2,18 @@ package grok
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/goccy/go-json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -114,18 +117,46 @@ func appendChatCompletionToolCallsChunkWithUsage(dst []byte, id string, created 
 	return appendChatCompletionChunkFinish(dst, finish, hasFinish, usage)
 }
 
+// baseHostPattern matches a bare hostname or hostname:port. Anything else
+// (path, query, userinfo, whitespace, control characters) is rejected so a
+// forwarding header cannot smuggle extra URL structure into a generated link.
+var baseHostPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.\-]{0,252}[A-Za-z0-9])?(:[0-9]{1,5})?$`)
+
+func sanitizeBaseHost(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" || len(value) > 260 {
+		return ""
+	}
+	if strings.HasPrefix(value, "[") {
+		host, port, err := net.SplitHostPort(value)
+		if err != nil || net.ParseIP(host) == nil {
+			return ""
+		}
+		if _, err := strconv.Atoi(port); err != nil {
+			return ""
+		}
+		return value
+	}
+	if !baseHostPattern.MatchString(value) {
+		return ""
+	}
+	return value
+}
+
 func detectPublicBaseURL(r *http.Request) string {
-	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
-	if proto == "" {
+	proto := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")))
+	if proto != "http" && proto != "https" {
 		if r.TLS != nil {
 			proto = "https"
 		} else {
 			proto = "http"
 		}
 	}
-	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	// The trusted-proxy middleware strips X-Forwarded-* from untrusted peers;
+	// sanitizeBaseHost keeps a surviving value from carrying URL structure.
+	host := sanitizeBaseHost(r.Header.Get("X-Forwarded-Host"))
 	if host == "" {
-		host = strings.TrimSpace(r.Host)
+		host = sanitizeBaseHost(r.Host)
 	}
 	if host == "" {
 		return ""
@@ -196,7 +227,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	h.applyDefaultChatStream(&req)
 	if err := req.Validate(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	if req.ImageConfig != nil && !isImageGenerationModel(req.Model) && !isImageEditModel(req.Model) {
@@ -218,15 +249,15 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	spec, ok := h.resolveConversationModel(r.Context(), req.Model)
 	if !ok {
-		http.Error(w, modelNotFoundMessage(req.Model), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, modelNotFoundMessage(req.Model))
 		return
 	}
 	if err := h.ensureResolvedModelCapability(r.Context(), req.Model, spec, store.CapabilityChat); err != nil {
-		http.Error(w, modelValidationMessage(req.Model, err), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, modelValidationMessage(req.Model, err))
 		return
 	}
 	if !spec.SupportsConversation() {
-		http.Error(w, fmt.Sprintf("model %s does not support chat completions", req.Model), http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("model %s does not support chat completions", req.Model))
 		return
 	}
 
@@ -235,7 +266,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		prompt, imageURLs := extractPromptAndImageURLs(req.Messages)
 		prompt = strings.TrimSpace(prompt)
 		if prompt == "" {
-			http.Error(w, "prompt is required", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "prompt is required")
 			return
 		}
 		imageCfg := req.ImageConfig
@@ -244,19 +275,19 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			imageCfg.Normalize()
 		}
 		if imageCfg.N < 1 || imageCfg.N > 10 {
-			http.Error(w, "image_config.n must be between 1 and 10", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "image_config.n must be between 1 and 10")
 			return
 		}
 		if isImageGenerationModel(req.Model) && normalizeModelID(req.Model) == "grok-imagine-image-lite" && imageCfg.N > 4 {
-			http.Error(w, "image_config.n must be between 1 and 4 for grok-imagine-image-lite", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "image_config.n must be between 1 and 4 for grok-imagine-image-lite")
 			return
 		}
 		if isImageEditModel(req.Model) && imageCfg.N > 2 {
-			http.Error(w, "image_config.n must be between 1 and 2 for image edit", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "image_config.n must be between 1 and 2 for image edit")
 			return
 		}
 		if req.Stream && imageCfg.N > 2 {
-			http.Error(w, "streaming is only supported when image_config.n=1 or n=2", http.StatusBadRequest)
+			writeGrokError(w, http.StatusBadRequest, "streaming is only supported when image_config.n=1 or n=2")
 			return
 		}
 		imageCfg.ResponseFormat = normalizeImageResponseFormat(imageCfg.ResponseFormat)
@@ -271,7 +302,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 				size, err = normalizeImageSize(imageCfg.Size)
 			}
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+				writeGrokUpstreamError(w, err)
 				return
 			}
 			imageCfg.Size = size
@@ -281,7 +312,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 		if isImageEditModel(spec.ID) {
 			if len(imageURLs) == 0 {
-				http.Error(w, "image_url is required for image edits", http.StatusBadRequest)
+				writeGrokError(w, http.StatusBadRequest, "image_url is required for image edits")
 				return
 			}
 			editInputs := imageURLs
@@ -309,7 +340,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !spec.IsVideo && modelRoutedToCLI(spec, h.configSnapshot()) {
 		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 		if err != nil {
-			http.Error(w, "no available grok cli token: "+err.Error(), http.StatusServiceUnavailable)
+			writeGrokNoAccountError(w, err)
 			return
 		}
 		defer sess.Close()
@@ -319,7 +350,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !spec.IsVideo && requiresConsoleResponses(spec) {
 		sess, err := h.openConsoleAccountSession(r.Context(), nil, req.Model)
 		if err != nil {
-			http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+			writeGrokNoAccountError(w, err)
 			return
 		}
 		defer sess.Close()
@@ -327,7 +358,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := validateWebToolDefinitions(req.Tools); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	parallelToolCalls := true
@@ -336,7 +367,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	text, attachments, err := extractMessageAndAttachmentsWithTools(req.Messages, spec.IsVideo, req.Tools, req.ToolChoice, parallelToolCalls)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	userPrompt := strings.TrimSpace(extractLastUserText(req.Messages))
@@ -351,20 +382,20 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		"stream", req.Stream,
 	)
 	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
-		http.Error(w, "empty message", http.StatusBadRequest)
+		writeGrokError(w, http.StatusBadRequest, "empty message")
 		return
 	}
 
 	if spec.IsVideo {
 		if cfg, err := validateVideoConfig(req.VideoConfig); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeGrokUpstreamError(w, err)
 			return
 		} else {
 			req.VideoConfig = cfg
 		}
 		videoPrompt, videoAttachments, err := extractVideoPromptAndAttachments(req.Messages)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeGrokUpstreamError(w, err)
 			return
 		}
 		h.serveVideoChatCompletion(r.Context(), w, &req, spec, videoPrompt, videoAttachments, publicBase, logger)
@@ -378,7 +409,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	sess, err := h.openChatAccountSessionForModel(r.Context(), spec)
 	if err != nil {
-		http.Error(w, "no available grok token: "+err.Error(), http.StatusServiceUnavailable)
+		writeGrokNoAccountError(w, err)
 		return
 	}
 	defer sess.Close()
@@ -400,7 +431,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		if skipExternalAttachmentFetchGrokAccountStatus(err) {
 			h.markAccountStatus(r.Context(), sess.acc, err)
 		}
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	if !logger.Capturing() {
@@ -409,7 +440,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	resp, err := h.doChatWithAutoSwitchRebuild(r.Context(), sess, &payload, buildPayload)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -1297,10 +1328,22 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	if err != nil {
 		slog.Warn("grok stream parse failed", "error", err)
 		if !sentAny {
-			writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
+			// A stalled upstream is not a parse error: the idle watchdog's sentinel
+			// gets its own text and its own code so a client can tell the two apart.
+			if errors.Is(err, ErrGrokSemanticIdle) {
+				writeSSECodedError(w, flusher, "upstream stream timed out while waiting for generated output", "upstream_stream_idle_timeout")
+			} else {
+				writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
+			}
 			return
 		}
-		writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
+		// A stalled upstream is not a parse error: the idle watchdog's sentinel
+		// gets its own text and its own code so a client can tell the two apart.
+		if errors.Is(err, ErrGrokSemanticIdle) {
+			writeSSECodedError(w, flusher, "upstream stream timed out while waiting for generated output", "upstream_stream_idle_timeout")
+		} else {
+			writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
+		}
 		return
 	}
 
@@ -1490,7 +1533,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 		return nil
 	})
 	if err != nil {
-		http.Error(w, "stream parse error: "+err.Error(), http.StatusBadGateway)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 

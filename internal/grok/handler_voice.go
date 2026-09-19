@@ -728,6 +728,18 @@ func (h *Handler) doConsoleVoice(r *http.Request, modelID, method, path string, 
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(r.Context(), sess.acc, err)
 		}
+		// A refused credential or an exhausted allowance belongs to the account
+		// pool, not to the caller's key. grok2api masks these as 503
+		// upstream_unavailable; answering 401/402/403 here made a client believe
+		// its own key was rejected and stop retrying a recoverable condition.
+		if status := upstreamHTTPResponseStatus(err); status == http.StatusUnauthorized ||
+			status == http.StatusForbidden || status == http.StatusPaymentRequired {
+			sess.Close()
+			return nil, nil, &consoleVoiceRequestError{
+				status: http.StatusServiceUnavailable, code: "upstream_unavailable",
+				err: fmt.Errorf("no upstream account is currently available for %s", modelID),
+			}
+		}
 		sess.Close()
 		return nil, nil, &consoleVoiceRequestError{status: upstreamHTTPResponseStatus(err), code: "upstream_error", err: err}
 	}
@@ -742,10 +754,84 @@ func writeConsoleVoiceRequestError(w http.ResponseWriter, err error) {
 	writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", err.Error())
 }
 
+// voiceResponseContentTypes are the only content types a voice response may
+// carry. An upstream that answers with text/html or an unlabelled octet stream
+// would otherwise be replayed verbatim, which is a content-sniffing surface and
+// (for Content-Disposition) an injection surface.
+var voiceResponseContentTypes = map[string]bool{
+	"application/json": true,
+	"text/plain":       true,
+	"application/ogg":  true,
+	"audio/mpeg":       true,
+	"audio/mp3":        true,
+	"audio/mp4":        true,
+	"audio/wav":        true,
+	"audio/x-wav":      true,
+	"audio/webm":       true,
+	"audio/flac":       true,
+	"audio/aac":        true,
+	"audio/pcm":        true,
+}
+
+// sanitizeContentDisposition keeps "inline"/"attachment" and any ASCII-only
+// filename that carries no path separators, dropping everything else.
+func sanitizeContentDisposition(raw string) string {
+	disposition := strings.ToLower(strings.TrimSpace(strings.Split(raw, ";")[0]))
+	if disposition != "inline" && disposition != "attachment" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(raw)
+	if err != nil {
+		if strings.Contains(strings.ToLower(raw), "filename") {
+			return ""
+		}
+		return disposition
+	}
+	name := strings.TrimSpace(params["filename"])
+	if name == "" {
+		return disposition
+	}
+	if strings.ContainsAny(name, `\/`) || strings.Contains(name, "..") || !isASCIIPrintable(name) {
+		return disposition
+	}
+	return fmt.Sprintf(`%s; filename="%s"`, disposition, strings.ReplaceAll(name, `"`, ""))
+}
+
+func isASCIIPrintable(value string) bool {
+	for _, r := range value {
+		if r < 0x20 || r > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 func copyVoiceResponseHeaders(destination, source http.Header) {
-	for _, key := range []string{"Content-Type", "Content-Disposition", "X-Request-Id"} {
+	for _, key := range []string{"Content-Type", "Content-Disposition", "X-Request-Id", "Retry-After"} {
 		for _, value := range source.Values(key) {
+			switch key {
+			case "Content-Type":
+				mediaType := strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
+				if !voiceResponseContentTypes[mediaType] {
+					continue
+				}
+			case "Content-Disposition":
+				// The upstream filename is attacker-influenced (it echoes the
+				// requested voice/prompt and the deployment's own naming). Only
+				// the disposition type is preserved; the filename parameter is
+				// dropped rather than replayed into a client's download path.
+				value = sanitizeContentDisposition(value)
+				if value == "" {
+					continue
+				}
+			}
 			destination.Add(key, value)
 		}
 	}
+	if destination.Get("Content-Type") == "" {
+		destination.Set("Content-Type", "application/octet-stream")
+	}
+	// The bytes are client-supplied media; never let a browser reinterpret them.
+	destination.Set("X-Content-Type-Options", "nosniff")
+	destination.Set("Cache-Control", "no-store")
 }

@@ -321,6 +321,27 @@ func (c *Client) appChatHeadersWithReferer(token, referer string) http.Header {
 	return h
 }
 
+// anonymousAssetHosts are media/CDN hosts that serve signed, short-lived URLs.
+// They must never receive the session cookie: the credential is bound to the
+// API origin, so attaching it to a CDN request copies it to a third-party log
+// surface. grok2api downloads these anonymously (Accept/User-Agent only).
+// assets.grok.com is deliberately *not* listed — that host is served from the
+// same session as the API and is verified to carry auth in practice.
+var anonymousAssetHosts = []string{
+	"imagine-public.x.ai",
+	"imgen.x.ai",
+	"vidgen.x.ai",
+}
+
+func isAnonymousAssetHost(host string) bool {
+	for _, base := range anonymousAssetHosts {
+		if host == base || strings.HasSuffix(host, "."+base) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) shouldSendAuthForAssetURL(rawURL string) bool {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u == nil {
@@ -328,6 +349,9 @@ func (c *Client) shouldSendAuthForAssetURL(rawURL string) bool {
 	}
 	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
 	if host == "" {
+		return false
+	}
+	if isAnonymousAssetHost(host) {
 		return false
 	}
 	if host == "grok.com" || strings.HasSuffix(host, ".grok.com") || host == "x.ai" || strings.HasSuffix(host, ".x.ai") {

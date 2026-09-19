@@ -119,3 +119,11 @@ func consumeCompatibleSSE(source io.Reader, handle func(compatibleSSEEvent) erro
 	}
 	return flush()
 }
+
+// isPrivateBuildControlEvent reports whether an event is Grok Build's private
+// control traffic rather than part of the public Responses stream. It matches
+// both the SSE event name and the payload `type`, because the upstream emits
+// the marker in either place (grok2api's isPrivateBuildControlEvent).
+func isPrivateBuildControlEvent(kind string) bool {
+	return strings.TrimSpace(kind) == "response.doom_loop_check"
+}

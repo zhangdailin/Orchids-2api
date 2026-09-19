@@ -143,13 +143,13 @@ func (h *Handler) HandleAdminTokensRefresh(w http.ResponseWriter, r *http.Reques
 	}
 	req, tokens, err := h.resolveTokenRefreshRequest(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 
 	accounts, err := h.lb.Store.ListAccounts(r.Context())
 	if err != nil {
-		http.Error(w, "failed to list accounts", http.StatusInternalServerError)
+		writeGrokError(w, http.StatusInternalServerError, "failed to list accounts")
 		return
 	}
 	tokenAccounts := collectGrokAccountsByToken(accounts)
@@ -171,13 +171,13 @@ func (h *Handler) HandleAdminTokensRefreshAsync(w http.ResponseWriter, r *http.R
 	}
 	req, tokens, err := h.resolveTokenRefreshRequest(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeGrokUpstreamError(w, err)
 		return
 	}
 
 	accounts, err := h.lb.Store.ListAccounts(r.Context())
 	if err != nil {
-		http.Error(w, "failed to list accounts", http.StatusInternalServerError)
+		writeGrokError(w, http.StatusInternalServerError, "failed to list accounts")
 		return
 	}
 	tokenAccounts := collectGrokAccountsByToken(accounts)
