@@ -55,6 +55,18 @@ func ConfigureMediaStorage(cfg *config.Config) error {
 	return nil
 }
 
+// CacheBaseDir returns the media root the package is writing to, after
+// ConfigureMediaStorage has resolved the default and cleaned the configured value.
+//
+// A caller outside this package needs the resolved path, not the configured one:
+// the sweeper walks the same tree the media inputs are written to, and the default
+// ("data/tmp" when media_dir is unset) is applied here rather than in the config.
+// Before ConfigureMediaStorage runs it returns the package default, which is the
+// same value the package would have used.
+func CacheBaseDir() string {
+	return cacheBaseDir
+}
+
 func preflightSharedMedia(directory, clusterID, instanceID string) error {
 	markerPath := filepath.Join(directory, sharedMediaMarkerName)
 	want := strings.TrimSpace(clusterID) + "\n"
