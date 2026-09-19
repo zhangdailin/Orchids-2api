@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -76,6 +77,49 @@ func TestBuildResponsesNormalizerWarnsAndRenamesCollisions(t *testing.T) {
 		if !strings.Contains(warnings, expected) {
 			t.Fatalf("warnings=%q missing %q", warnings, expected)
 		}
+	}
+}
+
+func TestBuildResponsesNormalizerPreservesNativeHistoryAndNormalizesExtensions(t *testing.T) {
+	native := map[string]interface{}{"type": "shell_call", "call_id": "native", "action": map[string]interface{}{"type": "exec", "commands": []interface{}{"pwd"}}, "future": "keep"}
+	payload := map[string]interface{}{"input": []interface{}{
+		native,
+		map[string]interface{}{"type": "agent_message", "author": "worker", "recipient": "manager", "content": "done", "encrypted_content": "must-not-leak"},
+		map[string]interface{}{"type": "local_shell_call", "call_id": "call_1", "action": map[string]interface{}{"type": "exec", "command": []interface{}{"printf", "hello world"}}},
+		map[string]interface{}{"type": "mcp_tool_call_output", "call_id": "mcp_1", "output": map[string]interface{}{"ok": true}, "secret": "drop"},
+	}}
+	if err := normalizeBuildResponsesPayload(payload); err != nil {
+		t.Fatal(err)
+	}
+	items := payload["input"].([]interface{})
+	first := items[0].(map[string]interface{})
+	if first["future"] != "keep" || first["type"] != "shell_call" {
+		t.Fatalf("native history changed: %#v", items[0])
+	}
+	agent := items[1].(map[string]interface{})
+	if agent["type"] != "message" || strings.Contains(agent["content"].([]interface{})[0].(map[string]interface{})["text"].(string), "must-not-leak") {
+		t.Fatalf("agent history=%#v", agent)
+	}
+	shell := items[2].(map[string]interface{})
+	if shell["type"] != "shell_call" || shell["call_id"] != "call_1" {
+		t.Fatalf("shell history=%#v", shell)
+	}
+	mcp := items[3].(map[string]interface{})
+	if mcp["type"] != "message" || strings.Contains(fmt.Sprint(mcp), "secret") {
+		t.Fatalf("mcp history=%#v", mcp)
+	}
+}
+
+func TestBuildResponsesNormalizerOpaqueAgentMessageUsesBoundary(t *testing.T) {
+	payload := map[string]interface{}{"input": []interface{}{map[string]interface{}{
+		"type": "agent_message", "content": map[string]interface{}{"ciphertext": "opaque-secret"},
+	}}}
+	if err := normalizeBuildResponsesPayload(payload); err != nil {
+		t.Fatal(err)
+	}
+	encoded := fmt.Sprint(payload["input"])
+	if strings.Contains(encoded, "opaque-secret") || !strings.Contains(encoded, "not portable") {
+		t.Fatalf("boundary=%s", encoded)
 	}
 }
 

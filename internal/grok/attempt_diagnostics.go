@@ -180,6 +180,10 @@ func (h *Handler) auditAttemptDiagnostic(ctx context.Context, acc *store.Account
 	if acc != nil {
 		accountID = acc.ID
 	}
+	usageSource := audit.UsageSourceNone
+	if reported {
+		usageSource = audit.UsageSourceUpstream
+	}
 	logger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Action: "grok_upstream_attempt", Channel: "grok", Provider: provider, Attempt: attempt, Duration: time.Since(started).Milliseconds(), Status: status, Metadata: metadata,
-		InputTokens: interfaceToInt(usage["input_tokens"]), OutputTokens: interfaceToInt(usage["output_tokens"]), CachedInputTokens: interfaceToInt(inputDetails["cached_tokens"]), ReasoningTokens: interfaceToInt(outputDetails["reasoning_tokens"])})
+		InputTokens: interfaceToInt(usage["input_tokens"]), OutputTokens: interfaceToInt(usage["output_tokens"]), CachedInputTokens: interfaceToInt(inputDetails["cached_tokens"]), ReasoningTokens: interfaceToInt(outputDetails["reasoning_tokens"]), TotalTokens: interfaceToInt(usage["total_tokens"]), UsageSource: usageSource})
 }

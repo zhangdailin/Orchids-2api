@@ -2,6 +2,7 @@ package grok
 
 import (
 	"errors"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -552,6 +553,25 @@ func TestWriteSSEBytesWritesEventFrame(t *testing.T) {
 	got := bytesRec.Body.String()
 	if !strings.Contains(got, "event: demo\n") || !strings.Contains(got, `data: {"ok":true}`) {
 		t.Fatalf("unexpected sse frame: %q", got)
+	}
+}
+
+func TestWriteSSEBytesPropagatesShortWrite(t *testing.T) {
+	writer := grok2apiShortWriter{httptest.NewRecorder()}
+	if err := writeSSEBytes(writer, "demo", []byte(`{"ok":true}`)); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestStreamResponseHeadersMatchSSEProxyContract(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	recorder.Header().Set("Connection", "keep-alive")
+	streamResponseHeaders(recorder)
+	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream; charset=utf-8" {
+		t.Fatalf("content-type=%q", got)
+	}
+	if recorder.Header().Get("X-Accel-Buffering") != "no" || recorder.Header().Get("Connection") != "" {
+		t.Fatalf("headers=%v", recorder.Header())
 	}
 }
 

@@ -17,7 +17,10 @@ import (
 // FlareSolverr integration: solve Cloudflare challenges for a target URL and
 // return the resulting cf_clearance/__cf_bm cookies bound to a User-Agent.
 
-const maxFlareSolverrResponseBytes = 2 << 20
+const (
+	maxFlareSolverrResponseBytes = 2 << 20
+	maxCloudflareCookieBytes     = 4096
+)
 
 var (
 	proxyCredentialPattern  = regexp.MustCompile(`(?i)\b(https?|socks4a?|socks5h?)://[^\s/@:]+:[^\s/@]+@`)
@@ -127,20 +130,32 @@ func (flaresolverrSolver) Solve(ctx context.Context, cfg ClearanceConfig, proxyU
 	return clearanceSolution{Cookies: cookies, UserAgent: userAgent}, nil
 }
 
-// SanitizeCloudflareCookies keeps only cf_clearance and __cf_bm.
+// SanitizeCloudflareCookies keeps the complete Cloudflare challenge cookie
+// family while rejecting malformed, duplicate, oversized, and control-bearing
+// values. Names are normalized so callers cannot smuggle cookie attributes.
 func SanitizeCloudflareCookies(raw string) string {
 	parts := strings.Split(raw, ";")
 	kept := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		name := part
-		if idx := strings.Index(part, "="); idx >= 0 {
-			name = strings.TrimSpace(part[:idx])
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
 		}
-		switch strings.ToLower(name) {
-		case "cf_clearance", "__cf_bm":
-			kept = append(kept, part)
+		name = strings.ToLower(strings.TrimSpace(name))
+		value = strings.TrimSpace(value)
+		allowed := name == "cf_clearance" || name == "__cf_bm" || name == "_cfuvid" || strings.HasPrefix(name, "cf_chl_")
+		if !allowed || value == "" || len(value) > maxCloudflareCookieBytes {
+			continue
 		}
+		if strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		kept = append(kept, name+"="+value)
 	}
 	return strings.Join(kept, "; ")
 }

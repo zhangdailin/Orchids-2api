@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +23,9 @@ import (
 	"orchids-api/internal/store"
 )
 
-const videoJobTTL = time.Hour
+// videoJobTTL is how long a video job (and the one-shot upload ticket that
+// belongs to it) stays addressable. grok2api keeps the same window.
+const videoJobTTL = 2 * time.Hour
 
 var (
 	videoJobsMu sync.Mutex
@@ -302,10 +306,91 @@ func parseVideosRequest(r *http.Request) (VideosRequest, error) {
 		fillVideosRequestFromForm(&req, r.Form)
 		return req, nil
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxVideoJSONBytes+1))
+	if err != nil {
 		return req, err
 	}
+	if len(raw) > maxVideoJSONBytes {
+		return req, fmt.Errorf("video request exceeds %d MiB", maxVideoJSONBytes>>20)
+	}
+	// Unknown keys are rejected so a typo ("duratoin") cannot silently fall back
+	// to the defaults. The check is explicit because the JSON implementation in
+	// use does not enforce Decoder.DisallowUnknownFields.
+	if err := rejectUnknownVideoFields(raw); err != nil {
+		return req, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if err := decoder.Decode(&req); err != nil {
+		return req, err
+	}
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return req, fmt.Errorf("unexpected trailing content in video request")
+	}
+	normalizeVideoRequestAliases(&req)
 	return req, nil
+}
+
+// maxVideoJSONBytes bounds the JSON video body. Media travels as URLs or file
+// ids here, so a huge body is never legitimate.
+const maxVideoJSONBytes = 16 << 20
+
+// videoRequestFields is every key this endpoint accepts on the JSON surface.
+var videoRequestFields = map[string]bool{
+	"model": true, "prompt": true,
+	"seconds": true, "duration": true, "video_length": true,
+	"size": true, "aspect_ratio": true,
+	"resolution_name": true, "resolution": true,
+	"preset": true, "user": true,
+	"image": true, "video": true,
+	"reference_images": true, "reference_audios": true,
+	"input_reference": true, "input_references": true,
+	"input_reference[]": true,
+}
+
+// rejectUnknownVideoFields fails on any key outside the accepted set, naming the
+// offending field so a client can fix the typo.
+func rejectUnknownVideoFields(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	unknown := make([]string, 0, len(fields))
+	for key := range fields {
+		if !videoRequestFields[key] {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return fmt.Errorf("unknown video request field %q", unknown[0])
+}
+
+// normalizeVideoRequestAliases folds the grok2api-compatible spellings onto the
+// canonical fields the rest of the handler uses.
+func normalizeVideoRequestAliases(req *VideosRequest) {
+	if req == nil {
+		return
+	}
+	if req.Seconds == 0 && len(req.Duration) > 0 {
+		if seconds, err := parseLooseIntAny(req.Duration); err == nil && seconds > 0 {
+			req.Seconds = seconds
+		}
+	}
+	if strings.TrimSpace(req.Size) == "" {
+		req.Size = strings.TrimSpace(req.AspectRatio)
+	}
+	if strings.TrimSpace(req.ResolutionName) == "" {
+		req.ResolutionName = strings.TrimSpace(req.Resolution)
+	}
+	for _, value := range append([]string{req.Image, req.Video}, req.ReferenceImages...) {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			req.InputReferences = append(req.InputReferences, trimmed)
+		}
+	}
+	req.InputReferences = uniqueStrings(req.InputReferences)
 }
 
 // fillVideosRequestFromForm copies the video request fields from form values.
@@ -313,9 +398,9 @@ func parseVideosRequest(r *http.Request) (VideosRequest, error) {
 func fillVideosRequestFromForm(req *VideosRequest, form url.Values) {
 	req.Model = strings.TrimSpace(form.Get("model"))
 	req.Prompt = strings.TrimSpace(form.Get("prompt"))
-	req.Seconds = parseIntLoose(firstNonEmpty(form.Get("seconds"), form.Get("video_length")), 6)
+	req.Seconds = parseIntLoose(firstNonEmpty(form.Get("seconds"), form.Get("duration"), form.Get("video_length")), 8)
 	req.Size = strings.TrimSpace(firstNonEmpty(form.Get("size"), form.Get("aspect_ratio")))
-	req.ResolutionName = strings.TrimSpace(form.Get("resolution_name"))
+	req.ResolutionName = strings.TrimSpace(firstNonEmpty(form.Get("resolution_name"), form.Get("resolution")))
 	req.Preset = strings.TrimSpace(form.Get("preset"))
 	for _, key := range []string{"input_reference", "input_references", "input_reference[]"} {
 		for _, value := range form[key] {
@@ -385,6 +470,9 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 		writeGrokError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
+	if req.Seconds == 0 {
+		req.Seconds = 8
+	}
 	req.Model = normalizeModelID(firstNonEmpty(req.Model, "grok-imagine-video"))
 	if !requireAPIKeyModel(w, r, req.Model) {
 		return
@@ -410,11 +498,19 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	h.startVideoJob(w, r, req, spec)
+}
+
+// startVideoJob validates the video configuration, registers the job and starts
+// its worker. It is shared by the legacy /videos endpoint and by the standard
+// /videos/generations endpoint when the resolved model is routed to the Web
+// plane rather than to Console.
+func (h *Handler) startVideoJob(w http.ResponseWriter, r *http.Request, req VideosRequest, spec ModelSpec) {
 	cfg, err := validateVideoConfigForModel(&VideoConfig{
 		VideoLength:    req.Seconds,
 		ResolutionName: req.ResolutionName,
 		Preset:         req.Preset,
-		Size:           firstNonEmpty(req.Size, "720x1280"),
+		Size:           firstNonEmpty(req.Size, "16:9"),
 	}, spec, len(req.InputReferences))
 	if err != nil {
 		writeGrokUpstreamError(w, err)
@@ -457,6 +553,27 @@ func (h *Handler) HandleVideosCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, response)
 }
 
+// webFreeVideoDurationLimit is the longest video a free/basic Web credential may
+// request on the app-chat plane.
+const webFreeVideoDurationLimit = 6
+
+// webFreeVideoDurationCap returns the cap that applies to this credential, or 0
+// when the account is not a free Web account.
+func webFreeVideoDurationCap(acc *store.Account) int {
+	if acc == nil {
+		return 0
+	}
+	if ProviderForAccount(acc) == ProviderBuild || ProviderForAccount(acc) == ProviderConsole {
+		return 0
+	}
+	switch strings.ToLower(strings.TrimSpace(acc.Subscription)) {
+	case "free", "basic", "lite":
+		return webFreeVideoDurationLimit
+	default:
+		return 0
+	}
+}
+
 func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec ModelSpec, cfg *VideoConfig) {
 	update := func(status string, progress int) {
 		videoJobsMu.Lock()
@@ -489,6 +606,14 @@ func (h *Handler) runVideoCreateJob(ctx context.Context, job *videoJob, spec Mod
 		return
 	}
 	defer sess.Close()
+
+	// A free Web credential cannot fetch a duration beyond the included tier
+	// cap: the upstream rejects the whole job, which used to surface as an
+	// opaque failure minutes later. Clamping here matches what grok2api does
+	// before it ever sends the request.
+	if cap := webFreeVideoDurationCap(sess.acc); cap > 0 && cfg.VideoLength > cap {
+		cfg.VideoLength = cap
+	}
 
 	attachments := make([]AttachmentInput, 0, len(job.InputReferences))
 	for _, ref := range job.InputReferences {

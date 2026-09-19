@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
 	"orchids-api/internal/handler"
@@ -192,9 +193,17 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 		accountID = acc.ID
 		provider = ProviderForAccount(acc)
 	}
+	usageSource := result.UsageSource
+	if usageSource == "" {
+		if result.Err != nil || len(usage) == 0 {
+			usageSource = audit.UsageSourceNone
+		} else {
+			usageSource = audit.UsageSourceEstimated
+		}
+	}
 	logger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
 		AccountID: accountID, Model: req.Model, Channel: "grok", Provider: provider, Status: status, Error: message, Duration: duration, Metadata: metadata,
-		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]),
+		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]), TotalTokens: interfaceToInt(usage["total_tokens"]), UsageSource: usageSource,
 		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])})
 }
 
@@ -381,7 +390,8 @@ func (h *Handler) ensureResolvedModelCapability(ctx context.Context, modelID str
 // least one enabled Build account advertises it, so arbitrary client strings
 // can never turn into upstream model probes.
 func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) (ModelSpec, bool) {
-	if spec, ok := ResolveModel(modelID); ok {
+	if spec, effort, ok := ResolveModelAlias(modelID); ok {
+		spec.AliasReasoningEffort = effort
 		return h.applyPersistedRoute(ctx, spec), true
 	}
 	id := normalizeModelID(modelID)
@@ -530,14 +540,18 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	// team limit. Prefer the precise reset parsed from the 429 body (team+model
 	// granularity), falling back to a 60s blanket cooldown.
 	if err != nil && isResourceExhaustedError(err) && acc != nil {
-		cooldown := 60 * time.Second
+		cooldown := accountpolicy.CooldownRateLimitBase
 		if meta := ParseRateLimitMetadata([]byte(err.Error())); meta != nil {
 			identity := ProviderForAccount(acc) + ":" + rateLimitIdentity(withRateLimitAccount(ctx, acc), "")
 			if remaining := teamCooldown.RetryAfterFor(meta.Scope, identity, meta.Model); remaining > 0 {
-				cooldown = remaining
+				cooldown = accountpolicy.BoundRateLimitCooldown(remaining)
 			} else if meta.RetryAfter > 0 {
-				cooldown = meta.RetryAfter
+				cooldown = accountpolicy.BoundRateLimitCooldown(meta.RetryAfter)
 			}
+		}
+		failureCooldown := accountpolicy.RateLimitCooldown(acc.RateLimitFailures + 1)
+		if failureCooldown > cooldown {
+			cooldown = failureCooldown
 		}
 		acc.QuotaResetAt = time.Now().Add(cooldown)
 	}
@@ -882,11 +896,11 @@ func shouldSwitchGrokAccount(err error) bool {
 		return false
 	}
 	status := apperrors.ClassifyAccountStatus(err.Error())
-	if status == "429" {
-		return !isSharedGrokRateLimitError(err)
+	if status == "401" || status == "429" {
+		return true
 	}
 	if isSharedGrokRateLimitError(err) {
-		return false
+		return true
 	}
 	if upstreamStatus := parseUpstreamStatus(err); upstreamStatus == http.StatusBadGateway ||
 		upstreamStatus == http.StatusServiceUnavailable ||
@@ -948,17 +962,30 @@ func (h *Handler) syncGrokQuota(acc *store.Account, headers http.Header) {
 		}
 
 		info := parseRateLimitInfo(headers)
+		requests := parseBuildRateLimitWindow(headers, "requests")
+		tokens := parseBuildRateLimitWindow(headers, "tokens")
+		hasBuildHeaders := requests.HasLimit || requests.HasRemaining || !requests.ResetAt.IsZero() || tokens.HasLimit || tokens.HasRemaining || !tokens.ResetAt.IsZero()
+		if info == nil && !hasBuildHeaders {
+			provider := ProviderForAccount(&accCopy)
+			if _, err := h.lb.Store.ConsumeGrokQuota(ctx, accCopy.ID, provider, 1); err != nil {
+				slog.Warn("grok local quota decrement failed", "account_id", accCopy.ID, "error", err)
+			}
+			return
+		}
 		latest, err := h.lb.Store.GetAccount(ctx, accCopy.ID)
 		if err != nil || latest == nil {
 			slog.Warn("grok quota account reload failed", "account_id", accCopy.ID, "error", err)
 			return
 		}
 		NormalizeProvider(latest)
-		if ProviderForAccount(latest) == ProviderBuild {
-			if !ApplyBuildRateLimits(latest, headers) {
-				return
-			}
-		} else if info == nil || !ApplyQuotaInfo(latest, info) {
+		provider := ProviderForAccount(latest)
+		changed := false
+		if provider == ProviderBuild {
+			changed = ApplyBuildRateLimits(latest, headers)
+		} else {
+			changed = info != nil && ApplyQuotaInfo(latest, info)
+		}
+		if !changed {
 			return
 		}
 		if err := h.lb.Store.UpdateAccount(ctx, latest); err != nil {

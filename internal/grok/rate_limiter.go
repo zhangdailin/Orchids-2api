@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/store"
 )
 
@@ -98,20 +99,15 @@ func rateLimitIdentity(ctx context.Context, token string) string {
 	return "token:" + dpopCacheKey(token)
 }
 
-// waitScopedRateLimit blocks while a scope+identity+model cooldown is active and
-// then consumes one pacing token.
-//
-// The identity is the one carried by withRateLimitAccount (team when known,
-// otherwise the account) so that noteScopedRateLimit and the wait consult the
-// SAME key. Note that this makes a team-scoped cooldown intentionally apply to
-// every sibling account on that team: xAI meters those limits per team, so
-// retrying the same model from a sibling would hit the same wall.
+// waitScopedRateLimit rejects an active team/account+model cooldown immediately,
+// then consumes one pacing token. Request paths must rotate accounts instead of
+// parking a request goroutine until an upstream 429 window expires.
 func waitScopedRateLimit(ctx context.Context, provider, token, model string, rate float64) error {
 	identity := provider + ":" + rateLimitIdentity(ctx, token)
 	for _, scope := range []RateLimitScope{RateLimitScopeRPS, RateLimitScopeRPM} {
 		for _, target := range uniqueStrings([]string{model, "*"}) {
-			if err := teamCooldown.Wait(ctx, scope, identity, target); err != nil {
-				return err
+			if remaining := teamCooldown.RetryAfterFor(scope, identity, target); remaining > 0 {
+				return fmt.Errorf("grok upstream status=429 body=too_many_requests team %s model %s cooling down; retry-after=%s", identity, target, remaining.Round(time.Second))
 			}
 		}
 	}
@@ -170,6 +166,7 @@ func noteScopedRateLimit(ctx context.Context, provider, token, model string, sta
 	if retry := parseRetryAfterHeader(header.Get("Retry-After"), time.Now()); retry > 0 {
 		meta.RetryAfter = retry
 	}
+	meta.RetryAfter = accountpolicy.BoundRateLimitCooldown(meta.RetryAfter)
 	identity := provider + ":" + rateLimitIdentity(ctx, token)
 	for _, target := range uniqueStrings([]string{firstNonEmpty(model, meta.Model, "*"), meta.Model}) {
 		teamCooldown.Note(meta.Scope, identity, target, meta.RetryAfter)

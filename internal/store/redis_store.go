@@ -383,6 +383,11 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		updated.WarpMonthlyRemaining = acc.WarpMonthlyRemaining
 		updated.WarpBonusRemaining = acc.WarpBonusRemaining
 		updated.StatusCode = acc.StatusCode
+		updated.AuthStatus = acc.AuthStatus
+		if acc.ClearVerifiedAt {
+			updated.AuthStatus = AccountAuthStatusActive
+		}
+		updated.RateLimitFailures = acc.RateLimitFailures
 		// The reason describes the CURRENT status only. It must never outlive the
 		// status it explains, or a recovered account keeps showing a stale error.
 		if strings.TrimSpace(acc.StatusCode) == "" {
@@ -745,6 +750,81 @@ func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage 
 		return err
 	}
 	return nil
+}
+
+func decrementQuotaWindow(window *GrokQuotaWindow, amount float64) bool {
+	if window == nil || !window.HasRemaining || window.Remaining <= 0 || amount <= 0 {
+		return false
+	}
+	window.Remaining = max(0, window.Remaining-amount)
+	return true
+}
+
+func (s *redisStore) ConsumeGrokQuota(ctx context.Context, id int64, provider string, amount float64) (bool, error) {
+	if amount <= 0 || id == 0 {
+		return false, nil
+	}
+	consumed := false
+	err := s.updateAccountAtomic(ctx, id, func(acc *Account) error {
+		consumed = false // updateAccountAtomic may retry after a WATCH conflict.
+		now := time.Now().UTC()
+		switch strings.ToLower(strings.TrimSpace(provider)) {
+		case "build":
+			consumed = decrementQuotaWindow(&acc.GrokRateLimits.Requests, amount)
+			if consumed {
+				acc.GrokRateLimits.ObservedAt = now
+			}
+		default:
+			// Match the compatibility projection: auto is the preferred request
+			// window, with fast used only when auto is absent. Without request-mode
+			// metadata, decrementing both would double-charge one successful call.
+			if acc.GrokWebQuota.Auto.HasRemaining {
+				consumed = decrementQuotaWindow(&acc.GrokWebQuota.Auto, amount)
+			} else {
+				consumed = decrementQuotaWindow(&acc.GrokWebQuota.Fast, amount)
+			}
+			if acc.UsageCurrent > 0 {
+				acc.UsageCurrent = max(0, acc.UsageCurrent-amount)
+				consumed = true
+			}
+			if consumed && !acc.GrokWebQuota.SyncedAt.IsZero() {
+				acc.GrokWebQuota.SyncedAt = now
+			}
+		}
+		return nil
+	})
+	return consumed, err
+}
+
+func (s *redisStore) ClaimGrokPaidQuotaProbe(ctx context.Context, id int64, now time.Time) (bool, error) {
+	if id == 0 {
+		return false, nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	claimed := false
+	err := s.updateAccountAtomic(ctx, id, func(acc *Account) error {
+		claimed = false // updateAccountAtomic may retry after a WATCH conflict.
+		billing := &acc.GrokBilling
+		if !billing.IsExhausted() {
+			return nil
+		}
+		due := billing.NextProbeAt
+		if due.IsZero() {
+			due = billing.PeriodEnd()
+		}
+		if due.IsZero() || now.Before(due) {
+			return nil
+		}
+		billing.LastProbeAt = now
+		billing.NextProbeAt = now.Add(GrokPaidQuotaProbeInterval)
+		claimed = true
+		return nil
+	})
+	return claimed, err
 }
 
 func (s *redisStore) getAccount(ctx context.Context, id int64) (*Account, error) {

@@ -39,7 +39,11 @@ func (h *Handler) HandleRealtime(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleVoiceWebSocket(w http.ResponseWriter, r *http.Request, path, defaultModel string) {
 	if !websocket.IsWebSocketUpgrade(r) {
-		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", "a WebSocket Upgrade request is required")
+		status := http.StatusBadRequest
+		if path == "stt" {
+			status = http.StatusMethodNotAllowed
+		}
+		writeResponsesAPIError(w, status, "invalid_request", "a WebSocket Upgrade request is required")
 		return
 	}
 	modelID := normalizeModelID(firstNonEmpty(r.URL.Query().Get("model"), defaultModel))
@@ -230,9 +234,10 @@ func (c *Client) dialConsoleVoiceWebSocket(ctx context.Context, token, path, mod
 		proofRequest.Header = c.consoleHeaders(token)
 		if strings.TrimSpace(leaseUserAgent) != "" {
 			proofRequest.Header.Set("User-Agent", leaseUserAgent)
+			applyChromiumClientHints(proofRequest.Header, leaseUserAgent)
 		}
 		mergeCFCookies(proofRequest.Header, leaseCFCookies)
-		proofRequest.Header.Set("x-cluster", "https://us-east-1.api.x.ai")
+		// x-cluster is a Console /responses routing hint, not a voice WS header.
 		proofRequest.Header.Set("Cache-Control", "no-cache")
 		proofRequest.Header.Set("Pragma", "no-cache")
 		proofRequest.Header.Set("Sec-Fetch-Mode", "websocket")

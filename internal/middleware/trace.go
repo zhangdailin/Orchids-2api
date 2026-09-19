@@ -362,7 +362,10 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 		if box, ok := r.Context().Value(requestObservationKey{}).(*requestObservation); ok {
 			box.mu.Lock()
 			outcome.InputTokens = box.input
+			outcome.CachedTokens = box.cached
 			outcome.OutputTokens = box.output
+			outcome.ReasoningTokens = box.reasoning
+			outcome.TotalTokens = box.total
 			outcome.UsageReported = box.usage
 			outcome.AttemptFailures = box.failures
 			outcome.AccountSwitches = box.switches

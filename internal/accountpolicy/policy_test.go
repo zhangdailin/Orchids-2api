@@ -33,6 +33,10 @@ func TestClassify_RefusedCredentialNeedsLogin(t *testing.T) {
 	if v.Cooldown != CredentialReverify {
 		t.Fatalf("cooldown = %v, want %v", v.Cooldown, CredentialReverify)
 	}
+	v.Apply(acc)
+	if acc.AuthStatus != store.AccountAuthStatusReauthRequired {
+		t.Fatalf("auth status = %q, want reauthRequired", acc.AuthStatus)
+	}
 }
 
 // TestClassify_ModelScopedFailureKeepsAccount covers the P0 rule: a complaint
@@ -139,8 +143,8 @@ func TestAccountLifecycle(t *testing.T) {
 	if !NeedsReverify(&store.Account{StatusCode: "401"}, now) {
 		t.Fatal("a 401 without a verdict stamp must be due immediately")
 	}
-	if AccountHeld(rejected, now.Add(CooldownFor(rejected)+time.Minute)) {
-		t.Fatal("the pool cooldown must expire")
+	if AccountHeld(rejected, now.Add(24*time.Hour)) == false {
+		t.Fatal("reauthRequired must remain held until a successful re-authentication")
 	}
 
 	healthy := grokSSO()
@@ -162,8 +166,8 @@ func TestCooldownFor_MatchesPoolValues(t *testing.T) {
 		acc  *store.Account
 		want time.Duration
 	}{
-		{&store.Account{StatusCode: "401"}, 5 * time.Minute},
-		{&store.Account{StatusCode: "429"}, 1 * time.Minute},
+		{&store.Account{StatusCode: "401"}, 30 * time.Minute},
+		{&store.Account{StatusCode: "429"}, 30 * time.Second},
 		{&store.Account{StatusCode: "402"}, 24 * time.Hour},
 		{&store.Account{StatusCode: "402", AccountType: "puter"}, 15 * time.Minute},
 		// A WorkBuddy account reaches status 402 only when its allowance is gone
@@ -179,6 +183,30 @@ func TestCooldownFor_MatchesPoolValues(t *testing.T) {
 		if got := CooldownFor(tc.acc); got != tc.want {
 			t.Fatalf("CooldownFor(%s/%s) = %v, want %v", tc.acc.AccountType, tc.acc.StatusCode, got, tc.want)
 		}
+	}
+}
+
+func TestRateLimitCooldownIsBoundedExponential(t *testing.T) {
+	want := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 16 * time.Minute, 30 * time.Minute, 30 * time.Minute}
+	failures := []int{1, 2, 3, 6, 7, 20}
+	for i, failureCount := range failures {
+		if got := RateLimitCooldown(failureCount); got != want[i] {
+			t.Fatalf("RateLimitCooldown(%d)=%v want %v", failureCount, got, want[i])
+		}
+	}
+	if got := BoundRateLimitCooldown(2 * time.Hour); got != 30*time.Minute {
+		t.Fatalf("bounded retry-after=%v want 30m", got)
+	}
+}
+
+func TestAccountHeldUsesLaterBoundedReset(t *testing.T) {
+	now := time.Now()
+	acc := &store.Account{StatusCode: "429", LastAttempt: now, RateLimitFailures: 1, QuotaResetAt: now.Add(10 * time.Minute)}
+	if !AccountHeld(acc, now.Add(time.Minute)) {
+		t.Fatal("quota reset later than exponential cooldown must keep account held")
+	}
+	if AccountHeld(acc, now.Add(11*time.Minute)) {
+		t.Fatal("account should recover after the later reset")
 	}
 }
 

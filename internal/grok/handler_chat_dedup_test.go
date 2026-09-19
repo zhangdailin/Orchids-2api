@@ -398,7 +398,7 @@ func TestStreamChat_AcceptsAlternateUpstreamEventShape(t *testing.T) {
 	}
 }
 
-func TestStreamChat_ParseErrorUsesSSEErrorEvent(t *testing.T) {
+func TestStreamChat_ParseErrorUsesDataOnlyOpenAIError(t *testing.T) {
 	h := &Handler{}
 	rec := httptest.NewRecorder()
 
@@ -406,8 +406,8 @@ func TestStreamChat_ParseErrorUsesSSEErrorEvent(t *testing.T) {
 
 	h.streamChat(rec, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, body, nil)
 	raw := rec.Body.String()
-	if !strings.Contains(raw, "event: error") {
-		t.Fatalf("expected SSE error event, raw=%q", raw)
+	if strings.Contains(raw, "event: error") || !strings.Contains(raw, `"type":"api_error"`) {
+		t.Fatalf("expected data-only OpenAI error, raw=%q", raw)
 	}
 	if !strings.Contains(raw, `"code":"stream_error"`) {
 		t.Fatalf("expected stream_error code, raw=%q", raw)

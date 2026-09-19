@@ -97,16 +97,13 @@ func TestResolveModel_Grok420BetaRejected(t *testing.T) {
 
 func TestResolveModel_LegacyAppChatModelsDeprecated(t *testing.T) {
 	for _, id := range []string{
-		"grok-4.20-0309-non-reasoning",
 		"grok-4.20-0309",
-		"grok-4.20-0309-reasoning",
 		"grok-4.20-0309-non-reasoning-super",
 		"grok-4.20-0309-super",
 		"grok-4.20-0309-reasoning-super",
 		"grok-4.20-0309-non-reasoning-heavy",
 		"grok-4.20-0309-heavy",
 		"grok-4.20-0309-reasoning-heavy",
-		"grok-4.20-multi-agent-0309",
 		"grok-4.20-fast",
 		"grok-4.20-auto",
 		"grok-4.20-expert",

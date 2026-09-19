@@ -329,17 +329,19 @@ func TestCLIClientFetchModelsReadsOfficialControlPlaneCatalog(t *testing.T) {
 	}
 }
 
-func TestCLIResponsesWaitsForTeamModelCooldownBeforeUpstream(t *testing.T) {
+func TestCLIResponsesRejectsTeamModelCooldownBeforeUpstream(t *testing.T) {
 	previous := teamCooldown
 	teamCooldown = newTeamCooldownRegistry()
 	defer func() { teamCooldown = previous }()
 	teamCooldown.Note(RateLimitScopeRPM, ProviderBuild+":team:team-1", "grok-4.6", time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
 	client := &CLIClient{}
-	_, err := client.doResponsesAt(ctx, &store.Account{TeamID: "team-1"}, "/responses", map[string]interface{}{"model": "grok-4.6"})
-	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
-		t.Fatalf("error=%v want cancellable team cooldown", err)
+	started := time.Now()
+	_, err := client.doResponsesAt(context.Background(), &store.Account{TeamID: "team-1"}, "/responses", map[string]interface{}{"model": "grok-4.6"})
+	if err == nil || !strings.Contains(err.Error(), "status=429") || !strings.Contains(err.Error(), "retry-after") {
+		t.Fatalf("error=%v want immediate team/model cooldown 429 with retry-after", err)
+	}
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		t.Fatalf("team cooldown blocked for %s; it must reject immediately so the retry loop can rotate accounts", elapsed)
 	}
 }

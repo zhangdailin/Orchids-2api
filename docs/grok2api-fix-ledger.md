@@ -93,6 +93,21 @@
 
 ## 三、未修（需要整块移植或产品决策）
 
+第三轮结束后仍未修的条目（52 条：P1×6、P2×35、P3×11），以及为什么：
+
+| 编号 | 仍未修的原因 |
+| --- | --- |
+| A9-1 | 计费层：价格表 + Key 额度预留/结算 + `usage_source` 列。属**新功能**，不是修 bug；本轮只补齐了用量口径与 unpriced/priced 维度 |
+| A3-7 | 网关侧 compaction（`compaction_trigger` 分类、canonical 摘要、`g2a_compact_v1` blob 编解码与展开），需要按上游 `responses_compaction*.go` 整块移植 |
+| A6-1 | 质量降级重试（encrypted-thinking dump / 缺失思考的识别、扣分、12h 冷却、二次停用），需要按上游 HEAD 的 `quality_retry.go` 移植（注意基点后该文件被改过） |
+| A7-7 | TLS ClientHello 与 UA 大版本映射：当前用库内 `HelloChrome_Auto` 常量，做到按 UA 版本映射需要改用 tls-client 的 `ClientProfile` 表（依赖升级），本轮只补了 HTTP/2 keepalive |
+| A7-8 | Web chat 主路径走 mgw WebSocket：与出口 lease 的浏览器 TLS/UA/cookie 复用是同一件事，属出口层重构 |
+| A7-10 | 节点健康持久化 + 主动探测 + 指数冷却：目前只有进程内健康分与固定 30s 冷却，落地需要探测任务与健康存储 |
+| A5-29 | 媒体输入上传端点的线契约（A 在推理前缀 + snake_case，B 在管理端 + camelCase `data` 包裹）：改线格式会打断现有调用方，属对外契约变更，需与客户端一起排期 |
+| A7-2 | statsig 的**签名**需要外部签名服务（上游由首页 metaContent + 签名器生成），本项目没有该依赖：已改为"配置有效则沿用、否则安全省略"，不再伪造 |
+| A2-6 | 原生 Responses 流的 `[DONE]`/重新分帧：项目的 relay 测试明确要求保留该行为（字节透明契约），见"保留差异" |
+| 其余 P2/P3 | 多为文案/字段集/边角校验差异（如流式图片事件 `size` 恒 auto、`/tts/voices` 未归一化、无 `[]` 的 `timestamp_granularities` 语义等），逐条列在 `docs/grok2api-parity-audit.md` 对应章节 |
+
 按批次给出后续方案，工作量从大到小：
 
 1. **A9-1 计费层缺失**（P0）：需要移植价格表 + Key 额度预留/结算 + `usage_source` 列。属新功能，不是修 bug。
@@ -166,3 +181,97 @@
 第二轮新增回归测试（`fix_regression_test.go`、`cmd/server/media_sweeper_test.go`）：Anthropic usage/cache/thinking 字段、refusal stop reason、id 归一、Console 每模型语义、参数整型规范化（含 number 类型不动、越界不转）、idle 超时分类、agent 会话头识别与命名空间、ftyp 品牌判定、ETag 稳定性、语音响应头过滤/放行、视频内容 URL、媒体输入清扫器只回收自己命名空间的文件。
 
 第二轮改动后 `go build ./...`、`go vet ./...`、`go test ./...` 全量通过。
+
+## 六、第三轮修复（53 条）
+
+本轮按功能面并行推进，仍然坚持"可自证正确、不破坏既有契约"：
+
+### 模型目录（7）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A4-1 / A4-2 / A4-3 | 保留既有 `console/`、`build/`、`web/` 前缀 ID 的同时，**新增**无前缀别名、历史兼容别名与 `<model>-<effort>` 档位别名（只在该模型真的支持该档位时才合成），`__models` 表同步暴露这些别名 | `internal/grok/models.go`、`internal/handler/models.go` |
+| A4-4 | 模型不存在改为 404 JSON `model_not_found`（OpenAI 面）与 `not_found_error`（Anthropic 面），不再是 400 纯文本 | `handler_chat.go`、`handler_messages.go` |
+| A4-7 | Codex 目录补齐 5 个协议字段（`default_service_tier`、`availability_nux`、`upgrade`、`model_messages`、`auto_compact_token_limit`） | `internal/handler/codex_models.go` |
+| A4-8 | agent 工具集（`apply_patch`/并行工具）只对 Build+Responses 路由宣告，Web 模型不再被标成支持 | 同上 |
+| A4-9 | 同名模型的 Build 池不可用时回退到 Console，而不是直接失败 | `handler_chat.go` |
+
+### Responses 兼容层（2）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A3-1 | 新增 `responses_compat.go`：只为**缺字段**的事件补齐 `response.id/object/created_at/model/output`、`item.id`、`item_id`、`output_text.annotations`，已合法的事件保持原始字节 | `responses_compat.go` |
+| A3-4 | 新增 `responses_history.go`：Build 请求中有选择地归一化扩展历史项（`agent_message`、`local_shell_call(_output)`、`mcp_tool_call_output`），原生历史与未知字段原样保留 | `responses_history.go` |
+
+### 账号策略（5）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A6-2 | 新增持久化 `AuthStatus`：401 标记 `reauthRequired` 并**不再回到候选池**，直到重新登录/改凭据/管理员验证成功 | `store`、`accountpolicy`、`loadbalancer` |
+| A6-4 | 429 冷却改为有界指数退避（30s→1m→2m→…→30m），上游 `Retry-After`/reset 一律封顶 30m；LB 与 `AccountHeld` 取两者较晚者 | 同上、`rate_limiter.go` |
+| A6-6 | 付费额度耗尽（月额度 ≤0 或周用量 100%）在计费周期结束前不进候选；周期结束后**每次只放行一个原子探针**（15 分钟间隔） | `store`、`loadbalancer` |
+| A6-7 | 团队/模型 429 不再在请求内阻塞等待，改为立即返回带 `Retry-After` 的 429，由重试循环换号 | `rate_limiter.go`、`handler.go` |
+| A6-15 | 成功请求在缺少权威配额头时对已观测到的本地窗口做原子扣减（每周百分比账单不动） | `store.ConsumeGrokQuota` |
+
+### 用量与计费口径（5，不含 A9-1）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A9-2 | journal 增加 `usage_source`（`upstream`/`estimated`/`none`）与 `total_tokens`，旧 Redis Stream 记录无需迁移 | `internal/audit`、`console.go`、`handler.go` |
+| A9-5 | Anthropic 流式 `message_start` 用请求侧估算填充 `input_tokens` 与缓存计数器，终态仍以上游 usage 覆盖 | `handler_messages.go` |
+| A9-7 | 见 A6-15：成功请求乐观扣减已观测窗口，缺失时绝不臆造额度 | `handler.go`、`quota.go` |
+| A9-8 | billing 百分比缺失时用 `monthly_used/monthly_limit` 反推；展示优先级改为月绝对额度优先于周百分比 | `cli_billing.go`、`quota_projection.go` |
+| A9-12 | 运营聚合补 cached/reasoning/total 与 priced/unpriced 维度（当前用量统一记未计价，因为 A9-1 未实现） | `internal/opsagg`、`middleware` |
+
+### 流式生命周期（6）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A2-2 | `writeSSEBytes` 返回并传播短写/写错误；可用时用 `ResponseController` 设置 30s 写截止；下游失败即中止上游解析 | `http_helpers.go`、`console_stream.go`、`handler_responses_store.go` |
+| A2-4 | 语义 idle 只用于 Build，Web/Console 改用字节级 idle；三通道都覆盖成功的 2xx body | `request_helpers.go`、`client.go` |
+| A2-8 | Chat 中途错误帧改为 data-only OpenAI 信封（`type=api_error`） | `http_helpers.go` |
+| A2-9 | SSE 头补 `charset=utf-8` 与 `X-Accel-Buffering: no`，不再写 hop-by-hop `Connection`；桥接复制内层已提交头 | 同上 |
+| A2-11 | 恢复 `semanticIdleReadCloser.TimedOut()` | `grok2api_streamidle.go` |
+| A2-12 | idle 改为按通道配置（Web 90s / Console-Build 120s，30–600s 边界，兼容旧单值配置） | `internal/config` |
+
+### 媒体与语音（6）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A5-1 | `/images/edits` 同时接受 multipart 与 `application/json`（`image`/`images` 的 `url` 或 `file_id`，二者互斥，复用媒体输入存储与 SSRF 防护） | `handler_image_edits.go` |
+| A5-15 | `/videos` JSON 接受 grok2api 拼写 `duration`/`aspect_ratio`/`resolution`（及 `user`/`image`/`reference_images`）并折叠到规范字段 | `types.go`、`handler_videos.go` |
+| A5-23 | 单请求附件数量上限 8（原来无上限，每个附件都会被下载并 base64 放大） | `handler_chat.go` |
+| A5-31 | 视频任务与一次性上传票据 TTL 1h→2h（接收端仍显式判过期） | `handler_videos.go` |
+| A5-34 | Responses/Grok 错误信封 `type` 按状态派生并补 `param`，不再恒为 `invalid_request_error` | `handler_responses_store.go` |
+| A5-14 | 视频**创建阶段**失败（401/402/403/429/5xx/配额）改为重新入队换号重试；已拿到上游任务 ID 后的失败仍然判死，避免重复生成 | `handler_videos_console.go` |
+
+### 出口与身份（12）
+
+| 编号 | 修复 |
+| --- | --- |
+| A7-2 | 不再本地伪造 `x-statsig-id`：配置里有效则沿用，否则安全省略（无外部签名器时的诚实降级） |
+| A7-3 | Console DPoP 取号与请求改走 `console` scope lease（带凭据亲和、UA/cookie、健康反馈与释放） |
+| A7-4 | Build/CLI 不再被注入浏览器 UA 与 grok.com `cf_clearance` |
+| A7-5 | 亲和改为按凭据派生（Web 用 SSO 指纹、Build 用账号身份），不再常量 |
+| A7-6 | clearance 指纹纳入节点 URL/求解器/目标/亲和（凭据安全哈希） |
+| A7-12 | CF cookie 白名单补 `_cfuvid`/`cf_chl_*`，去重、限长、拒控制字符 |
+| A7-13 | 会话身份探测走 app_chat lease，使用专用 GET 浏览器头并支持解压 |
+| A7-14 | Build 请求补 `x-authenticateresponse`/`x-grok-agent-id`/`x-grok-req-id`/`traceparent`，会话头规范为 UUID（确定性 UUIDv5） |
+| A7-15 | `x-cluster` 只用于 Console `/responses` |
+| A7-16 | lease 侧通用 403 也失效 clearance |
+| A7-17 | Client Hints 按实际 UA 的 Chrome 版本与平台推导 |
+| A7-18 | 连接池键纳入代理 URL 哈希，标准/浏览器客户端缓存封顶 512 并关闭空闲连接 |
+
+### 错误契约与 Chat 校验（4）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A8-5 | 限流闸门改为非阻塞准入：过载立即 503 + `Retry-After: 1` + `server_overloaded` JSON（原来是排队 60s 后纯文本 503） | `middleware/concurrency.go` |
+| A8-6 | Anthropic 错误 `type`/`code` 按状态派生（401→authentication_error、429→rate_limit_error、5xx→overloaded_error 等） | `handler_messages.go` |
+| A8-11 | `/videos` JSON 未知字段显式 400（本项目所用 JSON 库不执行 `DisallowUnknownFields`，改为按白名单显式校验） | `handler_videos.go` |
+| A8-15 | 模型白名单 403 改用统一错误信封（含 `param`） | `http_helpers.go` |
+| A1-15 | 缺 `tool_call_id` 的 tool 消息不再用 function name 顶替，而是跳过该条（避免生成不存在的 call_id） | `responses_normalize.go` |
+| A1-19 | 工具序列校验：`tool_use` 必须配对 `tool_result`，未配对即报错 | `handler_messages.go` |
+| A5-11 | Web 免费/基础档凭据的视频时长在发往上游前钳到 6 秒（原来上游直接拒绝整个任务，表现为几分钟后一个含糊失败） | `handler_videos.go` |
+| A7-9 | 流内反爬识别：上游流内 `code=7`/"anti-bot" 不再被当成普通失败——分类为 `errGrokWebAntiBot`，账号短冷却让下次重新求解 clearance（自动重签 statsig 仍未实现，见未修清单） | `console_stream.go`、`console.go` |
+| A5-12 | 标准 `/videos/generations` 不再硬绑 Console：模型路由到 Web 平面时改走 Web 任务引擎（带图片输入时仍明确报错），仅部署 Web 账号的场景不再必然 503 | `handler_videos_console.go` |

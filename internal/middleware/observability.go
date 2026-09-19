@@ -17,14 +17,14 @@ import (
 
 type requestObservationKey struct{}
 type requestObservation struct {
-	mu                           sync.Mutex
-	input, output                int64
-	usage                        bool
-	attempts, failures, switches int64
-	account                      int64
-	providerReached              bool
-	finalEvent                   *audit.Event
-	journal                      audit.Logger
+	mu                                      sync.Mutex
+	input, cached, output, reasoning, total int64
+	usage                                   bool
+	attempts, failures, switches            int64
+	account                                 int64
+	providerReached                         bool
+	finalEvent                              *audit.Event
+	journal                                 audit.Logger
 }
 
 var requestJournal audit.Logger
@@ -59,7 +59,10 @@ func (l observedAuditLogger) Log(ctx context.Context, e audit.Event) {
 			// Native Responses reports its usage on the completed upstream attempt.
 			if e.InputTokens > 0 || e.OutputTokens > 0 {
 				box.input += int64(e.InputTokens)
+				box.cached += int64(e.CachedInputTokens)
 				box.output += int64(e.OutputTokens)
+				box.reasoning += int64(e.ReasoningTokens)
+				box.total += int64(e.TotalTokens)
 				box.usage = true
 			}
 		} else if e.Action == "chat_request" || e.Action == "grok_request" {
@@ -69,7 +72,10 @@ func (l observedAuditLogger) Log(ctx context.Context, e audit.Event) {
 			box.providerReached = true
 			if e.InputTokens > 0 || e.OutputTokens > 0 {
 				box.input = int64(e.InputTokens)
+				box.cached = int64(e.CachedInputTokens)
 				box.output = int64(e.OutputTokens)
+				box.reasoning = int64(e.ReasoningTokens)
+				box.total = int64(e.TotalTokens)
 				box.usage = true
 			}
 		}

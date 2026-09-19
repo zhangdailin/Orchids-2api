@@ -90,10 +90,14 @@ func updateGrokUsageAccount(acc *store.Account, info *RateLimitInfo, status stri
 	status = strings.TrimSpace(status)
 	if status == "" {
 		acc.StatusCode = ""
+		acc.AuthStatus = store.AccountAuthStatusActive
 		acc.LastAttempt = time.Time{}
 		return
 	}
 	acc.StatusCode = status
+	if status == "401" {
+		acc.AuthStatus = store.AccountAuthStatusReauthRequired
+	}
 	acc.LastAttempt = time.Now()
 }
 

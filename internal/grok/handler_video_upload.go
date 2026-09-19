@@ -21,7 +21,10 @@ var videoUploadTokenPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // maxBuildVideoUploadBytes bounds the callback PUT. It matches grok2api's
 // 256 MiB middleware limit and answers 413, where this endpoint used to read up
 // to 512 MiB and then report 400.
-const maxBuildVideoUploadBytes = 256 << 20
+const (
+	maxBuildVideoUploadBytes = 256 << 20
+	videoUploadTicketTTL     = 2 * time.Hour
+)
 
 type videoUploadTarget struct {
 	job       *videoJob
@@ -55,7 +58,7 @@ func (h *Handler) registerBuildVideoUpload(job *videoJob) (string, error) {
 			return "", err
 		}
 		redisKey := h.lb.Store.RedisPrefix() + "video_upload:" + key
-		if err := h.lb.Store.RedisClient().Set(context.Background(), redisKey, raw, videoJobTTL).Err(); err != nil {
+		if err := h.lb.Store.RedisClient().Set(context.Background(), redisKey, raw, videoUploadTicketTTL).Err(); err != nil {
 			return "", fmt.Errorf("persist Build video upload token: %w", err)
 		}
 		return base + "/media/uploads/" + token, nil
@@ -67,7 +70,7 @@ func (h *Handler) registerBuildVideoUpload(job *videoJob) (string, error) {
 			delete(buildVideoUploads.items, existing)
 		}
 	}
-	buildVideoUploads.items[key] = videoUploadTarget{job: job, expiresAt: now.Add(videoJobTTL)}
+	buildVideoUploads.items[key] = videoUploadTarget{job: job, expiresAt: now.Add(videoUploadTicketTTL)}
 	buildVideoUploads.Unlock()
 	return base + "/media/uploads/" + token, nil
 }
@@ -116,11 +119,11 @@ func (h *Handler) restoreBuildVideoUpload(ctx context.Context, token string, job
 			return
 		}
 		redisKey := h.lb.Store.RedisPrefix() + "video_upload:" + key
-		_ = h.lb.Store.RedisClient().Set(ctx, redisKey, raw, videoJobTTL).Err()
+		_ = h.lb.Store.RedisClient().Set(ctx, redisKey, raw, videoUploadTicketTTL).Err()
 		return
 	}
 	buildVideoUploads.Lock()
-	buildVideoUploads.items[key] = videoUploadTarget{job: job, expiresAt: time.Now().Add(videoJobTTL)}
+	buildVideoUploads.items[key] = videoUploadTarget{job: job, expiresAt: time.Now().Add(videoUploadTicketTTL)}
 	buildVideoUploads.Unlock()
 }
 

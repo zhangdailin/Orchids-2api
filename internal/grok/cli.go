@@ -3,6 +3,7 @@ package grok
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/grok/egress"
@@ -163,8 +165,9 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 				// Keep the selected account's durable diagnostic state in sync. The
 				// in-memory team/model registry remains authoritative for waiting;
 				// this timestamp is only for admin visibility and restart diagnostics.
-				cooldownUntil := time.Now().Add(meta.RetryAfter)
-				if meta.RetryAfter > 0 && (acc.QuotaResetAt.IsZero() || cooldownUntil.After(acc.QuotaResetAt)) {
+				bounded := accountpolicy.BoundRateLimitCooldown(meta.RetryAfter)
+				cooldownUntil := time.Now().Add(bounded)
+				if bounded > 0 && (acc.QuotaResetAt.IsZero() || cooldownUntil.After(acc.QuotaResetAt)) {
 					acc.QuotaResetAt = cooldownUntil
 					// The throttle is scoped to the model that was asked for: the
 					// account's OTHER models stay selectable, so the verdict is
@@ -186,11 +189,11 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 			recordUpstreamChallenge("cloudflare")
 			if c.egress != nil && c.egress.Enabled() && !challengeRetried {
 				challengeRetried = true
-				c.egress.InvalidateAffinityClearance("cli", "cli-default")
+				c.egress.InvalidateAffinityClearance("cli", cliEgressAffinity(acc))
 				continue
 			}
 			if c.egress != nil && c.egress.Enabled() {
-				c.egress.FeedbackAffinityOutcome("cli", "cli-default", egress.OutcomeChallenge)
+				c.egress.FeedbackAffinityOutcome("cli", cliEgressAffinity(acc), egress.OutcomeChallenge)
 			}
 		} else if kind == UpstreamErrorDPoPChallenge {
 			recordUpstreamChallenge("dpop")
@@ -256,10 +259,78 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 		headers.Set("x-grok-model-override", firstNonEmpty(strings.TrimSpace(model), "grok-imagine-video-1.5"))
 	}
 	if session, _ := payload["prompt_cache_key"].(string); strings.TrimSpace(session) != "" {
-		headers.Set("x-grok-session-id", strings.TrimSpace(session))
-		headers.Set("x-grok-conv-id", strings.TrimSpace(session))
+		// The Build gateway expects session identity as a UUID. A raw sha256 hex
+		// string is not one: the upstream then treats the session as unstable and
+		// the prompt cache never warms.
+		normalized := buildSessionUUID(strings.TrimSpace(session))
+		headers.Set("x-grok-session-id", normalized)
+		headers.Set("x-grok-conv-id", normalized)
 	}
+	// The official Build client identifies itself and traces each request.
+	// Without these the upstream sees an anonymous caller, which is both a
+	// weaker identity and the reason session affinity behaved differently than
+	// through grok2api.
+	headers.Set("x-authenticateresponse", "true")
+	headers.Set("x-grok-agent-id", buildClientIdentifier(c))
+	if version := strings.TrimSpace(c.clientVersion()); version != "" {
+		headers.Set("x-grok-client-version", version)
+	}
+	requestID := randomHex(16)
+	headers.Set("x-grok-req-id", requestID)
+	headers.Set("traceparent", buildTraceparent(requestID))
 	return c.request(ctx, acc, http.MethodPost, c.baseURL()+path, body, headers)
+}
+
+// buildSessionUUID normalizes a session identity to the UUID form the Build
+// gateway expects. An existing UUID is passed through; anything else is mapped
+// deterministically (UUIDv5 over a fixed namespace) so the same session keeps
+// the same identity across requests.
+func buildSessionUUID(seed string) string {
+	trimmed := strings.TrimSpace(seed)
+	if trimmed == "" {
+		return ""
+	}
+	if isUUID(trimmed) {
+		return trimmed
+	}
+	sum := sha1.Sum([]byte("orchids:grok-session:" + trimmed))
+	var uuid [16]byte
+	copy(uuid[:], sum[:16])
+	uuid[6] = (uuid[6] & 0x0f) | 0x50 // version 5
+	uuid[8] = (uuid[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16])
+}
+
+func isUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, r := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if r != '-' {
+				return false
+			}
+			continue
+		}
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// buildTraceparent renders a W3C trace context for one Build request.
+func buildTraceparent(requestID string) string {
+	traceID := strings.TrimSpace(requestID)
+	if len(traceID) < 32 {
+		traceID = traceID + strings.Repeat("0", 32-len(traceID))
+	}
+	return "00-" + traceID[:32] + "-" + traceID[:16] + "-01"
+}
+
+// buildClientIdentifier is the agent identity the official Build client sends.
+func buildClientIdentifier(c *CLIClient) string {
+	return "grok-shell"
 }
 
 // doFallbackRequest sends a request to the direct xAI API with the same
@@ -348,7 +419,7 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 		if kind == UpstreamErrorCloudflareChallenge && c.egress != nil && c.egress.Enabled() && !challengeRetried {
 			challengeRetried = true
 			recordUpstreamChallenge("cloudflare")
-			c.egress.InvalidateAffinityClearance("cli", "cli-default")
+			c.egress.InvalidateAffinityClearance("cli", cliEgressAffinity(acc))
 			continue
 		}
 		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
@@ -438,8 +509,8 @@ func (c *CLIClient) request(ctx context.Context, acc *store.Account, method, end
 	}
 	attempt := debug.BeginUpstream(ctx, method, endpoint, req.Header, body)
 	resp, err := doUpstreamHTTP(req, func(req *http.Request) (*http.Response, error) {
-		return c.doCLIRequest(ctx, req)
-	}, c.cfg.GrokStreamIdleTimeout())
+		return c.doCLIRequest(ctx, acc, req)
+	}, c.cfg.GrokStreamIdleTimeoutFor(ProviderBuild), upstreamIdleBuildSemantic)
 	attempt.Response(resp, err)
 	if resp != nil {
 		resp.Body = attempt.CaptureBody(resp.Body)
@@ -447,23 +518,27 @@ func (c *CLIClient) request(ctx context.Context, acc *store.Account, method, end
 	return resp, err
 }
 
+func cliEgressAffinity(acc *store.Account) string {
+	if acc == nil {
+		return "build_unknown"
+	}
+	identity := firstNonEmpty(acc.UserID, acc.Email, acc.OAuthRefreshToken, acc.OAuthAccessToken, fmt.Sprintf("id:%d", acc.ID))
+	return credentialAffinity(identity)
+}
+
 // doCLIRequest is the fail-closed egress adapter. A successful response owns
 // its lease until the shared response lifecycle closes the body.
-func (c *CLIClient) doCLIRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
+func (c *CLIClient) doCLIRequest(ctx context.Context, acc *store.Account, req *http.Request) (*http.Response, error) {
 	if c.egress == nil || !c.egress.Enabled() {
 		return c.httpClient.Do(req)
 	}
-	lease, err := c.egress.Acquire(ctx, "cli", "cli-default")
+	lease, err := c.egress.Acquire(ctx, "cli", cliEgressAffinity(acc))
 	if err != nil {
 		recordEgressAcquireError()
 		return nil, fmt.Errorf("grok cli egress unavailable: %w", err)
 	}
-	if lease.UserAgent != "" {
-		req.Header.Set("User-Agent", lease.UserAgent)
-	}
-	if lease.CFCookies != "" {
-		mergeCFCookies(req.Header, lease.CFCookies)
-	}
+	// Build is a CLI identity. Its egress lease intentionally carries no
+	// browser UA or grok.com clearance, so never overwrite/leak either here.
 	resp, err := lease.Do(req)
 	if err != nil {
 		c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeTransportError)

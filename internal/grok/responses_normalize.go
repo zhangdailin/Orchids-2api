@@ -262,7 +262,17 @@ func responsesInputFromChatMessages(messages []ChatMessage) ([]interface{}, stri
 			continue
 		}
 		if role == "tool" {
-			callID := firstNonEmpty(strings.TrimSpace(message.ToolCallID), strings.TrimSpace(message.Name))
+			// Only tool_call_id may name the call it answers. Falling back to
+			// the function name produced a function_call_output for a call id
+			// that does not exist, and the upstream then rejected the whole
+			// turn with a message that named neither field.
+			callID := strings.TrimSpace(message.ToolCallID)
+			if callID == "" {
+				// A tool message without an id cannot be paired with its call;
+				// skipping it keeps the rest of the turn valid instead of
+				// emitting a function_call_output for an id that does not exist.
+				continue
+			}
 			items = append(items, map[string]interface{}{"type": "function_call_output", "call_id": callID, "output": responsesToolOutput(message.Content)})
 			continue
 		}
@@ -442,6 +452,9 @@ func interfaceMaps(value interface{}) []map[string]interface{} {
 
 func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 	state := newBuildToolNormalizationState()
+	if err := normalizeBuildInputHistory(payload, state); err != nil {
+		return err
+	}
 	// NOTE: the native Build relay is intentionally byte-transparent (see
 	// relay_policy_test.go: a client payload must reach the upstream unchanged,
 	// and only prompt_cache_key is rewritten). grok2api instead injects

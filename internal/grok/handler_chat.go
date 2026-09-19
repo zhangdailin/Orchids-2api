@@ -22,6 +22,9 @@ import (
 	"orchids-api/internal/util"
 )
 
+// maxChatAttachments bounds how many media inputs one request may reference.
+const maxChatAttachments = 8
+
 func appendUsage(dst []byte, usage map[string]interface{}) []byte {
 	if len(usage) == 0 {
 		dst = append(dst, `,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"prompt_tokens_details":{"cached_tokens":0,"text_tokens":0,"audio_tokens":0,"image_tokens":0},"completion_tokens_details":{"text_tokens":0,"audio_tokens":0,"reasoning_tokens":0}}`...)
@@ -249,10 +252,18 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	spec, ok := h.resolveConversationModel(r.Context(), req.Model)
 	if !ok {
-		writeGrokError(w, http.StatusBadRequest, modelNotFoundMessage(req.Model))
+		writeGrokErrorCode(w, http.StatusNotFound, "model_not_found", modelNotFoundMessage(req.Model))
 		return
 	}
-	if err := h.ensureResolvedModelCapability(r.Context(), req.Model, spec, store.CapabilityChat); err != nil {
+	if spec.AliasReasoningEffort != "" {
+		effort := spec.AliasReasoningEffort
+		req.ReasoningEffort = &effort
+	}
+	if err := h.ensureResolvedModelCapability(r.Context(), spec.ID, spec, store.CapabilityChat); err != nil {
+		if strings.EqualFold(strings.TrimSpace(err.Error()), "model not found") {
+			writeGrokErrorCode(w, http.StatusNotFound, "model_not_found", modelNotFoundMessage(req.Model))
+			return
+		}
 		writeGrokError(w, http.StatusBadRequest, modelValidationMessage(req.Model, err))
 		return
 	}
@@ -340,6 +351,13 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if !spec.IsVideo && modelRoutedToCLI(spec, h.configSnapshot()) {
 		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 		if err != nil {
+			if fallback, ok := ConsoleFallbackFor(spec); ok {
+				if consoleSess, consoleErr := h.openConsoleAccountSession(r.Context(), nil, fallback.ID); consoleErr == nil {
+					defer consoleSess.Close()
+					h.serveNativeChat(r.Context(), w, &req, fallback, consoleSess, logger, false)
+					return
+				}
+			}
 			writeGrokNoAccountError(w, err)
 			return
 		}
@@ -368,6 +386,15 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	text, attachments, err := extractMessageAndAttachmentsWithTools(req.Messages, spec.IsVideo, req.Tools, req.ToolChoice, parallelToolCalls)
 	if err != nil {
 		writeGrokUpstreamError(w, err)
+		return
+	}
+	// One request used to be able to name unbounded attachments, each fetched
+	// and base64-expanded server-side. grok2api caps the count and the combined
+	// size; the same ceiling keeps a single caller from monopolising the egress
+	// and the memory budget.
+	if len(attachments) > maxChatAttachments {
+		writeGrokError(w, http.StatusBadRequest,
+			fmt.Sprintf("at most %d attachments are supported per request", maxChatAttachments))
 		return
 	}
 	userPrompt := strings.TrimSpace(extractLastUserText(req.Messages))
@@ -1093,11 +1120,17 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		textRefCollector = newStreamTextImageRefCollector()
 	}
 	chunkScratch := make([]byte, 0, 256)
+	var downstreamWriteErr error
+	emitRaw := func(raw []byte) {
+		if downstreamWriteErr == nil {
+			downstreamWriteErr = writeSSELog(w, flusher, logger, raw)
+		}
+	}
 
 	emitChunk := func(role, content string, finish string, hasFinish bool) {
 		raw := appendChatCompletionChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, role, content, finish, hasFinish, finalUsage)
 		chunkScratch = raw[:0]
-		writeSSELog(w, flusher, logger, raw)
+		emitRaw(raw)
 		sentAny = true
 	}
 
@@ -1116,7 +1149,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		}
 		raw := appendChatCompletionReasoningChunk(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, content)
 		chunkScratch = raw[:0]
-		writeSSELog(w, flusher, logger, raw)
+		emitRaw(raw)
 		sentAny = true
 	}
 
@@ -1201,7 +1234,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		}
 		raw := appendChatCompletionToolCallsChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, indexedToolCalls, finish, hasFinish, finalUsage)
 		chunkScratch = raw[:0]
-		writeSSELog(w, flusher, logger, raw)
+		emitRaw(raw)
 		sentAny = true
 	}
 
@@ -1223,6 +1256,9 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	}
 
 	err := parseUpstreamLines(body, func(resp map[string]interface{}) error {
+		if downstreamWriteErr != nil {
+			return downstreamWriteErr
+		}
 		if logger != nil {
 			if raw, err := json.Marshal(resp); err == nil {
 				logger.LogUpstreamSSE("response", string(raw))
@@ -1325,24 +1361,27 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		}
 		return nil
 	})
+	if err == nil && downstreamWriteErr != nil {
+		err = downstreamWriteErr
+	}
 	if err != nil {
 		slog.Warn("grok stream parse failed", "error", err)
 		if !sentAny {
 			// A stalled upstream is not a parse error: the idle watchdog's sentinel
 			// gets its own text and its own code so a client can tell the two apart.
 			if errors.Is(err, ErrGrokSemanticIdle) {
-				writeSSECodedError(w, flusher, "upstream stream timed out while waiting for generated output", "upstream_stream_idle_timeout")
+				writeChatStreamError(w, flusher, logger, "upstream stream timed out while waiting for generated output", "upstream_stream_idle_timeout")
 			} else {
-				writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
+				writeChatStreamError(w, flusher, logger, "stream parse error: "+err.Error(), "stream_error")
 			}
 			return
 		}
 		// A stalled upstream is not a parse error: the idle watchdog's sentinel
 		// gets its own text and its own code so a client can tell the two apart.
 		if errors.Is(err, ErrGrokSemanticIdle) {
-			writeSSECodedError(w, flusher, "upstream stream timed out while waiting for generated output", "upstream_stream_idle_timeout")
+			writeChatStreamError(w, flusher, logger, "upstream stream timed out while waiting for generated output", "upstream_stream_idle_timeout")
 		} else {
-			writeSSEStreamError(w, flusher, logger, "stream parse error: "+err.Error())
+			writeChatStreamError(w, flusher, logger, "stream parse error: "+err.Error(), "stream_error")
 		}
 		return
 	}
@@ -1432,7 +1471,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		if toolPump != nil && toolPump.EmittedToolCalls {
 			finalUsage = addReasoningUsage(buildChatUsagePayload(req, strings.TrimSpace(finalBufferedText), []map[string]interface{}{{"type": "function"}}), reasoningContent.String())
 			emitChunk("", "", "tool_calls", true)
-			writeSSELog(w, flusher, logger, []byte("[DONE]"))
+			emitRaw([]byte("[DONE]"))
 			return
 		}
 		textContent, toolCalls := toolParser.parseCalls(strings.TrimSpace(finalBufferedText))
@@ -1440,7 +1479,7 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 		if len(toolCalls) > 0 {
 			finalUsage = addReasoningUsage(buildChatUsagePayload(req, textContent, toolCalls), reasoningContent.String())
 			emitToolCallsChunk(textContent, toolCalls, "tool_calls", true)
-			writeSSELog(w, flusher, logger, []byte("[DONE]"))
+			emitRaw([]byte("[DONE]"))
 			return
 		}
 	}
@@ -1449,11 +1488,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	if finalSnapshotEnabled && finalSnapshotContent != "" {
 		raw := appendChatCompletionSnapshotChunkWithUsage(chunkScratch[:0], id, time.Now().Unix(), model, fingerprint, finalSnapshotContent, "stop", true, finalUsage)
 		chunkScratch = raw[:0]
-		writeSSELog(w, flusher, logger, raw)
+		emitRaw(raw)
 	} else {
 		emitChunk("", "", "stop", true)
 	}
-	writeSSELog(w, flusher, logger, []byte("[DONE]"))
+	emitRaw([]byte("[DONE]"))
 }
 
 func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest, model string, spec ModelSpec, token string, publicBase string, hasAttachments bool, tools []ToolDef, toolChoice interface{}, body io.Reader, logger *debug.Logger) {

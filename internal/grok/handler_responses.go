@@ -300,6 +300,9 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 				_, _ = io.Copy(w, reader)
 				return
 			}
+			for key, values := range header {
+				w.Header()[key] = append([]string(nil), values...)
+			}
 			writeResponsesStreamFromChatReaderRequest(w, req, reader)
 		})
 		return

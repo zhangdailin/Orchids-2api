@@ -17,7 +17,8 @@ func TestShouldSwitchGrokAccount(t *testing.T) {
 		{name: "cloudflare 403", err: errors.New("grok upstream status=403 body=<html>Just a moment... verifying you are human</html>"), want: false},
 		{name: "dpop 403", err: errors.New("grok upstream status=403 body={\"code\":\"unauthorized_dpop_required\"}"), want: false},
 		{name: "account 429", err: errors.New("grok upstream status=429 body=rate limit exceeded"), want: true},
-		{name: "shared 429", err: errors.New("grok upstream status=429 body=too many requests"), want: false},
+		{name: "401", err: errors.New("grok upstream status=401 body=unauthorized"), want: true},
+		{name: "shared 429", err: errors.New("grok upstream status=429 body=too many requests"), want: true},
 		{name: "rate limit code", err: errors.New("imagine websocket error: rate_limit_exceeded: Image rate limit exceeded"), want: true},
 		{name: "timeout", err: errors.New("Client.Timeout exceeded while awaiting headers"), want: true},
 		{name: "deadline", err: errors.New("context deadline exceeded"), want: true},
@@ -41,8 +42,8 @@ func TestShouldSwitchGrokAccount_ConsoleScenarios(t *testing.T) {
 		want bool
 	}{
 		{name: "nil", err: nil, want: false},
-		{name: "team rate limit", err: errors.New("grok upstream status=429 body=too many requests for team"), want: false},
-		{name: "resource exhausted", err: errors.New("grok upstream status=429 body={\"code\":\"resource-exhausted\",\"error\":\"Too many requests for team\"}"), want: false},
+		{name: "team rate limit", err: errors.New("grok upstream status=429 body=too many requests for team"), want: true},
+		{name: "resource exhausted", err: errors.New("grok upstream status=429 body={\"code\":\"resource-exhausted\",\"error\":\"Too many requests for team\"}"), want: true},
 		{name: "account rate limit", err: errors.New("grok upstream status=429 body=rate limit exceeded"), want: true},
 		{name: "generic 403", err: errors.New("grok upstream status=403 body=forbidden"), want: false},
 		{name: "blocked-user 403", err: errors.New("grok upstream status=403 body={\"code\":\"blocked-user\"}"), want: true},
@@ -89,8 +90,8 @@ func TestMarkAllGrokAccountStatuses(t *testing.T) {
 		{name: "anti bot 403", err: errors.New("grok upstream status=403 body=Request rejected by anti-bot rules"), wantMark: false, wantSwitch: false},
 		{name: "cloudflare 403", err: errors.New("grok upstream status=403 body=<html>cf-mitigated: challenge</html>"), wantMark: false, wantSwitch: false},
 		{name: "dpop 403", err: errors.New("grok upstream status=403 body={\"code\":\"unauthorized_dpop_required\"}"), wantMark: false, wantSwitch: false},
-		{name: "401", err: errors.New("grok upstream status=401 body=unauthorized"), wantMark: true, wantSwitch: false},
-		{name: "shared 429", err: errors.New("grok upstream status=429 body=too many requests"), wantMark: false, wantSwitch: false},
+		{name: "401", err: errors.New("grok upstream status=401 body=unauthorized"), wantMark: true, wantSwitch: true},
+		{name: "shared 429", err: errors.New("grok upstream status=429 body=too many requests"), wantMark: false, wantSwitch: true},
 		{name: "account 429", err: errors.New("grok upstream status=429 body=rate limit exceeded"), wantMark: true, wantSwitch: true},
 		{name: "network", err: errors.New("read: connection reset by peer"), wantMark: true, wantSwitch: true},
 	}

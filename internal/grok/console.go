@@ -2,6 +2,7 @@ package grok
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/audit"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/util"
 )
@@ -393,6 +395,12 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
+		// A stream-level anti-bot rejection means the session behind this
+		// request is no longer trusted: cool the account briefly so the next
+		// attempt re-solves clearance instead of replaying the refused session.
+		if errors.Is(err, errGrokWebAntiBot) {
+			h.markAccountStatus(ctx, sess.acc, fmt.Errorf("grok upstream status=429 body=anti-bot rejected session"))
+		}
 		writeGrokUpstreamError(w, err)
 		return
 	}
@@ -631,7 +639,14 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 		writeGrokUpstreamError(w, outcome.Err)
 		return
 	}
-	outcome.Usage = firstUsage(consoleUsage(raw), addReasoningUsage(buildChatUsagePayload(req, text+refusal, toolCalls), reasoning))
+	upstreamUsage := consoleUsage(raw)
+	if len(upstreamUsage) > 0 {
+		outcome.Usage = upstreamUsage
+		outcome.UsageSource = audit.UsageSourceUpstream
+	} else {
+		outcome.Usage = addReasoningUsage(buildChatUsagePayload(req, text+refusal, toolCalls), reasoning)
+		outcome.UsageSource = audit.UsageSourceEstimated
+	}
 	outcome.Finish = finishReason
 	outcome.FirstToken = time.Now()
 	resp := map[string]interface{}{

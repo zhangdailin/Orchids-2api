@@ -34,8 +34,11 @@ const (
 // Cooldown windows. They mirror the account pool's long-standing values so the
 // scheduler and the pool expire a verdict at the same moment.
 const (
-	CooldownAuth       = 5 * time.Minute
-	CooldownRateLimit  = 1 * time.Minute
+	CooldownAuth          = 5 * time.Minute
+	CooldownRateLimitBase = 30 * time.Second
+	CooldownRateLimitMax  = 30 * time.Minute
+	// CooldownRateLimit is retained as the first-failure/default alias.
+	CooldownRateLimit  = CooldownRateLimitBase
 	CooldownPayment    = 24 * time.Hour
 	CooldownPuterQuota = 15 * time.Minute
 	CooldownBlocked    = 24 * time.Hour
@@ -90,12 +93,21 @@ func (v Verdict) Apply(acc *store.Account) {
 		at = time.Now()
 	}
 	acc.StatusCode = strings.TrimSpace(v.Status)
+	if v.NeedsLogin {
+		acc.AuthStatus = store.AccountAuthStatusReauthRequired
+	} else if acc.StatusCode == "" {
+		acc.AuthStatus = store.AccountAuthStatusActive
+	}
 	if acc.StatusCode == "" {
 		acc.StatusMessage = ""
 		acc.LastAttempt = time.Time{}
+		acc.RateLimitFailures = 0
 	} else {
 		acc.StatusMessage = strings.TrimSpace(v.Message)
 		acc.LastAttempt = at
+		if acc.StatusCode == "429" {
+			acc.RateLimitFailures++
+		}
 	}
 	// Any verdict — healthy or not — proves the credential was exercised, which
 	// is what makes "never checked" distinguishable from "checked and healthy".
@@ -278,6 +290,9 @@ func AccountHeld(acc *store.Account, now time.Time) bool {
 	if acc == nil {
 		return false
 	}
+	if !store.AccountAuthActive(acc) {
+		return true
+	}
 	status := strings.TrimSpace(acc.StatusCode)
 	if status == "" {
 		return false
@@ -285,7 +300,11 @@ func AccountHeld(acc *store.Account, now time.Time) bool {
 	if acc.LastAttempt.IsZero() {
 		return true
 	}
-	return now.Sub(acc.LastAttempt) < CooldownFor(acc)
+	until := acc.LastAttempt.Add(CooldownFor(acc))
+	if (status == "429" || status == "402") && acc.QuotaResetAt.After(until) {
+		until = acc.QuotaResetAt
+	}
+	return now.Before(until)
 }
 
 // CooldownFor returns the cooldown the account's current status implies.
@@ -295,9 +314,9 @@ func CooldownFor(acc *store.Account) time.Duration {
 	}
 	switch strings.TrimSpace(acc.StatusCode) {
 	case "401":
-		return CooldownAuth
+		return CredentialReverify
 	case "429":
-		return CooldownRateLimit
+		return RateLimitCooldown(acc.RateLimitFailures)
 	case "402":
 		// WorkBuddy reaches this with a status only when its allowance is gone: a
 		// model-scoped refusal writes no status at all (see Classify), so there is
@@ -318,6 +337,34 @@ func CooldownFor(acc *store.Account) time.Duration {
 	default:
 		return CooldownTransient
 	}
+}
+
+// RateLimitCooldown returns 30s, 1m, 2m ... capped at 30m. A missing legacy
+// failure count is treated as the first failure.
+func RateLimitCooldown(failures int) time.Duration {
+	if failures < 1 {
+		failures = 1
+	}
+	cooldown := CooldownRateLimitBase
+	for i := 1; i < failures && cooldown < CooldownRateLimitMax; i++ {
+		cooldown *= 2
+	}
+	if cooldown > CooldownRateLimitMax {
+		return CooldownRateLimitMax
+	}
+	return cooldown
+}
+
+// BoundRateLimitCooldown applies the configured policy ceiling to an upstream
+// Retry-After/reset duration.
+func BoundRateLimitCooldown(retryAfter time.Duration) time.Duration {
+	if retryAfter <= 0 {
+		return retryAfter
+	}
+	if retryAfter > CooldownRateLimitMax {
+		return CooldownRateLimitMax
+	}
+	return retryAfter
 }
 
 // NeedsReverify reports whether a credential the upstream refused is due to be

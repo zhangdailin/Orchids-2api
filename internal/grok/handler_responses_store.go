@@ -12,6 +12,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/audit"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
@@ -327,7 +328,13 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		}
 		responseID = interfaceString(response["id"])
 		result.Usage = consoleUsage(response)
+		if len(result.Usage) > 0 {
+			result.UsageSource = audit.UsageSourceUpstream
+		}
 		result.Finish, result.Err = responseTerminalFinish("", response)
+		// Whole JSON Responses objects are already self-contained. Preserve their
+		// original bytes; strict serde supplementation is only needed for partial
+		// SSE events that clients assemble incrementally.
 		if redactResponseError(response) {
 			raw, _ = json.Marshal(response)
 		}
@@ -336,10 +343,11 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 	}
 
 	flusher, _ := w.(http.Flusher)
-	target := io.MultiWriter(w, fullCapture)
+	target := io.MultiWriter(deadlineResponseWriter{w}, fullCapture)
 	terminal, done := false, false
 	failureCode, failureMessage := "", ""
 	tracker := &streamRepeatTracker{}
+	compat := &responsesCompatibilityState{model: model}
 	err := consumeCompatibleSSE(body, func(frame compatibleSSEEvent) error {
 		var event map[string]interface{}
 		kind := ""
@@ -373,7 +381,7 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 				return loopErr
 			}
 		}
-		if redactResponseError(event) {
+		if supplementResponsesEvent(event, compat) || redactResponseError(event) {
 			raw, _ := json.Marshal(event)
 			frame.data = []string{string(raw)}
 		}
@@ -386,6 +394,7 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		}
 		if usage := consoleUsageFromStreamEvent(event); len(usage) > 0 {
 			result.Usage = usage
+			result.UsageSource = audit.UsageSourceUpstream
 		}
 		item, _ := event["item"].(map[string]interface{})
 		meaningful := strings.HasSuffix(kind, ".delta") && streamString(event["delta"]) != ""
@@ -476,13 +485,26 @@ func (c *boundedResponseCapture) Write(p []byte) (int, error) {
 }
 
 func writeResponsesAPIError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	// The type has to follow the status: a client retries an overload or a rate
+	// limit and stops on a bad request, and a constant invalid_request_error
+	// told every client to stop, including for a 503 it could have retried.
+	errType := "invalid_request_error"
+	switch {
+	case status == http.StatusUnauthorized:
+		errType = "authentication_error"
+	case status == http.StatusForbidden:
+		errType = "permission_error"
+	case status == http.StatusTooManyRequests:
+		errType = "rate_limit_error"
+	case status >= 500:
+		errType = "server_error"
+	}
+	writeJSONStatus(w, status, map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": message,
-			"type":    "invalid_request_error",
+			"type":    errType,
 			"code":    code,
+			"param":   nil,
 		},
 	})
 }

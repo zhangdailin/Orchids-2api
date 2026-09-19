@@ -62,40 +62,20 @@ func (cl *ConcurrencyLimiter) LimitLongLived(next http.HandlerFunc) http.Handler
 
 func (cl *ConcurrencyLimiter) limit(next http.HandlerFunc, executionTimeout bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Calculate wait timeout
-		waitTimeout := 60 * time.Second
-		if cl.adaptive {
-			p95 := atomic.LoadInt64(&cl.cachedP95)
-			if p95 > 0 {
-				// Allow 1.5x P95 wait time, clamped
-				calcWait := time.Duration(float64(p95)*1.5) * time.Millisecond
-				if calcWait < 5*time.Second {
-					waitTimeout = 5 * time.Second
-				} else if calcWait > 60*time.Second {
-					waitTimeout = 60 * time.Second
-				} else {
-					waitTimeout = calcWait
-				}
-			}
-		}
-
-		if cl.timeout < waitTimeout {
-			waitTimeout = cl.timeout
-		}
-
-		waitCtx, cancelWait := context.WithTimeout(r.Context(), waitTimeout)
-		defer cancelWait()
-
-		// Try to acquire semaphore with wait timeout
-		acquireStart := time.Now()
-		if err := cl.sem.Acquire(waitCtx, 1); err != nil {
+		// Admission is deliberately non-blocking. Queueing requests behind the
+		// semaphore consumes connections and goroutines precisely when the server
+		// is overloaded, which can amplify an overload into a broader outage.
+		if !cl.sem.TryAcquire(1) {
 			atomic.AddInt64(&cl.rejectedReqs, 1)
-			slog.Warn("Concurrency limit: Wait timeout", "duration", time.Since(acquireStart), "total_rejected", atomic.LoadInt64(&cl.rejectedReqs), "wait_timeout", waitTimeout)
-			http.Error(w, "Request timed out while waiting for a worker slot or server busy", http.StatusServiceUnavailable)
+			slog.Warn("Concurrency limit: Request rejected", "total_rejected", atomic.LoadInt64(&cl.rejectedReqs))
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"server is overloaded; retry later","type":"server_error","code":"server_overloaded","param":null}}`))
 			return
 		}
 
-		slog.Debug("Concurrency limit: Slot acquired", "wait_duration", time.Since(acquireStart), "active", atomic.LoadInt64(&cl.activeCount)+1)
+		slog.Debug("Concurrency limit: Slot acquired", "active", atomic.LoadInt64(&cl.activeCount)+1)
 
 		atomic.AddInt64(&cl.activeCount, 1)
 		reqStart := time.Now()

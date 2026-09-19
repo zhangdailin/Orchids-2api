@@ -83,9 +83,11 @@ func TestFlareSolverrSanitizeMessage(t *testing.T) {
 }
 
 func TestSanitizeCloudflareCookies(t *testing.T) {
-	got := SanitizeCloudflareCookies("cf_clearance=a; __cf_bm=b; foo=bar")
-	if got != "cf_clearance=a; __cf_bm=b" {
-		t.Fatalf("got = %q", got)
+	oversized := strings.Repeat("x", maxCloudflareCookieBytes+1)
+	got := SanitizeCloudflareCookies("CF_CLEARANCE=a; __cf_bm=b; _cfuvid=device; cf_chl_2=challenge; cf_clearance=duplicate; foo=bar; cf_chl_bad=has\nnewline; __cf_bm=" + oversized)
+	want := "cf_clearance=a; __cf_bm=b; _cfuvid=device; cf_chl_2=challenge"
+	if got != want {
+		t.Fatalf("got = %q want %q", got, want)
 	}
 }
 

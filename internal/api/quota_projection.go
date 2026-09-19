@@ -294,29 +294,31 @@ func buildGrokBuildQuotaFields(fields map[string]interface{}, acc *store.Account
 	fields["quota_mode"] = "unknown"
 	fields["quota_unit"] = "build_credits"
 	fields["quota_supported"] = false
-	if weekly.HasUsage {
-		fields["quota_limit"] = 100.0
-		fields["quota_used"] = weekly.UsagePercent
-		fields["quota_remaining"] = max(0, 100-weekly.UsagePercent)
-		fields["quota_mode"] = "weekly_percent"
-		fields["quota_unit"] = "percent"
-		fields["quota_supported"] = true
-		fields["quota_reset_at"] = weekly.ResetAt
-		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-			"上游 Build 账单返回的周度窗口", true, false)
-	}
 	if monthly.HasLimit {
 		fields["quota_monthly_limit"] = monthly.Limit
 		fields["quota_monthly_remaining"] = monthly.Remaining
-		if !weekly.HasUsage {
-			fields["quota_limit"] = monthly.Limit
-			fields["quota_used"] = max(0, monthly.Limit-monthly.Remaining)
-			fields["quota_remaining"] = max(0, monthly.Remaining)
-			fields["quota_mode"] = "monthly"
-			fields["quota_unit"] = "build_credits"
+		fields["quota_limit"] = monthly.Limit
+		fields["quota_used"] = max(0, monthly.Limit-monthly.Remaining)
+		fields["quota_remaining"] = max(0, monthly.Remaining)
+		fields["quota_mode"] = "monthly"
+		fields["quota_unit"] = "build_credits"
+		fields["quota_supported"] = true
+		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
+			"上游 Build 账单返回的月度额度", true, false)
+	}
+	if weekly.HasUsage {
+		fields["quota_weekly_usage_percent"] = weekly.UsagePercent
+		fields["quota_weekly_reset_at"] = weekly.ResetAt
+		if !monthly.HasLimit {
+			fields["quota_limit"] = 100.0
+			fields["quota_used"] = weekly.UsagePercent
+			fields["quota_remaining"] = max(0, 100-weekly.UsagePercent)
+			fields["quota_mode"] = "weekly_percent"
+			fields["quota_unit"] = "percent"
 			fields["quota_supported"] = true
+			fields["quota_reset_at"] = weekly.ResetAt
 			applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-				"上游 Build 账单返回的月度额度", true, false)
+				"上游 Build 账单返回的周度窗口", true, false)
 		}
 	}
 	// Passive response headers are a minute-scale throttle, not a subscription

@@ -77,7 +77,9 @@ func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, heade
 			TLSClientConfig:       &stdtls.Config{MinVersion: stdtls.VersionTLS12},
 		},
 		http2: &http2.Transport{
-			AllowHTTP: false,
+			AllowHTTP:       false,
+			ReadIdleTimeout: 20 * time.Second,
+			PingTimeout:     10 * time.Second,
 			DialTLSContext: func(ctx context.Context, network, addr string, cfg *stdtls.Config) (net.Conn, error) {
 				return dialUTLSHTTP2Context(ctx, network, addr, cfg, proxyFunc)
 			},
@@ -92,6 +94,7 @@ func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, heade
 		Transport: rt,
 		Timeout:   timeout,
 	}
+	browserHTTPClientCache.evictOneClientLocked()
 	browserHTTPClientCache.clients[cacheKey] = client
 	return client
 }

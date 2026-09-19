@@ -147,6 +147,7 @@ type consoleVideoAPIRequest struct {
 	Video           *consoleVideoInput           `json:"video"`
 	Output          json.RawMessage              `json:"output"`
 	StorageOptions  json.RawMessage              `json:"storage_options"`
+	User            *string                      `json:"user"`
 }
 
 type preparedConsoleVideoRequest struct {
@@ -229,6 +230,24 @@ func (h *Handler) handleConsoleVideoCreate(w http.ResponseWriter, r *http.Reques
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	// The standard endpoint used to require a Console account even for a model
+	// whose route is the Web plane, so a deployment with only Web accounts got a
+	// hard 503. Re-dispatch those models through the Web job engine.
+	if spec.Upstream != UpstreamConsole {
+		if videoPayloadHasReferences(prepared.payload) {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request",
+				"web video generation currently supports text-to-video only; use a Console video model for image references")
+			return
+		}
+		h.startVideoJob(w, r, VideosRequest{
+			Model:          prepared.model,
+			Prompt:         prepared.prompt,
+			Seconds:        prepared.duration,
+			Size:           firstNonEmpty(parseLooseStringAny(prepared.payload["aspect_ratio"]), "16:9"),
+			ResolutionName: parseLooseStringAny(prepared.payload["resolution"]),
+		}, spec)
+		return
+	}
 	sess, err := h.openConsoleVideoAccountSession(r.Context(), prepared.model)
 	if err != nil {
 		writeResponsesAPIError(w, http.StatusServiceUnavailable, "account_unavailable", "no available Grok Console video account: "+err.Error())
@@ -306,8 +325,11 @@ func prepareConsoleVideoRequest(request consoleVideoAPIRequest, operation consol
 		if resolution != "480p" && resolution != "720p" && resolution != "1080p" {
 			return preparedConsoleVideoRequest{}, fmt.Errorf("resolution must be 480p, 720p, or 1080p")
 		}
-		if resolution == "1080p" && model != "grok-imagine-video-1.5" {
-			return preparedConsoleVideoRequest{}, fmt.Errorf("%s does not support 1080p", model)
+		if resolution == "1080p" {
+			spec, ok := ResolveModel(model)
+			if !ok || strings.TrimSpace(spec.UpstreamModel) != "grok-imagine-video-1.5" {
+				return preparedConsoleVideoRequest{}, fmt.Errorf("%s does not support 1080p", model)
+			}
 		}
 		imageURL := ""
 		if request.Image != nil {
@@ -459,6 +481,33 @@ func parseConsoleVideoDuration(raw json.RawMessage, defaultValue int) (int, erro
 	return parsed, nil
 }
 
+// videoPayloadHasReferences reports whether the prepared Console-shaped payload
+// carries image inputs. The Web engine serves text-to-video only.
+func videoPayloadHasReferences(payload map[string]interface{}) bool {
+	if payload == nil {
+		return false
+	}
+	for _, key := range []string{"image", "reference_images", "reference_audios", "video"} {
+		value, exists := payload[key]
+		if !exists || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case []interface{}:
+			if len(typed) > 0 {
+				return true
+			}
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 func hasConsoleVideoJSONValue(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
@@ -543,7 +592,40 @@ func (h *Handler) handleConsoleVideoJobError(job *videoJob, lease *consoleVideoJ
 		h.scheduleStoredConsoleVideoRetry(job)
 		return
 	}
+	// A creation-phase failure can still be served by another account: the task
+	// does not exist upstream yet, so the job is re-queued (which selects a new
+	// account) instead of being failed on the first 402/403/429. Once an upstream
+	// request id exists the task is real, and re-creating it would run the same
+	// generation twice.
+	if job != nil && strings.TrimSpace(job.UpstreamRequestID) == "" && videoCreationRetryable(err) {
+		h.abandonConsoleVideoJob(job)
+		h.scheduleStoredConsoleVideoRetry(job)
+		return
+	}
 	h.failVideoJob(job, err)
+}
+
+// videoCreationRetryable reports whether a video creation failure may succeed on
+// a different account.
+func videoCreationRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	status := parseUpstreamStatus(err)
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusPaymentRequired, http.StatusTooManyRequests:
+		return true
+	}
+	if status >= 500 {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	for _, marker := range []string{"resource-exhausted", "rate limit", "too many requests", "temporarily unavailable", "quota"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) resumeStoredConsoleVideoJob(job *videoJob, timeout time.Duration) {

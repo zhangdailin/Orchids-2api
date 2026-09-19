@@ -82,6 +82,10 @@ func (c *CLIClient) FetchBilling(ctx context.Context, acc *store.Account) (*CLIB
 		info.MonthlyUsed = used
 		info.HasMonthly = info.HasMonthly || ok
 	}
+	if !info.HasUsagePercent && info.MonthlyLimit > 0 {
+		info.UsagePercent = min(100, max(0, info.MonthlyUsed/info.MonthlyLimit*100))
+		info.HasUsagePercent = true
+	}
 	// The billing response does not consistently include the user's paid plan.
 	// The official CLI exposes it separately; it is useful account metadata but
 	// never a substitute for a numeric quota.
@@ -114,9 +118,14 @@ func ApplyCLIBillingInfo(acc *store.Account, info *CLIBillingInfo) bool {
 		changed = true
 	}
 	weekly := store.GrokQuotaWindow{}
-	if info.HasUsagePercent {
+	usagePercent, hasUsagePercent := info.UsagePercent, info.HasUsagePercent
+	if !hasUsagePercent && info.MonthlyLimit > 0 {
+		usagePercent = min(100, max(0, info.MonthlyUsed/info.MonthlyLimit*100))
+		hasUsagePercent = true
+	}
+	if hasUsagePercent {
 		weekly.HasUsage = true
-		weekly.UsagePercent = info.UsagePercent
+		weekly.UsagePercent = usagePercent
 	}
 	if !info.PeriodEnd.IsZero() {
 		weekly.ResetAt = info.PeriodEnd

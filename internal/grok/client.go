@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -105,7 +106,10 @@ func (c *Client) statsigID() string {
 			return configured
 		}
 	}
-	return buildStatsigID()
+	// Safe fallback when no external signer/configured browser value is
+	// available: omit the header. A locally fabricated TypeError token is more
+	// fingerprintable than an absent optional header and cannot be refreshed.
+	return ""
 }
 
 func (c *Client) cloudflareCookies() (string, string) {
@@ -283,13 +287,60 @@ func appChatDeviceEnvInfo() map[string]interface{} {
 	}
 }
 
+func applyChromiumClientHints(header http.Header, userAgent string) {
+	header.Del("Sec-Ch-Ua")
+	header.Del("Sec-Ch-Ua-Mobile")
+	header.Del("Sec-Ch-Ua-Platform")
+	ua := strings.TrimSpace(userAgent)
+	marker := "Chrome/"
+	idx := strings.Index(ua, marker)
+	if idx < 0 {
+		return
+	}
+	version := ua[idx+len(marker):]
+	if end := strings.IndexAny(version, ". "); end >= 0 {
+		version = version[:end]
+	}
+	if version == "" {
+		return
+	}
+	brand := "Google Chrome"
+	if strings.Contains(ua, "Chromium/") && !strings.Contains(ua, "Chrome/") {
+		brand = "Chromium"
+	}
+	platform := "Unknown"
+	switch {
+	case strings.Contains(ua, "Windows"):
+		platform = "Windows"
+	case strings.Contains(ua, "Macintosh") || strings.Contains(ua, "Mac OS X"):
+		platform = "macOS"
+	case strings.Contains(ua, "Linux"):
+		platform = "Linux"
+	}
+	header.Set("Sec-Ch-Ua", fmt.Sprintf(`"%s";v="%s", "Chromium";v="%s", "Not(A:Brand";v="24"`, brand, version, version))
+	header.Set("Sec-Ch-Ua-Mobile", "?0")
+	header.Set("Sec-Ch-Ua-Platform", strconv.Quote(platform))
+}
+
+func credentialAffinity(token string) string {
+	normalized := NormalizeSSOToken(token)
+	if normalized == "" {
+		normalized = strings.TrimSpace(token)
+	}
+	sum := sha256.Sum256([]byte(normalized))
+	return fmt.Sprintf("sso_%x", sum[:16])
+}
+
 func (c *Client) headers(token string) http.Header {
 	// 从预分配的模板浅克隆请求头；固定值切片复用，动态字段再覆盖。
 	h := cloneHeaderShallow(baseHeaders, 4)
 
 	// 添加动态请求头
 	h.Set("User-Agent", c.userAgent())
-	h.Set("x-statsig-id", c.statsigID())
+	applyChromiumClientHints(h, c.userAgent())
+	if statsig := c.statsigID(); statsig != "" {
+		h.Set("x-statsig-id", statsig)
+	}
 	h.Set("x-xai-request-id", randomUUID())
 
 	// 构建 Cookie
@@ -308,10 +359,13 @@ func (c *Client) appChatHeaders(token string) http.Header {
 func (c *Client) appChatHeadersWithReferer(token, referer string) http.Header {
 	h := cloneHeaderShallow(appChatHeaders, 4)
 	h.Set("User-Agent", c.userAgent())
+	applyChromiumClientHints(h, c.userAgent())
 	if referer = strings.TrimSpace(referer); referer != "" {
 		h.Set("Referer", referer)
 	}
-	h.Set("x-statsig-id", c.statsigID())
+	if statsig := c.statsigID(); statsig != "" {
+		h.Set("x-statsig-id", statsig)
+	}
 	h.Set("x-xai-request-id", randomUUID())
 
 	cfClearance, cfBM := c.cloudflareCookies()
@@ -663,13 +717,15 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 		leaseNodeID := ""
 		releaseLease := func() {}
 		if c.egress != nil && c.egress.Enabled() {
-			lease, err = c.egress.Acquire(ctx, c.egressScopeForURL(reqURL), c.egressAffinity(reqURL))
+			affinity := requestCredentialAffinity(req.Header, reqURL)
+			lease, err = c.egress.Acquire(ctx, c.egressScopeForURL(reqURL), affinity)
 			if err != nil {
 				recordEgressAcquireError()
 				return nil, fmt.Errorf("grok egress unavailable: %w", err)
 			}
 			leaseNodeID = lease.NodeID
 			req.Header.Set("User-Agent", lease.UserAgent)
+			applyChromiumClientHints(req.Header, lease.UserAgent)
 			if lease.CFCookies != "" {
 				mergeCFCookies(req.Header, lease.CFCookies)
 			}
@@ -681,7 +737,7 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			do = lease.Do
 		}
 		diagnosticAttempt := debug.BeginUpstream(ctx, method, reqURL, req.Header, body)
-		resp, err = doUpstreamHTTP(req, do, c.cfg.GrokStreamIdleTimeout())
+		resp, err = doUpstreamHTTP(req, do, c.cfg.GrokStreamIdleTimeoutFor(ProviderWeb), upstreamIdleBytes)
 		diagnosticAttempt.Response(resp, err)
 		if err != nil {
 			if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
@@ -756,6 +812,9 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 			recordUpstreamChallenge("dpop")
 		} else if kind == UpstreamErrorGenericForbidden {
 			recordGenericForbidden()
+			if lease != nil {
+				lease.InvalidateClearance()
+			}
 		}
 
 		if c.egress != nil && c.egress.Enabled() && leaseNodeID != "" {
@@ -782,14 +841,17 @@ func (c *Client) egressScopeForURL(reqURL string) string {
 	}
 }
 
-// egressAffinity derives a stable affinity key so the same account path sticks
-// to the same exit node/fingerprint (clearance stays valid).
-func (c *Client) egressAffinity(reqURL string) string {
-	host := strings.ToLower(strings.TrimSpace(reqURL))
-	if strings.Contains(host, "rate-limits") {
-		return "rate-limits"
+// requestCredentialAffinity derives account affinity from the SSO cookie
+// already attached to a request. It never exposes the credential in manager
+// state or cache keys. Non-authenticated requests retain a URL-specific key.
+func requestCredentialAffinity(header http.Header, reqURL string) string {
+	for _, item := range grokCookieItems(header.Get("Cookie")) {
+		if item.name == "sso" || item.name == "sso-rw" {
+			return credentialAffinity(item.value)
+		}
 	}
-	return "grok-default"
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(reqURL))))
+	return fmt.Sprintf("url_%x", sum[:12])
 }
 
 // mergeCFCookies injects Cloudflare clearance cookies into an existing Cookie

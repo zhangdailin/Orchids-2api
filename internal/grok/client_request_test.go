@@ -92,13 +92,15 @@ func TestAppChatHeaders_MatchBrowserProfile(t *testing.T) {
 	if got := headers.Get("User-Agent"); got != defaultUA {
 		t.Fatalf("User-Agent=%q", got)
 	}
-	if got := headers.Get("Sec-Ch-Ua"); got != defaultAppChatSecCHUA {
+	if got := headers.Get("Sec-Ch-Ua"); !strings.Contains(got, `"Google Chrome";v="148"`) {
 		t.Fatalf("Sec-Ch-Ua=%q", got)
 	}
 	if got := headers.Get("Sec-Ch-Ua-Platform"); got != `"macOS"` {
 		t.Fatalf("Sec-Ch-Ua-Platform=%q", got)
 	}
-	assertBrowserStatsigID(t, headers.Get("x-statsig-id"))
+	if got := headers.Get("x-statsig-id"); got != "" {
+		t.Fatalf("unsigned statsig fallback must be omitted, got %q", got)
+	}
 	if got := headers.Get("Cookie"); got != "sso=plain-token; sso-rw=plain-token" {
 		t.Fatalf("Cookie=%q", got)
 	}
@@ -130,7 +132,31 @@ func TestGrokHeaders_UseConfiguredStatsigAndCloudflareCookies(t *testing.T) {
 
 func TestGrokHeaders_IgnoreStaleConfiguredStatsig(t *testing.T) {
 	c := New(&config.Config{GrokStatsigID: "0196a8f6-0501-79f8-8d74-a2f2c0f5f5f5"})
-	assertBrowserStatsigID(t, c.appChatHeaders("plain-token").Get("x-statsig-id"))
+	if got := c.appChatHeaders("plain-token").Get("x-statsig-id"); got != "" {
+		t.Fatalf("invalid unsigned statsig must be omitted, got %q", got)
+	}
+}
+
+func TestCredentialAffinityIsStableAndCredentialScoped(t *testing.T) {
+	a := requestCredentialAffinity(http.Header{"Cookie": {"sso=alpha; sso-rw=alpha"}}, "https://grok.com/rest/app-chat")
+	b := requestCredentialAffinity(http.Header{"Cookie": {"sso=beta; sso-rw=beta"}}, "https://grok.com/rest/app-chat")
+	if a == b || a == "grok-default" || b == "grok-default" {
+		t.Fatalf("credential affinities not isolated: a=%q b=%q", a, b)
+	}
+	if again := requestCredentialAffinity(http.Header{"Cookie": {"sso=alpha"}}, "https://grok.com/other"); again != a {
+		t.Fatalf("same credential affinity changed: %q vs %q", a, again)
+	}
+}
+
+func TestApplyChromiumClientHintsMatchesUA(t *testing.T) {
+	h := http.Header{}
+	applyChromiumClientHints(h, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/146.0.0.0 Safari/537.36")
+	if got := h.Get("Sec-Ch-Ua"); !strings.Contains(got, `v="146"`) {
+		t.Fatalf("Sec-Ch-Ua=%q", got)
+	}
+	if got := h.Get("Sec-Ch-Ua-Platform"); got != `"Windows"` {
+		t.Fatalf("platform=%q", got)
+	}
 }
 
 func TestDoRequest_DoesNotMutateInputHeaders(t *testing.T) {

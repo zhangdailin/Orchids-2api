@@ -271,15 +271,10 @@ func requireAPIKeyModel(w http.ResponseWriter, r *http.Request, model string) bo
 	if middleware.APIKeyAllowsModel(r.Context(), model) {
 		return true
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"error": map[string]interface{}{
-			"message": "API key is not allowed to use model " + strings.TrimSpace(model),
-			"type":    "permission_error",
-			"code":    "model_not_allowed",
-		},
-	})
+	// The whole envelope shape is shared with every other Grok error, so a
+	// client can parse one object type: message, type, code and param.
+	writeGrokErrorCode(w, http.StatusForbidden, "model_not_allowed",
+		"API key is not allowed to use model "+strings.TrimSpace(model))
 	return false
 }
 
@@ -310,12 +305,12 @@ func requireGrokClient(w http.ResponseWriter, h *Handler) bool {
 // streamResponseHeaders writes the standard SSE headers and returns the
 // response flusher (possibly nil).
 func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	// Without this a reverse proxy (nginx defaults to proxy_buffering on) holds
 	// the frames until the response ends, which silently defeats streaming.
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set("Connection", "keep-alive")
+	w.Header().Del("Connection")
 	flusher, _ := w.(http.Flusher)
 	return flusher
 }
@@ -329,16 +324,55 @@ func writeSSEEventName(w http.ResponseWriter, event string) {
 	_, _ = w.Write([]byte(event))
 }
 
-// writeSSEBytes sends a raw SSE frame without flushing.
-func writeSSEBytes(w http.ResponseWriter, event string, data []byte) {
-	if event != "" {
-		_, _ = w.Write(grokSSEEventPrefixBytes)
-		writeSSEEventName(w, event)
-		_, _ = w.Write(grokSSENewlineBytes)
+const responseWriteTimeout = 30 * time.Second
+
+// setResponseWriteDeadline bounds downstream backpressure when the writer's
+// transport supports deadlines. In-memory/test writers legitimately do not.
+func setResponseWriteDeadline(w http.ResponseWriter) error {
+	err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(responseWriteTimeout))
+	if errors.Is(err, http.ErrNotSupported) {
+		return nil
 	}
-	_, _ = w.Write(grokSSEDataPrefixBytes)
-	_, _ = w.Write(data)
-	_, _ = w.Write(grokSSEFrameSuffixBytes)
+	return err
+}
+
+func writeAll(w io.Writer, p []byte) error {
+	n, err := w.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+
+type deadlineResponseWriter struct{ http.ResponseWriter }
+
+func (w deadlineResponseWriter) Write(p []byte) (int, error) {
+	if err := setResponseWriteDeadline(w.ResponseWriter); err != nil {
+		return 0, err
+	}
+	n, err := w.ResponseWriter.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	return n, err
+}
+
+// writeSSEBytes sends a raw SSE frame without flushing. Its error result may be
+// ignored by legacy non-streaming helpers, while stream loops propagate it.
+func writeSSEBytes(w http.ResponseWriter, event string, data []byte) error {
+	if err := setResponseWriteDeadline(w); err != nil {
+		return err
+	}
+	var frame []byte
+	if event != "" {
+		frame = append(frame, grokSSEEventPrefixBytes...)
+		frame = append(frame, event...)
+		frame = append(frame, grokSSENewlineBytes...)
+	}
+	frame = append(frame, grokSSEDataPrefixBytes...)
+	frame = append(frame, data...)
+	frame = append(frame, grokSSEFrameSuffixBytes...)
+	return writeAll(w, frame)
 }
 
 // writeSSEError sends an OpenAI-style SSE error event (no flush, no [DONE]).
@@ -376,21 +410,45 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, event string, data []
 }
 
 // writeSSELog sends an SSE frame, mirrors it to the debug logger, and flushes.
-func writeSSELog(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, raw []byte) {
-	writeSSEBytes(w, "", raw)
+func writeSSELog(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, raw []byte) error {
+	if err := writeSSEBytes(w, "", raw); err != nil {
+		return err
+	}
 	if logger != nil {
 		logger.LogOutputSSE("", string(raw))
 	}
 	if flusher != nil {
 		flusher.Flush()
 	}
+	return nil
 }
 
-// writeSSEStreamError sends the SSE error frame, the [DONE] terminator, and
-// flushes, mirroring both to the debug logger when one is set.
+// writeOpenAIStreamError emits the data-only error envelope expected by Chat
+// Completions clients. Responses and Anthropic keep their named error events.
+func writeOpenAIStreamError(w http.ResponseWriter, message, code string) error {
+	middleware.MarkStreamFailure(w)
+	payload := map[string]interface{}{"error": map[string]interface{}{
+		"message": apperrors.PublicMessage(message), "type": "api_error", "code": strings.TrimSpace(code),
+	}}
+	return writeSSEBytes(w, "", encodeJSONBytes(payload))
+}
+
+func writeChatStreamError(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, msg, code string) {
+	_ = writeOpenAIStreamError(w, msg, code)
+	_ = writeSSEBytes(w, "", []byte("[DONE]"))
+	if logger != nil {
+		logger.LogOutputSSE("error", msg)
+		logger.LogOutputSSE("", "[DONE]")
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+// writeSSEStreamError sends the named SSE error used by non-Chat protocols.
 func writeSSEStreamError(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, msg string) {
 	writeSSEError(w, msg, "server_error", "stream_error")
-	writeSSEBytes(w, "", []byte("[DONE]"))
+	_ = writeSSEBytes(w, "", []byte("[DONE]"))
 	if logger != nil {
 		logger.LogOutputSSE("error", msg)
 		logger.LogOutputSSE("", "[DONE]")

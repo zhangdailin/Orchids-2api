@@ -274,6 +274,7 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 		if err != nil {
 			if grok.IsCLIPermanentOAuthError(err) {
 				acc.StatusCode = "401"
+				acc.AuthStatus = store.AccountAuthStatusReauthRequired
 				acc.StatusMessage = "上游已不接受该 OAuth 授权（refresh token 被拒绝），需要重新登录"
 				acc.LastAttempt = time.Now()
 				// Distinguish "the upstream invalidated this grant" from "our record
@@ -299,6 +300,7 @@ func refreshCLIAccount(ctx context.Context, cfg *config.Config, s *store.Store, 
 		if token != "" {
 			acc.OAuthAccessToken = token
 			acc.StatusCode = ""
+			acc.AuthStatus = store.AccountAuthStatusActive
 			acc.LastAttempt = time.Time{}
 		}
 	}

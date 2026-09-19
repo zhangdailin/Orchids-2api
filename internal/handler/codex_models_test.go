@@ -19,7 +19,7 @@ func codexEntryFor(t *testing.T, catalog codexModelCatalog, slug string) codexMo
 }
 
 func textModel(id string) PublicModelResponse {
-	return PublicModelResponse{ID: id, Object: "model", Capabilities: []string{"chat", "messages", "responses"}}
+	return PublicModelResponse{ID: id, Object: "model", Provider: "build", Capabilities: []string{"chat", "messages", "responses"}}
 }
 
 // A client that cannot see the context window falls back to its own default,
@@ -56,10 +56,12 @@ func TestCodexCatalogExposesContextWindowAndModalities(t *testing.T) {
 }
 
 func TestCodexCatalogReasoningLevels(t *testing.T) {
+	consoleFixed := textModel("console/grok-4.20-0309-reasoning")
+	consoleFixed.Provider = "console"
 	catalog := newCodexModelCatalog([]PublicModelResponse{
 		textModel("grok-4.6"),
 		textModel("grok-4.5"),
-		textModel("console/grok-4.20-0309-reasoning"),
+		consoleFixed,
 	})
 
 	entry := codexEntryFor(t, catalog, "grok-4.6")
@@ -80,6 +82,9 @@ func TestCodexCatalogReasoningLevels(t *testing.T) {
 	}
 	if fixed.ContextWindow != 2000000 {
 		t.Fatalf("console reasoning context=%d", fixed.ContextWindow)
+	}
+	if !fixed.SupportsReasoningSummaries || !fixed.SupportsReasoningSummaryParameter {
+		t.Fatalf("fixed reasoning model must advertise summaries: %+v", fixed)
 	}
 }
 
@@ -103,6 +108,36 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 	}
 	if entry := codexEntryFor(t, catalog, "grok-imagine-image"); entry.ApplyPatchToolType != nil {
 		t.Fatalf("media model advertised apply_patch")
+	}
+}
+
+func TestCodexCatalogAgentToolsRequireBuildResponsesProvider(t *testing.T) {
+	build := textModel("build-model")
+	web := textModel("web-model")
+	web.Provider = "web"
+	console := textModel("console-model")
+	console.Provider = "console"
+	catalog := newCodexModelCatalog([]PublicModelResponse{build, web, console})
+	if entry := codexEntryFor(t, catalog, "build-model"); entry.ApplyPatchToolType == nil || !entry.SupportsParallelToolCalls {
+		t.Fatalf("build tools not advertised: %+v", entry)
+	}
+	for _, slug := range []string{"web-model", "console-model"} {
+		entry := codexEntryFor(t, catalog, slug)
+		if entry.ApplyPatchToolType != nil || entry.SupportsParallelToolCalls {
+			t.Fatalf("%s incorrectly advertised Build agent tools: %+v", slug, entry)
+		}
+	}
+}
+
+func TestCodexCatalogJSONIncludesNullableProtocolFields(t *testing.T) {
+	catalog := newCodexModelCatalog([]PublicModelResponse{textModel("grok-4.6")})
+	rec := httptest.NewRecorder()
+	writeCodexModelCatalog(rec, httptest.NewRequest(http.MethodGet, "/v1/models?client_version=1", nil), catalog)
+	body := rec.Body.String()
+	for _, field := range []string{"default_service_tier", "availability_nux", "upgrade", "model_messages", "auto_compact_token_limit"} {
+		if !strings.Contains(body, `"`+field+`":null`) {
+			t.Fatalf("missing nullable field %q in %s", field, body)
+		}
 	}
 }
 

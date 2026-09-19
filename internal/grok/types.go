@@ -105,6 +105,17 @@ type VideosRequest struct {
 	ResolutionName  string `json:"resolution_name"`
 	Preset          string `json:"preset"`
 	InputReferences []string
+	// grok2api-compatible aliases. The same options are spelled differently by
+	// the two public surfaces, and dropping the alias silently fell back to the
+	// defaults (8 seconds, 16:9) while reporting success.
+	Duration        json.RawMessage `json:"duration,omitempty"`
+	AspectRatio     string          `json:"aspect_ratio,omitempty"`
+	Resolution      string          `json:"resolution,omitempty"`
+	User            string          `json:"user,omitempty"`
+	Image           string          `json:"image,omitempty"`
+	ReferenceImages []string        `json:"reference_images,omitempty"`
+	ReferenceAudios []string        `json:"reference_audios,omitempty"`
+	Video           string          `json:"video,omitempty"`
 }
 
 type videoJob struct {
@@ -541,10 +552,12 @@ func (r *VideosRequest) UnmarshalJSON(data []byte) error {
 		Model           interface{} `json:"model"`
 		Prompt          interface{} `json:"prompt"`
 		Seconds         interface{} `json:"seconds"`
+		Duration        interface{} `json:"duration"`
 		VideoLength     interface{} `json:"video_length"`
 		Size            interface{} `json:"size"`
 		AspectRatio     interface{} `json:"aspect_ratio"`
 		ResolutionName  interface{} `json:"resolution_name"`
+		Resolution      interface{} `json:"resolution"`
 		Preset          interface{} `json:"preset"`
 		InputReference  interface{} `json:"input_reference"`
 		InputReferences interface{} `json:"input_references"`
@@ -556,6 +569,12 @@ func (r *VideosRequest) UnmarshalJSON(data []byte) error {
 	seconds, err := parseLooseIntAny(raw.Seconds)
 	if err != nil {
 		return err
+	}
+	if seconds == 0 {
+		seconds, err = parseLooseIntAny(raw.Duration)
+		if err != nil {
+			return err
+		}
 	}
 	if seconds == 0 {
 		seconds, err = parseLooseIntAny(raw.VideoLength)
@@ -571,6 +590,9 @@ func (r *VideosRequest) UnmarshalJSON(data []byte) error {
 		r.Size = parseLooseStringAny(raw.AspectRatio)
 	}
 	r.ResolutionName = parseLooseStringAny(raw.ResolutionName)
+	if r.ResolutionName == "" {
+		r.ResolutionName = parseLooseStringAny(raw.Resolution)
+	}
 	r.Preset = parseLooseStringAny(raw.Preset)
 	r.InputReferences = parseVideoInputReferences(raw.InputReferences)
 	if len(r.InputReferences) == 0 {

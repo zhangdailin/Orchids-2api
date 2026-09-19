@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"orchids-api/internal/store"
 	"os"
 	"strings"
 	"testing"
@@ -37,6 +38,21 @@ func TestWriteGrokErrorReturnsOpenAIEnvelope(t *testing.T) {
 	}
 	if body.Error.Type != "invalid_request_error" {
 		t.Fatalf("type = %q, want invalid_request_error", body.Error.Type)
+	}
+}
+
+func TestWriteGrokModelNotFoundReturns404Code(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeGrokErrorCode(rec, http.StatusNotFound, "model_not_found", modelNotFoundMessage("missing"))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want 404", rec.Code)
+	}
+	var body map[string]map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got := fmt.Sprint(body["error"]["code"]); got != "model_not_found" {
+		t.Fatalf("code=%q want model_not_found", got)
 	}
 }
 
@@ -570,5 +586,176 @@ func TestResponsesImagePartsCarryDefaultDetail(t *testing.T) {
 	part, _ = parts[0].(map[string]interface{})
 	if part["detail"] != "high" {
 		t.Fatalf("explicit detail = %v, want high", part["detail"])
+	}
+}
+
+func TestAnthropicErrorTypeFollowsStatus(t *testing.T) {
+	cases := map[int]string{
+		http.StatusBadRequest:         "invalid_request_error",
+		http.StatusUnauthorized:       "authentication_error",
+		http.StatusForbidden:          "permission_error",
+		http.StatusNotFound:           "not_found_error",
+		http.StatusTooManyRequests:    "rate_limit_error",
+		http.StatusServiceUnavailable: "overloaded_error",
+	}
+	for status, want := range cases {
+		rec := httptest.NewRecorder()
+		writeAnthropicError(rec, status, "boom")
+		var envelope struct {
+			Type  string `json:"type"`
+			Error struct {
+				Type string `json:"type"`
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("status %d: invalid JSON %v", status, err)
+		}
+		if envelope.Error.Type != want {
+			t.Fatalf("status %d: type = %q, want %q", status, envelope.Error.Type, want)
+		}
+		if envelope.Error.Code == "" {
+			t.Fatalf("status %d: code must be present", status)
+		}
+	}
+}
+
+func TestResponsesAPIErrorTypeFollowsStatus(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeResponsesAPIError(rec, http.StatusServiceUnavailable, "service_unavailable", "busy")
+	var envelope struct {
+		Error struct {
+			Type  string `json:"type"`
+			Code  string `json:"code"`
+			Param any    `json:"param"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if envelope.Error.Type != "server_error" {
+		t.Fatalf("type = %q, want server_error for a 503", envelope.Error.Type)
+	}
+	rec = httptest.NewRecorder()
+	writeResponsesAPIError(rec, http.StatusTooManyRequests, "rate_limit_exceeded", "slow down")
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if envelope.Error.Type != "rate_limit_error" {
+		t.Fatalf("type = %q, want rate_limit_error for a 429", envelope.Error.Type)
+	}
+}
+
+func TestBuildSessionUUIDIsStableAndValid(t *testing.T) {
+	first := buildSessionUUID("deadbeef")
+	if !isUUID(first) {
+		t.Fatalf("buildSessionUUID() = %q, want a UUID", first)
+	}
+	if first != buildSessionUUID("deadbeef") {
+		t.Fatal("the same session seed must map to the same UUID")
+	}
+	if first == buildSessionUUID("deadbeee") {
+		t.Fatal("different seeds must not collide")
+	}
+	existing := "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+	if got := buildSessionUUID(existing); got != existing {
+		t.Fatalf("an existing UUID must pass through, got %q", got)
+	}
+}
+
+func TestVideoRequestAcceptsGrok2APIAliases(t *testing.T) {
+	body := `{"model":"grok-imagine-video","prompt":"cat","duration":10,"aspect_ratio":"16:9","resolution":"720p","user":"u1"}`
+	req := httptest.NewRequest(http.MethodPost, "/grok/v1/videos", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	parsed, err := parseVideosRequest(req)
+	if err != nil {
+		t.Fatalf("parseVideosRequest() error = %v", err)
+	}
+	if parsed.Seconds != 10 || parsed.Size != "16:9" || parsed.ResolutionName != "720p" {
+		t.Fatalf("aliases not folded: %+v", parsed)
+	}
+	// A typo must be rejected rather than silently defaulted.
+	bad := httptest.NewRequest(http.MethodPost, "/grok/v1/videos", strings.NewReader(`{"model":"grok-imagine-video","prompt":"cat","duratoin":10}`))
+	bad.Header.Set("Content-Type", "application/json")
+	if _, err := parseVideosRequest(bad); err == nil {
+		t.Fatal("an unknown video field must be rejected")
+	}
+}
+
+func TestToolMessagesRequireCallID(t *testing.T) {
+	messages := []ChatMessage{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Type: "function", Function: map[string]interface{}{"name": "read", "arguments": "{}"}}}},
+		{Role: "tool", Name: "read", Content: "done"},
+	}
+	items, _ := responsesInputFromChatMessages(messages)
+	for _, item := range items {
+		if m, ok := item.(map[string]interface{}); ok && m["type"] == "function_call_output" {
+			t.Fatalf("a tool message without tool_call_id must not become a function_call_output: %#v", m)
+		}
+	}
+}
+
+func TestChatToolUseMustBeAnswered(t *testing.T) {
+	unanswered := []ChatMessage{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Function: map[string]interface{}{"name": "read"}}}},
+		{Role: "user", Content: "next"},
+	}
+	if err := validateChatToolSequence(unanswered); err == nil {
+		t.Fatal("an unanswered tool_use must be rejected")
+	}
+	answered := append([]ChatMessage{}, unanswered[0], ChatMessage{Role: "tool", ToolCallID: "call_1", Content: "ok"})
+	if err := validateChatToolSequence(answered); err != nil {
+		t.Fatalf("a paired tool_use must be accepted: %v", err)
+	}
+}
+
+func TestWebFreeVideoDurationCap(t *testing.T) {
+	free := &store.Account{AccountType: "grok", GrokProvider: "web", Subscription: "free"}
+	if got := webFreeVideoDurationCap(free); got != webFreeVideoDurationLimit {
+		t.Fatalf("free web cap = %d, want %d", got, webFreeVideoDurationLimit)
+	}
+	paid := &store.Account{AccountType: "grok", GrokProvider: "web", Subscription: "super"}
+	if got := webFreeVideoDurationCap(paid); got != 0 {
+		t.Fatalf("paid web cap = %d, want 0 (no clamp)", got)
+	}
+	build := &store.Account{AccountType: "grok", GrokProvider: "build", CredentialType: "oauth", Subscription: "free"}
+	if got := webFreeVideoDurationCap(build); got != 0 {
+		t.Fatalf("build cap = %d, want 0 (the Web cap does not apply)", got)
+	}
+}
+
+func TestVideoPayloadHasReferences(t *testing.T) {
+	if videoPayloadHasReferences(map[string]interface{}{"model": "m"}) {
+		t.Fatal("a text-only payload has no references")
+	}
+	if !videoPayloadHasReferences(map[string]interface{}{"image": map[string]interface{}{"url": "u"}}) {
+		t.Fatal("an image object is a reference")
+	}
+	if !videoPayloadHasReferences(map[string]interface{}{"reference_images": []interface{}{"a"}}) {
+		t.Fatal("a non-empty reference list is a reference")
+	}
+	if videoPayloadHasReferences(map[string]interface{}{"reference_images": []interface{}{}}) {
+		t.Fatal("an empty reference list is not a reference")
+	}
+	if !videoPayloadHasReferences(map[string]interface{}{"video": "data:x"}) {
+		t.Fatal("a video input is a reference")
+	}
+}
+
+func TestResponseFailureClassifiesAntiBot(t *testing.T) {
+	code7 := map[string]interface{}{"type": "error", "error": map[string]interface{}{"code": float64(7), "message": "rejected"}}
+	err := responseFailure(code7)
+	if !errors.Is(err, errGrokWebAntiBot) {
+		t.Fatalf("code 7 must classify as anti-bot, got %v", err)
+	}
+	named := map[string]interface{}{"type": "response.failed", "response": map[string]interface{}{
+		"error": map[string]interface{}{"message": "Anti-Bot detected"},
+	}}
+	if err := responseFailure(named); !errors.Is(err, errGrokWebAntiBot) {
+		t.Fatalf("an anti-bot message must classify as anti-bot, got %v", err)
+	}
+	other := map[string]interface{}{"type": "error", "error": map[string]interface{}{"code": float64(3), "message": "bad request"}}
+	if err := responseFailure(other); errors.Is(err, errGrokWebAntiBot) {
+		t.Fatalf("an unrelated failure must not classify as anti-bot, got %v", err)
 	}
 }

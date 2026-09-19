@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"orchids-api/internal/config"
@@ -76,6 +77,40 @@ func TestManagerAcquireDirectNode(t *testing.T) {
 	defer lease.Release()
 	if lease.UserAgent == "" {
 		t.Fatal("expected a user agent")
+	}
+}
+
+func TestManagerBuildLeaseHasNoBrowserIdentity(t *testing.T) {
+	cfg := &config.Config{
+		GrokEgressEnabled: true,
+		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
+	}
+	m := NewManager(cfg)
+	lease, err := m.Acquire(context.Background(), "cli", "acct-build")
+	if err != nil {
+		t.Fatalf("acquire failed: %v", err)
+	}
+	defer lease.Release()
+	if lease.UserAgent != "" || lease.CFCookies != "" {
+		t.Fatalf("Build lease leaked browser identity: ua=%q cookies=%q", lease.UserAgent, lease.CFCookies)
+	}
+}
+
+func TestManagerFingerprintIncludesProxyAndSolver(t *testing.T) {
+	cfg := &config.Config{GrokEgressEnabled: true, GrokFlareSolverrURL: "http://solver-a:8191"}
+	m := NewManager(cfg)
+	a := m.fingerprint(Node{Name: "same", URL: "http://proxy-a:8080"}, "acct")
+	b := m.fingerprint(Node{Name: "same", URL: "http://proxy-b:8080"}, "acct")
+	if a == b {
+		t.Fatal("proxy URL change must change clearance fingerprint")
+	}
+	cfg.GrokFlareSolverrURL = "http://solver-b:8191"
+	c := m.fingerprint(Node{Name: "same", URL: "http://proxy-a:8080"}, "acct")
+	if a == c {
+		t.Fatal("solver URL change must change clearance fingerprint")
+	}
+	if strings.Contains(a, "proxy-a") || strings.Contains(a, "solver-a") {
+		t.Fatalf("fingerprint must not expose configuration: %q", a)
 	}
 }
 

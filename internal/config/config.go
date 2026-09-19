@@ -102,9 +102,15 @@ type Config struct {
 	GrokWebTimeout          int      `json:"grok_web_timeout_seconds,omitempty"`
 	GrokConsoleTimeout      int      `json:"grok_console_timeout_seconds,omitempty"`
 	GrokBuildTimeout        int      `json:"grok_build_timeout_seconds,omitempty"`
-	GrokStreamIdleSeconds   int      `json:"grok_stream_idle_seconds,omitempty"`
-	WarpStreamIdleSeconds   int      `json:"warp_stream_idle_seconds,omitempty"`
-	PuterStreamIdleSeconds  int      `json:"puter_stream_idle_seconds,omitempty"`
+	// GrokStreamIdleSeconds is the legacy all-channel fallback. The channel
+	// fields below take precedence when set, allowing Web/Console/Build to be
+	// tuned independently without invalidating existing config files.
+	GrokStreamIdleSeconds        int `json:"grok_stream_idle_seconds,omitempty"`
+	GrokWebStreamIdleSeconds     int `json:"grok_web_stream_idle_seconds,omitempty"`
+	GrokConsoleStreamIdleSeconds int `json:"grok_console_stream_idle_seconds,omitempty"`
+	GrokBuildStreamIdleSeconds   int `json:"grok_build_stream_idle_seconds,omitempty"`
+	WarpStreamIdleSeconds        int `json:"warp_stream_idle_seconds,omitempty"`
+	PuterStreamIdleSeconds       int `json:"puter_stream_idle_seconds,omitempty"`
 
 	// ── Channel probes (synthetic reachability checks) ──
 	// The model a probe asks for. Empty means the built-in cheap default; a

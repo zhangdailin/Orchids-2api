@@ -48,10 +48,25 @@ func TestGrokLimitsDefaultsAndBounds(t *testing.T) {
 	}
 	cfg = &Config{RequestTimeout: 999999, GrokWebTimeout: 999999, GrokConsoleRPS: 999999, GrokBuildRPS: -1, GrokStreamIdleSeconds: 999999, WarpStreamIdleSeconds: 999999, PuterStreamIdleSeconds: 999999}
 	ApplyHardcoded(cfg)
-	if cfg.RequestTimeout != 86400 || cfg.GrokRequestTimeout("web") != 24*time.Hour || cfg.GrokStreamIdleTimeout() != time.Hour || cfg.GrokRequestsPerSecond("console") != 1000 || cfg.GrokRequestsPerSecond("build") != 0 {
+	if cfg.RequestTimeout != 86400 || cfg.GrokRequestTimeout("web") != 24*time.Hour || cfg.GrokStreamIdleTimeout() != 10*time.Minute || cfg.GrokRequestsPerSecond("console") != 1000 || cfg.GrokRequestsPerSecond("build") != 0 {
 		t.Fatal("invalid bounds")
 	}
 	if cfg.WarpStreamIdleTimeout() != time.Hour || cfg.PuterStreamIdleTimeout() != time.Hour {
 		t.Fatal("invalid Warp/Puter idle bounds")
+	}
+}
+
+func TestGrokChannelIdleDefaultsOverridesAndLegacyFallback(t *testing.T) {
+	var cfg *Config
+	if cfg.GrokStreamIdleTimeoutFor("web") != 90*time.Second || cfg.GrokStreamIdleTimeoutFor("console") != 2*time.Minute || cfg.GrokStreamIdleTimeoutFor("build") != 2*time.Minute {
+		t.Fatal("unexpected channel defaults")
+	}
+	cfg = &Config{GrokStreamIdleSeconds: 45, GrokWebStreamIdleSeconds: 35, GrokBuildStreamIdleSeconds: 9999}
+	if cfg.GrokStreamIdleTimeoutFor("web") != 35*time.Second || cfg.GrokStreamIdleTimeoutFor("console") != 45*time.Second || cfg.GrokStreamIdleTimeoutFor("build") != 10*time.Minute {
+		t.Fatal("channel override or legacy fallback broken")
+	}
+	cfg.GrokWebStreamIdleSeconds = 1
+	if cfg.GrokStreamIdleTimeoutFor("web") != 30*time.Second {
+		t.Fatal("minimum idle bound broken")
 	}
 }

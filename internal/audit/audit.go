@@ -28,6 +28,17 @@ const (
 )
 
 // Event represents a single audit log entry.
+// UsageSource describes whether token counters came from the upstream provider
+// or from the gateway's local estimator. Empty is retained for old/non-usage
+// events; request writers should use one of the constants below.
+type UsageSource string
+
+const (
+	UsageSourceUpstream  UsageSource = "upstream"
+	UsageSourceEstimated UsageSource = "estimated"
+	UsageSourceNone      UsageSource = "none"
+)
+
 type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 	// Kind is the journal this event belongs to (request/operation/system).
@@ -36,20 +47,22 @@ type Event struct {
 	Action    string `json:"action"`
 	// Actor is the operator or credential that caused a management change. It is
 	// empty for inference traffic, which is identified by APIKeyID instead.
-	Actor             string `json:"actor,omitempty"`
-	APIKeyID          int64  `json:"api_key_id,omitempty"`
-	AccountID         int64  `json:"account_id,omitempty"`
-	Model             string `json:"model,omitempty"`
-	Channel           string `json:"channel,omitempty"`
-	Provider          string `json:"provider,omitempty"`
-	Attempt           int    `json:"attempt,omitempty"`
-	InputTokens       int    `json:"input_tokens,omitempty"`
-	OutputTokens      int    `json:"output_tokens,omitempty"`
-	CachedInputTokens int    `json:"cached_input_tokens,omitempty"`
-	ReasoningTokens   int    `json:"reasoning_tokens,omitempty"`
-	ClientIP          string `json:"client_ip,omitempty"`
-	UserAgent         string `json:"user_agent,omitempty"`
-	Duration          int64  `json:"duration_ms,omitempty"`
+	Actor             string      `json:"actor,omitempty"`
+	APIKeyID          int64       `json:"api_key_id,omitempty"`
+	AccountID         int64       `json:"account_id,omitempty"`
+	Model             string      `json:"model,omitempty"`
+	Channel           string      `json:"channel,omitempty"`
+	Provider          string      `json:"provider,omitempty"`
+	Attempt           int         `json:"attempt,omitempty"`
+	InputTokens       int         `json:"input_tokens,omitempty"`
+	OutputTokens      int         `json:"output_tokens,omitempty"`
+	CachedInputTokens int         `json:"cached_input_tokens,omitempty"`
+	ReasoningTokens   int         `json:"reasoning_tokens,omitempty"`
+	TotalTokens       int         `json:"total_tokens,omitempty"`
+	UsageSource       UsageSource `json:"usage_source,omitempty"`
+	ClientIP          string      `json:"client_ip,omitempty"`
+	UserAgent         string      `json:"user_agent,omitempty"`
+	Duration          int64       `json:"duration_ms,omitempty"`
 	// Target names the object a management change touched (account id, key id).
 	Target  string `json:"target,omitempty"`
 	Status  string `json:"status"`

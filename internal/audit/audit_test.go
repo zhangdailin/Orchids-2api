@@ -10,6 +10,16 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+func TestUsageAccountingFieldsRoundTrip(t *testing.T) {
+	logger, _ := setupRedisLogger(t)
+	logger.Log(context.Background(), Event{Action: "usage", Status: "ok", InputTokens: 10, CachedInputTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 15, UsageSource: UsageSourceUpstream})
+	logger.Close()
+	events := readLoggedEvents(t, logger, 1)
+	if len(events) != 1 || events[0].UsageSource != UsageSourceUpstream || events[0].TotalTokens != 15 || events[0].CachedInputTokens != 4 || events[0].ReasoningTokens != 3 {
+		t.Fatalf("event=%+v", events)
+	}
+}
+
 func setupRedisLogger(t *testing.T) (*RedisLogger, *miniredis.Miniredis) {
 	t.Helper()
 	s := miniredis.RunT(t)
@@ -90,6 +100,16 @@ func TestRedisLoggerTimestamp(t *testing.T) {
 	}
 	if events[0].Timestamp.Before(before) {
 		t.Fatal("timestamp should be after log call")
+	}
+}
+
+func TestLegacyEventUsageFieldsDefaultEmpty(t *testing.T) {
+	var decoded Event
+	if err := json.Unmarshal([]byte(`{"action":"chat_request","status":"success","input_tokens":3,"output_tokens":4}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TotalTokens != 0 || decoded.UsageSource != "" {
+		t.Fatalf("legacy defaults are not backward-compatible: %+v", decoded)
 	}
 }
 

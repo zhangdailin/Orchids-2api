@@ -43,10 +43,17 @@ type Outcome struct {
 	// DurationMS is the whole request; FirstTokenMS is when the first byte was
 	// produced. They are kept apart so a slow prefill is distinguishable from
 	// slow generation.
-	DurationMS   int64
-	FirstTokenMS int64
-	InputTokens  int64
-	OutputTokens int64
+	DurationMS      int64
+	FirstTokenMS    int64
+	InputTokens     int64
+	CachedTokens    int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	TotalTokens     int64
+	// Priced is reserved for a future pricing layer. Current callers leave it
+	// false, so usage is explicitly counted as unpriced without implementing
+	// A9-1 billing or inventing a price.
+	Priced bool
 	// At defaults to now.
 	At time.Time
 }
@@ -62,7 +69,14 @@ type Bucket struct {
 	Failed                                                               int64     `json:"failed"`
 	Probes                                                               int64     `json:"probes"`
 	Input                                                                int64     `json:"input_tokens"`
+	Cached                                                               int64     `json:"cached_input_tokens"`
 	Output                                                               int64     `json:"output_tokens"`
+	Reasoning                                                            int64     `json:"reasoning_tokens"`
+	Total                                                                int64     `json:"total_tokens"`
+	PricedRequests                                                       int64     `json:"priced_requests"`
+	UnpricedRequests                                                     int64     `json:"unpriced_requests"`
+	PricedTokens                                                         int64     `json:"priced_tokens"`
+	UnpricedTokens                                                       int64     `json:"unpriced_tokens"`
 	DurationMS                                                           []int64   `json:"-"`
 	ConcurrencyPeak                                                      int64     `json:"concurrency_peak"`
 }
@@ -84,17 +98,24 @@ type Summary struct {
 	DurationHistogramFailed  []HistogramBin `json:"duration_histogram_failed"`
 	DurationHistogramAttempt []HistogramBin `json:"duration_histogram_attempt"`
 
-	Channel         string  `json:"channel"`
-	Requests        int64   `json:"requests"`
-	Success         int64   `json:"success"`
-	Failed          int64   `json:"failed"`
-	Probes          int64   `json:"probes"`
-	SuccessRate     float64 `json:"success_rate"`
-	RPM             float64 `json:"rpm"`
-	DurationP95MS   int64   `json:"duration_p95_ms"`
-	FirstTokenP95MS int64   `json:"first_token_p95_ms"`
-	InputTokens     int64   `json:"input_tokens"`
-	OutputTokens    int64   `json:"output_tokens"`
+	Channel           string  `json:"channel"`
+	Requests          int64   `json:"requests"`
+	Success           int64   `json:"success"`
+	Failed            int64   `json:"failed"`
+	Probes            int64   `json:"probes"`
+	SuccessRate       float64 `json:"success_rate"`
+	RPM               float64 `json:"rpm"`
+	DurationP95MS     int64   `json:"duration_p95_ms"`
+	FirstTokenP95MS   int64   `json:"first_token_p95_ms"`
+	InputTokens       int64   `json:"input_tokens"`
+	CachedInputTokens int64   `json:"cached_input_tokens"`
+	OutputTokens      int64   `json:"output_tokens"`
+	ReasoningTokens   int64   `json:"reasoning_tokens"`
+	TotalTokens       int64   `json:"total_tokens"`
+	PricedRequests    int64   `json:"priced_requests"`
+	UnpricedRequests  int64   `json:"unpriced_requests"`
+	PricedTokens      int64   `json:"priced_tokens"`
+	UnpricedTokens    int64   `json:"unpriced_tokens"`
 	// Samples reports how many observations backed the percentiles. Zero means
 	// "no sample", which the UI must show as such rather than as healthy.
 	Samples int64 `json:"samples"`
@@ -169,6 +190,32 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 	}
 	if outcome.OutputTokens > 0 {
 		pipe.HIncrBy(ctx, key, "output_tokens", outcome.OutputTokens)
+	}
+	if outcome.CachedTokens > 0 {
+		pipe.HIncrBy(ctx, key, "cached_input_tokens", outcome.CachedTokens)
+	}
+	if outcome.ReasoningTokens > 0 {
+		pipe.HIncrBy(ctx, key, "reasoning_tokens", outcome.ReasoningTokens)
+	}
+	total := outcome.TotalTokens
+	if total <= 0 {
+		total = outcome.InputTokens + outcome.OutputTokens
+	}
+	if total > 0 {
+		pipe.HIncrBy(ctx, key, "total_tokens", total)
+	}
+	if outcome.UsageReported {
+		if outcome.Priced {
+			pipe.HIncrBy(ctx, key, "priced_requests", 1)
+			if total > 0 {
+				pipe.HIncrBy(ctx, key, "priced_tokens", total)
+			}
+		} else {
+			pipe.HIncrBy(ctx, key, "unpriced_requests", 1)
+			if total > 0 {
+				pipe.HIncrBy(ctx, key, "unpriced_tokens", total)
+			}
+		}
 	}
 	if outcome.Model != "" {
 		// Per-model counters live in the same bucket: the matrix needs per-model
@@ -339,16 +386,23 @@ func bucketFromFields(minute time.Time, channel string, fields map[string]string
 		return value
 	}
 	return &Bucket{
-		Counters:        countersFrom(fields),
-		Channel:         normalizeChannel(channel),
-		Minute:          minute,
-		Requests:        toInt("requests"),
-		Success:         toInt("success"),
-		Failed:          toInt("failed"),
-		Probes:          toInt("probes"),
-		Input:           toInt("input_tokens"),
-		Output:          toInt("output_tokens"),
-		ConcurrencyPeak: toInt("concurrency_peak"),
+		Counters:         countersFrom(fields),
+		Channel:          normalizeChannel(channel),
+		Minute:           minute,
+		Requests:         toInt("requests"),
+		Success:          toInt("success"),
+		Failed:           toInt("failed"),
+		Probes:           toInt("probes"),
+		Input:            toInt("input_tokens"),
+		Cached:           toInt("cached_input_tokens"),
+		Output:           toInt("output_tokens"),
+		Reasoning:        toInt("reasoning_tokens"),
+		Total:            toInt("total_tokens"),
+		PricedRequests:   toInt("priced_requests"),
+		UnpricedRequests: toInt("unpriced_requests"),
+		PricedTokens:     toInt("priced_tokens"),
+		UnpricedTokens:   toInt("unpriced_tokens"),
+		ConcurrencyPeak:  toInt("concurrency_peak"),
 	}
 }
 
@@ -403,7 +457,18 @@ func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summ
 		summary.Failed += bucket.Failed
 		summary.Probes += bucket.Probes
 		summary.InputTokens += bucket.Input
+		summary.CachedInputTokens += bucket.Cached
 		summary.OutputTokens += bucket.Output
+		summary.ReasoningTokens += bucket.Reasoning
+		if bucket.Total > 0 {
+			summary.TotalTokens += bucket.Total
+		} else {
+			summary.TotalTokens += bucket.Input + bucket.Output
+		}
+		summary.PricedRequests += bucket.PricedRequests
+		summary.UnpricedRequests += bucket.UnpricedRequests
+		summary.PricedTokens += bucket.PricedTokens
+		summary.UnpricedTokens += bucket.UnpricedTokens
 		if !input.SamplesProvided && a.Enabled() {
 			key := a.key(bucket.Minute, input.Channel)
 			durations = append(durations, a.listInts(ctx, key+":dur")...)
@@ -444,7 +509,7 @@ func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summ
 	}
 	summary.QPS = summary.RPM / 60
 	if windowMinutes > 0 {
-		summary.TPS = float64(summary.InputTokens+summary.OutputTokens) / (windowMinutes * 60)
+		summary.TPS = float64(summary.TotalTokens) / (windowMinutes * 60)
 	}
 	summary.Duration = distribution(durations)
 	summary.FirstToken = distribution(ttfts)

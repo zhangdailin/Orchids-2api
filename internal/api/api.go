@@ -1107,7 +1107,11 @@ func (a *API) observedTokensByAccount(ctx context.Context, since time.Time) (map
 		if !since.IsZero() && event.Timestamp.Before(since) {
 			continue
 		}
-		if tokens := event.InputTokens + event.OutputTokens; tokens > 0 {
+		tokens := event.TotalTokens
+		if tokens <= 0 {
+			tokens = event.InputTokens + event.OutputTokens
+		}
+		if tokens > 0 {
 			usage[event.AccountID] += int64(tokens)
 		}
 	}

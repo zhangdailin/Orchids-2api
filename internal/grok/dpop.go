@@ -20,6 +20,7 @@ import (
 	"github.com/goccy/go-json"
 	"golang.org/x/sync/singleflight"
 	"orchids-api/internal/debug"
+	"orchids-api/internal/grok/egress"
 )
 
 const (
@@ -212,9 +213,25 @@ func (c *Client) fetchDPoPSession(ctx context.Context, token string) (dpopSessio
 	req.Header = c.consoleHeaders(token)
 	req.Header.Set("Content-Type", "application/json")
 	before := time.Now().UTC()
-	resp, err := c.httpClient.Do(req)
+	do := c.httpClient.Do
+	var lease *egress.Lease
+	if c.egress != nil && c.egress.Enabled() {
+		lease, err = c.egress.Acquire(ctx, "console", dpopCacheKey(token))
+		if err != nil {
+			return dpopSession{}, fmt.Errorf("grok console egress unavailable: %w", err)
+		}
+		defer lease.Release()
+		req.Header.Set("User-Agent", lease.UserAgent)
+		applyChromiumClientHints(req.Header, lease.UserAgent)
+		mergeCFCookies(req.Header, lease.CFCookies)
+		do = lease.Do
+	}
+	resp, err := do(req)
 	after := time.Now().UTC()
 	if err != nil {
+		if lease != nil {
+			c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeTransportError)
+		}
 		return dpopSession{}, err
 	}
 	defer resp.Body.Close()
@@ -223,7 +240,14 @@ func (c *Client) fetchDPoPSession(ctx context.Context, token string) (dpopSessio
 		return dpopSession{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if lease != nil && resp.StatusCode == http.StatusForbidden {
+			lease.InvalidateClearance()
+			c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeChallenge)
+		}
 		return dpopSession{}, fmt.Errorf("grok upstream status=%d body=%s", resp.StatusCode, raw)
+	}
+	if lease != nil {
+		c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeSuccess)
 	}
 	var out struct {
 		AccessToken string `json:"access_token"`
@@ -316,22 +340,42 @@ func (c *Client) doConsoleDPoPRequestWithHeaders(ctx context.Context, token, met
 				req.Header.Add(key, value)
 			}
 		}
-		req.Header.Set("x-cluster", "https://us-east-1.api.x.ai")
+		if strings.HasSuffix(req.URL.Path, "/responses") {
+			req.Header.Set("x-cluster", "https://us-east-1.api.x.ai")
+		}
 		if err := applyDPoPAuthorization(req, session); err != nil {
 			return nil, err
 		}
-		client := *c.httpClient
-		client.Timeout = c.cfg.GrokRequestTimeout(ProviderConsole)
+		do := c.httpClient.Do
+		var lease *egress.Lease
+		if c.egress != nil && c.egress.Enabled() {
+			lease, err = c.egress.Acquire(ctx, "console", dpopCacheKey(token))
+			if err != nil {
+				return nil, fmt.Errorf("grok console egress unavailable: %w", err)
+			}
+			req.Header.Set("User-Agent", lease.UserAgent)
+			applyChromiumClientHints(req.Header, lease.UserAgent)
+			mergeCFCookies(req.Header, lease.CFCookies)
+			do = lease.Do
+		}
 		diagnosticAttempt := debug.BeginUpstream(ctx, method, endpoint, req.Header, body)
-		resp, err := doUpstreamHTTP(req, client.Do, c.cfg.GrokStreamIdleTimeout())
+		resp, err := doUpstreamHTTP(req, do, c.cfg.GrokStreamIdleTimeoutFor(ProviderConsole), upstreamIdleBytes)
 		diagnosticAttempt.Response(resp, err)
 		if resp != nil {
 			resp.Body = diagnosticAttempt.CaptureBody(resp.Body)
 		}
 		if err != nil {
+			if lease != nil {
+				c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeTransportError)
+				lease.Release()
+			}
 			return nil, err
 		}
 		if resp.StatusCode == http.StatusOK {
+			if lease != nil {
+				c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeSuccess)
+				resp.Body = &leaseResponseBody{ReadCloser: resp.Body, release: lease.Release}
+			}
 			return resp, nil
 		}
 		raw, headerCopy := readBoundedResponse(resp)
@@ -346,14 +390,27 @@ func (c *Client) doConsoleDPoPRequestWithHeaders(ctx context.Context, token, met
 		if dpopChallenge && attempt == 0 {
 			recordUpstreamChallenge("dpop")
 			c.dpop.invalidate(cacheKey, session.accessToken)
+			if lease != nil {
+				lease.Release()
+			}
 			continue
 		}
 
 		kind := ClassifyUpstreamResponse(resp.StatusCode, resp.Header, raw)
 		if kind == UpstreamErrorCloudflareChallenge {
 			recordUpstreamChallenge("cloudflare")
+			if lease != nil {
+				lease.InvalidateClearance()
+				c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeChallenge)
+			}
 		} else if kind == UpstreamErrorGenericForbidden {
 			recordGenericForbidden()
+			if lease != nil {
+				lease.InvalidateClearance()
+			}
+		}
+		if lease != nil {
+			lease.Release()
 		}
 		return nil, newUpstreamError(resp.StatusCode, headerCopy, raw, "")
 	}

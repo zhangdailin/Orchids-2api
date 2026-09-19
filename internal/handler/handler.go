@@ -1298,6 +1298,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if sh.finalStopReason == "" && !sh.hasReturn {
 			status = "error"
 		}
+		usageSource := audit.UsageSourceEstimated
+		if sh.useUpstreamUsage {
+			usageSource = audit.UsageSourceUpstream
+		}
 		h.auditLogger.Log(r.Context(), audit.Event{
 			// One journal schema for every channel: the log centre must be able to
 			// compare a Grok request with a Warp request on the same fields.
@@ -1317,6 +1321,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			},
 			InputTokens:  sh.inputTokens,
 			OutputTokens: sh.outputTokens,
+			TotalTokens:  sh.inputTokens + sh.outputTokens,
+			UsageSource:  usageSource,
 		})
 	}
 }

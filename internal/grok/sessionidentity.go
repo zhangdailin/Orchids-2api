@@ -105,13 +105,50 @@ func (c *Client) FetchSessionIdentity(ctx context.Context, token string) (Accoun
 	if err != nil {
 		return AccountIdentity{}, err
 	}
-	req.Header = c.headers(token)
+	req.Header = http.Header{
+		"Accept":          {"*/*"},
+		"Accept-Encoding": {"gzip, deflate, br, zstd"},
+		"Accept-Language": {"zh-CN,zh;q=0.9,en;q=0.8"},
+		"Cache-Control":   {"no-cache"},
+		"Cookie":          {buildGrokCookie(token, "", "")},
+		"Pragma":          {"no-cache"},
+		"Priority":        {"u=1, i"},
+		"Referer":         {strings.TrimRight(c.baseURL(), "/") + "/"},
+		"Sec-Fetch-Dest":  {"empty"},
+		"Sec-Fetch-Mode":  {"cors"},
+		"Sec-Fetch-Site":  {"same-origin"},
+		"User-Agent":      {c.userAgent()},
+	}
+	applyChromiumClientHints(req.Header, c.userAgent())
 
-	resp, err := c.httpClient.Do(req)
+	do := c.httpClient.Do
+	var leaseRelease func()
+	if c.egress != nil && c.egress.Enabled() {
+		lease, acquireErr := c.egress.Acquire(reqCtx, "app_chat", credentialAffinity(token))
+		if acquireErr != nil {
+			return AccountIdentity{}, fmt.Errorf("grok session egress unavailable: %w", acquireErr)
+		}
+		req.Header.Set("User-Agent", lease.UserAgent)
+		applyChromiumClientHints(req.Header, lease.UserAgent)
+		mergeCFCookies(req.Header, lease.CFCookies)
+		do = lease.Do
+		leaseRelease = lease.Release
+	}
+
+	resp, err := do(req)
 	if err != nil {
+		if leaseRelease != nil {
+			leaseRelease()
+		}
 		return AccountIdentity{}, err
 	}
+	if leaseRelease != nil {
+		defer leaseRelease()
+	}
 	defer resp.Body.Close()
+	if err := decodeHTTPResponseBody(resp); err != nil {
+		return AccountIdentity{}, fmt.Errorf("decode grok session response: %w", err)
+	}
 
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if readErr != nil {

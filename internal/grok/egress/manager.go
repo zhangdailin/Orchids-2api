@@ -2,6 +2,8 @@ package egress
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -109,17 +111,23 @@ func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, 
 		return nil, errNoHealthyNode
 	}
 	fingerprint := m.fingerprint(*node, affinity)
-	ua, cookies, version, err := m.resolveFingerprint(ctx, *node, fingerprint)
-	if err != nil {
-		return nil, err
+	var ua, cookies string
+	var version uint64
+	var err error
+	if usesBrowserClearance(scope) {
+		ua, cookies, version, err = m.resolveFingerprint(ctx, *node, fingerprint)
+		if err != nil {
+			return nil, err
+		}
 	}
 	m.mu.Lock()
 	m.lastLease[scope+"|"+affinity] = leaseKeyInfo{fingerprint: fingerprint, version: version, nodeID: node.Name}
 	m.mu.Unlock()
 
-	// Isolate the connection pool by node + fingerprint so different clearance
-	// bindings never share mismatched connection/TLS state.
-	poolKey := "egress:" + node.Name + "|" + fingerprint
+	// Isolate connection pools by node, proxy URL, and clearance binding. The
+	// proxy component is hashed so credentials never appear in cache keys or
+	// diagnostics, while a same-name node whose URL changes gets a fresh pool.
+	poolKey := "egress:" + node.Name + "|proxy=" + shortHash(node.URL) + "|" + fingerprint
 	client := util.GetSharedBrowserHTTPClientWithHeaderTimeout(poolKey, m.cfg.GrokRequestTimeout(strings.ToLower(strings.TrimSpace(scope))), 0, proxyFuncForNode(*node))
 
 	lease := &Lease{
@@ -210,7 +218,29 @@ func (m *Manager) degradedLocked(name string, now time.Time) bool {
 }
 
 func (m *Manager) fingerprint(node Node, affinity string) string {
-	return strings.ToLower(strings.TrimSpace(node.Name)) + "|" + strings.ToLower(strings.TrimSpace(affinity))
+	cfg := m.clearanceConfig()
+	binding := strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(node.Name)),
+		strings.TrimSpace(node.URL),
+		strings.TrimRight(strings.TrimSpace(cfg.FlareSolverrURL), "/"),
+		strings.TrimRight(strings.TrimSpace(cfg.TargetURL), "/"),
+		strings.ToLower(strings.TrimSpace(affinity)),
+	}, "\x00")
+	return shortHash(binding)
+}
+
+func shortHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:16])
+}
+
+func usesBrowserClearance(scope string) bool {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "cli", "build", "console_asset":
+		return false
+	default:
+		return true
+	}
 }
 
 // resolveFingerprint returns a stable (ua, cookies, version) pair for a

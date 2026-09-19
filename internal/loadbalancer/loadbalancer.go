@@ -300,6 +300,28 @@ const (
 )
 
 func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Account) bool {
+	if !store.AccountAuthActive(acc) {
+		return false
+	}
+	// A paid Build billing snapshot is an authoritative routing signal: do not
+	// keep probing an account known to be exhausted before the period resets.
+	if isPaidGrokBuildAccount(acc) && acc.GrokBilling.IsExhausted() {
+		now := time.Now().UTC()
+		periodEnd := acc.GrokBilling.PeriodEnd()
+		if periodEnd.IsZero() || now.Before(periodEnd) {
+			return false
+		}
+		// Once the billing period ends, admit exactly one account probe per
+		// bounded interval. Without an atomic claim every concurrent request
+		// floods the same exhausted account the instant PeriodEnd passes.
+		if lb.Store == nil {
+			return false
+		}
+		claimed, err := lb.Store.ClaimGrokPaidQuotaProbe(ctx, acc.ID, now)
+		if err != nil || !claimed {
+			return false
+		}
+	}
 	status := strings.TrimSpace(acc.StatusCode)
 	if status == "" {
 		return true
@@ -322,33 +344,31 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		return true
 	case "401":
-		// 401 表示 token 过期或会话失效，短时间冷却后自动恢复尝试
-		if acc.LastAttempt.IsZero() {
-			return false
-		}
-		if now.Sub(acc.LastAttempt) >= retry401Default {
-			lb.clearAccountStatus(ctx, acc, "401 冷却完成，自动恢复尝试")
-			return true
-		}
+		// A refused credential needs operator re-authentication. Legacy rows that
+		// only carry StatusCode=401 are also kept out rather than automatically
+		// retried with the same dead credential.
 		return false
 	case "429":
 		if acc.LastAttempt.IsZero() {
 			return false
 		}
-		cooldown := retry429Default
-		if !acc.QuotaResetAt.IsZero() {
-			if !now.Before(acc.QuotaResetAt) {
-				lb.clearAccountStatus(ctx, acc, "429 冷却完成，自动恢复尝试")
-				return true
-			}
-			return false
-		}
-		if now.Sub(acc.LastAttempt) >= cooldown {
+		if !accountpolicy.AccountHeld(acc, now) {
 			lb.clearAccountStatus(ctx, acc, "429 冷却完成，自动恢复尝试")
 			return true
 		}
 		return false
 	case "402":
+		// Paid Build exhaustion recovers at the billing period boundary rather
+		// than after an arbitrary 24-hour probe window.
+		if isPaidGrokBuildAccount(acc) {
+			if periodEnd := acc.GrokBilling.PeriodEnd(); !periodEnd.IsZero() {
+				if !now.Before(periodEnd) {
+					lb.clearAccountStatus(ctx, acc, "402 账期已结束，恢复尝试")
+					return true
+				}
+				return false
+			}
+		}
 		// 402 通常表示余额/credits 不足。若上游给出 reset 时间则优先尊重，
 		// 否则使用更长的冷却，避免调度器持续撞到同一个无额度账号。
 		if !acc.QuotaResetAt.IsZero() {
@@ -399,6 +419,24 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 	}
 }
 
+func isPaidGrokBuildAccount(acc *store.Account) bool {
+	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") {
+		return false
+	}
+	provider := strings.ToLower(strings.TrimSpace(acc.GrokProvider))
+	credential := strings.ToLower(strings.TrimSpace(acc.CredentialType))
+	if provider != "build" && !(provider == "" && credential == "oauth") {
+		return false
+	}
+	plan := strings.ToLower(strings.TrimSpace(acc.Subscription))
+	for _, paid := range []string{"super", "pro", "heavy", "lite", "x_basic", "xbasic", "x_premium", "xpremium", "paid", "team", "enterprise"} {
+		if strings.Contains(plan, paid) {
+			return true
+		}
+	}
+	return false
+}
+
 func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Account, reason string) {
 	// 清除 warp session 缓存，确保恢复后使用新 token
 	if strings.EqualFold(acc.AccountType, "warp") && acc.ID > 0 {
@@ -410,12 +448,14 @@ func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Accou
 	acc.StatusMessage = ""
 	acc.LastAttempt = time.Time{}
 	acc.QuotaResetAt = time.Time{}
+	acc.RateLimitFailures = 0
 	for _, cached := range lb.cachedAccounts {
 		if cached.ID == acc.ID {
 			cached.StatusCode = ""
 			cached.StatusMessage = ""
 			cached.LastAttempt = time.Time{}
 			cached.QuotaResetAt = time.Time{}
+			cached.RateLimitFailures = 0
 			break
 		}
 	}
@@ -432,12 +472,28 @@ func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Accoun
 	now := time.Now()
 	acc.StatusCode = status
 	acc.LastAttempt = now
+	if status != "429" {
+		acc.RateLimitFailures = 0
+	}
+	if status == "401" {
+		acc.AuthStatus = store.AccountAuthStatusReauthRequired
+	}
+	if status == "429" {
+		acc.RateLimitFailures++
+		cooldown := accountpolicy.RateLimitCooldown(acc.RateLimitFailures)
+		if acc.QuotaResetAt.IsZero() || acc.QuotaResetAt.Before(now.Add(cooldown)) {
+			acc.QuotaResetAt = now.Add(cooldown)
+		}
+	}
 
 	// Ensure the cache is updated as well
 	for _, cached := range lb.cachedAccounts {
 		if cached.ID == acc.ID {
 			cached.StatusCode = status
 			cached.LastAttempt = now
+			cached.AuthStatus = acc.AuthStatus
+			cached.RateLimitFailures = acc.RateLimitFailures
+			cached.QuotaResetAt = acc.QuotaResetAt
 			break
 		}
 	}

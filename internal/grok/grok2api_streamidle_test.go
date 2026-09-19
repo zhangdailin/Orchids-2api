@@ -188,7 +188,7 @@ func TestBuildSemanticIdlePausesWhileNotReading(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(150 * time.Millisecond)
-	if grok2apiTestTimedOut(body.(*semanticIdleReadCloser)) {
+	if body.(*semanticIdleReadCloser).TimedOut() {
 		t.Fatal("idle timer fired while nobody was reading upstream")
 	}
 	go func() {
@@ -249,7 +249,7 @@ func TestBuildSemanticIdleIgnoresStaleTimerCallbackAfterActivityReset(t *testing
 	// Simulate an expired AfterFunc callback from the previous deadline arriving
 	// after useful output has already refreshed clockStart and remaining.
 	body.timeout()
-	if grok2apiTestTimedOut(body) {
+	if body.TimedOut() {
 		t.Fatal("stale timer callback timed out the refreshed read deadline")
 	}
 
@@ -273,7 +273,7 @@ func TestBuildSemanticIdleStopsAfterEOFOrClose(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(40 * time.Millisecond)
-		if grok2apiTestTimedOut(body) {
+		if body.TimedOut() {
 			t.Fatal("timer fired after EOF")
 		}
 		if err := body.Close(); err != nil {
@@ -294,7 +294,7 @@ func TestBuildSemanticIdleStopsAfterEOFOrClose(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(40 * time.Millisecond)
-		if grok2apiTestTimedOut(body) {
+		if body.TimedOut() {
 			t.Fatal("timer fired after Close")
 		}
 		if got := inner.closes.Load(); got != 1 {
@@ -311,11 +311,4 @@ type grok2apiCountingReadCloser struct {
 func (r *grok2apiCountingReadCloser) Close() error {
 	r.closes.Add(1)
 	return nil
-}
-
-// Inspect timer state in tests without adding a production-only test accessor.
-func grok2apiTestTimedOut(body *semanticIdleReadCloser) bool {
-	body.mu.Lock()
-	defer body.mu.Unlock()
-	return body.timedOut
 }

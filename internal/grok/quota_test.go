@@ -137,6 +137,34 @@ func TestApplyFreeQuotaExhaustionIgnoresEverythingElse(t *testing.T) {
 // the Free verdict is what lets the account list label a Build account "Free", so
 // it must never fire for an account whose plan string names a paid tier or whose
 // billing profile shows a real window.
+func TestConsumeSuccessfulQuotaUpdatesSupportedSnapshots(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	web := &store.Account{UsageCurrent: 3, GrokWebQuota: store.GrokWebQuotaSnapshot{
+		Auto: store.GrokQuotaWindow{HasRemaining: true, Remaining: 2},
+		Fast: store.GrokQuotaWindow{HasRemaining: true, Remaining: 1}, SyncedAt: now,
+	}}
+	if !ConsumeSuccessfulQuota(web, ProviderWeb, false) {
+		t.Fatal("web quota was not consumed")
+	}
+	if web.UsageCurrent != 2 || web.GrokWebQuota.Auto.Remaining != 1 || web.GrokWebQuota.Fast.Remaining != 1 {
+		t.Fatalf("web snapshot not decremented: %+v legacy=%v", web.GrokWebQuota, web.UsageCurrent)
+	}
+
+	build := buildAcc()
+	build.GrokRateLimits.Requests = store.GrokQuotaWindow{HasRemaining: true, Remaining: 1}
+	build.GrokBilling.Weekly = store.GrokQuotaWindow{HasUsage: true, UsagePercent: 99}
+	if !ConsumeSuccessfulQuota(build, ProviderBuild, false) || build.GrokRateLimits.Requests.Remaining != 0 {
+		t.Fatalf("build request snapshot not decremented: %+v", build.GrokRateLimits)
+	}
+	if build.GrokBilling.Weekly.UsagePercent != 99 {
+		t.Fatal("weekly percentage billing must not be locally decremented")
+	}
+	if ConsumeSuccessfulQuota(build, ProviderBuild, true) {
+		t.Fatal("authoritative response headers must suppress local decrement")
+	}
+}
+
 func TestInferFreeProfileDoesNotClaimPaidAccountsAsFree(t *testing.T) {
 	t.Parallel()
 

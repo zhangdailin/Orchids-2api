@@ -206,6 +206,12 @@ func (r *semanticIdleReadCloser) closeInner() error {
 	return r.closeErr
 }
 
+func (r *semanticIdleReadCloser) TimedOut() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.timedOut
+}
+
 // buildSSEActivityDetector incrementally parses SSE framing without modifying
 // the bytes returned to downstream response wrappers.
 type buildSSEActivityDetector struct {

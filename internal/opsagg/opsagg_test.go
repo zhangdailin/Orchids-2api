@@ -9,6 +9,21 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+func TestUsageDimensionsAggregateAndTotalDrivesTPS(t *testing.T) {
+	agg, _ := newAggregator(t)
+	ctx := context.Background()
+	at := time.Now().Truncate(time.Minute)
+	agg.Observe(ctx, Outcome{Channel: "grok", At: at, OK: true, UsageReported: true, InputTokens: 10, CachedTokens: 4, OutputTokens: 5, ReasoningTokens: 3, TotalTokens: 18})
+	buckets, err := agg.Range(ctx, "grok", at, at)
+	if err != nil || len(buckets) != 1 {
+		t.Fatalf("Range: buckets=%v err=%v", buckets, err)
+	}
+	summary := agg.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, WindowMinutes: 1, SamplesProvided: true})
+	if summary.CachedInputTokens != 4 || summary.ReasoningTokens != 3 || summary.TotalTokens != 18 || summary.TPS != 0.3 || summary.UnpricedRequests != 1 || summary.UnpricedTokens != 18 {
+		t.Fatalf("summary=%+v", summary)
+	}
+}
+
 func newRedisClient(t *testing.T, addr string) *redis.Client {
 	t.Helper()
 	client := redis.NewClient(&redis.Options{Addr: addr})

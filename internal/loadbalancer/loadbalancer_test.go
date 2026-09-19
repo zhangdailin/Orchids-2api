@@ -180,13 +180,50 @@ func TestMemoryConnTrackerTryAcquireIsBounded(t *testing.T) {
 	}
 }
 
+func TestIsAccountAvailable_401RequiresReauth(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{ID: 1, AccountType: "grok", StatusCode: "401", AuthStatus: store.AccountAuthStatusReauthRequired, LastAttempt: time.Now().Add(-24 * time.Hour)}
+	if lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("reauthRequired account must remain excluded regardless of age")
+	}
+}
+
+func TestIsAccountAvailable_PaidGrokBillingExhaustion(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{ID: 1, AccountType: "grok", GrokProvider: "build", CredentialType: "oauth", Subscription: "super"}
+	acc.GrokBilling.Monthly = store.GrokQuotaWindow{HasLimit: true, Limit: 100, HasRemaining: true, Remaining: 0, ResetAt: time.Now().Add(time.Hour)}
+	if lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("known exhausted paid Build account must be gated")
+	}
+	acc.GrokBilling.Monthly.Remaining = 1
+	if !lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("paid Build account with remaining billing must be available")
+	}
+}
+
+func TestIsAccountAvailable_Paid402UsesBillingPeriodEnd(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	acc := &store.Account{ID: 1, AccountType: "grok", GrokProvider: "build", CredentialType: "oauth", Subscription: "super", StatusCode: "402", LastAttempt: time.Now().Add(-48 * time.Hour)}
+	acc.GrokBilling.Weekly = store.GrokQuotaWindow{HasUsage: true, UsagePercent: 100, ResetAt: time.Now().Add(time.Hour)}
+	if lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("paid 402 must remain gated until billing period end")
+	}
+	acc.GrokBilling.Weekly.ResetAt = time.Now().Add(-time.Second)
+	// A post-period probe is admitted through the atomic store claim, not by a
+	// store-less LoadBalancer: without the claim every concurrent request would
+	// hit the exhausted account at once.
+	if lb.isAccountAvailable(context.Background(), acc) {
+		t.Fatal("paid 402 must remain gated when no atomic probe store is configured")
+	}
+}
+
 func TestIsAccountAvailable_429UsesQuotaResetAt(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{
 		ID:           1,
 		AccountType:  "warp",
 		StatusCode:   "429",
-		LastAttempt:  time.Now(),
+		LastAttempt:  time.Now().Add(-time.Minute),
 		QuotaResetAt: time.Now().Add(-time.Second),
 	}
 
@@ -349,5 +386,17 @@ func TestMarkAccountStatus_Repeated429RefreshesCooldownStart(t *testing.T) {
 	}
 	if got := lb.cachedAccounts[0].LastAttempt; !got.After(before) {
 		t.Fatalf("expected cached repeated 429 to refresh cooldown start, before=%v after=%v", before, got)
+	}
+	if acc.RateLimitFailures != 1 || lb.cachedAccounts[0].RateLimitFailures != 1 {
+		t.Fatalf("expected failure count persisted to account/cache: acc=%d cache=%d", acc.RateLimitFailures, lb.cachedAccounts[0].RateLimitFailures)
+	}
+	remaining := time.Until(acc.QuotaResetAt)
+	if remaining < 29*time.Second || remaining > 31*time.Second {
+		t.Fatalf("first 429 cooldown=%v want about 30s", remaining)
+	}
+	lb.MarkAccountStatus(context.Background(), acc, "429")
+	remaining = time.Until(acc.QuotaResetAt)
+	if acc.RateLimitFailures != 2 || remaining < 59*time.Second || remaining > 61*time.Second {
+		t.Fatalf("second 429 failures=%d cooldown=%v want about 1m", acc.RateLimitFailures, remaining)
 	}
 }

@@ -63,8 +63,8 @@ func TestHandleChatCompletions_DoesNotAutoRegisterUnknownModel(t *testing.T) {
 
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 	if _, err := s.GetModelByModelID(context.Background(), "grok-5"); err == nil {
 		t.Fatal("unexpected auto-registered model grok-5")
@@ -168,10 +168,34 @@ func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t
 	}
 }
 
-func TestResolveModel_RejectsRemovedConsoleModels(t *testing.T) {
-	for _, id := range []string{"grok-4.3", "grok-build-0.1", "grok-4.3-beta"} {
-		if _, ok := ResolveModel(id); ok {
-			t.Fatalf("ResolveModel(%s) = true, want removed", id)
+func TestResolveModel_AcceptsUnprefixedConsoleCompatibilityAliases(t *testing.T) {
+	for _, id := range []string{"grok-4.3", "grok-build-0.1", "grok-4.3-console"} {
+		spec, ok := ResolveModel(id)
+		if !ok || spec.Upstream != UpstreamConsole {
+			t.Fatalf("ResolveModel(%s) = (%+v, %v), want Console alias", id, spec, ok)
+		}
+	}
+	if _, ok := ResolveModel("grok-4.3-beta"); ok {
+		t.Fatal("ResolveModel(grok-4.3-beta) = true, want removed")
+	}
+}
+
+func TestResolveModel_ParsesSupportedEffortSuffixes(t *testing.T) {
+	for _, tc := range []struct {
+		id, effort string
+	}{
+		{"grok-4.5-low", "low"},
+		{"grok-4.6-xhigh", "xhigh"},
+		{"grok-4.3-none", "none"},
+	} {
+		_, effort, ok := ResolveModelAlias(tc.id)
+		if !ok || effort != tc.effort {
+			t.Fatalf("ResolveModelAlias(%q) effort=%q ok=%v", tc.id, effort, ok)
+		}
+	}
+	for _, id := range []string{"grok-4.5-xhigh", "grok-4.6-none"} {
+		if _, _, ok := ResolveModelAlias(id); ok {
+			t.Fatalf("ResolveModelAlias(%q) unexpectedly accepted", id)
 		}
 	}
 }
@@ -269,8 +293,8 @@ func TestHandleChatCompletions_Grok43RejectedBeforeUpstream(t *testing.T) {
 
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 	if len(upstreamPaths) != 0 {
 		t.Fatalf("upstream paths=%#v want none", upstreamPaths)
@@ -598,8 +622,8 @@ func TestHandleChatCompletions_DoesNotProbeMissingModel(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleChatCompletions(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 	if _, err := s.GetModelByModelID(context.Background(), "grok-5"); err == nil {
 		t.Fatal("unexpected created model grok-5")

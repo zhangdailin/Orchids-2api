@@ -8,6 +8,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"unicode/utf8"
@@ -16,9 +17,33 @@ import (
 )
 
 const (
-	maxVoiceRequestBytes  = 64 << 20
+	maxVoiceRequestBytes  = 32 << 20
 	maxVoiceResponseBytes = 128 << 20
 )
+
+type voiceInputError struct {
+	status  int
+	code    string
+	message string
+}
+
+func (e *voiceInputError) Error() string { return e.message }
+
+func unsupportedVoiceParameter(name string) error {
+	return &voiceInputError{status: http.StatusBadRequest, code: "unsupported_parameter", message: name + " is not supported by Console STT"}
+}
+
+func unsupportedVoiceContentType(message string) error {
+	return &voiceInputError{status: http.StatusUnsupportedMediaType, code: "invalid_request", message: message}
+}
+
+func writeVoiceInputError(w http.ResponseWriter, err error) {
+	if typed, ok := err.(*voiceInputError); ok {
+		writeResponsesAPIError(w, typed.status, typed.code, typed.message)
+		return
+	}
+	writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+}
 
 type ttsAPIRequest struct {
 	Model                    string                 `json:"model"`
@@ -352,13 +377,13 @@ func (h *Handler) HandleSTT(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxVoiceRequestBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "STT request exceeds 64 MiB")
+		writeResponsesAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "STT request exceeds 32 MiB")
 		return
 	}
 	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
 	modelID, hasInput, upstreamBody, upstreamContentType, err := prepareSTTRequest(body, contentType)
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeVoiceInputError(w, err)
 		return
 	}
 	modelID = normalizeModelID(firstNonEmpty(modelID, "grok-stt"))
@@ -385,12 +410,12 @@ func (h *Handler) HandleAudioTranscriptions(w http.ResponseWriter, r *http.Reque
 	r.Body = http.MaxBytesReader(w, r.Body, maxVoiceRequestBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "audio transcription request exceeds 64 MiB")
+		writeResponsesAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "audio transcription request exceeds 32 MiB")
 		return
 	}
 	modelID, hasInput, upstreamBody, upstreamContentType, responseFormat, err := prepareOpenAITranscriptionRequest(body, r.Header.Get("Content-Type"))
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		writeVoiceInputError(w, err)
 		return
 	}
 	modelID = normalizeModelID(firstNonEmpty(modelID, "grok-stt"))
@@ -439,7 +464,7 @@ func (h *Handler) HandleAudioTranscriptions(w http.ResponseWriter, r *http.Reque
 func prepareOpenAITranscriptionRequest(body []byte, contentType string) (string, bool, []byte, string, string, error) {
 	mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(contentType))
 	if err != nil {
-		return "", false, nil, "", "", fmt.Errorf("invalid Content-Type")
+		return "", false, nil, "", "", unsupportedVoiceContentType("audio transcription requires application/json or multipart/form-data")
 	}
 	responseFormat := "json"
 	switch strings.ToLower(mediaType) {
@@ -458,13 +483,13 @@ func prepareOpenAITranscriptionRequest(body []byte, contentType string) (string,
 			}
 		}
 		if value, exists := payload["prompt"]; exists && hasTranscriptionValues(value) {
-			return "", false, nil, "", "", fmt.Errorf("prompt is not supported by Console STT")
+			return "", false, nil, "", "", unsupportedVoiceParameter("prompt")
 		}
 		if value, exists := payload["temperature"]; exists && !isZeroTranscriptionTemperature(value) {
-			return "", false, nil, "", "", fmt.Errorf("non-zero temperature is not supported by Console STT")
+			return "", false, nil, "", "", unsupportedVoiceParameter("temperature")
 		}
 		if value, exists := payload["timestamp_granularities"]; exists && hasTranscriptionValues(value) {
-			return "", false, nil, "", "", fmt.Errorf("timestamp_granularities is not supported by Console STT")
+			return "", false, nil, "", "", unsupportedVoiceParameter("timestamp_granularities")
 		}
 		model, hasInput, upstreamBody, upstreamType, prepareErr := prepareSTTRequest(body, contentType)
 		if prepareErr != nil {
@@ -491,7 +516,7 @@ func prepareOpenAITranscriptionRequest(body []byte, contentType string) (string,
 		}
 		return model, hasInput, rewritten, rewrittenType, responseFormat, nil
 	default:
-		return "", false, nil, "", "", fmt.Errorf("audio transcription requires application/json or multipart/form-data")
+		return "", false, nil, "", "", unsupportedVoiceContentType("audio transcription requires application/json or multipart/form-data")
 	}
 }
 
@@ -527,17 +552,17 @@ func rewriteOpenAITranscriptionMultipart(body []byte, boundary string) (string, 
 			responseFormat, skip = strings.ToLower(text), true
 		case "prompt":
 			if text != "" {
-				return "", false, nil, "", "", fmt.Errorf("prompt is not supported by Console STT")
+				return "", false, nil, "", "", unsupportedVoiceParameter("prompt")
 			}
 			skip = true
 		case "temperature":
 			if !isZeroTranscriptionTemperature(text) {
-				return "", false, nil, "", "", fmt.Errorf("non-zero temperature is not supported by Console STT")
+				return "", false, nil, "", "", unsupportedVoiceParameter("temperature")
 			}
 			skip = true
-		case "timestamp_granularities", "timestamp_granularities[]":
+		case "timestamp_granularities[]":
 			if text != "" {
-				return "", false, nil, "", "", fmt.Errorf("timestamp_granularities is not supported by Console STT")
+				return "", false, nil, "", "", unsupportedVoiceParameter("timestamp_granularities")
 			}
 			skip = true
 		}
@@ -622,7 +647,7 @@ func writeOpenAITranscriptionResponse(w http.ResponseWriter, responseFormat stri
 func prepareSTTRequest(body []byte, contentType string) (string, bool, []byte, string, error) {
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return "", false, nil, "", fmt.Errorf("invalid Content-Type")
+		return "", false, nil, "", unsupportedVoiceContentType("STT requires application/json or multipart/form-data")
 	}
 	switch strings.ToLower(mediaType) {
 	case "application/json":
@@ -636,6 +661,9 @@ func prepareSTTRequest(body []byte, contentType string) (string, bool, []byte, s
 		writer := multipart.NewWriter(&multipartBody)
 		for _, key := range []string{"model", "url", "audio_format", "sample_rate", "language", "format", "multichannel", "channels", "diarize", "filler_words", "vad_threshold"} {
 			value, exists := payload[key]
+			if key == "sample_rate" && !exists {
+				value, exists = payload["sample_rate_hertz"]
+			}
 			if !exists || value == nil {
 				continue
 			}
@@ -661,7 +689,15 @@ func prepareSTTRequest(body []byte, contentType string) (string, bool, []byte, s
 			return "", false, nil, "", fmt.Errorf("multipart boundary is required")
 		}
 		reader := multipart.NewReader(bytes.NewReader(body), boundary)
+		var rewritten bytes.Buffer
+		writer := multipart.NewWriter(&rewritten)
 		model, hasInput := "", false
+		allowed := map[string]bool{
+			"model": true, "url": true, "file": true, "audio_format": true,
+			"sample_rate": true, "language": true, "format": true,
+			"multichannel": true, "channels": true, "diarize": true,
+			"filler_words": true, "vad_threshold": true, "keyterm": true,
+		}
 		for {
 			part, nextErr := reader.NextPart()
 			if nextErr == io.EOF {
@@ -675,18 +711,42 @@ func prepareSTTRequest(body []byte, contentType string) (string, bool, []byte, s
 			if readErr != nil || len(value) > maxVoiceRequestBytes {
 				return "", false, nil, "", fmt.Errorf("invalid STT multipart part")
 			}
-			switch part.FormName() {
+			name := part.FormName()
+			switch name {
 			case "model":
 				model = strings.TrimSpace(string(value))
 			case "url":
 				hasInput = hasInput || strings.TrimSpace(string(value)) != ""
 			case "file":
 				hasInput = hasInput || len(value) > 0
+			case "sample_rate_hertz":
+				name = "sample_rate"
+			}
+			if !allowed[name] {
+				continue
+			}
+			header := make(textproto.MIMEHeader, len(part.Header))
+			for key, values := range part.Header {
+				header[key] = append([]string(nil), values...)
+			}
+			if name != part.FormName() {
+				disposition := `form-data; name="` + name + `"`
+				header.Set("Content-Disposition", disposition)
+			}
+			destination, createErr := writer.CreatePart(header)
+			if createErr != nil {
+				return "", false, nil, "", fmt.Errorf("failed to build STT multipart request")
+			}
+			if _, writeErr := destination.Write(value); writeErr != nil {
+				return "", false, nil, "", fmt.Errorf("failed to build STT multipart request")
 			}
 		}
-		return model, hasInput, body, contentType, nil
+		if err := writer.Close(); err != nil {
+			return "", false, nil, "", fmt.Errorf("failed to build STT multipart request")
+		}
+		return model, hasInput, rewritten.Bytes(), writer.FormDataContentType(), nil
 	default:
-		return "", false, nil, "", fmt.Errorf("STT requires application/json or multipart/form-data")
+		return "", false, nil, "", unsupportedVoiceContentType("STT requires application/json or multipart/form-data")
 	}
 }
 

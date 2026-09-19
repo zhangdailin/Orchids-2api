@@ -47,6 +47,13 @@ type Account struct {
 	WarpMonthlyRemaining float64 `json:"warp_monthly_remaining,omitempty"`
 	WarpBonusRemaining   float64 `json:"warp_bonus_remaining,omitempty"`
 	StatusCode           string  `json:"status_code"`
+	// AuthStatus is the durable credential-routing state. Empty is treated as
+	// active for legacy rows; reauthRequired permanently excludes the account
+	// until a successful verification or credential replacement clears it.
+	AuthStatus string `json:"auth_status,omitempty"`
+	// RateLimitFailures counts consecutive account-scoped 429 failures. It drives
+	// the bounded exponential routing cooldown and is reset on recovery.
+	RateLimitFailures int `json:"rate_limit_failures,omitempty"`
 	// StatusMessage explains StatusCode in operator terms. A bare "401" cannot
 	// distinguish "the upstream retired this grant, re-login required" from
 	// "our record lost the credential", and those need different actions.
@@ -266,6 +273,31 @@ type GrokBillingSnapshot struct {
 	Monthly  GrokQuotaWindow `json:"monthly,omitempty"`
 	SyncedAt time.Time       `json:"synced_at,omitempty"`
 	Source   string          `json:"source,omitempty"`
+	// NextProbeAt serializes probes after an exhausted paid period ends. Before
+	// the first claim PeriodEnd is the due time; each claim advances this by the
+	// bounded retry interval so concurrent selectors cannot hammer billing.
+	NextProbeAt time.Time `json:"next_probe_at,omitempty"`
+	LastProbeAt time.Time `json:"last_probe_at,omitempty"`
+}
+
+const GrokPaidQuotaProbeInterval = 15 * time.Minute
+
+// IsExhausted reports an authoritative paid-billing exhaustion signal. Monthly
+// numeric allowance wins when present; otherwise a 100% weekly usage snapshot
+// is sufficient when it also carries a real billing period.
+func (b GrokBillingSnapshot) IsExhausted() bool {
+	if b.Monthly.HasLimit && b.Monthly.Limit > 0 && b.Monthly.HasRemaining && b.Monthly.Remaining <= 0 {
+		return true
+	}
+	return b.Weekly.HasUsage && b.Weekly.UsagePercent >= 100 && !b.Weekly.ResetAt.IsZero()
+}
+
+// PeriodEnd returns the latest known paid billing reset.
+func (b GrokBillingSnapshot) PeriodEnd() time.Time {
+	if b.Monthly.ResetAt.After(b.Weekly.ResetAt) {
+		return b.Monthly.ResetAt
+	}
+	return b.Weekly.ResetAt
 }
 
 // GrokRateLimitSnapshot stores passive response headers separately from
@@ -305,6 +337,21 @@ type GrokFreeQuotaSnapshot struct {
 // from a transient HTTP 429. The account remains usable for Warp's free-only
 // capabilities while model/capability filters keep paid requests away from it.
 const AccountStatusWarpQuotaExhausted = "warp_quota_exhausted"
+
+const (
+	AccountAuthStatusActive         = "active"
+	AccountAuthStatusReauthRequired = "reauthRequired"
+)
+
+// AccountAuthActive preserves compatibility with rows created before AuthStatus
+// existed while making every non-active explicit state ineligible for routing.
+func AccountAuthActive(acc *Account) bool {
+	if acc == nil {
+		return false
+	}
+	status := strings.TrimSpace(acc.AuthStatus)
+	return status == "" || strings.EqualFold(status, AccountAuthStatusActive)
+}
 
 type ApiKey struct {
 	ID            int64      `json:"id"`
@@ -478,6 +525,8 @@ type accountStore interface {
 	ListAccounts(ctx context.Context) ([]*Account, error)
 	GetEnabledAccounts(ctx context.Context) ([]*Account, error)
 	IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error
+	ConsumeGrokQuota(ctx context.Context, id int64, provider string, amount float64) (bool, error)
+	ClaimGrokPaidQuotaProbe(ctx context.Context, id int64, now time.Time) (bool, error)
 }
 
 type settingsStore interface {
@@ -835,6 +884,25 @@ func (s *Store) IncrementAccountStats(ctx context.Context, id int64, usage float
 		return s.accounts.IncrementAccountStats(ctx, id, usage, count)
 	}
 	return fmt.Errorf("store not configured")
+}
+
+// ConsumeGrokQuota atomically applies successful request units to an observed
+// local quota snapshot. It returns false when the provider has no compatible
+// request-unit window, deliberately leaving weekly percentage billing alone.
+func (s *Store) ConsumeGrokQuota(ctx context.Context, id int64, provider string, amount float64) (bool, error) {
+	if s.accounts != nil {
+		return s.accounts.ConsumeGrokQuota(ctx, id, provider, amount)
+	}
+	return false, fmt.Errorf("store not configured")
+}
+
+// ClaimGrokPaidQuotaProbe atomically admits at most one paid-billing probe per
+// interval once the known billing period has ended.
+func (s *Store) ClaimGrokPaidQuotaProbe(ctx context.Context, id int64, now time.Time) (bool, error) {
+	if s.accounts != nil {
+		return s.accounts.ClaimGrokPaidQuotaProbe(ctx, id, now)
+	}
+	return false, fmt.Errorf("store not configured")
 }
 
 func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {

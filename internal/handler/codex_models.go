@@ -45,7 +45,11 @@ type codexModelEntry struct {
 	Priority                          int                   `json:"priority"`
 	AdditionalSpeedTiers              []string              `json:"additional_speed_tiers"`
 	ServiceTiers                      []any                 `json:"service_tiers"`
+	DefaultServiceTier                *string               `json:"default_service_tier"`
+	AvailabilityNUX                   any                   `json:"availability_nux"`
+	Upgrade                           any                   `json:"upgrade"`
 	BaseInstructions                  string                `json:"base_instructions"`
+	ModelMessages                     any                   `json:"model_messages"`
 	IncludeSkillsUsageInstructions    bool                  `json:"include_skills_usage_instructions"`
 	SupportsReasoningSummaryParameter bool                  `json:"supports_reasoning_summary_parameter"`
 	SupportsReasoningSummaries        bool                  `json:"supports_reasoning_summaries"`
@@ -60,6 +64,7 @@ type codexModelEntry struct {
 	ContextWindow                     int                   `json:"context_window"`
 	MaxContextWindow                  int                   `json:"max_context_window"`
 	EffectiveContextWindowPercent     int                   `json:"effective_context_window_percent"`
+	AutoCompactTokenLimit             *int                  `json:"auto_compact_token_limit"`
 	ExperimentalSupportedTools        []string              `json:"experimental_supported_tools"`
 	InputModalities                   []string              `json:"input_modalities"`
 	SupportsSearchTool                bool                  `json:"supports_search_tool"`
@@ -138,6 +143,10 @@ func codexHasCapability(item PublicModelResponse, capability string) bool {
 		}
 	}
 	return false
+}
+
+func codexAgentToolsSupported(item PublicModelResponse) bool {
+	return strings.EqualFold(strings.TrimSpace(item.Provider), "build") && codexHasCapability(item, "responses")
 }
 
 // Media endpoints are not agent chat models, so they are listed but hidden.
@@ -261,14 +270,25 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 		if metadata.imageInput {
 			modalities = append(modalities, "image")
 		}
-		// Only text models served over the Responses API accept the agent toolset.
-		toolsSupported := codexHasCapability(item, "responses")
+		// Agent tools require the Build Responses route. Web and Console models may
+		// expose a generic responses compatibility capability but not Codex tools.
+		toolsSupported := codexAgentToolsSupported(item)
 		var applyPatchToolType *string
 		if toolsSupported {
 			value := "freeform"
 			applyPatchToolType = &value
 		}
-		reasoningSupported := len(levels) > 0
+		reasoningSupported := false
+		if strings.EqualFold(strings.TrimSpace(item.Provider), "console") && slug == "grok-4.20-0309-reasoning" {
+			reasoningSupported = true
+		} else {
+			for _, level := range levels {
+				if level != "none" {
+					reasoningSupported = true
+					break
+				}
+			}
+		}
 		models = append(models, codexModelEntry{
 			Slug:                              name,
 			DisplayName:                       codexDisplayName(slug),

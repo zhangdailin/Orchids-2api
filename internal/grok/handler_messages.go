@@ -73,7 +73,16 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicError(w, http.StatusBadRequest, "max_tokens must be greater than zero")
 		return
 	}
-	if err := h.ensureModelCapability(r.Context(), req.Model, store.CapabilityMessages); err != nil {
+	spec, ok := h.resolveConversationModel(r.Context(), req.Model)
+	if !ok {
+		writeAnthropicModelNotFound(w, req.Model)
+		return
+	}
+	if err := h.ensureResolvedModelCapability(r.Context(), spec.ID, spec, store.CapabilityMessages); err != nil {
+		if strings.EqualFold(strings.TrimSpace(err.Error()), "model not found") {
+			writeAnthropicModelNotFound(w, req.Model)
+			return
+		}
 		writeAnthropicError(w, http.StatusBadRequest, modelValidationMessage(req.Model, err))
 		return
 	}
@@ -96,7 +105,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	subReq.ContentLength = int64(len(body))
 
 	if req.Stream {
-		h.serveAnthropicMessageStream(w, subReq, req.Model)
+		prompt := estimatePromptUsageFromRequest(&chat)
+		inputTokens := prompt.promptTextTokens + prompt.promptAudioTokens + prompt.promptImageTokens
+		h.serveAnthropicMessageStream(w, subReq, req.Model, inputTokens)
 		return
 	}
 	rec := newCaptureResponseWriter()
@@ -393,6 +404,17 @@ func validateChatToolSequence(messages []ChatMessage) error {
 		}
 		delete(pending, id)
 		completed[id] = true
+	}
+	// Every tool_use must be answered: an unanswered call is forwarded upstream
+	// as a dangling call_id, which the upstream rejects much later and with a
+	// message that does not name the offending call.
+	if len(pending) > 0 {
+		unanswered := make([]string, 0, len(pending))
+		for id := range pending {
+			unanswered = append(unanswered, id)
+		}
+		sort.Strings(unanswered)
+		return fmt.Errorf("tool_use %s has no matching tool_result", strings.Join(unanswered, ", "))
 	}
 	return nil
 }
@@ -900,7 +922,7 @@ func anthropicUsageFromOpenAI(usage map[string]interface{}) map[string]interface
 	return result
 }
 
-func (h *Handler) serveAnthropicMessageStream(w http.ResponseWriter, req *http.Request, model string) {
+func (h *Handler) serveAnthropicMessageStream(w http.ResponseWriter, req *http.Request, model string, inputTokens int) {
 	h.withChatStream(req, func(status int, header http.Header, reader io.Reader) {
 		for key, values := range header {
 			w.Header()[key] = values
@@ -913,7 +935,7 @@ func (h *Handler) serveAnthropicMessageStream(w http.ResponseWriter, req *http.R
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
-		_ = translateOpenAIChatStreamToAnthropic(w, reader, model)
+		_ = translateOpenAIChatStreamToAnthropicWithInput(w, reader, model, inputTokens)
 	})
 }
 
@@ -940,17 +962,19 @@ type anthropicStreamState struct {
 }
 
 func translateOpenAIChatStreamToAnthropic(w io.Writer, reader io.Reader, model string) error {
+	return translateOpenAIChatStreamToAnthropicWithInput(w, reader, model, 0)
+}
+
+func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader, model string, inputTokens int) error {
 	tracked := &checkedStreamWriter{target: w}
 	w = tracked
 	state := &anthropicStreamState{
 		id: "msg_" + randomHex(12), model: model, textIndex: -1, thinkIndex: -1,
 		toolIndexes: map[int]int{}, open: map[int]bool{},
-		// message_start is emitted before the upstream reports usage, so its
-		// counters are necessarily zero. They still carry the complete
-		// Anthropic shape (cache + thinking), otherwise a caller reading
-		// cache_read_input_tokens or thinking_tokens at message_start sees a
-		// missing field instead of 0.
-		usage:    anthropicUsageFromOpenAI(map[string]interface{}{"prompt_tokens": 0, "completion_tokens": 0}),
+		// Upstream usage arrives on the terminal chunk, after message_start. The
+		// request is already parsed here, so seed Anthropic's required input/cache
+		// counters from the same conservative estimator used by chat fallback.
+		usage:    anthropicUsageFromOpenAI(map[string]interface{}{"prompt_tokens": max(0, inputTokens), "completion_tokens": 0}),
 		searches: map[string]*messageSearchState{}, citations: map[string]bool{},
 	}
 	writeAnthropicSSE(w, "message_start", map[string]interface{}{
@@ -1214,11 +1238,68 @@ func writeAnthropicSSE(w io.Writer, event string, payload interface{}) {
 	}
 }
 
-func writeAnthropicError(w http.ResponseWriter, status int, message string) {
+func writeAnthropicModelNotFound(w http.ResponseWriter, model string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusNotFound)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"type": "error", "error": map[string]interface{}{"type": "invalid_request_error", "message": message},
+		"type": "error", "error": map[string]interface{}{"type": "not_found_error", "message": modelNotFoundMessage(model)},
+	})
+}
+
+// anthropicErrorType derives the Anthropic error type from the HTTP status.
+// A constant invalid_request_error made an exhausted allowance, an upstream
+// overload and a bad request indistinguishable, and an Anthropic client decides
+// whether to retry from that field.
+func anthropicErrorType(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication_error"
+	case status == http.StatusForbidden:
+		return "permission_error"
+	case status == http.StatusNotFound:
+		return "not_found_error"
+	case status == http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status == http.StatusServiceUnavailable || status == http.StatusBadGateway ||
+		status == http.StatusGatewayTimeout:
+		// Anthropic reports capacity and upstream trouble as overloaded_error,
+		// which is the type its clients back off on.
+		return "overloaded_error"
+	default:
+		return "invalid_request_error"
+	}
+}
+
+// anthropicErrorCode is the stable machine code paired with the type above.
+func anthropicErrorCode(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication_error"
+	case status == http.StatusForbidden:
+		return "permission_error"
+	case status == http.StatusNotFound:
+		return "not_found_error"
+	case status == http.StatusRequestEntityTooLarge:
+		return "request_too_large"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status >= 500:
+		return "upstream_unavailable"
+	default:
+		return "invalid_request"
+	}
+}
+
+func writeAnthropicError(w http.ResponseWriter, status int, message string) {
+	writeJSONStatus(w, status, map[string]interface{}{
+		"type": "error",
+		"error": map[string]interface{}{
+			"type":    anthropicErrorType(status),
+			"code":    anthropicErrorCode(status),
+			"message": message,
+		},
 	})
 }
 

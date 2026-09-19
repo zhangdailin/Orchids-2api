@@ -39,6 +39,9 @@ type ModelSpec struct {
 	MediaAPIOnly  bool
 	// Upstream explicitly routes the model; UpstreamAuto derives from fields.
 	Upstream UpstreamKind
+	// AliasReasoningEffort is populated only while resolving an effort-suffixed
+	// compatibility alias and is copied into the request before normalization.
+	AliasReasoningEffort string
 }
 
 const (
@@ -98,6 +101,28 @@ var modelByID = func() map[string]ModelSpec {
 	return out
 }()
 
+// providerCompatibilityAliases preserve the provider-qualified IDs while also
+// accepting the unqualified and historical names published by grok2api.
+var providerCompatibilityAliases = map[string]string{
+	"grok-4.3":                             "console/grok-4.3",
+	"grok-4.3-console":                     "console/grok-4.3",
+	"grok-4.20-0309-reasoning":             "console/grok-4.20-0309-reasoning",
+	"grok-4.20-0309-reasoning-console":     "console/grok-4.20-0309-reasoning",
+	"grok-4.20-0309-non-reasoning":         "console/grok-4.20-0309-non-reasoning",
+	"grok-4.20-0309-non-reasoning-console": "console/grok-4.20-0309-non-reasoning",
+	"grok-4.20-multi-agent-0309":           "console/grok-4.20-multi-agent-0309",
+	"grok-4.20-multi-agent-console":        "console/grok-4.20-multi-agent-0309",
+	"grok-4.5-console":                     "console/grok-4.5",
+	"grok-build-0.1":                       "console/grok-build-0.1",
+	"grok-build-console":                   "console/grok-build-0.1",
+	"grok-imagine-image-quality-2.0":       "console/grok-imagine-image-quality",
+	"console/grok-imagine-video":          "grok-imagine-video",
+	"console/grok-imagine-video-1.5":      "grok-imagine-video-1.5",
+	"build/grok-imagine-video":            "grok-imagine-video",
+	"web/grok-imagine-video":              "grok-imagine-video",
+	"web/grok-imagine-video-1.5":          "grok-imagine-video-1.5",
+}
+
 func IsDeprecatedModelID(modelID string) bool {
 	return modelpolicy.IsDeprecatedGrokModelID(normalizeModelID(modelID))
 }
@@ -106,13 +131,63 @@ func normalizeModelID(modelID string) string {
 	return strings.ToLower(strings.TrimSpace(modelID))
 }
 
-func ResolveModel(modelID string) (ModelSpec, bool) {
+// ParseReasoningModelAlias resolves a supported <model>-<effort> alias. The
+// suffix is accepted only when the base model's provider contract advertises
+// that exact effort, so names such as grok-4.5-xhigh remain model-not-found.
+func ParseReasoningModelAlias(modelID string) (base, effort string, ok bool) {
 	id := normalizeModelID(modelID)
-	// Provider prefixes are case-insensitive. Web prefixes are aliases because
-	// Web model names do not collide; Console prefixes are canonical.
+	for _, candidate := range []string{"xhigh", "medium", "high", "low", "none"} {
+		if !strings.HasSuffix(id, "-"+candidate) {
+			continue
+		}
+		base = strings.TrimSuffix(id, "-"+candidate)
+		canonical := base
+		if alias, exists := providerCompatibilityAliases[base]; exists {
+			canonical = alias
+		}
+		if modelpolicy.SupportsReasoningEffort(canonical, candidate) {
+			return base, candidate, true
+		}
+	}
+	return "", "", false
+}
+
+func ResolveModelAlias(modelID string) (ModelSpec, string, bool) {
+	id := normalizeModelID(modelID)
+	// Explicit provider-qualified IDs always win and remain supported.
+	if m, exists := modelByID[id]; exists {
+		return m, "", true
+	}
 	id = strings.TrimPrefix(id, "web/")
-	m, ok := modelByID[id]
+	if m, exists := modelByID[id]; exists {
+		return m, "", true
+	}
+	if canonical, exists := providerCompatibilityAliases[id]; exists {
+		m, found := modelByID[canonical]
+		return m, "", found
+	}
+	if base, effort, exists := ParseReasoningModelAlias(id); exists {
+		if canonical, aliased := providerCompatibilityAliases[base]; aliased {
+			base = canonical
+		}
+		m, found := modelByID[base]
+		return m, effort, found
+	}
+	return ModelSpec{}, "", false
+}
+
+func ResolveModel(modelID string) (ModelSpec, bool) {
+	m, _, ok := ResolveModelAlias(modelID)
 	return m, ok
+}
+
+func ConsoleFallbackFor(spec ModelSpec) (ModelSpec, bool) {
+	if spec.Upstream != UpstreamCLI {
+		return ModelSpec{}, false
+	}
+	slug := strings.ToLower(strings.TrimSpace(spec.UpstreamModel))
+	fallback, ok := modelByID["console/"+slug]
+	return fallback, ok
 }
 
 func (m ModelSpec) PoolCandidates() []string {

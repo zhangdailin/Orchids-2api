@@ -21,6 +21,24 @@ type clientPool struct {
 	clients map[string]*http.Client
 }
 
+const maxSharedHTTPClients = 512
+
+// evictOneClientLocked bounds process-wide connection pools. Callers hold p.mu.
+// A deterministic LRU is unnecessary here because keys are configuration
+// identities; bounding and closing any stale pool prevents unbounded growth.
+func (p *clientPool) evictOneClientLocked() {
+	if p == nil || len(p.clients) < maxSharedHTTPClients {
+		return
+	}
+	for key, client := range p.clients {
+		delete(p.clients, key)
+		if client != nil {
+			client.CloseIdleConnections()
+		}
+		return
+	}
+}
+
 var httpClientCache = clientPool{clients: make(map[string]*http.Client)}
 
 // GetSharedHTTPClient returns a shared http.Client.
@@ -64,6 +82,7 @@ func GetSharedHTTPClient(proxyKey string, timeout time.Duration, proxyFunc func(
 		Timeout:   timeout,
 	}
 
+	httpClientCache.evictOneClientLocked()
 	httpClientCache.clients[cacheKey] = newClient
 	return newClient
 }

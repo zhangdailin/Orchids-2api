@@ -96,6 +96,39 @@ func (h *Handler) warpModelVisible(ctx context.Context, modelID string) bool {
 	return ok
 }
 
+func appendGrokCompatibilityAliases(items []PublicModelResponse, entry PublicModelResponse) []PublicModelResponse {
+	if !strings.EqualFold(entry.OwnedBy, "grok") {
+		return items
+	}
+	base := modelpolicy.GrokModelSlug(entry.ID)
+	aliases := make([]string, 0, 6)
+	if strings.Contains(strings.TrimSpace(entry.ID), "/") {
+		aliases = append(aliases, base)
+	}
+	levels := modelpolicy.SupportedReasoningEfforts(entry.ID)
+	if len(levels) >= 2 {
+		for _, level := range levels {
+			aliases = append(aliases, base+"-"+level)
+		}
+	}
+	for _, alias := range aliases {
+		duplicate := false
+		for _, existing := range items {
+			if strings.EqualFold(existing.ID, alias) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		copy := entry
+		copy.ID = alias
+		items = append(items, copy)
+	}
+	return items
+}
+
 func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		apperrors.New("invalid_request_error", "Method not allowed", http.StatusMethodNotAllowed).WriteResponse(w)
@@ -145,6 +178,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.Provider = m.Provider
 		entry.UpstreamModel = m.UpstreamModel
 		publicModels = append(publicModels, entry)
+		publicModels = appendGrokCompatibilityAliases(publicModels, entry)
 	}
 
 	// Codex-family clients ask for a richer catalog that carries the context

@@ -378,7 +378,7 @@ func validateVideoConfig(cfg *VideoConfig) (*VideoConfig, error) {
 	}
 	mapped, ok := videoAspectRatioMap[ar]
 	if !ok {
-		return nil, fmt.Errorf("aspect_ratio must be one of [1280x720 720x1280 1792x1024 1024x1792 1024x1024 16:9 9:16 3:2 2:3 1:1]")
+		return nil, fmt.Errorf("aspect_ratio must be one of [1280x720 720x1280 1792x1024 1024x1792 1024x1024 16:9 9:16 4:3 3:4 3:2 2:3 1:1]")
 	}
 	cfg.AspectRatio = mapped
 
