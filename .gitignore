@@ -81,3 +81,9 @@ test/
 .gomodcache/
 .gopath/
 
+# Reference clones of upstream projects used for parity audits (.upstream/) and
+# the per-area audit reports they produce (.audit/). Both are working material;
+# the summary that matters lives in docs/.
+.upstream/
+.audit/
+
