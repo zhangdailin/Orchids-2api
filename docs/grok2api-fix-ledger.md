@@ -93,17 +93,17 @@
 
 ## 三、未修（需要整块移植或产品决策）
 
-第三轮结束后仍未修的条目（52 条：P1×6、P2×35、P3×11），以及为什么：
+第四轮结束后的未修条目（35 条：P2×25、P3×10），以及为什么：
 
 | 编号 | 仍未修的原因 |
 | --- | --- |
 | A9-1 | 计费层：价格表 + Key 额度预留/结算 + `usage_source` 列。属**新功能**，不是修 bug；本轮只补齐了用量口径与 unpriced/priced 维度 |
 | A3-7 | 网关侧 compaction（`compaction_trigger` 分类、canonical 摘要、`g2a_compact_v1` blob 编解码与展开），需要按上游 `responses_compaction*.go` 整块移植 |
-| A6-1 | 质量降级重试（encrypted-thinking dump / 缺失思考的识别、扣分、12h 冷却、二次停用），需要按上游 HEAD 的 `quality_retry.go` 移植（注意基点后该文件被改过） |
-| A7-7 | TLS ClientHello 与 UA 大版本映射：当前用库内 `HelloChrome_Auto` 常量，做到按 UA 版本映射需要改用 tls-client 的 `ClientProfile` 表（依赖升级），本轮只补了 HTTP/2 keepalive |
+| A6-1 | **部分完成**：识别 + 12h 停靠 + 二次停用已落地；"扣住 dump 不发给客户端并在换号后重试"仍未做——需要流式 hold 缓冲（流式已写出的内容无法撤回）与非流式先收集再决定写回，属流式写入层重构 |
+| A7-7 | **已在第四轮修复**（按 UA 大版本选择 utls ClientHello，并纳入缓存键） |
 | A7-8 | Web chat 主路径走 mgw WebSocket：与出口 lease 的浏览器 TLS/UA/cookie 复用是同一件事，属出口层重构 |
-| A7-10 | 节点健康持久化 + 主动探测 + 指数冷却：目前只有进程内健康分与固定 30s 冷却，落地需要探测任务与健康存储 |
-| A5-29 | 媒体输入上传端点的线契约（A 在推理前缀 + snake_case，B 在管理端 + camelCase `data` 包裹）：改线格式会打断现有调用方，属对外契约变更，需与客户端一起排期 |
+| A7-10 | **已在第四轮修复**（指数冷却 + 主动探测 + 共享目录持久化 + 只读健康快照） |
+| A5-29 | **已在第四轮以加法方式修复**（新增管理面 `/api/media/inputs`，原推理面端点保持兼容） |
 | A7-2 | statsig 的**签名**需要外部签名服务（上游由首页 metaContent + 签名器生成），本项目没有该依赖：已改为"配置有效则沿用、否则安全省略"，不再伪造 |
 | A2-6 | 原生 Responses 流的 `[DONE]`/重新分帧：项目的 relay 测试明确要求保留该行为（字节透明契约），见"保留差异" |
 | 其余 P2/P3 | 多为文案/字段集/边角校验差异（如流式图片事件 `size` 恒 auto、`/tts/voices` 未归一化、无 `[]` 的 `timestamp_granularities` 语义等），逐条列在 `docs/grok2api-parity-audit.md` 对应章节 |
@@ -275,3 +275,40 @@
 | A5-11 | Web 免费/基础档凭据的视频时长在发往上游前钳到 6 秒（原来上游直接拒绝整个任务，表现为几分钟后一个含糊失败） | `handler_videos.go` |
 | A7-9 | 流内反爬识别：上游流内 `code=7`/"anti-bot" 不再被当成普通失败——分类为 `errGrokWebAntiBot`，账号短冷却让下次重新求解 clearance（自动重签 statsig 仍未实现，见未修清单） | `console_stream.go`、`console.go` |
 | A5-12 | 标准 `/videos/generations` 不再硬绑 Console：模型路由到 Web 平面时改走 Web 任务引擎（带图片输入时仍明确报错），仅部署 Web 账号的场景不再必然 503 | `handler_videos_console.go` |
+
+## 七、第四轮修复（5 条 + 1 条部分实现）
+
+### 出口节点健康（2）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A7-10 | 节点失败改为**有界指数冷却**（30s→1m→2m→…→10m 上限，成功后计数清零），不再 30s 后无条件回到坏节点；新增**主动探测**：某 scope 全部节点在冷却时，不再直接失败，而是挑选冷却最早结束的节点、在不持锁的情况下探测一次，探通即恢复（坏节点则延长冷却）；健康快照**持久化**到共享媒体目录（多副本挂同一目录即共享，重启不清零）；新增 `HealthSnapshot()`（只含节点名/健康分/失败数/冷却截止，绝不含代理 URL 或凭据） | `internal/grok/egress/manager.go` |
+| A7-7 | TLS ClientHello 按 UA 声明的 Chrome 大版本选择（本 utls 版本提供 120/131/133 三档，就近向下取、UA 更新则取最新），不再固定 `HelloChrome_Auto`；连接池与缓存键纳入所选 profile，UA 与指纹不再互相矛盾 | `internal/util/browser_transport.go`、`egress/manager.go` |
+
+### 媒体输入契约（1，加法式）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A5-29 | **新增**管理面端点 `POST/GET/DELETE /api/media/inputs[/{id}]`（管理员会话鉴权、`{"data":{fileId,mimeType,sizeBytes,…}}` camelCase 信封与 `{error:{code,message}}`），与 grok2api 管理契约一致；原推理面前缀端点保留不变。管理面对象落在共享 `admin` 命名空间，客户端可直接引用其 `file_id`；调用方自己的命名空间仍然优先、隔离不变 | `internal/grok/handler_media_inputs.go`、`cmd/server/routes.go` |
+
+### 质量降级防护（1，部分）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A6-1 | 移植降级判定与处置：新增 `quality_guard.go`，在控制台流式/非流式两条路径上采集信号（是否期待推理、是否真的收到推理、可见/推理/密文字符数、推理 token 数、首次可见延迟、是否终止、工具调用数），判定"期待推理却完全没有推理"与"大额推理账单 + <2s 迟到的短文"两种 dump；首次命中把凭据**停靠 12 小时**（并入选号过滤 `accountUsableForModel`），第二次命中**停用**凭据，成功一轮清零计数 | `internal/grok/quality_guard.go`、`console.go`、`console_stream.go`、`handler.go`、`internal/store/store.go` |
+
+**仍然缺的一半（已记入未修清单）**：流式路径无法撤回已经写出的内容，因此本实现只冷却产生 dump 的凭据，不做"扣住不发给客户端再换号重试"。要做到上游那样，需要在流开头引入 hold 缓冲（可见输出达到阈值/超时/终止三者之一才放行），属流式写入层重构；非流式路径同理需要把 `collectConsoleChat` 改为返回结果再决定是否写回。
+
+### 复核补记（并行实现已落地、此前未逐条登记）
+
+| 编号 | 状态 | 证据 |
+| --- | --- | --- |
+| A5-17 | 已修 | 官方视频请求结构体包含 `User *string`，不再因 `user` 字段报 400 |
+| A5-18 | 已修 | `videoAspectRatioMap` 接受 `4:3`/`3:4`，Web 与 Console 平面一致 |
+| A5-19 | 已修 | 1080p 资格判定比较 `spec.UpstreamModel`，不再用公开模型名 |
+| A5-20 | 已修 | 兼容别名表覆盖带 Provider 前缀的视频模型名 |
+| A5-37 | 已修 | GET `/stt` 非 Upgrade 返回 405 |
+| A5-38 | 已修 | STT 不支持的 Content-Type 返回 415 |
+| A5-39 | 已修 | STT multipart 接受 `sample_rate_hertz` 并归一化为 `sample_rate` |
+| A5-43 | 已修 | voice 请求体上限 32 MiB（与上游一致） |
+| A3-10 / A3-11（部分） | 已修 | Build 会话头规范为 UUID、补齐 trace 身份头（A7-14 一并落地）；`x-xai-request-id` 的平面归属仍与上游有差异，属 P2 余项 |

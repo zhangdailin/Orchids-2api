@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -198,7 +199,7 @@ func (h *Handler) HandleMediaInputResource(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	owner := videoRequestOwner(r)
-	input, err := h.lb.Store.GetStoredMediaInput(r.Context(), id, owner)
+	input, err := h.loadMediaInput(r.Context(), id, owner)
 	if err != nil {
 		writeGrokError(w, http.StatusNotFound, "media input not found")
 		return
@@ -317,11 +318,30 @@ func validCachedMediaContentPath(path, kind string) bool {
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
 }
 
+// mediaInputAdminOwner is the namespace the management plane uploads into.
+// A management-plane input is a deployment-level asset (the operator uploaded
+// it, any client may reference its unguessable id), which is how grok2api's
+// admin-plane media inputs behave.
+const mediaInputAdminOwner = "admin"
+
+// loadMediaInput resolves an input for the caller: its own namespace first, then
+// the management plane's.
+func (h *Handler) loadMediaInput(ctx context.Context, id, owner string) (*store.StoredMediaInput, error) {
+	input, err := h.lb.Store.GetStoredMediaInput(ctx, id, owner)
+	if err == nil {
+		return input, nil
+	}
+	if !errors.Is(err, store.ErrNoRows) || owner == mediaInputAdminOwner {
+		return nil, err
+	}
+	return h.lb.Store.GetStoredMediaInput(ctx, id, mediaInputAdminOwner)
+}
+
 func (h *Handler) resolveMediaInputDataURL(ctx context.Context, id, owner, expectedKind string) (string, int64, error) {
 	if h == nil || h.lb == nil || h.lb.Store == nil {
 		return "", 0, fmt.Errorf("media input store is not configured")
 	}
-	input, err := h.lb.Store.GetStoredMediaInput(ctx, id, owner)
+	input, err := h.loadMediaInput(ctx, id, owner)
 	if err != nil {
 		if errors.Is(err, store.ErrNoRows) {
 			return "", 0, fmt.Errorf("file_id is unavailable or belongs to another API key")
@@ -439,4 +459,146 @@ func validateBuildVideoReference(value string) (int64, error) {
 		return 0, fmt.Errorf("reference image MIME type does not match its content")
 	}
 	return int64(len(data)), nil
+}
+
+// HandleAdminMediaInputs is the management-plane upload endpoint. It is the
+// same storage as the inference-plane endpoint, exposed with the envelope and
+// field names grok2api's admin API uses, so an operator tool written against
+// that contract works here too:
+//
+//	POST /api/media/inputs            multipart "file" -> {"data": {fileId, ...}}
+//	GET  /api/media/inputs/{id}       metadata
+//	DELETE /api/media/inputs/{id}     delete
+//
+// Uploads land in the shared admin namespace, so a client request may reference
+// the returned file_id without knowing who uploaded it.
+func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		writeJSONStatus(w, http.StatusServiceUnavailable, adminMediaError("service_unavailable", "media input store is not configured"))
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if err != nil || !strings.EqualFold(mediaType, "multipart/form-data") {
+		writeJSONStatus(w, http.StatusUnsupportedMediaType, adminMediaError("invalid_request", "media input upload requires multipart/form-data"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMediaInputRequestBytes)
+	if err := r.ParseMultipartForm(maxMediaInputRequestBytes); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSONStatus(w, http.StatusRequestEntityTooLarge, adminMediaError("media_too_large", "media input exceeds 20 MiB"))
+			return
+		}
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_request", "invalid media input upload"))
+		return
+	}
+	files := r.MultipartForm.File["file"]
+	if len(files) != 1 {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_request", "exactly one file is required"))
+		return
+	}
+	fileHeader := files[0]
+	if fileHeader.Size <= 0 || fileHeader.Size > maxMediaInputBytes {
+		writeJSONStatus(w, http.StatusRequestEntityTooLarge, adminMediaError("media_too_large", "media input exceeds 20 MiB"))
+		return
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_media", "failed to read media input"))
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxMediaInputBytes+1))
+	if err != nil || len(data) == 0 || len(data) > maxMediaInputBytes {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_media", "invalid media input"))
+		return
+	}
+	kind, mimeType, err := detectMediaInput(data, fileHeader.Header.Get("Content-Type"))
+	if err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_media", err.Error()))
+		return
+	}
+	if used, usageErr := mediaInputUsageBytes(); usageErr == nil && used+int64(len(data)) > maxMediaInputTotalBytes {
+		writeJSONStatus(w, http.StatusInsufficientStorage, adminMediaError("media_storage_full", "media input storage is full"))
+		return
+	}
+	id, err := newMediaInputID()
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, adminMediaError("internal_error", "failed to allocate media input"))
+		return
+	}
+	name, err := h.cacheMediaInputBytes(id, kind, data, mimeType)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, adminMediaError("internal_error", "failed to cache media input"))
+		return
+	}
+	contentPath := filepath.Join(cacheBaseDir, kind, name)
+	now := time.Now().UTC()
+	input := &store.StoredMediaInput{
+		ID: id, OwnerHash: mediaInputAdminOwner, Kind: kind, MIMEType: mimeType,
+		ContentPath: contentPath, SizeBytes: int64(len(data)), CreatedAt: now,
+	}
+	if err := h.lb.Store.SaveStoredMediaInput(r.Context(), input, mediaInputTTL); err != nil {
+		_ = os.Remove(contentPath)
+		writeJSONStatus(w, http.StatusServiceUnavailable, adminMediaError("service_unavailable", "failed to persist media input"))
+		return
+	}
+	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{"data": adminMediaInputJSON(input)})
+}
+
+// HandleAdminMediaInputResource serves GET/DELETE for a management-plane input.
+func (h *Handler) HandleAdminMediaInputResource(w http.ResponseWriter, r *http.Request) {
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		writeJSONStatus(w, http.StatusServiceUnavailable, adminMediaError("service_unavailable", "media input store is not configured"))
+		return
+	}
+	id := strings.Trim(strings.TrimPrefix(strings.TrimSpace(r.URL.Path), "/api/media/inputs/"), "/")
+	if !validMediaInputID(id) {
+		writeJSONStatus(w, http.StatusNotFound, adminMediaError("not_found", "media input not found"))
+		return
+	}
+	input, err := h.lb.Store.GetStoredMediaInput(r.Context(), id, mediaInputAdminOwner)
+	if err != nil {
+		writeJSONStatus(w, http.StatusNotFound, adminMediaError("not_found", "media input not found"))
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, map[string]interface{}{"data": adminMediaInputJSON(input)})
+	case http.MethodDelete:
+		if err := h.lb.Store.DeleteStoredMediaInput(r.Context(), id, mediaInputAdminOwner); err != nil {
+			writeJSONStatus(w, http.StatusNotFound, adminMediaError("not_found", "media input not found"))
+			return
+		}
+		if validCachedMediaContentPath(input.ContentPath, input.Kind) {
+			_ = os.Remove(input.ContentPath)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeJSONStatus(w, http.StatusMethodNotAllowed, adminMediaError("method_not_allowed", "method not allowed"))
+	}
+}
+
+// adminMediaInputJSON renders an input with the management contract's names.
+func adminMediaInputJSON(input *store.StoredMediaInput) map[string]interface{} {
+	if input == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"id":        input.ID,
+		"fileId":    input.ID,
+		"kind":      input.Kind,
+		"mimeType":  input.MIMEType,
+		"sizeBytes": input.SizeBytes,
+		"createdAt": input.CreatedAt.UTC().Format(time.RFC3339),
+		"expiresAt": input.ExpiresAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// adminMediaError renders the management contract's error object.
+func adminMediaError(code, message string) map[string]interface{} {
+	return map[string]interface{}{"error": map[string]interface{}{"code": code, "message": message}}
 }

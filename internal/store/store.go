@@ -54,6 +54,13 @@ type Account struct {
 	// RateLimitFailures counts consecutive account-scoped 429 failures. It drives
 	// the bounded exponential routing cooldown and is reset on recovery.
 	RateLimitFailures int `json:"rate_limit_failures,omitempty"`
+	// QualityFailures counts consecutive responses this credential returned
+	// without the reasoning the request asked for (an upstream quality dump).
+	// The first offence parks the credential for a cooldown; a repeat disables
+	// it, mirroring grok2api's quality guard.
+	QualityFailures int `json:"quality_failures,omitempty"`
+	// QualityCooldownUntil parks a credential whose responses are degraded.
+	QualityCooldownUntil time.Time `json:"quality_cooldown_until,omitempty"`
 	// StatusMessage explains StatusCode in operator terms. A bare "401" cannot
 	// distinguish "the upstream retired this grant, re-login required" from
 	// "our record lost the credential", and those need different actions.

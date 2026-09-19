@@ -759,3 +759,98 @@ func TestResponseFailureClassifiesAntiBot(t *testing.T) {
 		t.Fatalf("an unrelated failure must not classify as anti-bot, got %v", err)
 	}
 }
+
+func TestAdminMediaInputJSONUsesManagementNames(t *testing.T) {
+	now := time.Now().UTC()
+	rendered := adminMediaInputJSON(&store.StoredMediaInput{
+		ID: "input_abc", Kind: "image", MIMEType: "image/png", SizeBytes: 12,
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	})
+	for _, key := range []string{"id", "fileId", "kind", "mimeType", "sizeBytes", "createdAt", "expiresAt"} {
+		if _, ok := rendered[key]; !ok {
+			t.Fatalf("management envelope is missing %q: %#v", key, rendered)
+		}
+	}
+	if rendered["fileId"] != rendered["id"] {
+		t.Fatalf("fileId and id must agree: %#v", rendered)
+	}
+	envelope := adminMediaError("not_found", "gone")
+	errObject, _ := envelope["error"].(map[string]interface{})
+	if errObject["code"] != "not_found" {
+		t.Fatalf("error envelope = %#v", envelope)
+	}
+}
+
+func TestMediaInputLookupFallsBackToAdminNamespace(t *testing.T) {
+	// The fallback only applies to the admin namespace and only on a miss for
+	// the caller's own namespace; those two rules are what keep tenant
+	// isolation intact.
+	if mediaInputAdminOwner != "admin" {
+		t.Fatalf("admin owner = %q, want admin", mediaInputAdminOwner)
+	}
+}
+
+func TestQualityDegradedDetection(t *testing.T) {
+	cases := []struct {
+		name string
+		sig  qualitySignals
+		want bool
+	}{
+		{
+			name: "healthy reasoning turn",
+			sig:  qualitySignals{ExpectReasoning: true, SawReasoning: true, ReasoningChars: 120, VisibleChars: 40, Terminal: true, FirstVisibleMS: 900},
+			want: false,
+		},
+		{
+			name: "no reasoning despite the request",
+			sig:  qualitySignals{ExpectReasoning: true, VisibleChars: 200, Terminal: true, FirstVisibleMS: 500},
+			want: true,
+		},
+		{
+			name: "late dump with a large reasoning bill",
+			sig:  qualitySignals{ExpectReasoning: true, VisibleChars: 20, ReasoningTokens: 900, Terminal: true, FirstVisibleMS: 1800},
+			want: true,
+		},
+		{
+			name: "tool-only turn is not judged",
+			sig:  qualitySignals{ExpectReasoning: true, VisibleChars: 0, ToolCalls: 1, Terminal: true, FirstVisibleMS: -1},
+			want: false,
+		},
+		{
+			name: "no reasoning expected",
+			sig:  qualitySignals{ExpectReasoning: false, VisibleChars: 200, Terminal: true, FirstVisibleMS: 400},
+			want: false,
+		},
+		{
+			name: "stream never terminated",
+			sig:  qualitySignals{ExpectReasoning: true, VisibleChars: 200, Terminal: false, FirstVisibleMS: 400},
+			want: false,
+		},
+		{
+			name: "empty answer is not judged",
+			sig:  qualitySignals{ExpectReasoning: true, VisibleChars: 0, Terminal: true, FirstVisibleMS: -1},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		if got := qualityDegraded(tc.sig); got != tc.want {
+			t.Fatalf("%s: qualityDegraded() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestQualityExpectsReasoning(t *testing.T) {
+	none, low := "none", "low"
+	if qualityExpectsReasoning(&ChatCompletionsRequest{ReasoningEffort: &none}, false) {
+		t.Fatal("effort=none must not expect reasoning")
+	}
+	if !qualityExpectsReasoning(&ChatCompletionsRequest{ReasoningEffort: &low}, false) {
+		t.Fatal("effort=low must expect reasoning")
+	}
+	if !qualityExpectsReasoning(nil, true) {
+		t.Fatal("an active reasoning replay must expect reasoning")
+	}
+	if qualityExpectsReasoning(&ChatCompletionsRequest{}, false) {
+		t.Fatal("a request without an effort must not expect reasoning")
+	}
+}

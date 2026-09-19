@@ -220,6 +220,10 @@ func registerRoutes(
 	mux.HandleFunc("/api/accounts", sessionAuth(apiHandler.HandleAccounts))
 	mux.HandleFunc("/api/accounts/", sessionAuth(apiHandler.HandleAccountByID))
 	mux.HandleFunc("/api/grok/availability", sessionAuth(apiHandler.HandleGrokAvailability))
+	// Management-plane media inputs: the same store as the inference-plane
+	// endpoint, with the envelope grok2api's admin API uses.
+	mux.HandleFunc("/api/media/inputs", sessionAuth(grokHandler.HandleAdminMediaInputs))
+	mux.HandleFunc("/api/media/inputs/", sessionAuth(grokHandler.HandleAdminMediaInputResource))
 	mux.HandleFunc("/api/puter/web-login", sessionAuth(apiHandler.HandlePuterWebLogin))
 	mux.HandleFunc("/api/workbuddy/login", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/workbuddy/login/", sessionAuth(apiHandler.HandleWorkBuddyLogin))

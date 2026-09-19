@@ -416,10 +416,12 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 	h.syncGrokQuota(sess.acc, resp.Header)
 	if req.Stream {
 		result := h.streamConsoleChat(w, req, resp.Body)
+		h.applyConsoleQualityGuard(ctx, sess.acc, result)
 		h.auditChatOutcome(ctx, sess.acc, req, result)
 		return
 	}
 	result := h.collectConsoleChat(w, req, resp.Body)
+	h.applyConsoleQualityGuard(ctx, sess.acc, result)
 	h.auditChatOutcome(ctx, sess.acc, req, result)
 }
 
@@ -558,6 +560,7 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 		writeGrokUpstreamError(w, outcome.Err)
 		return
 	}
+	outcomeStarted := time.Now()
 	text := consoleExtractMessageText(raw)
 	refusal := consoleExtractRefusal(raw)
 	filter := stopFilter{sequences: req.Stop}
@@ -566,6 +569,24 @@ func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletions
 	encryptedReasoning := consoleExtractEncryptedReasoning(raw)
 	annotations := consoleChatAnnotations(consoleFlatAnnotations(raw))
 	toolCalls := consoleToolCallsFromOutput(raw)
+	outcome.Quality = qualitySignals{
+		ExpectReasoning: qualityExpectsReasoning(req, false),
+		SawReasoning:    strings.TrimSpace(reasoning) != "",
+		VisibleChars:    int64(len(text)),
+		ReasoningChars:  int64(len(reasoning)),
+		EncryptedChars:  int64(len(encryptedReasoning)),
+		ToolCalls:       len(toolCalls),
+		Terminal:        true,
+		FirstVisibleMS:  -1,
+	}
+	if len(text) > 0 {
+		outcome.Quality.FirstVisibleMS = time.Since(outcomeStarted).Milliseconds()
+	}
+	if usage := consoleUsage(raw); usage != nil {
+		if details, _ := usage["completion_tokens_details"].(map[string]interface{}); details != nil {
+			outcome.Quality.ReasoningTokens = int64(interfaceToInt(details["reasoning_tokens"]))
+		}
+	}
 	seen := map[string]bool{}
 	for _, entry := range interfaceSlice(raw["output"]) {
 		item, _ := entry.(map[string]interface{})

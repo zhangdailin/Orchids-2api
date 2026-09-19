@@ -3,8 +3,10 @@ package egress
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"orchids-api/internal/config"
 )
@@ -288,5 +290,127 @@ func TestAcquireFailsClosedWhenNoNodes(t *testing.T) {
 	}
 	if _, err := m.Acquire(context.Background(), "app_chat", "acct"); err == nil {
 		t.Fatal("expected error when no nodes configured")
+	}
+}
+
+func TestNodeCooldownGrowsAndCaps(t *testing.T) {
+	cases := map[int]time.Duration{
+		0:  nodeCooldown,
+		1:  nodeCooldown,
+		2:  2 * nodeCooldown,
+		3:  4 * nodeCooldown,
+		4:  8 * nodeCooldown,
+		5:  16 * nodeCooldown,
+		6:  nodeCooldownMax,
+		20: nodeCooldownMax,
+	}
+	for failures, want := range cases {
+		if got := nodeCooldownFor(failures); got != want {
+			t.Fatalf("nodeCooldownFor(%d) = %s, want %s", failures, got, want)
+		}
+		if got := nodeCooldownFor(failures); got > nodeCooldownMax {
+			t.Fatalf("nodeCooldownFor(%d) = %s exceeds the cap", failures, got)
+		}
+	}
+}
+
+func TestFeedbackOutcomeBacksOffExponentially(t *testing.T) {
+	m := &Manager{
+		cfg:       &config.Config{GrokEgressEnabled: true},
+		nodes:     []Node{{Name: "n1", Scope: "all", Weight: 1}},
+		health:    map[string]float64{},
+		unhealthy: map[string]time.Time{},
+		failures:  map[string]int{},
+		lastError: map[string]string{},
+		lastProbe: map[string]time.Time{},
+	}
+	m.FeedbackOutcome("n1", OutcomeTransportError)
+	first := time.Until(m.unhealthy["n1"])
+	if first > nodeCooldown+2*time.Second || first < nodeCooldown-2*time.Second {
+		t.Fatalf("first cooldown = %s, want about %s", first, nodeCooldown)
+	}
+	m.FeedbackOutcome("n1", OutcomeTransportError)
+	second := time.Until(m.unhealthy["n1"])
+	if second < first {
+		t.Fatalf("second cooldown %s must be longer than the first %s", second, first)
+	}
+	if m.lastError["n1"] != "transport" {
+		t.Fatalf("last error = %q, want transport", m.lastError["n1"])
+	}
+	// A success clears both the cooldown and the accumulated backoff.
+	m.FeedbackOutcome("n1", OutcomeSuccess)
+	if m.failures["n1"] != 0 {
+		t.Fatalf("failures = %d, want 0 after success", m.failures["n1"])
+	}
+	if _, cooling := m.unhealthy["n1"]; cooling {
+		t.Fatal("a successful node must leave the cooldown map")
+	}
+}
+
+func TestHealthSnapshotNeverLeaksProxyURL(t *testing.T) {
+	m := &Manager{
+		cfg:       &config.Config{GrokEgressEnabled: true},
+		nodes:     []Node{{Name: "eu-1", URL: "http://user:secret@proxy.internal:8080", Scope: "app_chat", Weight: 1}},
+		health:    map[string]float64{},
+		unhealthy: map[string]time.Time{},
+		failures:  map[string]int{},
+		lastError: map[string]string{},
+		lastProbe: map[string]time.Time{},
+	}
+	m.FeedbackOutcome("eu-1", OutcomeServerError)
+	snapshot := m.HealthSnapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("snapshot = %#v, want one node", snapshot)
+	}
+	encoded := fmt.Sprint(snapshot)
+	for _, leak := range []string{"secret", "proxy.internal", "8080"} {
+		if strings.Contains(encoded, leak) {
+			t.Fatalf("health snapshot leaked %q: %s", leak, encoded)
+		}
+	}
+	if snapshot[0]["failures"] != 1 || snapshot[0]["healthy"] != false {
+		t.Fatalf("snapshot = %#v, want a degraded node with one failure", snapshot[0])
+	}
+}
+
+func TestHealthPersistsAcrossManagers(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{GrokEgressEnabled: true, MediaDir: dir, GrokEgressNodes: []config.EgressNodeConfig{
+		{Name: "n1", URL: "http://127.0.0.1:1", Scope: "all"},
+	}}
+	first := NewManager(cfg)
+	if first == nil {
+		t.Fatal("manager must be created when egress is enabled")
+	}
+	first.FeedbackOutcome("n1", OutcomeTransportError)
+	first.FeedbackOutcome("n1", OutcomeTransportError)
+	// The write is throttled; force a flush by clearing the throttle.
+	first.mu.Lock()
+	first.lastPersist = time.Time{}
+	first.persistHealthLocked()
+	first.mu.Unlock()
+
+	second := NewManager(cfg)
+	if second == nil {
+		t.Fatal("second manager must be created")
+	}
+	second.mu.RLock()
+	failures := second.failures["n1"]
+	_, cooling := second.unhealthy["n1"]
+	second.mu.RUnlock()
+	if failures != 2 {
+		t.Fatalf("restored failures = %d, want 2", failures)
+	}
+	if !cooling {
+		t.Fatal("restored node must keep its cooldown")
+	}
+	// A node that no longer exists in the configuration must not come back.
+	cfg.GrokEgressNodes = []config.EgressNodeConfig{{Name: "other", URL: "http://127.0.0.1:1", Scope: "all"}}
+	third := NewManager(cfg)
+	third.mu.RLock()
+	_, restored := third.failures["n1"]
+	third.mu.RUnlock()
+	if restored {
+		t.Fatal("health of a removed node must not be restored")
 	}
 }

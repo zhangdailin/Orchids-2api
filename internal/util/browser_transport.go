@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,11 @@ import (
 type browserLikeRoundTripper struct {
 	http1 *http.Transport
 	http2 *http2.Transport
+	// hello is the TLS ClientHello presented on every connection of this
+	// transport. It is chosen from the User-Agent the caller will send, so the
+	// fingerprint and the advertised browser version cannot contradict each
+	// other — a mismatch is one of the most reliable bot signals.
+	hello utls.ClientHelloID
 }
 
 func (rt *browserLikeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -44,10 +50,22 @@ var browserHTTPClientCache = clientPool{clients: make(map[string]*http.Client)}
 // deadline. Keep it in the cache key so custom long-lived inference clients
 // cannot inherit another caller's shorter HTTP/1 header deadline.
 func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) *http.Client {
+	return getSharedBrowserHTTPClient(proxyKey, timeout, headerTimeout, proxyFunc, "")
+}
+
+// GetSharedBrowserHTTPClientForUserAgent is the same browser-like client, but
+// its TLS ClientHello is selected from the User-Agent the caller sends. Two
+// callers with different UAs therefore get different transports.
+func GetSharedBrowserHTTPClientForUserAgent(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), userAgent string) *http.Client {
+	return getSharedBrowserHTTPClient(proxyKey, timeout, headerTimeout, proxyFunc, userAgent)
+}
+
+func getSharedBrowserHTTPClient(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), userAgent string) *http.Client {
 	if proxyKey == "" {
 		proxyKey = "direct"
 	}
-	cacheKey := "browser|" + sharedHTTPClientCacheKey(proxyKey, timeout) + fmt.Sprintf("|headers=%d", headerTimeout)
+	hello := utlsProfileForUserAgent(userAgent)
+	cacheKey := "browser|" + sharedHTTPClientCacheKey(proxyKey, timeout) + fmt.Sprintf("|headers=%d|hello=%s", headerTimeout, hello.Version)
 
 	browserHTTPClientCache.mu.RLock()
 	client, ok := browserHTTPClientCache.clients[cacheKey]
@@ -63,6 +81,7 @@ func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, heade
 	}
 
 	rt := &browserLikeRoundTripper{
+		hello: hello,
 		http1: &http.Transport{
 			Proxy:                 proxyFunc,
 			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -81,7 +100,7 @@ func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, heade
 			ReadIdleTimeout: 20 * time.Second,
 			PingTimeout:     10 * time.Second,
 			DialTLSContext: func(ctx context.Context, network, addr string, cfg *stdtls.Config) (net.Conn, error) {
-				return dialUTLSHTTP2Context(ctx, network, addr, cfg, proxyFunc)
+				return dialUTLSHTTP2ContextWithHello(ctx, network, addr, cfg, proxyFunc, hello)
 			},
 			TLSClientConfig: &stdtls.Config{
 				MinVersion: stdtls.VersionTLS12,
@@ -100,6 +119,10 @@ func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, heade
 }
 
 func dialUTLSHTTP2Context(ctx context.Context, network, addr string, cfg *stdtls.Config, proxyFunc func(*http.Request) (*url.URL, error)) (net.Conn, error) {
+	return dialUTLSHTTP2ContextWithHello(ctx, network, addr, cfg, proxyFunc, utls.HelloChrome_Auto)
+}
+
+func dialUTLSHTTP2ContextWithHello(ctx context.Context, network, addr string, cfg *stdtls.Config, proxyFunc func(*http.Request) (*url.URL, error), hello utls.ClientHelloID) (net.Conn, error) {
 	rawConn, targetHost, err := dialHTTPSProxyAware(ctx, network, addr, proxyFunc)
 	if err != nil {
 		return nil, err
@@ -114,7 +137,10 @@ func dialUTLSHTTP2Context(ctx context.Context, network, addr string, cfg *stdtls
 		MinVersion: utls.VersionTLS12,
 		NextProtos: []string{"h2"},
 	}
-	conn := utls.UClient(rawConn, utlsCfg, utls.HelloChrome_Auto)
+	if hello == (utls.ClientHelloID{}) {
+		hello = utls.HelloChrome_Auto
+	}
+	conn := utls.UClient(rawConn, utlsCfg, hello)
 	if err := conn.HandshakeContext(ctx); err != nil {
 		rawConn.Close()
 		return nil, err
@@ -241,4 +267,60 @@ func writeHTTPConnect(ctx context.Context, conn net.Conn, target string, proxyUR
 		return fmt.Errorf("proxy CONNECT failed: %s", resp.Status)
 	}
 	return nil
+}
+
+// utlsProfileForUserAgent picks the TLS ClientHello whose Chrome version is
+// closest to (but never newer than) the version the User-Agent claims. A UA
+// that does not name a Chrome version keeps the library default.
+//
+// The available profiles are the ones this utls release ships; a UA claiming a
+// newer Chrome than any profile gets the newest profile, which is the closest
+// honest approximation.
+func utlsProfileForUserAgent(userAgent string) utls.ClientHelloID {
+	major := chromeMajorFromUserAgent(userAgent)
+	if major <= 0 {
+		return utls.HelloChrome_Auto
+	}
+	// This utls release ships three Chrome profiles. A UA claiming a newer
+	// version than any profile gets the newest one (the closest honest
+	// approximation); an older claim gets the oldest, rather than the default
+	// which would advertise the newest Chrome.
+	profiles := [...]struct {
+		major int
+		id    utls.ClientHelloID
+	}{
+		{133, utls.HelloChrome_133},
+		{131, utls.HelloChrome_131},
+		{120, utls.HelloChrome_120},
+	}
+	best := profiles[len(profiles)-1].id
+	for _, profile := range profiles {
+		if profile.major <= major {
+			best = profile.id
+			break
+		}
+	}
+	return best
+}
+
+// chromeMajorFromUserAgent extracts the major version from a Chrome UA.
+func chromeMajorFromUserAgent(userAgent string) int {
+	marker := "Chrome/"
+	index := strings.Index(userAgent, marker)
+	if index < 0 {
+		return 0
+	}
+	rest := userAgent[index+len(marker):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	major, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0
+	}
+	return major
 }

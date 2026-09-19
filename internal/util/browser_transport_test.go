@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	utls "github.com/refraction-networking/utls"
 	"io"
 	"net"
 	"net/http"
@@ -175,4 +176,27 @@ func handleSOCKS5ProxyConn(conn net.Conn) {
 		done <- struct{}{}
 	}()
 	<-done
+}
+
+func TestUtlsProfileFollowsUserAgentChromeVersion(t *testing.T) {
+	cases := map[string]string{
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36":       "133",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36": "131",
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36":                 "120",
+		// Older than any shipped profile: the oldest profile, never the newest.
+		"Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.0.0 Safari/537.36": "120",
+	}
+	for ua, want := range cases {
+		profile := utlsProfileForUserAgent(ua)
+		if profile.Version != want {
+			t.Fatalf("utlsProfileForUserAgent(%q) = %s, want %s", ua, profile.Version, want)
+		}
+	}
+	// A UA without a Chrome version keeps the library default.
+	if got := utlsProfileForUserAgent("curl/8.0"); got != utls.HelloChrome_Auto {
+		t.Fatalf("unknown UA = %+v, want the default profile", got)
+	}
+	if chromeMajorFromUserAgent("curl/8.0") != 0 {
+		t.Fatal("a UA without Chrome/ must not report a version")
+	}
 }

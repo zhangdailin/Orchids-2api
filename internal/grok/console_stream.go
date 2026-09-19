@@ -21,6 +21,10 @@ type chatOutcome struct {
 	Finish      string
 	FirstToken  time.Time
 	Err         error
+	// Quality carries what the quality guard needs to tell a healthy turn from
+	// a degraded one (see quality_guard.go).
+	Quality qualitySignals
+	SawText bool
 }
 
 // stopFilter keeps only a suffix that could still become a stop sequence.
@@ -141,6 +145,16 @@ func isAntiBotFailure(detail map[string]interface{}, message string) bool {
 }
 
 func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) (outcome chatOutcome) {
+	outcomeStarted := time.Now()
+	defer func() {
+		outcome.Quality.ExpectReasoning = qualityExpectsReasoning(req, false)
+		outcome.Quality.Terminal = outcome.Err == nil
+		if outcome.Usage != nil {
+			if details, _ := outcome.Usage["completion_tokens_details"].(map[string]interface{}); details != nil {
+				outcome.Quality.ReasoningTokens = int64(interfaceToInt(details["reasoning_tokens"]))
+			}
+		}
+	}()
 	flusher := streamResponseHeaders(w)
 	id, created := "chatcmpl_"+randomHex(8), time.Now().Unix()
 	var text, reasoning, refusal strings.Builder
@@ -194,6 +208,11 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 			return nil
 		}
 		text.WriteString(value)
+		outcome.Quality.VisibleChars += int64(len(value))
+		outcome.SawText = true
+		if outcome.Quality.FirstVisibleMS < 0 {
+			outcome.Quality.FirstVisibleMS = time.Since(outcomeStarted).Milliseconds()
+		}
 		return emit(map[string]interface{}{"content": value}, "", nil)
 	}
 	emitArgs := func(tc *responseToolState, value string, snapshot bool) error {
@@ -225,6 +244,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		}
 		tc := tools[itemID]
 		if tc == nil {
+			outcome.Quality.ToolCalls++
 			if byCall[callID] != nil {
 				return fmt.Errorf("duplicate upstream call_id %q", callID)
 			}
@@ -273,6 +293,8 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		}
 		state.text += value
 		reasoning.WriteString(value)
+		outcome.Quality.SawReasoning = true
+		outcome.Quality.ReasoningChars += int64(len(value))
 		return emit(map[string]interface{}{"reasoning_content": value, "reasoning_item_id": state.key}, "", nil)
 	}
 	err := readResponseSSE(body, func(event, data string) error {
@@ -340,6 +362,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 					}
 				}
 				if signature := streamString(item["encrypted_content"]); signature != "" && signature != state.signature {
+					outcome.Quality.EncryptedChars = int64(len(signature))
 					state.signature = signature
 					lastSignature = signature
 					if err := emit(map[string]interface{}{"reasoning_item_id": state.key, "reasoning_encrypted_content": signature}, "", nil); err != nil {
