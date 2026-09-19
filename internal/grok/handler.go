@@ -560,6 +560,14 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	// Cooling the whole credential took every other model out of the pool for
 	// ten minutes; the model cooldown map exists for exactly this case
 	// (grok2api marks the model, not the account).
+	// A 5xx is the upstream's own trouble, not the credential's: a short hold
+	// keeps the next request from immediately re-selecting the same account
+	// while the upstream recovers, without marking the credential as broken.
+	if acc != nil {
+		if status := parseUpstreamStatus(err); status >= 500 {
+			acc.QuotaResetAt = time.Now().Add(serverFaultHold)
+		}
+	}
 	if acc != nil && isModelScopedRefusal(err) {
 		if model := requestModelFromContext(ctx); model != "" {
 			store.RecordModelCooldown(acc, model, time.Now().Add(modelScopedRefusalCooldown))
@@ -575,6 +583,9 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 // modelScopedRefusalCooldown is how long one model stays out of rotation after
 // the upstream refused it for this credential.
 const modelScopedRefusalCooldown = 5 * time.Minute
+
+// serverFaultHold is the short pause applied after an upstream 5xx.
+const serverFaultHold = 5 * time.Second
 
 // isModelScopedRefusal reports whether an upstream failure refused one model
 // rather than the credential itself.

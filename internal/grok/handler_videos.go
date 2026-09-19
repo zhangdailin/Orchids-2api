@@ -116,13 +116,21 @@ func (j *videoJob) toStandardMap() map[string]interface{} {
 		}
 	case "failed":
 		message := "video operation failed"
+		code := "internal_error"
 		if j.Error != nil {
 			if value := strings.TrimSpace(fmt.Sprint(j.Error["message"])); value != "" && value != "<nil>" {
 				message = value
 			}
+			if value := strings.TrimSpace(fmt.Sprint(j.Error["code"])); value != "" && value != "<nil>" {
+				code = value
+			}
 		}
+		// The stored code is kept: grok2api distinguishes an account or model
+		// failure ("the account cannot serve this model") from an internal
+		// fault, and collapsing both onto internal_error told a client to give
+		// up on a job another account could have finished.
 		return map[string]interface{}{
-			"status": "failed", "error": map[string]interface{}{"code": "internal_error", "message": message},
+			"status": "failed", "error": map[string]interface{}{"code": code, "message": message},
 		}
 	default:
 		return map[string]interface{}{

@@ -20,6 +20,12 @@ import (
 
 const defaultStoredResponseTTL = 30 * 24 * time.Hour
 
+// maxNativeResponsesBytes bounds a buffered non-streaming native Build
+// Responses body. The reference implementation allows 128 MiB; the previous
+// 8 MiB rejected a long reasoning turn as an upstream fault, and the client
+// then retried a request that had already succeeded upstream.
+const maxNativeResponsesBytes = 128 << 20
+
 func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Request, modelID string, spec ModelSpec, payload map[string]interface{}, upstreamPath string, saveOwnership bool) {
 	spec.Upstream, spec.ConsoleModel = UpstreamCLI, ""
 	started := time.Now()
@@ -298,6 +304,8 @@ func responseIDFromResourcePath(path string) string {
 }
 
 func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader, contentType, model string) (responseID string, captured []byte, result chatOutcome) {
+	// The streaming capture is a bounded side buffer for usage/model recovery;
+	// only the non-streaming body needs the larger ceiling.
 	fullCapture := newBoundedResponseCapture(8 << 20)
 	defer func() {
 		captured = fullCapture.data
@@ -306,13 +314,13 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		}
 	}()
 	if !strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		raw, readErr := io.ReadAll(io.LimitReader(body, (8<<20)+1))
+		raw, readErr := io.ReadAll(io.LimitReader(body, maxNativeResponsesBytes+1))
 		if readErr != nil {
 			result.Err = fmt.Errorf("upstream response could not be read within the response limit: %w", readErr)
 			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
 			return
 		}
-		if len(raw) > 8<<20 {
+		if len(raw) > maxNativeResponsesBytes {
 			result.Err = fmt.Errorf("upstream response could not be read within the response limit")
 			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Upstream response unavailable")
 			return

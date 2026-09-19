@@ -854,3 +854,58 @@ func TestQualityExpectsReasoning(t *testing.T) {
 		t.Fatal("a request without an effort must not expect reasoning")
 	}
 }
+
+func TestNormalizeTTSVoicesShape(t *testing.T) {
+	raw := []byte(`{"voices":[{"id":"v1","name":"Aria","language":"en","internal":"drop"},{"voice_id":"v2"},{"name":"nameless"}],"other":true}`)
+	normalized := normalizeTTSVoices(raw)
+	var payload map[string]interface{}
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		t.Fatalf("normalized payload is not JSON: %v (%s)", err, normalized)
+	}
+	voices, _ := payload["voices"].([]interface{})
+	if len(voices) != 2 {
+		t.Fatalf("voices = %#v, want 2 entries (an entry without an id is dropped)", voices)
+	}
+	first, _ := voices[0].(map[string]interface{})
+	if first["voice_id"] != "v1" || first["name"] != "Aria" || first["language"] != "en" {
+		t.Fatalf("first voice = %#v", first)
+	}
+	if _, leaked := first["internal"]; leaked {
+		t.Fatalf("an unknown upstream field survived: %#v", first)
+	}
+	second, _ := voices[1].(map[string]interface{})
+	if second["voice_id"] != "v2" || second["name"] != "v2" {
+		t.Fatalf("second voice must fall back to its id as the name: %#v", second)
+	}
+	if language, present := second["language"]; !present || language != nil {
+		t.Fatalf("a missing language must be an explicit null, got %#v", second["language"])
+	}
+	// A payload that is not a voice list is passed through untouched.
+	other := []byte(`{"error":"nope"}`)
+	if string(normalizeTTSVoices(other)) != string(other) {
+		t.Fatal("a non-list payload must be passed through")
+	}
+}
+
+func TestVideoFailureKeepsStoredCode(t *testing.T) {
+	job := &videoJob{ID: "v1", Status: "failed", Error: map[string]interface{}{"code": "upstream_unavailable", "message": "no account"}}
+	rendered := job.toStandardMap()
+	errorObject, _ := rendered["error"].(map[string]interface{})
+	if errorObject["code"] != "upstream_unavailable" {
+		t.Fatalf("code = %v, want the stored code", errorObject["code"])
+	}
+}
+
+func TestImageEventSizeReportsRealPixels(t *testing.T) {
+	// A 1x2 PNG, encoded by hand so the assertion does not depend on any encoder.
+	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAYAAACZgbYnAAAAEklEQVR42mP8z8BQz0AEYBxVSF8FAJJ9Bf8AAAAASUVORK5CYII="
+	if got := imageEventSize("b64_json", png); got != "1x2" {
+		t.Fatalf("imageEventSize() = %q, want 1x2", got)
+	}
+	if got := imageEventSize("b64_json", "not-base64"); got != "auto" {
+		t.Fatalf("undecodable payload = %q, want auto", got)
+	}
+	if got := imageEventSize("url", "https://example.com/a.png"); got != "auto" {
+		t.Fatalf("url payload = %q, want auto (the bytes are not fetched here)", got)
+	}
+}

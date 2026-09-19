@@ -301,7 +301,12 @@ func AccountHeld(acc *store.Account, now time.Time) bool {
 		return true
 	}
 	until := acc.LastAttempt.Add(CooldownFor(acc))
-	if (status == "429" || status == "402") && acc.QuotaResetAt.After(until) {
+	// QuotaResetAt is an explicit deadline somebody recorded: the rate-limit
+	// reset for a 429/402, or the short server-fault hold the gateway applies
+	// after a 5xx. It is never allowed to shorten a definitive block (401/403).
+	if !strings.HasPrefix(status, "4") && acc.QuotaResetAt.After(until) {
+		until = acc.QuotaResetAt
+	} else if (status == "429" || status == "402") && acc.QuotaResetAt.After(until) {
 		until = acc.QuotaResetAt
 	}
 	return now.Before(until)

@@ -312,3 +312,17 @@
 | A5-39 | 已修 | STT multipart 接受 `sample_rate_hertz` 并归一化为 `sample_rate` |
 | A5-43 | 已修 | voice 请求体上限 32 MiB（与上游一致） |
 | A3-10 / A3-11（部分） | 已修 | Build 会话头规范为 UUID、补齐 trace 身份头（A7-14 一并落地）；`x-xai-request-id` 的平面归属仍与上游有差异，属 P2 余项 |
+
+## 八、第五轮修复（7 条）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A3-12 | 非流式原生 Build Responses 上限 8 MiB→128 MiB（流式捕获侧缓冲保持 8 MiB 有界，因其只用于用量/模型回收） | `handler_responses_store.go` |
+| A5-8 | 流式图像事件的 `size` 不再恒为 `auto`：base64 载荷按图像头解析出真实 `WxH`，URL 载荷仍为 `auto`（不为此抓取远端字节） | `handler_image_helpers.go`、`handler_images.go` |
+| A5-16 | 视频失败保留已记录的 `error.code`（账号/模型类失败不再被压成 `internal_error`） | `handler_videos.go` |
+| A5-36 | `/tts/voices` 归一化为文档形状：每项 `voice_id`/`name`/`language`（缺失 language 显式 `null`），未知上游字段丢弃，无 id 的条目剔除；非列表载荷原样透传 | `handler_voice.go` |
+| A5-44 | 语音响应转发白名单含 `Retry-After`（此前 429 的退避信息丢失） | `handler_voice.go` |
+| A6-11 | 上游 5xx 施加 5 秒软隔离；`AccountHeld` 现在也尊重显式 `QuotaResetAt`（不再只对 429/402 生效），且不会因此缩短 401/403 的确定性封禁 | `handler.go`、`accountpolicy/policy.go` |
+| A3-11（收尾） | Build 请求头补 `x-grok-client-version`（与既有 trace 身份头一并） | `cli.go` |
+
+复核确认（此前发现已不成立）：**A5-44** 的 `Retry-After` 与 **A5-17/A5-18/A5-19/A5-37/A5-38/A5-39/A5-43** 已在并行实现中修复，详见上一节"复核补记"。

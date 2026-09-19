@@ -249,7 +249,7 @@ func (h *Handler) streamImagineWSGeneration(ctx context.Context, w http.Response
 				outputFormat := imageOutputFormatFromBase64(value)
 				writeSSE(w, flusher, "image_generation.partial_image", encodeJSONBytes(map[string]interface{}{
 					"type": "image_generation.partial_image", "b64_json": value,
-					"created_at": time.Now().Unix(), "size": "auto", "quality": "auto",
+					"created_at": time.Now().Unix(), "size": imageEventSize("b64_json", value), "quality": "auto",
 					"background": "auto", "output_format": outputFormat, "partial_image_index": partialIndex,
 				}))
 				partialIndex++
@@ -266,7 +266,7 @@ func (h *Handler) streamImagineWSGeneration(ctx context.Context, w http.Response
 		outputFormat := imageOutputFormatFromBase64(value)
 		writeSSE(w, flusher, "image_generation.completed", encodeJSONBytes(map[string]interface{}{
 			"type": "image_generation.completed", "b64_json": value,
-			"created_at": time.Now().Unix(), "size": "auto", "quality": "auto",
+			"created_at": time.Now().Unix(), "size": imageEventSize("b64_json", value), "quality": "auto",
 			"background": "auto", "output_format": outputFormat,
 		}))
 		completed++

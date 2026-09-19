@@ -17,6 +17,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -354,4 +355,36 @@ func (h *Handler) cacheMediaBytes(rawURL, mediaType string, data []byte, mimeTyp
 		return "", renameErr
 	}
 	return name, nil
+}
+
+// imageSizeFromBase64 reports the pixel size of a base64 image as "WxH", or
+// "auto" when it cannot be determined. A streamed image event used to always
+// say "auto"; a client that sizes its placeholder from the event had to guess.
+func imageSizeFromBase64(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "auto"
+	}
+	if idx := strings.Index(trimmed, ","); strings.HasPrefix(strings.ToLower(trimmed), "data:") && idx > 0 {
+		trimmed = trimmed[idx+1:]
+	}
+	raw, err := base64.StdEncoding.DecodeString(trimmed)
+	if err != nil || len(raw) == 0 {
+		return "auto"
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return "auto"
+	}
+	return strconv.Itoa(cfg.Width) + "x" + strconv.Itoa(cfg.Height)
+}
+
+// imageEventSize picks the reported size for an image event: the real pixel
+// size for base64 payloads, and "auto" for a URL (whose bytes are not fetched
+// here).
+func imageEventSize(field, value string) string {
+	if field != "b64_json" {
+		return "auto"
+	}
+	return imageSizeFromBase64(value)
 }

@@ -361,7 +361,11 @@ func (h *Handler) HandleTTSVoices(w http.ResponseWriter, r *http.Request) {
 		}
 		path += "/" + url.PathEscape(voiceID)
 	}
-	h.forwardConsoleVoice(w, r, modelID, http.MethodGet, path, nil, http.Header{"Accept": []string{"application/json"}})
+	rewrite := func(raw []byte) []byte { return raw }
+	if path == "tts/voices" {
+		rewrite = normalizeTTSVoices
+	}
+	h.forwardConsoleVoiceWith(w, r, modelID, http.MethodGet, path, nil, http.Header{"Accept": []string{"application/json"}}, rewrite)
 }
 
 // HandleSTT serves both the JSON/multipart HTTP API and the streaming
@@ -751,6 +755,14 @@ func prepareSTTRequest(body []byte, contentType string) (string, bool, []byte, s
 }
 
 func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header) {
+	h.forwardConsoleVoiceWith(w, r, modelID, method, path, body, headers, nil)
+}
+
+// forwardConsoleVoiceWith is forwardConsoleVoice with an optional JSON rewriter.
+// A nil rewriter keeps the byte-for-byte passthrough used by every audio
+// endpoint; a rewriter is used where the response shape is part of the public
+// contract (the voice list).
+func (h *Handler) forwardConsoleVoiceWith(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header, rewriteJSON func([]byte) []byte) {
 	resp, sess, err := h.doConsoleVoice(r, modelID, method, path, body, headers)
 	if sess != nil {
 		defer sess.Close()
@@ -765,10 +777,61 @@ func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, mo
 		writeResponsesAPIError(w, http.StatusBadGateway, "response_too_large", "Console voice response exceeds 128 MiB")
 		return
 	}
+	isJSON := strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type"))), "application/json")
+	if rewriteJSON == nil || !isJSON || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		w.WriteHeader(resp.StatusCode)
+		// Streaming TTS responses may not have a Content-Length. Copy them
+		// through without buffering or silently cutting a valid audio stream.
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxVoiceJSONBytes+1))
+	if readErr != nil || len(raw) > maxVoiceJSONBytes {
+		writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", "Console voice response could not be read")
+		return
+	}
 	w.WriteHeader(resp.StatusCode)
-	// Streaming TTS responses may not have a Content-Length. Copy them through
-	// without buffering or silently cutting a valid audio stream.
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = w.Write(rewriteJSON(raw))
+}
+
+// maxVoiceJSONBytes bounds a rewritten JSON voice response.
+const maxVoiceJSONBytes = 4 << 20
+
+// normalizeTTSVoices rewrites the Console voice list into the documented shape:
+// each entry carries voice_id, name and language, with a missing language set to
+// null rather than omitted, and unknown upstream fields dropped.
+func normalizeTTSVoices(raw []byte) []byte {
+	var payload map[string]interface{}
+	if json.Unmarshal(raw, &payload) != nil {
+		return raw
+	}
+	source, ok := payload["voices"].([]interface{})
+	if !ok {
+		return raw
+	}
+	voices := make([]interface{}, 0, len(source))
+	for _, entry := range source {
+		item, _ := entry.(map[string]interface{})
+		if item == nil {
+			continue
+		}
+		id := firstNonEmpty(interfaceString(item["voice_id"]), interfaceString(item["id"]))
+		if id == "" {
+			continue
+		}
+		name := firstNonEmpty(interfaceString(item["name"]), id)
+		normalized := map[string]interface{}{"voice_id": id, "name": name, "language": nil}
+		if language := interfaceString(item["language"]); language != "" {
+			normalized["language"] = language
+		}
+		voices = append(voices, normalized)
+	}
+	payload["voices"] = voices
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return encoded
 }
 
 func (h *Handler) doConsoleVoice(r *http.Request, modelID, method, path string, body []byte, headers http.Header) (*http.Response, *chatAccountSession, error) {
