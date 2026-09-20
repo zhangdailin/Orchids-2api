@@ -78,21 +78,44 @@ func TestGrok2apiNativeSSEFramingAndLogicalTerminal(t *testing.T) {
 	if id != "resp_a" || tail.reads != 0 || result.Err != nil || result.Finish != "stop" {
 		t.Fatal(id, tail.reads, result)
 	}
-	for _, want := range []string{": keepalive", "id: event_a", "retry: 1000", "data: [DONE]"} {
+	for _, want := range []string{": keepalive", "id: event_a", "retry: 1000"} {
 		if !strings.Contains(recorder.Body.String(), want) || !bytes.Contains(capture, []byte(want)) {
 			t.Fatal("SSE metadata lost", want)
 		}
 	}
-	if strings.Count(recorder.Body.String(), "[DONE]") != 1 {
-		t.Fatal("duplicate DONE")
+	// grok2api relays the native Responses stream: no added [DONE], and the
+	// upstream's own framing (CRLF, multi-line data) is what the client receives.
+	if strings.Contains(recorder.Body.String(), "data: [DONE]") {
+		t.Fatal("the relay appended a Responses-invalid [DONE] frame")
+	}
+
+	// A frame that already carries every field the strict clients need is relayed
+	// byte-for-byte, CRLF included: supplementation is what makes a frame differ,
+	// never the relay itself.
+	complete := "event: response.completed\r\ndata: { \"type\":\"response.completed\", \"id\":\"resp_ok\", \"response\":{\"id\":\"resp_ok\",\"object\":\"response\",\"created_at\":42,\"model\":\"grok-4.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}]}}\r\n\r\n"
+	verbatim := httptest.NewRecorder()
+	_, _, verbatimResult := copyNativeCLIResponseAndCaptureModel(verbatim, strings.NewReader(complete), "text/event-stream", "grok-4.6")
+	if verbatimResult.Err != nil {
+		t.Fatal(verbatimResult.Err)
+	}
+	if verbatim.Body.String() != complete {
+		t.Fatalf("complete frame was rewritten:\n got %q\nwant %q", verbatim.Body.String(), complete)
 	}
 }
 
-func TestGrok2apiNativeDoneWithoutTerminalFailsBeforeDone(t *testing.T) {
+// An upstream [DONE] without a terminal response event is still a failure the
+// client has to see; the relay reports it instead of inventing a completion.
+func TestGrok2apiNativeDoneWithoutTerminalSynthesizesFailure(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	_, _, _ = copyNativeCLIResponseAndCaptureModel(recorder, strings.NewReader("data: [DONE]\n\n"), "text/event-stream", "grok-4.6")
 	output := recorder.Body.String()
-	if strings.Count(output, "data: [DONE]") != 1 || strings.Index(output, "event: response.failed") > strings.Index(output, "data: [DONE]") {
-		t.Fatal(output)
+	if !strings.Contains(output, "event: response.failed") {
+		t.Fatalf("no synthesized failure: %s", output)
+	}
+	if strings.Contains(output, "data: [DONE]") {
+		t.Fatalf("the relay relayed or re-added [DONE]: %s", output)
+	}
+	if !strings.Contains(output, "upstream_terminal_missing") {
+		t.Fatalf("failure reason lost: %s", output)
 	}
 }

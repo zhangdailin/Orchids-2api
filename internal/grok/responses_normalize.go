@@ -454,18 +454,49 @@ func interfaceMaps(value interface{}) []map[string]interface{} {
 	}
 }
 
+// applyBuildResponseDefaults mirrors grok2api's applyBuildResponseDefaults:
+// `store` defaults to false (ZDR) and `include` always asks for
+// reasoning.encrypted_content. An explicit `store` from the caller is kept, and
+// an existing include list keeps its other entries and its order.
+func applyBuildResponseDefaults(payload map[string]interface{}) {
+	if payload == nil {
+		return
+	}
+	if raw, exists := payload["store"]; !exists || raw == nil {
+		payload["store"] = false
+	}
+	const reasoningInclude = "reasoning.encrypted_content"
+	includes := make([]interface{}, 0, 2)
+	switch typed := payload["include"].(type) {
+	case []interface{}:
+		includes = append(includes, typed...)
+	case []string:
+		for _, value := range typed {
+			includes = append(includes, value)
+		}
+	case nil:
+	default:
+		includes = append(includes, typed)
+	}
+	for _, value := range includes {
+		if text, ok := value.(string); ok && strings.TrimSpace(text) == reasoningInclude {
+			payload["include"] = includes
+			return
+		}
+	}
+	payload["include"] = append(includes, reasoningInclude)
+}
+
 func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 	state := newBuildToolNormalizationState()
 	if err := normalizeBuildInputHistory(payload, state); err != nil {
 		return err
 	}
-	// NOTE: the native Build relay is intentionally byte-transparent (see
-	// relay_policy_test.go: a client payload must reach the upstream unchanged,
-	// and only prompt_cache_key is rewritten). grok2api instead injects
-	// `store:false` and `reasoning.encrypted_content` here; doing that in this
-	// gateway would break the documented transparency contract, so the two
-	// defaults stay a deliberate deviation. The chat->Responses bridge, which
-	// builds its own payload, does request encrypted reasoning.
+	// The two defaults grok2api applies to every Build request. They are the
+	// reason a Codex turn can build a reasoning-replay chain at all: without the
+	// include the upstream never returns encrypted_content, and `store:false` is
+	// the zero-data-retention default the reference implementation documents.
+	applyBuildResponseDefaults(payload)
 	if raw, ok := payload["response_format"].(map[string]interface{}); ok {
 		delete(payload, "response_format")
 		if _, exists := payload["text"]; !exists {

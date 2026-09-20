@@ -16,8 +16,11 @@ data: { "type":"response.completed", "id":"resp_ok", "response":{"id":"resp_ok",
 	if result.Err != nil {
 		t.Fatal(result.Err)
 	}
-	if rec.Body.String() != line+"data: [DONE]\n\n" {
-		t.Fatalf("complete event bytes changed:\n got %q\nwant %q", rec.Body.String(), line+"data: [DONE]\n\n")
+	// The native relay is byte-transparent: an event that already carries every
+	// field reaches the client exactly as the upstream wrote it, with no added
+	// frame (grok2api relays the same way).
+	if rec.Body.String() != line {
+		t.Fatalf("complete event bytes changed:\n got %q\nwant %q", rec.Body.String(), line)
 	}
 }
 

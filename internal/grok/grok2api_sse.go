@@ -5,6 +5,7 @@ package grok
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"strings"
@@ -19,6 +20,12 @@ type compatibleSSEEvent struct {
 	Comments []string
 	Other    []string
 	data     []string
+	// raw is the frame exactly as it arrived, including its line endings and the
+	// terminating blank line. writeTo prefers it so an untouched frame is
+	// byte-identical to the upstream: grok2api relays the native Responses
+	// stream instead of re-rendering it, and a byte-identical relay is what makes
+	// a side-by-side diff of the two gateways meaningful.
+	raw []byte
 }
 
 func (e compatibleSSEEvent) Data() []byte {
@@ -28,6 +35,10 @@ func (e compatibleSSEEvent) Data() []byte {
 func (e compatibleSSEEvent) HasData() bool { return len(e.data) > 0 }
 
 func (e compatibleSSEEvent) writeTo(writer io.Writer) error {
+	if len(e.raw) > 0 {
+		_, err := writer.Write(e.raw)
+		return err
+	}
 	for _, comment := range e.Comments {
 		if _, err := fmt.Fprintln(writer, comment); err != nil {
 			return err
@@ -62,23 +73,43 @@ func (e compatibleSSEEvent) writeTo(writer io.Writer) error {
 	return err
 }
 
+// splitSSELinesKeepingEnd is bufio.ScanLines without the line-ending rewrite: the
+// token keeps its own "\n" or "\r\n" so a relayed frame reproduces the upstream
+// bytes exactly. The blank line that ends a frame is a token of its own.
+func splitSSELinesKeepingEnd(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i+1], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
 func consumeCompatibleSSE(source io.Reader, handle func(compatibleSSEEvent) error) error {
 	scanner := bufio.NewScanner(source)
 	scanner.Buffer(make([]byte, 64<<10), upstreamMaxEventBytes)
+	scanner.Split(splitSSELinesKeepingEnd)
 	event := compatibleSSEEvent{}
 	eventBytes := 0
 	firstLine := true
+	var rawFrame []byte
 	flush := func() error {
 		if len(event.data) == 0 && len(event.Comments) == 0 && len(event.Other) == 0 && event.Event == "" && event.ID == "" && event.Retry == "" {
+			rawFrame = rawFrame[:0]
 			return nil
 		}
 		current := event
+		current.raw = append([]byte(nil), rawFrame...)
 		event = compatibleSSEEvent{}
 		eventBytes = 0
+		rawFrame = rawFrame[:0]
 		return handle(current)
 	}
 	for scanner.Scan() {
-		line := strings.TrimSuffix(scanner.Text(), "\r")
+		rawLine := scanner.Text()
+		rawFrame = append(rawFrame, rawLine...)
+		line := strings.TrimSuffix(strings.TrimSuffix(rawLine, "\n"), "\r")
 		if firstLine {
 			line = strings.TrimPrefix(line, "\uFEFF")
 			firstLine = false

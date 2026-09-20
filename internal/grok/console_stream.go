@@ -199,6 +199,9 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 		return hold.writer.Commit()
 	}
 	id, created := "chatcmpl_"+randomHex(8), time.Now().Unix()
+	// The converted stream needs the same degenerate-repeat guard the native relay
+	// has: grok2api tracks deltas in its stream layer, before protocol conversion.
+	repeatTracker := &streamRepeatTracker{}
 	var text, reasoning, refusal strings.Builder
 	tools := map[string]*responseToolState{}
 	byCall := map[string]*responseToolState{}
@@ -367,6 +370,14 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 		kind := firstNonEmpty(interfaceString(ev["type"]), event)
 		if kind == "error" || kind == "response.failed" {
 			return responseFailure(ev)
+		}
+		if loopErr := repeatTracker.observe(ev, kind); loopErr != nil {
+			outcome.Err = loopErr
+			outcome.Finish = "error"
+			// A typed frame, so the caller can tell a degenerate model from a
+			// transport failure instead of retrying both.
+			writeSSECodedError(respWriter, flusher, loopErr.Error(), "upstream_output_loop")
+			return loopErr
 		}
 		if terminal {
 			return nil
@@ -545,6 +556,10 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 		outcome.Withheld = true
 		outcome.Quality.Terminal = true
 		outcome.Finish = "quality_degraded"
+		return
+	}
+	if errors.Is(err, errGrokUpstreamOutputLoop) {
+		// The typed frame was already written where the loop was detected.
 		return
 	}
 	if err != nil && err != io.EOF {

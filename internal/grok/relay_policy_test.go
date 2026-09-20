@@ -3,6 +3,7 @@ package grok
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +74,12 @@ func TestRelayNativeContextAndUpstreamDecisions(t *testing.T) {
 			}
 			payload := map[string]interface{}{
 				"model": "grok-4.6", "stream": false, "prompt_cache_key": "client-session",
+				// The gateway now applies grok2api's Build defaults: store=false for
+				// zero-data-retention, and the encrypted-reasoning include that makes
+				// a replay chain possible at all. Everything the client sent is still
+				// relayed verbatim.
+				"store":              false,
+				"include":            []interface{}{"reasoning.encrypted_content"},
 				"reasoning":          map[string]interface{}{"effort": "future-effort"},
 				"context_management": []interface{}{map[string]interface{}{"type": "compaction", "compact_threshold": float64(50000)}},
 				"input": []interface{}{
@@ -259,18 +266,55 @@ func TestRelayBuildEffortAliasesFollowModelContract(t *testing.T) {
 	}
 }
 
-func TestRelayRepeatedResponsesDeltasArePreserved(t *testing.T) {
-	const count = 300 // Exceeds both former text and reasoning repetition limits.
-	text, thought := "repeat this answer ", "repeat this thought "
-	stream := strings.Repeat(parityText(text), count) + strings.Repeat(parityFrame("response.reasoning_text.delta", map[string]interface{}{"delta": thought}), count) + parityTerminal("response.completed")
-	rec := httptest.NewRecorder()
-	_, _, result := copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(stream), "text/event-stream", "grok-4.6")
-	if result.Err != nil || strings.Count(rec.Body.String(), text) != count || strings.Count(rec.Body.String(), thought) != count {
-		t.Fatalf("native stream repetition suppressed: text=%d thought=%d err=%v", strings.Count(rec.Body.String(), text), strings.Count(rec.Body.String(), thought), result.Err)
+// grok2api terminates a degenerate upstream that repeats itself: more than 128
+// identical visible deltas or more than 256 identical reasoning deltas end the
+// turn as upstream_output_loop. Distinct deltas are untouched, however many of
+// them there are — the threshold counts repeats of one value, not volume.
+func TestRelayRepeatedDeltaThresholdsMatchGrok2API(t *testing.T) {
+	// 300 distinct content deltas all survive.
+	var distinct strings.Builder
+	for i := 0; i < 300; i++ {
+		distinct.WriteString(parityFrame("response.output_text.delta", map[string]interface{}{"delta": fmt.Sprintf("chunk-%d ", i)}))
 	}
-	converted, result := parityRun(t, stream)
-	if result.Err != nil || strings.Count(converted, text) != count || strings.Count(converted, thought) != count {
-		t.Fatalf("converted stream repetition suppressed: text=%d thought=%d err=%v", strings.Count(converted, text), strings.Count(converted, thought), result.Err)
+	distinct.WriteString(parityTerminal("response.completed"))
+	rec := httptest.NewRecorder()
+	_, _, result := copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(distinct.String()), "text/event-stream", "grok-4.6")
+	if result.Err != nil {
+		t.Fatalf("distinct deltas were rejected: %v", result.Err)
+	}
+	for i := 0; i < 300; i++ {
+		if !strings.Contains(rec.Body.String(), fmt.Sprintf("chunk-%d", i)) {
+			t.Fatalf("distinct delta %d was dropped", i)
+		}
+	}
+
+	// One visible delta repeated past the threshold terminates the relay.
+	repeating := strings.Repeat(parityText("repeat this answer "), int(contentDoomLoopThreshold)+2) + parityTerminal("response.completed")
+	rec = httptest.NewRecorder()
+	_, _, result = copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(repeating), "text/event-stream", "grok-4.6")
+	if result.Err == nil || !strings.Contains(rec.Body.String(), "upstream_output_loop") {
+		t.Fatalf("content doom loop was not terminated: err=%v body=%s", result.Err, rec.Body.String())
+	}
+
+	// Reasoning has its own, higher threshold: just below it the stream is fine.
+	belowReasoning := strings.Repeat(parityFrame("response.reasoning_text.delta", map[string]interface{}{"delta": "same thought "}), int(reasoningDoomLoopThreshold)) + parityTerminal("response.completed")
+	rec = httptest.NewRecorder()
+	_, _, result = copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(belowReasoning), "text/event-stream", "grok-4.6")
+	if result.Err != nil {
+		t.Fatalf("a stream at the reasoning threshold was rejected: %v", result.Err)
+	}
+	// One more repeat crosses it.
+	aboveReasoning := strings.Repeat(parityFrame("response.reasoning_text.delta", map[string]interface{}{"delta": "same thought "}), int(reasoningDoomLoopThreshold)+1) + parityTerminal("response.completed")
+	rec = httptest.NewRecorder()
+	_, _, result = copyNativeCLIResponseAndCaptureModel(rec, strings.NewReader(aboveReasoning), "text/event-stream", "grok-4.6")
+	if result.Err == nil || !strings.Contains(rec.Body.String(), "upstream_output_loop") {
+		t.Fatalf("reasoning doom loop was not terminated: err=%v", result.Err)
+	}
+
+	// The converted (chat) path applies the same thresholds.
+	converted, outcome := parityRun(t, repeating)
+	if outcome.Err == nil {
+		t.Fatalf("converted stream accepted a doom loop: %s", converted)
 	}
 }
 

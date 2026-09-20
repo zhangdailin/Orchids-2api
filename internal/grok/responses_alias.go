@@ -147,6 +147,9 @@ func rewriteBuildToolAliasSSE(dst io.Writer, source io.Reader, aliases map[strin
 			return err
 		}
 		frame.data = []string{string(converted)}
+		// A rewritten frame is no longer the upstream's bytes: drop the raw form so
+		// writeTo renders the new payload.
+		frame.raw = nil
 		return frame.writeTo(dst)
 	})
 }

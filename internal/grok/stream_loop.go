@@ -14,15 +14,13 @@ import (
 // repeat counter distinguishes the two.
 var errGrokUpstreamOutputLoop = errors.New("upstream output loop")
 
-// The thresholds are deliberately higher than grok2api's 128/256. This gateway
-// documents its Responses relay as byte-faithful, and its relay policy test
-// asserts that a client which legitimately asks for a repeated phrase receives
-// all 300 copies. A limit that low would suppress real output; these values
-// still terminate a runaway generation within seconds while leaving every
-// plausible answer intact.
+// The thresholds are grok2api's: more than 128 identical visible deltas or more
+// than 256 identical reasoning deltas is a degenerate upstream repeating itself.
+// They count repeats of one value, not volume, so a long answer made of distinct
+// chunks is never affected.
 const (
-	contentDoomLoopThreshold   = 1024
-	reasoningDoomLoopThreshold = 2048
+	contentDoomLoopThreshold   = 128
+	reasoningDoomLoopThreshold = 256
 )
 
 type streamRepeatTracker struct {

@@ -451,6 +451,9 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 		if supplementResponsesEvent(event, compat) || redactResponseError(event) {
 			raw, _ := json.Marshal(event)
 			frame.data = []string{string(raw)}
+			// The compat layer changed the payload, so the frame cannot be relayed
+			// as the upstream sent it.
+			frame.raw = nil
 		}
 		if err := frame.writeTo(target); err != nil {
 			result.Err = err
@@ -517,10 +520,10 @@ func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader,
 			return
 		}
 	}
-	// Emit exactly one DONE, after the terminal (including a synthesized failure).
-	if err := (compatibleSSEEvent{data: []string{"[DONE]"}}).writeTo(target); err != nil {
-		result.Err = err
-	}
+	// No trailing [DONE]: the Responses protocol has no such frame, and grok2api
+	// relays the native stream as the upstream ends it. A strict serde client
+	// treats an unknown frame as a protocol error, and appending one made the two
+	// gateways produce different bytes for the same upstream stream.
 	if flusher != nil {
 		flusher.Flush()
 	}

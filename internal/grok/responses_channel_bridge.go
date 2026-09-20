@@ -182,11 +182,11 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 		}
 		response := responsesObjectFromChat(req.Model, chatBody)
 		applyBridgedResponseExtras(response, req)
-		if storeRequested(req) {
-			if err := saveBridgedResponse(r, req, response, opts); err != nil {
-				writeGrokError(w, http.StatusServiceUnavailable, "failed to store response")
-				return
-			}
+		// Ownership is recorded for any successful response, exactly as grok2api
+		// does: the caller's `store` asks the upstream to retain, not this gateway.
+		if err := saveBridgedResponse(r, req, response, opts); err != nil {
+			writeGrokError(w, http.StatusServiceUnavailable, "failed to store response")
+			return
 		}
 		writeJSON(w, response)
 	}
@@ -327,6 +327,11 @@ func ResponsesChannelSubpath(chat http.HandlerFunc, opts ResponsesBridgeOptions)
 	}
 }
 
+// storeRequested reports whether the caller asked the upstream to keep the
+// response. It no longer decides whether this gateway records ownership:
+// grok2api writes ownership for every successful Responses request regardless of
+// `store`, which is what makes previous_response_id and GET /responses/{id} work
+// for clients that never set the field (OpenAI treats storage as on by default).
 func storeRequested(req ResponsesCreateRequest) bool {
 	return req.Store != nil && *req.Store
 }
@@ -363,10 +368,9 @@ func saveBridgedResponse(r *http.Request, req ResponsesCreateRequest, response m
 // A stream cannot report a storage failure to the client any more, so the
 // failure is logged and the next turn sees response_not_found.
 func bridgedResponseRecorder(r *http.Request, req ResponsesCreateRequest, opts ResponsesBridgeOptions) func(map[string]interface{}) {
-	if !storeRequested(req) {
-		return nil
-	}
 	return func(response map[string]interface{}) {
+		// Only a completed response is a resource a client can continue from; a
+		// failed or partial one has no id worth owning.
 		if !strings.EqualFold(parseLooseStringAny(response["status"]), "completed") {
 			return
 		}
