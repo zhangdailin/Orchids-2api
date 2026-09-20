@@ -702,15 +702,17 @@ func TestWarpConversationID_PersistedWithConversationKey(t *testing.T) {
 	}
 }
 
+// The gateway relays client content verbatim. There is deliberately no
+// history-message or tool-result cap: the old WarpMaxHistoryMessages /
+// WarpMaxToolResults knobs never trimmed anything, so this test now guards the
+// behaviour itself rather than proving two inert fields stayed inert.
 func TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
 	h := &Handler{
 		config: &config.Config{
-			DebugEnabled:           false,
-			WarpMaxHistoryMessages: 1,
-			WarpMaxToolResults:     1,
+			DebugEnabled: false,
 		},
 		client:       client,
 		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),

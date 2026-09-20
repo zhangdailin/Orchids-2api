@@ -129,13 +129,24 @@ type openAINonStreamResponse struct {
 const keepAliveInterval = 15 * time.Second
 const maxRequestBytes = 50 * 1024 * 1024 // 50MB
 
+// sessionTTL is how long a conversation binding survives an idle gap. A missing
+// or non-positive setting keeps the historical half hour; the configured value
+// is what a deployment raises so a long session is not detached mid-way.
+func sessionTTL(cfg *config.Config) time.Duration {
+	const fallback = 30 * time.Minute
+	if cfg == nil || cfg.SessionTTLMinutes <= 0 {
+		return fallback
+	}
+	return time.Duration(cfg.SessionTTLMinutes) * time.Minute
+}
+
 func NewWithLoadBalancer(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 	h := &Handler{
 		config:       cfg,
 		loadBalancer: lb,
 		connTracker:  loadbalancer.NewMemoryConnTracker(),
 		clientCache:  newAccountClientCache(),
-		sessionStore: NewMemorySessionStore(30*time.Minute, 1024),
+		sessionStore: NewMemorySessionStore(sessionTTL(cfg), 1024),
 		auditLogger:  audit.NewNopLogger(),
 	}
 	h.clientCache.SetConfig(cfg)
@@ -972,25 +983,27 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		payloadMessages := upstreamMessages
 		payloadSystem := req.System
 
-		warpFeatureConfig := h.resolveWarpFeatureConfig(r.Context(), currentAccount, mappedModel)
+		warpFeatures := h.resolveWarpRequestFeatures(r.Context(), currentAccount, mappedModel)
+		warpFeatureConfig := warpFeatures.Config
 		upstreamReq := upstream.UpstreamRequest{
-			Prompt:               builtPrompt,
-			Workdir:              effectiveWorkdir,
-			Model:                mappedModel,
-			Messages:             payloadMessages,
-			System:               payloadSystem,
-			Tools:                effectiveTools,
-			ToolChoice:           req.ToolChoice,
-			ParallelToolCalls:    req.ParallelToolCalls,
-			NoTools:              gateNoTools,
-			RequestID:            workBuddyConversationRequestID(r),
-			ConversationID:       explicitConversationID(r, req),
-			TraceID:              middleware.GetTraceID(r.Context()),
-			ChatSessionID:        chatSessionID,
-			WarpCliAgentModel:    warpFeatureConfig.CliAgentModel,
-			WarpComputerUseModel: warpFeatureConfig.ComputerUseAgentModel,
-			WarpToolContexts:     warpContinuationState.toolContexts,
-			WarpTaskContext:      warpContinuationState.taskContext,
+			Prompt:                 builtPrompt,
+			Workdir:                effectiveWorkdir,
+			Model:                  mappedModel,
+			Messages:               payloadMessages,
+			System:                 payloadSystem,
+			Tools:                  effectiveTools,
+			ToolChoice:             req.ToolChoice,
+			ParallelToolCalls:      req.ParallelToolCalls,
+			NoTools:                gateNoTools,
+			RequestID:              workBuddyConversationRequestID(r),
+			ConversationID:         explicitConversationID(r, req),
+			TraceID:                middleware.GetTraceID(r.Context()),
+			ChatSessionID:          chatSessionID,
+			WarpCliAgentModel:      warpFeatureConfig.CliAgentModel,
+			WarpComputerUseModel:   warpFeatureConfig.ComputerUseAgentModel,
+			WarpContextWindowLimit: warpFeatures.ContextWindow,
+			WarpToolContexts:       warpContinuationState.toolContexts,
+			WarpTaskContext:        warpContinuationState.taskContext,
 		}
 		primaryHandler := sh.handleMessage
 		var attempt int
@@ -1163,9 +1176,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 					trackedAccountID = nextTrackedAccountID
 					previousRelease()
 					if currentAccount != nil {
-						warpFeatureConfig = h.resolveWarpFeatureConfig(r.Context(), currentAccount, upstreamReq.Model)
+						switchedFeatures := h.resolveWarpRequestFeatures(r.Context(), currentAccount, upstreamReq.Model)
+						warpFeatureConfig = switchedFeatures.Config
 						upstreamReq.WarpCliAgentModel = warpFeatureConfig.CliAgentModel
 						upstreamReq.WarpComputerUseModel = warpFeatureConfig.ComputerUseAgentModel
+						upstreamReq.WarpContextWindowLimit = switchedFeatures.ContextWindow
 						if verboseDiagnostics {
 							slog.Debug("Switched to account", "account", currentAccount.Name)
 						}
@@ -1173,6 +1188,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						warpFeatureConfig = warp.AccountFeatureConfig{}
 						upstreamReq.WarpCliAgentModel = ""
 						upstreamReq.WarpComputerUseModel = ""
+						upstreamReq.WarpContextWindowLimit = 0
 						if verboseDiagnostics {
 							slog.Debug("Switched to default upstream config")
 						}
@@ -1189,9 +1205,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 						apiClient = prevClient
 						currentAccount = prevAccount
 						trackedAccountID = reacquiredID
-						warpFeatureConfig = h.resolveWarpFeatureConfig(r.Context(), currentAccount, upstreamReq.Model)
+						retryFeatures := h.resolveWarpRequestFeatures(r.Context(), currentAccount, upstreamReq.Model)
+						warpFeatureConfig = retryFeatures.Config
 						upstreamReq.WarpCliAgentModel = warpFeatureConfig.CliAgentModel
 						upstreamReq.WarpComputerUseModel = warpFeatureConfig.ComputerUseAgentModel
+						upstreamReq.WarpContextWindowLimit = retryFeatures.ContextWindow
 						slog.Warn(
 							"No alternate accounts available; retrying current account",
 							"trace_id", traceID,

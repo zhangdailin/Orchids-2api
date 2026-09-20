@@ -18,6 +18,12 @@ type AccountModelChoices struct {
 	Accounts       map[string][]string             `json:"accounts"`
 	Sources        map[string]string               `json:"sources,omitempty"`
 	FeatureConfigs map[string]AccountFeatureConfig `json:"feature_configs,omitempty"`
+	// ContextWindows records the upstream-declared window per model id. Warp
+	// publishes contextWindow{min,max,default} with every model choice, and the
+	// window is a property of the model rather than of one account, so it is
+	// stored once and reused. Dropping it here was what left the request builder
+	// with nothing to state and made a 1M-token model look like a zero-window one.
+	ContextWindows map[string]ModelContextWindow `json:"context_windows,omitempty"`
 }
 
 type AccountFeatureConfig struct {
@@ -62,6 +68,16 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 	}
 	if len(choices.FeatureConfigs) > 0 {
 		normalized.FeatureConfigs = make(map[string]AccountFeatureConfig, len(choices.FeatureConfigs))
+	}
+	if len(choices.ContextWindows) > 0 {
+		normalized.ContextWindows = make(map[string]ModelContextWindow, len(choices.ContextWindows))
+		for modelID, window := range choices.ContextWindows {
+			key := NormalizeModelID(modelID)
+			if key == "" || window.Max == 0 {
+				continue
+			}
+			normalized.ContextWindows[key] = window
+		}
 	}
 	for accountID, models := range choices.Accounts {
 		key := strings.TrimSpace(accountID)
@@ -192,4 +208,75 @@ func normalizeAccountModelIDs(models []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ContextWindowsFromChoices projects a discovery result onto the per-model
+// window table. Only a real max is kept: a choice that never declared a window
+// must not overwrite one another account already observed.
+func ContextWindowsFromChoices(choices []ModelChoice) map[string]ModelContextWindow {
+	if len(choices) == 0 {
+		return nil
+	}
+	out := make(map[string]ModelContextWindow, len(choices))
+	for _, choice := range choices {
+		id := NormalizeModelID(choice.ID)
+		if id == "" || choice.ContextWindow.Max == 0 {
+			continue
+		}
+		out[id] = choice.ContextWindow
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// MergeContextWindows folds freshly observed windows into the stored table.
+// An observation for a model not seen before is added; a model that was already
+// known keeps the larger max, because a smaller report from one account must not
+// shrink the window every other account can use.
+func MergeContextWindows(dst map[string]ModelContextWindow, fresh map[string]ModelContextWindow) map[string]ModelContextWindow {
+	if len(fresh) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = make(map[string]ModelContextWindow, len(fresh))
+	}
+	for id, window := range fresh {
+		key := NormalizeModelID(id)
+		if key == "" || window.Max == 0 {
+			continue
+		}
+		if existing, ok := dst[key]; ok && existing.Max >= window.Max {
+			continue
+		}
+		dst[key] = window
+	}
+	return dst
+}
+
+// ModelContextWindowLimitFor resolves the input-token window to state on an
+// upstream request. It answers 0 when nothing was observed, which the request
+// builder renders as "field absent" so Warp keeps using the model's own max.
+func ModelContextWindowLimitFor(choices *AccountModelChoices, modelID string) uint32 {
+	if choices == nil || len(choices.ContextWindows) == 0 {
+		return 0
+	}
+	normalized := NormalizeModelID(modelID)
+	if normalized == "" {
+		return 0
+	}
+	if window, ok := choices.ContextWindows[normalized]; ok && window.Max > 0 {
+		return window.Max
+	}
+	// A discovery may have published only the effort variants of a family the
+	// client asked for by its bare name. Take the largest variant's window
+	// rather than reporting nothing.
+	largest := uint32(0)
+	for id, window := range choices.ContextWindows {
+		if strings.HasPrefix(id, normalized+"-") && window.Max > largest {
+			largest = window.Max
+		}
+	}
+	return largest
 }

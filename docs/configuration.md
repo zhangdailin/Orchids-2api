@@ -148,8 +148,6 @@ Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress �
 | `context_keep_turns` | 不生效 | 旧兼容字段；不按轮数删除请求历史 |
 | `grok_api_base_url` | `https://grok.com` | Grok 基础地址 |
 | `warp_disable_tools` | `false` | Warp 工具默认开启 |
-| `warp_max_tool_results` | `10` | Warp 单轮工具结果上限 |
-| `warp_max_history_messages` | `20` | Warp 历史消息上限 |
 | `stream` | `true` | Chat 默认流式 |
 | `image_nsfw` | `true` | 公共 imagine 默认 NSFW 开启 |
 | `public_enabled` | `true` | 公共页面默认开启 |
@@ -160,6 +158,41 @@ Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress �
 | `load_balancer_cache_ttl` | `5` | 负载均衡缓存 TTL（秒） |
 | `concurrency_limit` | `100` | 并发上限 |
 | `adaptive_timeout` | `true` | 自适应超时 |
+
+### 3.3 上下文与长会话相关字段
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `session_ttl_minutes` | `720`（12 小时） | 客户端会话可空闲多久仍续用上游会话绑定。过短会在轮次之间断开绑定，下一轮只能重发整段 transcript。上限 43200（30 天） |
+| `warp_stateless_history_max_chars` | `8388608`（8 MiB） | 无服务端会话 ID 的 Warp 请求所渲染 transcript 的**传输**上限，不是上下文策略：上游按模型自身窗口处理收到的内容。旧值 48 KiB（约 12k token）会让 1M 窗口的模型表现得像 16k。上限 67108864 |
+
+模型窗口是**观测值**，不是配置项：`GET /v1/models` 与 `GET /v1/models/{id}` 会按渠道已经观测到的目录回报
+`context_length` / `max_input_tokens` / `max_output_tokens`；未观测到的模型**不输出**这些字段（而不是输出 0），
+以免客户端按一个编造的数字做预算。数据来源：
+
+| 渠道 | 来源 |
+|---|---|
+| Qoder | 账号快照 `qoder_model_ids[]` 的 `max_input_tokens` |
+| WorkBuddy | 账号快照 `workbuddy_model_ids[]` 的 `max_input_tokens` / `max_output_tokens` |
+| Warp | 账号模型发现缓存的 `context_windows`（即上游 `contextWindow.max`） |
+| Grok | Codex catalog 的静态窗口表 |
+| Puter | 暂无可信来源，不输出 |
+
+服务端从不按 token 裁剪请求历史：`puter` / `workbuddy` / `qoder` 全量透传客户端 `messages`。
+
+### 3.4 工具定义保真
+
+客户端声明的工具定义按原样转发，中转层只做必要的结构解析，不改写内容：
+
+| 位置 | 行为 | 说明 |
+|---|---|---|
+| 工具 schema | 逐字透传 | 不再按内置工具白名单删字段、不再丢弃 `additionalProperties` / `oneOf` / `$schema` 等关键字、不再因超过 4 KiB 就替换成空对象 |
+| 工具描述 | 逐字透传（仅去首尾空白） | 上限 64 KiB 仅作传输保护，达到上限才是病态请求 |
+| 工具数量 | 上限 256 | 仅作传输保护；旧值 32 会静默丢弃第 32 个之后的工具 |
+| 工具 token 估算 | 按实际发送的定义计算 | `count_tokens` 与前置 usage 不再按"压缩后的投影"少报（旧实现：24 个工具 / 128 字符描述 / 4 KiB schema） |
+
+历史里唯一被丢弃过的内容是**旧版**的 48 KiB 无状态 transcript 上限，现已提高为
+`warp_stateless_history_max_chars`（见 3.3）。
 
 ## 4. 最小可用配置
 

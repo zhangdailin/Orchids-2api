@@ -243,8 +243,42 @@ func catalogToIDs(catalog *Catalog) []string {
 	return ids
 }
 
-// FetchModels returns the catalog already observed for this account.
+// CatalogContextWindows projects a stored catalog snapshot onto the input-token
+// window of every name that snapshot resolves.
 //
+// The gateway declares the window per model (max_input_tokens) and the request
+// path already forwards it. This is the same observation made readable to the
+// public model list, so a client budgeting its context learns the real number
+// instead of falling back to its own default. An entry that carries no window is
+// skipped rather than reported as zero, because "unknown" must not read as
+// "cannot hold anything".
+func CatalogContextWindows(ids []string) map[string]int {
+	catalog := catalogFromIDs(ids)
+	if catalog == nil || catalog.Len() == 0 {
+		return nil
+	}
+	out := make(map[string]int, catalog.Len()*3)
+	for _, entry := range catalog.entries {
+		if entry.MaxInputTokens <= 0 {
+			continue
+		}
+		for _, name := range []string{entry.Key, entry.Name, entry.DisplayName} {
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name == "" {
+				continue
+			}
+			if existing, ok := out[name]; !ok || entry.MaxInputTokens > existing {
+				out[name] = entry.MaxInputTokens
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// FetchModels returns the catalog already observed for this account.
 // It is a pure read of the account snapshot: the catalog is written by
 // FetchUpstreamModels during a refresh, and a chat request must not perform
 // catalog I/O. With no snapshot there is nothing to resolve against, so the

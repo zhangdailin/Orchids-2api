@@ -31,7 +31,7 @@ func estimateInputTokenBreakdown(promptText string, tools []interface{}) inputTo
 	bd.SystemContextTokens = sysTokens
 	bd.BasePromptTokens = promptTokens - sysTokens
 
-	bd.ToolsTokens = estimateCompactedToolsTokens(tools)
+	bd.ToolsTokens = estimateToolsTokens(tools)
 
 	bd.Total = bd.BasePromptTokens + bd.SystemContextTokens + bd.HistoryTokens + bd.ToolsTokens
 	return bd

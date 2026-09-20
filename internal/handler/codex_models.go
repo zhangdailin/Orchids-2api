@@ -266,6 +266,14 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 		if !ok {
 			metadata = codexDefaultMetadata
 		}
+		// A window observed from the channel's own catalog beats both the static
+		// table and the default. The default is Grok-shaped (128k), so applying it
+		// to a Qoder or WorkBuddy model reported a 1M-token model as eight times
+		// smaller and made the client compact a long session far too early.
+		contextWindow := metadata.contextWindow
+		if item.ContextLength > 0 {
+			contextWindow = item.ContextLength
+		}
 		levels := entry.levels
 		if len(levels) == 0 {
 			levels = codexReasoningLevelsFor(name)
@@ -319,8 +327,8 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 			TruncationPolicy:                  codexTruncationPolicy{Mode: "tokens", Limit: 10000},
 			SupportsParallelToolCalls:         toolsSupported,
 			SupportsImageDetailOriginal:       false,
-			ContextWindow:                     metadata.contextWindow,
-			MaxContextWindow:                  metadata.contextWindow,
+			ContextWindow:                     contextWindow,
+			MaxContextWindow:                  contextWindow,
 			EffectiveContextWindowPercent:     95,
 			ExperimentalSupportedTools:        []string{},
 			InputModalities:                   modalities,

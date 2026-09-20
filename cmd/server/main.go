@@ -32,6 +32,7 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/internal/tokencache"
+	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -127,6 +128,12 @@ func main() {
 		slog.Error("Failed to initialize media storage", "error", err)
 		os.Exit(1)
 	}
+	// The Warp request builder renders a whole transcript when no server-issued
+	// conversation id is available. That ceiling is a transport bound, so it is
+	// installed once here rather than being a compiled-in constant that decides
+	// how much context a large-window model gets.
+	warp.SetStatelessHistoryMaxChars(cfg.WarpStatelessHistoryMaxChars)
+	slog.Debug("Warp stateless transcript ceiling", "max_chars", cfg.WarpStatelessHistoryMaxChars)
 	slog.Info("Media storage initialized", "directory", cfg.MediaDir, "replicas", cfg.DeploymentReplicas, "shared", cfg.SharedMedia)
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Duration(cfg.LoadBalancerCacheTTL)*time.Second)
@@ -200,7 +207,7 @@ func main() {
 
 	// Session store: use Redis when available, fall back to memory
 	if redisClient := s.RedisClient(); redisClient != nil {
-		sessionStore := handler.NewRedisSessionStore(redisClient, s.RedisPrefix(), 30*time.Minute)
+		sessionStore := handler.NewRedisSessionStore(redisClient, s.RedisPrefix(), conversationBindingTTL(cfg))
 		h.SetSessionStore(sessionStore)
 		slog.Debug("Session store initialized", "backend", "redis")
 
@@ -356,6 +363,17 @@ func main() {
 
 	<-idleConnsClosed
 	slog.Info("Server shutdown gracefully")
+}
+
+// conversationBindingTTL is how long a client conversation may idle and still
+// resume the upstream conversation it was attached to. The default raises the
+// historical half hour, which detached ordinary working sessions between turns.
+func conversationBindingTTL(cfg *config.Config) time.Duration {
+	const fallback = 30 * time.Minute
+	if cfg == nil || cfg.SessionTTLMinutes <= 0 {
+		return fallback
+	}
+	return time.Duration(cfg.SessionTTLMinutes) * time.Minute
 }
 
 // logWorkBuddyReachability reports at startup whether this process can reach the

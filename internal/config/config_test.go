@@ -38,6 +38,48 @@ func TestConfigDefaults(t *testing.T) {
 	}
 }
 
+// A conversation binding must outlive an ordinary working session. Thirty
+// minutes detached the upstream conversation between turns, which forced the
+// next turn to replay the whole transcript.
+func TestConfigDefaultsKeepConversationBindingsAlive(t *testing.T) {
+	var cfg Config
+	ApplyDefaults(&cfg)
+	if cfg.SessionTTLMinutes < 60 {
+		t.Fatalf("SessionTTLMinutes=%d, want at least an hour", cfg.SessionTTLMinutes)
+	}
+}
+
+// The stateless transcript ceiling is a transport bound, not a context policy:
+// it has to stay above any single model window.
+func TestConfigDefaultsLeaveTheTranscriptCeilingAboveAnyModelWindow(t *testing.T) {
+	var cfg Config
+	ApplyDefaults(&cfg)
+	if cfg.WarpStatelessHistoryMaxChars < 1<<20 {
+		t.Fatalf("WarpStatelessHistoryMaxChars=%d, want at least 1 MiB", cfg.WarpStatelessHistoryMaxChars)
+	}
+}
+
+// An operator's explicit values survive, and an absurd one is still bounded.
+func TestConfigKeepsExplicitContextSettingsWithinBounds(t *testing.T) {
+	cfg := Config{SessionTTLMinutes: 90, WarpStatelessHistoryMaxChars: 2 << 20}
+	ApplyDefaults(&cfg)
+	if cfg.SessionTTLMinutes != 90 {
+		t.Fatalf("SessionTTLMinutes=%d, want the configured 90", cfg.SessionTTLMinutes)
+	}
+	if cfg.WarpStatelessHistoryMaxChars != 2<<20 {
+		t.Fatalf("WarpStatelessHistoryMaxChars=%d, want the configured 2 MiB", cfg.WarpStatelessHistoryMaxChars)
+	}
+
+	over := Config{SessionTTLMinutes: 1 << 30, WarpStatelessHistoryMaxChars: 1 << 30}
+	ApplyDefaults(&over)
+	if over.SessionTTLMinutes > 30*24*60 {
+		t.Fatalf("SessionTTLMinutes=%d is unbounded", over.SessionTTLMinutes)
+	}
+	if over.WarpStatelessHistoryMaxChars > 64<<20 {
+		t.Fatalf("WarpStatelessHistoryMaxChars=%d is unbounded", over.WarpStatelessHistoryMaxChars)
+	}
+}
+
 func TestCloneDeepCopiesReferenceFields(t *testing.T) {
 	on := true
 	original := &Config{

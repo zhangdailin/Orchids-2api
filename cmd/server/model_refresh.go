@@ -420,17 +420,14 @@ func workBuddyCatalogToDiscovered(models []workbuddy.WorkBuddyModel) []discovere
 }
 
 // persistWorkBuddyCatalogSnapshot records the account-scoped whitelist so model
-// selection can be checked against what this account may actually run.
+// selection can be checked against what this account may actually run. Each row
+// keeps the window the catalog declared, because the public model list has to
+// report a real number for a client that budgets its context.
 func persistWorkBuddyCatalogSnapshot(ctx context.Context, s *store.Store, acc *store.Account, models []workbuddy.WorkBuddyModel) {
 	if acc == nil || acc.ID == 0 {
 		return
 	}
-	ids := make([]string, 0, len(models))
-	for _, model := range models {
-		if id := strings.TrimSpace(model.ID); id != "" {
-			ids = append(ids, id)
-		}
-	}
+	ids := workbuddy.CatalogSnapshot(models)
 	if len(ids) == 0 {
 		return
 	}
@@ -943,9 +940,26 @@ func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoverie
 	if s == nil {
 		return
 	}
-	accountChoices := &warp.AccountModelChoices{Accounts: make(map[string][]string)}
-	accountChoices.Sources = make(map[string]string)
-	accountChoices.FeatureConfigs = make(map[string]warp.AccountFeatureConfig)
+	// Start from what is already stored rather than from an empty struct: this
+	// function writes the whole setting, so rebuilding it from scratch would drop
+	// the window table every account that failed discovery in this pass.
+	accountChoices, err := warp.LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		slog.Warn("warp account model choices could not be read; rebuilding", "error", err)
+		accountChoices = nil
+	}
+	if accountChoices == nil {
+		accountChoices = &warp.AccountModelChoices{}
+	}
+	if accountChoices.Accounts == nil {
+		accountChoices.Accounts = make(map[string][]string)
+	}
+	if accountChoices.Sources == nil {
+		accountChoices.Sources = make(map[string]string)
+	}
+	if accountChoices.FeatureConfigs == nil {
+		accountChoices.FeatureConfigs = make(map[string]warp.AccountFeatureConfig)
+	}
 	for _, result := range discoveries {
 		if !result.ok || result.id == 0 || len(result.choices) == 0 {
 			continue
@@ -962,6 +976,10 @@ func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoverie
 		if !result.featureConfig.IsEmpty() {
 			accountChoices.FeatureConfigs[key] = result.featureConfig
 		}
+		// The input window belongs to the model, not to the account, so every
+		// account's discovery feeds one shared table. Dropping it here is what
+		// left the request builder with no window to state upstream.
+		accountChoices.ContextWindows = warp.MergeContextWindows(accountChoices.ContextWindows, warp.ContextWindowsFromChoices(result.choices))
 	}
 	if len(accountChoices.Accounts) == 0 {
 		return

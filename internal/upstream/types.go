@@ -28,7 +28,12 @@ type UpstreamRequest struct {
 	Workdir              string // Dynamic local workdir override
 	WarpCliAgentModel    string
 	WarpComputerUseModel string
-	WarpToolContexts     map[string]WarpToolContext
+	// WarpContextWindowLimit is the base model's input-token window as the
+	// account's own discovery declared it. Warp reads zero as "use the model's
+	// default max", so a caller that already knows the real window states it
+	// instead of leaving the upstream to fall back to a smaller default.
+	WarpContextWindowLimit uint32
+	WarpToolContexts       map[string]WarpToolContext
 	// WarpTaskContext is the protobuf-encoded task state returned by Warp on
 	// the preceding turn. Warp conversations are stateful but task state is
 	// client-owned and must be round-tripped with tool results.

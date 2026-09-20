@@ -97,6 +97,10 @@ func refreshWarpAccountState(a *API, ctx context.Context, acc *store.Account) (s
 				if !featureConfig.IsEmpty() {
 					existing.FeatureConfigs[key] = featureConfig
 				}
+				// Record the per-model input window alongside the model list. The
+				// request path states it upstream so Warp does not fall back to a
+				// smaller default for a model that actually accepts far more.
+				existing.ContextWindows = warp.MergeContextWindows(existing.ContextWindows, warp.ContextWindowsFromChoices(choices))
 				if err := warp.SaveAccountModelChoices(ctx, a.store, existing); err != nil {
 					slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
 				}

@@ -499,9 +499,18 @@ func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices 
 	return ok
 }
 
-func (h *Handler) resolveWarpFeatureConfig(ctx context.Context, acc *store.Account, requestedModel string) warp.AccountFeatureConfig {
+// warpRequestFeatures is everything the request builder needs from the account's
+// own model discovery: the agent defaults and the base model's input window.
+// They resolve together because both come from the same stored snapshot, and a
+// second read would only be another way for the two to disagree.
+type warpRequestFeatures struct {
+	Config        warp.AccountFeatureConfig
+	ContextWindow uint32
+}
+
+func (h *Handler) resolveWarpRequestFeatures(ctx context.Context, acc *store.Account, requestedModel string) warpRequestFeatures {
 	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-		return warp.AccountFeatureConfig{}
+		return warpRequestFeatures{}
 	}
 	var choices *warp.AccountModelChoices
 	if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
@@ -510,7 +519,10 @@ func (h *Handler) resolveWarpFeatureConfig(ctx context.Context, acc *store.Accou
 			choices = loaded
 		}
 	}
-	return warp.EffectiveAccountFeatureConfig(acc, choices, requestedModel)
+	return warpRequestFeatures{
+		Config:        warp.EffectiveAccountFeatureConfig(acc, choices, requestedModel),
+		ContextWindow: warp.ModelContextWindowLimitFor(choices, requestedModel),
+	}
 }
 
 // refreshWarpModelConfigAsync consumes Warp's stale-config signal without
@@ -567,6 +579,11 @@ func (h *Handler) refreshWarpModelConfigAsync(acc *store.Account) {
 		key := strconv.FormatInt(account.ID, 10)
 		existing.Accounts[key] = models
 		existing.Sources[key] = source
+		// The per-model window is a property of the model, not of the account, so
+		// it is merged into one table instead of being keyed by account id. Without
+		// it the request builder has nothing to state and Warp falls back to the
+		// model's default max.
+		existing.ContextWindows = warp.MergeContextWindows(existing.ContextWindows, warp.ContextWindowsFromChoices(choices))
 		if config := warp.AccountFeatureConfigFromChoices(features); !config.IsEmpty() {
 			existing.FeatureConfigs[key] = config
 		}

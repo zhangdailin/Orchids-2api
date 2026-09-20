@@ -480,8 +480,16 @@ func TestConvertTools_PreservesCustomMCPTools(t *testing.T) {
 	if got[0].Name != "workspace_search" {
 		t.Fatalf("custom tool name=%q want workspace_search", got[0].Name)
 	}
-	if !strings.HasSuffix(got[0].Description, "...[truncated]") {
-		t.Fatalf("custom tool description=%q want truncated suffix", got[0].Description)
+	// A description is how the model decides when the tool applies, so it is
+	// forwarded whole (surrounding whitespace aside). The old 512-character cut
+	// removed the guidance and left a "...[truncated]" marker in its place.
+	wantDescription := strings.TrimSpace(strings.Repeat("search project symbols ", 40))
+	if got[0].Description != wantDescription {
+		t.Fatalf("custom tool description was rewritten: got %d runes, want %d",
+			len([]rune(got[0].Description)), len([]rune(wantDescription)))
+	}
+	if strings.Contains(got[0].Description, "[truncated]") {
+		t.Fatalf("custom tool description was truncated: %q", got[0].Description)
 	}
 	props, ok := got[0].Schema["properties"].(map[string]interface{})
 	if !ok {

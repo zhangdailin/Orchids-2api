@@ -181,12 +181,7 @@ func verifyWorkBuddyAccountWithStore(ctx context.Context, acc *store.Account, cf
 		return "", 502, err
 	}
 
-	ids := make([]string, 0, len(models))
-	for _, model := range models {
-		if id := strings.TrimSpace(model.ID); id != "" {
-			ids = append(ids, id)
-		}
-	}
+	ids := workbuddy.CatalogSnapshot(models)
 	if len(ids) > 0 {
 		acc.WorkBuddyModelIDs = ids
 		acc.WorkBuddyModelsSyncedAt = time.Now()

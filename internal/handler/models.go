@@ -24,6 +24,18 @@ type PublicModelResponse struct {
 	Capabilities  []string `json:"capabilities,omitempty"`
 	Provider      string   `json:"provider,omitempty"`
 	UpstreamModel string   `json:"upstream_model,omitempty"`
+	// ContextLength is the model's real input-token window, as observed from the
+	// channel's own catalog. It is omitted when nothing was observed, because a
+	// client that reads a wrong number budgets against the wrong number: too low
+	// and it reports a context overflow after the model already answered, too high
+	// and it keeps sending a history the upstream will refuse.
+	ContextLength int `json:"context_length,omitempty"`
+	// MaxInputTokens carries the same observation under the name some clients
+	// look for. Both are emitted so a client that only reads one still finds it.
+	MaxInputTokens int `json:"max_input_tokens,omitempty"`
+	// MaxOutputTokens is the declared output budget where the catalog publishes
+	// one. Zero means unobserved and is omitted.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 }
 
 type PublicModelsListResponse struct {
@@ -185,6 +197,9 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		warpVisible = h.visibleWarpModelSet(ctx)
 	}
 	var publicModels []PublicModelResponse
+	// One read of the observed catalogs answers every row below, so the model
+	// list reports the same window the request path forwards upstream.
+	contextWindows := h.observedModelContextWindows(ctx)
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
@@ -217,6 +232,13 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.Capabilities = m.Capabilities
 		entry.Provider = m.Provider
 		entry.UpstreamModel = m.UpstreamModel
+		// The window is looked up by the route's own id first: that is what the
+		// channel's catalog was keyed by when it was observed. The public alias is
+		// the fallback for a channel that publishes a different spelling.
+		input, output := h.modelContextWindow(ctx, contextWindows, mChannel, m.ModelID, publicID)
+		entry.ContextLength = input
+		entry.MaxInputTokens = input
+		entry.MaxOutputTokens = output
 		publicModels = append(publicModels, entry)
 		publicModels = appendGrokCompatibilityAliases(publicModels, entry)
 	}
@@ -319,6 +341,14 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := publicModelResponse(m.ModelID, mChannel, m.CreatedAt)
+	// The single-model lookup answers with the same window the list publishes, so
+	// a client that validates one catalog entry learns the real number instead of
+	// falling back to its own default.
+	contextWindows := h.observedModelContextWindows(ctx)
+	input, output := h.modelContextWindow(ctx, contextWindows, mChannel, m.ModelID, normalizeRequestedModelID(id))
+	resp.ContextLength = input
+	resp.MaxInputTokens = input
+	resp.MaxOutputTokens = output
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		apperrors.New("api_error", "Failed to encode response", http.StatusInternalServerError).WriteResponse(w)

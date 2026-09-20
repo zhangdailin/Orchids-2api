@@ -452,8 +452,6 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		writeInt(cfg.MaxRetries)
 		writeInt(cfg.RetryDelay)
 		writeInt(cfg.RequestTimeout)
-		writeInt(cfg.WarpMaxToolResults)
-		writeInt(cfg.WarpMaxHistoryMessages)
 		for _, value := range cfg.ProxyBypass {
 			writeString(value)
 		}

@@ -138,39 +138,55 @@ type Config struct {
 	// A relay gateway forwards client messages without rewriting content.
 	// This field is NOT written into ApplyHardcoded, so it survives a
 	// persistConfig round trip.
-	WarpDisableTools       *bool `json:"-"`
-	WarpMaxToolResults     int   `json:"-"`
-	WarpMaxHistoryMessages int   `json:"-"`
-	Stream                 *bool `json:"-"`
-	ImageNSFW              *bool `json:"-"`
-	ImageFinalMinBytes     int   `json:"-"`
-	ImageMediumMinBytes    int   `json:"-"`
-	MaxRetries             int   `json:"max_retries,omitempty"`
-	RetryDelay             int   `json:"retry_delay,omitempty"`
-	AccountSwitchCount     int   `json:"account_switch_count,omitempty"`
+	//
+	// WarpMaxToolResults and WarpMaxHistoryMessages used to live here. They never
+	// trimmed anything — the only reader was the account client-cache key — so a
+	// deployment that lowered them to save context got no saving and no warning.
+	// They are gone rather than documented, because an inert knob is a trap. The
+	// passthrough behaviour they pretended to govern is covered by
+	// TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem.
+	WarpDisableTools    *bool `json:"-"`
+	Stream              *bool `json:"-"`
+	ImageNSFW           *bool `json:"-"`
+	ImageFinalMinBytes  int   `json:"-"`
+	ImageMediumMinBytes int   `json:"-"`
+	MaxRetries          int   `json:"max_retries,omitempty"`
+	RetryDelay          int   `json:"retry_delay,omitempty"`
+	AccountSwitchCount  int   `json:"account_switch_count,omitempty"`
 	// Quality-hold policy. The gateway withholds a degraded reasoning turn
 	// instead of streaming it, then retries it on another account. Holding is on
 	// by default and fails open once the retry budget is spent.
-	QualityHoldEnabled     *bool    `json:"quality_hold_enabled,omitempty"`
-	QualityHoldMaxAttempts int      `json:"quality_hold_max_attempts,omitempty"`
-	QualityHoldTimeoutMs   int      `json:"quality_hold_timeout_ms,omitempty"`
-	QualityHoldOnExhausted string   `json:"quality_hold_on_exhausted,omitempty"`
-	RequestTimeout         int      `json:"request_timeout,omitempty"`
-	Retry429Interval       int      `json:"retry_429_interval,omitempty"`
-	TokenRefreshInterval   int      `json:"-"`
-	AutoRefreshToken       bool     `json:"-"`
-	LoadBalancerCacheTTL   int      `json:"-"`
-	ConcurrencyLimit       int      `json:"-"`
-	ConcurrencyTimeout     int      `json:"concurrency_timeout,omitempty"`
-	AdaptiveTimeout        bool     `json:"-"`
-	ProxyURL               string   `json:"proxy_url"`
-	ProxyHTTP              string   `json:"proxy_http"`
-	ProxyHTTPS             string   `json:"proxy_https"`
-	ProxyUser              string   `json:"proxy_user"`
-	ProxyPass              string   `json:"proxy_pass"`
-	ProxyBypass            []string `json:"proxy_bypass"`
-	PublicKey              string   `json:"-"`
-	PublicEnabled          *bool    `json:"-"`
+	QualityHoldEnabled     *bool  `json:"quality_hold_enabled,omitempty"`
+	QualityHoldMaxAttempts int    `json:"quality_hold_max_attempts,omitempty"`
+	QualityHoldTimeoutMs   int    `json:"quality_hold_timeout_ms,omitempty"`
+	QualityHoldOnExhausted string `json:"quality_hold_on_exhausted,omitempty"`
+	RequestTimeout         int    `json:"request_timeout,omitempty"`
+	Retry429Interval       int    `json:"retry_429_interval,omitempty"`
+	// SessionTTLMinutes bounds how long a client conversation may pause and still
+	// resume the upstream conversation it was attached to. A coding session
+	// routinely idles for hours between turns; when the binding expires the next
+	// turn can no longer continue the upstream conversation and the whole
+	// transcript has to be re-sent instead.
+	SessionTTLMinutes int `json:"session_ttl_minutes,omitempty"`
+	// WarpStatelessHistoryMaxChars bounds the transcript rendered for a Warp
+	// request that has no server-issued conversation id. It is a transport
+	// ceiling, not a context policy: the upstream applies the model's own window
+	// to whatever it receives, so this must stay well above any model window.
+	WarpStatelessHistoryMaxChars int      `json:"warp_stateless_history_max_chars,omitempty"`
+	TokenRefreshInterval         int      `json:"-"`
+	AutoRefreshToken             bool     `json:"-"`
+	LoadBalancerCacheTTL         int      `json:"-"`
+	ConcurrencyLimit             int      `json:"-"`
+	ConcurrencyTimeout           int      `json:"concurrency_timeout,omitempty"`
+	AdaptiveTimeout              bool     `json:"-"`
+	ProxyURL                     string   `json:"proxy_url"`
+	ProxyHTTP                    string   `json:"proxy_http"`
+	ProxyHTTPS                   string   `json:"proxy_https"`
+	ProxyUser                    string   `json:"proxy_user"`
+	ProxyPass                    string   `json:"proxy_pass"`
+	ProxyBypass                  []string `json:"proxy_bypass"`
+	PublicKey                    string   `json:"-"`
+	PublicEnabled                *bool    `json:"-"`
 }
 
 // EgressNodeConfig describes one egress exit node for the Grok proxy pool.
@@ -339,8 +355,6 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 	v := false
 	cfg.WarpDisableTools = &v
-	cfg.WarpMaxToolResults = 10
-	cfg.WarpMaxHistoryMessages = 20
 	vTrue := true
 	cfg.Stream = &vTrue
 	cfg.ImageNSFW = &vTrue
@@ -361,6 +375,14 @@ func ApplyHardcoded(cfg *Config) {
 	// one. The bounds still let an operator lower it.
 	cfg.RequestTimeout = boundedDefault(cfg.RequestTimeout, 7200, 86400)
 	cfg.Retry429Interval = boundedDefault(cfg.Retry429Interval, 60, 3600)
+	// A conversation binding must outlive a working session. Thirty minutes was
+	// short enough that an ordinary lunch break detached the upstream
+	// conversation and forced the next turn to replay the entire transcript.
+	cfg.SessionTTLMinutes = boundedDefault(cfg.SessionTTLMinutes, 12*60, 30*24*60)
+	// Transport ceiling for a stateless Warp request. 1M tokens of text is only a
+	// few MiB, so 8 MiB is above any single model window while still bounding one
+	// protobuf frame.
+	cfg.WarpStatelessHistoryMaxChars = boundedDefault(cfg.WarpStatelessHistoryMaxChars, 8<<20, 64<<20)
 	cfg.TokenRefreshInterval = 1
 	cfg.AutoRefreshToken = true
 	cfg.LoadBalancerCacheTTL = 5

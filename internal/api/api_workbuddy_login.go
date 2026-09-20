@@ -212,12 +212,7 @@ func (a *API) buildWorkBuddyAccountFromCredentialsWithFactory(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(models))
-	for _, model := range models {
-		if id := strings.TrimSpace(model.ID); id != "" {
-			ids = append(ids, id)
-		}
-	}
+	ids := workbuddy.CatalogSnapshot(models)
 	if len(ids) == 0 {
 		return nil, errors.New("workbuddy catalog was empty")
 	}

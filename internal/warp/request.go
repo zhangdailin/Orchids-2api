@@ -17,7 +17,6 @@ import (
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/toolname"
 	"orchids-api/internal/upstream"
-	"orchids-api/internal/util"
 )
 
 type InputTokenEstimate struct {
@@ -33,9 +32,31 @@ var warpExitCodePattern = regexp.MustCompile(`(?i)\bexit(?:\s+code|\s+status)?\s
 var warpGrepLinePattern = regexp.MustCompile(`^(.+?):(\d+)(?::|-)`)
 
 // A request without a server-issued Warp conversation ID is stateless at the
-// upstream. Keep enough transcript to preserve OpenAI/Claude multi-turn
-// semantics instead of silently forwarding only the last user message.
-const warpStatelessHistoryMaxChars = 48 * 1024
+// upstream, so the rendered transcript IS the conversation. The ceiling exists
+// only to bound one protobuf request; it must never be the thing that decides
+// how much context a model gets, because the upstream applies the model's own
+// window to whatever it receives.
+//
+// The historical value was 48 KiB, which silently replaced everything older
+// than roughly 12k tokens with "[Earlier conversation omitted for length]" and
+// made a 1M-token model behave like a 16k one. StatelessHistoryMaxChars is a
+// variable so the deployment can tune it; the default is deliberately far above
+// any single model window (1M tokens of text is only a few MiB).
+const defaultStatelessHistoryMaxChars = 8 << 20
+
+// StatelessHistoryMaxChars caps the transcript rendered when no server-issued
+// Warp conversation id is available. Set it once from the deployment config.
+var StatelessHistoryMaxChars = defaultStatelessHistoryMaxChars
+
+// SetStatelessHistoryMaxChars installs the configured ceiling. A non-positive
+// value restores the default.
+func SetStatelessHistoryMaxChars(limit int) {
+	if limit <= 0 {
+		StatelessHistoryMaxChars = defaultStatelessHistoryMaxChars
+		return
+	}
+	StatelessHistoryMaxChars = limit
+}
 
 func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	query := buildWarpUserQuery(req.Prompt, req.Messages, req.System, req.ChatSessionID)
@@ -124,9 +145,10 @@ func renderWarpStatelessTranscript(messages []prompt.Message, systemItems []prom
 	}
 	selected := make([]string, 0, len(parts)-start)
 	used := len(systemPart)
+	limit := StatelessHistoryMaxChars
 	for i := len(parts) - 1; i >= start; i-- {
 		part := parts[i]
-		if used+len(part)+2 > warpStatelessHistoryMaxChars && len(selected) > 0 {
+		if used+len(part)+2 > limit && len(selected) > 0 {
 			break
 		}
 		selected = append(selected, part)
@@ -596,7 +618,18 @@ func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warp
 	if computerAgentModel == "" {
 		computerAgentModel = computerUseModel
 	}
-	contextLimit := uint32(0)
+	// The model config carries the window only when the caller resolved one from
+	// the account's own discovery. Warp reads an absent field as "use the model's
+	// default max", which is honest; it must not be pinned to a literal zero.
+	modelConfig := warpapi.Request_Settings_ModelConfig_builder{
+		Base:             stringPtr(normalizeWarpModel(req.Model)),
+		CliAgent:         stringPtr(cliAgentModel),
+		ComputerUseAgent: stringPtr(computerAgentModel),
+	}
+	if req.WarpContextWindowLimit > 0 {
+		limit := req.WarpContextWindowLimit
+		modelConfig.BaseModelContextWindowLimit = &limit
+	}
 	// Warp defines an empty supported_tools list as "any tool", not "no tools".
 	// Always send the bounded official lists. Per-request denial is enforced by
 	// the handler's prompt gate and response-side hard gate.
@@ -621,12 +654,7 @@ func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warp
 	autonomy := warpapi.AutonomyLevel_SUPERVISED
 	isolation := warpapi.IsolationLevel_NONE
 	return warpapi.Request_Settings_builder{
-		ModelConfig: warpapi.Request_Settings_ModelConfig_builder{
-			Base:                        stringPtr(normalizeWarpModel(req.Model)),
-			CliAgent:                    stringPtr(cliAgentModel),
-			ComputerUseAgent:            stringPtr(computerAgentModel),
-			BaseModelContextWindowLimit: &contextLimit,
-		}.Build(),
+		ModelConfig:                                modelConfig.Build(),
 		WebContextRetrievalEnabled:                 boolPtr(toolsEnabled),
 		SupportsParallelToolCalls:                  boolPtr(parallelTools),
 		UseAnthropicTextEditorTools:                boolPtr(false),
@@ -749,9 +777,19 @@ type toolDef struct {
 }
 
 const (
-	maxWarpToolCount         = 32
-	maxWarpToolDescLen       = 512
-	maxWarpToolSchemaJSONLen = 4096
+	// warpToolCountCeiling bounds how many tool declarations one request may
+	// carry. It is a transport guard, not a curation policy: the previous value of
+	// 32 silently dropped every tool past the first 32, which a client that
+	// declares MCP server tools reaches easily. A dropped tool is invisible to
+	// the model, so the client believes it can be called while the model has
+	// never heard of it.
+	warpToolCountCeiling = 256
+	// warpToolDescriptionCeiling bounds one tool description. A description is how
+	// the model decides when a tool applies, so the old 512-character cut deleted
+	// exactly the part that explains a tool's limits and failure modes. The
+	// ceiling exists only so a malformed request cannot build an unbounded
+	// protobuf frame, and it sits far above any real description.
+	warpToolDescriptionCeiling = 64 * 1024
 )
 
 var warpBuiltinToolNames = map[string]struct{}{
@@ -762,50 +800,6 @@ var warpBuiltinToolNames = map[string]struct{}{
 	"Glob":      {},
 	"Grep":      {},
 	"TodoWrite": {},
-}
-
-var warpToolAllowedProps = map[string]map[string]struct{}{
-	"Bash": {
-		"command":           {},
-		"description":       {},
-		"run_in_background": {},
-		"timeout":           {},
-	},
-	"Read": {
-		"file_path": {},
-		"offset":    {},
-		"limit":     {},
-		"pages":     {},
-	},
-	"Edit": {
-		"file_path":   {},
-		"old_string":  {},
-		"new_string":  {},
-		"replace_all": {},
-	},
-	"Write": {
-		"file_path": {},
-		"content":   {},
-	},
-	"Glob": {
-		"pattern": {},
-		"path":    {},
-	},
-	"Grep": {
-		"pattern":     {},
-		"path":        {},
-		"glob":        {},
-		"type":        {},
-		"output_mode": {},
-		"-i":          {},
-		"multiline":   {},
-		"head_limit":  {},
-		"offset":      {},
-		"context":     {},
-	},
-	"TodoWrite": {
-		"todos": {},
-	},
 }
 
 func isWarpBuiltinTool(name string) bool {
@@ -844,13 +838,19 @@ func convertTools(tools []interface{}) []toolDef {
 		}
 		seen[key] = struct{}{}
 
-		schema = compactWarpSchemaForTool(canonicalName, schema)
+		// The client's schema is forwarded verbatim. It used to be rewritten —
+		// schema keys outside a small set dropped, properties filtered against a
+		// hand-maintained allowlist per builtin, and anything past 4 KiB replaced
+		// by an empty object — which removed arguments the model had been told
+		// about (Bash's dangerouslyDisableSandbox among them) and turned an
+		// over-sized tool into one that accepts nothing. The upstream takes an
+		// arbitrary JSON schema, so there is nothing here to rewrite.
 		defs = append(defs, toolDef{
 			Name:        name,
-			Description: compactWarpDescription(description),
+			Description: warpToolDescription(description),
 			Schema:      schema,
 		})
-		if len(defs) >= maxWarpToolCount {
+		if len(defs) >= warpToolCountCeiling {
 			break
 		}
 	}
@@ -902,131 +902,25 @@ func schemaMap(v interface{}) map[string]interface{} {
 	return m
 }
 
-func compactWarpDescription(description string) string {
+// warpToolDescription renders one tool description for the upstream request.
+//
+// It trims surrounding whitespace and nothing else below the ceiling. A
+// description tells the model when a tool applies and where it fails, so cutting
+// it is cutting capability; the ceiling is a transport guard, not a curation
+// policy.
+func warpToolDescription(description string) string {
 	description = strings.TrimSpace(description)
 	if description == "" {
 		return ""
 	}
-	const suffix = "...[truncated]"
 	runes := []rune(description)
-	if len(runes) <= maxWarpToolDescLen {
+	if len(runes) <= warpToolDescriptionCeiling {
 		return description
 	}
-	keep := maxWarpToolDescLen - len([]rune(suffix))
+	const suffix = "...[truncated]"
+	keep := warpToolDescriptionCeiling - len([]rune(suffix))
 	if keep <= 0 {
 		return suffix
 	}
 	return string(runes[:keep]) + suffix
-}
-
-func compactWarpSchemaForTool(name string, schema map[string]interface{}) map[string]interface{} {
-	if schema == nil {
-		return nil
-	}
-	cleaned := cleanWarpSchema(schema, true)
-	if cleaned == nil {
-		return nil
-	}
-	filtered := filterWarpSchemaProperties(name, cleaned)
-	if filtered == nil {
-		return nil
-	}
-	cleaned = filtered
-	if util.SchemaJSONLen(cleaned) <= maxWarpToolSchemaJSONLen {
-		return cleaned
-	}
-	stripped := cleanWarpSchema(cleaned, false)
-	if util.SchemaJSONLen(stripped) <= maxWarpToolSchemaJSONLen {
-		return stripped
-	}
-	return map[string]interface{}{
-		"type":       "object",
-		"properties": map[string]interface{}{},
-	}
-}
-
-func filterWarpSchemaProperties(name string, schema map[string]interface{}) map[string]interface{} {
-	allowed, ok := warpToolAllowedProps[name]
-	if !ok || schema == nil {
-		return schema
-	}
-	props, ok := schema["properties"].(map[string]interface{})
-	if !ok || len(props) == 0 {
-		return schema
-	}
-
-	filtered := make(map[string]interface{}, len(props))
-	for key, value := range props {
-		if _, keep := allowed[key]; keep {
-			filtered[key] = value
-		}
-	}
-
-	out := make(map[string]interface{}, len(schema))
-	for key, value := range schema {
-		switch key {
-		case "properties":
-			out[key] = filtered
-		case "required":
-			raw, ok := value.([]interface{})
-			if !ok {
-				out[key] = value
-				continue
-			}
-			req := make([]interface{}, 0, len(raw))
-			for _, item := range raw {
-				propName, _ := item.(string)
-				if _, keep := allowed[propName]; keep {
-					req = append(req, item)
-				}
-			}
-			if len(req) > 0 {
-				out[key] = req
-			}
-		default:
-			out[key] = value
-		}
-	}
-	return out
-}
-
-func cleanWarpSchema(schema map[string]interface{}, keepDescriptions bool) map[string]interface{} {
-	if schema == nil {
-		return nil
-	}
-	sanitized := map[string]interface{}{}
-	for _, key := range []string{"type", "description", "properties", "required", "enum", "items"} {
-		if key == "description" && !keepDescriptions {
-			continue
-		}
-		if v, ok := schema[key]; ok {
-			sanitized[key] = v
-		}
-	}
-	if props, ok := sanitized["properties"].(map[string]interface{}); ok {
-		cleanProps := map[string]interface{}{}
-		for name, prop := range props {
-			cleanProps[name] = cleanWarpSchemaValue(prop, keepDescriptions)
-		}
-		sanitized["properties"] = cleanProps
-	}
-	if items, ok := sanitized["items"]; ok {
-		sanitized["items"] = cleanWarpSchemaValue(items, keepDescriptions)
-	}
-	return sanitized
-}
-
-func cleanWarpSchemaValue(value interface{}, keepDescriptions bool) interface{} {
-	switch v := value.(type) {
-	case map[string]interface{}:
-		return cleanWarpSchema(v, keepDescriptions)
-	case []interface{}:
-		out := make([]interface{}, 0, len(v))
-		for _, item := range v {
-			out = append(out, cleanWarpSchemaValue(item, keepDescriptions))
-		}
-		return out
-	default:
-		return value
-	}
 }
