@@ -187,14 +187,6 @@ func buildStatsigID() string {
 	return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("x1:TypeError: Cannot read properties of undefined (reading '%s')", property)))
 }
 
-func isBrowserStatsigID(value string) bool {
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
-	if err != nil {
-		return false
-	}
-	return strings.HasPrefix(string(decoded), "x1:TypeError: Cannot read properties of ")
-}
-
 func randomStringFromCharset(length int, charset string) string {
 	if length <= 0 || charset == "" {
 		return ""

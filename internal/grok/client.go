@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -100,16 +101,99 @@ func (c *Client) userAgent() string {
 	return defaultUA
 }
 
+// statsigID is the manually configured value, used when no signer is set.
 func (c *Client) statsigID() string {
 	if c != nil && c.cfg != nil && strings.TrimSpace(c.cfg.GrokStatsigID) != "" {
-		if configured := strings.TrimSpace(c.cfg.GrokStatsigID); isBrowserStatsigID(configured) {
+		// grok2api's own validity rule: base64 that decodes to 70 bytes. The
+		// browser-shaped prefix check was stricter than the reference and rejected
+		// values the upstream accepts.
+		if configured := strings.TrimSpace(c.cfg.GrokStatsigID); validStatsigID(configured) {
 			return configured
 		}
 	}
-	// Safe fallback when no external signer/configured browser value is
-	// available: omit the header. A locally fabricated TypeError token is more
-	// fingerprintable than an absent optional header and cannot be refreshed.
+	// With no value and no signer the header is omitted: a locally fabricated
+	// TypeError token is more fingerprintable than an absent optional header and
+	// cannot be refreshed.
 	return ""
+}
+
+// statsigSignerOnce is the process-wide signer: signatures are keyed by page and
+// path, so sharing the cache across accounts avoids re-reading grok.com per
+// credential.
+var (
+	statsigSignerOnce sync.Once
+	statsigSignerInst *statsigSigner
+)
+
+func (c *Client) statsigSigner() *statsigSigner {
+	statsigSignerOnce.Do(func() { statsigSignerInst = newStatsigSigner() })
+	return statsigSignerInst
+}
+
+// statsigSignerURL is the configured signing endpoint. grok2api ships
+// https://grok.wodf.de/sign as its default; this gateway requires the operator to
+// name it, because the signer receives the account's page metadata and that is a
+// dependency a deployment should choose deliberately. Setting the field to
+// grok2api's default reproduces its behaviour exactly.
+func (c *Client) statsigSignerURL() string {
+	if c == nil || c.cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.cfg.GrokStatsigSignerURL)
+}
+
+// statsigIDForRequest returns the header value for one request: the signed one
+// when a signer is configured, otherwise the manual value. A signing failure is
+// never fatal — the request proceeds without the header, which is exactly what
+// this gateway did before the signer existed.
+func (c *Client) statsigIDForRequest(ctx context.Context, token, method, reqURL string) string {
+	manual := c.statsigID()
+	signerURL := c.statsigSignerURL()
+	if signerURL == "" {
+		return manual
+	}
+	signer := c.statsigSigner()
+	if signer == nil {
+		return manual
+	}
+	cookie := ""
+	if cfClearance, cfBM := c.cloudflareCookies(); true {
+		cookie = buildGrokCookie(token, cfClearance, cfBM)
+	}
+	value, source, err := signer.signature(ctx, c.statsigMetaDoer(token), c.baseURL(), signerURL, cookie, method, reqURL)
+	if err != nil || value == "" {
+		if err != nil {
+			slog.Debug("statsig signing failed; sending the request without the header", "error", err, "path", reqURL)
+		}
+		return manual
+	}
+	slog.Debug("statsig id resolved", "source", source, "path", reqURL)
+	return value
+}
+
+// statsigMetaDoer reads the account's own page through the same transport the
+// account's requests use, so the metaContent belongs to this account.
+func (c *Client) statsigMetaDoer(token string) func(*http.Request) (*http.Response, error) {
+	client := c.clientForAsset(false)
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return func(request *http.Request) (*http.Response, error) {
+		return client.Do(request)
+	}
+}
+
+// invalidateStatsig drops the cached signature for one endpoint after a
+// challenge, so the next attempt signs again instead of replaying the value the
+// upstream just rejected (grok2api's Invalidate).
+func (c *Client) invalidateStatsig(method, reqURL string) {
+	signerURL := c.statsigSignerURL()
+	if signerURL == "" {
+		return
+	}
+	if signer := c.statsigSigner(); signer != nil {
+		signer.invalidate(c.baseURL(), signerURL, method, reqURL)
+	}
 }
 
 func (c *Client) cloudflareCookies() (string, string) {
@@ -331,6 +415,18 @@ func credentialAffinity(token string) string {
 	return fmt.Sprintf("sso_%x", sum[:16])
 }
 
+// headersFor is headers with the statsig id resolved for one request. The plain
+// headers method keeps the manual-only behaviour for callers without a context.
+func (c *Client) headersFor(ctx context.Context, token, method, reqURL string) http.Header {
+	h := c.headers(token)
+	if statsig := c.statsigIDForRequest(ctx, token, method, reqURL); statsig != "" {
+		h.Set("x-statsig-id", statsig)
+	} else {
+		h.Del("x-statsig-id")
+	}
+	return h
+}
+
 func (c *Client) headers(token string) http.Header {
 	// 从预分配的模板浅克隆请求头；固定值切片复用，动态字段再覆盖。
 	h := cloneHeaderShallow(baseHeaders, 4)
@@ -354,6 +450,17 @@ func (c *Client) headers(token string) http.Header {
 
 func (c *Client) appChatHeaders(token string) http.Header {
 	return c.appChatHeadersWithReferer(token, "")
+}
+
+// appChatHeadersFor resolves the statsig id for one app-chat request.
+func (c *Client) appChatHeadersFor(ctx context.Context, token, method, reqURL string) http.Header {
+	h := c.appChatHeaders(token)
+	if statsig := c.statsigIDForRequest(ctx, token, method, reqURL); statsig != "" {
+		h.Set("x-statsig-id", statsig)
+	} else {
+		h.Del("x-statsig-id")
+	}
+	return h
 }
 
 func (c *Client) appChatHeadersWithReferer(token, referer string) http.Header {
@@ -893,7 +1000,7 @@ func (c *Client) doRESTChat(ctx context.Context, token string, payload map[strin
 	}
 
 	reqURL := c.baseURL() + defaultChatPath
-	headers := c.appChatHeaders(token)
+	headers := c.appChatHeadersFor(ctx, token, http.MethodPost, reqURL)
 	if media, _ := payload["mediaGenInput"].(map[string]interface{}); media["imageToImage"] != nil {
 		headers.Set("Referer", c.baseURL()+"/imagine")
 	}
@@ -932,7 +1039,11 @@ func (c *Client) createAppChatCanvas(ctx context.Context, token string) (string,
 		return "", err
 	}
 	reqURL := c.baseURL() + defaultCanvasCreatePath
-	resp, err := c.doAppChatRequest(ctx, reqURL, body, c.appChatHeadersWithReferer(token, c.appChatImagineReferer("")))
+	headers := c.appChatHeadersWithReferer(token, c.appChatImagineReferer(""))
+	if statsig := c.statsigIDForRequest(ctx, token, http.MethodPost, reqURL); statsig != "" {
+		headers.Set("x-statsig-id", statsig)
+	}
+	resp, err := c.doAppChatRequest(ctx, reqURL, body, headers)
 	if err != nil {
 		return "", err
 	}
@@ -958,7 +1069,11 @@ func (c *Client) createAppChatConversation(ctx context.Context, token, referer s
 		return "", err
 	}
 	reqURL := c.baseURL() + defaultConversationPath
-	resp, err := c.doAppChatRequest(ctx, reqURL, body, c.appChatHeadersWithReferer(token, referer))
+	headers := c.appChatHeadersWithReferer(token, referer)
+	if statsig := c.statsigIDForRequest(ctx, token, http.MethodPost, reqURL); statsig != "" {
+		headers.Set("x-statsig-id", statsig)
+	}
+	resp, err := c.doAppChatRequest(ctx, reqURL, body, headers)
 	if err != nil {
 		return "", err
 	}
@@ -1127,7 +1242,7 @@ func (c *Client) getUsageBySpec(ctx context.Context, token string, spec ModelSpe
 	}
 
 	reqURL := c.baseURL() + defaultRateLimitsPath
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, c.headers(token), false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, c.headersFor(ctx, token, http.MethodPost, reqURL), false)
 	if err != nil {
 		return nil, err
 	}
@@ -1169,7 +1284,7 @@ func (c *Client) uploadFile(ctx context.Context, token, fileName, fileMimeType, 
 	}
 
 	reqURL := c.baseURL() + defaultUploadFilePath
-	headers := c.headers(token)
+	headers := c.headersFor(ctx, token, http.MethodPost, reqURL)
 	headers.Set("Referer", "https://grok.com/files")
 	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, headers, false)
 	if err != nil {
@@ -1271,7 +1386,7 @@ func (c *Client) getVoiceToken(ctx context.Context, token, voice, personality st
 	}
 
 	reqURL := c.baseURL() + defaultLivekitPath
-	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, c.headers(token), false)
+	resp, err := c.doRequest(ctx, reqURL, http.MethodPost, raw, c.headersFor(ctx, token, http.MethodPost, reqURL), false)
 	if err != nil {
 		return nil, err
 	}

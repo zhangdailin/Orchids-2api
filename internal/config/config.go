@@ -52,6 +52,7 @@ type Config struct {
 	UpstreamMode          string `json:"-"`
 	GrokAPIBaseURL        string `json:"-"`
 	GrokUserAgent         string `json:"-"`
+	GrokStatsigSignerURL string `json:"grok_statsig_signer_url,omitempty"`
 	GrokStatsigID         string `json:"grok_statsig_id,omitempty"`
 	GrokConfigCFClearance string `json:"grok_cf_clearance,omitempty"`
 	GrokConfigCFBM        string `json:"grok_cf_bm,omitempty"`

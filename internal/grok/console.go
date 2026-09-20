@@ -405,6 +405,12 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		// request is no longer trusted: cool the account briefly so the next
 		// attempt re-solves clearance instead of replaying the refused session.
 		if errors.Is(err, errGrokWebAntiBot) {
+			// The signed statsig id was just rejected: drop it so the next attempt
+			// asks the signer for a fresh one instead of replaying a value the
+			// upstream is refusing (grok2api's Invalidate).
+			if client := h.webClient(); client != nil {
+				client.invalidateStatsig(http.MethodPost, url)
+			}
 			h.markAccountStatus(ctx, sess.acc, fmt.Errorf("grok upstream status=429 body=anti-bot rejected session"))
 		}
 		writeGrokUpstreamError(w, err)
