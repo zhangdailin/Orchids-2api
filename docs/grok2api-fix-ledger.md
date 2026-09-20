@@ -519,18 +519,18 @@
 
 ## 十九、第十九轮：部署到生产（us1）
 
-部署对象：`3.15.148.113`（t2.small，Ubuntu 24.04），产物从 `2256a90` 构建，`sha256=69197ef28538e7e633f49a038c5f3227d441d2f6259279dfff70213c0dbc7dd0`，`/opt/orchids-2api/orchids-server` 已校验一致（旧版保留为 `orchids-server.backup-20260920-032428`）。
+部署对象：`<PROD_IP>`（t2.small，Ubuntu 24.04），产物从 `2256a90` 构建，`sha256=69197ef28538e7e633f49a038c5f3227d441d2f6259279dfff70213c0dbc7dd0`，`/opt/orchids-2api/orchids-server` 已校验一致（旧版保留为 `orchids-server.backup-20260920-032428`）。
 
 **部署前发现的阻塞点**：线上最近一小时 39 次推理请求（grok/workbuddy/qoder）**没有任何一个带 Key**，而完全对齐后 `inference_auth_enabled` 已不能关闭鉴权 → 直接部署会让所有现有调用方 401 且无法用配置恢复。按部署方选择，先落地一个"匿名来源白名单"（第十八节），再部署。
 
 **主机配置变更**（Redis 的 `settings:config` 与 `config.json` 同时写入，各自留有 `*.bak-preapply-20260920` 备份）：
-- `anonymous_allow_ips = ["161.118.140.32/32", "203.77.252.2/32"]`（实测的两个调用方来源），其余全部必须带 Key。
+- `anonymous_allow_ips = ["<PANEL_IP>/32", "<ALLOWED_SOURCE_IP_2>/32"]`（实测的两个调用方来源），其余全部必须带 Key。
 - `trusted_proxies` 补入 Cloudflare 的 22 条官方网段（`https://api.cloudflare.com/client/v4/ips`），共 24 条。原配置只有回环地址，导致"客户端 IP"被解析成 Cloudflare 边缘地址（141.101.84.8 / 162.158.138.122 等），既污染审计行，也让按来源的白名单无法工作。
 - 配套代码改动：可信对端下优先采用 `CF-Connecting-IP`（不可信对端会被清除该头），见第十九轮提交 `2256a90`。
 
 **部署后实测**：
 - 启动日志确认：`Statsig signing enabled with the default endpoint (https://grok.wodf.de/sign)`、`anonymous inference access is allowed for the configured sources...`。
-- 真实调用方：`161.118.140.32` → `/workbuddy/v1/chat/completions` **200**、`/grok/v1/chat/completions` **200**（部署后持续正常）。
+- 真实调用方：`<PANEL_IP>` → `/workbuddy/v1/chat/completions` **200**、`/grok/v1/chat/completions` **200**（部署后持续正常）。
 - 未在白名单的来源（部署机自身出口 / 回环）→ `/v1/models` **401** `invalid_api_key`；`/health` 200；`/admin` 302。
 - 白名单逐一验证：临时把测试出口加入白名单后 `/v1/models` **200**、返回 **200 个模型且无任何带 `/` 前缀的 ID**（`grok-4.6`、`grok-4.6-xhigh`、`grok-4-3-low` 等），验证完立即恢复为仅两个生产来源（恢复后该来源立刻回到 401）。
 - 单元状态：`orchids-2api`/`caddy`/`orchids-3002-loopback`/`redis-server` 全部 active+enabled；10 分钟内无 warning/error；端口 3002 对外仍被 nft 丢弃；磁盘 65%。
@@ -541,7 +541,7 @@
 `system cpu overloaded (current: 99.2%, threshold: 90%)`。完整证据链见
 `docs/incident-2026-09-20-workbuddy-503.md`。
 
-**定性**：两条报错来自两层。后者是前置 New API 面板（`api.chinablog.xyz` → `161.118.140.32:3000`，
+**定性**：两条报错来自两层。后者是前置 New API 面板（`<PANEL_DOMAIN>` → `<PANEL_IP>:3000`，
 Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值可配），与本部署无关——
 `strings orchids-server | grep -c "system cpu overloaded"` = 0、近 7 天 journal = 0，同期本机 load 0.01。
 
@@ -568,7 +568,7 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
 （`docs/diag-analysis-2026-09-19.md`：378 条请求中 224 条 > 262 144，中位数 297 356），4 个 350-credit
 免费包一天烧穿。要么补号，要么把长会话路由到不计量额度的渠道 / 在客户端做上下文压缩。
 
-**部署与实测**（`3.15.148.113`）：
+**部署与实测**（`<PROD_IP>`）：
 
 - 提交 `0f82039`，`sha256=342a72cd367248604a3542298fa7d95151163bd8445b6600b839b11e206fcc6b`。
   工作区当时有另一条并行改动（上下文窗口/`config.SessionTTLMinutes`/`resolveWarpRequestFeatures` 等，
@@ -579,13 +579,13 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
 - 二进制断言：`cooling down for the requested model` 出现 2 次、`no account in this channel can serve the request`
   1 次、`have exhausted their allowance` 1 次；`system cpu overloaded` 仍为 **0**（第 2 条报错与本部署无关的复核）；
   旧的 `overloaded_error` 常量已不在二进制里。
-- 实时验证（以生产调用方身份，用可信对端 + `CF-Connecting-IP: 161.118.140.32` 命中匿名白名单）：
+- 实时验证（以生产调用方身份，用可信对端 + `CF-Connecting-IP: <PANEL_IP>` 命中匿名白名单）：
   `GET /v1/models` → **200**（200 个模型，不消耗上游额度）。把 qoder 两个账号临时置为 429（只写状态，
   不发上游请求，因此不消耗额度）后：`POST /qoder/v1/chat/completions` → **429**
   `{"error":{"message":"Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account.","type":"rate_limit"},"type":"error"}`；
   选号器的内部说明 `no enabled accounts available for channel: qoder (all matching accounts are rate-limited or cooling down)`
   只出现在日志里。测试结束后两个账号已按备份逐字恢复（`status_code=''`、`last_attempt` 归零）。
-- 未做（留给运维）：面板 `161.118.140.32` 的 `monitor_cpu_threshold`（第 2 条报错）与 workbuddy/puter 的容量补充。
+- 未做（留给运维）：面板 `<PANEL_IP>` 的 `monitor_cpu_threshold`（第 2 条报错）与 workbuddy/puter 的容量补充。
 - 同类未改：`internal/grok/handler_responses_store.go` 有两处 `writeResponsesAPIError(503, …, err.Error())`
   同样把内部文本发给客户端；本轮只改通用会话入口，未动 grok responses 的既有语义。
 
@@ -634,7 +634,7 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
 `"Failed to fetch models: " + err.Error()`（500，`/v1/models` 与 `/api/models` 共用）会把存储层错误
 发给调用方；该文件有未提交的并行改动，动它会在对方提交时丢失。
 
-**第二轮部署与实测**（`3.15.148.113`）：
+**第二轮部署与实测**（`<PROD_IP>`）：
 
 - 提交 `cbd3c97`，`sha256=c95e92ca7fc3875e6ee8a71e855c5a89e4c668da59ac38482e19d33a4ef5b3e1`；
   验收为 `go build ./...` + `go vet` + `go test ./...` 全绿后构建 amd64 产物。
@@ -651,3 +651,29 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
   与共享分类器在 qoder 路径上的实时验证共同覆盖。账号状态已按备份逐字恢复。
 - 顺带发现（未修，属运维）：grok 视频上游对所有尝试返回 403 `This page is out of date`，
   指向该渠道 console/build 的 SSO 已失效，需要重新登录对应 xAI 账号。
+
+### 二十·四、公开仓库的文档脱敏与 sha 映射
+
+本仓库是 **public**，第二十轮的记录里带有生产/面板主机的可识别信息，故在推送后做了一次文档脱敏
+（`<PROD_IP>`、`<PANEL_IP>`、`<PANEL_DOMAIN>`、`<PANEL_NAME>`、`<PROD_DOMAIN>`、`<PROD_HOSTNAME>`、
+`<ALLOWED_SOURCE_IP_2>`、`<CLOUD_REGION>` 替换真实值；仅文档，代码与运行状态不变）。
+
+**脱敏只覆盖本文件与本轮新增的事故文档**。同一批标识符在更早的公开提交里仍然存在：
+`deploy/README.md`、`docs/diag-analysis-2026-09-19.md`、`docs/model-refresh-accuracy-audit.md`
+（`.audit/` 未纳入版本控制）。要彻底移除需要重写历史并处理 GitHub 侧的悬空对象。
+
+**sha 映射（2026-09-20 作者重写）**：第二十轮的 5 个提交推送后做过一次作者重写
+（`git rebase --exec 'git commit --amend --reset-author'`，作者改为仓库身份 `zhangdailin`，**树内容不变**），
+因此上文与服务器 build-info 引用的旧 sha 与仓库现有 sha 不同、但指向同一棵树：
+
+| 旧 sha（文档/服务器 build-info 引用） | 现 sha |
+| --- | --- |
+| `6bb81e4` | `cfebcfd` |
+| `cbd3c97` | `a14a607` |
+| `995efb5` | `786cc0e` |
+| `62665d0` | `49036f1` |
+| `b627729` | `bdd28f2` |
+
+线上二进制的 `orchids-server.deploy-info.txt` 仍记录构建当时的 sha（round 1 `0f82039`、round 2 `cbd3c97`、
+round 3 `62665d0`）；其中 `0f82039` 在补账本文档时已被 amend，只存在于服务器 build-info，与 `cfebcfd`
+仅差账本文档。

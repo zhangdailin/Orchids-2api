@@ -1,27 +1,27 @@
 # 事故记录：2026-09-20 两条 503（workbuddy 池空 + 面板 CPU 保护）
 
-调查对象：`3.15.148.113`（t2.small / Ubuntu 24.04，`ip-172-31-9-86`，`us1.daige.tech`）。
-结论：两条报错**来自两层不同的服务**，只有第 1 条出在 `3.15.148.113`；第 1 条的根因是
+调查对象：`<PROD_IP>`（t2.small / Ubuntu 24.04，`<PROD_HOSTNAME>`，`<PROD_DOMAIN>`）。
+结论：两条报错**来自两层不同的服务**，只有第 1 条出在 `<PROD_IP>`；第 1 条的根因是
 **容量耗尽**，以及**初始选号把"池子临时不可用"报成了 503 服务器故障**。
 
 ## 0. 线上拓扑（实测）
 
 ```
-客户端 (DSH provider=daige, baseURL https://api.chinablog.xyz/)
+客户端 (DSH provider=daige, baseURL https://<PANEL_DOMAIN>/)
    │
    ▼
-New API 面板「小肥肥智慧屋」 v1.0.0-rc.37
-  api.chinablog.xyz → 161.118.140.32:3000   （Oracle Cloud 首尔，AS31898）
+New API 面板「<PANEL_NAME>」 v1.0.0-rc.37
+  <PANEL_DOMAIN> → <PANEL_IP>:3000   （<CLOUD_REGION>，AS31898）
    │   匿名白名单调用方（orchids 配置 anonymous_allow_ips）
    ▼
-Cloudflare → Caddy (443) → orchids-2api 127.0.0.1:3002   ← 3.15.148.113
+Cloudflare → Caddy (443) → orchids-2api 127.0.0.1:3002   ← <PROD_IP>
    │
    ▼
 上游 www.workbuddy.ai / cli-chat-proxy.grok.com / …
 ```
 
-- `3.15.148.113` 上只有 `orchids-2api`(`:3002`)、`caddy`、`redis-server`；无 new-api 进程与文件。
-- `161.118.140.32` = `api.chinablog.xyz`（DNS 实测），其 `:3000/api/status` 返回 New API 的 `system_name/server_address/version`。
+- `<PROD_IP>` 上只有 `orchids-2api`(`:3002`)、`caddy`、`redis-server`；无 new-api 进程与文件。
+- `<PANEL_IP>` = `<PANEL_DOMAIN>`（DNS 实测），其 `:3000/api/status` 返回 New API 的 `system_name/server_address/version`。
 
 ## 1. 错误 A — `no enabled accounts available for channel: workbuddy`
 
@@ -37,7 +37,7 @@ Cloudflare → Caddy (443) → orchids-2api 127.0.0.1:3002   ← 3.15.148.113
 | 07:05:45 | 上游 `workbuddy API error: status=429, code=14003, message=too many requests` |
 | 07:28:03 / 07:28:09 | 同一 trace 连续两次 429（`code=14003`）→ 写入**模型级**冷却 |
 | 07:28:09 | `No more accounts available` → `no enabled accounts available for channel: workbuddy` |
-| 07:28:18 – 07:32:40 | **8 次 503**（`/workbuddy/v1/chat/completions`，来源全是 `161.118.140.32`，`Go-http-client/2.0`） |
+| 07:28:18 – 07:32:40 | **8 次 503**（`/workbuddy/v1/chat/completions`，来源全是 `<PANEL_IP>`，`Go-http-client/2.0`） |
 | 07:28:28 | critical 告警 `pool-empty:workbuddy`：“7 个启用账号全部处于冷却/异常状态” |
 | 07:33:28 | 告警自愈（模型级冷却到期） |
 
@@ -155,8 +155,8 @@ chat/images/videos/console 走 `writeGrokUpstreamError`（`apperrors.PublicMessa
 - 字符串与 `new_api_error` 都来自 New API：`middleware/performance.go` 的系统保护
   （`system_cpu_overloaded` / 503），`int(CPUUsage) > monitor_cpu_threshold`（默认 90），
   每 5s 采一次**面板主机**的系统级 CPU（`common/system_monitor.go`），超阈值期间所有请求直接 503。
-- 99.2% 是**面板那台机器**（`161.118.140.32`，同机还跑 WARP 出口与数据库）的水位：
-  `3.15.148.113` 同期 load average 0.01/0.02、内存 1961MB 用 511MB、CPU 压力 `avg10=1.29%`。
+- 99.2% 是**面板那台机器**（`<PANEL_IP>`，同机还跑 WARP 出口与数据库）的水位：
+  `<PROD_IP>` 同期 load average 0.01/0.02、内存 1961MB 用 511MB、CPU 压力 `avg10=1.29%`。
 - 时间也对得上：客户端 request id `20260920072841…` = 07:28:41Z，正落在 orchids 那批 503
   （07:28:33 / 07:28:48）之间——同一分钟里面板一边被自己的 CPU 保护挡住，一边在转发 workbuddy 的 503。
 
