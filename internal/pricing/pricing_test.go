@@ -283,3 +283,80 @@ func TestMediaPricingMatchesGrok2API(t *testing.T) {
 		t.Fatal("a provider-qualified video model was not priced")
 	}
 }
+
+func TestReconstructBreakdownExplainsAStoredCost(t *testing.T) {
+	// A text row: the components must add up to the estimator's answer.
+	q := Quantities{InputTokens: 1000, CachedTokens: 400, OutputTokens: 500}
+	breakdown, ok := ReconstructBreakdown("grok-4.6", q)
+	if !ok {
+		t.Fatal("grok-4.6 was not reconstructed")
+	}
+	direct, priced := EstimateCost("grok-4.6", q.InputTokens, q.CachedTokens, q.OutputTokens, q.InputTokens)
+	if !priced || breakdown.CostInUSDTicks != direct.CostInUSDTicks {
+		t.Fatalf("breakdown=%d direct=%d", breakdown.CostInUSDTicks, direct.CostInUSDTicks)
+	}
+	kinds := map[ComponentKind]int64{}
+	for _, component := range breakdown.Components {
+		kinds[component.Kind] = component.Quantity
+	}
+	if kinds[ComponentUncachedInput] != 600 || kinds[ComponentCachedInput] != 400 || kinds[ComponentOutput] != 500 {
+		t.Fatalf("components=%+v", breakdown.Components)
+	}
+	// The long-context tier is visible in the component price.
+	long, ok := ReconstructBreakdown("grok-4.6", Quantities{InputTokens: 300_000, OutputTokens: 10, ContextTokens: 300_000})
+	if !ok {
+		t.Fatal("long-context row was not reconstructed")
+	}
+	for _, component := range long.Components {
+		if component.Kind == ComponentUncachedInput && component.UnitPriceInUSDTicks != 40_000 {
+			t.Fatalf("long-context input price=%d", component.UnitPriceInUSDTicks)
+		}
+	}
+
+	// Images: output images plus the input images an edit processed.
+	images, ok := ReconstructBreakdown("grok-imagine-image-2.0-medium-2k", Quantities{OutputImages: 2})
+	if !ok {
+		t.Fatal("image row was not reconstructed")
+	}
+	if want := int64(2) * 800_000_000; images.CostInUSDTicks != want {
+		t.Fatalf("image breakdown=%d want=%d", images.CostInUSDTicks, want)
+	}
+	edit, ok := ReconstructBreakdown("grok-imagine-image-edit-2k", Quantities{OutputImages: 1, InputImages: 2})
+	if !ok {
+		t.Fatal("edit row was not reconstructed")
+	}
+	if want := int64(700_000_000) + int64(2)*100_000_000; edit.CostInUSDTicks != want {
+		t.Fatalf("edit breakdown=%d want=%d", edit.CostInUSDTicks, want)
+	}
+
+	// Video: seconds times the resolution rate plus reference images.
+	video, ok := ReconstructBreakdown("grok-imagine-video-1.5-1080p", Quantities{OutputSeconds: 6, InputImages: 1})
+	if !ok {
+		t.Fatal("video row was not reconstructed")
+	}
+	if want := int64(6)*2_500_000_000 + 100_000_000; video.CostInUSDTicks != want {
+		t.Fatalf("video breakdown=%d want=%d", video.CostInUSDTicks, want)
+	}
+
+	// Voice: characters for TTS, seconds for STT.
+	tts, ok := ReconstructBreakdown("grok-voice-tts", Quantities{Characters: 1000})
+	if !ok || tts.CostInUSDTicks != 1000*officialTTSCharacterTicks {
+		t.Fatalf("tts breakdown=%d ok=%v", tts.CostInUSDTicks, ok)
+	}
+	stt, ok := ReconstructBreakdown("grok-stt-streaming", Quantities{StreamingSeconds: 3600})
+	if !ok || stt.CostInUSDTicks != 2_000_000_000 {
+		t.Fatalf("stt breakdown=%d ok=%v", stt.CostInUSDTicks, ok)
+	}
+	// A partial hour is priced exactly as the estimator does, not by multiplying a
+	// rounded per-second rate.
+	sttDirect, sttPriced := EstimateSTTCost(1234.5, true)
+	partial, partialOK := ReconstructBreakdown("grok-stt-streaming", Quantities{StreamingSeconds: 1234.5})
+	if !sttPriced || !partialOK || partial.CostInUSDTicks != sttDirect.CostInUSDTicks {
+		t.Fatalf("partial stt breakdown=%d direct=%d", partial.CostInUSDTicks, sttDirect.CostInUSDTicks)
+	}
+
+	// An unpriced model stays unpriced rather than inventing components.
+	if _, ok := ReconstructBreakdown("future-model", Quantities{InputTokens: 10}); ok {
+		t.Fatal("an unpriced model was reconstructed")
+	}
+}

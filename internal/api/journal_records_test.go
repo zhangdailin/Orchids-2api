@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"orchids-api/internal/audit"
+	"orchids-api/internal/pricing"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -142,5 +143,41 @@ func TestJournalRecords_CursorAdvancesPastScannedEntries(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("following next_cursor never reached the buried request: older journal entries are unreachable")
+	}
+}
+
+// A priced journal row carries the components behind its cost, so the log centre
+// can answer "which rate is this" without a second lookup.
+func TestJournalRowCarriesItsPricingBreakdown(t *testing.T) {
+	breakdown, ok := pricingBreakdownForJournal(audit.Event{
+		Action: "grok_request", Model: "grok-4.6", PricingModel: "grok-4.6", PricingVersion: pricing.Version,
+		InputTokens: 1000, CachedInputTokens: 400, OutputTokens: 500, CostInUSDTicks: 55_000_000,
+	})
+	if !ok {
+		t.Fatal("a priced row produced no breakdown")
+	}
+	if breakdown.Model != "grok-4.6" || len(breakdown.Components) != 3 {
+		t.Fatalf("breakdown=%+v", breakdown)
+	}
+	var total int64
+	for _, component := range breakdown.Components {
+		total += component.CostInUSDTicks
+	}
+	if total != breakdown.CostInUSDTicks {
+		t.Fatalf("components total %d but the row says %d", total, breakdown.CostInUSDTicks)
+	}
+
+	// A media row takes its quantities from the metadata the settle path wrote.
+	media, ok := pricingBreakdownForJournal(audit.Event{
+		Action: "grok_media_request", Model: "grok-imagine-image", PricingModel: "grok-imagine-image",
+		CostInUSDTicks: 400_000_000, Metadata: map[string]interface{}{"images": 2},
+	})
+	if !ok || media.CostInUSDTicks != 400_000_000 {
+		t.Fatalf("media breakdown=%+v ok=%v", media, ok)
+	}
+
+	// An unpriced row stays without one rather than fabricating components.
+	if _, ok := pricingBreakdownForJournal(audit.Event{Action: "grok_request", Model: "future-model"}); ok {
+		t.Fatal("an unpriced row grew a breakdown")
 	}
 }

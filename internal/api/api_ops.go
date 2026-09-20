@@ -15,6 +15,7 @@ import (
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/opsagg"
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 )
 
@@ -254,6 +255,49 @@ func (a *API) HandleJournalRecords(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// pricingBreakdownForJournal rebuilds the rate components of a priced row. The
+// quantities come from the row's own usage counters plus the media counts the
+// row recorded in its metadata; a row without a pricing model, or whose
+// quantities are missing, simply has no breakdown.
+func pricingBreakdownForJournal(event audit.Event) (pricing.Breakdown, bool) {
+	if strings.TrimSpace(event.PricingModel) == "" || event.CostInUSDTicks <= 0 {
+		return pricing.Breakdown{}, false
+	}
+	quantities := pricing.Quantities{
+		InputTokens:  int64(event.InputTokens),
+		CachedTokens: int64(event.CachedInputTokens),
+		OutputTokens: int64(event.OutputTokens),
+	}
+	if event.Metadata != nil {
+		quantities.OutputImages = metadataInt(event.Metadata, "images")
+		quantities.InputImages = metadataInt(event.Metadata, "input_images")
+		quantities.OutputSeconds = metadataInt(event.Metadata, "seconds")
+		quantities.Characters = metadataInt(event.Metadata, "characters")
+		if duration, ok := event.Metadata["duration_seconds"].(float64); ok {
+			quantities.StreamingSeconds = duration
+			quantities.OutputSeconds = int64(duration)
+		}
+	}
+	breakdown, ok := pricing.ReconstructBreakdown(event.PricingModel, quantities)
+	if !ok {
+		return pricing.Breakdown{}, false
+	}
+	return breakdown, true
+}
+
+func metadataInt(metadata map[string]interface{}, key string) int64 {
+	switch value := metadata[key].(type) {
+	case int:
+		return int64(value)
+	case int64:
+		return value
+	case float64:
+		return int64(value)
+	default:
+		return 0
+	}
+}
+
 func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 	if a == nil || a.store == nil || a.store.RedisClient() == nil {
 		http.Error(w, "journal requires Redis storage", http.StatusServiceUnavailable)
@@ -341,6 +385,12 @@ func (a *API) writeJournalList(w http.ResponseWriter, r *http.Request) {
 			"event":    event,
 			"attempts": attempts[event.RequestID],
 		})
+		if breakdown, priced := pricingBreakdownForJournal(event); priced {
+			// The row keeps the cost and the pricing model; the components behind
+			// them are reconstructed on read so an operator can see which rate
+			// produced the number instead of taking it on faith.
+			records[len(records)-1]["pricing_breakdown"] = breakdown
+		}
 		if class := auditOutcomeClass(event); class != "" {
 			// The result class travels with the record: it is what the row's badge and
 			// the drill-down that opened the list both talk about.
