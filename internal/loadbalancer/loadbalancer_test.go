@@ -148,6 +148,59 @@ func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfu
 	}
 }
 
+// TestGetNextAccountExcludingByChannelWithTracker_AllAllowanceParkedNamesTheAllowance
+// pins the second reason an empty pool has: every account is parked by an
+// exhausted allowance with its reset time still ahead. The caller has to be able
+// to tell that apart from a rate limit, because the action differs — credits and
+// capacity, rather than waiting out a cooldown.
+func TestGetNextAccountExcludingByChannelWithTracker_AllAllowanceParkedNamesTheAllowance(t *testing.T) {
+	now := time.Now()
+	lb := &LoadBalancer{
+		connTracker: NewMemoryConnTracker(),
+		cachedAccounts: []*store.Account{
+			{ID: 1, Name: "WB1", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
+			{ID: 2, Name: "WB2", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
+		},
+		cacheExpires: now.Add(time.Minute),
+	}
+
+	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "workbuddy", nil)
+	if err == nil {
+		t.Fatal("expected an allowance-parked selector error, got nil")
+	}
+	if !strings.Contains(err.Error(), "have exhausted their allowance") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThePool
+// pins the reason that produced the WorkBuddy outage this was written for: the
+// channel has accounts, but every one of them is cooling down for the model the
+// request asked for. The bare "no enabled accounts available for channel" made
+// that read like a channel with no accounts at all.
+func TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThePool(t *testing.T) {
+	now := time.Now()
+	tracker := NewMemoryConnTracker()
+	lb := &LoadBalancer{
+		connTracker: tracker,
+		cachedAccounts: []*store.Account{
+			{ID: 1, Name: "WB1", AccountType: "workbuddy", Enabled: true},
+		},
+		cacheExpires: now.Add(time.Minute),
+	}
+
+	_, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", tracker, func(*store.Account) bool {
+		// The per-model cooldown filter: every candidate is withheld for this model.
+		return false
+	})
+	if err == nil {
+		t.Fatal("expected a model-filtered selector error, got nil")
+	}
+	if !strings.Contains(err.Error(), "cooling down for the requested model") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestGetNextAccountExcludingByChannelWithTracker_RejectsSingleAccountAtLimit(t *testing.T) {
 	tracker := NewMemoryConnTracker()
 	tracker.Acquire(1)

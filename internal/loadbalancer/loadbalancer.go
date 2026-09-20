@@ -111,8 +111,12 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 
 	var filtered []*store.Account
 	excludeSet := make(map[int64]bool)
+	// Counted per scan pass (see scan below), so the reasons reported for an empty
+	// pool describe one pass rather than a window and its fallback added together.
+	channelCandidates := 0
 	channelMatched := 0
 	rateLimitedUnavailable := 0
+	allowanceParked := 0
 	for _, id := range excludeIDs {
 		excludeSet[id] = true
 	}
@@ -132,6 +136,11 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 	}
 
 	scan := func(candidates []*store.Account) bool {
+		// Reset per pass: the whole-pool fallback re-scans accounts the window
+		// already counted, and doubling the counters would let one pool look like
+		// two (and flip which reason is reported for an empty one).
+		channelCandidates, channelMatched = 0, 0
+		rateLimitedUnavailable, allowanceParked = 0, 0
 		for _, acc := range candidates {
 			if excludeSet[acc.ID] {
 				continue
@@ -145,13 +154,21 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 					continue
 				}
 			}
+			// Counted before the caller's filter: the difference between "this
+			// channel has no accounts" and "this channel has accounts and the
+			// request's model filter rejected all of them" is the whole reason the
+			// pool is empty, and it is reported below.
+			channelCandidates++
 			if filter != nil && !filter(acc) {
 				continue
 			}
 			channelMatched++
 			if !lb.isAccountAvailable(ctx, acc) {
-				if strings.TrimSpace(acc.StatusCode) == "429" {
+				switch strings.TrimSpace(acc.StatusCode) {
+				case "429":
 					rateLimitedUnavailable++
+				case "402":
+					allowanceParked++
 				}
 				continue
 			}
@@ -166,8 +183,21 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 	accounts = filtered
 
 	if len(accounts) == 0 {
-		if channel != "" && channelMatched > 0 && rateLimitedUnavailable == channelMatched {
+		// An empty pool has three different causes and they need three different
+		// answers: a request whose model is cooling down on every account, a pool
+		// that is rate-limited, and a pool whose allowance is spent. All three used
+		// to arrive as the bare sentence below, so "every account is cooling down
+		// for this model" reached the operator as "no enabled accounts available
+		// for channel", which reads like the channel has no accounts at all — and
+		// the caller answered it with a 503 instead of a retryable 429.
+		switch {
+		case channel != "" && channelCandidates > 0 && channelMatched == 0:
+			// The caller's filter (a per-model cooldown) rejected every candidate.
+			return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are cooling down for the requested model)", channel)
+		case channel != "" && channelMatched > 0 && rateLimitedUnavailable == channelMatched:
 			return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are rate-limited or cooling down)", channel)
+		case channel != "" && channelMatched > 0 && allowanceParked == channelMatched:
+			return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts have exhausted their allowance)", channel)
 		}
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s", channel)
 	}

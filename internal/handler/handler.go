@@ -611,7 +611,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			"model":   req.Model,
 			"channel": targetChannel,
 		})
-		apperrors.New("overloaded_error", err.Error(), http.StatusServiceUnavailable).WriteResponse(w)
+		// The pool's note says why it is empty (cooling down for this model, rate
+		// limited, allowance spent, all busy). It stays in the log; the client gets
+		// the shared answer for that cause, with the status the cause implies — a
+		// capacity problem is a retryable 429, not a 503 server fault.
+		writePoolExhaustion(w, classifyPoolExhaustion(err, err.Error()))
 		return
 	}
 	if verboseDiagnostics {

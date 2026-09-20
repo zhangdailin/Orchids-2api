@@ -89,11 +89,19 @@ func TestHandleMessages_Warp403MarksAccountBlocked(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(body2))
 	h.HandleMessages(rec2, req2)
+	// The pool's own note ("no enabled accounts available for channel: warp") is a
+	// diagnostic and stays in the log: the client is told the pool cannot serve the
+	// request, in words that do not read like the channel is empty or the caller
+	// sent something wrong.
 	if rec2.Code != http.StatusServiceUnavailable {
 		t.Fatalf("second status=%d want 503 body=%s", rec2.Code, rec2.Body.String())
 	}
-	if !strings.Contains(rec2.Body.String(), "no enabled accounts available for channel: warp") {
-		t.Fatalf("second body=%q want no available warp account", rec2.Body.String())
+	secondBody := rec2.Body.String()
+	if !strings.Contains(secondBody, "no account in this channel can serve the request") {
+		t.Fatalf("second body=%q want the pool-unavailable answer", secondBody)
+	}
+	if strings.Contains(secondBody, "no enabled accounts available for channel") {
+		t.Fatalf("selector detail leaked into the response: %s", secondBody)
 	}
 	if upstreamCalls != 1 {
 		t.Fatalf("upstreamCalls=%d want still 1 after cached 403", upstreamCalls)

@@ -534,3 +534,57 @@
 - 未在白名单的来源（部署机自身出口 / 回环）→ `/v1/models` **401** `invalid_api_key`；`/health` 200；`/admin` 302。
 - 白名单逐一验证：临时把测试出口加入白名单后 `/v1/models` **200**、返回 **200 个模型且无任何带 `/` 前缀的 ID**（`grok-4.6`、`grok-4.6-xhigh`、`grok-4-3-low` 等），验证完立即恢复为仅两个生产来源（恢复后该来源立刻回到 401）。
 - 单元状态：`orchids-2api`/`caddy`/`orchids-3002-loopback`/`redis-server` 全部 active+enabled；10 分钟内无 warning/error；端口 3002 对外仍被 nft 丢弃；磁盘 65%。
+
+## 二十、第二十轮：池空的上报（两条 503 的定性）
+
+调查来源：调用方同时看到 `no enabled accounts available for channel: workbuddy (request id: …)` 与
+`system cpu overloaded (current: 99.2%, threshold: 90%)`。完整证据链见
+`docs/incident-2026-09-20-workbuddy-503.md`。
+
+**定性**：两条报错来自两层。后者是前置 New API 面板（`api.chinablog.xyz` → `161.118.140.32:3000`，
+Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值可配），与本部署无关——
+`strings orchids-server | grep -c "system cpu overloaded"` = 0、近 7 天 journal = 0，同期本机 load 0.01。
+
+**前者**：workbuddy 渠道 7 个号中 4 个的信用包在 2026-09-17 一次批量请求中真实耗尽
+（上游 14018 `Credits exhausted`），按 `dafe8a9` 的设计停在 `QuotaResetAt`（9-26/9-27）——
+该设计有生产实测支撑（额度耗尽对所有模型都拒绝），**不是僵尸状态**，不做提前释放。剩余 3 个号承担全渠道流量，
+被上游 `14003` 限流后各写一条模型级冷却，候选集为 0 → 池空。
+
+**本次改动（唯一的代码缺陷：把容量问题报成服务器故障）**：
+- `handler.go` 的初始选号此前硬编码 `apperrors.New("overloaded_error", err.Error(), 503)`：状态错（同一条件在
+  "重试耗尽"入口早就是可重试的 429），文案错（把选号器内部说明发给客户端）。
+- `loadbalancer.go` 把空池的三种原因压成同一句；现按原因分别命名（模型级冷却 / 全池限流 / 额度耗尽），
+  并按扫描轮次重置计数器（窗口扫描 + 全池回退不再相加）。
+- 新增 `internal/handler/no_account.go`：初始选号与重试耗尽共用一套分类，状态由 `apperrors.StatusForCategory`
+  推出，因此状态与文案不可能互相矛盾（冷却/限流/额度耗尽/账号忙 → 429；模型不可路由 → 404；无账号或凭据全废 → 503）。
+  内部说明只进日志。
+- 测试：新增 `no_account_test.go`（8 种原因 + 状态 + "内部说明不得出现在响应里"）、`loadbalancer_test.go` 两条
+  （额度耗尽、模型过滤清空候选），并修正 `handler_warp_status_test.go` 对响应文案的断言。
+
+**未做且不该做**：上一轮为"提前释放 4 个 402"准备的 `scripts/clear-workbuddy-stale-402.sh` 已删除——
+按上述实测，提前释放会把死号放回池子，重现"每个请求重试多个死号 + 二次 429"的原始事故。
+
+**容量（代码之外）**：真正让池子变空的是额度消耗——该渠道承载 30–40 万 input tokens 的长会话
+（`docs/diag-analysis-2026-09-19.md`：378 条请求中 224 条 > 262 144，中位数 297 356），4 个 350-credit
+免费包一天烧穿。要么补号，要么把长会话路由到不计量额度的渠道 / 在客户端做上下文压缩。
+
+**部署与实测**（`3.15.148.113`）：
+
+- 提交 `0f82039`，`sha256=342a72cd367248604a3542298fa7d95151163bd8445b6600b839b11e206fcc6b`。
+  工作区当时有另一条并行改动（上下文窗口/`config.SessionTTLMinutes`/`resolveWarpRequestFeatures` 等，
+  未提交）会让整树编译不过，因此**从 `61dd2ee` 的干净 worktree 重新落一次提交**，只含本轮改动的 9 个文件，
+  不夹带并行改动；`go build ./...` + `go test ./...` 在该干净树上全绿。
+- 部署走 `scripts/deploy-orchids.sh`：校验和一致、旧二进制保留为 `orchids-server.backup-20260920-075255`、
+  health check 通过（`/admin` 302、`/health` 200），启动日志无 error，`NRestarts=0`。
+- 二进制断言：`cooling down for the requested model` 出现 2 次、`no account in this channel can serve the request`
+  1 次、`have exhausted their allowance` 1 次；`system cpu overloaded` 仍为 **0**（第 2 条报错与本部署无关的复核）；
+  旧的 `overloaded_error` 常量已不在二进制里。
+- 实时验证（以生产调用方身份，用可信对端 + `CF-Connecting-IP: 161.118.140.32` 命中匿名白名单）：
+  `GET /v1/models` → **200**（200 个模型，不消耗上游额度）。把 qoder 两个账号临时置为 429（只写状态，
+  不发上游请求，因此不消耗额度）后：`POST /qoder/v1/chat/completions` → **429**
+  `{"error":{"message":"Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account.","type":"rate_limit"},"type":"error"}`；
+  选号器的内部说明 `no enabled accounts available for channel: qoder (all matching accounts are rate-limited or cooling down)`
+  只出现在日志里。测试结束后两个账号已按备份逐字恢复（`status_code=''`、`last_attempt` 归零）。
+- 未做（留给运维）：面板 `161.118.140.32` 的 `monitor_cpu_threshold`（第 2 条报错）与 workbuddy/puter 的容量补充。
+- 同类未改：`internal/grok/handler_responses_store.go` 有两处 `writeResponsesAPIError(503, …, err.Error())`
+  同样把内部文本发给客户端；本轮只改通用会话入口，未动 grok responses 的既有语义。

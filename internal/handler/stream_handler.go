@@ -2898,28 +2898,18 @@ func (h *streamHandler) writeStreamError(category, message string) {
 }
 
 func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr error) {
-	errorMsg := "Request failed: retries exhausted and no available accounts. Please check account statuses in Admin UI or add valid accounts."
-	category := apperrors.ClassifyUpstreamError(lastErr).Category
-	selectErrText := ""
-	if selectErr != nil {
-		selectErrText = strings.ToLower(selectErr.Error())
-	}
-	lowerLastErr := strings.ToLower(lastErr)
-	switch {
-	case apperrors.IsCreditExhaustion(lowerLastErr):
-		// The channel's accounts are out of allowance rather than busy, so the
-		// action is to add credits or capacity. This used to name Warp whatever
-		// channel had actually run out.
-		category = "quota_exhausted"
-		errorMsg = "Request failed: every account for this channel has exhausted its allowance. Add credits or accounts, or wait for the quota reset."
-	case strings.Contains(lowerLastErr, "qoder agent limit reached") ||
-		strings.Contains(lowerLastErr, "qoder model rate limited") ||
-		strings.Contains(lowerLastErr, "model cooldown"):
-		category = "rate_limit"
-		errorMsg = "Request failed: the requested Qoder model is temporarily rate-limited. Please retry after its cooldown or choose another model."
-	case category == "rate_limit" || strings.Contains(selectErrText, "rate-limited"):
-		category = "rate_limit"
-		errorMsg = "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account."
+	// One rule for "no account could take this request", shared with the initial
+	// selection in Handler.HandleMessages: the two entrances used to answer the
+	// same condition differently, which is how a cooling pool reached one caller
+	// as a retryable 429 and another as a 503 server fault.
+	out := classifyPoolExhaustion(selectErr, lastErr)
+	if out.category == "" {
+		// Nothing named the cause, so the retry-exhausted wording and whatever the
+		// upstream error implies stand.
+		out = poolExhaustion{
+			category: apperrors.ClassifyUpstreamError(lastErr).Category,
+			message:  poolRetriesExhaustedMessage,
+		}
 	}
 	// The selector error and the last upstream error are diagnostics. They go to
 	// the log rather than into the response, which a client may show to a user and
@@ -2927,7 +2917,7 @@ func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr 
 	if selectErr != nil || strings.TrimSpace(lastErr) != "" {
 		slog.Warn("Reporting that no account could serve the request", "select_error", selectErr, "last_error", lastErr)
 	}
-	h.reportRequestFailure("Injecting no available account error to client", category, errorMsg)
+	h.reportRequestFailure("Injecting no available account error to client", out.category, out.message)
 }
 
 // Tool shape validation is independent of whether another call had the same input.
