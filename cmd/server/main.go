@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -167,6 +168,7 @@ func main() {
 		os.Exit(1)
 	}
 	grokHandler.SetCompactionCipher(compactionCipher)
+	logStatsigConfiguration(cfg)
 	apiHandler.SetConfigChangeHook(func(next *config.Config) {
 		configureRuntimeLogging(next)
 		h.SetConfig(next)
@@ -395,6 +397,30 @@ func logQoderReachability(cfg *config.Config) {
 		}
 		slog.Info("Qoder control plane reachable", "endpoint", qoder.DefaultOpenAPIBaseURL)
 	}()
+}
+
+// logStatsigConfiguration states which signing endpoint the Web plane will use.
+// The value decides whether account page metadata leaves this host, so an
+// operator should not have to infer it from behaviour.
+func logStatsigConfiguration(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	switch {
+	case cfg.GrokStatsigSignerURL == nil:
+		slog.Info("Statsig signing enabled with the default endpoint",
+			"endpoint", grok.DefaultStatsigSignerURL, "source", "default")
+	case strings.TrimSpace(*cfg.GrokStatsigSignerURL) == "":
+		slog.Warn("Statsig signing is disabled: no x-statsig-id will be sent; a manual value is used when configured")
+	default:
+		endpoint := strings.TrimSpace(*cfg.GrokStatsigSignerURL)
+		if err := grok.ValidateStatsigSignerURL(endpoint); err != nil {
+			slog.Error("Configured statsig signer URL is not usable; signing will be skipped",
+				"endpoint", endpoint, "error", err)
+			return
+		}
+		slog.Info("Statsig signing enabled", "endpoint", endpoint, "source", "config")
+	}
 }
 
 func configureRuntimeLogging(cfg *config.Config) {

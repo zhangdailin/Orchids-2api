@@ -13,6 +13,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
 )
 
@@ -272,5 +273,38 @@ func TestPersistConfigConcurrentReadersSeeCompleteSnapshots(t *testing.T) {
 	close(errCh)
 	for err := range errCh {
 		t.Fatal(err)
+	}
+}
+
+// A signing endpoint is validated where it is typed: the value decides whether
+// account page metadata leaves the host, so an invalid one must not be stored.
+func TestPersistConfigValidatesStatsigSignerURL(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	invalid := "http://public-signer.example.com/sign"
+	cfg := &config.Config{GrokStatsigSignerURL: &invalid}
+	if err := a.persistConfig(ctx, nil, cfg); err == nil {
+		t.Fatal("an insecure public signer URL was stored")
+	}
+	if saved, err := s.GetSetting(ctx, "config"); err != nil || strings.Contains(saved, "public-signer") {
+		t.Fatalf("the rejected value reached the store: %q err=%v", saved, err)
+	}
+
+	// grok2api's own endpoint, and an explicit opt-out, both store.
+	valid := grok.DefaultStatsigSignerURL
+	cfg = &config.Config{GrokStatsigSignerURL: &valid}
+	if err := a.persistConfig(ctx, nil, cfg); err != nil {
+		t.Fatalf("the reference signer URL was rejected: %v", err)
+	}
+	disabled := ""
+	cfg = &config.Config{GrokStatsigSignerURL: &disabled}
+	if err := a.persistConfig(ctx, nil, cfg); err != nil {
+		t.Fatalf("an explicit opt-out was rejected: %v", err)
+	}
+	// Unset keeps the default behaviour and is always accepted.
+	if err := a.persistConfig(ctx, nil, &config.Config{}); err != nil {
+		t.Fatalf("an unset signer URL was rejected: %v", err)
 	}
 }

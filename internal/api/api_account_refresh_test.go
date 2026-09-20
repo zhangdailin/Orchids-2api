@@ -15,6 +15,14 @@ import (
 	"orchids-api/internal/store"
 )
 
+// signerDisabledConfig points a client at a mock upstream with statsig signing
+// off: these tests assert the exact request paths, and signing would add the
+// signer's own page read to them.
+func signerDisabledConfig(baseURL string) *config.Config {
+	disabled := ""
+	return &config.Config{GrokAPIBaseURL: baseURL, GrokStatsigSignerURL: &disabled}
+}
+
 func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
 	t.Parallel()
 
@@ -37,7 +45,7 @@ func TestRefreshAccountState_GrokSyncsRemainingQuota(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &config.Config{GrokAPIBaseURL: srv.URL}
+	cfg := signerDisabledConfig(srv.URL)
 	a := New(nil, "", "", cfg)
 	acc := &store.Account{
 		ID:           1,
@@ -85,7 +93,7 @@ func TestRefreshAccountState_GrokQuotaIgnoresStaleAgentMode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(nil, "", "", &config.Config{GrokAPIBaseURL: srv.URL})
+	a := New(nil, "", "", signerDisabledConfig(srv.URL))
 	acc := &store.Account{
 		ID:           23,
 		AccountType:  "grok",
@@ -293,7 +301,7 @@ func TestVerifyGrokAccount_ModelNotFoundKeepsAuthenticatedSSOUsable(t *testing.T
 
 	acc := &store.Account{ID: 144, AccountType: "grok", ClientCookie: "sso=test-cookie"}
 	normalizeGrokTokenInput(acc)
-	if err := verifyGrokAccount(context.Background(), acc, &config.Config{GrokAPIBaseURL: srv.URL}, nil); err != nil {
+	if err := verifyGrokAccount(context.Background(), acc, signerDisabledConfig(srv.URL), nil); err != nil {
 		t.Fatalf("verifyGrokAccount() error=%v", err)
 	}
 	if acc.UserID != "user-1" || acc.Email != "user@example.com" || acc.TeamID != "team-1" {

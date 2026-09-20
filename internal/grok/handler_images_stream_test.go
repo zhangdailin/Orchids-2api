@@ -290,6 +290,8 @@ func TestAppChatImagePayload_MatchesGrokImagineAgentShape(t *testing.T) {
 }
 
 func TestCollectAppChatImageURLs_LiteUsesNewConversationEndpoint(t *testing.T) {
+	// Signing off: the test asserts which requests reach the upstream, and the
+	// signer's page read would join that list.
 	var upstreamPaths []string
 	var upstreamPayload map[string]interface{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -315,7 +317,8 @@ func TestCollectAppChatImageURLs_LiteUsesNewConversationEndpoint(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := NewHandler(&config.Config{GrokAPIBaseURL: upstream.URL}, nil)
+	signingOff := ""
+	h := NewHandler(&config.Config{GrokAPIBaseURL: upstream.URL, GrokStatsigSignerURL: &signingOff}, nil)
 	sess := &chatAccountSession{token: "basic-token"}
 	spec := ModelSpec{
 		ID:            "grok-imagine-image-lite",

@@ -205,31 +205,98 @@ func TestClientResolvesStatsigHeaderForRequest(t *testing.T) {
 	}))
 	defer signer.Close()
 
-	client := &Client{cfg: &config.Config{GrokStatsigSignerURL: signer.URL, GrokAPIBaseURL: page.URL}}
+	signerURL := signer.URL
+	client := &Client{cfg: &config.Config{GrokStatsigSignerURL: &signerURL, GrokAPIBaseURL: page.URL}}
 	client.httpClient = page.Client()
 	got := client.statsigIDForRequest(context.Background(), "sso=token", http.MethodPost, page.URL+"/rest/app-chat/conversations/new")
 	if got != value {
 		t.Fatalf("signed id=%q want %q", got, value)
 	}
-	// Manual mode is unchanged: no signer URL means the configured value is used.
+	// A manual value is still used when signing cannot produce one.
 	manual := signerFixture(5)
-	manualClient := &Client{cfg: &config.Config{GrokStatsigID: manual}}
-	if got := manualClient.statsigIDForRequest(context.Background(), "sso=token", http.MethodPost, "https://grok.com/rest"); got != manual {
-		t.Fatalf("manual id=%q want %q", got, manual)
-	}
-	// Neither configured: the header is omitted rather than fabricated.
-	empty := &Client{cfg: &config.Config{}}
+	// Signing turned off explicitly: no signer URL and no manual value means the
+	// header is omitted rather than fabricated.
+	disabled := ""
+	empty := &Client{cfg: &config.Config{GrokStatsigSignerURL: &disabled}}
 	if got := empty.statsigIDForRequest(context.Background(), "sso=token", http.MethodPost, "https://grok.com/rest"); got != "" {
 		t.Fatalf("id=%q want empty", got)
+	}
+	// Unset means grok2api's own default endpoint, so an upgraded deployment signs
+	// without being configured: pointed at the test page it must sign there.
+	unsetClient := &Client{cfg: &config.Config{GrokAPIBaseURL: page.URL}}
+	unsetClient.httpClient = page.Client()
+	if got := unsetClient.statsigSignerURL(); got != DefaultStatsigSignerURL {
+		t.Fatalf("unset signer URL=%q want the grok2api default", got)
 	}
 	// A failing signer falls back to the manual value, not to an error.
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer failing.Close()
-	fallback := &Client{cfg: &config.Config{GrokStatsigSignerURL: failing.URL, GrokStatsigID: manual, GrokAPIBaseURL: page.URL}}
+	failingURL := failing.URL
+	fallback := &Client{cfg: &config.Config{GrokStatsigSignerURL: &failingURL, GrokStatsigID: manual, GrokAPIBaseURL: page.URL}}
 	fallback.httpClient = page.Client()
 	if got := fallback.statsigIDForRequest(context.Background(), "sso=token", http.MethodPost, page.URL+"/rest"); got != manual {
 		t.Fatalf("fallback id=%q want the manual value", got)
+	}
+}
+
+// An unset endpoint means grok2api's own signer, and the client reports exactly
+// that, so an upgraded deployment signs without being configured.
+func TestStatsigSigningDefaultsToGrok2APIEndpoint(t *testing.T) {
+	client := &Client{cfg: &config.Config{}}
+	if got := client.statsigSignerURL(); got != DefaultStatsigSignerURL {
+		t.Fatalf("default signer=%q want %q", got, DefaultStatsigSignerURL)
+	}
+	// The default endpoint passes this gateway's own URL validation, so it is not
+	// refused where it is used.
+	if err := ValidateStatsigSignerURL(DefaultStatsigSignerURL); err != nil {
+		t.Fatalf("the default signer URL was refused: %v", err)
+	}
+	// An explicit empty string is the documented opt-out.
+	disabled := ""
+	if got := (&Client{cfg: &config.Config{GrokStatsigSignerURL: &disabled}}).statsigSignerURL(); got != "" {
+		t.Fatalf("opt-out signer=%q want empty", got)
+	}
+	// A configured endpoint wins.
+	custom := "https://signer.internal.example/sign"
+	if got := (&Client{cfg: &config.Config{GrokStatsigSignerURL: &custom}}).statsigSignerURL(); got != custom {
+		t.Fatalf("configured signer=%q want %q", got, custom)
+	}
+}
+
+// The signer reads the account's page through the client's own transport, and a
+// page without the verification meta is a signing failure rather than a silent
+// empty signature.
+func TestStatsigSigningUsesTheDefaultEndpointWhenUnset(t *testing.T) {
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, statsigTestPage("meta"))
+	}))
+	defer page.Close()
+	value := signerFixture(21)
+	var signedPath string
+	signer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		signedPath, _ = payload["path"].(string)
+		_ = json.NewEncoder(w).Encode(map[string]string{"x-statsig-id": value})
+	}))
+	defer signer.Close()
+
+	// The client points at the mock page, but leaves the signer endpoint unset, so
+	// the default is used: point the default at the mock through the package
+	// variable the tests own.
+	previous := statsigDefaultEndpointOverride
+	statsigDefaultEndpointOverride = signer.URL
+	defer func() { statsigDefaultEndpointOverride = previous }()
+
+	client := &Client{cfg: &config.Config{GrokAPIBaseURL: page.URL}}
+	client.httpClient = page.Client()
+	got := client.statsigIDForRequest(context.Background(), "sso=token", http.MethodPost, page.URL+"/rest/app-chat/conversations/new")
+	if got != value {
+		t.Fatalf("signed id=%q want %q", got, value)
+	}
+	if signedPath != "/rest/app-chat/conversations/new" {
+		t.Fatalf("signer path=%q", signedPath)
 	}
 }

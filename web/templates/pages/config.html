@@ -135,8 +135,18 @@
             <div class="settings-card-body">
               <div class="form-row">
                 <div class="form-row-label">
+                  <label class="form-label" for="cfg_grok_statsig_signer_url">statsig 签名服务</label>
+                  <span class="helper-text">留空表示使用 grok2api 默认签名服务（<code>https://grok.wodf.de/sign</code>）；填 <code>-</code> 或一个空格表示关闭签名；填写地址则用它。签名服务会收到账号首页的校验元数据。</span>
+                </div>
+                <div class="form-row-control">
+                  <input type="text" id="cfg_grok_statsig_signer_url" class="form-input" placeholder="留空 = 默认签名服务">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-row-label">
                   <label class="form-label" for="cfg_grok_statsig_id">x-statsig-id</label>
-                  <span class="helper-text">浏览器抓包得到的 x-statsig-id，用于通过上游指纹校验。</span>
+                  <span class="helper-text">浏览器抓包得到的 x-statsig-id，用于通过上游指纹校验；签名不可用时回落到它。</span>
                 </div>
                 <div class="form-row-control">
                   <input type="text" id="cfg_grok_statsig_id" class="form-input" placeholder="浏览器抓包得到的 x-statsig-id">

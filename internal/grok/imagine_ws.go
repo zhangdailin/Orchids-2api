@@ -89,8 +89,11 @@ func buildImagineWSRequestMessage(prompt, aspectRatio string, nsfw bool, pro boo
 	}
 }
 
-func (c *Client) imagineWSHeaders(token string) http.Header {
-	h := c.headers(token)
+func (c *Client) imagineWSHeaders(ctx context.Context, token string) http.Header {
+	// The handshake is a signed request like any other web-plane call: grok2api
+	// resolves x-statsig-id per method+path, and the WebSocket upgrade is the same
+	// document origin as /imagine.
+	h := c.headersFor(ctx, token, http.MethodGet, c.baseURL()+"/ws/imagine/listen")
 	h.Del("Content-Type")
 	h.Set("Origin", "https://grok.com")
 	h.Set("Referer", "https://grok.com/imagine")
@@ -108,7 +111,7 @@ func (c *Client) dialImagineWS(ctx context.Context, token string) (*websocket.Co
 		HandshakeTimeout: imagineWSConnectTimeout,
 		Proxy:            proxyFunc,
 	}
-	return dialer.DialContext(ctx, defaultImagineWSURL, c.imagineWSHeaders(token))
+	return dialer.DialContext(ctx, defaultImagineWSURL, c.imagineWSHeaders(ctx, token))
 }
 
 func parseImagineWSImageID(rawURL string) string {

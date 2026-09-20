@@ -33,17 +33,24 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// DefaultStatsigSignerURL is grok2api's own signing endpoint, and the one this
+// gateway uses when the deployment has not chosen another. It is exported so the
+// admin plane can show which endpoint a configuration is actually using.
+const DefaultStatsigSignerURL = "https://grok.wodf.de/sign"
+
+// statsigDefaultEndpointOverride lets a test exercise the unset case against a
+// local signer instead of the reference endpoint. Production never sets it.
+var statsigDefaultEndpointOverride string
+
 const (
-	// defaultStatsigSignerURL is grok2api's default signing endpoint.
-	defaultStatsigSignerURL = "https://grok.wodf.de/sign"
-	statsigCacheTTL         = time.Hour
-	statsigCacheMaxEntries  = 4096
-	statsigMetaBodyLimit    = 4 << 20
-	statsigResponseLimit    = 4 << 10
-	statsigMetaTimeout      = 15 * time.Second
-	statsigSignerTimeout    = 12 * time.Second
-	statsigSignerMaxURL     = 2048
-	statsigMetaName         = "grok-site-verification"
+	statsigCacheTTL        = time.Hour
+	statsigCacheMaxEntries = 4096
+	statsigMetaBodyLimit   = 4 << 20
+	statsigResponseLimit   = 4 << 10
+	statsigMetaTimeout     = 15 * time.Second
+	statsigSignerTimeout   = 12 * time.Second
+	statsigSignerMaxURL    = 2048
+	statsigMetaName        = "grok-site-verification"
 )
 
 var errStatsigMetaMissing = fmt.Errorf("grok index is missing the %s meta tag", statsigMetaName)
@@ -371,6 +378,14 @@ func validStatsigID(value string) bool {
 // explicitly configured internal address. A signer URL arrives from configuration,
 // and this gateway calls it with account-derived metadata, so a public plaintext
 // or custom-port endpoint is refused rather than silently trusted.
+// ValidateStatsigSignerURL reports whether a configured signing endpoint is one
+// this gateway is willing to call. The admin plane validates on save, so a
+// misconfigured endpoint is refused where it is typed instead of silently
+// dropping every signature at request time.
+func ValidateStatsigSignerURL(value string) error {
+	return validateStatsigSignerURL(value)
+}
+
 func validateStatsigSignerURL(value string) error {
 	raw := strings.TrimSpace(value)
 	parsed, err := url.ParseRequestURI(raw)

@@ -16,6 +16,10 @@ func TestGetUsage_DefaultModelDoesNotFallback(t *testing.T) {
 
 	var requestedModels []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if signerProbePath(r.URL.Path) {
+			answerSignerProbe(w, r)
+			return
+		}
 		if r.URL.Path != defaultRateLimitsPath {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -50,6 +54,10 @@ func TestGetUsage_ExplicitModelDoesNotFallback(t *testing.T) {
 
 	var requestedModels []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if signerProbePath(r.URL.Path) {
+			answerSignerProbe(w, r)
+			return
+		}
 		if r.URL.Path != defaultRateLimitsPath {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -80,6 +88,10 @@ func TestGetWebQuota_UsesAutoAndFastModes(t *testing.T) {
 	t.Parallel()
 	var requested []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if signerProbePath(r.URL.Path) {
+			answerSignerProbe(w, r)
+			return
+		}
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode payload: %v", err)
@@ -234,6 +246,10 @@ func TestGetVoiceToken_UsesPersonalityWhenInstructionEmpty(t *testing.T) {
 
 	var session map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if signerProbePath(r.URL.Path) {
+			answerSignerProbe(w, r)
+			return
+		}
 		if r.URL.Path != defaultLivekitPath {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
@@ -283,6 +299,10 @@ func TestGetVoiceToken_UsesRawInstructionsWhenProvided(t *testing.T) {
 
 	var session map[string]interface{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if signerProbePath(r.URL.Path) {
+			answerSignerProbe(w, r)
+			return
+		}
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode payload: %v", err)

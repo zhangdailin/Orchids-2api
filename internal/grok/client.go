@@ -130,16 +130,27 @@ func (c *Client) statsigSigner() *statsigSigner {
 	return statsigSignerInst
 }
 
-// statsigSignerURL is the configured signing endpoint. grok2api ships
-// https://grok.wodf.de/sign as its default; this gateway requires the operator to
-// name it, because the signer receives the account's page metadata and that is a
-// dependency a deployment should choose deliberately. Setting the field to
-// grok2api's default reproduces its behaviour exactly.
+// statsigSignerURL is the signing endpoint this deployment uses.
+//
+// Unset means grok2api's own default, so an upgraded deployment signs exactly
+// like the reference without being configured. An explicit empty string is the
+// opt-out, and any other value is that endpoint.
 func (c *Client) statsigSignerURL() string {
 	if c == nil || c.cfg == nil {
-		return ""
+		return statsigDefaultEndpoint()
 	}
-	return strings.TrimSpace(c.cfg.GrokStatsigSignerURL)
+	if c.cfg.GrokStatsigSignerURL == nil {
+		return statsigDefaultEndpoint()
+	}
+	return strings.TrimSpace(*c.cfg.GrokStatsigSignerURL)
+}
+
+// statsigDefaultEndpoint is grok2api's endpoint, or a test's local stand-in.
+func statsigDefaultEndpoint() string {
+	if override := strings.TrimSpace(statsigDefaultEndpointOverride); override != "" {
+		return override
+	}
+	return DefaultStatsigSignerURL
 }
 
 // statsigIDForRequest returns the header value for one request: the signed one

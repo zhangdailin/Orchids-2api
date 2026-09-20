@@ -107,7 +107,7 @@
 | A4-1 / A4-2 / A4-3 | 已对齐（第十一轮：公开模型名去 provider 前缀并按外部 ID 去重、通用大小写不敏感前缀剥离、补齐 B 的注册别名表；`<model>-<effort>` 别名按模型支持档位解析） |
 | A4-11 | 已对齐（第十一轮：恢复 B 的三项目录派生：4.6 在位补 4.5、OAuth Build 补 Composer、Super 才有 video 1.5） |
 | A4-17 | 已对齐（第十一轮：Codex 未知模型描述与 B 逐字节相同） |
-| A7-2 | 已对齐（第十一轮：移植外部签名器 + 首页 metaContent + 1h 缓存 + 反爬失效重签 + URL 校验；签名地址由配置显式指定） |
+| A7-2 | 已对齐（第十一轮：移植外部签名器 + 首页 metaContent + 1h 缓存 + 反爬失效重签 + URL 校验；第十八轮改为**默认启用参考实现的签名服务**，未配置时即 `https://grok.wodf.de/sign`） |
 | A8-12 | 已对齐（第十一轮：推理前缀恒要求托管 Key，`inference_auth_enabled` 不再能关闭鉴权） |
 | A9-1 | 已修复（第十轮：`internal/pricing` 官方费率表 + Key 额度预留/结算 + 审计成本三列，见第十四节） |
 | A3-7 | 已修复（第十轮：`compaction_trigger`/TUI 分类、canonical 摘要采样、`g2a_compact_v1` 封存与展开，见第十四节） |
@@ -498,3 +498,21 @@
 - `PricingBreakdown`：`pricing.ReconstructBreakdown` 从"定价模型 + 数量"重建费率分量（未缓存/缓存/输出 token 含长上下文档、图片输出+输入张数含 2.0 的档位矩阵与编辑附加费、视频秒数+参考图、TTS 字符、STT 小时费率），journal 列表对每个带定价模型的行附上 `pricing_breakdown`。
 
 **至此，本目标列出的每一项（17 条保留差异 + 覆盖缺口 + 实现级差异）都已落地**，判据见各节与 `docs/grok2api-audit/recount.py`（171 / 171 / 0 / 0）。
+
+## 十八、第十八轮：statsig 签名改为默认启用（与参考实现一致）
+
+第十一轮移植了签名器，但把"用哪个签名服务"留给部署方显式配置；参考实现是**默认就用** `https://grok.wodf.de/sign`。本轮把默认值补齐，语义变成三态：
+
+| `grok_statsig_signer_url` | 行为 |
+| --- | --- |
+| 未设置 / `null` | 使用参考实现默认签名服务 `https://grok.wodf.de/sign`（升级后行为与 grok2api 一致，无需配置） |
+| `""`（显式空串） | 关闭签名：不发送 `x-statsig-id`；配置了合法的 `grok_statsig_id` 时回落到它 |
+| 其它地址 | 使用该签名服务 |
+
+配套：
+- 字段类型改为 `*string`，因此"未设置"与"显式关闭"可区分（JSON 里 `null` vs `""`）。
+- **管理端配置保存时校验**签名地址（公网必须 HTTPS:443，仅可信内网可用 HTTP/自定义端口），非法地址在输入处即被拒绝，不再等到请求期静默丢弃签名；`grok.ValidateStatsigSignerURL` 对外暴露复用。
+- 启动日志打印生效的签名模式与地址（默认 / 配置 / 已关闭），因为该值决定账号页面元数据是否离开本机。
+- 管理端"上游与指纹"卡片新增该字段：留空＝默认签名服务，填 `-`＝关闭，填地址＝自定义。
+- imagine WebSocket 握手也走签名（`imagineWSHeaders` 改为按 method+path 解析 x-statsig-id），此前只有 HTTP 路径签名。
+- 测试：未设置 → 默认地址（含本地 stand-in 的端到端签名）、显式关闭 → 不发头、自定义地址生效、非法地址在保存时被拒；断言"只有某个请求到达上游"的既有测试改为应答签名器的页面读取（`signerProbePath`/`answerSignerProbe` 助手）或在配置里显式关闭签名。

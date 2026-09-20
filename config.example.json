@@ -46,8 +46,8 @@
   "fidelity_comment": "Upstream fidelity: the gateway relays client content verbatim by default. Set to explicitly re-enable legacy rewriting.",
   "cc_entrypoint_mode": "keep",
 
-  "grok_statsig_comment": "Statsig signing. grok2api ships https://grok.wodf.de/sign as its default signer; set grok_statsig_signer_url to it to match exactly, or leave it empty to send no x-statsig-id (grok_statsig_id is then used when it is a valid 70-byte id).",
-  "grok_statsig_signer_url": "",
+  "grok_statsig_comment": "Statsig signing. Omit grok_statsig_signer_url to use grok2api's own signer (https://grok.wodf.de/sign); set it to \"\" to send no x-statsig-id (grok_statsig_id is then used when it is a valid 70-byte id); any other value is that endpoint.",
+  "grok_statsig_signer_url": null,
   "grok_statsig_id": "",
 
   "quality_hold_comment": "Quality hold: withhold a degraded reasoning turn instead of streaming it, then retry it on another account. Fail-open delivers the last held response once the retry budget is spent.",

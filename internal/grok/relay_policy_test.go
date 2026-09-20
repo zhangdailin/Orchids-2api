@@ -189,7 +189,10 @@ func TestRelayNativeResponsesRecoversOpaqueReasoning(t *testing.T) {
 
 func TestRelayImageRetriesPreservePrompt(t *testing.T) {
 	calls := 0
-	h := &Handler{client: &Client{cfg: &config.Config{}, httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	// Signing off: this test counts the image-generation attempts, and a signer
+	// page read would be counted with them.
+	disabled := ""
+	h := &Handler{client: &Client{cfg: &config.Config{GrokStatsigSignerURL: &disabled}, httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {

@@ -3417,6 +3417,23 @@ func allowanceStillSpent(acc *store.Account) bool {
 	return acc.UsageLimit > 0 && acc.UsageCurrent <= 0
 }
 
+// validateStatsigConfig checks the one configuration value that decides whether
+// account metadata leaves this host, so an invalid endpoint cannot be stored.
+func validateStatsigConfig(cfg *config.Config) error {
+	if cfg == nil || cfg.GrokStatsigSignerURL == nil {
+		return nil
+	}
+	endpoint := strings.TrimSpace(*cfg.GrokStatsigSignerURL)
+	if endpoint == "" {
+		// Explicitly disabled.
+		return nil
+	}
+	if err := grok.ValidateStatsigSignerURL(endpoint); err != nil {
+		return fmt.Errorf("grok_statsig_signer_url: %w", err)
+	}
+	return nil
+}
+
 func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config) error {
 	if newCfg == nil {
 		return fmt.Errorf("config is nil")
@@ -3427,6 +3444,12 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 
 	storedCfg := newCfg.Clone()
 	config.ApplyHardcoded(storedCfg)
+	// A signing endpoint is called with the account's own page metadata, so a
+	// misconfigured one is refused where it is typed rather than dropped
+	// silently at request time (grok2api validates it during config load too).
+	if err := validateStatsigConfig(storedCfg); err != nil {
+		return err
+	}
 
 	data, err := json.Marshal(storedCfg)
 	if err != nil {

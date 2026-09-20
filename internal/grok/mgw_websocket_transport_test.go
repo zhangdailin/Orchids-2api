@@ -41,6 +41,14 @@ func TestMGWCookieReplacesUntrustedUserID(t *testing.T) {
 	}
 }
 
+// signingOffConfig points a client at a mock upstream with statsig signing off:
+// these tests assert which requests reach the upstream, and signing adds its own
+// page read to that list.
+func signingOffConfig(baseURL string) *config.Config {
+	disabled := ""
+	return &config.Config{GrokAPIBaseURL: baseURL, GrokStatsigSignerURL: &disabled}
+}
+
 func TestLegacyAppChatTransportFallsBackToREST(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -56,7 +64,7 @@ func TestLegacyAppChatTransportFallsBackToREST(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := New(&config.Config{GrokAPIBaseURL: server.URL})
+	client := New(signingOffConfig(server.URL))
 	response, err := client.doChat(context.Background(), "sso-token", map[string]interface{}{"message": "hello"})
 	if err != nil {
 		t.Fatalf("doChat() error = %v", err)
