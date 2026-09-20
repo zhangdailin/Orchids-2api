@@ -300,8 +300,18 @@ func classifyStatus(status int, raw []byte) error {
 	detail := strings.TrimSpace(string(raw))
 	wrapped := apiError(http.MethodPost, "/chat/completions", status, raw)
 	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized:
+		// 401 means the access token is refused. It is the one status a refresh
+		// can still repair, so it keeps the unauth flag.
 		return &attemptStreamError{err: fmt.Errorf("%w: %v", ErrCredentialMissing, wrapped), unauth: true}
+	case http.StatusForbidden:
+		// 403 is not a credential verdict here. The upstream answers it for an
+		// entitlement the account does not hold — an unsubscribed model, or a
+		// catalog entry this plan may not run — and the message names the model,
+		// not the token. Reporting it as a missing credential would take a
+		// healthy account out of rotation and demand a re-login that cannot fix
+		// it, so it is surfaced as a plain refusal for the scheduler to judge.
+		return &attemptStreamError{err: wrapped}
 	case http.StatusTooManyRequests:
 		// The inference cap names the account and states its own recovery
 		// window, so it is returned as-is: the scheduler cools the account for

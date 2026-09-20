@@ -405,6 +405,7 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("X-Task-ID", taskID)
+	applyClientHeaders(req.Header)
 
 	resp, err := c.stream.Do(req)
 	if err != nil {
@@ -455,6 +456,7 @@ func (c *Client) ProbeReachability(ctx context.Context) error {
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Task-ID", "sess_probe")
+	applyClientHeaders(req.Header)
 
 	resp, err := c.control.Do(req)
 	if err != nil {
@@ -495,6 +497,7 @@ func (c *Client) FetchUpstreamModels(ctx context.Context) ([]Model, error) {
 	req.Header.Set("Authorization", "Bearer "+creds.Bearer())
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Task-ID", newTaskID(time.Now()))
+	applyClientHeaders(req.Header)
 
 	resp, err := c.control.Do(req)
 	if err != nil {
