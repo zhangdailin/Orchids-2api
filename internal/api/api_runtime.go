@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -16,10 +17,65 @@ import (
 
 // CPU is sampled from cumulative Linux scheduler ticks, never since boot and
 // never by sleeping in an HTTP handler. Memory is host scope, RSS is process scope.
+//
+// The sampler keeps the last reading and the value derived from it. A window
+// shorter than hostCPUMinWindow is not measured: /proc/stat counts whole ticks,
+// so a window of one or two ticks is decided by whether this very request
+// happened to run in it — back-to-back calls reported 100% CPU on a host that was
+// 95% idle. The previous value is reported instead, with the window it came from.
 var hostCPU = struct {
 	sync.Mutex
 	total, idle uint64
+	sampledAt   time.Time
+	value       float64
+	window      time.Duration
+	hasValue    bool
 }{}
+
+// hostCPUMinWindow is the shortest window a rate may be computed over. One second
+// is still coarse (100 ticks per core) and never a single request's worth of noise.
+const hostCPUMinWindow = time.Second
+
+// sampleHostCPU turns two /proc/stat readings into a busy ratio. ok is false when
+// no rate can be reported yet; in that case any previously measured rate is
+// returned unchanged so a caller cannot mistake a stale window for a fresh one.
+func sampleHostCPU(raw string, now time.Time) (busy float64, window time.Duration, ok bool) {
+	total, idle, err := parseCPUTicks(raw)
+	if err != nil {
+		return 0, 0, false
+	}
+	hostCPU.Lock()
+	defer hostCPU.Unlock()
+	if hostCPU.sampledAt.IsZero() || total <= hostCPU.total || idle < hostCPU.idle {
+		// First reading, or the counters moved backwards (reboot, wrap). Start a
+		// new window rather than dividing by a meaningless delta.
+		hostCPU.total, hostCPU.idle, hostCPU.sampledAt = total, idle, now
+		hostCPU.hasValue = false
+		return 0, 0, false
+	}
+	elapsed := now.Sub(hostCPU.sampledAt)
+	if elapsed < hostCPUMinWindow {
+		if hostCPU.hasValue {
+			return hostCPU.value, hostCPU.window, true
+		}
+		return 0, 0, false
+	}
+	deltaTotal := total - hostCPU.total
+	deltaIdle := idle - hostCPU.idle
+	if deltaTotal == 0 {
+		return 0, 0, false
+	}
+	busy = 1 - float64(deltaIdle)/float64(deltaTotal)
+	if busy < 0 {
+		busy = 0
+	}
+	if busy > 1 {
+		busy = 1
+	}
+	hostCPU.total, hostCPU.idle, hostCPU.sampledAt = total, idle, now
+	hostCPU.value, hostCPU.window, hostCPU.hasValue = busy, elapsed, true
+	return busy, elapsed, true
+}
 
 func parseCPUTicks(raw string) (total, idle uint64, err error) {
 	line := strings.SplitN(raw, "\n", 2)[0]
@@ -80,21 +136,11 @@ func (a *API) HandleOpsRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	cpu := runtimeMetric("主机 CPU", "", "需要 Linux /proc 采集", false, 0)
 	if raw, err := os.ReadFile("/proc/stat"); err == nil {
-		total, idle, err := parseCPUTicks(string(raw))
-		if err == nil {
-			hostCPU.Lock()
-			if total > hostCPU.total && hostCPU.total > 0 && idle >= hostCPU.idle {
-				busy := 1 - float64(idle-hostCPU.idle)/float64(total-hostCPU.total)
-				if busy < 0 {
-					busy = 0
-				}
-				cpu = runtimeMetric("主机 CPU", fmt.Sprintf("%.1f%%", busy*100), "整机所有核心 · 两次采样间隔", true, busy*100)
-			} else {
-				cpu = runtimeMetric("主机 CPU", "", "等待下一次采样", false, 0)
-			}
-			hostCPU.total = total
-			hostCPU.idle = idle
-			hostCPU.Unlock()
+		if busy, window, ok := sampleHostCPU(string(raw), time.Now()); ok {
+			cpu = runtimeMetric("主机 CPU", fmt.Sprintf("%.1f%%", busy*100),
+				fmt.Sprintf("整机所有核心 · %.1fs 采样窗口", window.Seconds()), true, busy*100)
+		} else {
+			cpu = runtimeMetric("主机 CPU", "", "等待下一次采样", false, 0)
 		}
 	}
 	memory := runtimeMetric("主机内存", "", "需要 Linux /proc 采集", false, 0)
