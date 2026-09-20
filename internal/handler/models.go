@@ -105,6 +105,27 @@ func (h *Handler) warpModelVisible(ctx context.Context, modelID string) bool {
 	return ok
 }
 
+// externalPublicModelID is the name clients see for a route row. Grok routes
+// carry a plane qualifier internally (console/, build/) that grok2api never
+// publishes; every other channel's row is already the public name.
+func externalPublicModelID(channel, internalID string) string {
+	if strings.EqualFold(strings.TrimSpace(channel), "grok") {
+		if external := modelpolicy.ExternalPublicID(internalID); external != "" {
+			return external
+		}
+	}
+	return normalizeRequestedModelID(internalID)
+}
+
+func containsPublicModel(items []PublicModelResponse, id string) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(id)) {
+			return true
+		}
+	}
+	return false
+}
+
 func appendGrokCompatibilityAliases(items []PublicModelResponse, entry PublicModelResponse) []PublicModelResponse {
 	if !strings.EqualFold(entry.OwnedBy, "grok") {
 		return items
@@ -178,11 +199,21 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		if !middleware.APIKeyAllowsModel(ctx, m.ModelID) {
+		// The provider qualifier is a routing detail: grok2api publishes the bare
+		// name (ExternalPublicID) and keeps the qualified one as an input alias.
+		// A Grok route named console/grok-4.3 therefore appears as grok-4.3, and
+		// the two spellings still resolve to the same route.
+		publicID := externalPublicModelID(mChannel, m.ModelID)
+		if !middleware.APIKeyAllowsModel(ctx, m.ModelID) && !middleware.APIKeyAllowsModel(ctx, publicID) {
+			continue
+		}
+		// One public entry per external ID: routes that differ only by plane are
+		// the same public model (the admin plane lists them grouped).
+		if containsPublicModel(publicModels, publicID) {
 			continue
 		}
 
-		entry := publicModelResponse(m.ModelID, mChannel, m.CreatedAt)
+		entry := publicModelResponse(publicID, mChannel, m.CreatedAt)
 		entry.Capabilities = m.Capabilities
 		entry.Provider = m.Provider
 		entry.UpstreamModel = m.UpstreamModel

@@ -105,6 +105,13 @@ var modelByID = func() map[string]ModelSpec {
 
 // providerCompatibilityAliases preserve the provider-qualified IDs while also
 // accepting the unqualified and historical names published by grok2api.
+// ExternalPublicID is the model name clients see (grok2api's ExternalPublicID).
+// The provider-qualifier rules live in modelpolicy because both this package and
+// the public model list need them, and this package already imports handler.
+func ExternalPublicID(internalID string) string {
+	return modelpolicy.ExternalPublicID(internalID)
+}
+
 var providerCompatibilityAliases = map[string]string{
 	"grok-4.3":                             "console/grok-4.3",
 	"grok-4.3-console":                     "console/grok-4.3",
@@ -118,11 +125,31 @@ var providerCompatibilityAliases = map[string]string{
 	"grok-build-0.1":                       "console/grok-build-0.1",
 	"grok-build-console":                   "console/grok-build-0.1",
 	"grok-imagine-image-quality-2.0":       "console/grok-imagine-image-quality",
-	"console/grok-imagine-video":           "grok-imagine-video",
-	"console/grok-imagine-video-1.5":       "grok-imagine-video-1.5",
-	"build/grok-imagine-video":             "grok-imagine-video",
-	"web/grok-imagine-video":               "grok-imagine-video",
-	"web/grok-imagine-video-1.5":           "grok-imagine-video-1.5",
+	// The remaining registered names grok2api accepts (console/catalog.go), where
+	// a route is reached through a provider-qualified or effort-baked alias.
+	"grok-4.6-console":               "console/grok-4.5",
+	"grok-4.5-latest":                "grok-4.5",
+	"grok-4.6-latest":                "grok-4.6",
+	"grok-4.3-latest":                "console/grok-4.3",
+	"grok-4.20":                      "console/grok-4.20-0309-reasoning",
+	"grok-4.20-reasoning":            "console/grok-4.20-0309-reasoning",
+	"grok-4.20-non-reasoning":        "console/grok-4.20-0309-non-reasoning",
+	"grok-4.20-multi-agent":          "console/grok-4.20-multi-agent-0309",
+	"grok-4.20-multi-agent-beta":     "console/grok-4.20-multi-agent-0309",
+	"grok-4.20-beta":                 "console/grok-4.20-0309-reasoning",
+	"grok-4.20-beta-reasoning":       "console/grok-4.20-0309-reasoning",
+	"grok-4.20-beta-non-reasoning":   "console/grok-4.20-0309-non-reasoning",
+	"grok-code-fast":                 "grok-composer-2.5-fast",
+	"grok-code-fast-1":               "grok-composer-2.5-fast",
+	"build/grok-build-0.1":           "console/grok-build-0.1",
+	"build/grok-4.5":                 "grok-4.5",
+	"console/grok-4.6":               "grok-4.6",
+	"build/grok-4.6":                 "grok-4.6",
+	"console/grok-imagine-video":     "grok-imagine-video",
+	"console/grok-imagine-video-1.5": "grok-imagine-video-1.5",
+	"build/grok-imagine-video":       "grok-imagine-video",
+	"web/grok-imagine-video":         "grok-imagine-video",
+	"web/grok-imagine-video-1.5":     "grok-imagine-video-1.5",
 }
 
 func IsDeprecatedModelID(modelID string) bool {
@@ -131,6 +158,12 @@ func IsDeprecatedModelID(modelID string) bool {
 
 func normalizeModelID(modelID string) string {
 	return strings.ToLower(strings.TrimSpace(modelID))
+}
+
+// stripProviderPublicPrefix removes one provider qualifier, reporting whether it
+// removed anything.
+func stripProviderPublicPrefix(id string) (string, bool) {
+	return modelpolicy.StripProviderPublicPrefix(id)
 }
 
 // ParseReasoningModelAlias resolves a supported <model>-<effort> alias. The
@@ -160,9 +193,18 @@ func ResolveModelAlias(modelID string) (ModelSpec, string, bool) {
 	if m, exists := modelByID[id]; exists {
 		return m, "", true
 	}
-	id = strings.TrimPrefix(id, "web/")
-	if m, exists := modelByID[id]; exists {
-		return m, "", true
+	// Provider-qualified spellings in any casing. The exact table above has
+	// already been consulted, so a qualifier that names a real route of another
+	// plane is unaffected.
+	if stripped, changed := stripProviderPublicPrefix(id); changed {
+		if m, exists := modelByID[stripped]; exists {
+			return m, "", true
+		}
+		if canonical, exists := providerCompatibilityAliases[stripped]; exists {
+			m, found := modelByID[canonical]
+			return m, "", found
+		}
+		id = stripped
 	}
 	if canonical, exists := providerCompatibilityAliases[id]; exists {
 		m, found := modelByID[canonical]

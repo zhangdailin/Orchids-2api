@@ -89,9 +89,22 @@ func TestResolveModel_ImagineMappingsMatchGrok2API(t *testing.T) {
 	}
 }
 
-func TestResolveModel_Grok420BetaRejected(t *testing.T) {
-	if _, ok := ResolveModel("grok-4.20-beta"); ok {
-		t.Fatalf("ResolveModel(grok-4.20-beta) should fail")
+// grok2api's registered alias set accepts the beta spellings of the 4.20
+// family; an unknown name in the same shape is still rejected.
+func TestResolveModel_Grok420BetaResolvesRegisteredSpellings(t *testing.T) {
+	for _, id := range []string{"grok-4.20-beta", "grok-4.20-reasoning", "grok-4.20", "grok-4.20-beta-non-reasoning"} {
+		spec, ok := ResolveModel(id)
+		if !ok {
+			t.Fatalf("ResolveModel(%s) should resolve a registered alias", id)
+		}
+		if spec.Upstream != UpstreamConsole {
+			t.Fatalf("ResolveModel(%s) routed to %v, want the console plane", id, spec.Upstream)
+		}
+	}
+	for _, id := range []string{"grok-4.20-beta-9999", "grok-9.9", "console/grok-nope"} {
+		if _, ok := ResolveModel(id); ok {
+			t.Fatalf("ResolveModel(%s) should fail", id)
+		}
 	}
 }
 

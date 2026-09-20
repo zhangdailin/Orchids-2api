@@ -98,22 +98,25 @@ func TestAccountSupportsModelUsesObservedBuildCatalog(t *testing.T) {
 // was advertised, and a tier-gated video entry. Those are locally invented
 // capabilities: republishing them would advertise models the account never
 // reported, which is exactly what model management must not do.
-func TestApplyCLIModelsRecordsExactlyTheCatalog(t *testing.T) {
-	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: "super"}
+func TestApplyCLIModelsRestoresGrok2APICatalogCompletion(t *testing.T) {
+	// grok2api derives three entries from the account rather than the catalog: a
+	// Build account advertising 4.6 can serve 4.5, an OAuth Build account can
+	// serve Composer, and a Super account gets the tier-gated video entry.
+	acc := &store.Account{AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, Subscription: "super"}
 	ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5", "grok-4.6"}, time.Now())
 
-	want := []string{"grok-4.6", "grok-imagine-video-1.5"}
+	want := []string{"grok-4.6", "grok-imagine-video-1.5", "grok-4.5", "grok-composer-2.5-fast"}
 	if len(acc.GrokModels) != len(want) {
-		t.Fatalf("catalog = %#v, want exactly %#v", acc.GrokModels, want)
+		t.Fatalf("catalog = %#v, want %#v", acc.GrokModels, want)
 	}
 	for i, model := range want {
 		if !strings.EqualFold(acc.GrokModels[i], model) {
-			t.Fatalf("catalog = %#v, want exactly %#v", acc.GrokModels, want)
+			t.Fatalf("catalog = %#v, want %#v", acc.GrokModels, want)
 		}
 	}
-	for _, invented := range []string{"grok-composer-2.5-fast", "grok-4.5"} {
-		if AccountSupportsModel(acc, invented) {
-			t.Fatalf("locally invented capability %q survived: %#v", invented, acc.GrokModels)
+	for _, derived := range want[2:] {
+		if !AccountSupportsModel(acc, derived) {
+			t.Fatalf("derived capability %q is missing: %#v", derived, acc.GrokModels)
 		}
 	}
 	if acc.GrokModelsSyncedAt.IsZero() {
@@ -121,18 +124,24 @@ func TestApplyCLIModelsRecordsExactlyTheCatalog(t *testing.T) {
 	}
 }
 
-// TestApplyCLIModelsDoesNotGateOnSubscriptionTier proves tier is not used to
-// invent or remove capabilities: the catalog decides, not a local policy.
-func TestApplyCLIModelsDoesNotGateOnSubscriptionTier(t *testing.T) {
-	for _, subscription := range []string{"free", "super", ""} {
-		acc := &store.Account{AccountType: "grok", CredentialType: "oauth", Subscription: subscription}
-		ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5"}, time.Now())
+// The only capability grok2api gates on tier is the video 1.5 entry: a Super
+// account gains it, anything below loses it even if the catalog listed it.
+func TestApplyCLIModelsTierGatesOnlyTheVideoEntry(t *testing.T) {
+	super := &store.Account{AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, Subscription: "super"}
+	ApplyCLIModels(super, []string{"grok-4.6"}, time.Now())
+	if !AccountSupportsModel(super, "grok-imagine-video-1.5") {
+		t.Fatalf("a super account lost the tier-gated video entry: %#v", super.GrokModels)
+	}
 
-		if !AccountSupportsModel(acc, "grok-imagine-video-1.5") {
-			t.Fatalf("subscription %q dropped an advertised model: %#v", subscription, acc.GrokModels)
+	for _, subscription := range []string{"free", "basic", ""} {
+		acc := &store.Account{AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, Subscription: subscription}
+		ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5"}, time.Now())
+		if AccountSupportsModel(acc, "grok-imagine-video-1.5") {
+			t.Fatalf("subscription %q kept a tier-gated model: %#v", subscription, acc.GrokModels)
 		}
-		if AccountSupportsModel(acc, "grok-composer-2.5-fast") {
-			t.Fatalf("subscription %q gained a model the catalog never advertised: %#v", subscription, acc.GrokModels)
+		// The other two derivations are not tier-gated.
+		if !AccountSupportsModel(acc, "grok-4.5") || !AccountSupportsModel(acc, "grok-composer-2.5-fast") {
+			t.Fatalf("subscription %q lost a non-tier derivation: %#v", subscription, acc.GrokModels)
 		}
 	}
 }

@@ -193,6 +193,27 @@ func AccountSupportsModel(acc *store.Account, modelID string) bool {
 	return false
 }
 
+const (
+	buildGrok45Model   = "grok-4.5"
+	buildGrok46Model   = "grok-4.6"
+	buildVideoModel    = "grok-imagine-video-1.5"
+	buildComposerModel = "grok-composer-2.5-fast"
+)
+
+// buildAccountIsSuper mirrors grok2api's IsBuildSuper: a Build account is Super
+// when its billing profile is paid or its own plan name says so. A Free account
+// (or one with no verdict yet) is not, which is what gates the video 1.5 entry.
+func buildAccountIsSuper(acc *store.Account) bool {
+	if acc == nil || ProviderForAccount(acc) != ProviderBuild {
+		return false
+	}
+	if BuildPlanIsPaid(acc.Subscription) {
+		return true
+	}
+	billing := acc.GrokBilling
+	return billing.Monthly.HasLimit || billing.Monthly.HasUsage || billing.Weekly.HasLimit || billing.Weekly.HasUsage
+}
+
 func CLIModelsNeedSync(acc *store.Account, now time.Time) bool {
 	if ProviderForAccount(acc) != ProviderBuild || len(acc.GrokModels) == 0 || acc.GrokModelsSyncedAt.IsZero() {
 		return true
@@ -222,12 +243,48 @@ func ApplyCLIModels(acc *store.Account, models []string, now time.Time) bool {
 		appendModel(model)
 	}
 
-	// The snapshot records exactly what the upstream catalog returned. It used
-	// to be padded with a synthetic composer entry, a 4.5 alias whenever 4.6 was
-	// advertised, and a tier-gated video entry; those are locally invented
-	// capabilities, and a refresh that republishes them would advertise models
-	// the account never reported. Capability truth now comes from the catalog
-	// alone, so a model the catalog omits is simply absent.
+	// grok2api's NormalizeAccountModelCapabilities, restored. The upstream's own
+	// catalog is authoritative for what an account can serve, but three entries
+	// are derived from the account's tier and credential rather than listed:
+	// a Build account advertising 4.6 can always serve 4.5, an OAuth Build
+	// account can always serve Composer, and the tier-gated video 1.5 entry is
+	// present for a Super account and absent below it. Without them the catalog
+	// omits models that route perfectly well.
+	super := buildAccountIsSuper(acc)
+	hasGrok46 := false
+	hasVideo15 := false
+	for _, model := range normalized {
+		switch strings.ToLower(strings.TrimSpace(model)) {
+		case buildGrok46Model:
+			hasGrok46 = true
+		case buildVideoModel:
+			hasVideo15 = true
+		}
+	}
+	if !super {
+		filtered := normalized[:0]
+		for _, model := range normalized {
+			if strings.EqualFold(strings.TrimSpace(model), buildVideoModel) {
+				continue
+			}
+			filtered = append(filtered, model)
+		}
+		normalized = filtered
+		hasVideo15 = false
+		seen = map[string]struct{}{}
+		for _, model := range normalized {
+			seen[strings.ToLower(strings.TrimSpace(model))] = struct{}{}
+		}
+	}
+	if hasGrok46 {
+		appendModel(buildGrok45Model)
+	}
+	if super && !hasVideo15 {
+		appendModel(buildVideoModel)
+	}
+	if ProviderForAccount(acc) == ProviderBuild && strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+		appendModel(buildComposerModel)
+	}
 	if len(normalized) == 0 {
 		return false
 	}

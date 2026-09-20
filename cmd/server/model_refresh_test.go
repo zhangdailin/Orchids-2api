@@ -356,8 +356,12 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	for _, item := range items {
 		gotIDs = append(gotIDs, item.ID)
 	}
-	if strings.Join(gotIDs, ",") != "grok-4.6,future-private-model,grok-4.5" {
-		t.Fatalf("public IDs=%v want exactly the upstream catalog", gotIDs)
+	// The upstream catalog plus the entries grok2api derives from the account:
+	// 4.6 implies 4.5, and an OAuth Build account can serve Composer. The row for
+	// the catalog model is published under its bare public name.
+	wantIDs := "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast"
+	if strings.Join(gotIDs, ",") != wantIDs {
+		t.Fatalf("public IDs=%v want %s", gotIDs, wantIDs)
 	}
 
 	persisted, err := s.GetAccount(ctx, acc.ID)
@@ -367,7 +371,7 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	if persisted.GrokProvider != "build" || persisted.GrokModelsSyncedAt.IsZero() {
 		t.Fatalf("provider/catalog not persisted: %+v", persisted)
 	}
-	if strings.Join(persisted.GrokModels, ",") != "grok-4.6,future-private-model,grok-4.5" {
+	if strings.Join(persisted.GrokModels, ",") != "grok-4.6,future-private-model,grok-4.5,grok-composer-2.5-fast" {
 		t.Fatalf("account capability snapshot=%v", persisted.GrokModels)
 	}
 }
