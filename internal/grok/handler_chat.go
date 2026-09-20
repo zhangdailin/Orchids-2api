@@ -289,6 +289,16 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			writeGrokError(w, http.StatusBadRequest, "image_config.n must be between 1 and 10")
 			return
 		}
+		// The same transport-layer rules the image endpoints apply: a ratio is a
+		// ratio, and a resolution tier is 1k or 2k.
+		if edgeAspect := strings.TrimSpace(imageCfg.AspectRatio); edgeAspect != "" && !validImageAspectRatio(edgeAspect) {
+			writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", "aspect_ratio is not supported")
+			return
+		}
+		if _, err := normalizeImageResolution(imageCfg.Resolution); err != nil {
+			writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", err.Error())
+			return
+		}
 		if isImageGenerationModel(req.Model) && normalizeModelID(req.Model) == "grok-imagine-image-lite" && imageCfg.N > 4 {
 			writeGrokError(w, http.StatusBadRequest, "image_config.n must be between 1 and 4 for grok-imagine-image-lite")
 			return
@@ -334,11 +344,16 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
+		// image_config carries the ratio and the resolution tier in grok2api, so a
+		// chat image request can ask for either instead of only reaching the
+		// defaults the top-level fields would have produced.
 		genReq := ImagesGenerationsRequest{
 			Model:          req.Model,
 			Prompt:         prompt,
 			N:              imageCfg.N,
 			Size:           imageCfg.Size,
+			AspectRatio:    strings.TrimSpace(imageCfg.AspectRatio),
+			Resolution:     strings.TrimSpace(imageCfg.Resolution),
 			Stream:         req.Stream,
 			ResponseFormat: imageCfg.ResponseFormat,
 		}

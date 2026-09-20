@@ -148,6 +148,12 @@ type ImageConfig struct {
 	N              int    `json:"n"`
 	Size           string `json:"size"`
 	ResponseFormat string `json:"response_format"`
+	// grok2api's image_config also carries the ratio and the resolution tier.
+	// Without them a caller could not ask for either, and a request that got its
+	// options through the top-level fields behaved differently depending on which
+	// surface it used.
+	AspectRatio string `json:"aspect_ratio,omitempty"`
+	Resolution  string `json:"resolution,omitempty"`
 }
 
 type ImagesGenerationsRequest struct {
@@ -765,9 +771,8 @@ func (r *ChatCompletionsRequest) Validate() error {
 }
 
 func (r *ImagesGenerationsRequest) Normalize() {
-	if strings.TrimSpace(r.Model) == "" {
-		r.Model = "grok-imagine-image"
-	}
+	// No model default: grok2api rejects a request that names none, and silently
+	// choosing one spent image quota on a request the caller never described.
 	if r.N <= 0 {
 		r.N = 1
 	}

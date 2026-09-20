@@ -457,6 +457,45 @@ func normalizeImageSize(size string) (string, error) {
 	}
 }
 
+// validImageAspectRatio is grok2api's transport-layer check: only a real ratio
+// string (or auto) is accepted here. The provider layer below still maps a pixel
+// size to its ratio, which is what grok2api does too — but a caller cannot reach
+// it through aspect_ratio, so `aspect_ratio=1280x720` is rejected exactly as the
+// reference rejects it.
+func validImageAspectRatio(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3",
+		"2:1", "1:2", "19.5:9", "9:19.5", "20:9", "9:20":
+		return true
+	default:
+		return false
+	}
+}
+
+// validImageEditSize is grok2api's accepted `size` set for image edits.
+func validImageEditSize(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "auto", "1024x1024", "1024x1536", "1536x1024":
+		return true
+	default:
+		return false
+	}
+}
+
+// normalizeImageResolution applies grok2api's resolution rule: empty defaults to
+// 1k, and anything other than 1k/2k is a parameter error. The Web plane used to
+// accept an unsupported resolution and silently render at 1k.
+func normalizeImageResolution(value string) (string, error) {
+	resolution := strings.ToLower(strings.TrimSpace(value))
+	if resolution == "" {
+		return "1k", nil
+	}
+	if resolution != "1k" && resolution != "2k" {
+		return "", fmt.Errorf("resolution must be 1k or 2k")
+	}
+	return resolution, nil
+}
+
 func normalizeImageAspectRatio(aspectRatio, size string) (string, error) {
 	values := map[string]string{
 		"auto": "auto", "1:1": "1:1", "16:9": "16:9", "9:16": "9:16",

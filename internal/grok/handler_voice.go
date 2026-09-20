@@ -570,6 +570,12 @@ func rewriteOpenAITranscriptionMultipart(body []byte, boundary string) (string, 
 				return "", false, nil, "", "", unsupportedVoiceParameter("timestamp_granularities")
 			}
 			skip = true
+		case "timestamp_granularities":
+			// grok2api only inspects the bracketed spelling; without brackets the
+			// option is neither converted nor forwarded, so the request succeeds
+			// with the option ignored. Rejecting it here would make the same
+			// multipart request fail on this gateway and succeed there.
+			skip = true
 		}
 		if skip {
 			continue

@@ -238,13 +238,13 @@ func (h *Handler) imageOutputValue(ctx context.Context, token, url, format strin
 		} else if err != nil {
 			cacheErr = err
 		}
-		if mustCacheImageURL(trim) {
-			if cacheErr != nil {
-				return "", fmt.Errorf("cache grok image locally: %w", cacheErr)
-			}
-			return "", fmt.Errorf("cache grok image locally failed")
+		// grok2api always lands the asset locally and answers with its own
+		// address; handing the caller an upstream CDN URL (or a low-res
+		// thumbnail that was skipped) is what the reference never does.
+		if cacheErr != nil {
+			return "", fmt.Errorf("cache grok image locally: %w", cacheErr)
 		}
-		return trim, nil
+		return "", fmt.Errorf("cache grok image locally failed")
 	}
 	raw, _, err := h.webClient().downloadAsset(ctx, token, url)
 	if err != nil {
@@ -257,21 +257,26 @@ func (h *Handler) imageOutputValue(ctx context.Context, token, url, format strin
 // With strict=true a conversion failure aborts with 502; otherwise the failing
 // entry falls back to the raw URL (url format) or an empty value (b64_json).
 func (h *Handler) writeImageResults(w http.ResponseWriter, ctx context.Context, token, prompt string, urls []string, format, publicBase string, strict bool) {
+	_ = strict // kept for callers: every conversion failure is fatal now.
 	field := imageResponseField(format)
 	data := make([]map[string]interface{}, 0, len(urls))
 	for _, u := range urls {
 		val, err := h.imageOutputValue(ctx, token, u, format)
 		if err != nil {
+			// No pass-through: either the asset is cached and served from this
+			// gateway, or the request fails. strict only decides the error shape.
 			slog.Warn("grok image convert failed", "url", u, "error", err)
-			if field == "url" && (!strict || !mustCacheImageURL(u)) {
-				val = u
-			} else if strict {
-				writeGrokUpstreamError(w, err)
+			writeGrokUpstreamError(w, err)
+			return
+		}
+		if field == "url" {
+			if publicBase == "" {
+				writeGrokErrorCode(w, http.StatusInternalServerError, "image_url_base_missing", "image URL base is not configured")
 				return
 			}
-		}
-		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
-			val = publicBase + val
+			if strings.HasPrefix(val, "/") {
+				val = publicBase + val
+			}
 		}
 		data = append(data, map[string]interface{}{
 			field: val,

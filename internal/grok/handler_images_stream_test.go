@@ -50,7 +50,7 @@ func TestStreamImageGeneration_ParseErrorUsesSSEErrorEvent(t *testing.T) {
 	h := &Handler{}
 	rec := httptest.NewRecorder()
 
-	h.streamImageGeneration(rec, strings.NewReader(`{"result":{"response":{"token":"bad"}}`), "", "test prompt", "url", 1, "")
+	h.streamImageGeneration(rec, strings.NewReader(`{"result":{"response":{"token":"bad"}}`), "", "test prompt", "url", 1, "https://gw.example")
 
 	raw := rec.Body.String()
 	if !strings.Contains(raw, "event: error") {
@@ -72,7 +72,7 @@ func TestStreamImageGeneration_SuccessEndsWithDone(t *testing.T) {
 	h := testGrokImageHandler(t)
 	rec := httptest.NewRecorder()
 
-	h.streamImageGeneration(rec, strings.NewReader(`{"result":{"response":{"modelResponse":{"generatedImageUrls":["https://assets.grok.com/users/u-1/generated/a1/image.png"]}}}}`), "", "test prompt", "url", 1, "")
+	h.streamImageGeneration(rec, strings.NewReader(`{"result":{"response":{"modelResponse":{"generatedImageUrls":["https://assets.grok.com/users/u-1/generated/a1/image.png"]}}}}`), "", "test prompt", "url", 1, "https://gw.example")
 
 	raw := rec.Body.String()
 	if !strings.Contains(raw, "image_generation.completed") {
@@ -138,7 +138,7 @@ func TestStreamImageGeneration_AcceptsAlternateProgressShape(t *testing.T) {
 	h.streamImageGeneration(rec, strings.NewReader(
 		`{"result":{"response":{"streaming_image_generation_response":{"image_index":1,"percentage":55}}}}`+
 			`{"result":{"response":{"model_response":{"generatedImageUrls":["https://assets.grok.com/users/u-1/generated/a1/image.png"]}}}}`,
-	), "", "alt prompt", "url", 2, "")
+	), "", "alt prompt", "url", 2, "https://gw.example")
 
 	raw := rec.Body.String()
 	if !strings.Contains(raw, `"progress":55`) {

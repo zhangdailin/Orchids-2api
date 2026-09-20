@@ -77,7 +77,11 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-imagine-image-lite", Name: "Grok Imagine Image Lite", UpstreamModel: "grok-imagine-image-lite", ModelMode: "MODEL_MODE_FAST", ModeID: "fast", Tier: grokTierBasic, IsImage: true},
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-2.0", Name: "Grok Imagine Image 2.0", UpstreamModel: "grok-imagine-image-2.0", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
-	{ID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", UpstreamModel: "grok-imagine-image-quality-lite", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
+	// grok-imagine-image-quality is a Console media product in grok2api, not a Web
+	// Imagine one: pointing the public name at the Web `-lite` upstream made the
+	// same model name reach a different plane (and a different billing basis)
+	// than the reference implementation.
+	{ID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", UpstreamModel: "grok-imagine-image-quality", ConsoleModel: "grok-imagine-image-quality", Tier: grokTierBasic, IsImage: true, MediaAPIOnly: true, Upstream: UpstreamConsole},
 	// grok-imagine-image-pro is deprecated: it is unconditionally rejected by
 	// IsDeprecatedModelID, so advertising it only produced a catalog entry that
 	// every request failed on. The pro route is grok-imagine-image-2.0.

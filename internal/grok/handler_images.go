@@ -56,16 +56,20 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 	for i, u := range urls {
 		val, err := h.imageOutputValue(context.Background(), token, u, format)
 		if err != nil {
+			// Always fatal: the caller gets this gateway's own absolute asset URL
+			// or an error, never the upstream CDN address.
 			slog.Warn("grok image stream convert failed", "url", u, "error", err)
-			if field == "url" && !mustCacheImageURL(u) {
-				val = u
-			} else {
-				writeSSECodedError(w, flusher, "image cache failed: "+err.Error(), "image_cache_failed")
+			writeSSECodedError(w, flusher, "image cache failed: "+err.Error(), "image_cache_failed")
+			return
+		}
+		if field == "url" {
+			if publicBase == "" {
+				writeSSECodedError(w, flusher, "image URL base is not configured", "image_url_base_missing")
 				return
 			}
-		}
-		if field == "url" && publicBase != "" && strings.HasPrefix(val, "/") {
-			val = publicBase + val
+			if strings.HasPrefix(val, "/") {
+				val = publicBase + val
+			}
 		}
 		data := map[string]interface{}{
 			"type":           "image_generation.completed",
@@ -90,9 +94,33 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	}
 	req.Model = normalizeModelID(req.Model)
 	req.Normalize()
+	// grok2api treats a missing model as a validation failure; the local fallback
+	// used to generate an image (and spend image quota) on a request that named no
+	// model at all.
+	if req.Model == "" {
+		writeGrokErrorCode(w, http.StatusBadRequest, "invalid_request_error", "model is required")
+		return
+	}
 	if !requireAPIKeyModel(w, r, req.Model) {
 		return
 	}
+	// Transport-layer validation, exactly as the reference performs it: a ratio is
+	// a ratio, a size is one of the four accepted edit sizes, and a resolution is
+	// 1k or 2k.
+	if strings.TrimSpace(req.AspectRatio) != "" && !validImageAspectRatio(req.AspectRatio) {
+		writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", "aspect_ratio is not supported")
+		return
+	}
+	if strings.TrimSpace(req.Size) != "" && !validImageEditSize(req.Size) {
+		writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", "size must be auto, 1024x1024, 1024x1536 or 1536x1024")
+		return
+	}
+	resolution, resolutionErr := normalizeImageResolution(req.Resolution)
+	if resolutionErr != nil {
+		writeGrokErrorCode(w, http.StatusBadRequest, "invalid_parameter", resolutionErr.Error())
+		return
+	}
+	req.Resolution = resolution
 	rawResponseFormat := strings.ToLower(strings.TrimSpace(req.ResponseFormat))
 	if rawResponseFormat != "" && rawResponseFormat != "url" && rawResponseFormat != "b64_json" && rawResponseFormat != "base64" {
 		writeGrokError(w, http.StatusBadRequest, "response_format must be url or b64_json")
@@ -298,8 +326,14 @@ func (h *Handler) collectImagineWSGeneration(ctx context.Context, w http.Respons
 			writeGrokUpstreamError(w, err)
 			return
 		}
-		if field == "url" && publicBase != "" && strings.HasPrefix(value, "/") {
-			value = publicBase + value
+		if field == "url" {
+			if publicBase == "" {
+				writeGrokErrorCode(w, http.StatusInternalServerError, "image_url_base_missing", "image URL base is not configured")
+				return
+			}
+			if strings.HasPrefix(value, "/") {
+				value = publicBase + value
+			}
 		}
 		data = append(data, map[string]interface{}{
 			field:            value,
