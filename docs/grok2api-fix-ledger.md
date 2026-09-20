@@ -607,3 +607,21 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
 
 **边界（有意保留）**：上游自己写的错误文本仍按各平面既有语义透传（`upstream_error` + `err.Error()`），
 与"池子内部说明绝不外发"是两件事；若要连上游散文一并净化（`apperrors.PublicMessage`），需要单独一轮。
+
+**第二轮部署与实测**（`3.15.148.113`）：
+
+- 提交 `cbd3c97`，`sha256=c95e92ca7fc3875e6ee8a71e855c5a89e4c668da59ac38482e19d33a4ef5b3e1`；
+  验收为 `go build ./...` + `go vet` + `go test ./...` 全绿后构建 amd64 产物。
+- 部署走 `scripts/deploy-orchids.sh`：校验和一致、旧二进制保留为 `orchids-server.backup-20260920-080521`、
+  `/health` 200、`/admin` 302、启动日志无 error、`NRestarts=0`。
+- 二进制断言：两条新的 grok 固定文案各出现 1 次；`system cpu overloaded` 仍为 0。
+- **grok 平面实时验证未成功（记录在案）**：构造"5 个 console 账号全部置 429"的窗口后向
+  `/grok/v1/videos/generations` 发了一次生产调用，结果 **200 + 排队任务**——说明该请求走的是
+  `handleConsoleVideoCreate` 里更靠前的 Build/CLI 分支（`UpstreamCLI`），并未经过本轮改动的
+  `openConsoleVideoAccountSession`。该任务随后**被上游以 403 拒绝而失败**（`This page is out of date`，
+  即 console/build 的 SSO 已陈旧），**没有生成视频、没有消耗额度**；它的日志行正是本轮新加的
+  `slog.Error("Video job failed", …)`，属于新代码按预期工作的旁证。为避免再次真实创建任务，**未重跑**；
+  grok 平面各分支由 `internal/grok/pool_error_test.go`（6 种原因 + 状态/类型/文案 + 内部说明不得进响应）
+  与共享分类器在 qoder 路径上的实时验证共同覆盖。账号状态已按备份逐字恢复。
+- 顺带发现（未修，属运维）：grok 视频上游对所有尝试返回 403 `This page is out of date`，
+  指向该渠道 console/build 的 SSO 已失效，需要重新登录对应 xAI 账号。
