@@ -608,6 +608,32 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
 **边界（有意保留）**：上游自己写的错误文本仍按各平面既有语义透传（`upstream_error` + `err.Error()`），
 与"池子内部说明绝不外发"是两件事；若要连上游散文一并净化（`apperrors.PublicMessage`），需要单独一轮。
 
+### 二十·三、上游散文净化（第三轮，按部署方选择）
+
+各平面此前不一致：chat/images/videos/console 早已走 `writeGrokUpstreamError`（类别句 + 类别状态 +
+保留 `Retry-After`），Responses/voice 平面直接写 `err.Error()`，把
+`grok cli upstream status=403 body={…}`、出口节点与内部 status 标记一起发给客户端；**异步**视频任务
+还把同样的散文存进 `job.Error.message`，客户端 GET 200 就能读到。
+
+- 新增 `grokUpstreamFailureMessage` / `writeGrokUpstreamFailure`：**上游失败**换成共享类别句（原文进日志），
+  **本地失败**（multipart 参数、存储错误、任务中断）保留精确文案——判据复用 `isUpstreamFailure`，
+  与 `writeGrokUpstreamError` 同一条线；状态仍用调用方算出的值。
+- 站点：`handler_responses_store.go` ×2、`handler_voice_ws.go`、`handler_voice.go`（typed error + 兜底）、
+  `responses_compaction.go`、`handler_videos.go`（`videoJobFailureMessage`）。
+- 测试：`TestWriteGrokUpstreamFailure_KeepsProseOutOfTheBody`（状态保持 / 散文不得入 body / 本地文案保留）
+  与 `videoJobFailureMessage` 的上游+本地两分支。
+
+**第三轮部署与实测**：提交 `62665d0`，
+`sha256=ffcea4eba86e4b8e364555afb72975719fe14f0630223cc75fa5fa5788d197c3`，
+旧二进制 `orchids-server.backup-20260920-081426`；`/health` 200、`/admin` 302、启动无 error、`NRestarts=0`。
+实时验证只做了不消耗额度的部分：voice 本地校验错误仍返回精确文案（证明"本地分支保留文案"），
+`/v1/models` 200。**上游散文分支未做实时验证**——上次实时验证意外触发了一次真实视频任务
+（上游 403 失败、未消耗额度），此后不再用真实上游调用做验证，改由上述单测覆盖。
+
+**仍待办（一行，等并行改动落地）**：`internal/handler/models.go:192`
+`"Failed to fetch models: " + err.Error()`（500，`/v1/models` 与 `/api/models` 共用）会把存储层错误
+发给调用方；该文件有未提交的并行改动，动它会在对方提交时丢失。
+
 **第二轮部署与实测**（`3.15.148.113`）：
 
 - 提交 `cbd3c97`，`sha256=c95e92ca7fc3875e6ee8a71e855c5a89e4c668da59ac38482e19d33a4ef5b3e1`；
