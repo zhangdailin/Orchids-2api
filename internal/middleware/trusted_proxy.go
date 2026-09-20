@@ -144,3 +144,58 @@ func ipString(ip net.IP, fallback string) string {
 	}
 	return strings.TrimSpace(fallback)
 }
+
+// AnonymousAllowlist decides which sources may call the inference routes without a
+// managed key. An empty list means "nobody": every caller must present a key,
+// which is the reference implementation's behaviour. A deployment that cannot
+// update a client yet can name that client's address here, and everyone else
+// still needs a key.
+type AnonymousAllowlist struct {
+	networks []*net.IPNet
+}
+
+// NewAnonymousAllowlist parses CIDRs, bare IPs and hostnames-as-IPs. An empty
+// entry list yields a usable, empty allowlist.
+func NewAnonymousAllowlist(values []string) (*AnonymousAllowlist, error) {
+	networks := make([]*net.IPNet, 0, len(values))
+	for _, raw := range values {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		if address := net.ParseIP(entry); address != nil {
+			bits := 32
+			if address.To4() == nil {
+				bits = 128
+			}
+			networks = append(networks, &net.IPNet{IP: address, Mask: net.CIDRMask(bits, bits)})
+			continue
+		}
+		if _, network, err := net.ParseCIDR(entry); err == nil {
+			networks = append(networks, network)
+			continue
+		}
+		return nil, fmt.Errorf("anonymous_allow_ips entry %q is not an IP or CIDR", entry)
+	}
+	return &AnonymousAllowlist{networks: networks}, nil
+}
+
+// Empty reports whether the allowlist lets nobody through.
+func (a *AnonymousAllowlist) Empty() bool { return a == nil || len(a.networks) == 0 }
+
+// Allows reports whether this request's client address is on the list.
+func (a *AnonymousAllowlist) Allows(r *http.Request) bool {
+	if a.Empty() || r == nil {
+		return false
+	}
+	address := net.ParseIP(strings.TrimSpace(ClientIP(r)))
+	if address == nil {
+		return false
+	}
+	for _, network := range a.networks {
+		if network.Contains(address) {
+			return true
+		}
+	}
+	return false
+}

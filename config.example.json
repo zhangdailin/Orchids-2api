@@ -6,6 +6,8 @@
   "admin_path": "/admin",
   "admin_token": "",
   "inference_auth_enabled": true,
+  "anonymous_allow_ips_comment": "Sources allowed to call the inference routes without a managed key. Empty (default) requires a key from every caller, as grok2api does; list an address only when a client cannot be updated yet.",
+  "anonymous_allow_ips": [],
   "trusted_proxies": [],
   "credential_encryption_key_file": "data/credential.key",
   "response_store_ttl_hours": 720,

@@ -137,8 +137,18 @@ func APIKeyAllowsModel(ctx context.Context, model string) bool {
 // accepts OpenAI-style Bearer auth and Anthropic's x-api-key header. enabled is
 // evaluated per request so config hot reloads take effect.
 func APIKeyAuth(enabled func() bool, validate APIKeyValidator, next http.HandlerFunc) http.HandlerFunc {
+	return APIKeyAuthWithRequest(func(*http.Request) bool {
+		return enabled == nil || enabled()
+	}, validate, next)
+}
+
+// APIKeyAuthWithRequest is APIKeyAuth with a predicate that can look at the
+// request. It exists for a deployment that must keep a known source reachable
+// without a key while every other caller still needs one; require returns whether
+// a key is required for this request.
+func APIKeyAuthWithRequest(require func(*http.Request) bool, validate APIKeyValidator, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if enabled != nil && !enabled() {
+		if require != nil && !require(r) {
 			ctx := context.WithValue(r.Context(), apiKeyFingerprintContextKey{}, "anonymous")
 			next(w, r.WithContext(ctx))
 			return

@@ -65,3 +65,85 @@ func TestTrustedProxyMiddlewareRejectsInvalidNetwork(t *testing.T) {
 		t.Fatal("expected invalid proxy error")
 	}
 }
+
+// An anonymous allowlist lets the named sources through without a key and nobody
+// else; an empty list is the reference behaviour (everyone needs a key).
+func TestAnonymousAllowlistAllowsOnlyNamedSources(t *testing.T) {
+	empty, err := NewAnonymousAllowlist(nil)
+	if err != nil {
+		t.Fatalf("NewAnonymousAllowlist(nil): %v", err)
+	}
+	if !empty.Empty() {
+		t.Fatal("a nil list is not empty")
+	}
+	request := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
+	request.RemoteAddr = "161.118.140.32:4444"
+	if empty.Allows(request) {
+		t.Fatal("an empty allowlist allowed a caller")
+	}
+
+	list, err := NewAnonymousAllowlist([]string{"161.118.140.32", "203.77.252.0/24", "2001:db8::1"})
+	if err != nil {
+		t.Fatalf("NewAnonymousAllowlist: %v", err)
+	}
+	cases := []struct {
+		remote string
+		want   bool
+	}{
+		{"161.118.140.32:1111", true},
+		{"161.118.140.33:1111", false},
+		{"203.77.252.9:1111", true},
+		{"203.77.253.9:1111", false},
+		{"[2001:db8::1]:1111", true},
+		{"[2001:db8::2]:1111", false},
+		{"not-an-address", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
+		req.RemoteAddr = tc.remote
+		if got := list.Allows(req); got != tc.want {
+			t.Fatalf("Allows(%q)=%v want %v", tc.remote, got, tc.want)
+		}
+	}
+
+	// A malformed entry is an error, so a typo cannot silently widen the list.
+	if _, err := NewAnonymousAllowlist([]string{"10.0.0.0/8", "nonsense"}); err == nil {
+		t.Fatal("a malformed entry was accepted")
+	}
+}
+
+// A forwarded client address is only honoured when the peer is a trusted proxy,
+// which is what the allowlist must decide on.
+func TestAnonymousAllowlistUsesTheTrustedClientAddress(t *testing.T) {
+	list, err := NewAnonymousAllowlist([]string{"161.118.140.32"})
+	if err != nil {
+		t.Fatalf("NewAnonymousAllowlist: %v", err)
+	}
+	wrap, err := TrustedProxyMiddleware([]string{"127.0.0.1/32"})
+	if err != nil {
+		t.Fatalf("TrustedProxyMiddleware: %v", err)
+	}
+	var allowed bool
+	handler := wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		allowed = list.Allows(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// A trusted peer's forwarded address is the client.
+	trusted := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
+	trusted.RemoteAddr = "127.0.0.1:5555"
+	trusted.Header.Set("X-Forwarded-For", "161.118.140.32")
+	handler.ServeHTTP(httptest.NewRecorder(), trusted)
+	if !allowed {
+		t.Fatal("a trusted proxy's forwarded client address was not honoured")
+	}
+
+	// The same header from an untrusted peer is cleared, so the peer itself decides.
+	untrusted := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
+	untrusted.RemoteAddr = "203.0.113.9:5555"
+	untrusted.Header.Set("X-Forwarded-For", "161.118.140.32")
+	handler.ServeHTTP(httptest.NewRecorder(), untrusted)
+	if allowed {
+		t.Fatal("an untrusted peer spoofed its way onto the allowlist")
+	}
+}

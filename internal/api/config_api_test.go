@@ -308,3 +308,24 @@ func TestPersistConfigValidatesStatsigSignerURL(t *testing.T) {
 		t.Fatalf("an unset signer URL was rejected: %v", err)
 	}
 }
+
+// A malformed anonymous_allow_ips entry is refused on save, so a typo cannot
+// silently change who is exempt from the key requirement.
+func TestPersistConfigValidatesAnonymousAllowIPs(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	broken := &config.Config{AnonymousAllowIPs: []string{"10.0.0.0/8", "not-an-address"}}
+	if err := a.persistConfig(ctx, nil, broken); err == nil {
+		t.Fatal("a malformed anonymous_allow_ips entry was stored")
+	}
+	if saved, err := s.GetSetting(ctx, "config"); err != nil || strings.Contains(saved, "not-an-address") {
+		t.Fatalf("the rejected value reached the store: %q err=%v", saved, err)
+	}
+
+	valid := &config.Config{AnonymousAllowIPs: []string{"161.118.140.32", "203.77.252.0/24"}}
+	if err := a.persistConfig(ctx, nil, valid); err != nil {
+		t.Fatalf("a valid allowlist was rejected: %v", err)
+	}
+}

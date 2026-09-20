@@ -169,6 +169,7 @@ func main() {
 	}
 	grokHandler.SetCompactionCipher(compactionCipher)
 	logStatsigConfiguration(cfg)
+	logAnonymousAllowlist(cfg)
 	apiHandler.SetConfigChangeHook(func(next *config.Config) {
 		configureRuntimeLogging(next)
 		h.SetConfig(next)
@@ -421,6 +422,22 @@ func logStatsigConfiguration(cfg *config.Config) {
 		}
 		slog.Info("Statsig signing enabled", "endpoint", endpoint, "source", "config")
 	}
+}
+
+// logAnonymousAllowlist states which sources may call the inference routes
+// without a key. It is a deviation from the reference implementation, so a
+// deployment that uses it should see it in the log rather than infer it.
+func logAnonymousAllowlist(cfg *config.Config) {
+	if cfg == nil || len(cfg.AnonymousAllowIPs) == 0 {
+		return
+	}
+	list, err := middleware.NewAnonymousAllowlist(cfg.AnonymousAllowIPs)
+	if err != nil || list.Empty() {
+		slog.Error("anonymous_allow_ips is not usable; every caller must present a key", "error", err)
+		return
+	}
+	slog.Warn("anonymous inference access is allowed for the configured sources; every other caller still needs a key",
+		"anonymous_allow_ips", cfg.AnonymousAllowIPs)
 }
 
 func configureRuntimeLogging(cfg *config.Config) {

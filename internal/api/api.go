@@ -3450,6 +3450,9 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 	if err := validateStatsigConfig(storedCfg); err != nil {
 		return err
 	}
+	if _, err := middleware.NewAnonymousAllowlist(storedCfg.AnonymousAllowIPs); err != nil {
+		return fmt.Errorf("anonymous_allow_ips: %w", err)
+	}
 
 	data, err := json.Marshal(storedCfg)
 	if err != nil {

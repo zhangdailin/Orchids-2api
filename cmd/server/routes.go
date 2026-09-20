@@ -50,12 +50,30 @@ func registerRoutes(
 		return cfg
 	}
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return middleware.APIKeyAuth(
-			// Always required, exactly as grok2api mounts middleware.ClientAuth on
-			// its whole /v1 group. `inference_auth_enabled: false` used to open every
-			// inference route to anonymous callers, which turns the unified entry
-			// point into an open proxy; the field is now advisory only.
-			func() bool { return true },
+		return middleware.APIKeyAuthWithRequest(
+			// A key is required, exactly as grok2api mounts middleware.ClientAuth on
+			// its whole /v1 group; `inference_auth_enabled: false` used to open every
+			// inference route to anonymous callers and is now advisory only. The one
+			// exception is an explicit anonymous_allow_ips source, which a deployment
+			// names when it cannot yet update that client.
+			func(r *http.Request) bool {
+				cfg := currentConfig()
+				if cfg == nil {
+					return true
+				}
+				allowlist, err := middleware.NewAnonymousAllowlist(cfg.AnonymousAllowIPs)
+				if err != nil {
+					// A malformed entry makes the list unusable: require keys rather
+					// than silently opening the routes.
+					slog.Warn("anonymous_allow_ips is invalid; requiring a key from everyone", "error", err)
+					return true
+				}
+				if allowlist.Allows(r) {
+					slog.Debug("anonymous inference request allowed by anonymous_allow_ips", "client_ip", middleware.ClientIP(r))
+					return false
+				}
+				return true
+			},
 			func(ctx context.Context, token string) (*middleware.APIKeyPrincipal, error) {
 				key, err := s.AuthorizeApiKey(ctx, token)
 				switch {

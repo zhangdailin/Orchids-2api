@@ -47,21 +47,26 @@ type Config struct {
 	TokenCacheStrategy string   `json:"token_cache_strategy"`
 
 	// ── Hardcoded fields (set unconditionally by ApplyHardcoded) ──
-	DebugLogSSE           bool   `json:"-"`
-	SuppressThinking      bool   `json:"-"`
-	UpstreamMode          string `json:"-"`
-	GrokAPIBaseURL        string `json:"-"`
-	GrokUserAgent         string `json:"-"`
+	DebugLogSSE      bool   `json:"-"`
+	SuppressThinking bool   `json:"-"`
+	UpstreamMode     string `json:"-"`
+	GrokAPIBaseURL   string `json:"-"`
+	GrokUserAgent    string `json:"-"`
+	// AnonymousAllowIPs names the sources that may call the inference routes
+	// without a managed key. Empty (the default) requires a key from everyone, as
+	// grok2api does; an operator that cannot update a client yet lists its address
+	// here, and every other caller still needs a key.
+	AnonymousAllowIPs []string `json:"anonymous_allow_ips,omitempty"`
 	// GrokStatsigSignerURL selects statsig signing. Unset means grok2api's own
 	// default signer; an explicit empty string turns signing off; any other value
 	// is used as that endpoint.
-	GrokStatsigSignerURL *string `json:"grok_statsig_signer_url,omitempty"`
-	GrokStatsigID         string `json:"grok_statsig_id,omitempty"`
-	GrokConfigCFClearance string `json:"grok_cf_clearance,omitempty"`
-	GrokConfigCFBM        string `json:"grok_cf_bm,omitempty"`
-	GrokTemporary         *bool  `json:"grok_temporary,omitempty"`
-	GrokDisableMemory     *bool  `json:"grok_disable_memory,omitempty"`
-	GrokCustomInstruction string `json:"grok_custom_instruction,omitempty"`
+	GrokStatsigSignerURL  *string `json:"grok_statsig_signer_url,omitempty"`
+	GrokStatsigID         string  `json:"grok_statsig_id,omitempty"`
+	GrokConfigCFClearance string  `json:"grok_cf_clearance,omitempty"`
+	GrokConfigCFBM        string  `json:"grok_cf_bm,omitempty"`
+	GrokTemporary         *bool   `json:"grok_temporary,omitempty"`
+	GrokDisableMemory     *bool   `json:"grok_disable_memory,omitempty"`
+	GrokCustomInstruction string  `json:"grok_custom_instruction,omitempty"`
 
 	// ── WorkBuddy international backend (www.workbuddy.ai) ──
 	// Overridable for self-hosted regional deployments and for tests that need a
@@ -133,23 +138,23 @@ type Config struct {
 	// A relay gateway forwards client messages without rewriting content.
 	// This field is NOT written into ApplyHardcoded, so it survives a
 	// persistConfig round trip.
-	WarpDisableTools       *bool    `json:"-"`
-	WarpMaxToolResults     int      `json:"-"`
-	WarpMaxHistoryMessages int      `json:"-"`
-	Stream                 *bool    `json:"-"`
-	ImageNSFW              *bool    `json:"-"`
-	ImageFinalMinBytes     int      `json:"-"`
-	ImageMediumMinBytes    int      `json:"-"`
-	MaxRetries             int      `json:"max_retries,omitempty"`
-	RetryDelay             int      `json:"retry_delay,omitempty"`
-	AccountSwitchCount     int      `json:"account_switch_count,omitempty"`
+	WarpDisableTools       *bool `json:"-"`
+	WarpMaxToolResults     int   `json:"-"`
+	WarpMaxHistoryMessages int   `json:"-"`
+	Stream                 *bool `json:"-"`
+	ImageNSFW              *bool `json:"-"`
+	ImageFinalMinBytes     int   `json:"-"`
+	ImageMediumMinBytes    int   `json:"-"`
+	MaxRetries             int   `json:"max_retries,omitempty"`
+	RetryDelay             int   `json:"retry_delay,omitempty"`
+	AccountSwitchCount     int   `json:"account_switch_count,omitempty"`
 	// Quality-hold policy. The gateway withholds a degraded reasoning turn
 	// instead of streaming it, then retries it on another account. Holding is on
 	// by default and fails open once the retry budget is spent.
-	QualityHoldEnabled     *bool  `json:"quality_hold_enabled,omitempty"`
-	QualityHoldMaxAttempts int    `json:"quality_hold_max_attempts,omitempty"`
-	QualityHoldTimeoutMs   int    `json:"quality_hold_timeout_ms,omitempty"`
-	QualityHoldOnExhausted string `json:"quality_hold_on_exhausted,omitempty"`
+	QualityHoldEnabled     *bool    `json:"quality_hold_enabled,omitempty"`
+	QualityHoldMaxAttempts int      `json:"quality_hold_max_attempts,omitempty"`
+	QualityHoldTimeoutMs   int      `json:"quality_hold_timeout_ms,omitempty"`
+	QualityHoldOnExhausted string   `json:"quality_hold_on_exhausted,omitempty"`
 	RequestTimeout         int      `json:"request_timeout,omitempty"`
 	Retry429Interval       int      `json:"retry_429_interval,omitempty"`
 	TokenRefreshInterval   int      `json:"-"`
