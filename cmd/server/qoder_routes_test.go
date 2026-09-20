@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -137,13 +140,21 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	stub := newQoderE2EStub(t)
 	defer stub.Close()
 
-	disabled := false
+	digest := sha256.Sum256([]byte("sk-qoder-e2e"))
+	if err := s.CreateApiKey(context.Background(), &store.ApiKey{
+		Name: "qoder-e2e", KeyHash: hex.EncodeToString(digest[:]), KeyPrefix: "sk-", KeySuffix: "-e2e", Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateApiKey() error = %v", err)
+	}
+
+	// Inference auth is unconditional, so the channel request carries a managed
+	// key; the admin request uses the admin token as before.
+	const managedKey = "sk-qoder-e2e"
 	cfg := &config.Config{
 		AdminUser:           "admin",
 		AdminPass:           "secret",
 		AdminToken:          "admintoken",
 		AdminPath:           "/admin",
-		InferenceAuth:       &disabled,
 		QoderOAuthBaseURL:   stub.URL,
 		QoderOpenAPIBaseURL: stub.URL,
 		QoderInferenceURL:   stub.URL,
@@ -202,6 +213,8 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 		req.Header.Set("Origin", server.URL)
 		if admin {
 			req.Header.Set("X-Admin-Token", "admintoken")
+		} else {
+			req.Header.Set("Authorization", "Bearer "+managedKey)
 		}
 		resp, err := httpClient.Do(req)
 		if err != nil {

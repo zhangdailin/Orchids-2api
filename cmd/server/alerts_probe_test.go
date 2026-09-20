@@ -148,9 +148,11 @@ func TestResolveProbeAPIKey(t *testing.T) {
 	if got := resolveProbeAPIKey(&config.Config{}); got != "" {
 		t.Fatalf("resolveProbeAPIKey(no key, auth on) = %q, want empty", got)
 	}
+	// Auth is unconditional now, so a configured key is used regardless of the
+	// (advisory) inference_auth_enabled flag.
 	off := false
-	if got := resolveProbeAPIKey(&config.Config{PublicKey: "public-key", InferenceAuth: &off}); got != "" {
-		t.Fatalf("resolveProbeAPIKey(auth off) = %q, want empty (no key needed)", got)
+	if got := resolveProbeAPIKey(&config.Config{PublicKey: "public-key", InferenceAuth: &off}); got != "public-key" {
+		t.Fatalf("resolveProbeAPIKey(auth flag off) = %q, want the public key", got)
 	}
 	if got := resolveProbeAPIKey(&config.Config{PublicKey: "  public-key  "}); got != "public-key" {
 		t.Fatalf("resolveProbeAPIKey() = %q, want the trimmed public key", got)
@@ -242,15 +244,17 @@ func TestProbeOnce_RecordsUpstreamStatus(t *testing.T) {
 	defer upstream.Close()
 
 	s := newProbeStore(t, &store.Account{Name: "grok-live", AccountType: "grok", Enabled: true})
-	off := false
-	cfg := &config.Config{InferenceAuth: &off}
+	// Inference auth is unconditional, so a probe needs the public key: without
+	// one the middleware would reject it and the result would describe this
+	// gateway rather than the upstream.
+	cfg := &config.Config{PublicKey: "public-key"}
 
 	if recorded := probeOnce(context.Background(), s, cfg, recorder, upstream.URL, upstream.Client()); recorded != 1 {
 		t.Fatalf("probeOnce() recorded = %d, want 1", recorded)
 	}
 	_, _, headers, events := recorder.snapshot()
-	if got := headers[0].Get("Authorization"); got != "" {
-		t.Fatalf("probe Authorization = %q, want none while inference auth is off", got)
+	if got := headers[0].Get("Authorization"); !strings.Contains(got, "public-key") {
+		t.Fatalf("probe Authorization = %q, want the configured public key", got)
 	}
 	if len(events) != 1 || events[0].Status != "error" {
 		t.Fatalf("journal events = %+v, want one error entry", events)

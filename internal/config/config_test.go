@@ -156,8 +156,8 @@ func TestInferenceAuthOptOutSurvivesApplyDefaults(t *testing.T) {
 	if *cfg.InferenceAuth {
 		t.Fatal("ApplyDefaults forced inference_auth_enabled back to true")
 	}
-	if cfg.InferenceAuthEnabled() {
-		t.Fatal("InferenceAuthEnabled()=true want=false for inference_auth_enabled=false")
+	if !cfg.InferenceAuthEnabled() {
+		t.Fatal("auth must stay required even when inference_auth_enabled=false")
 	}
 
 	var unset Config

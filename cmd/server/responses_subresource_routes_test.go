@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,10 +37,10 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	inferenceAuthDisabled := false
+	// Inference auth is unconditional (grok2api has no switch on /v1), so the
+	// probe has to carry a managed key to reach the routing layer.
 	cfg := &config.Config{
 		AdminUser: "admin", AdminPass: "secret", AdminToken: "admintoken", AdminPath: "/admin",
-		InferenceAuth: &inferenceAuthDisabled,
 	}
 	lb := loadbalancer.NewWithCacheTTL(s, 0)
 	h := handler.NewWithLoadBalancer(cfg, lb)
@@ -48,6 +51,15 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 		t.Fatalf("template.NewRenderer() error = %v", err)
 	}
 	limiter := middleware.NewConcurrencyLimiter(4, 0, false)
+
+	// A managed key, because /v1 requires one unconditionally.
+	managedKey := "sk-responses-subresource"
+	digest := sha256.Sum256([]byte(managedKey))
+	if err := s.CreateApiKey(context.Background(), &store.ApiKey{
+		Name: "subresource-probe", KeyHash: hex.EncodeToString(digest[:]), KeyPrefix: "sk-", KeySuffix: "urce", Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateApiKey() error = %v", err)
+	}
 
 	mux := http.NewServeMux()
 	registerRoutes(mux, cfg, s, h, nil, apiHandler, limiter, nil, renderer)
@@ -64,7 +76,9 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 				{http.MethodGet, prefix + "/responses/resp_absent/input_items", ""},
 			} {
 				rec := httptest.NewRecorder()
-				mux.ServeHTTP(rec, httptest.NewRequest(probe.method, probe.path, strings.NewReader(probe.body)))
+				req := httptest.NewRequest(probe.method, probe.path, strings.NewReader(probe.body))
+				req.Header.Set("Authorization", "Bearer "+managedKey)
+				mux.ServeHTTP(rec, req)
 
 				if rec.Code == http.StatusMethodNotAllowed {
 					t.Fatalf("%s %s returned 405: the path is registered for the wrong method", probe.method, probe.path)
@@ -84,7 +98,9 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 			// Allow header), which is the difference between "this endpoint
 			// rejects GET" and "this endpoint does not exist".
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, prefix+"/responses/resp_absent/cancel", nil))
+			wrongMethod := httptest.NewRequest(http.MethodGet, prefix+"/responses/resp_absent/cancel", nil)
+			wrongMethod.Header.Set("Authorization", "Bearer "+managedKey)
+			mux.ServeHTTP(rec, wrongMethod)
 			if rec.Code != http.StatusMethodNotAllowed {
 				t.Fatalf("GET %s/responses/resp_absent/cancel status = %d, want 405", prefix, rec.Code)
 			}
@@ -97,7 +113,9 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 	// The response id itself must keep working on the unified prefix: the
 	// explicit sibling routes must not shadow the /responses/ subtree.
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/responses/resp_absent", nil))
+	resourceReq := httptest.NewRequest(http.MethodGet, "/v1/responses/resp_absent", nil)
+	resourceReq.Header.Set("Authorization", "Bearer "+managedKey)
+	mux.ServeHTTP(rec, resourceReq)
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "response_not_found") {
 		t.Fatalf("GET /v1/responses/resp_absent status = %d body = %s", rec.Code, rec.Body.String())
 	}

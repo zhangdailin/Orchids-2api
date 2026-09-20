@@ -321,11 +321,10 @@ func ApplyDefaults(cfg *Config) {
 // retry/deadline settings. Configured runtime values survive file/Redis/API
 // round trips; protocol constants remain non-configurable.
 func ApplyHardcoded(cfg *Config) {
-	// inference_auth_enabled is deliberately NOT hardcoded: a trusted upstream
-	// gateway may opt out with inference_auth_enabled=false, and a hardcoded
-	// true here silently overrode that choice on every file/Redis/API round
-	// trip. The default stays "enabled" through InferenceAuthEnabled() when the
-	// field is absent.
+	// inference_auth_enabled is deliberately NOT hardcoded: the field is read for
+	// display and migration only, because InferenceAuthEnabled() now always
+	// answers true (grok2api has no switch on /v1). Hardcoding it here would
+	// rewrite the operator's stored value on every file/Redis/API round trip.
 	cfg.UpstreamMode = "ws"
 	cfg.GrokAPIBaseURL = "https://grok.com"
 	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
@@ -525,10 +524,16 @@ func (c *Config) PublicAPIEnabled() bool {
 	return c != nil && c.PublicEnabled != nil && *c.PublicEnabled
 }
 
-// InferenceAuthEnabled reports whether model and inference endpoints require
-// a managed API key.
+// InferenceAuthEnabled reports whether model and inference endpoints require a
+// managed API key.
+//
+// It is always true: grok2api mounts its client auth middleware on the whole /v1
+// group with no switch, and a single config flag that turns the unified entry
+// point into an anonymous proxy is a security boundary the two gateways must not
+// differ on. `inference_auth_enabled: false` is therefore ignored, and callers
+// that only need to ask "is a key available" use PublicAPIKey instead.
 func (c *Config) InferenceAuthEnabled() bool {
-	return c == nil || c.InferenceAuth == nil || *c.InferenceAuth
+	return true
 }
 
 func generateRandomPassword(length int) (string, error) {

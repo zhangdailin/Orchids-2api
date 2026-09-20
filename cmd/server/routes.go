@@ -51,7 +51,11 @@ func registerRoutes(
 	}
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return middleware.APIKeyAuth(
-			func() bool { return currentConfig().InferenceAuthEnabled() },
+			// Always required, exactly as grok2api mounts middleware.ClientAuth on
+			// its whole /v1 group. `inference_auth_enabled: false` used to open every
+			// inference route to anonymous callers, which turns the unified entry
+			// point into an open proxy; the field is now advisory only.
+			func() bool { return true },
 			func(ctx context.Context, token string) (*middleware.APIKeyPrincipal, error) {
 				key, err := s.AuthorizeApiKey(ctx, token)
 				switch {
