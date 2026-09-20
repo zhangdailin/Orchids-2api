@@ -491,4 +491,10 @@
 | 质量 hold 阈值量纲 | 由"字符"改为与参考实现一致的 token 量纲（用同一套 rune/4 估算换算），上游上报的推理 token 数优先。 |
 | compaction blob 信封字段 | 明文信封字段名改为参考实现的 `version`/`session`/`summary`。 |
 
-**仍在进行（下一轮）**：TTS/STT/视频三条路径的结算接线（估值函数已就绪）；ops 聚合的 cost 与 priced/unpriced 维度；Key 账期重置与管理端入口；`PricingBreakdown`（成本重建结构）。
+**已全部完成（第十四轮收尾）**：
+- TTS/STT/视频三条路径的结算接线：TTS 按字符、STT 按上游 JSON 里的时长（纯文本转录无时长则不计价）、视频按"时长 × 每秒费率 + 输入图"在创建时结算；Web 与 Console 两面都接。
+- ops 聚合的 cost 维度：观测框累加本请求所有已计价行的 ticks，trace 中间件透出，按分钟桶/汇总/JSON 都暴露 `cost_in_usd_ticks`，与 priced/unpriced 请求数并列（面板不会把部分数字当成全部账单）。
+- Key 账期重置：`billing_period_days` + 持久化的 `billing_period_started_at`，到期自动把已结算用量归零；管理端新增 `POST /api/keys/{id}/reset-usage` 供人工重置（限额保留）。期初时间随记录持久化，否则重启后就再也等不到滚动。
+- `PricingBreakdown`：`pricing.ReconstructBreakdown` 从"定价模型 + 数量"重建费率分量（未缓存/缓存/输出 token 含长上下文档、图片输出+输入张数含 2.0 的档位矩阵与编辑附加费、视频秒数+参考图、TTS 字符、STT 小时费率），journal 列表对每个带定价模型的行附上 `pricing_breakdown`。
+
+**至此，本目标列出的每一项（17 条保留差异 + 覆盖缺口 + 实现级差异）都已落地**，判据见各节与 `docs/grok2api-audit/recount.py`（171 / 171 / 0 / 0）。
