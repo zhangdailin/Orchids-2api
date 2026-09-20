@@ -1,5 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
+const same=(a,b)=>assert.equal(JSON.stringify(a),JSON.stringify(b));
 const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
@@ -32,11 +33,11 @@ const plain=v=>Array.from(v);
 test('anonymous_allow_ips is parsed into a trimmed list, and an empty box means nobody',()=>{
  const {api,node}=loadConfig();
  node('cfg_anonymous_allow_ips').value=' 161.118.140.32 \n\n203.77.252.0/24\n';
- assert.deepEqual(plain(api.parseAnonymousAllowIPs()),['161.118.140.32','203.77.252.0/24']);
+ assert.deepStrictEqual(plain(api.parseAnonymousAllowIPs()),['161.118.140.32','203.77.252.0/24']);
  node('cfg_anonymous_allow_ips').value='   \n ';
- assert.deepEqual(plain(api.parseAnonymousAllowIPs()),[]);
+ assert.deepStrictEqual(plain(api.parseAnonymousAllowIPs()),[]);
  node('cfg_anonymous_allow_ips').value='';
- assert.deepEqual(plain(api.parseAnonymousAllowIPs()),[]);
+ assert.deepStrictEqual(plain(api.parseAnonymousAllowIPs()),[]);
 });
 
 test('USD and ticks convert both ways without losing the integer ledger',()=>{
