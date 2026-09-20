@@ -14,6 +14,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 )
@@ -170,6 +171,11 @@ func (h *Handler) handleChatImageEdit(
 		defer resp.Body.Close()
 		h.syncGrokQuota(sess.acc, resp.Header)
 		h.streamImageGeneration(w, resp.Body, sess.token, prompt, responseFormat, n, publicBase)
+		if cost, priced := pricing.EstimateImageEditCost(spec.UpstreamModel, imageCfg.Resolution, "", n, len(imageURLs)); priced {
+			h.settleMediaBilling(ctx, req.Model, cost, map[string]interface{}{
+				"plane": "web", "stream": true, "images": n, "input_images": len(imageURLs),
+			})
+		}
 		return
 	}
 
@@ -564,6 +570,15 @@ func (h *Handler) HandleImagesEdits(w http.ResponseWriter, r *http.Request) {
 		defer resp.Body.Close()
 		h.syncGrokQuota(sess.acc, resp.Header)
 		h.streamImageGeneration(w, resp.Body, sess.token, prompt, responseFormat, n, publicBase)
+		inputs := len(inputValues)
+		if inputs == 0 {
+			inputs = len(uploads)
+		}
+		if cost, priced := pricing.EstimateImageEditCost(spec.UpstreamModel, formValue("resolution"), formValue("quality"), n, inputs); priced {
+			h.settleMediaBilling(r.Context(), model, cost, map[string]interface{}{
+				"plane": "web", "stream": true, "images": n, "input_images": inputs,
+			})
+		}
 		return
 	}
 

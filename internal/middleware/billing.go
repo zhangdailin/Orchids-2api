@@ -194,6 +194,36 @@ func SettleAPIKeyBilling(
 	return result, true
 }
 
+// SettleAPIKeyBillingResult books an explicitly priced request (an image, a
+// video, a TTS or STT call) against the reservation in the context.
+//
+// The text settle path derives its cost from token counts; the media planes are
+// billed per produced asset, so they compute a pricing.Result themselves and hand
+// it in. Claim-once semantics are identical: one request charges at most once.
+func SettleAPIKeyBillingResult(ctx context.Context, settler APIKeyBillingStore, result pricing.Result) bool {
+	if result.CostInUSDTicks <= 0 || strings.TrimSpace(result.Model) == "" {
+		return false
+	}
+	if settler == nil {
+		settler = apiKeyBillingStore
+	}
+	reservation := BillingReservationFrom(ctx)
+	if settler == nil || reservation == nil || reservation.KeyID == 0 || reservation.EventID == "" {
+		// No hold was taken (an unlimited key): the cost is still returned so the
+		// caller can record it, but there is nothing to convert.
+		return true
+	}
+	if _, first := reservation.claim(result); !first {
+		return true
+	}
+	if err := settler.SettleApiKeyBilling(ctx, reservation.KeyID, reservation.EventID, result.CostInUSDTicks); err != nil {
+		slog.Warn("failed to settle media API key billing",
+			"error", err, "key_id", reservation.KeyID, "event_id", reservation.EventID,
+			"amount_ticks", result.CostInUSDTicks, "model", result.Model)
+	}
+	return true
+}
+
 // APIKeyBillingReservation reserves the worst-case text cost of one inference
 // request against the client key's limit before the handler runs.
 //

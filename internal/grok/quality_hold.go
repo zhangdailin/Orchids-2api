@@ -12,6 +12,7 @@ import (
 
 	"orchids-api/internal/audit"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 )
 
@@ -765,5 +766,33 @@ func (h *Handler) auditQualityDegraded(ctx context.Context, acc *store.Account, 
 			"first_visible_ms": outcome.Quality.FirstVisibleMS,
 			"withheld":         true,
 		},
+	})
+}
+
+// settleMediaBilling charges a per-asset request (image, video, TTS, STT) against
+// the client key's reservation and records one compact audit row for it.
+//
+// The text paths settle from token counts inside their own audit event; these
+// planes are priced per produced asset, so the price is computed here and the row
+// carries it. A request that was already settled (or has no reservation because
+// the key is unlimited) still reports its cost.
+func (h *Handler) settleMediaBilling(ctx context.Context, requestModel string, result pricing.Result, metadata map[string]interface{}) {
+	if h == nil || result.CostInUSDTicks <= 0 {
+		return
+	}
+	booked := middleware.SettleAPIKeyBillingResult(ctx, nil, result)
+	logger := h.auditLoggerSnapshot()
+	if logger == nil {
+		return
+	}
+	status := "success"
+	if !booked {
+		status = "unpriced"
+	}
+	logger.Log(ctx, audit.Event{
+		Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_media_request",
+		APIKeyID: middleware.APIKeyID(ctx), Model: requestModel, Channel: "grok",
+		Status: status, UsageSource: audit.UsageSourceUpstream, Metadata: metadata,
+		CostInUSDTicks: result.CostInUSDTicks, PricingModel: result.Model, PricingVersion: pricing.Version,
 	})
 }

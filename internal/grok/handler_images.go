@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 )
 
@@ -52,6 +53,7 @@ func (h *Handler) streamImageGeneration(w http.ResponseWriter, body io.Reader, t
 		writeSSECodedError(w, flusher, "no image generated", "no_image_generated")
 		return
 	}
+
 
 	for i, u := range urls {
 		val, err := h.imageOutputValue(context.Background(), token, u, format)
@@ -229,6 +231,11 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 	}
 
 	h.writeImageResults(w, ctx, sess.token, req.Prompt, urls, req.ResponseFormat, publicBase, true)
+	if cost, priced := pricing.EstimateImageCost(spec.UpstreamModel, req.Resolution, req.Quality, len(urls)); priced {
+		h.settleMediaBilling(ctx, req.Model, cost, map[string]interface{}{
+			"plane": "web", "images": len(urls), "resolution": req.Resolution,
+		})
+	}
 }
 
 func imagineWSProModel(modelID string) bool {
@@ -371,6 +378,11 @@ func (h *Handler) streamAppChatImagesGeneration(ctx context.Context, w http.Resp
 	defer resp.Body.Close()
 	h.syncGrokQuota(sess.acc, resp.Header)
 	h.streamImageGeneration(w, resp.Body, sess.token, req.Prompt, req.ResponseFormat, req.N, publicBase)
+	if cost, priced := pricing.EstimateImageCost(spec.UpstreamModel, req.Resolution, req.Quality, req.N); priced {
+		h.settleMediaBilling(ctx, req.Model, cost, map[string]interface{}{
+			"plane": "web", "stream": true, "images": req.N,
+		})
+	}
 }
 
 func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccountSession, spec ModelSpec, req ImagesGenerationsRequest, allowSwitch bool) ([]string, error) {

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/pricing"
 )
 
 const (
@@ -172,6 +174,42 @@ func (h *Handler) forwardConsoleImageRequest(ctx context.Context, w http.Respons
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+	// Console images are billed per produced asset, so the price comes from the
+	// payload that was actually sent rather than from a token count.
+	if cost, priced := consoleImageCost(modelID, payload); priced {
+		h.settleMediaBilling(ctx, modelID, cost, map[string]interface{}{
+			"plane": "console", "path": path,
+		})
+	}
+}
+
+// consoleImageCost prices a Console image request from the payload it sent: an
+// edit pays for its output images plus the input images it had to process, a
+// generation pays for the produced images.
+func consoleImageCost(modelID string, payload map[string]interface{}) (pricing.Result, bool) {
+	if payload == nil {
+		return pricing.Result{}, false
+	}
+	count := 1
+	if n := interfaceToInt(payload["n"]); n > 0 {
+		count = n
+	}
+	resolution, _ := payload["resolution"].(string)
+	quality, _ := payload["quality"].(string)
+	inputs := 0
+	switch value := payload["images"].(type) {
+	case []interface{}:
+		inputs = len(value)
+	}
+	if inputs == 0 {
+		if _, exists := payload["image"]; exists {
+			inputs = 1
+		}
+	}
+	if inputs > 0 {
+		return pricing.EstimateImageEditCost(modelID, resolution, quality, count, inputs)
+	}
+	return pricing.EstimateImageCost(modelID, resolution, quality, count)
 }
 
 func (h *Handler) localizeConsoleImageResponse(ctx context.Context, token string, data []byte, publicBase string) ([]byte, error) {
