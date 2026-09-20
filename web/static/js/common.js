@@ -39,6 +39,10 @@ function getSidebarAccountToken(acc) {
     // only so the table can show that a credential exists.
     return acc.qoder_access_token || "";
   }
+  if (type === "cline") {
+    // Same contract as Qoder: the refresh token is server-side only.
+    return acc.cline_access_token || "";
+  }
   return acc.client_cookie || acc.token || "";
 }
 
@@ -178,6 +182,8 @@ function isSidebarAccountAbnormal(acc) {
   } else if (type === "workbuddy") {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (type === "qoder") {
+    if (!hasSidebarAccountCredential(acc)) return true;
+  } else if (type === "cline") {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {
     return true;

@@ -90,6 +90,8 @@ func accountCredentialFields(acc *Account) []*string {
 		&acc.QoderRefreshToken,
 		&acc.QoderRuntimeInfo,
 		&acc.QoderRuntimeKey,
+		&acc.ClineAccessToken,
+		&acc.ClineRefreshToken,
 	}
 }
 

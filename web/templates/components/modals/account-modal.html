@@ -51,7 +51,16 @@
            <a id="qoderLoginLinkText" href="#" target="_blank" rel="noopener noreferrer"></a>
          </div>
        </div>
-       <div class="form-group" id="warpDeviceLoginGroup" hidden>
+       <div class="form-group" id="clineLoginGroup" hidden>
+          <label class="form-label">官方 Cline 登录（WorkOS 设备授权）</label>
+          <button class="btn btn-secondary" id="clineLoginButton" type="button" onclick="ClineLogin.start()">使用 Cline 官方网页登录</button>
+          <small class="helper-text">在 WorkOS 官方页面完成 Cline 授权；服务端只保存 Cline access/refresh token，读取不到密码。授权完成后自动保存账号并同步模型目录，refreshToken 由服务端自动轮换。该渠道只支持官方登录，不提供手填凭证。</small>
+          <div class="account-import-status" id="clineLoginStatus" hidden></div>
+          <div class="account-import-status" id="clineLoginLink" hidden>
+            <a id="clineLoginLinkText" href="#" target="_blank" rel="noopener noreferrer"></a>
+          </div>
+        </div>
+<div class="form-group" id="warpDeviceLoginGroup" hidden>
          <label class="form-label">官方 Warp 登录</label>
          <button class="btn btn-secondary" id="warpDeviceLoginButton" type="button" onclick="startWarpDeviceLogin()">使用 Warp 官方网页登录</button>
          <small class="helper-text">仅支持在 app.warp.dev 完成官方授权，不支持手填 Token 或文件导入。登录会话由服务器自动续期，不会返回到管理页面。</small>

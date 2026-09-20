@@ -177,6 +177,21 @@
               </tr>
               <tr>
                 <td data-label="渠道与账号方式">
+                  <span class="tag badge-cline">Cline</span>
+                  <small>使用 WorkOS 设备授权</small>
+                </td>
+                <td data-label="普通客户端">
+                  <span class="tut-address">
+                    <code id="tutUrlCline" data-api-path="/cline/v1"></code>
+                    <button type="button" data-copy-target="tutUrlCline">复制</button>
+                  </span>
+                </td>
+                <td data-label="Claude Code"><code data-api-path="/cline"></code></td>
+                <td data-label="模型示例"><code class="doc-model-code">x-ai/grok-4.1-fast</code></td>
+                <td data-label="协议"><span class="tag protocol-tag protocol-tag-claude">Claude</span> <span class="tag protocol-tag protocol-tag-openai">OpenAI</span></td>
+              </tr>
+              <tr>
+                <td data-label="渠道与账号方式">
                   <span class="tag badge-grok">Grok</span>
                   <small>在账号管理中登录</small>
                 </td>
@@ -214,8 +229,8 @@
           <p>客户端应使用「配置管理」创建的 <code class="doc-inline-code">sk-...</code>，通常放在 <code class="doc-inline-code">Authorization: Bearer sk-...</code>；Anthropic Messages 客户端也可使用 <code class="doc-inline-code">x-api-key</code>。</p>
         </details>
         <details>
-          <summary>WorkBuddy 或 Qoder 无法手动填写凭据</summary>
-          <p>这是预期行为。WorkBuddy 使用官方网页登录，Qoder 使用 <code class="doc-inline-code">qoder.com</code> 的 OAuth 设备授权；两者都应从账号管理页面发起登录。</p>
+          <summary>WorkBuddy、Qoder 或 Cline 无法手动填写凭据</summary>
+          <p>这是预期行为。WorkBuddy 使用官方网页登录，Qoder 使用 <code class="doc-inline-code">qoder.com</code> 的 OAuth 设备授权，Cline 通过 WorkOS 设备授权（<code class="doc-inline-code">api.cline.bot</code>）登录；三者都应从账号管理页面发起登录。</p>
         </details>
         <details>
           <summary>Puter 模型列表没有 openrouter: 等前缀模型</summary>

@@ -465,15 +465,23 @@ function applyTokenLabels(type) {
   // through the same browser flow, so the group stays visible while editing.
   const qoderLoginGroup = document.getElementById("qoderLoginGroup");
   if (qoderLoginGroup) qoderLoginGroup.hidden = normalized !== "qoder";
+  // Cline is OAuth-only for the same reason: the WorkOS device grant is the only
+  // way to obtain the credential, and an existing account is renewed by signing
+  // in again.
+  const clineLoginGroup = document.getElementById("clineLoginGroup");
+  if (clineLoginGroup) clineLoginGroup.hidden = normalized !== "cline";
   const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
   if (warpDeviceLoginGroup) {
     warpDeviceLoginGroup.hidden = normalized !== "warp" || Boolean(accountId);
   }
   const saveButton = document.querySelector('#accountForm button[type="submit"]');
   if (saveButton) {
-    // Warp, WorkBuddy and Qoder are created by their official login flows, so
-    // the form has nothing to submit for a new account of any of those types.
-    saveButton.hidden = (normalized === "warp" || normalized === "workbuddy" || normalized === "qoder") && !accountId;
+    // Warp, WorkBuddy, Qoder and Cline are created by their official login
+    // flows, so the form has nothing to submit for a new account of any of
+    // those types.
+    const loginOnlyChannel =
+      normalized === "warp" || normalized === "workbuddy" || normalized === "qoder" || normalized === "cline";
+    saveButton.hidden = loginOnlyChannel && !accountId;
   }
   applyCredentialModeUI(normalized);
   if (!label || !input || !hint) return;
@@ -737,7 +745,8 @@ function applyCredentialModeUI(type) {
   // The credential textarea is hidden for the channels that only accept official
   // login (Warp) and for the OAuth-only channels (WorkBuddy, Qoder).
   const normalizedType = String(type || "").trim().toLowerCase();
-  const oauthOnlyChannel = normalizedType === "warp" || normalizedType === "workbuddy" || normalizedType === "qoder";
+  const oauthOnlyChannel =
+    normalizedType === "warp" || normalizedType === "workbuddy" || normalizedType === "qoder" || normalizedType === "cline";
   const showToken = !oauthOnlyChannel && !isOAuth;
   const providerGroup = document.getElementById("grokProviderGroup");
   if (providerGroup) providerGroup.hidden = true;
@@ -903,6 +912,11 @@ function buildAccountPayload(type, baseData, credential) {
     // and there is no manual field, so the form only carries settings.
     delete payload.refresh_token;
     delete payload.client_cookie;
+  } else if (type === "cline") {
+    // Cline is OAuth-only for the same reason: the WorkOS device grant is the
+    // only source of the credential.
+    delete payload.refresh_token;
+    delete payload.client_cookie;
   } else {
     payload.client_cookie = credential;
   }
@@ -921,6 +935,8 @@ function accountTypeLabel(type) {
       return "WorkBuddy";
     case "qoder":
       return "Qoder";
+    case "cline":
+      return "Cline";
     default:
       return "Warp";
   }
@@ -961,6 +977,7 @@ function platformAccountType(platform) {
     case "puter":
     case "workbuddy":
     case "qoder":
+    case "cline":
       return key;
     default:
       return getActiveAccountType();

@@ -1,0 +1,266 @@
+package cline
+
+import (
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/goccy/go-json"
+
+	"orchids-api/internal/prompt"
+	"orchids-api/internal/upstream"
+)
+
+// TestBuildChatBodyCarriesTheUpstreamDefaults pins what the upstream needs on
+// every request: an omitted reasoning_effort makes some models answer with empty
+// content, and a session_id is how it correlates a turn.
+func TestBuildChatBodyCarriesTheUpstreamDefaults(t *testing.T) {
+	body, err := buildChatBody(upstream.UpstreamRequest{
+		Model:    "x-ai/grok-4.1-fast",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hello"}}},
+	}, "x-ai/grok-4.1-fast")
+	if err != nil {
+		t.Fatalf("buildChatBody() error = %v", err)
+	}
+	raw := string(body)
+	for _, want := range []string{
+		`"model":"x-ai/grok-4.1-fast"`,
+		`"max_tokens":128000`,
+		`"reasoning_effort":"high"`,
+		`"session_id":"sess_`,
+		`"stream":true`,
+		`"messages":[{"role":"user","content":"hello"}]`,
+	} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("body is missing %s: %s", want, raw)
+		}
+	}
+}
+
+// TestBuildMessagesMapsToolHistory proves an assistant tool_use block becomes a
+// tool_calls entry and its tool_result becomes a paired `tool` message: an
+// orphan tool result is rejected upstream.
+func TestBuildMessagesMapsToolHistory(t *testing.T) {
+	out := buildMessages(upstream.UpstreamRequest{
+		System: []prompt.SystemItem{{Type: "text", Text: "be terse"}},
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "read the file"}},
+			{
+				Role: "assistant",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_use", ID: "call-1", Name: "Read", Input: map[string]interface{}{"path": "/tmp/a"}},
+				}},
+			},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "call-1", Content: "file body"},
+				}},
+			},
+		},
+	})
+	if len(out) != 4 {
+		t.Fatalf("messages = %d, want 4 (%+v)", len(out), out)
+	}
+	if out[0].Role != "system" || out[0].Content != "be terse" {
+		t.Errorf("first message = %+v, want the system item", out[0])
+	}
+	if len(out[2].ToolCalls) != 1 || out[2].ToolCalls[0].Function.Name != "Read" {
+		t.Fatalf("assistant message = %+v, want one Read tool call", out[2])
+	}
+	if out[3].Role != "tool" || out[3].ToolCallID != "call-1" || out[3].Content != "file body" {
+		t.Errorf("tool result = %+v, want a paired tool message", out[3])
+	}
+}
+
+// TestBuildMessagesDropsOrphanToolResults covers the case that would otherwise
+// be rejected: a tool_result whose call is not in the history has nothing to
+// pair with.
+func TestBuildMessagesDropsOrphanToolResults(t *testing.T) {
+	out := buildMessages(upstream.UpstreamRequest{
+		Messages: []prompt.Message{
+			{Role: "user", Content: prompt.MessageContent{Text: "hi"}},
+			{
+				Role: "user",
+				Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
+					{Type: "tool_result", ToolUseID: "call-absent", Content: "body"},
+				}},
+			},
+		},
+	})
+	if len(out) != 1 || out[0].Content != "hi" {
+		t.Fatalf("messages = %+v, want only the user message", out)
+	}
+}
+
+// TestConsumeStreamEmitsTextAndUsage drives the SSE conversion that the handler
+// consumes, including the {"data":{...}} envelope: a chunk that arrives wrapped
+// must still produce its delta.
+func TestConsumeStreamEmitsTextAndUsage(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" +
+		"data: {\"data\":{\"choices\":[{\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}}\n\n" +
+		"data: [DONE]\n\n"
+	var text strings.Builder
+	var usage map[string]interface{}
+	finish := false
+	result, err := consumeStream(strings.NewReader(stream), func(msg upstream.SSEMessage) {
+		switch msg.Type {
+		case "model.text-delta":
+			text.WriteString(msg.Event["delta"].(string))
+		case "model.tokens-used":
+			usage = msg.Event
+		case "model.finish":
+			finish = true
+		}
+	})
+	if err != nil {
+		t.Fatalf("consumeStream() error = %v", err)
+	}
+	if got := text.String(); got != "hello world" {
+		t.Errorf("text = %q, want \"hello world\"", got)
+	}
+	if usage == nil || usage["inputTokens"] != 5 || usage["outputTokens"] != 2 {
+		t.Errorf("usage = %+v, want the normalized pair", usage)
+	}
+	if !result.SawMeaningfulEvent {
+		t.Error("SawMeaningfulEvent = false, want true")
+	}
+	if finish {
+		t.Error("consumeStream emitted a finish event; the caller owns it")
+	}
+}
+
+// TestConsumeStreamEmitsEachToolCallOnce is the regression the accumulator
+// exists for: the finish-time emit and the end-of-stream flush both run, and a
+// tool call must not reach the client twice.
+func TestConsumeStreamEmitsEachToolCallOnce(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\"}}]}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"/tmp/a}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	var calls int
+	var names []string
+	result, err := consumeStream(strings.NewReader(stream), func(msg upstream.SSEMessage) {
+		if msg.Type != "model.tool-call" {
+			return
+		}
+		calls++
+		names = append(names, msg.Event["toolName"].(string))
+	})
+	if err != nil {
+		t.Fatalf("consumeStream() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("tool calls emitted = %d, want 1 (%v)", calls, names)
+	}
+	if result.ToolCallCount != 1 {
+		t.Errorf("ToolCallCount = %d, want 1", result.ToolCallCount)
+	}
+	if result.FinishReason() != "tool_use" {
+		t.Errorf("FinishReason() = %q, want tool_use", result.FinishReason())
+	}
+}
+
+// TestClassifyStatusTurnsTheCapIntoAKnownWindow is the reason the 429 path is
+// special: the wait is in the body, and reading it turns a retry into a
+// cooldown the scheduler can honour.
+func TestClassifyStatusTurnsTheCapIntoAKnownWindow(t *testing.T) {
+	err := classifyStatus(429, []byte(`{"error":"INFERENCE_CAP_ERROR","message":"Try again in 17h 59m"}`))
+	capErr, ok := err.(*InferenceCapError)
+	if !ok {
+		t.Fatalf("classifyStatus(429) = %T (%v), want *InferenceCapError", err, err)
+	}
+	if capErr.Wait != 17*time.Hour+59*time.Minute {
+		t.Errorf("wait = %v, want 17h59m", capErr.Wait)
+	}
+}
+
+// TestClassifyStatusRefusesToRetryForever pins the retry boundary: a 401 is
+// unauthorized (one refresh, then stop) and a 400 is final, so a broken request
+// does not burn the account's credential.
+func TestClassifyStatusRefusesToRetryForever(t *testing.T) {
+	if err := classifyStatus(401, []byte(`{"error":"unauthorized"}`)); !isUnauthorized(err) {
+		t.Errorf("classifyStatus(401) = %v, want unauthorized", err)
+	}
+	if err := classifyStatus(400, []byte(`{"error":"bad"}`)); isRetryable(err) {
+		t.Errorf("classifyStatus(400) = %v, want final", err)
+	}
+	if err := classifyStatus(503, []byte(`{}`)); !isRetryable(err) {
+		t.Errorf("classifyStatus(503) = %v, want retryable", err)
+	}
+}
+
+// TestCatalogSnapshotRoundTripsTheObservedFeed proves the stored form keeps the
+// identifier, and that a bare id written by an older build still resolves.
+func TestCatalogSnapshotRoundTripsTheObservedFeed(t *testing.T) {
+	models := []Model{{ID: "x-ai/grok-4.1-fast", Name: "Grok 4.1 Fast", Provider: "x-ai", RequiresStream: true}}
+	rows := CatalogSnapshot(models)
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if got := catalogID(rows[0]); got != "x-ai/grok-4.1-fast" {
+		t.Errorf("catalogID() = %q, want x-ai/grok-4.1-fast", got)
+	}
+	if got := catalogID("openai/gpt-5"); got != "openai/gpt-5" {
+		t.Errorf("catalogID(bare) = %q, want the bare id", got)
+	}
+	// The snapshot is JSON rows, so the identifier has to survive the encoding.
+	var decoded map[string]interface{}
+	if err := json.Unmarshal([]byte(rows[0]), &decoded); err != nil {
+		t.Fatalf("row is not JSON: %v", err)
+	}
+	if decoded["id"] != "x-ai/grok-4.1-fast" {
+		t.Errorf("row id = %v, want the upstream id", decoded["id"])
+	}
+}
+
+// TestParseCatalogPublishesOnlyTheFreeTier covers the feed's shape: the paid
+// rows name models this account may not run, and an empty feed is an error
+// rather than an empty catalog.
+func TestParseCatalogPublishesOnlyTheFreeTier(t *testing.T) {
+	models, err := parseCatalog([]byte(`{"free":[{"id":"x-ai/grok-4.1-fast","name":"Grok 4.1 Fast"}],"paid":[{"id":"anthropic/claude-opus","name":"Opus"}]}`))
+	if err != nil {
+		t.Fatalf("parseCatalog() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "x-ai/grok-4.1-fast" {
+		t.Fatalf("models = %+v, want only the free row", models)
+	}
+	if models[0].Provider != "x-ai" {
+		t.Errorf("provider = %q, want the half before the slash", models[0].Provider)
+	}
+	if !models[0].RequiresStream {
+		t.Error("RequiresStream = false, want true for a bare identifier")
+	}
+	if models, err = parseCatalog([]byte(`{"free":[]}`)); err != nil || len(models) != 0 {
+		t.Errorf("an empty feed must parse as empty, got %+v / %v", models, err)
+	}
+}
+
+// TestNewToolCallIDIsUnique keeps two concurrent tool calls from colliding on
+// one id, which would pair a result with the wrong call.
+func TestNewToolCallIDIsUnique(t *testing.T) {
+	seen := make(map[string]bool, 200)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				id := NewToolCallID()
+				mu.Lock()
+				if seen[id] {
+					mu.Unlock()
+					t.Errorf("duplicate tool call id %q", id)
+					return
+				}
+				seen[id] = true
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if len(seen) != 200 {
+		t.Errorf("unique ids = %d, want 200", len(seen))
+	}
+}

@@ -91,6 +91,9 @@ func (h *Handler) observedModelContextWindows(ctx context.Context) *modelContext
 			// The Qoder catalog declares max_input_tokens per model and the
 			// request path already forwards it.
 			mergeInputWindows(w, "qoder", qoder.CatalogContextWindows(acc.QoderModelIDs))
+		case "cline":
+			// The Cline feed names models, not windows, and the upstream caps
+			// the request itself, so no window is recorded here.
 		case "workbuddy":
 			input, output := workbuddy.CatalogContextWindows(acc.WorkBuddyModelIDs)
 			mergeInputWindows(w, "workbuddy", input)

@@ -121,6 +121,9 @@ func channelFromPath(path string) string {
 	if strings.HasPrefix(path, "/qoder/") {
 		return "qoder"
 	}
+	if strings.HasPrefix(path, "/cline/") {
+		return "cline"
+	}
 	if strings.HasPrefix(path, "/grok/v1/") {
 		return "grok"
 	}

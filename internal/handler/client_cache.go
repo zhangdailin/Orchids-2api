@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"orchids-api/internal/accountevents"
+	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/puter"
 	"orchids-api/internal/qoder"
@@ -327,6 +328,15 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 		}
 		return client
 	}
+	// Cline rotates its refresh token on every renewal as well, so the client
+	// needs the store for the same reason.
+	if strings.EqualFold(acc.AccountType, "cline") {
+		client := cline.NewFromAccount(acc, cfg)
+		if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+			client.SetAccountStore(h.loadBalancer.Store)
+		}
+		return client
+	}
 	return nil
 }
 
@@ -428,6 +438,11 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 	writeString(acc.QoderRuntimeInfo)
 	writeString(acc.QoderRuntimeKey)
 	writeStrings(acc.QoderModelIDs)
+	writeString(acc.ClineAccessToken)
+	writeString(acc.ClineRefreshToken)
+	writeInt64(acc.ClineExpiresAt.UnixNano())
+	writeString(acc.ClineEmail)
+	writeStrings(acc.ClineModelIDs)
 	// Do not include stats-only timestamps like UpdatedAt here.
 	// Request/usage accounting bumps UpdatedAt on every call, and using it in the
 	// fingerprint would force unnecessary client rebuilds and drop keep-alive pools.
@@ -440,6 +455,10 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 		writeString(cfg.QoderInferenceURL)
 		writeString(cfg.QoderClientID)
 		writeString(cfg.QoderClientVersion)
+		writeString(cfg.ClineAPIBaseURL)
+		writeString(cfg.ClineWorkOSClientID)
+		writeString(cfg.ClineWorkOSAuthorizeURL)
+		writeString(cfg.ClineWorkOSTokenURL)
 		writeString(cfg.ProxyURL)
 		writeString(cfg.ProxyHTTP)
 		writeString(cfg.ProxyHTTPS)

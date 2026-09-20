@@ -197,6 +197,28 @@ type Account struct {
 	// the upgrade link) so the console can explain an account instead of showing
 	// it as broken.
 	QoderQuota QoderQuotaSnapshot `json:"qoder_quota,omitempty"`
+
+	// ── Cline (api.cline.bot) OAuth channel ──
+	//
+	// A Cline account is created only through the official WorkOS device
+	// authorization flow: there is no pasted personal access token. The Cline
+	// access token is short lived and the Cline refresh token is the durable
+	// credential, renewed at POST /auth/refresh, so the rotated value must be
+	// written back. They live in their own fields rather than the generic
+	// Token/RefreshToken slots so account responses can redact them without
+	// touching another channel's credential.
+	ClineAccessToken  string    `json:"cline_access_token,omitempty"`
+	ClineRefreshToken string    `json:"cline_refresh_token,omitempty"`
+	ClineExpiresAt    time.Time `json:"cline_expires_at,omitempty"`
+	ClineEmail        string    `json:"cline_email,omitempty"`
+	// ReplaceClineCredentials is an explicit write intent. Ordinary full
+	// account updates carry a snapshot and must not overwrite a refresh token
+	// that rotated after that snapshot was read.
+	ReplaceClineCredentials bool `json:"-"`
+	// ClineModelIDs is the last successful account-scoped catalog snapshot. An
+	// empty snapshot means "not synced yet", not that the account supports every
+	// model.
+	ClineModelIDs []string `json:"cline_model_ids,omitempty"`
 }
 
 // QoderQuotaSnapshot is one Qoder credit/plan observation.
@@ -540,12 +562,25 @@ type QoderAccountPatch struct {
 	ModelIDs             []string
 }
 
+// ClineCredentialPatch contains the independently refreshed Cline client state.
+// Nil slices mean "not changed"; the remaining zero values keep the stored
+// value, matching the provider's rotated-credential semantics.
+type ClineCredentialPatch struct {
+	ExpectedRefreshToken string
+	AccessToken          string
+	RefreshToken         string
+	ExpiresAt            time.Time
+	Email                string
+	ModelIDs             []string
+}
+
 type accountStore interface {
 	CreateAccount(ctx context.Context, acc *Account) error
 	UpdateAccount(ctx context.Context, acc *Account) error
 	UpdateAccountQuality(ctx context.Context, id int64, failures int, cooldownUntil time.Time) error
 	UpdateWorkBuddyCredentials(ctx context.Context, id int64, patch WorkBuddyCredentialPatch) error
 	UpdateQoderAccount(ctx context.Context, id int64, patch QoderAccountPatch) error
+	UpdateClineCredentials(ctx context.Context, id int64, patch ClineCredentialPatch) error
 	DeleteAccount(ctx context.Context, id int64) error
 	GetAccount(ctx context.Context, id int64) (*Account, error)
 	ListAccounts(ctx context.Context) ([]*Account, error)
@@ -886,6 +921,14 @@ func (s *Store) UpdateWorkBuddyCredentials(ctx context.Context, id int64, patch 
 func (s *Store) UpdateQoderAccount(ctx context.Context, id int64, patch QoderAccountPatch) error {
 	if s.accounts != nil {
 		return s.accounts.UpdateQoderAccount(ctx, id, patch)
+	}
+	return fmt.Errorf("store not configured")
+}
+
+// UpdateClineCredentials persists a rotated Cline credential atomically.
+func (s *Store) UpdateClineCredentials(ctx context.Context, id int64, patch ClineCredentialPatch) error {
+	if s.accounts != nil {
+		return s.accounts.UpdateClineCredentials(ctx, id, patch)
 	}
 	return fmt.Errorf("store not configured")
 }
@@ -1342,5 +1385,7 @@ func (a *Account) Secrets() []string {
 		a.QoderRefreshToken,
 		a.QoderRuntimeInfo,
 		a.QoderRuntimeKey,
+		a.ClineAccessToken,
+		a.ClineRefreshToken,
 	}
 }

@@ -12,6 +12,7 @@
 | `/puter/v1/messages` | POST | Puter 通道 Claude Messages 代理 |
 | `/workbuddy/v1/messages` | POST | WorkBuddy 国际版 Claude Messages 代理 |
 | `/qoder/v1/messages` | POST | Qoder（qoder.com）Claude Messages 代理 |
+| `/cline/v1/messages` | POST | Cline（api.cline.bot）Claude Messages 代理 |
 | `/grok/v1/messages` | POST | Grok 通道 Anthropic Messages 兼容入口 |
 | `/v1/messages` | POST | Grok Messages 兼容别名 |
 | `/*/v1/messages/count_tokens` | POST | 输入 token 估算 |
@@ -24,12 +25,13 @@
 | `/puter/v1/chat/completions` | POST | Puter OpenAI 兼容入口 |
 | `/workbuddy/v1/chat/completions` | POST | WorkBuddy 国际版 OpenAI 兼容入口 |
 | `/qoder/v1/chat/completions` | POST | Qoder OpenAI 兼容入口 |
+| `/cline/v1/chat/completions` | POST | Cline OpenAI 兼容入口 |
 | `/grok/v1/chat/completions` | POST | Grok OpenAI 兼容入口 |
 | `/v1/chat/completions` | POST | Grok 兼容别名 |
 
 ### 1.3 OpenAI Responses 风格
 
-所有渠道的模型都可经统一前缀 `/v1` 使用 Responses API：Grok 模型走原生实现，其余渠道（Warp / Puter / WorkBuddy / Qoder）由 Responses→Chat 桥接提供。渠道前缀（`/warp/v1`、`/puter/v1`、`/workbuddy/v1`、`/qoder/v1`、`/grok/v1`）同样可用。
+所有渠道的模型都可经统一前缀 `/v1` 使用 Responses API：Grok 模型走原生实现，其余渠道（Warp / Puter / WorkBuddy / Qoder / Cline）由 Responses→Chat 桥接提供。渠道前缀（`/warp/v1`、`/puter/v1`、`/workbuddy/v1`、`/qoder/v1`、`/cline/v1`、`/grok/v1`）同样可用。
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -104,6 +106,7 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/puter/v1/models` | GET | Puter 模型列表 |
 | `/workbuddy/v1/models` | GET | WorkBuddy 国际版模型列表 |
 | `/qoder/v1/models` | GET | Qoder 模型列表 |
+| `/cline/v1/models` | GET | Cline 模型列表 |
 | `/grok/v1/models` | GET | Grok 模型列表 |
 | `/health` | GET | 健康检查 |
 | `/metrics` | GET | Prometheus 指标 |
@@ -127,6 +130,8 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/api/workbuddy/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
 | `/api/qoder/login` | POST | 发起 Qoder 官方设备授权登录（返回 `id` 与官方 `verification_uri_complete`） |
 | `/api/qoder/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
+| `/api/cline/login` | POST | 发起 Cline 官方 WorkOS 设备授权登录（返回 `id` 与官方 `verification_uri_complete`） |
+| `/api/cline/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
 | `/api/keys` | GET/POST | API Key 列表 / 创建 |
 | `/api/keys/{id}` | PATCH/DELETE | 更新 API Key 状态或访问策略 / 删除 |
 | `/api/models` | GET/POST | 模型列表 / 创建模型 |
@@ -311,6 +316,7 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 - Puter 会额外使用账号 `test_mode` 逐模型验证，返回 `source=puter_public_models_test_mode`；`discovered` 是上游目录条数，`verified` 是探测通过条数
 - WorkBuddy 使用 `GET /v3/config` 的 `cli` 白名单（鉴权成功即视为验证通过，不额外消耗额度），返回 `source=workbuddy_cli_models`
 - Qoder 使用**有符号上游目录** `GET /algo/api/v2/model/list`（复用聊天链路的 COSY 签名），返回 `source=qoder_upstream_models`；对外模型 ID 是**小写化的显示名**（例如 `qwen3.7-max`），内部 key（`qmodel_latest`）以及 `max_input_tokens`/`is_reasoning` 等字段按 JSON 保存在账号快照里
+- Cline 使用推荐模型目录 `GET /ai/cline/recommended-models`（只发布 `free` 列表），返回 `source=cline_recommended_models`；对外模型 ID 就是上游 id（例如 `x-ai/grok-4.1-fast`）
 - Grok 使用 Build OAuth `GET /v1/models`，返回 `source=grok_build_models`；Warp 使用账号 GraphQL，返回 `source=warp_graphql_*`
 - 仅当本轮确实读到上游目录时，来源中已消失的模型才会被删除
 
@@ -534,3 +540,42 @@ Qoder 网关不接受裸 OAuth token，每个请求携带服务端派生的认�
 | `Cosy-Date` | 与签名使用同一个 Unix 秒 |
 
 请求体不是裸 JSON：服务端用上游的私有 Base64 字母表编码并交换外侧三段，签名覆盖的是**编码后的字节**。`event:finish` 是权威结束标记；结束标记之前 EOF 会被判为截断并报错，而不是伪装成成功的短回答。
+
+## 10. Cline 官方 WorkOS 设备授权登录
+
+Cline 通道**只支持 OAuth 设备授权登录**，不提供手填凭证入口，账号创建接口会拒绝手工粘贴的 token。
+管理页面「添加账号 → Cline 平台 → 使用 Cline 官方网页登录」等价于下面这组请求。
+
+```bash
+# 1) 申请设备授权事务（同源请求，需管理会话 Cookie 或 X-Admin-Token）
+curl -s http://127.0.0.1:3002/api/cline/login   -H 'Content-Type: application/json'   -H 'Origin: http://127.0.0.1:3002'   -d '{"enabled":true}'
+# → {"id":"<login-id>","status":"pending","user_code":"ABCD-EFGH","verification_uri":"https://auth.cline.bot/device",
+#    "verification_uri_complete":"https://auth.cline.bot/device?code=ABCD-EFGH","expires_at":"..."}
+
+# 2) 浏览器打开 verification_uri_complete 完成授权，然后轮询
+curl -s http://127.0.0.1:3002/api/cline/login/<login-id>
+# → {"status":"pending"} → ... → {"status":"complete","account_id":12,"message":"Cline account added"}
+
+# 取消（可选）
+curl -s -X DELETE http://127.0.0.1:3002/api/cline/login/<login-id>
+```
+
+行为说明：
+
+- **登录只由用户操作触发**：打开添加/编辑账号弹窗不会发起任何登录请求；只有点击「使用 Cline 官方网页登录」才调用本接口
+- 授权 URL 的 host 必须在允许列表内（`api.workos.com`、`workos.com`、`dashboard.workos.com`、本部署配置的授权基址，以及 loopback）；其他 host 一律拒绝，避免把登录页重定向到第三方
+- **device_code 只保存在服务端**，轮询响应里不会出现它；浏览器只拿到官方页面与需要人工确认的 `user_code`
+- WorkOS 在浏览器步骤完成前返回 `error=authorization_pending`，服务端归一为「pending」并按 2s 节奏轮询
+- 拿到 WorkOS token 后服务端立即调用 `POST /api/v1/auth/register` 换成 Cline 的 access/refresh token；**落库条件是换到了 refreshToken**，模型目录读取失败不影响登录是否成功
+- 请求凭据是 `Authorization: Bearer workos:<accessToken>` 加 `X-Task-ID: sess_<...>`；WorkOS token 不会出现在任何上游请求头里
+- Cline refreshToken 由上游轮换，服务端在过期前自动刷新并回写账号记录；管理页面不返回 refreshToken
+- 同一账号再次登录会更新原账号，不会产生重复记录
+- 需要同源（`Origin` 与 Host 一致）且 HTTPS（本地 `localhost`/`127.0.0.1` 例外）；跨站请求一律 403
+
+### 10.1 推理上限（429）
+
+Cline 对免费额度用**推理上限**表达限流：HTTP 429，body 里写明还要等多久（`Try again in 17h 59m`）。
+服务端解析该时长并按 `rate_limit` 处理（可重试、切换账号），不再把它当成未知的服务端故障。
+
+模型清单同样是**上游观测**：`POST /api/models/refresh?channel=cline` 读取 `GET /ai/cline/recommended-models`
+（只发布 `free` 列表），返回 `source=cline_recommended_models`；读取失败即上报失败，绝不回退到内置目录。

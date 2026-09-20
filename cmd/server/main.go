@@ -18,6 +18,7 @@ import (
 	"orchids-api/internal/api"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
+	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/grok"
@@ -278,6 +279,12 @@ func main() {
 				}); ok {
 					qd.SetAccountStore(s)
 				}
+				// Cline rotates its refresh token on every renewal as well.
+				if cl, ok := client.(interface {
+					SetAccountStore(cline.AccountUpdater)
+				}); ok {
+					cl.SetAccountStore(s)
+				}
 				return client
 			}
 		}
@@ -330,6 +337,7 @@ func main() {
 	startProbeLoop(ctx, s, apiHandler.ConfigSnapshot, wiredAuditLogger, cfg.Port)
 	logWorkBuddyReachability(cfg)
 	logQoderReachability(cfg)
+	logClineReachability(cfg)
 	// Cached media inputs outlive their Redis records; without this sweep the
 	// files accumulate on disk forever.
 	startMediaInputSweeper(ctx, s, grok.CacheBaseDir())
@@ -415,6 +423,27 @@ func logQoderReachability(cfg *config.Config) {
 			return
 		}
 		slog.Info("Qoder control plane reachable", "endpoint", qoder.DefaultOpenAPIBaseURL)
+	}()
+}
+
+// logClineReachability reports at startup whether this process can reach the
+// Cline API. A blocked egress path breaks both the device login and every
+// inference request, so the cause should be visible in the boot log instead of
+// surfacing as a per-request 502.
+func logClineReachability(cfg *config.Config) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+
+		client := cline.NewFromAccount(nil, cfg)
+		defer client.Close()
+		if err := client.ProbeReachability(ctx); err != nil {
+			slog.Warn("Cline API is not reachable; the cline channel will fail until egress is fixed",
+				"endpoint", cline.DefaultAPIBase, "error", err,
+				"hint", "configure HTTP_PROXY/HTTPS_PROXY or the proxy settings in config.json if this host needs one")
+			return
+		}
+		slog.Info("Cline API reachable", "endpoint", cline.DefaultAPIBase)
 	}()
 }
 

@@ -107,7 +107,7 @@ func registerRoutes(
 	// OpenAI handlers. Grok is not among them: it has a native implementation of
 	// both. /v1 is excluded too, because it is the unified prefix — it dispatches
 	// by model instead of by path.
-	channelPrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1"}
+	channelPrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1", "/cline/v1"}
 	// allPrefixes additionally serves the native Grok prefix and the unified one.
 	// It is for the routes whose answer comes from shared state and is the same
 	// whichever prefix carried the request.
@@ -262,6 +262,8 @@ func registerRoutes(
 	mux.HandleFunc("/api/workbuddy/login/", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/qoder/login", sessionAuth(apiHandler.HandleQoderLogin))
 	mux.HandleFunc("/api/qoder/login/", sessionAuth(apiHandler.HandleQoderLogin))
+	mux.HandleFunc("/api/cline/login", sessionAuth(apiHandler.HandleClineLogin))
+	mux.HandleFunc("/api/cline/login/", sessionAuth(apiHandler.HandleClineLogin))
 	mux.HandleFunc("/api/warp/device-auth", sessionAuth(apiHandler.HandleWarpDeviceAuthorization))
 	mux.HandleFunc("/api/warp/device-auth/", sessionAuth(apiHandler.HandleWarpDeviceAuthorization))
 	mux.HandleFunc("/api/grok/device-auth", sessionAuth(apiHandler.HandleGrokDeviceAuthorization))

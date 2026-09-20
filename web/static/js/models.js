@@ -13,7 +13,7 @@ let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
 
 function modelChannels() {
-  const defaultChannels = ["Warp", "Puter", "WorkBuddy", "Qoder", "Grok"];
+  const defaultChannels = ["Warp", "Puter", "WorkBuddy", "Qoder", "Cline", "Grok"];
   const seen = new Set();
   const ordered = [];
 
@@ -168,6 +168,7 @@ function modelRefreshSourceLabel(source) {
     grok_build_models: "Grok Build OAuth 目录",
     workbuddy_cli_models: "WorkBuddy /v3/config 白名单",
     qoder_upstream_models: "Qoder 有符号上游目录",
+    cline_recommended_models: "Cline 推荐模型目录",
     puter_public_models_test_mode: "Puter 公开目录 + 账号探测",
     // Not an observation: nothing was read from an upstream account.
     no_active_account: "无 active 账号（未拉取，未发布）",
@@ -177,6 +178,7 @@ function modelRefreshSourceLabel(source) {
   if (value.startsWith("grok_build_models")) return "Grok Build OAuth 目录";
   if (value.startsWith("workbuddy_cli_models")) return "WorkBuddy /v3/config 白名单";
   if (value.startsWith("qoder_upstream_models")) return "Qoder 有符号上游目录";
+  if (value.startsWith("cline_recommended_models")) return "Cline 推荐模型目录";
   if (value.startsWith("puter_public_models_test_mode")) return "Puter 公开目录 + 账号探测";
   // Anything reaching here is a cached or compiled-in list. It must not be
   // mistaken for a fresh upstream observation.
@@ -194,6 +196,7 @@ function isUpstreamModelRefreshSource(source) {
     value.startsWith("grok_build_models") ||
     value.startsWith("workbuddy_cli_models") ||
     value.startsWith("qoder_upstream_models") ||
+    value.startsWith("cline_recommended_models") ||
     value.startsWith("puter_public_models_test_mode");
 }
 

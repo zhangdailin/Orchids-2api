@@ -2,16 +2,17 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `warp`、`puter`、`workbuddy`、`qoder`、`grok` 五类通道。
+一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `warp`、`puter`、`workbuddy`、`qoder`、`cline`、`grok` 六类通道。
 
 ## 当前状态
 
-- `internal/handler` 统一处理 `warp` / `puter` / `workbuddy` / `qoder` 的 `/v1/messages` 与 `/v1/chat/completions`
+- `internal/handler` 统一处理 `warp` / `puter` / `workbuddy` / `qoder` / `cline` 的 `/v1/messages` 与 `/v1/chat/completions`
 - `internal/grok` 独立处理 `grok` 的 Messages、Responses、Chat、图片、视频和本地媒体接口
 - 模型管理支持按通道刷新：`/api/models/refresh`
 - Puter 非流式 Claude Messages 已覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归
 - WorkBuddy 通道对接国际版 `www.workbuddy.ai`，账号级模型目录从 `GET /v3/config` 同步，refreshToken 自动轮换并回写
 - Qoder 通道对接 `qoder.com` CLI 设备授权流（**只支持 OAuth 登录，不提供 PAT 入口**），模型目录由 `GET /algo/api/v2/model/list` 读取（复用聊天链路的 COSY 签名，无内置回退），设备 refreshToken 自动轮换并回写
+- Cline 通道对接 `api.cline.bot`：WorkOS 设备授权（**只支持 OAuth 登录，不提供手填凭证**）换取 Cline access/refresh token，请求凭据是 `Bearer workos:<accessToken>`，模型目录由 `GET /ai/cline/recommended-models` 读取（无内置回退），refreshToken 自动轮换并回写
 
 ## 核心能力
 
@@ -33,6 +34,7 @@
 | `puter` | `/puter/v1/messages`、`/puter/v1/chat/completions` |
 | `workbuddy` | `/workbuddy/v1/messages`、`/workbuddy/v1/chat/completions` |
 | `qoder` | `/qoder/v1/messages`、`/qoder/v1/chat/completions` |
+| `cline` | `/cline/v1/messages`、`/cline/v1/chat/completions` |
 | `grok` | `/grok/v1/messages`、`/grok/v1/responses`、`/grok/v1/chat/completions`、图片、视频与文件接口 |
 
 统一模型查询入口：
@@ -247,7 +249,7 @@ WB_LIVE=1 WB_AUTH_FILE=/path/to/auths/workbuddy-<uid>.json go test ./internal/wo
 - `POST /responses/{response_id}/cancel`
 - `GET /responses/{response_id}/input_items`
 
-统一前缀 `/v1` 下以上端点对所有渠道的模型可用：Grok 模型走原生实现，Warp / Puter / WorkBuddy / Qoder 由 Responses→Chat 桥接提供；`cancel` 与 `input_items` 在六个前缀（含 `/grok/v1`）下均已注册，读取同一个 response store。未配置 Redis 时桥接回退到进程内存储并输出 WARN 日志，多副本部署必须配置 Redis。
+统一前缀 `/v1` 下以上端点对所有渠道的模型可用：Grok 模型走原生实现，Warp / Puter / WorkBuddy / Qoder / Cline 由 Responses→Chat 桥接提供；`cancel` 与 `input_items` 在六个前缀（含 `/grok/v1`）下均已注册，读取同一个 response store。未配置 Redis 时桥接回退到进程内存储并输出 WARN 日志，多副本部署必须配置 Redis。
 
 Build stored Responses 会按客户端 API Key 隔离，并固定回创建该 Response 的 OAuth 账号；归属记录默认保留 720 小时。详见 [docs/api-reference.md](docs/api-reference.md#13-openai-responses-风格)。
 

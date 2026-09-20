@@ -18,6 +18,10 @@ const (
 	PoolQoderModelMessage = "Request failed: the requested Qoder model is temporarily rate-limited. Please retry after its cooldown or choose another model."
 	// PoolModelCooldownMessage is the channel-neutral form of the same answer.
 	PoolModelCooldownMessage = "Request failed: the requested model is cooling down on this channel. Please retry after its cooldown or choose another model."
+	// PoolClineInferenceCapMessage answers Cline's inference cap, which holds
+	// the whole account for the duration the upstream stated rather than one
+	// model, so the answer names the account and says how long.
+	PoolClineInferenceCapMessage = "Request failed: this Cline account reached its inference cap and is cooling down. Please wait for the cap window to pass or add another Cline account."
 	// PoolRateLimitedMessage answers a pool every account of which is cooling down.
 	PoolRateLimitedMessage = "Request failed: all available accounts for this channel are currently rate-limited. Please wait for cooldown or add another valid account."
 	// PoolBusyMessage answers a pool whose accounts are all serving other requests.
@@ -70,6 +74,10 @@ func ClassifyPoolExhaustion(selectErr error, lastErr string) PoolExhaustion {
 	switch {
 	case IsCreditExhaustion(lowerLastErr) || strings.Contains(lowerSelect, "exhausted their allowance"):
 		return PoolExhaustion{Category: "quota_exhausted", Message: PoolAllowanceMessage}
+	case strings.Contains(lowerLastErr, "cline inference cap reached"):
+		// The inference cap holds the whole account for the duration the
+		// upstream stated, not one model, so it gets its own answer.
+		return PoolExhaustion{Category: "rate_limit", Message: PoolClineInferenceCapMessage}
 	case strings.Contains(lowerLastErr, "qoder agent limit reached") ||
 		strings.Contains(lowerLastErr, "qoder model rate limited") ||
 		strings.Contains(lowerLastErr, "model cooldown"):

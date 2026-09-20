@@ -101,8 +101,11 @@ type loginSeed struct {
 	// embedded in it. A channel with no separate page leaves verifyURI empty.
 	verifyURI  string
 	verifyFull string
-	expiresAt  time.Time
-	interval   time.Duration
+	// userCode is the short code the operator confirms on that page. It is safe
+	// to show: it cannot be exchanged without the device code.
+	userCode  string
+	expiresAt time.Time
+	interval  time.Duration
 	// message is the console's "waiting" line while the browser step is pending.
 	message string
 	enabled bool
@@ -133,6 +136,7 @@ func admitBrowserLogin[T any](
 	pollContext, pollCancel := context.WithCancel(context.Background())
 	login := attach(deviceLogin{
 		deviceCode:     seed.deviceCode,
+		userCode:       seed.userCode,
 		verifyURI:      seed.verifyURI,
 		verifyFull:     seed.verifyFull,
 		expiresAt:      seed.expiresAt,

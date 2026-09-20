@@ -264,6 +264,8 @@ func credentialMessage(acc *store.Account, fallback string) string {
 		return "上游拒绝该 SSO Cookie（会话已失效，或被同账号的另一次登录替换），请重新登录该 xAI 账号并抓取新的 Cookie"
 	case acc != nil && strings.EqualFold(strings.TrimSpace(acc.AccountType), "workbuddy"):
 		return "上游拒绝该 WorkBuddy 授权，请在账号管理中重新完成 OAuth 登录"
+	case acc != nil && strings.EqualFold(strings.TrimSpace(acc.AccountType), "cline"):
+		return "上游拒绝该 Cline 授权，请在账号管理中重新完成 OAuth 登录"
 	default:
 		return "上游拒绝该凭据，需要重新登录后重试"
 	}

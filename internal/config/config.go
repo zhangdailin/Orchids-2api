@@ -92,6 +92,22 @@ type Config struct {
 	// and appended to the login URL.
 	QoderClientVersion string `json:"qoder_client_version,omitempty"`
 
+	// ── Cline (api.cline.bot) OAuth channel ──
+	//
+	// The channel talks to two hosts: the Cline API (control plane, inference and
+	// the model feed) and WorkOS, which performs the device authorization. They
+	// are configurable so a deployment can point at a regional endpoint and so
+	// tests can stub the upstream. Empty means the production hosts.
+	//
+	//   ClineAPIBaseURL      Cline API                    (default https://api.cline.bot/api/v1)
+	//   ClineWorkOSClientID  public WorkOS client id      (default the Cline CLI's)
+	//   ClineWorkOSAuthorizeURL / ClineWorkOSTokenURL
+	//                        the device authorization pair (default api.workos.com)
+	ClineAPIBaseURL         string `json:"cline_api_base_url,omitempty"`
+	ClineWorkOSClientID     string `json:"cline_workos_client_id,omitempty"`
+	ClineWorkOSAuthorizeURL string `json:"cline_workos_authorize_url,omitempty"`
+	ClineWorkOSTokenURL     string `json:"cline_workos_token_url,omitempty"`
+
 	// ── Grok Build CLI (cli-chat-proxy.grok.com) OAuth upstream ──
 	// These fields are configurable via config.json / Redis and are deliberately
 	// NOT written into ApplyHardcoded, so they survive a persistConfig round trip.

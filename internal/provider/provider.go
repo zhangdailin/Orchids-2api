@@ -12,6 +12,7 @@ package provider
 import (
 	"strings"
 
+	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/puter"
 	"orchids-api/internal/qoder"
@@ -42,6 +43,9 @@ var factories = map[string]Factory{
 	},
 	"qoder": func(acc *store.Account, cfg *config.Config) interface{} {
 		return qoder.NewFromAccount(acc, cfg)
+	},
+	"cline": func(acc *store.Account, cfg *config.Config) interface{} {
+		return cline.NewFromAccount(acc, cfg)
 	},
 }
 

@@ -36,6 +36,25 @@ var quotaProjectors = map[string]quotaProjector{
 	"grok":      projectGrokQuota,
 	"warp":      projectWarpQuota,
 	"puter":     projectPuterQuota,
+	"cline":     projectClineQuota,
+}
+
+// Cline publishes no numeric allowance: the free feed is a list, the inference
+// cap is a rate limit expressed in prose, and there is no credit meter to read.
+//
+// The projection therefore answers "unsupported" instead of inventing a balance.
+// Fabricating a limit here is what makes an account look spent when it is not,
+// and the generic usage counters are reserved for channels that actually
+// bill them.
+func projectClineQuota(fields map[string]interface{}, acc *store.Account, limit, current float64, observedTokens int64, usageObserved bool) {
+	fields["quota_limit"] = 0.0
+	fields["quota_used"] = 0.0
+	fields["quota_remaining"] = 0.0
+	fields["quota_mode"] = "unmetered"
+	fields["quota_unit"] = "requests"
+	fields["quota_supported"] = false
+	applyQuotaProvenance(fields, "unknown", "unknown", "",
+		"Cline 未下发数值额度；达到推理上限时按 429 冷却处理", false, false)
 }
 
 // projectQuotaFields renders acc's allowance into fields.

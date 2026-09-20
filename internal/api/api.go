@@ -22,6 +22,7 @@ import (
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
+	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
@@ -66,6 +67,7 @@ type API struct {
 	grokLogins      *deviceLoginRegistry[deviceLogin]
 	workbuddyLogins *deviceLoginRegistry[workbuddyLogin]
 	qoderLogins     *deviceLoginRegistry[qoderLoginTransaction]
+	clineLogins     *deviceLoginRegistry[clineLoginTransaction]
 
 	// opsAggregator and alerts back the operations overview. They are optional:
 	// a Redis-less deployment simply reports "no sample" instead of failing.
@@ -982,7 +984,7 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 	// Credentials are write-only. The account API exposes only their presence,
 	// including for create, update and refresh responses.
 	merged["has_credential"] = o.SessionFingerprint != "" || o.WarpAuthenticated
-	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "session_fingerprint", "warp_authenticated"} {
+	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "cline_access_token", "cline_refresh_token", "session_fingerprint", "warp_authenticated"} {
 		delete(merged, field)
 	}
 	if o.Account != nil {
@@ -1060,6 +1062,11 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 		// the server; the access token stays visible so the account table can
 		// prove a credential exists.
 		out = RedactQoderOutput(out)
+	}
+	if strings.EqualFold(out.AccountType, "cline") {
+		// The durable refresh token never leaves the server; the access token
+		// stays visible so the account table can prove a credential exists.
+		out = RedactClineOutput(out)
 	}
 	return &accountOutput{
 		Account:            out,
@@ -1148,6 +1155,9 @@ func accountSessionFingerprint(acc *store.Account) string {
 	case "qoder":
 		creds := qoder.ResolveCredentials(acc)
 		return util.Fingerprint(util.FirstNonEmpty(creds.RefreshToken, creds.AccessToken))
+	case "cline":
+		creds := cline.ResolveCredentials(acc)
+		return util.Fingerprint(util.FirstNonEmpty(creds.RefreshToken, creds.AccessToken))
 	case "puter":
 		return util.Fingerprint(util.FirstNonEmpty(acc.Token, acc.SessionCookie, acc.ClientCookie))
 	default:
@@ -1178,6 +1188,8 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 		return WorkBuddyCredentialKey(acc)
 	case "qoder":
 		return QoderCredentialKey(acc)
+	case "cline":
+		return ClineCredentialKey(acc)
 	default:
 		token = strings.TrimSpace(util.FirstNonEmpty(acc.RefreshToken, acc.SessionCookie, acc.ClientCookie, acc.Token))
 	}
@@ -1190,7 +1202,7 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 
 func isSupportedAccountType(accountType string) bool {
 	switch strings.ToLower(strings.TrimSpace(accountType)) {
-	case "warp", "puter", "grok", "workbuddy", "qoder":
+	case "warp", "puter", "grok", "workbuddy", "qoder", "cline":
 		return true
 	default:
 		return false
@@ -1295,6 +1307,10 @@ func stableProviderIdentityKey(acc *store.Account) string {
 		}
 		if machineID := strings.TrimSpace(acc.QoderMachineID); machineID != "" {
 			return "qoder:machine:" + machineID
+		}
+	case "cline":
+		if email := strings.ToLower(strings.TrimSpace(acc.ClineEmail)); email != "" {
+			return "cline:email:" + email
 		}
 	}
 	return ""
@@ -1496,6 +1512,9 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		qoderLogins: newDeviceLoginRegistry(
 			func(login *qoderLoginTransaction) *deviceLogin { return &login.deviceLogin },
 			deviceLoginReadyWithoutCode, "Qoder authorization expired"),
+		clineLogins: newDeviceLoginRegistry(
+			func(login *clineLoginTransaction) *deviceLogin { return &login.deviceLogin }, nil,
+			"Cline authorization expired"),
 	}
 	if cfg != nil {
 		a.config.Store(cfg.Clone())
@@ -1770,6 +1789,11 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 			// Qoder is OAuth-only: an account is created by the browser device
 			// flow (/api/qoder/login), never by pasting a personal access token.
 			http.Error(w, "Qoder accounts must be added using the official browser login (/api/qoder/login)", http.StatusBadRequest)
+			return
+		} else if strings.EqualFold(acc.AccountType, "cline") {
+			// Cline is OAuth-only for the same reason: the WorkOS device grant is
+			// the only way to obtain the credential.
+			http.Error(w, "Cline accounts must be added using the official browser login (/api/cline/login)", http.StatusBadRequest)
 			return
 		}
 		if existing, err := a.findDuplicateAccountByCredential(r.Context(), &acc, 0); err != nil {
@@ -2453,6 +2477,23 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			if acc.ReplaceQoderCredentials {
 				acc.ClearVerifiedAt = true
 			}
+		} else if strings.EqualFold(acc.AccountType, "cline") {
+			// The read path redacts the refresh token, so an ordinary edit
+			// arrives without it; keep the stored credential unless a new one
+			// was actually submitted.
+			submitted := cline.ResolveCredentials(&acc)
+			PreserveClineCredentialsOnEdit(&acc, existing)
+			if !NormalizeClineCredentials(&acc) {
+				http.Error(w, "missing Cline credential: sign in again with the browser login", http.StatusBadRequest)
+				return
+			}
+			existingCreds := cline.ResolveCredentials(existing)
+			acc.ReplaceClineCredentials = submitted.HasCredential() &&
+				(submitted.AccessToken != existingCreds.AccessToken ||
+					submitted.RefreshToken != existingCreds.RefreshToken)
+			if acc.ReplaceClineCredentials {
+				acc.ClearVerifiedAt = true
+			}
 		} else if strings.EqualFold(acc.AccountType, "puter") && strings.EqualFold(existing.AccountType, "puter") && strings.TrimSpace(acc.ClientCookie) == "" && strings.TrimSpace(acc.Token) == "" {
 			acc.ClientCookie = existing.ClientCookie
 			acc.Token = existing.Token
@@ -2651,6 +2692,12 @@ func restoreExportCredentials(out, acc *store.Account) {
 		out.QoderExpiresAt = acc.QoderExpiresAt
 		out.QoderRuntimeInfo = acc.QoderRuntimeInfo
 		out.QoderRuntimeKey = acc.QoderRuntimeKey
+	case "cline":
+		// The refresh token is the durable credential; the access token is what
+		// the chat endpoint spends.
+		out.ClineAccessToken = acc.ClineAccessToken
+		out.ClineRefreshToken = acc.ClineRefreshToken
+		out.ClineExpiresAt = acc.ClineExpiresAt
 	}
 }
 
@@ -2693,6 +2740,11 @@ func redactForeignCredentials(acc *store.Account) {
 		acc.QoderExpiresAt = time.Time{}
 		acc.QoderRuntimeInfo = ""
 		acc.QoderRuntimeKey = ""
+	}
+	if channel != "cline" {
+		acc.ClineAccessToken = ""
+		acc.ClineRefreshToken = ""
+		acc.ClineExpiresAt = time.Time{}
 	}
 }
 

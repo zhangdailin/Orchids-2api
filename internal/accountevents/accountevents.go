@@ -352,6 +352,11 @@ type credentialMaterial struct {
 	qoderRuntime string
 	qoderKey     string
 	qoderModels  string
+	clineAccess  string
+	clineRefresh string
+	clineExpires int64
+	clineEmail   string
+	clineModels  string
 	agentMode    string
 	grokProvider string
 	credType     string
@@ -394,6 +399,11 @@ func materialOf(acc *store.Account) credentialMaterial {
 		qoderRuntime: acc.QoderRuntimeInfo,
 		qoderKey:     acc.QoderRuntimeKey,
 		qoderModels:  strings.Join(acc.QoderModelIDs, "\x00"),
+		clineAccess:  acc.ClineAccessToken,
+		clineRefresh: acc.ClineRefreshToken,
+		clineExpires: acc.ClineExpiresAt.UnixNano(),
+		clineEmail:   acc.ClineEmail,
+		clineModels:  strings.Join(acc.ClineModelIDs, "\x00"),
 		agentMode:    acc.AgentMode,
 		grokProvider: acc.GrokProvider,
 		credType:     acc.CredentialType,

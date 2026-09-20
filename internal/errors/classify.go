@@ -209,6 +209,10 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	case HasExplicitHTTPStatus(lower, "429") ||
 		strings.Contains(lower, "qoder agent limit reached") ||
 		strings.Contains(lower, "qoder model rate limited") ||
+		// Cline's inference cap arrives as 429 with the wait written in prose
+		// ("Try again in 17h 59m"). Recognising the phrase keeps it a rate limit
+		// instead of an unknown server fault, and the channel parses the wait.
+		strings.Contains(lower, "cline inference cap reached") ||
 		strings.Contains(lower, "available upstream accounts are rate-limited") ||
 		strings.Contains(lower, "agentlimitresettime") ||
 		strings.Contains(lower, "too many requests") ||

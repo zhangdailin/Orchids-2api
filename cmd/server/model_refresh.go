@@ -14,6 +14,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/puter"
@@ -107,6 +108,7 @@ var upstreamCatalogSources = map[string]struct{}{
 	"workbuddy_cli_models":          {},
 	"qoder_upstream_models":         {},
 	"puter_public_models_test_mode": {},
+	"cline_recommended_models":      {},
 }
 
 // warpGraphQLSourcePrefix is the stable prefix of the Warp catalog source, which
@@ -222,6 +224,8 @@ func normalizeAdminModelChannel(channel string) string {
 		return "WorkBuddy"
 	case "qoder":
 		return "Qoder"
+	case "cline":
+		return "Cline"
 	case "grok":
 		return "Grok"
 	default:
@@ -272,6 +276,8 @@ func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config,
 		return discoverWorkBuddyModels(ctx, cfg, s)
 	case "qoder":
 		return discoverQoderModels(ctx, cfg, s)
+	case "cline":
+		return discoverClineModels(ctx, cfg, s)
 	case "grok":
 		return discoverGrokModelsConcurrent(ctx, cfg, s, concurrency)
 	default:
@@ -400,6 +406,81 @@ func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store
 	acc.QoderModelIDs = ids
 	if err := s.UpdateAccount(ctx, acc); err != nil {
 		slog.Warn("failed to persist qoder model snapshot", "account_id", acc.ID, "error", err)
+	}
+}
+
+// discoverClineModels publishes the Cline channel catalog read from the
+// upstream recommended-models feed.
+//
+// There is no local fallback. A compiled-in list is not an observation of what
+// the account may run, so the refresh reports the read failure instead of
+// restating a default as discovered state.
+func discoverClineModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
+	source := "cline_recommended_models"
+	accounts, err := enabledAccountsByType(ctx, s, "cline")
+	if err != nil {
+		return nil, "", fmt.Errorf("cline model discovery failed: %w", err)
+	}
+	if len(accounts) == 0 {
+		return nil, "", &noActiveAccountsError{Channel: "Cline"}
+	}
+
+	var lastErr error
+	for _, acc := range accounts {
+		// The catalog read is the only thing that may publish Cline rows, and it
+		// never sends a chat request.
+		client := cline.NewFromAccount(acc, refreshModelRequestConfig(cfg, "cline"))
+		client.SetAccountStore(s)
+		models, fetchErr := client.FetchUpstreamModels(ctx)
+		client.Close()
+		if fetchErr != nil {
+			lastErr = fetchErr
+			continue
+		}
+		candidates := clineCatalogToDiscovered(models)
+		if len(candidates) == 0 {
+			lastErr = fmt.Errorf("cline account #%d returned an empty upstream catalog", acc.ID)
+			continue
+		}
+		persistClineCatalogSnapshot(ctx, s, acc, models)
+		return candidates, source, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("cline model discovery failed")
+	}
+	return nil, "", fmt.Errorf("cline model discovery failed: %w", lastErr)
+}
+
+// clineCatalogToDiscovered maps the observed feed onto the channel's public
+// model records.
+//
+// The public identifier is the upstream id: a client that saw it in /v1/models
+// must be able to ask for it by that name.
+func clineCatalogToDiscovered(models []cline.Model) []discoveredModel {
+	out := make([]discoveredModel, 0, len(models))
+	for i, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			continue
+		}
+		out = append(out, discoveredModel{ID: id, Name: id, SortOrder: i, Verified: true})
+	}
+	return out
+}
+
+// persistClineCatalogSnapshot records the account-scoped upstream catalog so
+// model selection resolves against the same list the channel publishes.
+func persistClineCatalogSnapshot(ctx context.Context, s *store.Store, acc *store.Account, models []cline.Model) {
+	if acc == nil || acc.ID == 0 {
+		return
+	}
+	ids := cline.CatalogSnapshot(models)
+	if len(ids) == 0 {
+		return
+	}
+	acc.ClineModelIDs = ids
+	if err := s.UpdateAccount(ctx, acc); err != nil {
+		slog.Warn("failed to persist cline model snapshot", "account_id", acc.ID, "error", err)
 	}
 }
 
@@ -1019,7 +1100,7 @@ func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Confi
 	}
 
 	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "warp", "puter", "workbuddy", "qoder":
+	case "warp", "puter", "workbuddy", "qoder", "cline":
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
 			cfg.RequestTimeout = 15
 		}

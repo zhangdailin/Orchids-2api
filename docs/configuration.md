@@ -114,6 +114,10 @@ cp config.example.json config.json
 | `qoder_inference_base_url` | `https://api2.qoder.sh` | Qoder 聊天 SSE 地址（CN 网关可用 `https://gateway.qoder.com.cn`） |
 | `qoder_client_id` | 内置 CLI 公共 client id | 设备授权 client id；非机密，可随 CLI 升级替换 |
 | `qoder_client_version` | `1.1.34` | 发送的 `Cosy-Version` / `User-Agent` 版本号 |
+| `cline_api_base_url` | `https://api.cline.bot/api/v1` | Cline API 地址（登录交换、模型目录、聊天） |
+| `cline_workos_client_id` | 内置 CLI 公共 client id | WorkOS 设备授权 client id；非机密 |
+| `cline_workos_authorize_url` | `https://api.workos.com/user_management/authorize/device` | WorkOS 设备授权地址；配置的 host 会自动加入授权页允许列表 |
+| `cline_workos_token_url` | `https://api.workos.com/user_management/authenticate` | WorkOS 设备 token 轮询地址 |
 | `request_timeout` | `600` | 通用请求超时，秒，上限 86400 |
 | `concurrency_timeout` | 跟随 `request_timeout` | 入口请求执行超时，秒，上限 86400；不是单纯排队等待时间 |
 | `retry_429_interval` | `60` | 无精确 reset 信息时的 Web 429 重试间隔，秒，上限 3600 |
@@ -173,12 +177,13 @@ Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress �
 | 渠道 | 来源 |
 |---|---|
 | Qoder | 账号快照 `qoder_model_ids[]` 的 `max_input_tokens` |
+| Cline | 暂无可信来源，不输出（推荐模型目录只声明 id） |
 | WorkBuddy | 账号快照 `workbuddy_model_ids[]` 的 `max_input_tokens` / `max_output_tokens` |
 | Warp | 账号模型发现缓存的 `context_windows`（即上游 `contextWindow.max`） |
 | Grok | Codex catalog 的静态窗口表 |
 | Puter | 暂无可信来源，不输出 |
 
-服务端从不按 token 裁剪请求历史：`puter` / `workbuddy` / `qoder` 全量透传客户端 `messages`。
+服务端从不按 token 裁剪请求历史：`puter` / `workbuddy` / `qoder` / `cline` 全量透传客户端 `messages`。
 
 ### 3.4 工具定义保真
 

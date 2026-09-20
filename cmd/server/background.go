@@ -9,6 +9,7 @@ import (
 
 	"orchids-api/internal/accountevents"
 	"orchids-api/internal/accountpolicy"
+	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/grok"
@@ -385,6 +386,52 @@ func refreshQoderQuota(ctx context.Context, cfg *config.Config, s *store.Store, 
 	}
 }
 
+// clineCatalogRefreshDue reports whether the account's catalog snapshot should
+// be re-read. The snapshot is an observation, and the free feed changes without
+// notice, so it is refreshed on the same cadence as the other providers.
+func clineCatalogRefreshDue(acc *store.Account, now time.Time) bool {
+	if acc == nil {
+		return false
+	}
+	if len(acc.ClineModelIDs) == 0 {
+		return true
+	}
+	return now.Sub(acc.UpdatedAt) >= providerHealthRefreshInterval
+}
+
+// refreshClineCatalog re-reads the account's model feed.
+//
+// It never publishes a compiled-in list: a failed read leaves the snapshot
+// untouched, so an account that stopped being able to read the feed keeps the
+// last observation instead of being silently widened.
+func refreshClineCatalog(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) {
+	if acc == nil || s == nil || !clineCatalogRefreshDue(acc, time.Now()) {
+		return
+	}
+	if !refreshqueue.WithLease(acc.ID, func() {
+		client := cline.NewFromAccount(acc, cfg)
+		defer client.Close()
+		client.SetAccountStore(s)
+		catalogCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		models, err := client.FetchUpstreamModels(catalogCtx)
+		cancel()
+		if err != nil {
+			slog.Warn("Auto refresh cline catalog failed; keeping the last snapshot", "account_id", acc.ID, "error", err)
+			return
+		}
+		ids := cline.CatalogSnapshot(models)
+		if len(ids) == 0 {
+			return
+		}
+		acc.ClineModelIDs = ids
+		if err := s.UpdateAccount(ctx, acc); err != nil {
+			slog.Warn("Auto refresh cline catalog: update account failed", "account_id", acc.ID, "error", err)
+		}
+	}) {
+		slog.Debug("Auto refresh cline catalog: account already refreshing", "account_id", acc.ID)
+	}
+}
+
 // grokSSORefreshRetryDelay is the pause before re-asking a rejected session in
 // the background loop. A variable so tests can drive the retry without sleeping.
 var grokSSORefreshRetryDelay = 800 * time.Millisecond
@@ -692,6 +739,13 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 			}
 			if strings.EqualFold(acc.AccountType, "qoder") {
 				refreshQoderQuota(refreshCtx, cfg, s, acc)
+				continue
+			}
+			if strings.EqualFold(acc.AccountType, "cline") {
+				// Cline has no credit meter to poll, but its catalog must stay an
+				// observation: a feed that changed after login otherwise leaves the
+				// account resolving against a stale list forever.
+				refreshClineCatalog(refreshCtx, cfg, s, acc)
 				continue
 			}
 			if isUnverifiedGrokSSOAccount(acc) {

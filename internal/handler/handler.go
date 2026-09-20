@@ -532,7 +532,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// belongs to the same passthrough family: no Warp history trimming, and the
 	// request verbatim as the caller sent it.
 	preSelectQoderRequest := strings.EqualFold(targetChannel, "qoder")
-	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest || preSelectWorkBuddyRequest || preSelectQoderRequest
+	// Cline is the same kind of passthrough: its endpoint is OpenAI-shaped and
+	// the client's messages are forwarded verbatim.
+	preSelectClineRequest := strings.EqualFold(targetChannel, "cline")
+	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest || preSelectWorkBuddyRequest || preSelectQoderRequest || preSelectClineRequest
 	suggestionMode := isSuggestionMode(req.Messages)
 	emptyOutputRecoveryPrompt := ""
 	if preSelectWarpRequest {
@@ -649,15 +652,22 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "qoder") {
 		isQoderRequest = true
 	}
-	isPassthroughRequest := isWarpRequest || isPuterRequest || isWorkBuddyRequest || isQoderRequest
+	isClineRequest := preSelectClineRequest
+	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "cline") {
+		isClineRequest = true
+	}
+	isPassthroughRequest := isWarpRequest || isPuterRequest || isWorkBuddyRequest || isQoderRequest || isClineRequest
 	if isPassthroughRequest {
 		channel := "warp"
-		if isPuterRequest {
+		switch {
+		case isPuterRequest:
 			channel = "puter"
-		} else if isWorkBuddyRequest {
+		case isWorkBuddyRequest:
 			channel = "workbuddy"
-		} else if isQoderRequest {
+		case isQoderRequest:
 			channel = "qoder"
+		case isClineRequest:
+			channel = "cline"
 		}
 		// Passthrough channels do not trim history/tool results.
 		if verboseDiagnostics {
@@ -695,12 +705,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		mappedModel = upstreamWarpModelID(req.Model)
-	} else if isPuterRequest || isWorkBuddyRequest || isQoderRequest {
+	} else if isPuterRequest || isWorkBuddyRequest || isQoderRequest || isClineRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
 	var builtPrompt string
-	if isPuterRequest || isWorkBuddyRequest || isQoderRequest {
+	if isPuterRequest || isWorkBuddyRequest || isQoderRequest || isClineRequest {
 		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
 		if builtPrompt == "" {
 			switch {
@@ -708,6 +718,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				builtPrompt = "workbuddy request"
 			case isQoderRequest:
 				builtPrompt = "qoder request"
+			case isClineRequest:
+				builtPrompt = "cline request"
 			default:
 				builtPrompt = "puter request"
 			}
@@ -775,6 +787,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if isQoderRequest {
 		breakdownProfile = "qoder"
+	}
+	if isClineRequest {
+		breakdownProfile = "cline"
 	}
 	if isWarpRequest {
 		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, req.System, effectiveTools, gateNoTools, chatSessionID); err == nil {

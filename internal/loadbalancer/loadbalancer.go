@@ -41,7 +41,7 @@ func EffectiveAccountConcurrencyLimit(acc *store.Account) int64 {
 		return int64(acc.MaxConcurrent)
 	}
 	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
-	case "warp", "puter", "workbuddy", "qoder", "grok":
+	case "warp", "puter", "workbuddy", "qoder", "cline", "grok":
 		return DefaultAccountConcurrency
 	default:
 		return 0

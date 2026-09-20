@@ -589,6 +589,21 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		if !acc.QoderQuota.SyncedAt.IsZero() && (existing.QoderQuota.SyncedAt.IsZero() || !acc.QoderQuota.SyncedAt.Before(existing.QoderQuota.SyncedAt)) {
 			updated.QoderQuota = acc.QoderQuota
 		}
+		// Cline credentials are rotated by the upstream on every refresh, and
+		// account updates are frequently partial, so an empty value means "keep
+		// what is stored", never "erase". Only an explicit replace intent writes
+		// a new pair, so a snapshot read before a rotation cannot rewind it.
+		if acc.ReplaceClineCredentials {
+			updated.ClineAccessToken = strings.TrimSpace(acc.ClineAccessToken)
+			updated.ClineRefreshToken = strings.TrimSpace(acc.ClineRefreshToken)
+			updated.ClineExpiresAt = acc.ClineExpiresAt
+		}
+		if email := strings.TrimSpace(acc.ClineEmail); email != "" {
+			updated.ClineEmail = email
+		}
+		if len(acc.ClineModelIDs) > 0 {
+			updated.ClineModelIDs = append([]string(nil), acc.ClineModelIDs...)
+		}
 		*existing = updated
 		return nil
 	})
@@ -749,6 +764,31 @@ func (s *redisStore) UpdateQoderAccount(ctx context.Context, id int64, patch Qod
 		}
 		if patch.ModelIDs != nil {
 			acc.QoderModelIDs = append([]string(nil), patch.ModelIDs...)
+		}
+		return nil
+	})
+}
+
+func (s *redisStore) UpdateClineCredentials(ctx context.Context, id int64, patch ClineCredentialPatch) error {
+	return s.updateAccountAtomic(ctx, id, func(acc *Account) error {
+		if expected := strings.TrimSpace(patch.ExpectedRefreshToken); expected != "" &&
+			acc.ClineRefreshToken != expected && acc.ClineRefreshToken != strings.TrimSpace(patch.RefreshToken) {
+			return fmt.Errorf("cline credential changed concurrently")
+		}
+		if token := strings.TrimSpace(patch.AccessToken); token != "" {
+			acc.ClineAccessToken = token
+		}
+		if token := strings.TrimSpace(patch.RefreshToken); token != "" {
+			acc.ClineRefreshToken = token
+		}
+		if !patch.ExpiresAt.IsZero() {
+			acc.ClineExpiresAt = patch.ExpiresAt
+		}
+		if email := strings.TrimSpace(patch.Email); email != "" {
+			acc.ClineEmail = email
+		}
+		if patch.ModelIDs != nil {
+			acc.ClineModelIDs = append([]string(nil), patch.ModelIDs...)
 		}
 		return nil
 	})

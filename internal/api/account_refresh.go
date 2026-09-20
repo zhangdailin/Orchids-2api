@@ -31,6 +31,7 @@ var accountRefreshers = map[string]func(*API, context.Context, *store.Account) (
 	"puter":     refreshPuterAccountState,
 	"qoder":     refreshQoderAccountState,
 	"workbuddy": refreshWorkBuddyAccountState,
+	"cline":     refreshClineAccountState,
 }
 
 // refreshWarpAccountState re-proves a Warp session and re-reads the quota it
@@ -171,6 +172,14 @@ func refreshQoderAccountState(a *API, ctx context.Context, acc *store.Account) (
 func refreshWorkBuddyAccountState(a *API, ctx context.Context, acc *store.Account) (string, int, error) {
 	return verifyThroughStore("workbuddy", errWorkBuddyMissingCredential, func() (string, int, error) {
 		return verifyWorkBuddyAccountWithStore(ctx, acc, a.config.Load(), a.store)
+	})
+}
+
+// refreshClineAccountState re-verifies a Cline credential through the store,
+// which may also persist a rotated refresh token.
+func refreshClineAccountState(a *API, ctx context.Context, acc *store.Account) (string, int, error) {
+	return verifyThroughStore("cline", errClineMissingCredential, func() (string, int, error) {
+		return verifyClineAccountWithStore(ctx, acc, a.config.Load(), a.store)
 	})
 }
 
