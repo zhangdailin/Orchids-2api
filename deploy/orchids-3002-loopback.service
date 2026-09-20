@@ -1,0 +1,16 @@
+[Unit]
+Description=Restrict orchids-2api port 3002 to loopback (only Caddy may reach the backend)
+Documentation=file:/etc/orchids-guard.nft
+After=network-pre.target
+Wants=network-pre.target
+Before=orchids-2api.service caddy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Re-applying replaces the table, so restarting the unit never stacks rules.
+ExecStart=/bin/sh -c 'nft delete table inet orchids_guard 2>/dev/null || true; nft -f /etc/orchids-guard.nft'
+ExecStop=/bin/sh -c 'nft delete table inet orchids_guard 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target

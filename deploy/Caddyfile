@@ -1,6 +1,19 @@
 # Merge this site's headers/reverse_proxy into the live configuration; do not
 # overwrite unrelated sites. Only Caddy should expose the backend publicly.
+#
+# "Only Caddy" needs enforcing: the server listens on :3002 for every interface
+# and has no bind-address setting, so pair this file with
+# deploy/orchids-3002-loopback.service + deploy/orchids-guard.nft, which drop
+# non-loopback traffic to 3002.
 {$ORCHIDS_DOMAIN:us1.daige.tech} {
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 20MiB
+			roll_keep 3
+		}
+		format json
+	}
+
 	encode zstd gzip
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"

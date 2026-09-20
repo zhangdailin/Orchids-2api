@@ -1,0 +1,9 @@
+# Only Caddy may reach the orchids-2api backend. The server listens on :3002 for
+# every interface and has no bind-address setting, so the loopback restriction
+# lives here. Caddy reverse_proxies 127.0.0.1:3002, which stays allowed.
+table inet orchids_guard {
+	chain input {
+		type filter hook input priority -10; policy accept;
+		iifname != "lo" tcp dport 3002 drop
+	}
+}
