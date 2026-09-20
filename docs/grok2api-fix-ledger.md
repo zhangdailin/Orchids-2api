@@ -396,7 +396,7 @@
 
 ## 十二、总账（截至第十二轮）
 
-对账方式：取 `docs/grok2api-parity-audit.md` 中全部发现编号（每条发现一个 `### A?-? [P?]` 标题），逐个归入本台账的"已修表 / 有意保留表 / 未修表"，要求三集合互斥且并集等于审计总数。可用 `python3 docs/grok2api-audit/recount.py` 复算（输出的四行与本表逐字对应，若有未归类条目会以非 0 退出码报错）。
+对账方式：取 `docs/grok2api-parity-audit.md` 中全部发现编号（每条发现一个 `### A?-? [P?]` 标题），逐个归入本台账的"已修表 / 有意保留表 / 未修表"，要求三集合互斥且并集等于审计总数。可用归档里的 `recount.py` 复算（输出的四行与本表逐字对应，若有未归类条目会以非 0 退出码报错）；该脚本已在 2026-09-20 的文档清理中移出 HEAD，见 `docs/README.md`。
 
 | 分类 | 条数 | 严重度分布 | 说明 |
 | --- | --- | --- | --- |
@@ -414,7 +414,7 @@
 验证（第十轮涉及代码）：
 
 - `go build ./...`、`go vet ./...`、`go test ./... -count=1` 全绿（第十轮结束时）。
-- `python3 docs/grok2api-audit/recount.py` 退出码 0，输出 171 / 171 / 0 / 0。
+- 归档 `recount.py` 退出码 0，输出 171 / 171 / 0 / 0。
 
 ## 十三、第九轮修复（2 条 + 1 条归类）
 
@@ -497,7 +497,7 @@
 - Key 账期重置：`billing_period_days` + 持久化的 `billing_period_started_at`，到期自动把已结算用量归零；管理端新增 `POST /api/keys/{id}/reset-usage` 供人工重置（限额保留）。期初时间随记录持久化，否则重启后就再也等不到滚动。
 - `PricingBreakdown`：`pricing.ReconstructBreakdown` 从"定价模型 + 数量"重建费率分量（未缓存/缓存/输出 token 含长上下文档、图片输出+输入张数含 2.0 的档位矩阵与编辑附加费、视频秒数+参考图、TTS 字符、STT 小时费率），journal 列表对每个带定价模型的行附上 `pricing_breakdown`。
 
-**至此，本目标列出的每一项（17 条保留差异 + 覆盖缺口 + 实现级差异）都已落地**，判据见各节与 `docs/grok2api-audit/recount.py`（171 / 171 / 0 / 0）。
+**至此，本目标列出的每一项（17 条保留差异 + 覆盖缺口 + 实现级差异）都已落地**，判据见各节与归档 `recount.py`（171 / 171 / 0 / 0）。
 
 ## 十八、第十八轮：statsig 签名改为默认启用（与参考实现一致）
 
@@ -565,7 +565,7 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
 按上述实测，提前释放会把死号放回池子，重现"每个请求重试多个死号 + 二次 429"的原始事故。
 
 **容量（代码之外）**：真正让池子变空的是额度消耗——该渠道承载 30–40 万 input tokens 的长会话
-（`docs/diag-analysis-2026-09-19.md`：378 条请求中 224 条 > 262 144，中位数 297 356），4 个 350-credit
+（实测：378 条请求中 224 条 > 262 144，中位数 297 356），4 个 350-credit
 免费包一天烧穿。要么补号，要么把长会话路由到不计量额度的渠道 / 在客户端做上下文压缩。
 
 **部署与实测**（`<PROD_IP>`）：
@@ -659,8 +659,8 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
 `<ALLOWED_SOURCE_IP_2>`、`<CLOUD_REGION>` 替换真实值；仅文档，代码与运行状态不变）。
 
 **脱敏只覆盖本文件与本轮新增的事故文档**。同一批标识符在更早的公开提交里仍然存在：
-`deploy/README.md`、`docs/diag-analysis-2026-09-19.md`、`docs/model-refresh-accuracy-audit.md`
-（`.audit/` 未纳入版本控制）。要彻底移除需要重写历史并处理 GitHub 侧的悬空对象。
+`deploy/README.md`，以及本次已移出 HEAD 的 `docs/diag-analysis-2026-09-19.md`、`docs/model-refresh-accuracy-audit.md`（在历史提交中仍可查，见 `docs/README.md`）。
+要彻底移除需要重写历史并处理 GitHub 侧的悬空对象。
 
 **sha 映射（2026-09-20 作者重写）**：第二十轮的 5 个提交推送后做过一次作者重写
 （`git rebase --exec 'git commit --amend --reset-author'`，作者改为仓库身份 `zhangdailin`，**树内容不变**），

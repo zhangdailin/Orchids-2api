@@ -7,11 +7,11 @@
 ## 0. 线上拓扑（实测）
 
 ```
-客户端 (DSH provider=daige, baseURL https://<PANEL_DOMAIN>/)
+客户端 (DSH provider=<PROVIDER>, baseURL https://<PANEL_DOMAIN>/)
    │
    ▼
 New API 面板「<PANEL_NAME>」 v1.0.0-rc.37
-  <PANEL_DOMAIN> → <PANEL_IP>:3000   （<CLOUD_REGION>，AS31898）
+  <PANEL_DOMAIN> → <PANEL_IP>:3000   （<CLOUD_REGION>，<CLOUD_ASN>）
    │   匿名白名单调用方（orchids 配置 anonymous_allow_ips）
    ▼
 Cloudflare → Caddy (443) → orchids-2api 127.0.0.1:3002   ← <PROD_IP>
@@ -65,7 +65,7 @@ workbuddy_quota: limit=350 used=350
 
 所以 `policy.go` 的账号级 402 + `isAccountAvailable` 尊重 `QuotaResetAt`（停到计费周期重置）是正确的。
 **代码不能凭空产生额度**：真正的根因是池子的额度被烧穿了——4 个 350-credit 的免费包在 2026-09-17 一天内用尽，
-（该渠道的请求是 30–40 万 input tokens 的长会话，见 `docs/diag-analysis-2026-09-19.md`），
+（该渠道的请求是 30–40 万 input tokens 的长会话），
 于是整个渠道只剩 **3 个号**（`159/217/218`）在扛。
 
 剩下的 3 个号一旦被上游限流（`14003`），就各写一条**模型级**冷却；请求的模型在所有候选账号上都被冷却过滤掉，
@@ -175,7 +175,7 @@ chat/images/videos/console 走 `writeGrokUpstreamError`（`apperrors.PublicMessa
 
 - workbuddy 渠道现有 7 个号，其中 4 个已在本计费周期耗尽（9-26/9-27 才重置），**实际并发容量只有 3 个号**。
   要根治"池空 503"，需要补号或降低消耗。
-- 消耗侧：该渠道承载的是 30–40 万 input tokens 的长会话（`docs/diag-analysis-2026-09-19.md` 实测
+- 消耗侧：该渠道承载的是 30–40 万 input tokens 的长会话（实测
   378 条请求中 224 条 > 262 144，中位数 297 356）。把长会话路由到不计量额度的渠道、
   或在客户端做上下文压缩，是比补号更根本的手段。
 - 面板侧的 CPU 阈值见第 2 节。

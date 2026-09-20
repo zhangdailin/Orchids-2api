@@ -1,11 +1,13 @@
 # Orchids-2api Grok 通道 × chenyme/grok2api 深度对比审计
 
-> 修复进展见 `docs/grok2api-fix-ledger.md`。**截至第十二轮的总账**：171 条**全部已修复/已对齐**（6 条 P0 全部关闭），有意保留 0 条、未修 0 条。第十一、十二轮按"完全对齐 grok2api"清除了全部 17 条此前的有意保留差异。逐条对账表与复算脚本见台账第十二节与 `docs/grok2api-audit/recount.py`。审计期间对 A5-10 做了更正（见该条）。
+> 修复进展见 `docs/grok2api-fix-ledger.md`。**截至第十二轮的总账**：171 条**全部已修复/已对齐**（6 条 P0 全部关闭），有意保留 0 条、未修 0 条。第十一、十二轮按"完全对齐 grok2api"清除了全部 17 条此前的有意保留差异。逐条对账表见台账第十二节，复算脚本 `recount.py` 见清理前提交 `546ee00`。审计期间对 A5-10 做了更正（见该条）。
+> 9 份逐面证据档案（`01-chat-messages.md` … `09-usage-accounting.md`）与 `recount.py` 已在 2026-09-20 的文档清理中移出 HEAD；完整内容见清理前提交 `546ee00` 的 `docs/grok2api-audit/`（例如 `git show 546ee00:docs/grok2api-audit/06-accounts-quota.md`）。下文按档案名引用，不再带路径前缀。
 
-- 审计对象 A（本项目）：`/home/zhangdailin/Documents/Orchids-2api`，Grok 通道实现位于 `internal/grok/`、`internal/handler/`、`internal/api/`、`internal/store/`、`internal/middleware/`、`cmd/server/`。
+- 审计对象 A（本项目）：本仓库，Grok 通道实现位于 `internal/grok/`、`internal/handler/`、`internal/api/`、`internal/store/`、`internal/middleware/`、`cmd/server/`。
 - 参考实现 B：`chenyme/grok2api`，Go 后端根目录 `backend/`，审计基线 **HEAD = `906b9493`（v3.1.6，2026-09-16）**，克隆在 `.upstream/grok2api/`（未纳入版本控制）。
 - 移植基点：A 的三个文件标注 `Derived from chenyme/grok2api, commit 44a390b8…`（`internal/grok/grok2api_sse.go`、`grok2api_streamidle.go`、`grok2api_streamidle_test.go`）。基点与 HEAD 之间相隔 **19 个提交**，其中 5 个是行为修复（`22ac653a`/`72a3a347`/`5d19ccff`/`e5285ebe` 工具 schema 根联合展平，`8641a782`/`ca392e68` 多轮推理恢复，`6db9f67f`/`df4dde39` console 空 tools 时丢弃 tool_choice，`7f3f3d3c`/`50c09e26` 质量守卫转储阈值，`7d1b4246` 回放分配溢出）。凡属该漂移造成的差异，条目中均标注 `[漂移]`。
-- 方法：按 9 个功能面并行做双侧逐行对照，每条发现都要求 A 与 B 双方 `file:line` + 1–5 行代码引用；无法给出代码证据的条目已剔除或标 `[待验证]`。证据细节见 `docs/grok2api-audit/01..09-*.md`。
+
+- 方法：按 9 个功能面并行做双侧逐行对照，每条发现都要求 A 与 B 双方 `file:line` + 1–5 行代码引用；无法给出代码证据的条目已剔除或标 `[待验证]`。证据细节见 `01..09-*.md`。
 - 结论基于源码静态对照（未运行 A/B 服务做线上抓包）；`go test ./internal/grok/...` 在审计时为通过（`ok orchids-api/internal/grok 6.130s`），即下述问题都不被现有测试覆盖。
 
 统计（详见各章与附录索引）：**P0 × 6、P1 × 69、P2 × 75、P3 × 21**，合计 171 条；其中约 15 条是同一根因在不同功能面的重复记录，去重后独立缺陷约 156 条。
@@ -32,7 +34,7 @@
 
 ## 1. Chat Completions / Anthropic Messages（20 条）
 
-证据：`docs/grok2api-audit/01-chat-messages.md`。
+证据：`01-chat-messages.md`。
 
 ### A1-1 [P0] Anthropic `tool_result` 数组内容被 Chat 校验层 400 拒绝
 
@@ -164,7 +166,7 @@
 
 ## 2. Responses API / Grok CLI(Build) 适配（14 条）
 
-证据：`docs/grok2api-audit/03-responses-cli.md`。
+证据：`03-responses-cli.md`。
 
 ### A3-1 [P1] 原生 Build Responses 流未做事件字段补齐，Codex / Grok TUI 解析失败
 
@@ -265,7 +267,7 @@
 
 ## 3. 模型目录 / 路由（17 条）
 
-证据：`docs/grok2api-audit/04-models.md`。补充：公开 `/v1/models` 由 `internal/handler/models.go:99` 提供（不在 `internal/api/api.go`，后者是管理端 `/api/models`）。
+证据：`04-models.md`。补充：公开 `/v1/models` 由 `internal/handler/models.go:99` 提供（不在 `internal/api/api.go`，后者是管理端 `/api/models`）。
 
 ### A4-1 [P1] 对外模型 ID 携带 Provider 前缀
 
@@ -366,7 +368,7 @@
 
 ## 4. 错误契约 / 鉴权 / 校验（16 条）
 
-证据：`docs/grok2api-audit/08-errors-auth.md`。
+证据：`08-errors-auth.md`。
 
 ### A8-1 [P0/P1] 上游错误正文与内部错误串透传客户端
 
@@ -469,7 +471,7 @@
 
 ## 5. 媒体 / 音频（45 条）
 
-证据：`docs/grok2api-audit/05-media-audio.md`（其中 98 处 `file:line` 引用已机械校验）。
+证据：`05-media-audio.md`（其中 98 处 `file:line` 引用已机械校验）。
 
 ### A5-1 [P0] `/images/edits` 线格式完全不同：A 仅 multipart，B 仅 JSON
 
@@ -686,7 +688,7 @@
 
 ## 6. 流式 / SSE 语义（12 条）
 
-证据：`docs/grok2api-audit/02-streaming.md`。移植基点核对：语义 idle 实现与 B **逐行等价**（唯一差异是丢失 `TimedOut()`，A2-11）。
+证据：`02-streaming.md`。移植基点核对：语义 idle 实现与 B **逐行等价**（唯一差异是丢失 `TimedOut()`，A2-11）。
 
 ### A2-1 [P1] 上游重复帧（doom loop）零检测，且重复帧恰好让语义 idle 永不触发
 
@@ -764,7 +766,7 @@
 
 ## 7. 出口 / 反爬 / 身份（18 条）
 
-证据：`docs/grok2api-audit/07-egress-antibot.md`。
+证据：`07-egress-antibot.md`。
 
 ### A7-1 [P0] 出口节点校验失败把带凭据的代理 URL 原文写进日志
 
@@ -865,7 +867,7 @@
 
 ## 8. 用量统计 / 计费 / 缓存（13 条）
 
-证据：`docs/grok2api-audit/09-usage-accounting.md`。
+证据：`09-usage-accounting.md`。
 
 ### A9-1 [P0] 没有价格表、成本字段与 Key 计费预留/结算
 
@@ -944,7 +946,7 @@
 
 ## 9. 账号轮换 / 配额 / 限流（16 条）
 
-证据：`docs/grok2api-audit/06-accounts-quota.md`（132 处 `file:line` 引用已机械校验）。
+证据：`06-accounts-quota.md`（132 处 `file:line` 引用已机械校验）。
 
 ### A6-1 [P1] 质量降级（encrypted-thinking dump / 缺失思考）的识别、扣分与重试整体缺失 `[漂移]`
 
@@ -1068,15 +1070,15 @@
 
 | 区域 | 报告文件 | 条数 | P0 | P1 | P2 | P3 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Chat Completions / Anthropic Messages | `docs/grok2api-audit/01-chat-messages.md` | 20 | 1 | 3 | 10 | 6 |
-| 流式 / SSE | `docs/grok2api-audit/02-streaming.md` | 12 | 0 | 2 | 7 | 3 |
-| Responses API / CLI(Build) | `docs/grok2api-audit/03-responses-cli.md` | 14 | 0 | 8 | 6 | 0 |
-| 模型目录 / 路由 | `docs/grok2api-audit/04-models.md` | 17 | 0 | 9 | 5 | 3 |
-| 媒体 / 音频 | `docs/grok2api-audit/05-media-audio.md` | 45 | 2 | 18 | 20 | 5 |
-| 账号 / 配额 / 限流 | `docs/grok2api-audit/06-accounts-quota.md` | 16 | 0 | 7 | 6 | 3 |
-| 出口 / 反爬 / 身份 | `docs/grok2api-audit/07-egress-antibot.md` | 18 | 1 | 9 | 8 | 0 |
-| 错误契约 / 鉴权 / 校验 | `docs/grok2api-audit/08-errors-auth.md` | 16 | 1 | 6 | 8 | 1 |
-| 用量 / 计费 / 缓存 | `docs/grok2api-audit/09-usage-accounting.md` | 13 | 1 | 7 | 5 | 0 |
+| Chat Completions / Anthropic Messages | `01-chat-messages.md` | 20 | 1 | 3 | 10 | 6 |
+| 流式 / SSE | `02-streaming.md` | 12 | 0 | 2 | 7 | 3 |
+| Responses API / CLI(Build) | `03-responses-cli.md` | 14 | 0 | 8 | 6 | 0 |
+| 模型目录 / 路由 | `04-models.md` | 17 | 0 | 9 | 5 | 3 |
+| 媒体 / 音频 | `05-media-audio.md` | 45 | 2 | 18 | 20 | 5 |
+| 账号 / 配额 / 限流 | `06-accounts-quota.md` | 16 | 0 | 7 | 6 | 3 |
+| 出口 / 反爬 / 身份 | `07-egress-antibot.md` | 18 | 1 | 9 | 8 | 0 |
+| 错误契约 / 鉴权 / 校验 | `08-errors-auth.md` | 16 | 1 | 6 | 8 | 1 |
+| 用量 / 计费 / 缓存 | `09-usage-accounting.md` | 13 | 1 | 7 | 5 | 0 |
 | **合计** | | **171** | **6** | **69** | **75** | **21** |
 
 跨区域重复计数（同一根因在不同面向被两次记录，去重后独立缺陷约 156 条）：
@@ -1102,4 +1104,4 @@
 
 `[待验证]` 条目（需运行时实证，未计入结论）：`A1-9`（上游是否接受 `stop`）、`A1-14`（上游是否接受 `input` 中的 `output_text`）、`A8-14` 内部 Key 分支、`A5-7` 运行期路由合并次序、`A5-22` 未在实例上实证内网抓取、`A5-12` 未做双实例对照。
 
-审计过程说明：`.upstream/grok2api` 为本次审计克隆的上游仓库（未纳入版本控制，可随时删除）；9 份区域报告位于 `docs/grok2api-audit/`。审计期间未修改任何产品源码，`go test ./internal/grok/...` 保持通过。
+审计过程说明：`.upstream/grok2api` 为本次审计克隆的上游仓库（未纳入版本控制，可随时删除）；9 份区域报告已归档（见文首说明，可用 `git show` 取回）。审计期间未修改任何产品源码，`go test ./internal/grok/...` 保持通过。
