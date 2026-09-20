@@ -106,3 +106,55 @@ func consoleLineContaining(source, marker string) string {
 	}
 	return ""
 }
+
+// TestAccountsJSRendersTheClineRowCells pins the four columns that were empty.
+//
+// Each of them has a channel-specific branch, and a channel absent from every
+// branch falls through to a generic default that renders a dash — or worse,
+// reads the channel's empty session columns as "no credential" and calls a
+// healthy account 待补全. Cline writes no session columns at all, so it needs
+// its own branch in each renderer.
+func TestAccountsJSRendersTheClineRowCells(t *testing.T) {
+	source, err := readConsoleScript("accounts.js")
+	if err != nil {
+		t.Fatalf("read accounts.js: %v", err)
+	}
+	// 配额: an unmetered channel must be rendered as a verdict, not a dash.
+	if !strings.Contains(source, "unmetered: true") {
+		t.Error("getQuotaStats has no unmetered verdict for Cline")
+	}
+	if !strings.Contains(source, "未计量") {
+		t.Error("buildQuotaMarkup does not name the unmetered verdict")
+	}
+	// 等级: no plan name is published, so the badge falls back to what the
+	// server actually observed.
+	if !strings.Contains(source, `免费目录`) {
+		t.Error("subscriptionBadge has no Cline tier")
+	}
+	// 状态: the credential verdict must come from has_credential, not from the
+	// session columns this channel never writes.
+	if !strings.Contains(source, `type === 'cline'`) {
+		t.Error("evaluateAccountStatus has no Cline branch")
+	}
+	// 能力: NSFW is a Grok switch, so the column is a dash for every other
+	// channel unless the renderer knows what to show.
+	if !strings.Contains(source, `function buildCapabilityMarkup`) {
+		t.Error("the 能力 cell has no channel-aware renderer")
+	}
+	if !strings.Contains(source, `cline_model_ids`) {
+		t.Error("the Cline cells never read the observed catalog")
+	}
+}
+
+// TestCommonJSCountsTheClineCredentialPresence pins the verdict behind the whole
+// row: without has_credential the status cell falls back to the session columns
+// that Cline never writes, and a healthy account reads 待补全.
+func TestCommonJSCountsTheClineCredentialPresence(t *testing.T) {
+	source, err := readConsoleScript("common.js")
+	if err != nil {
+		t.Fatalf("read common.js: %v", err)
+	}
+	if !strings.Contains(source, `isQuotaOnlyStatus`) {
+		t.Error("common.js has no quota-only guard")
+	}
+}

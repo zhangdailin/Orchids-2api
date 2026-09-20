@@ -130,6 +130,22 @@ function quotaTooltip(acc, quota) {
 function getQuotaStats(acc) {
   if (!acc) return null;
   const type = normalizeAccountType(acc);
+  if (type === "cline") {
+    // Cline publishes no numeric allowance: the recommended-models feed is a
+    // list and the inference cap is a rate limit written in prose. Returning
+    // null made the 配额 cell fall through to a bare dash, which reads as
+    // "nothing was ever read" rather than "this channel is unmetered".
+    return {
+      supported: false,
+      unmetered: true,
+      limit: 0,
+      remaining: 0,
+      used: 0,
+      pctRemaining: 0,
+      note: String(acc.quota_note || "").trim(),
+      modelCount: Array.isArray(acc.cline_model_ids) ? acc.cline_model_ids.length : 0,
+    };
+  }
   if (type === "workbuddy") {
     const base = getSidebarQuotaStats(acc);
     if (!base) {
@@ -340,6 +356,35 @@ function subscriptionBadge(acc) {
       tip: "Qoder 未返回计划档位",
     };
   }
+  if (type === "cline") {
+    // No plan name is published. The catalog the server observed is the free
+    // tier of recommended-models, so the badge says what was actually observed
+    // rather than inventing a tier.
+    const plan = String(acc?.quota_plan || "").trim();
+    if (plan) {
+      return {
+        text: plan,
+        bg: "rgba(167, 139, 250, 0.16)",
+        color: "#c4b5fd",
+        tip: `Cline 套餐: ${plan}`,
+      };
+    }
+    const modelCount = Array.isArray(acc?.cline_model_ids) ? acc.cline_model_ids.length : 0;
+    if (modelCount === 0) {
+      return {
+        text: "未同步",
+        bg: "rgba(100, 116, 139, 0.12)",
+        color: "#94a3b8",
+        tip: "尚未读取到 Cline 模型目录；点「刷新」立即同步",
+      };
+    }
+    return {
+      text: "免费目录",
+      bg: "rgba(167, 139, 250, 0.16)",
+      color: "#c4b5fd",
+      tip: `Cline 未下发套餐名；当前 ${modelCount} 个模型来自官方 recommended-models 免费清单`,
+    };
+  }
   if (type === "workbuddy") {
     const plan = String(acc?.quota_plan || "").trim();
     if (plan) {
@@ -442,6 +487,30 @@ function qoderQuotaExhausted(acc) {
 
 function shouldShowNSFWBadge(acc) {
   return normalizeAccountType(acc) === "grok" && !!acc?.nsfw_enabled;
+}
+
+// clineObservedModelCount is how many identifiers the server last read from the
+// account's recommended-models feed. It is the only capability signal the channel
+// publishes, and it is what makes an account with a refresh-but-empty catalog
+// visibly different from one that synced.
+function clineObservedModelCount(acc) {
+  if (normalizeAccountType(acc) !== "cline") return 0;
+  return Array.isArray(acc?.cline_model_ids) ? acc.cline_model_ids.length : 0;
+}
+
+// buildCapabilityMarkup renders the 能力 cell.
+//
+// NSFW is a Grok switch, so for every other channel this column is a dash — and
+// a dash in a column titled 能力 reads as "this account can do nothing". For a
+// catalog-driven channel the honest content is what was actually observed, so
+// Cline shows its model count instead.
+function buildCapabilityMarkup(acc) {
+  if (shouldShowNSFWBadge(acc)) return buildNSFWBadgeMarkup(acc);
+  const modelCount = clineObservedModelCount(acc);
+  if (modelCount > 0) {
+    return `<span class="tag" title="Cline 官方 recommended-models 免费清单中观测到的模型数" style="background:rgba(167, 139, 250, 0.14);color:#c4b5fd;border:none;">模型 ${modelCount}</span>`;
+  }
+  return `<span class="muted">—</span>`;
 }
 
 function buildNSFWBadgeMarkup(acc) {
@@ -1217,6 +1286,12 @@ function evaluateAccountStatus(acc) {
     if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Qoder 设备凭据，请重新使用官方网页登录' };
     }
+  } else if (type === 'cline') {
+    // Same trap as Qoder: a Cline account writes no session columns at all, so
+    // the generic branch below would call a healthy account 待补全.
+    if (!hasSidebarAccountCredential(acc)) {
+      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Cline WorkOS 凭据，请重新使用官方网页登录' };
+    }
   } else if (!acc.session_id && !acc.session_cookie) {
     return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少会话信息' };
   }
@@ -1585,6 +1660,11 @@ function renderAccounts() {
       } else {
         tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
       }
+    } else if (normalizeAccountType(acc) === "cline") {
+      const models = clineObservedModelCount(acc);
+      tdQuota.title = models > 0
+        ? `Cline 未下发数值额度；已观测 ${models} 个免费模型（点「刷新」重新同步）`
+        : "Cline 未下发数值额度；点「刷新」同步模型目录";
     } else if (normalizeAccountType(acc) === "qoder") {
       if (quota && quota.supported) {
         tdQuota.title = [
@@ -1621,18 +1701,7 @@ function renderAccounts() {
 
     const tdCapability = document.createElement("td");
     tdCapability.className = "col-capability";
-    if (shouldShowNSFWBadge(acc)) {
-      const nsfwSpan = document.createElement("span");
-      nsfwSpan.className = "tag account-nsfw-tag";
-      nsfwSpan.title = "Grok NSFW 已开启";
-      nsfwSpan.textContent = "NSFW";
-      tdCapability.appendChild(nsfwSpan);
-    } else {
-      const plain = document.createElement("span");
-      plain.className = "muted";
-      plain.textContent = "—";
-      tdCapability.appendChild(plain);
-    }
+    tdCapability.innerHTML = buildCapabilityMarkup(acc);
     tr.appendChild(tdCapability);
 
     // One usage cell: the count carries the meaning, the last-use time is a
@@ -1812,6 +1881,14 @@ function buildQuotaMarkup(acc) {
   }
   if (quota && quota.quotaUnavailable) {
     return `<span style="color:#94a3b8">未知</span> <span style="color:#64748b;font-size:0.75rem">(xAI 未下发 Build 数值配额)</span>`;
+  }
+  if (quota && quota.unmetered) {
+    // Unmetered is a verdict, not a missing number: the channel is billed by
+    // rate limit rather than a balance, so the cell says so instead of showing
+    // a dash. The reason is the tooltip, because the server's sentence is far
+    // too long to sit next to the number.
+    const reason = quota.note || "该渠道按速率限制计费，不提供数值额度";
+    return `<span style="color:#94a3b8" title="${escapeHtml(reason)}">未计量</span> <span style="color:#64748b;font-size:0.75rem">(按速率限制)</span>`;
   }
   if (quota && quota.unknown) {
     const hint = normalizeAccountType(acc) === "workbuddy"

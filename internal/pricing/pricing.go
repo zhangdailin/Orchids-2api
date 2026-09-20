@@ -89,7 +89,8 @@ func buildOfficialTokenPrices() map[string]tokenPrice {
 	prices := make(map[string]tokenPrice)
 	register := func(canonical string, price tokenPrice, names ...string) {
 		price.CanonicalModel = canonical
-		for _, name := range append([]string{canonical}, names...) {
+		prices[canonical] = price
+		for _, name := range names {
 			prices[name] = price
 		}
 	}

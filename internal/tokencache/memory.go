@@ -87,12 +87,9 @@ func (c *MemoryCache) Put(ctx context.Context, key string, tokens int) {
 		return
 	}
 	now := time.Now()
-	expiresAt := time.Time{}
-	if c.ttl > 0 {
-		expiresAt = now.Add(c.ttl)
-	}
 	size := int64(len(key)) + 8
 	c.mu.Lock()
+	expiresAt := c.expiresAtLocked(now)
 	if existing, ok := c.items[key]; ok {
 		c.sizeBytes -= existing.size
 	} else if c.maxEntries > 0 && len(c.items) >= c.maxEntries {

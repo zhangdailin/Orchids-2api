@@ -194,7 +194,10 @@ func streamMGW(ctx context.Context, connection *websocket.Conn, writer *io.PipeW
 		if messageType != websocket.TextMessage || len(data) > mgwMaxFrameBytes {
 			continue
 		}
-		if _, err := writer.Write(append(append([]byte(nil), data...), '\n')); err != nil {
+		frame := make([]byte, len(data)+1)
+		copy(frame, data)
+		frame[len(data)] = '\n'
+		if _, err := writer.Write(frame); err != nil {
 			return
 		}
 		eventType, sessionID := mgwEventMetadata(data)

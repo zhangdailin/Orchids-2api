@@ -32,18 +32,7 @@ func NewMemoryPromptCache(ttl time.Duration, maxEntries ...int) *MemoryPromptCac
 }
 
 func (c *MemoryPromptCache) cleanupLoop() {
-	ticker := time.NewTicker(time.Minute * 5)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-c.done:
-			return
-		case <-ticker.C:
-			c.mu.Lock()
-			c.pruneExpiredLocked(time.Now())
-			c.mu.Unlock()
-		}
-	}
+	c.runCleanup(c.done, 5*time.Minute)
 }
 
 // Close 停止后台清理 goroutine
@@ -51,11 +40,7 @@ func (c *MemoryPromptCache) Close() {
 	if c == nil {
 		return
 	}
-	select {
-	case <-c.done:
-	default:
-		close(c.done)
-	}
+	stopCleanup(c.done)
 }
 
 func (c *MemoryPromptCache) SetTTL(ttl time.Duration) {
@@ -78,29 +63,31 @@ func (c *MemoryPromptCache) CheckPromptCache(strategy string, systemTokens, tool
 	// 1: Split (System and Tools separate)
 	// 2: System only
 	// 3: Tools only
-	now := time.Now()
-	expiresAt := time.Time{}
-	if c.ttl > 0 {
-		expiresAt = now.Add(c.ttl)
-	}
-
 	checkCache := func(key string, tokens int) (int, int) {
 		if tokens <= 0 || key == "" {
 			return 0, 0
 		}
 
+		now := time.Now()
 		c.mu.RLock()
 		item, ok := c.items[key]
-		if ok && (c.ttl == 0 || item.expiresAt.IsZero() || !now.After(item.expiresAt)) {
+		if ok && !c.expiredLocked(item, now) {
 			c.mu.RUnlock()
 			c.touch(key)
 			return tokens, 0
 		}
 		c.mu.RUnlock()
 
-		// Cache Miss - Need to Put
+		// Cache Miss - Need to Put. Re-check after taking the write lock because
+		// another goroutine may have inserted this key in the meantime.
 		size := int64(len(key)) + 8
 		c.mu.Lock()
+		if item, ok := c.items[key]; ok && !c.expiredLocked(item, now) {
+			c.mu.Unlock()
+			c.touch(key)
+			return tokens, 0
+		}
+		expiresAt := c.expiresAtLocked(now)
 		if existing, ok := c.items[key]; ok {
 			c.sizeBytes -= existing.size
 		} else if c.maxEntries > 0 && len(c.items) >= c.maxEntries {

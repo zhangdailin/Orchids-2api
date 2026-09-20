@@ -65,6 +65,39 @@ func (s *memoryStore[T]) setTTL(ttl time.Duration) {
 	s.mu.Unlock()
 }
 
+// expiresAtLocked calculates an entry deadline from the current TTL. Callers
+// must hold s.mu so a concurrent SetTTL cannot mix an old TTL with new entries.
+func (s *memoryStore[T]) expiresAtLocked(now time.Time) time.Time {
+	if s.ttl <= 0 {
+		return time.Time{}
+	}
+	return now.Add(s.ttl)
+}
+
+// runCleanup periodically removes expired entries until done is closed.
+func (s *memoryStore[T]) runCleanup(done <-chan struct{}, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			s.mu.Lock()
+			s.pruneExpiredLocked(time.Now())
+			s.mu.Unlock()
+		case <-done:
+			return
+		}
+	}
+}
+
+func stopCleanup(done chan struct{}) {
+	select {
+	case <-done:
+	default:
+		close(done)
+	}
+}
+
 // evictLRULocked drops the least recently accessed entry. Requires s.mu held.
 func (s *memoryStore[T]) evictLRULocked() {
 	var lruKey string

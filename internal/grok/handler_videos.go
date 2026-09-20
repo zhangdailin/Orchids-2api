@@ -395,10 +395,15 @@ func normalizeVideoRequestAliases(req *VideosRequest) {
 	if strings.TrimSpace(req.ResolutionName) == "" {
 		req.ResolutionName = strings.TrimSpace(req.Resolution)
 	}
-	for _, value := range append([]string{req.Image, req.Video}, req.ReferenceImages...) {
+	appendReference := func(value string) {
 		if trimmed := strings.TrimSpace(value); trimmed != "" {
 			req.InputReferences = append(req.InputReferences, trimmed)
 		}
+	}
+	appendReference(req.Image)
+	appendReference(req.Video)
+	for _, value := range req.ReferenceImages {
+		appendReference(value)
 	}
 	req.InputReferences = uniqueStrings(req.InputReferences)
 }
