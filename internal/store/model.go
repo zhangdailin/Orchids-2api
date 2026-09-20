@@ -5,6 +5,7 @@ import (
 	"github.com/goccy/go-json"
 	"slices"
 	"strings"
+	"time"
 )
 
 const (
@@ -89,6 +90,10 @@ type Model struct {
 	Capabilities    []string    `json:"capabilities,omitempty"`
 	Origin          string      `json:"origin,omitempty"`
 	BoundAccountIDs []int64     `json:"bound_account_ids,omitempty"`
+	// CreatedAt records when the route row was first seen. The public model
+	// list reports it as `created`; a row stored before this field existed
+	// leaves it zero and the caller falls back to the legacy constant.
+	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
 func (m *Model) NormalizeRoute() {

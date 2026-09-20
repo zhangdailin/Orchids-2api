@@ -127,7 +127,8 @@ func TestNormalizeImagineModel_DefaultsToLite(t *testing.T) {
 		{"quality", "grok-imagine-image-quality"},
 		{"pro", "grok-imagine-image-quality"},
 		{"grok-imagine-image", "grok-imagine-image"},
-		{"grok-imagine-image-pro", "grok-imagine-image-pro"},
+		// The legacy pro id is deprecated: it maps to the route that replaced it.
+		{"grok-imagine-image-pro", "grok-imagine-image-quality"},
 		{"grok-4.20-auto", "grok-imagine-image-lite"},
 	}
 	for _, tt := range tests {

@@ -78,7 +78,9 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-imagine-image", Name: "Grok Imagine Image", UpstreamModel: "grok-imagine-image", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-2.0", Name: "Grok Imagine Image 2.0", UpstreamModel: "grok-imagine-image-2.0", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", UpstreamModel: "grok-imagine-image-quality-lite", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
-	{ID: "grok-imagine-image-pro", Name: "Grok Imagine Image Pro", UpstreamModel: "grok-imagine-image-pro", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
+	// grok-imagine-image-pro is deprecated: it is unconditionally rejected by
+	// IsDeprecatedModelID, so advertising it only produced a catalog entry that
+	// every request failed on. The pro route is grok-imagine-image-2.0.
 	{ID: "grok-imagine-image-edit", Name: "Grok Imagine Image Edit", UpstreamModel: "imagine-image-edit", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsImage: true},
 	{ID: "grok-imagine-video", Name: "Grok Imagine Video", UpstreamModel: "imagine-video-gen", ModelMode: "MODEL_MODE_AUTO", ModeID: "auto", Tier: grokTierSuper, IsVideo: true},
 	{ID: "grok-imagine-video-1.5", Name: "Grok Imagine Video 1.5", UpstreamModel: "grok-imagine-video-1.5", Upstream: UpstreamConsole, IsVideo: true, MediaAPIOnly: true},
@@ -116,11 +118,11 @@ var providerCompatibilityAliases = map[string]string{
 	"grok-build-0.1":                       "console/grok-build-0.1",
 	"grok-build-console":                   "console/grok-build-0.1",
 	"grok-imagine-image-quality-2.0":       "console/grok-imagine-image-quality",
-	"console/grok-imagine-video":          "grok-imagine-video",
-	"console/grok-imagine-video-1.5":      "grok-imagine-video-1.5",
-	"build/grok-imagine-video":            "grok-imagine-video",
-	"web/grok-imagine-video":              "grok-imagine-video",
-	"web/grok-imagine-video-1.5":          "grok-imagine-video-1.5",
+	"console/grok-imagine-video":           "grok-imagine-video",
+	"console/grok-imagine-video-1.5":       "grok-imagine-video-1.5",
+	"build/grok-imagine-video":             "grok-imagine-video",
+	"web/grok-imagine-video":               "grok-imagine-video",
+	"web/grok-imagine-video-1.5":           "grok-imagine-video-1.5",
 }
 
 func IsDeprecatedModelID(modelID string) bool {
@@ -193,7 +195,10 @@ func ConsoleFallbackFor(spec ModelSpec) (ModelSpec, bool) {
 func (m ModelSpec) PoolCandidates() []string {
 	switch {
 	case m.IsImage && normalizeModelID(m.ID) == "grok-imagine-image-lite" && m.Tier == grokTierBasic:
-		return []string{"lite", "super", "heavy"}
+		// Basic is this model's minimum tier, not an exclusion: a deployment
+		// whose only credentials are free/basic Web accounts can serve it. The
+		// model's own tier is still preferred, so lite comes first.
+		return []string{"lite", "basic", "super", "heavy"}
 	case m.PreferBest && m.Tier == grokTierHeavy:
 		return []string{"heavy", "basic"}
 	case m.PreferBest:

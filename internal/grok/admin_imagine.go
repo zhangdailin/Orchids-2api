@@ -125,6 +125,12 @@ func normalizeImagineModel(model string) string {
 	case "quality", "pro":
 		return "grok-imagine-image-quality"
 	}
+	// The legacy pro id is deprecated and rejected everywhere else, so the admin
+	// surface maps it to the quality route that replaced it instead of returning
+	// a name that can only fail.
+	if raw == "grok-imagine-image-pro" || raw == "console/grok-imagine-image-pro" {
+		return "grok-imagine-image-quality"
+	}
 	id := raw
 	if id == "" {
 		return "grok-imagine-image-lite"
@@ -240,7 +246,7 @@ func (h *Handler) generateImagineBatch(ctx context.Context, prompt, aspectRatio,
 	startedAt := time.Now()
 	maxAttempts := 2
 	if h != nil && h.configSnapshot() != nil && h.configSnapshot().AccountSwitchCount > 0 {
-		maxAttempts = h.configSnapshot().AccountSwitchCount
+		maxAttempts = min(h.configSnapshot().AccountSwitchCount, maxAccountSwitchBudget)
 	}
 
 	var lastErr error

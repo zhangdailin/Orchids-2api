@@ -182,6 +182,37 @@ func (h *Handler) bindAffinity(ctx context.Context, provider string, accountID i
 	}
 }
 
+// unbindAffinity drops this session's binding to an account after a failure the
+// account cannot recover from within the session. Without it the next turn
+// returns to the same credential that just failed, which is how a cooling
+// account kept being handed the same conversation.
+func (h *Handler) unbindAffinity(ctx context.Context, provider string, accountID int64) {
+	session := sessionFromContext(ctx)
+	if h == nil || session.Key == "" {
+		return
+	}
+	key := affinityMapKey(session, provider)
+	h.affinityMu.Lock()
+	defer h.affinityMu.Unlock()
+	h.sessionMu.Lock()
+	entry, existed := h.affinity[key]
+	if existed && (accountID == 0 || entry.AccountID == accountID) {
+		delete(h.affinity, key)
+	}
+	h.sessionMu.Unlock()
+	if !existed || h.lb == nil || h.lb.Store == nil {
+		return
+	}
+	// Retire the persisted binding instead of waiting out its TTL. The store
+	// rejects a zero account id, so the same binding is rewritten with a
+	// one-second lifetime: it is gone before the next turn, and a concurrent
+	// reader sees the account it was already using rather than a blank.
+	_ = h.lb.Store.SaveSessionAffinity(ctx, &store.StoredSessionAffinity{
+		Provider: provider, Model: session.Model, SessionKey: session.Key,
+		AccountID: entry.AccountID,
+	}, time.Second)
+}
+
 func replayMapKey(model, key string) string {
 	return normalizeModelID(model) + "\x00" + strings.TrimSpace(key)
 }
@@ -358,7 +389,7 @@ func (h *Handler) applyNativeReasoningReplay(model, key string, payload map[stri
 	if len(filtered) == 0 {
 		return
 	}
-	payload["input"] = insertReplayItems(input, filtered)
+	payload["input"] = backfillReasoningForCalls(insertReplayItems(input, filtered), items)
 	ensureReasoningEncryptedInclude(payload)
 }
 

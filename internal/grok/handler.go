@@ -574,9 +574,13 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 			if h.lb != nil && h.lb.Store != nil {
 				_ = h.lb.Store.UpdateAccount(ctx, acc)
 			}
+			h.unbindAffinity(ctx, ProviderForAccount(acc), acc.ID)
 			return
 		}
 	}
+	// The credential cannot serve this session any more: drop the affinity so the
+	// next turn picks a different account instead of coming back here.
+	h.unbindAffinity(ctx, ProviderForAccount(acc), acc.ID)
 	h.base.MarkAccountStatus(ctx, acc, err)
 }
 
@@ -633,8 +637,10 @@ func (h *Handler) openChatAccountSessionForModelExcluding(ctx context.Context, e
 
 func (h *Handler) openChatAccountSessionForImagineLite(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
 	spec.Tier = grokTierLite
+	// Basic is the minimum tier for the lite image model, so a basic credential
+	// is a valid fallback rather than an excluded pool.
 	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, spec.PoolCandidates(), func(acc *store.Account) bool {
-		return grokAccountPool(acc) != "basic" && h.routeAllowsAccount(ctx, spec.ID, acc.ID)
+		return h.routeAllowsAccount(ctx, spec.ID, acc.ID)
 	})
 }
 

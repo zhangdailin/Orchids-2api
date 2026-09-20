@@ -131,6 +131,11 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	if !saveOwnership || ownerHash == "" || responseID == "" || resp.StatusCode < 200 || resp.StatusCode >= 300 || result.Err != nil {
 		return
 	}
+	// A continuation request only carries this turn's input; the history lives in
+	// the response it names. The stored record is what GET input_items answers
+	// from, so the chain is folded in here — otherwise a client that continues a
+	// conversation reads back a list with only the last turn in it.
+	storedInput := responsesInputItemsJSON(h.accumulatedInputItems(r, ownerHash, payload))
 	if err := h.saveStoredResponse(r, &store.StoredResponse{
 		ResponseID: responseID,
 		OwnerHash:  ownerHash,
@@ -141,7 +146,8 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		// part of the exchange the gateway can serve back itself. Persisting them
 		// lets GET /responses/{id}/input_items answer locally instead of doing a
 		// second upstream round trip for data it already had.
-		InputItems: responsesInputItemsJSON(payload["input"]),
+		InputItems:         storedInput,
+		PreviousResponseID: strings.TrimSpace(parseLooseStringAny(payload["previous_response_id"])),
 	}); err != nil {
 		slog.Error("failed to save response ownership", "response_id", responseID, "account_id", sess.acc.ID, "error", err)
 	}
@@ -241,6 +247,36 @@ func (h *Handler) HandleResponseResource(w http.ResponseWriter, r *http.Request)
 	if (r.Method == http.MethodDelete && resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 		_ = h.deleteStoredResponse(r, responseID, ownerHash)
 	}
+}
+
+// maxStoredInputChainDepth bounds how many previous responses are folded into a
+// stored input list, so a long conversation cannot make one record unbounded.
+const maxStoredInputChainDepth = 8
+
+// accumulatedInputItems returns this turn's input followed by the input of the
+// responses it continues (nearest ancestor first, bounded).
+func (h *Handler) accumulatedInputItems(r *http.Request, ownerHash string, payload map[string]interface{}) []interface{} {
+	current := responsesInputItems(payload["input"])
+	if h == nil || r == nil || ownerHash == "" {
+		return current
+	}
+	previousID := strings.TrimSpace(parseLooseStringAny(payload["previous_response_id"]))
+	seen := map[string]bool{}
+	for depth := 0; depth < maxStoredInputChainDepth && previousID != "" && !seen[previousID]; depth++ {
+		seen[previousID] = true
+		record, err := h.getStoredResponse(r, previousID, ownerHash)
+		if err != nil || record == nil {
+			break
+		}
+		if len(record.InputItems) > 0 {
+			var decoded []interface{}
+			if json.Unmarshal(record.InputItems, &decoded) == nil {
+				current = append(current, decoded...)
+			}
+		}
+		previousID = strings.TrimSpace(record.PreviousResponseID)
+	}
+	return current
 }
 
 func (h *Handler) getStoredResponse(r *http.Request, responseID, ownerHash string) (*store.StoredResponse, error) {

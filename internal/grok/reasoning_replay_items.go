@@ -457,3 +457,100 @@ func shouldInsertReplayBefore(entry interface{}) bool {
 	}
 	return role != "system" && role != "developer"
 }
+
+// reasoningForCalls indexes the cached turn's reasoning items by the call id of
+// the function_call that follows them. A multi-turn tool loop only needs the
+// reasoning proof that belongs to the call it is answering, and a client that
+// echoes its own calls may drop that block.
+func reasoningForCalls(items []interface{}) map[string]map[string]interface{} {
+	index := map[string]map[string]interface{}{}
+	var pending map[string]interface{}
+	for _, entry := range items {
+		item, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(interfaceString(item["type"])) {
+		case "reasoning":
+			if encrypted := strings.TrimSpace(interfaceString(item["encrypted_content"])); encrypted != "" {
+				pending = item
+			}
+		case "function_call", "custom_tool_call":
+			if pending == nil {
+				continue
+			}
+			callID := strings.TrimSpace(interfaceString(item["call_id"]))
+			if callID == "" {
+				continue
+			}
+			for _, key := range comparableReplayCallIDs(callID) {
+				index[key] = pending
+			}
+		}
+	}
+	return index
+}
+
+// hasReasoningBefore reports whether a reasoning item precedes position in the
+// input, which is what the upstream requires for a call to carry its proof.
+func hasReasoningBefore(input []interface{}, position int) bool {
+	for i := position - 1; i >= 0; i-- {
+		item, ok := input[i].(map[string]interface{})
+		if !ok {
+			return false
+		}
+		switch strings.TrimSpace(interfaceString(item["type"])) {
+		case "reasoning":
+			return strings.TrimSpace(interfaceString(item["encrypted_content"])) != ""
+		case "function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output", "message":
+			// A call boundary was reached without seeing the proof.
+			return false
+		}
+	}
+	return false
+}
+
+// backfillReasoningForCalls inserts the reasoning item that belongs to a
+// function_call the client echoed without its proof.
+//
+// This is the per-call counterpart of the whole-turn replay: a client that
+// resends only part of its history (or reorders it) still gets the proof the
+// upstream needs, instead of the upstream silently losing the reasoning chain.
+func backfillReasoningForCalls(input []interface{}, cached []interface{}) []interface{} {
+	if len(input) == 0 || len(cached) == 0 {
+		return input
+	}
+	index := reasoningForCalls(cached)
+	if len(index) == 0 {
+		return input
+	}
+	seen := map[string]bool{}
+	added := 0
+	out := make([]interface{}, 0, len(input))
+	for position, entry := range input {
+		item, ok := entry.(map[string]interface{})
+		if !ok {
+			out = append(out, entry)
+			continue
+		}
+		typeName := strings.TrimSpace(interfaceString(item["type"]))
+		if typeName == "function_call" || typeName == "custom_tool_call" {
+			callID := strings.TrimSpace(interfaceString(item["call_id"]))
+			for _, key := range comparableReplayCallIDs(callID) {
+				proof, exists := index[key]
+				if !exists || seen[key] || hasReasoningBefore(append(out, entry), position) {
+					continue
+				}
+				seen[key] = true
+				out = append(out, cloneReplayItems([]interface{}{proof})...)
+				added++
+				break
+			}
+		}
+		out = append(out, entry)
+	}
+	if added == 0 {
+		return input
+	}
+	return out
+}

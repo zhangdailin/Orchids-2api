@@ -107,6 +107,9 @@
 | A7-2 | statsig 的**签名**需要外部签名服务（上游由首页 metaContent + 签名器生成），本项目没有该依赖：已改为"配置有效则沿用、否则安全省略"，不再伪造 |
 | A2-6 | 原生 Responses 流的 `[DONE]`/重新分帧：项目的 relay 测试明确要求保留该行为（字节透明契约），见"保留差异" |
 | A5-42 | 无 `[]` 的 `timestamp_granularities`：本项目明确 400 而不是静默忽略（宁可报错也不静默丢选项），属有意保留 |
+| A4-11 | Build 账号目录不再用"合成 Composer / 4.6 时补 4.5 / 分级 video 1.5"补全：`provider.go` 明确注释"能力真相只来自上游目录"，补全等于本地上造能力并会随刷新重新发布 |
+| A5-2 | `/images/generations` 缺省 model 时回落到 `grok-imagine-image`（上游契约是 400）：本项目把它当作显式便利，管理端与前端都会传 model；若改为强制，需要同步改前端与文档 |
+| A5-4 / A5-5 / A5-7 | 图像 `resolution`/像素别名校验、URL 形态（相对路径 + publicBase 补全）、图像模型目录（quality 走 imagine-lite 上游）：三者都处在"两个实现各自可用但契约不同"的区间，改动会连带前端与客户端，保留并在审计报告留档 |
 | 其余 P2/P3 | 多为文案/字段集/边角校验差异（如流式图片事件 `size` 恒 auto、`/tts/voices` 未归一化、无 `[]` 的 `timestamp_granularities` 语义等），逐条列在 `docs/grok2api-parity-audit.md` 对应章节 |
 
 按批次给出后续方案，工作量从大到小：
@@ -332,3 +335,39 @@
 | A1-9 | `stop` 序列只在本地下发（控制台流/非流各有一个 stopFilter），不再同时写进上游 Responses 载荷：上游一旦自己截断，匹配到的 token 不会回来，客户端就拿不到 `stop_sequence`，而且该字段本不属于 Build/Console 线契约 | `responses_normalize.go` |
 | A5-41 | 复核：转录"不支持参数"已返回 `unsupported_parameter`（此前审计基于旧版本） | `handler_voice.go` |
 | A5-21 | 复核：Console DPoP 与媒体请求在 403 时都会 `lease.InvalidateClearance()` 并向出口层反馈 challenge，clearance 会重建（此前审计基于旧版本） | `dpop.go`、`client.go` |
+
+## 九、第六轮修复（8 条 + 2 条复核）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A4-12 | 从编译期目录移除已弃用的 `grok-imagine-image-pro`（它被 `IsDeprecatedModelID` 无条件拒绝，列出来只会让客户端选中一个必然失败的模型）；管理员 Imagine 入口把旧名映射到取代它的 `grok-imagine-image-quality` | `models.go`、`handler_images.go`、`admin_imagine.go` |
+| A4-13 | 公开 `/v1/models` 的 `created` 使用路由行真实创建时间（`store.Model.CreatedAt` 新增，创建/更新时补零值），旧数据回退原常量；`capabilities`/`provider`/`upstream_model` 保留（本项目控制台依赖它们显示路由与固定推理档位，属有意扩展） | `store/model.go`、`store/redis_store.go`、`handler/models.go` |
+| A4-14 | `grok-imagine-image-lite` 把 Basic 视为**最低可用档**而不是排除池：该模型候选顺序为 lite→basic→super→heavy，imagine-lite 取号路径不再显式过滤 basic，只有 Basic 账号的部署可以服务它 | `models.go`、`handler.go` |
+| A1-14 | 历史文本 part 统一用 `input_text`（助手历史原样发 `output_text` 会被上游拒绝） | `responses_normalize.go` |
+| A6-8 | 等负载账号之间改为**最久未选中优先**（LRU）：`LoadBalancer` 维护 `lastSelected`（加锁、懒初始化，避免与共享账号对象竞争），不再纯随机导致固定子集过热 | `loadbalancer.go` |
+| A6-10 | 换号预算默认 5→20、硬上限 20→100：坏池不再在少数账号后直接"retries exhausted"；账号级冷却本身限住重试，不会变成风暴 | `config.go`、`console.go`、`admin_imagine.go` |
+| A6-16 | 凭据失败（401/402/403/429/模型级 403/质量降级）时**解绑会话粘滞**：内存绑定立即删除，持久绑定用 1 秒 TTL 退役，下一轮不再回到刚失败的账号 | `session_state.go`、`handler.go` |
+| A8-14 | 客户端 Key 不再被隐式套用 60 RPM 默认值（0 = 不限速，由部署级准入控制保护）；过期 Key 的错误码与未知 Key 统一为 `invalid_api_key`（补救动作相同） | `store.go`、`middleware/session.go` |
+
+复核：**A4-10** 已修复（固定推理模型走显式分支判 true，仅 `none` 档位的模型判 false，与上游一致）；**A5-21** 已在早前修复（见复核补记）。
+
+## 十、第七轮修复（3 条 + 2 条保留）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A5-40 | TTS/STT 增加**账号级重试/故障转移**：一次语音请求最多换 3 个 Console 账号，只有账号类/上游类失败（401/402/403/429/5xx）才换号，调用方自己的参数错误（4xx 非上述）直接返回不重试 | `handler_voice.go` |
+| A6-13 | 永久失效凭据收敛：后台刷新循环跳过 `AuthStatus=reauthRequired` 或已停用的 OAuth 账号，不再每轮重复刷新、重复写同一条告警；运维重新登录即恢复（删除仍需人工决策，避免自动化删除账号） | `cmd/server/background.go` |
+| A6-12 | 刷新批量 5→25：千账号规模下按到期时间轮询一轮从"大半天"降到可控；循环之间仍有 500ms 间隔，不冲击上游 | `cmd/server/background.go` |
+
+保留（已记入第二节）：**A4-17**（Codex 未知模型 description 文案，客户端不解析）、**A6-14**（订阅/等级推断阈值：需要 auto/fast 两种窗口形态的数据模型才能正确改写，凭猜测改阈值比现状更糟，留作后续）。
+
+## 十一、第八轮修复（4 条）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A9-13 | 新增**按 call_id 的推理证明回填**：缓存的一轮里，"某个 function_call 之前的那条 reasoning"会按它的 call_id 建索引；当客户端只回传部分历史（或漏掉证明块）时，缺失的证明会补回对应调用之前，已带证明或未知 call_id 不动。这是整轮回放的按调用粒度补充，覆盖多轮工具循环中被丢弃推理链的场景 | `reasoning_replay_items.go`、`session_state.go`、`responses_normalize.go` |
+| A3-14 | `GET /responses/{id}/input_items` 现在能给出完整对话：存储记录新增 `PreviousResponseID` 链，保存时把祖先响应（最多 8 层，去环）的输入项折叠进来，不再只返回本轮输入 | `handler_responses_store.go`、`store/store.go` |
+| A6-9 | 大池改为**轮转窗口扫描**：超过 64 个账号时只检查一段窗口并向前推进，窗口内无可选账号才回退全量扫描——每请求不再为上千账号做全量可用性检查，同时保证每个账号仍会被扫到 | `loadbalancer.go` |
+| A4-16 | 控制台前端兜底模型清单换成当前在售模型（默认 `grok-4.6`，含 4.5/4.3 及其档位别名）：旧清单整份都是已弃用 ID，接口拉取失败时会把会话预置成一个必然被拒的模型；同时同步重新生成 `grok-tools.min.js` | `web/static/js/grok-tools.js`、`grok-tools.min.js` |
+
+保留（已记入第二节）：**A4-15**（管理端模型接口形状：分页信封/分组/同步端点，改动需连同管理前端一起做，属对外管理契约）、**A4-17**（Codex 未知模型 description 文案，客户端不解析）、**A6-14**（订阅/等级推断需要 auto/fast 两套窗口形态的数据模型，凭猜测改阈值会更糟）。

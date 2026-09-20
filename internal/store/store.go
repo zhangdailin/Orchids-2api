@@ -393,9 +393,13 @@ type StoredResponse struct {
 	// list rather than failing, and previous_response_id expansion is unaffected
 	// because it reads Body.
 	InputItems json.RawMessage `json:"input_items,omitempty"`
-	ExpiresAt  time.Time       `json:"expires_at"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	// PreviousResponseID links a continuation to the response it continued, so
+	// the stored input list can report the whole conversation instead of only
+	// the last turn.
+	PreviousResponseID string    `json:"previous_response_id,omitempty"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // StoredReasoningReplay contains one opaque encrypted reasoning item. The key
@@ -955,16 +959,17 @@ func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error
 	if key.ExpiresAt != nil && !now.Before(key.ExpiresAt.UTC()) {
 		return nil, ErrApiKeyExpired
 	}
-	rpm := key.RPMLimit
-	if rpm <= 0 {
-		rpm = 60
-	}
-	allowed, err := s.apiKeys.ConsumeApiKeyRPM(ctx, key.ID, rpm, now)
-	if err != nil {
-		return nil, err
-	}
-	if !allowed {
-		return nil, ErrApiKeyRateLimited
+	// A key without an explicit per-minute limit has none. A silent 60 RPM
+	// default throttled a caller that never asked for a limit; the deployment's
+	// admission control is what protects the gateway.
+	if rpm := key.RPMLimit; rpm > 0 {
+		allowed, err := s.apiKeys.ConsumeApiKeyRPM(ctx, key.ID, rpm, now)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			return nil, ErrApiKeyRateLimited
+		}
 	}
 	key.LastUsedAt = &now
 	return key, nil

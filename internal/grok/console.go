@@ -493,15 +493,20 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 	}, payload, resp, err)
 }
 
+const (
+	defaultAccountSwitchBudget = 20
+	maxAccountSwitchBudget     = 100
+)
+
 // retryWithAccountSwitch runs a request in a bounded loop, switching to
 // the next account whenever shouldSwitchGrokAccount fires. doRequest issues the
 // request against the current session; openNext returns its replacement.
 // onSwitch runs after each successful account swap (e.g. to rebuild the request
 // payload for the new account).
 func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountSession, switchPace time.Duration, doRequest func() (*http.Response, error), openNext func(used []int64) (*chatAccountSession, error), onSwitch func() error) (*http.Response, error) {
-	maxAttempts := 5
+	maxAttempts := defaultAccountSwitchBudget
 	if h != nil && h.configSnapshot() != nil && h.configSnapshot().AccountSwitchCount > 0 {
-		maxAttempts = min(h.configSnapshot().AccountSwitchCount, 20)
+		maxAttempts = min(h.configSnapshot().AccountSwitchCount, maxAccountSwitchBudget)
 	}
 
 	used := make([]int64, 0)

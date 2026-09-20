@@ -51,7 +51,11 @@ var (
 )
 
 const (
-	maxGrokRefreshPerCycle = 5
+	// maxGrokRefreshPerCycle bounds how many credentials one refresh cycle
+	// touches. Five per thirty-minute cycle meant a thousand-account pool took
+	// most of a day to verify once; the cycle pauses between accounts, so a
+	// larger batch still paces the upstream.
+	maxGrokRefreshPerCycle = 25
 	grokRefresh429Backoff  = 10 * time.Minute
 	grokRefreshPause       = 500 * time.Millisecond
 	// Credential expiry checks may tick every minute, but provider identity and
@@ -701,6 +705,14 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 			// lifecycle; SSO accounts check once per unique token.
 			if strings.EqualFold(acc.AccountType, "grok") {
 				if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+					// A credential the upstream already refused needs a human, not
+					// another refresh. Skipping it here is the convergence step: it
+					// stops consuming refresh cycles and writing the same warning
+					// every interval until an operator logs in again (which restores
+					// the active state).
+					if !store.AccountAuthActive(acc) || !acc.Enabled {
+						continue
+					}
 					refreshCLIAccount(refreshCtx, cfg, s, acc)
 				} else {
 					grokRefreshQueue = append(grokRefreshQueue, acc)

@@ -62,23 +62,21 @@
     abortController: null,
     renderFrame: 0,
     sidebarOpen: false,
-    model: "grok-4.20-0309-non-reasoning",
+    // The list below is only a placeholder for the moment before the model
+    // catalog loads (or when it cannot be fetched). Every id here must be one
+    // the backend serves: the previous list was made entirely of retired
+    // models, so a failed fetch left the tool preconfigured with a request the
+    // gateway rejects.
+    model: "grok-4.6",
     models: [
-      "grok-4.20-0309-non-reasoning",
-      "grok-4.20-0309",
-      "grok-4.20-0309-reasoning",
-      "grok-4.20-0309-non-reasoning-super",
-      "grok-4.20-0309-super",
-      "grok-4.20-0309-reasoning-super",
-      "grok-4.20-0309-non-reasoning-heavy",
-      "grok-4.20-0309-heavy",
-      "grok-4.20-0309-reasoning-heavy",
-      "grok-4.20-multi-agent-0309",
-      "grok-4.20-fast",
-      "grok-4.20-auto",
-      "grok-4.20-expert",
-      "grok-4.20-heavy",
-      "grok-4.3-beta",
+      "grok-4.6",
+      "grok-4.5",
+      "grok-4.5-low",
+      "grok-4.5-high",
+      "grok-4.3",
+      "grok-4.3-low",
+      "grok-4.3-high",
+      "grok-composer-2.5-fast",
     ],
     capabilities: { chat: false, imagine: false, video: false, voice: false },
     modelsLoaded: false,
@@ -1836,12 +1834,15 @@
     });
   }
 
+  // Preference order for the app-chat plane. The retired 4.20 ids that used to
+  // head this list are no longer served, so a saved selection pointing at one
+  // of them is replaced by the first model the catalog actually reports.
   function preferredAppChatModel(models) {
     const list = Array.isArray(models) ? models : [];
-    for (const model of ["grok-4.20-0309-non-reasoning", "grok-4.20-fast", "grok-4.20-0309"]) {
+    for (const model of ["grok-4.6", "grok-4.5", "grok-4.3"]) {
       if (list.includes(model)) return model;
     }
-    return list[0] || "grok-4.20-0309-non-reasoning";
+    return list[0] || "grok-4.6";
   }
 
   async function loadChatModels() {

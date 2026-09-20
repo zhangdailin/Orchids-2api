@@ -334,7 +334,12 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.ImageMediumMinBytes = 30000
 	cfg.MaxRetries = boundedDefault(cfg.MaxRetries, 3, 20)
 	cfg.RetryDelay = boundedDefault(cfg.RetryDelay, 1000, 60000)
-	cfg.AccountSwitchCount = boundedDefault(cfg.AccountSwitchCount, 5, 20)
+	// How many accounts one request may rotate through before it gives up.
+	// The reference implementation allows far more; a ceiling of twenty made a
+	// bad pool fail visibly ("retries exhausted") while equivalent accounts were
+	// still available. Account-level cooldowns bound the retries, so a larger
+	// budget does not turn into a retry storm.
+	cfg.AccountSwitchCount = boundedDefault(cfg.AccountSwitchCount, 20, 100)
 	// A long reasoning or tool-using turn is legitimate: the reference
 	// implementation allows two hours, and a ten minute ceiling cut such a turn
 	// short while the per-channel stream-idle watchdog already bounds a stalled

@@ -2,6 +2,7 @@ package grok
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -763,7 +764,26 @@ func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, mo
 // endpoint; a rewriter is used where the response shape is part of the public
 // contract (the voice list).
 func (h *Handler) forwardConsoleVoiceWith(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header, rewriteJSON func([]byte) []byte) {
-	resp, sess, err := h.doConsoleVoice(r, modelID, method, path, body, headers)
+	// A voice request used to be sent to exactly one account. A 402/429/5xx is
+	// an account-scoped condition (the same allowance the chat path rotates on),
+	// so the request is retried on another account before the caller sees an
+	// error.
+	var (
+		resp *http.Response
+		sess *chatAccountSession
+		err  error
+		used []int64
+	)
+	for attempt := 0; attempt < maxVoiceAccountAttempts; attempt++ {
+		resp, sess, err = h.doConsoleVoiceExcluding(r, used, modelID, method, path, body, headers)
+		if err == nil || !retryableVoiceError(err) || sess == nil {
+			break
+		}
+		used = append(used, sess.acc.ID)
+		sess.Close()
+		sess = nil
+		resp = nil
+	}
 	if sess != nil {
 		defer sess.Close()
 	}
@@ -792,6 +812,25 @@ func (h *Handler) forwardConsoleVoiceWith(w http.ResponseWriter, r *http.Request
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(rewriteJSON(raw))
+}
+
+// maxVoiceAccountAttempts bounds how many accounts one voice request may try.
+const maxVoiceAccountAttempts = 3
+
+// retryableVoiceError reports whether a failed voice attempt may succeed on a
+// different account: an allowance or credential refusal, or an upstream fault.
+// A request the upstream rejected on its merits is not retried.
+func retryableVoiceError(err error) bool {
+	var typed *consoleVoiceRequestError
+	if !errors.As(err, &typed) {
+		return false
+	}
+	switch typed.status {
+	case http.StatusPaymentRequired, http.StatusForbidden, http.StatusUnauthorized,
+		http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusBadGateway:
+		return true
+	}
+	return typed.status >= 500
 }
 
 // maxVoiceJSONBytes bounds a rewritten JSON voice response.
@@ -835,12 +874,16 @@ func normalizeTTSVoices(raw []byte) []byte {
 }
 
 func (h *Handler) doConsoleVoice(r *http.Request, modelID, method, path string, body []byte, headers http.Header) (*http.Response, *chatAccountSession, error) {
+	return h.doConsoleVoiceExcluding(r, nil, modelID, method, path, body, headers)
+}
+
+func (h *Handler) doConsoleVoiceExcluding(r *http.Request, excludeIDs []int64, modelID, method, path string, body []byte, headers http.Header) (*http.Response, *chatAccountSession, error) {
 	if h == nil || h.currentClient() == nil {
 		return nil, nil, &consoleVoiceRequestError{
 			status: http.StatusServiceUnavailable, code: "service_unavailable", err: fmt.Errorf("grok client not configured"),
 		}
 	}
-	sess, err := h.openConsoleAccountSession(r.Context(), nil, modelID)
+	sess, err := h.openConsoleAccountSession(r.Context(), excludeIDs, modelID)
 	if err != nil {
 		return nil, nil, &consoleVoiceRequestError{
 			status: http.StatusServiceUnavailable, code: "account_unavailable", err: fmt.Errorf("no available Grok Console account: %w", err),

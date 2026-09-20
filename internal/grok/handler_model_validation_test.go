@@ -385,13 +385,16 @@ func TestOpenChatAccountSessionForImageLiteSkipsBasicPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open image lite session error=%v", err)
 	}
+	// Basic is the minimum tier for this model, so it is an eligible fallback
+	// rather than an excluded pool; the lite credential is still preferred by
+	// the tier ordering.
 	if NormalizeSSOToken(sess.token) != "lite-token" {
 		t.Fatalf("token=%q want sso lite-token", sess.token)
 	}
 	sess.Close()
 }
 
-func TestOpenChatAccountSessionForImagineLiteSkipsBasicPool(t *testing.T) {
+func TestOpenChatAccountSessionForImagineLiteFallsBackToBasicPool(t *testing.T) {
 	h2, s2, mini2 := setupValidationHandler(t)
 	defer func() {
 		_ = s2.Close()
@@ -428,10 +431,14 @@ func TestOpenChatAccountSessionForImagineLiteSkipsBasicPool(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateAccount(basic only) error = %v", err)
 	}
+	// A basic-only deployment can serve image lite: basic is its minimum tier.
 	next, err := h3.openChatAccountSessionForImagineLite(context.Background(), nil, spec)
-	if err == nil {
-		defer next.Close()
-		t.Fatalf("open image lite with only basic unexpectedly succeeded token=%q", next.token)
+	if err != nil {
+		t.Fatalf("open image lite with only basic error=%v", err)
+	}
+	defer next.Close()
+	if NormalizeSSOToken(next.token) != "basic-only-token" {
+		t.Fatalf("token=%q want sso basic-only-token", next.token)
 	}
 }
 
@@ -497,7 +504,7 @@ func TestOpenChatAccountSessionForImageLiteLitePoolDoesNotRequireFullBrowserCook
 	}
 }
 
-func TestOpenChatAccountSessionForImagineLiteSkipsCoolingLiteWithoutBasicFallback(t *testing.T) {
+func TestOpenChatAccountSessionForImagineLiteFallsBackToBasic(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -518,9 +525,12 @@ func TestOpenChatAccountSessionForImagineLiteSkipsCoolingLiteWithoutBasicFallbac
 		t.Fatal("missing grok-imagine-image-lite spec")
 	}
 	sess, err := h.openChatAccountSessionForImagineLite(context.Background(), nil, spec)
-	if err == nil {
-		defer sess.Close()
-		t.Fatalf("open image lite with cooling lite and basic unexpectedly succeeded token=%q", sess.token)
+	if err != nil {
+		t.Fatalf("a basic credential must serve image lite when lite is cooling: %v", err)
+	}
+	defer sess.Close()
+	if NormalizeSSOToken(sess.token) != "basic-token" {
+		t.Fatalf("token=%q want sso basic-token", sess.token)
 	}
 }
 
@@ -545,13 +555,16 @@ func TestOpenChatAccountSessionForImageLiteSkipsCoolingLiteWithoutBasicFallback(
 		t.Fatal("missing grok-imagine-image-lite spec")
 	}
 	sess, err := h.openChatAccountSessionForModel(context.Background(), spec)
-	if err == nil {
-		defer sess.Close()
-		t.Fatalf("open image lite with cooling lite and basic unexpectedly succeeded token=%q", sess.token)
+	if err != nil {
+		t.Fatalf("a basic credential must serve image lite as the minimum tier: %v", err)
+	}
+	defer sess.Close()
+	if NormalizeSSOToken(sess.token) != "basic-token" {
+		t.Fatalf("token=%q want sso basic-token", sess.token)
 	}
 }
 
-func TestOpenChatAccountSessionForImageLiteTierOverrideSkipsCoolingLiteWithoutBasicFallback(t *testing.T) {
+func TestOpenChatAccountSessionForImageLiteTierOverrideFallsBackPastCoolingLite(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -578,6 +591,8 @@ func TestOpenChatAccountSessionForImageLiteTierOverrideSkipsCoolingLiteWithoutBa
 		t.Fatalf("open tier-overridden image lite session error=%v", err)
 	}
 	defer sess.Close()
+	// The cooling lite credential is skipped; the tier-override order still
+	// prefers super over the basic fallback, which stays last for this model.
 	if NormalizeSSOToken(sess.token) != "super-token" {
 		t.Fatalf("token=%q want sso super-token", sess.token)
 	}

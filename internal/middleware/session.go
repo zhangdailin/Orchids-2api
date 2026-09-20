@@ -16,7 +16,10 @@ import (
 )
 
 const (
-	APIKeyDenialExpired     = "api_key_expired"
+	// An expired or disabled key is reported with the same code an unknown key
+	// gets: the caller's remedy is identical (replace the key), and a distinct
+	// code only invited clients to special-case it.
+	APIKeyDenialExpired     = "invalid_api_key"
 	APIKeyDenialRateLimited = "rate_limit_exceeded"
 )
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -30,8 +31,16 @@ type PublicModelsListResponse struct {
 	Data   []PublicModelResponse `json:"data"`
 }
 
-func publicModelResponse(id, ownedBy string) PublicModelResponse {
-	return PublicModelResponse{ID: id, Object: "model", Created: 1677610602, OwnedBy: ownedBy}
+// legacyModelCreated is the placeholder the API used before a route row carried
+// its own creation time. It stays only for rows stored by an older build.
+const legacyModelCreated = 1677610602
+
+func publicModelResponse(id, ownedBy string, createdAt time.Time) PublicModelResponse {
+	created := int64(legacyModelCreated)
+	if !createdAt.IsZero() {
+		created = createdAt.Unix()
+	}
+	return PublicModelResponse{ID: id, Object: "model", Created: created, OwnedBy: ownedBy}
 }
 
 func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
@@ -173,7 +182,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		entry := publicModelResponse(m.ModelID, mChannel)
+		entry := publicModelResponse(m.ModelID, mChannel, m.CreatedAt)
 		entry.Capabilities = m.Capabilities
 		entry.Provider = m.Provider
 		entry.UpstreamModel = m.UpstreamModel
@@ -278,7 +287,7 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := publicModelResponse(m.ModelID, mChannel)
+	resp := publicModelResponse(m.ModelID, mChannel, m.CreatedAt)
 
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		apperrors.New("api_error", "Failed to encode response", http.StatusInternalServerError).WriteResponse(w)

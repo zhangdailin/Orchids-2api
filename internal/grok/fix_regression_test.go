@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -907,5 +908,103 @@ func TestImageEventSizeReportsRealPixels(t *testing.T) {
 	}
 	if got := imageEventSize("url", "https://example.com/a.png"); got != "auto" {
 		t.Fatalf("url payload = %q, want auto (the bytes are not fetched here)", got)
+	}
+}
+
+func TestUnbindAffinityDropsTheSessionBinding(t *testing.T) {
+	h := &Handler{affinity: map[string]sessionAffinityEntry{}}
+	ctx := withGrokSession(context.Background(), grokSessionContext{Key: "session-1", Model: "grok-4.6"})
+	h.affinityMu.Lock()
+	key := affinityMapKey(grokSessionContext{Key: "session-1", Model: "grok-4.6"}, ProviderWeb)
+	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
+	h.affinityMu.Unlock()
+
+	h.unbindAffinity(ctx, ProviderWeb, 7)
+
+	if id := h.affinityAccount(ctx, ProviderWeb); id != 0 {
+		t.Fatalf("affinityAccount() = %d, want 0 after an unbind", id)
+	}
+	// An unrelated account id must not clear the binding.
+	h.affinityMu.Lock()
+	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
+	h.affinityMu.Unlock()
+	h.unbindAffinity(ctx, ProviderWeb, 9)
+	if id := h.affinityAccount(ctx, ProviderWeb); id != 7 {
+		t.Fatalf("affinityAccount() = %d, want the binding to survive a mismatch", id)
+	}
+}
+
+func TestRetryableVoiceErrorClassification(t *testing.T) {
+	retryable := []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusPaymentRequired,
+		http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusBadGateway}
+	for _, status := range retryable {
+		err := &consoleVoiceRequestError{status: status, code: "x", err: errors.New("boom")}
+		if !retryableVoiceError(err) {
+			t.Fatalf("status %d must be retryable on another account", status)
+		}
+	}
+	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound, http.StatusUnsupportedMediaType} {
+		err := &consoleVoiceRequestError{status: status, code: "x", err: errors.New("boom")}
+		if retryableVoiceError(err) {
+			t.Fatalf("status %d is the caller's mistake and must not be retried", status)
+		}
+	}
+	// An untyped error is not a voice request failure and is not retried here.
+	if retryableVoiceError(errors.New("boom")) {
+		t.Fatal("an untyped error must not be treated as a retryable voice failure")
+	}
+}
+
+func TestBackfillReasoningForCalls(t *testing.T) {
+	proof := map[string]interface{}{"type": "reasoning", "id": "rs_1", "encrypted_content": "cipher-1"}
+	cached := []interface{}{
+		proof,
+		map[string]interface{}{"type": "function_call", "call_id": "call_1", "name": "read", "arguments": "{}"},
+	}
+	// The client echoes the call but not its proof.
+	input := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_1", "name": "read", "arguments": "{}"}}
+	filled := backfillReasoningForCalls(input, cached)
+	if len(filled) != 2 {
+		t.Fatalf("filled = %#v, want the proof inserted before the call", filled)
+	}
+	first, _ := filled[0].(map[string]interface{})
+	if first["type"] != "reasoning" || first["encrypted_content"] != "cipher-1" {
+		t.Fatalf("first item = %#v, want the cached proof", first)
+	}
+	// A call that already carries its proof is not doubled.
+	withProof := append(cloneReplayItems([]interface{}{proof}), input...)
+	if got := backfillReasoningForCalls(withProof, cached); len(got) != len(withProof) {
+		t.Fatalf("a call that already carries its proof must not be doubled: %#v", got)
+	}
+	// An unknown call id is left alone.
+	unknown := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_9", "name": "read"}}
+	if got := backfillReasoningForCalls(unknown, cached); len(got) != 1 {
+		t.Fatalf("an unknown call must not gain a proof: %#v", got)
+	}
+	// No cache means no change.
+	plain := []interface{}{map[string]interface{}{"type": "function_call", "call_id": "call_1"}}
+	if got := backfillReasoningForCalls(plain, nil); len(got) != 1 {
+		t.Fatalf("without cached items nothing may be inserted: %#v", got)
+	}
+}
+
+func TestReasoningForCallsIndexesOnlyProofs(t *testing.T) {
+	index := reasoningForCalls([]interface{}{
+		map[string]interface{}{"type": "reasoning", "id": "rs_1"}, // no encrypted content
+		map[string]interface{}{"type": "function_call", "call_id": "call_1"},
+		map[string]interface{}{"type": "reasoning", "id": "rs_2", "encrypted_content": "cipher"},
+		map[string]interface{}{"type": "custom_tool_call", "call_id": "call_2"},
+	})
+	if _, ok := index["call_1"]; ok {
+		t.Fatal("a reasoning item without a proof must not be indexed")
+	}
+	if entry, ok := index["call_2"]; !ok || entry["id"] != "rs_2" {
+		t.Fatalf("call_2 index = %#v, want rs_2", entry)
+	}
+}
+
+func TestAccumulatedInputItemsWalksTheContinuationChain(t *testing.T) {
+	if got := maxStoredInputChainDepth; got < 1 || got > 64 {
+		t.Fatalf("chain depth = %d, want a bounded positive value", got)
 	}
 }

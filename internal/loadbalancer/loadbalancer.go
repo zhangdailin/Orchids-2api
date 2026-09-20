@@ -56,6 +56,13 @@ type LoadBalancer struct {
 	cacheTTL       time.Duration
 	connTracker    ConnTracker
 	sfGroup        singleflight.Group
+	// scanCursor rotates the window a large pool is examined through.
+	scanCursor int
+	// lastSelected remembers when each account was last handed out, for the
+	// least-recently-used tie-break. It is kept here rather than on the account
+	// because the cached account objects are shared by concurrent callers.
+	lastSelected map[int64]time.Time
+	selectedMu   sync.Mutex
 }
 
 func NewWithCacheTTL(s *store.Store, cacheTTL time.Duration) *LoadBalancer {
@@ -63,10 +70,28 @@ func NewWithCacheTTL(s *store.Store, cacheTTL time.Duration) *LoadBalancer {
 		cacheTTL = defaultCacheTTL
 	}
 	return &LoadBalancer{
-		Store:       s,
-		cacheTTL:    cacheTTL,
-		connTracker: NewMemoryConnTracker(),
+		Store:        s,
+		cacheTTL:     cacheTTL,
+		connTracker:  NewMemoryConnTracker(),
+		lastSelected: make(map[int64]time.Time),
 	}
+}
+
+// accountScanWindow bounds how many accounts one selection examines before it
+// falls back to the whole pool.
+const accountScanWindow = 64
+
+// rotateScanCursor advances the window start so successive requests cover the
+// pool instead of always looking at its head.
+func (lb *LoadBalancer) rotateScanCursor(size int) int {
+	if size <= 0 {
+		return 0
+	}
+	lb.selectedMu.Lock()
+	defer lb.selectedMu.Unlock()
+	start := lb.scanCursor % size
+	lb.scanCursor = (start + accountScanWindow) % size
+	return start
 }
 
 // SetConnTracker replaces the default in-memory connection tracker.
@@ -92,30 +117,51 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 		excludeSet[id] = true
 	}
 
-	for _, acc := range accounts {
-		if excludeSet[acc.ID] {
-			continue
+	// A large pool is examined in rotating windows rather than in full. Every
+	// request paying for a scan and availability check of thousands of accounts
+	// is what made the pool expensive to grow; the window wraps, so every
+	// account is still reachable, and a window that yields nothing falls back to
+	// the full list so correctness never depends on the window size.
+	scanned := accounts
+	if len(accounts) > accountScanWindow {
+		start := lb.rotateScanCursor(len(accounts))
+		scanned = make([]*store.Account, 0, accountScanWindow)
+		for offset := 0; offset < accountScanWindow; offset++ {
+			scanned = append(scanned, accounts[(start+offset)%len(accounts)])
 		}
-		if channel != "" {
-			accType := acc.AccountType
-			if strings.TrimSpace(accType) == "" {
+	}
+
+	scan := func(candidates []*store.Account) bool {
+		for _, acc := range candidates {
+			if excludeSet[acc.ID] {
 				continue
 			}
-			if !strings.EqualFold(accType, channel) && !strings.EqualFold(acc.AgentMode, channel) {
+			if channel != "" {
+				accType := acc.AccountType
+				if strings.TrimSpace(accType) == "" {
+					continue
+				}
+				if !strings.EqualFold(accType, channel) && !strings.EqualFold(acc.AgentMode, channel) {
+					continue
+				}
+			}
+			if filter != nil && !filter(acc) {
 				continue
 			}
-		}
-		if filter != nil && !filter(acc) {
-			continue
-		}
-		channelMatched++
-		if !lb.isAccountAvailable(ctx, acc) {
-			if strings.TrimSpace(acc.StatusCode) == "429" {
-				rateLimitedUnavailable++
+			channelMatched++
+			if !lb.isAccountAvailable(ctx, acc) {
+				if strings.TrimSpace(acc.StatusCode) == "429" {
+					rateLimitedUnavailable++
+				}
+				continue
 			}
-			continue
+			filtered = append(filtered, acc)
 		}
-		filtered = append(filtered, acc)
+		return len(filtered) > 0
+	}
+	if !scan(scanned) && len(scanned) != len(accounts) {
+		// Nothing usable in this window: fall back to the whole pool once.
+		scan(accounts)
 	}
 	accounts = filtered
 
@@ -267,7 +313,42 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		return nil
 	}
 
-	return bestAccounts[rand.IntN(len(bestAccounts))]
+	// Among equally loaded accounts prefer the one that has been idle longest.
+	// Random tie-breaking kept selecting the same low-latency accounts while
+	// others were never tried, which shows up as a hot subset in the pool.
+	// Accounts never handed out sort first, so a fresh account is tried.
+	lb.selectedMu.Lock()
+	defer lb.selectedMu.Unlock()
+	if lb.lastSelected == nil {
+		// A LoadBalancer built as a struct literal (tests, embedders) has no map.
+		lb.lastSelected = make(map[int64]time.Time)
+	}
+	var unseen, coldest []*store.Account
+	var oldest time.Time
+	for _, acc := range bestAccounts {
+		last, seen := lb.lastSelected[acc.ID]
+		if !seen {
+			unseen = append(unseen, acc)
+			continue
+		}
+		switch {
+		case coldest == nil || last.Before(oldest):
+			oldest = last
+			coldest = []*store.Account{acc}
+		case last.Equal(oldest):
+			coldest = append(coldest, acc)
+		}
+	}
+	pool := unseen
+	if len(pool) == 0 {
+		pool = coldest
+	}
+	if len(pool) == 0 {
+		pool = bestAccounts
+	}
+	picked := pool[rand.IntN(len(pool))]
+	lb.lastSelected[picked.ID] = time.Now()
+	return picked
 }
 
 func (lb *LoadBalancer) AcquireConnection(accountID int64) {

@@ -400,3 +400,46 @@ func TestMarkAccountStatus_Repeated429RefreshesCooldownStart(t *testing.T) {
 		t.Fatalf("second 429 failures=%d cooldown=%v want about 1m", acc.RateLimitFailures, remaining)
 	}
 }
+
+func TestSelectAccountRotatesAcrossEqualAccounts(t *testing.T) {
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	accounts := []*store.Account{
+		{ID: 1, Name: "a", Weight: 1},
+		{ID: 2, Name: "b", Weight: 1},
+		{ID: 3, Name: "c", Weight: 1},
+	}
+	seen := map[int64]int{}
+	for i := 0; i < 30; i++ {
+		acc := lb.selectAccountWithTracker(accounts, nil)
+		if acc == nil {
+			t.Fatal("nil account")
+		}
+		seen[acc.ID]++
+	}
+	if len(seen) != 3 {
+		t.Fatalf("selection hit only %d accounts; equally loaded accounts must rotate", len(seen))
+	}
+	for id, count := range seen {
+		if count < 5 {
+			t.Fatalf("account %d selected %d times out of 30; rotation is too uneven", id, count)
+		}
+	}
+}
+
+func TestLargePoolIsScannedInRotatingWindows(t *testing.T) {
+	if accountScanWindow < 8 {
+		t.Fatalf("window %d is too small to be useful", accountScanWindow)
+	}
+	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
+	size := accountScanWindow * 3
+	seen := map[int]bool{}
+	for i := 0; i < size; i++ {
+		start := lb.rotateScanCursor(size)
+		for offset := 0; offset < accountScanWindow; offset++ {
+			seen[(start+offset)%size] = true
+		}
+	}
+	if len(seen) != size {
+		t.Fatalf("rotating windows covered %d of %d accounts", len(seen), size)
+	}
+}

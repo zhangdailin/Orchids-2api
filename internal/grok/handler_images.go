@@ -100,7 +100,7 @@ func (h *Handler) HandleImagesGenerations(w http.ResponseWriter, r *http.Request
 	}
 	req.ResponseFormat = normalizeImageResponseFormat(req.ResponseFormat)
 	if !isImageGenerationModel(req.Model) {
-		writeGrokError(w, http.StatusBadRequest, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0, grok-imagine-image-quality, grok-imagine-image-pro]")
+		writeGrokError(w, http.StatusBadRequest, "image generation model must be one of [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0, grok-imagine-image-quality]")
 		return
 	}
 	ratio, ratioErr := normalizeImageAspectRatio(req.AspectRatio, req.Size)
@@ -158,7 +158,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 
 	spec, ok := ResolveModel(req.Model)
 	if !ok || !spec.IsImage || !isImageGenerationModel(spec.ID) {
-		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0, grok-imagine-image-quality, grok-imagine-image-pro]", req.Model))
+		writeGrokError(w, http.StatusBadRequest, fmt.Sprintf("The model `%s` is not supported for image generation. Supported: [grok-imagine-image-lite, grok-imagine-image, grok-imagine-image-2.0, grok-imagine-image-quality]", req.Model))
 		return
 	}
 	spec = h.applyPersistedRoute(ctx, spec)
@@ -205,7 +205,7 @@ func (h *Handler) serveImagesGenerations(ctx context.Context, w http.ResponseWri
 
 func imagineWSProModel(modelID string) bool {
 	switch normalizeModelID(modelID) {
-	case "grok-imagine-image-2.0", "grok-imagine-image-quality", "grok-imagine-image-pro":
+	case "grok-imagine-image-2.0", "grok-imagine-image-quality":
 		return true
 	default:
 		return false

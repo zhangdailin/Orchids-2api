@@ -1703,6 +1703,9 @@ func (s *redisStore) CreateModel(ctx context.Context, m *Model) error {
 		return err
 	}
 	m.ID = strconv.FormatInt(id, 10)
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now().UTC()
+	}
 
 	data, err := json.Marshal(m)
 	if err != nil {
@@ -1721,6 +1724,9 @@ func (s *redisStore) CreateModel(ctx context.Context, m *Model) error {
 }
 
 func (s *redisStore) UpdateModel(ctx context.Context, m *Model) error {
+	if m != nil && m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now().UTC()
+	}
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
 	}
