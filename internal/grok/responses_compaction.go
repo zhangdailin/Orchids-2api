@@ -762,7 +762,12 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 			if attempt < gatewayCompactionMaxAttempts && waitGatewayCompactionRetry(r.Context(), gatewayCompactionRetryPause) {
 				continue
 			}
-			fail(upstreamHTTPResponseStatus(callErr), "upstream_error", callErr.Error())
+			// The comment above says the client never sees upstream prose from this
+			// path; that is true once the failure goes through the shared sanitizer
+			// (err.Error() used to leak it here).
+			slog.Warn("Reporting an upstream failure to the client", "error", callErr,
+				"status", upstreamHTTPResponseStatus(callErr))
+			fail(upstreamHTTPResponseStatus(callErr), "upstream_error", grokUpstreamFailureMessage(callErr))
 			return
 		}
 		h.syncGrokQuota(sess.acc, resp.Header)

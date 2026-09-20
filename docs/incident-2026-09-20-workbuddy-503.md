@@ -124,10 +124,27 @@ this channel has exhausted its allowance. Add credits or accounts, or wait for t
 | 多 pool 选号时只在错误含 `rate-limited or cooling down` 时才替换 `lastErr`，额度耗尽/并发原因会被更早的空错误压掉 → 客户端收到无法解释的 503 | `internal/grok/handler.go` | 改为"带原因的优先于不带原因的"（`carriesPoolReason`） |
 | 测试 | `internal/grok/pool_error_test.go` | 6 种原因的状态/文案/类型 + "内部说明不得进响应"；`videoJobFailureMessage` 的池子/非池子分支 |
 
-边界（有意保留，不是遗漏）：**上游自己写的错误文本**（非池子内部状态）仍按各平面既有语义透传
-（如 `upstream_error` + `err.Error()`，`handler_responses_store.go:263`、`handler_voice.go:960`），
-这与"池子内部说明绝不外发"是两件事；如果希望连上游散文也统一净化（`apperrors.PublicMessage`），
-可以再单独做一轮。
+### 1.6 上游散文一并净化（第三轮）
+
+按部署方选择，`upstream_error` 路径也不再透传上游自己写的原文。此前各平面并不一致：
+chat/images/videos/console 走 `writeGrokUpstreamError`（`apperrors.PublicMessage` + 类别状态 + 保留
+`Retry-After`），而 Responses/voice 平面直接写 `err.Error()`，把
+`grok cli upstream status=403 body={"error":{"code":7,…}}` 这类内容发给客户端。
+
+| 原状 | 文件 | 现在 |
+| --- | --- | --- |
+| 上游失败 → `writeResponsesAPIError(…, "upstream_error", err.Error())` | `handler_responses_store.go`（2 处）、`handler_voice_ws.go`、`responses_compaction.go` | `writeGrokUpstreamFailure` / `grokUpstreamFailureMessage`：状态保持调用方算出的值，文案换成共享类别句，原文进日志 |
+| voice 转发把上游 error 直接塞进 typed error | `handler_voice.go` | 构造时就净化；`writeConsoleVoiceRequestError` 的兜底分支同样处理 |
+| **异步**视频任务把上游原文存进 `job.Error.message`（客户端 GET 200 读到） | `handler_videos.go` | `videoJobFailureMessage` 对上游失败返回类别句；本地失败（部件缺失、任务中断）保留自身文案，`error_code` 仍是机器可读的种类 |
+| 测试 | `internal/grok/pool_error_test.go` | 新增 `TestWriteGrokUpstreamFailure_KeepsProseOutOfTheBody`（状态保持 + 散文不得入 body + 本地错误保留文案），并扩展 `videoJobFailureMessage` 的上游/本地分支 |
+
+**仍保留（有意）**：调用方自己的错误（`invalid_request_error`、错的方法、multipart 参数）保留精确文案——
+把它压成"上游失败"会藏掉调用方唯一能修的东西；`isUpstreamFailure` 就是这条分界线（与
+`writeGrokUpstreamError` 同一判据）。
+
+**待办（等并行改动落地后一行即可）**：`internal/handler/models.go:192` 的
+`"Failed to fetch models: " + err.Error()`（500）会把存储层错误发给 `/v1/models` 调用方；
+该文件当前有未提交的并行改动，动它会在对方提交时丢失，故留待合并后处理。
 
 ## 2. 错误 B — `system cpu overloaded (current: 99.2%, threshold: 90%)`
 

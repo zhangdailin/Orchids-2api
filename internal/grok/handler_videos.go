@@ -692,9 +692,13 @@ func (h *Handler) failVideoJobWithCode(job *videoJob, code string, err error) {
 }
 
 // videoJobFailureMessage returns the message an asynchronous job stores for the
-// client, and whether it is the classified answer for a pool failure. A job is
-// retrieved with a 200, so the pool's own note ("no enabled accounts available
-// for channel: grok …") must not be what a polling client reads.
+// client, and whether it is the classified answer for a pool failure.
+//
+// A job is retrieved with a 200, so what is stored is a client-facing body: the
+// pool's own note ("no enabled accounts available for channel: grok …") must not
+// be what a polling client reads, and neither must the upstream's prose — both go
+// to the log. The job's error_code carries the machine-readable kind, and a local
+// failure keeps its own precise message.
 func videoJobFailureMessage(err error) (string, bool) {
 	if err == nil {
 		return "", false
@@ -702,7 +706,7 @@ func videoJobFailureMessage(err error) (string, bool) {
 	if out := apperrors.ClassifyPoolExhaustion(err, ""); !out.Empty() {
 		return out.Message, true
 	}
-	return err.Error(), false
+	return grokUpstreamFailureMessage(err), false
 }
 
 func (h *Handler) HandleVideosRetrieve(w http.ResponseWriter, r *http.Request) {

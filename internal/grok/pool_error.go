@@ -89,3 +89,33 @@ func carriesPoolReason(err error) bool {
 	text := err.Error()
 	return strings.Contains(text, "matching accounts") || strings.Contains(text, "account pool")
 }
+
+// grokUpstreamFailureMessage is the text a client may read for a failure that came
+// from an upstream service: the shared category sentence. The provider's response
+// body, the egress node id and the internal "grok … upstream status=…" shape stay
+// in the log — which is how writeGrokUpstreamError has always answered the
+// chat/completions plane, and what the Responses/voice plane used to skip by
+// writing err.Error().
+//
+// A local failure (a bad multipart part, a storage error, an interrupted job) is
+// the caller's own problem and keeps its precise message, because flattening it
+// into "the upstream request failed" would hide the one thing the caller can fix.
+func grokUpstreamFailureMessage(err error) string {
+	if err == nil {
+		return apperrors.PublicMessage("")
+	}
+	if !isUpstreamFailure(err) {
+		return err.Error()
+	}
+	return apperrors.PublicMessage(err.Error())
+}
+
+// writeGrokUpstreamFailure answers an upstream failure on the Responses/voice
+// plane. That plane keeps its own envelope and the status the caller already
+// computed (a client acts on the status), while the prose goes to the log.
+func writeGrokUpstreamFailure(w http.ResponseWriter, status int, err error) {
+	if err != nil {
+		slog.Warn("Reporting an upstream failure to the client", "error", err, "status", status)
+	}
+	writeResponsesAPIError(w, status, "upstream_error", grokUpstreamFailureMessage(err))
+}

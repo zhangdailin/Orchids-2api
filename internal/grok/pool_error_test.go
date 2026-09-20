@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	apperrors "orchids-api/internal/errors"
 )
 
 // TestWriteGrokAccountUnavailable_ClassifiesThePool pins that the Grok handlers
@@ -167,7 +169,53 @@ func TestVideoJobFailureMessageKeepsThePoolNoteOutOfTheJob(t *testing.T) {
 		t.Fatalf("message = %q, want the job's own text", message)
 	}
 
+	// An upstream failure is prose like any other: the job stores the shared
+	// category sentence and the provider's body stays in the log.
+	prose := errors.New(`grok upstream status=403 body={"error":{"code":7,"message":"This page is out of date. Reload to continue."}}`)
+	message, fromPool = videoJobFailureMessage(prose)
+	if fromPool {
+		t.Fatal("an upstream refusal is not a pool failure")
+	}
+	if strings.Contains(message, "This page is out of date") || strings.Contains(message, "upstream status=") {
+		t.Fatalf("upstream prose stored on the job: %s", message)
+	}
+	if message != apperrors.PublicMessage(prose.Error()) {
+		t.Fatalf("message = %q, want the shared category sentence", message)
+	}
+
 	if message, fromPool = videoJobFailureMessage(nil); message != "" || fromPool {
 		t.Fatalf("nil error = (%q, %v), want empty", message, fromPool)
+	}
+}
+
+// TestWriteGrokUpstreamFailure_KeepsProseOutOfTheBody pins the other half of the
+// sanitising contract for the Responses/voice plane: the status the caller computed
+// is preserved (a client acts on it), the body carries the shared category sentence,
+// and the upstream's own body — the response text, the egress and the internal
+// "upstream status=…" shape — stays in the log. A local failure keeps its precise
+// message, because flattening it would hide the one thing the caller can fix.
+func TestWriteGrokUpstreamFailure_KeepsProseOutOfTheBody(t *testing.T) {
+	upstream := errors.New(`grok cli upstream status=403 body={"error":{"code":7,"message":"This page is out of date. Reload to continue."}}`)
+	rec := httptest.NewRecorder()
+	writeGrokUpstreamFailure(rec, http.StatusForbidden, upstream)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want the status the caller computed", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, apperrors.PublicMessage(upstream.Error())) {
+		t.Fatalf("body = %s, want the shared category sentence", body)
+	}
+	for _, leaked := range []string{"This page is out of date", "upstream status=", "code\":7"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("upstream prose %q leaked into the response: %s", leaked, body)
+		}
+	}
+
+	local := errors.New("audio part is missing a filename")
+	rec = httptest.NewRecorder()
+	writeGrokUpstreamFailure(rec, http.StatusBadGateway, local)
+	if !strings.Contains(rec.Body.String(), "audio part is missing a filename") {
+		t.Fatalf("a local failure lost its message: %s", rec.Body.String())
 	}
 }

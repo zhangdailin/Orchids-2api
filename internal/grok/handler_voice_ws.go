@@ -74,7 +74,7 @@ func (h *Handler) handleVoiceWebSocket(w http.ResponseWriter, r *http.Request, p
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(r.Context(), sess.acc, err)
 		}
-		writeResponsesAPIError(w, upstreamHTTPResponseStatus(err), "upstream_error", err.Error())
+		writeGrokUpstreamFailure(w, upstreamHTTPResponseStatus(err), err)
 		return
 	}
 	defer releaseEgress()

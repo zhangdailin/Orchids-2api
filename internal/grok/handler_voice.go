@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"mime"
 	"mime/multipart"
@@ -947,7 +948,13 @@ func (h *Handler) doConsoleVoiceExcluding(r *http.Request, excludeIDs []int64, m
 			}
 		}
 		sess.Close()
-		return nil, nil, &consoleVoiceRequestError{status: upstreamHTTPResponseStatus(err), code: "upstream_error", err: err}
+		// The upstream's body and the internal "status=…" shape stay in the log: the
+		// typed error carries the shared category sentence the client may read.
+		slog.Warn("Reporting an upstream failure to the client", "error", err, "status", upstreamHTTPResponseStatus(err))
+		return nil, nil, &consoleVoiceRequestError{
+			status: upstreamHTTPResponseStatus(err), code: "upstream_error",
+			err: errors.New(grokUpstreamFailureMessage(err)),
+		}
 	}
 	return resp, sess, nil
 }
@@ -957,7 +964,9 @@ func writeConsoleVoiceRequestError(w http.ResponseWriter, err error) {
 		writeResponsesAPIError(w, typed.status, typed.code, typed.Error())
 		return
 	}
-	writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", err.Error())
+	// A failure that never reached the upstream (a rejected part, a storage error)
+	// keeps its own precise message; anything the upstream refused is sanitized.
+	writeGrokUpstreamFailure(w, http.StatusBadGateway, err)
 }
 
 // voiceResponseContentTypes are the only content types a voice response may
