@@ -91,20 +91,43 @@ apperrors.New("overloaded_error", err.Error(), http.StatusServiceUnavailable).Wr
    正说明是 `channelMatched == 0` 那条分支——即**请求的模型在所有账号上都在冷却**，
    而这句话在当时的错误里完全没有体现。
 
-### 1.4 本次修复
+### 1.4 本次修复（第一轮）
 
 | 改动 | 文件 | 说明 |
 | --- | --- | --- |
 | 空池原因分别命名 | `internal/loadbalancer/loadbalancer.go` | 三种原因各自带后缀：`cooling down for the requested model` / `rate-limited or cooling down` / `have exhausted their allowance`；计数器按扫描轮次重置，窗口扫描与全池回退不再相加 |
-| 统一"池子接不了这个请求"的应答 | `internal/handler/no_account.go`（新增） | 分类 + 文案 + 状态由 `apperrors.StatusForCategory` 决定，因此**状态与文案不可能互相矛盾**：冷却/全池限流 → 429，额度耗尽 → 429，账号都忙 → 429，模型不可路由 → 404，其余（无账号、凭据全废）→ 503 |
+| 统一"池子接不了这个请求"的应答 | `internal/errors/pool.go`、`internal/handler/no_account.go` | 分类器放在 `internal/errors`（唯一一处规则），文案 + 状态由 `apperrors.StatusForCategory` 决定，因此**状态与文案不可能互相矛盾**：冷却/全池限流 → 429，额度耗尽 → 429，账号都忙 → 429，模型不可路由 → 404，其余（无账号、凭据全废）→ 503 |
 | 初始选号改用它 | `internal/handler/handler.go` | 不再硬编码 503 `overloaded_error`，内部说明只进日志（`slog.Error("selectAccount failed", …)`） |
 | 重试耗尽入口改用它 | `internal/handler/stream_handler.go` | 与初始选号共用一套规则；原有分支文案逐字保留，仅新增两条来自选号器的原因 |
-| 测试 | `no_account_test.go`（新增）、`loadbalancer_test.go`、`handler_warp_status_test.go` | 覆盖 8 种原因、状态断言、以及"内部选号说明不得出现在响应里" |
+| 测试 | `internal/errors/pool_test.go`、`no_account_test.go`、`loadbalancer_test.go`、`handler_warp_status_test.go` | 覆盖 9 种原因、状态断言、以及"内部选号说明不得出现在响应里" |
 
 效果：同一状况下客户端拿到的是 `429` + “the requested model is cooling down on this channel.
 Please retry after its cooldown or choose another model.”；而额度耗尽时是 `429` + “every account for
 this channel has exhausted its allowance. Add credits or accounts, or wait for the quota reset.” ——
 后者才是本次事件真正需要运维看到的动作。
+
+### 1.5 同类路径彻底收口（第二轮）
+
+第一轮只改了**通用会话入口**。grok 各处理器自己选号（`openCLIAccountSession` /
+`openConsoleAccountSession` …），于是同一条件在那里还有第二种答案。全量审计（对"能拿到池错误的
+客户端应答点"逐个读）后逐条修掉：
+
+| 原状 | 文件 | 现在 |
+| --- | --- | --- |
+| `writeGrokNoAccountError` **收下 err 却不用**，硬编码 503 + 一句话（8 个调用方：chat / images / image-edits ×2 / images-console / video-chat / admin） | `internal/grok/pool_error.go`、`http_helpers.go` | 改为共享分类：冷却/限流/额度/忙 → 429，模型不可路由 → 404，只有真正无账号才 503；信封仍是该平面的 OpenAI 形状 |
+| responses 会话打开失败 → 503 + `err.Error()`（池子内部说明直接进响应体） | `handler_responses_store.go` ×2 | `writeGrokAccountUnavailable` → 分类 + 固定文案，内部说明进日志 |
+| voice（realtime）取号失败 → 503 + `"no available Grok Console account: " + err.Error()` | `handler_voice_ws.go`、`handler_voice.go` | 同上；语音转发路径的 typed error 也改成预分类（状态/文案随原因） |
+| 视频（console）取号失败 → 同上拼接 | `handler_videos_console.go` | 同上 |
+| 网关 compaction 取号失败 → 503 + `err.Error()`（该路径的注释写着"客户端看不到上游散文"，但选号错误绕过了净化） | `responses_compaction.go` | 分类后写入，日志保留原文 |
+| **异步**视频任务失败把 `err.Error()` 存进 `job.Error.message`，客户端 GET 时以 **200** 读到池子内部说明 | `handler_videos.go`（`videoJobFailureMessage`，覆盖 build/console 全部任务失败路径） | 池子原因存分类后的可重试文案，其它失败保留自身文本，原文进日志 |
+| 图片限流换号失败时 `switchErr` 被丢弃，无日志 | `handler_images.go` | 记 `slog.Warn`，原因不再消失 |
+| 多 pool 选号时只在错误含 `rate-limited or cooling down` 时才替换 `lastErr`，额度耗尽/并发原因会被更早的空错误压掉 → 客户端收到无法解释的 503 | `internal/grok/handler.go` | 改为"带原因的优先于不带原因的"（`carriesPoolReason`） |
+| 测试 | `internal/grok/pool_error_test.go` | 6 种原因的状态/文案/类型 + "内部说明不得进响应"；`videoJobFailureMessage` 的池子/非池子分支 |
+
+边界（有意保留，不是遗漏）：**上游自己写的错误文本**（非池子内部状态）仍按各平面既有语义透传
+（如 `upstream_error` + `err.Error()`，`handler_responses_store.go:263`、`handler_voice.go:960`），
+这与"池子内部说明绝不外发"是两件事；如果希望连上游散文也统一净化（`apperrors.PublicMessage`），
+可以再单独做一轮。
 
 ## 2. 错误 B — `system cpu overloaded (current: 99.2%, threshold: 90%)`
 
@@ -125,9 +148,11 @@ this channel has exhausted its allowance. Add credits or accounts, or wait for t
 
 ## 3. 处置与不复用的方案
 
-### 3.1 代码（本次已改）
+### 3.1 代码（两轮已改）
 
-见 1.4。`go test ./...` 与 amd64 构建为部署前的验收条件。
+- 第一轮：见 1.4（通用会话入口 + 选号器原因）。
+- 第二轮：见 1.5（grok 各处理器的同类路径彻底收口）。
+- 验收：`go build ./...`、`go vet`、`go test ./...` 全绿后构建 amd64 产物再部署。
 
 ### 3.2 容量（运维决策，代码无法替代）
 

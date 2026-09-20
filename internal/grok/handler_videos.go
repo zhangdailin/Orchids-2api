@@ -19,6 +19,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
@@ -669,14 +670,39 @@ func (h *Handler) failVideoJob(job *videoJob, err error) {
 }
 
 func (h *Handler) failVideoJobWithCode(job *videoJob, code string, err error) {
+	// An asynchronous job is read back with a 200, so its stored message is a
+	// client-facing body: a pool failure is classified (a capacity problem reads as
+	// retryable and never carries the pool's own note), and the note stays in the
+	// log with the rest of the diagnostics.
+	message, fromPool := videoJobFailureMessage(err)
+	if fromPool {
+		slog.Warn("Grok account pool could not serve a video job",
+			"error", err, "job_id", job.ID)
+	} else {
+		slog.Error("Video job failed", "error", err, "job_id", job.ID, "code", code)
+	}
 	videoJobsMu.Lock()
 	job.Status = "failed"
 	job.Error = map[string]interface{}{
 		"code":    code,
-		"message": err.Error(),
+		"message": message,
 	}
 	videoJobsMu.Unlock()
 	h.persistVideoJob(context.Background(), job)
+}
+
+// videoJobFailureMessage returns the message an asynchronous job stores for the
+// client, and whether it is the classified answer for a pool failure. A job is
+// retrieved with a 200, so the pool's own note ("no enabled accounts available
+// for channel: grok …") must not be what a polling client reads.
+func videoJobFailureMessage(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	if out := apperrors.ClassifyPoolExhaustion(err, ""); !out.Empty() {
+		return out.Message, true
+	}
+	return err.Error(), false
 }
 
 func (h *Handler) HandleVideosRetrieve(w http.ResponseWriter, r *http.Request) {

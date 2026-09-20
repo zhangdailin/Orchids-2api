@@ -747,7 +747,11 @@ func (h *Handler) handleGatewayCompaction(w http.ResponseWriter, r *http.Request
 	for attempt := 1; attempt <= gatewayCompactionMaxAttempts; attempt++ {
 		sess, err := h.openCLIAccountSession(r.Context(), nil, spec.UpstreamModel)
 		if err != nil {
-			fail(http.StatusServiceUnavailable, "response_account_unavailable", err.Error())
+			// The pool's note names why it is empty, and this path used to put it in
+			// the body: classify it the way every other entrance does, and let the
+			// note stay in the log.
+			answer := classifyGrokPoolFailure(err, "response_account_unavailable", grokResponseAccountUnavailableMessage)
+			fail(answer.status, answer.code, answer.message)
 			return
 		}
 		accountID := sess.acc.ID

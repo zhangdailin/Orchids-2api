@@ -769,7 +769,12 @@ func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.
 				break
 			}
 			if err != nil {
-				if lastErr == nil || strings.Contains(err.Error(), "rate-limited or cooling down") {
+				if lastErr == nil || (!carriesPoolReason(lastErr) && carriesPoolReason(err)) {
+					// Keep the error that says why the pool is empty. A bare "no
+					// enabled accounts available" carries no reason, so a later pool
+					// that reports one (cooling down, rate limited, allowance spent,
+					// busy) must replace it — otherwise the failure reaches the client
+					// as a 503 that explains nothing.
 					lastErr = err
 				}
 			}

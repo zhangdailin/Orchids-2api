@@ -920,8 +920,13 @@ func (h *Handler) doConsoleVoiceExcluding(r *http.Request, excludeIDs []int64, m
 	}
 	sess, err := h.openConsoleAccountSession(r.Context(), excludeIDs, modelID)
 	if err != nil {
+		// A pool that is cooling down, rate limited or spent is a retryable
+		// capacity condition, not a 503: the shared classification decides, and the
+		// pool's own note stays in the log (it used to be concatenated into the
+		// message this typed error carries to the client).
+		answer := classifyGrokPoolFailure(err, "account_unavailable", grokVoiceAccountUnavailableMessage)
 		return nil, nil, &consoleVoiceRequestError{
-			status: http.StatusServiceUnavailable, code: "account_unavailable", err: fmt.Errorf("no available Grok Console account: %w", err),
+			status: answer.status, code: answer.code, err: errors.New(answer.message),
 		}
 	}
 	resp, err := h.currentClient().doConsoleDPoPRequestWithHeaders(withRateLimitAccount(r.Context(), sess.acc), sess.token, method, h.consoleURL(path), body, headers)

@@ -465,14 +465,9 @@ func writeSSECodedError(w http.ResponseWriter, flusher http.Flusher, message, co
 	writeSSE(w, flusher, "", []byte("[DONE]"))
 }
 
-// writeGrokNoAccountError answers a request that could not be served because the
-// account pool had no usable credential. It is not the caller's credential that
-// failed, so the response is a 503 with a stable code rather than the upstream
-// status (grok2api answers the same situation with upstream_unavailable).
-func writeGrokNoAccountError(w http.ResponseWriter, err error) {
-	writeGrokErrorCode(w, http.StatusServiceUnavailable, "upstream_unavailable",
-		"No upstream account is currently available for this model. Retry later or add capacity.")
-}
+// writeGrokNoAccountError lives in pool_error.go: the answer depends on why the
+// pool is empty (cooling, rate limited, allowance spent, busy, or truly empty),
+// so it shares the classification every other entrance uses.
 
 // readBoundedJSONBody reads a JSON request body under the shared limit. It
 // writes the 413/400 response itself and returns an error so the caller only

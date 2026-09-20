@@ -254,7 +254,7 @@ func (h *Handler) handleConsoleVideoCreate(w http.ResponseWriter, r *http.Reques
 	}
 	sess, err := h.openConsoleVideoAccountSession(r.Context(), prepared.model)
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusServiceUnavailable, "account_unavailable", "no available Grok Console video account: "+err.Error())
+		writeGrokAccountUnavailable(w, err, "account_unavailable", grokVideoAccountUnavailableMessage)
 		return
 	}
 	job := &videoJob{

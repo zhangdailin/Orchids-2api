@@ -555,8 +555,8 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
   "重试耗尽"入口早就是可重试的 429），文案错（把选号器内部说明发给客户端）。
 - `loadbalancer.go` 把空池的三种原因压成同一句；现按原因分别命名（模型级冷却 / 全池限流 / 额度耗尽），
   并按扫描轮次重置计数器（窗口扫描 + 全池回退不再相加）。
-- 新增 `internal/handler/no_account.go`：初始选号与重试耗尽共用一套分类，状态由 `apperrors.StatusForCategory`
-  推出，因此状态与文案不可能互相矛盾（冷却/限流/额度耗尽/账号忙 → 429；模型不可路由 → 404；无账号或凭据全废 → 503）。
+- 新增 `internal/errors/pool.go`（唯一一处分类规则）+ `internal/handler/no_account.go`（写响应）：初始选号与重试耗尽共用一套分类，
+  状态由 `apperrors.StatusForCategory` 推出，因此状态与文案不可能互相矛盾（冷却/限流/额度耗尽/账号忙 → 429；模型不可路由 → 404；无账号或凭据全废 → 503）。
   内部说明只进日志。
 - 测试：新增 `no_account_test.go`（8 种原因 + 状态 + "内部说明不得出现在响应里"）、`loadbalancer_test.go` 两条
   （额度耗尽、模型过滤清空候选），并修正 `handler_warp_status_test.go` 对响应文案的断言。
@@ -588,3 +588,22 @@ Oracle 首尔）自己的系统保护（其 `middleware/performance.go`，阈值
 - 未做（留给运维）：面板 `161.118.140.32` 的 `monitor_cpu_threshold`（第 2 条报错）与 workbuddy/puter 的容量补充。
 - 同类未改：`internal/grok/handler_responses_store.go` 有两处 `writeResponsesAPIError(503, …, err.Error())`
   同样把内部文本发给客户端；本轮只改通用会话入口，未动 grok responses 的既有语义。
+
+### 二十·二、同类路径彻底收口（第二轮）
+
+第一轮只覆盖了通用会话入口；grok 各处理器自己选号，同一条件在那里还有第二种答案。对"能拿到池错误的
+客户端应答点"做了全量审计（含一次只读子代理复核），逐条修掉：
+
+- `writeGrokNoAccountError` 收下 `err` 却不用、硬编码 503（8 个调用方）→ 改为共享分类（`internal/grok/pool_error.go`）；
+  信封仍是该平面的 OpenAI 形状，状态随原因：冷却/限流/额度/忙 → 429，模型不可路由 → 404，真无账号 → 503。
+- responses 会话打开失败 ×2、voice ws 取号、voice 转发 typed error、console 视频取号、网关 compaction 取号：
+  原先 503 + `err.Error()`（池子内部说明进响应体）→ 统一走分类 + 固定文案，原文进日志。
+- **异步**视频任务：`err.Error()` 曾被存进 `job.Error.message`，客户端 GET 时以 200 读到池子说明 →
+  新增 `videoJobFailureMessage`（池子原因存分类文案，其它失败保留自身文本），覆盖 build/console 全部失败路径。
+- 诊断丢失：图片限流换号失败时 `switchErr` 被丢弃（补日志）；多 pool 选号时只在含 `rate-limited or cooling down`
+  才替换 `lastErr`，额度耗尽/并发原因会被更早的空错误压掉 → 改为"带原因的优先"（`carriesPoolReason`）。
+- 测试：新增 `internal/grok/pool_error_test.go`（6 种原因的状态/文案/类型 + 内部说明不得进响应 +
+  `videoJobFailureMessage` 两分支）；`internal/errors/pool_test.go` 承接原分类表并新增"文案不得出现池子内部字样"。
+
+**边界（有意保留）**：上游自己写的错误文本仍按各平面既有语义透传（`upstream_error` + `err.Error()`），
+与"池子内部说明绝不外发"是两件事；若要连上游散文一并净化（`apperrors.PublicMessage`），需要单独一轮。

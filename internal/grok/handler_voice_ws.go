@@ -61,7 +61,7 @@ func (h *Handler) handleVoiceWebSocket(w http.ResponseWriter, r *http.Request, p
 	}
 	sess, err := h.openConsoleAccountSession(r.Context(), nil, modelID)
 	if err != nil {
-		writeResponsesAPIError(w, http.StatusServiceUnavailable, "account_unavailable", "no available Grok Console account: "+err.Error())
+		writeGrokAccountUnavailable(w, err, "account_unavailable", grokVoiceAccountUnavailableMessage)
 		return
 	}
 	defer sess.Close()

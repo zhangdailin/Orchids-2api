@@ -452,6 +452,11 @@ func (h *Handler) collectAppChatImageURLs(ctx context.Context, sess *chatAccount
 				sess.Close()
 				next, switchErr := h.openChatAccountSessionExcludingWithPools(ctx, excludedAccountIDs, sess.poolCandidates)
 				if switchErr != nil {
+					// The switch failed, so the upgrade-limit error above is the one
+					// the client acts on — but the pool's reason must not vanish: it is
+					// the only record of why another account could not be found.
+					slog.Warn("No image account to switch to after the generation limit",
+						"error", switchErr, "account_id", sess.acc.ID)
 					return nil, err
 				}
 				sess.acc = next.acc

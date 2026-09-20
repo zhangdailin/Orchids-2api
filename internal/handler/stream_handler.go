@@ -2902,13 +2902,13 @@ func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr 
 	// selection in Handler.HandleMessages: the two entrances used to answer the
 	// same condition differently, which is how a cooling pool reached one caller
 	// as a retryable 429 and another as a 503 server fault.
-	out := classifyPoolExhaustion(selectErr, lastErr)
-	if out.category == "" {
+	out := apperrors.ClassifyPoolExhaustion(selectErr, lastErr)
+	if out.Empty() {
 		// Nothing named the cause, so the retry-exhausted wording and whatever the
 		// upstream error implies stand.
-		out = poolExhaustion{
-			category: apperrors.ClassifyUpstreamError(lastErr).Category,
-			message:  poolRetriesExhaustedMessage,
+		out = apperrors.PoolExhaustion{
+			Category: apperrors.ClassifyUpstreamError(lastErr).Category,
+			Message:  apperrors.PoolRetriesExhaustedMessage,
 		}
 	}
 	// The selector error and the last upstream error are diagnostics. They go to
@@ -2917,7 +2917,7 @@ func (h *streamHandler) InjectNoAvailableAccountError(lastErr string, selectErr 
 	if selectErr != nil || strings.TrimSpace(lastErr) != "" {
 		slog.Warn("Reporting that no account could serve the request", "select_error", selectErr, "last_error", lastErr)
 	}
-	h.reportRequestFailure("Injecting no available account error to client", out.category, out.message)
+	h.reportRequestFailure("Injecting no available account error to client", out.Category, out.Message)
 }
 
 // Tool shape validation is independent of whether another call had the same input.
