@@ -1,0 +1,2 @@
+#!/bin/sh
+exec env RSH_PASS="${RSH_PASS:-Zhang1996}" SSH_ASKPASS="$PWD/.rsh/askpass.sh" SSH_ASKPASS_REQUIRE=force setsid -w ssh -T -o StrictHostKeyChecking=no -o UserKnownHostsFile="$PWD/.rsh/known_hosts" -o ConnectTimeout=15 -o LogLevel=ERROR root@3.15.148.113 "$@"
