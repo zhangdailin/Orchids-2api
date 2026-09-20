@@ -250,6 +250,8 @@ func registerRoutes(
 	mux.HandleFunc("/api/grok/device-auth/", sessionAuth(apiHandler.HandleGrokDeviceAuthorization))
 	mux.HandleFunc("/api/keys", sessionAuth(apiHandler.HandleKeys))
 	mux.HandleFunc("/api/keys/", sessionAuth(apiHandler.HandleKeyByID))
+	// POST /api/keys/{id}/reset-usage lands on the same handler, which dispatches
+	// on the trailing path segment.
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
 	mux.HandleFunc("/api/models/groups", sessionAuth(apiHandler.HandleModelGroups))
 	mux.HandleFunc("/api/models/refresh", sessionAuth(func(w http.ResponseWriter, r *http.Request) {

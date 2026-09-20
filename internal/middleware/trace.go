@@ -367,6 +367,8 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 			outcome.ReasoningTokens = box.reasoning
 			outcome.TotalTokens = box.total
 			outcome.UsageReported = box.usage
+			outcome.CostInUSDTicks = box.costTicks
+			outcome.Priced = box.priced
 			outcome.AttemptFailures = box.failures
 			outcome.AccountSwitches = box.switches
 			outcome.ProviderReached = box.providerReached

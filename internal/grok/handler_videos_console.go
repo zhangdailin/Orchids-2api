@@ -19,6 +19,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 )
 
@@ -156,6 +157,9 @@ type preparedConsoleVideoRequest struct {
 	duration   int
 	resolution string
 	payload    map[string]interface{}
+	// inputImages counts the images the model has to process (an edit's source
+	// plus any references), which the price includes.
+	inputImages int
 }
 
 type consoleVideoRequestError struct {
@@ -281,6 +285,14 @@ func (h *Handler) handleConsoleVideoCreate(w http.ResponseWriter, r *http.Reques
 	}
 	putVideoJob(job)
 	h.persistVideoJob(r.Context(), job)
+	// Billed from the request the caller sent, exactly as grok2api prices a video
+	// job at creation: duration times the resolution rate plus the input images.
+	if cost, priced := pricing.EstimateVideoCost(prepared.model, job.Quality, job.Seconds, prepared.inputImages); priced {
+		h.settleMediaBilling(r.Context(), prepared.model, cost, map[string]interface{}{
+			"plane": "console", "endpoint": "videos", "job_id": job.ID, "seconds": job.Seconds,
+			"resolution": job.Quality, "input_images": prepared.inputImages,
+		})
+	}
 	go func() {
 		defer baseCancel()
 		h.runConsoleVideoJobWithLease(leaseCtx, lease, job, sess, operation, prepared.payload)
@@ -397,6 +409,12 @@ func prepareConsoleVideoRequest(request consoleVideoAPIRequest, operation consol
 		}
 		prepared.duration = duration
 		prepared.resolution = resolution
+		// Every image the model has to look at is billed: the source image plus
+		// any references.
+		prepared.inputImages = len(references)
+		if imageURL != "" {
+			prepared.inputImages++
+		}
 		return prepared, nil
 	}
 
@@ -422,6 +440,8 @@ func prepareConsoleVideoRequest(request consoleVideoAPIRequest, operation consol
 		if hasConsoleVideoJSONValue(request.Duration) {
 			return preparedConsoleVideoRequest{}, fmt.Errorf("video edit does not support duration")
 		}
+		// An edit feeds one source video in; there are no image inputs to price.
+		prepared.inputImages = 0
 		return prepared, nil
 	}
 	duration, err := parseConsoleVideoDuration(request.Duration, 6)

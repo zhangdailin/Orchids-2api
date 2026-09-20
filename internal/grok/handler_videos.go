@@ -20,6 +20,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/store"
 )
 
@@ -557,6 +558,14 @@ func (h *Handler) startVideoJob(w http.ResponseWriter, r *http.Request, req Vide
 	putVideoJob(job)
 	h.persistVideoJob(r.Context(), job)
 	response := job.toMap()
+	// Video is billed from the request itself (duration, resolution and reference
+	// images), which is what grok2api prices at creation.
+	if cost, priced := pricing.EstimateVideoCost(spec.UpstreamModel, firstNonEmpty(cfg.ResolutionName, req.ResolutionName), cfg.VideoLength, len(req.InputReferences)); priced {
+		h.settleMediaBilling(r.Context(), req.Model, cost, map[string]interface{}{
+			"plane": "web", "endpoint": "videos", "job_id": job.ID, "seconds": cfg.VideoLength,
+			"resolution": firstNonEmpty(cfg.ResolutionName, req.ResolutionName), "input_images": len(req.InputReferences),
+		})
+	}
 	go h.runVideoCreateJob(context.Background(), job, spec, cfg)
 	writeJSON(w, response)
 }

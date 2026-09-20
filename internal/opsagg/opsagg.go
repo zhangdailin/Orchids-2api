@@ -50,10 +50,14 @@ type Outcome struct {
 	OutputTokens    int64
 	ReasoningTokens int64
 	TotalTokens     int64
-	// Priced is reserved for a future pricing layer. Current callers leave it
-	// false, so usage is explicitly counted as unpriced without implementing
-	// A9-1 billing or inventing a price.
+	// Priced marks a row whose usage came from the upstream and whose model has a
+	// published price; unpriced rows are counted separately so a dashboard can
+	// never present an estimate as a bill.
 	Priced bool
+	// CostInUSDTicks is the priced cost of this request in ticks (1 USD = 1e10).
+	// It is zero for unpriced rows, which is a statement about the price table,
+	// not about the request.
+	CostInUSDTicks int64
 	// At defaults to now.
 	At time.Time
 }
@@ -77,6 +81,7 @@ type Bucket struct {
 	UnpricedRequests                                                     int64     `json:"unpriced_requests"`
 	PricedTokens                                                         int64     `json:"priced_tokens"`
 	UnpricedTokens                                                       int64     `json:"unpriced_tokens"`
+	CostInUSDTicks                                                       int64     `json:"cost_in_usd_ticks"`
 	DurationMS                                                           []int64   `json:"-"`
 	ConcurrencyPeak                                                      int64     `json:"concurrency_peak"`
 }
@@ -116,6 +121,10 @@ type Summary struct {
 	UnpricedRequests  int64   `json:"unpriced_requests"`
 	PricedTokens      int64   `json:"priced_tokens"`
 	UnpricedTokens    int64   `json:"unpriced_tokens"`
+	// CostInUSDTicks is the summed cost of the window, in ticks. A window that
+	// mixes priced and unpriced rows reports both the cost and the unpriced
+	// request count, so the figure is never presented as complete on its own.
+	CostInUSDTicks int64 `json:"cost_in_usd_ticks"`
 	// Samples reports how many observations backed the percentiles. Zero means
 	// "no sample", which the UI must show as such rather than as healthy.
 	Samples int64 `json:"samples"`
@@ -203,6 +212,9 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 	}
 	if total > 0 {
 		pipe.HIncrBy(ctx, key, "total_tokens", total)
+	}
+	if outcome.CostInUSDTicks > 0 {
+		pipe.HIncrBy(ctx, key, "cost_in_usd_ticks", outcome.CostInUSDTicks)
 	}
 	if outcome.UsageReported {
 		if outcome.Priced {
@@ -402,6 +414,7 @@ func bucketFromFields(minute time.Time, channel string, fields map[string]string
 		UnpricedRequests: toInt("unpriced_requests"),
 		PricedTokens:     toInt("priced_tokens"),
 		UnpricedTokens:   toInt("unpriced_tokens"),
+		CostInUSDTicks:   toInt("cost_in_usd_ticks"),
 		ConcurrencyPeak:  toInt("concurrency_peak"),
 	}
 }
@@ -468,6 +481,7 @@ func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summ
 		summary.PricedRequests += bucket.PricedRequests
 		summary.UnpricedRequests += bucket.UnpricedRequests
 		summary.PricedTokens += bucket.PricedTokens
+		summary.CostInUSDTicks += bucket.CostInUSDTicks
 		summary.UnpricedTokens += bucket.UnpricedTokens
 		if !input.SamplesProvided && a.Enabled() {
 			key := a.key(bucket.Minute, input.Channel)

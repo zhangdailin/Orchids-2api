@@ -209,21 +209,25 @@ var (
 )
 
 type apiKeyRecord struct {
-	ID                   int64      `json:"id"`
-	Name                 string     `json:"name"`
-	KeyHash              string     `json:"key_hash"`
-	KeyFull              string     `json:"key_full,omitempty"`
-	KeyPrefix            string     `json:"key_prefix"`
-	KeySuffix            string     `json:"key_suffix"`
-	Enabled              bool       `json:"enabled"`
-	AllowedModels        []string   `json:"allowed_models,omitempty"`
-	RPMLimit             int        `json:"rpm_limit,omitempty"`
-	MaxConcurrent        int        `json:"max_concurrent,omitempty"`
-	BillingLimitUSDTicks int64      `json:"billing_limit_usd_ticks,omitempty"`
-	BillingUsedUSDTicks  int64      `json:"billing_used_usd_ticks,omitempty"`
-	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt           *time.Time `json:"last_used_at"`
-	CreatedAt            time.Time  `json:"created_at"`
+	ID                   int64    `json:"id"`
+	Name                 string   `json:"name"`
+	KeyHash              string   `json:"key_hash"`
+	KeyFull              string   `json:"key_full,omitempty"`
+	KeyPrefix            string   `json:"key_prefix"`
+	KeySuffix            string   `json:"key_suffix"`
+	Enabled              bool     `json:"enabled"`
+	AllowedModels        []string `json:"allowed_models,omitempty"`
+	RPMLimit             int      `json:"rpm_limit,omitempty"`
+	MaxConcurrent        int      `json:"max_concurrent,omitempty"`
+	BillingLimitUSDTicks int64    `json:"billing_limit_usd_ticks,omitempty"`
+	BillingUsedUSDTicks  int64    `json:"billing_used_usd_ticks,omitempty"`
+	BillingPeriodDays    int      `json:"billing_period_days,omitempty"`
+	// BillingPeriodStartedAt travels with the record: without it a restart would
+	// forget when the current period began and never roll over.
+	BillingPeriodStartedAt time.Time  `json:"billing_period_started_at,omitempty"`
+	ExpiresAt              *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt             *time.Time `json:"last_used_at"`
+	CreatedAt              time.Time  `json:"created_at"`
 }
 
 func newRedisStore(addr, password string, db int, prefix string, credentialKey []byte) (*redisStore, error) {
@@ -1884,40 +1888,44 @@ func (s *redisStore) DeleteStoredMediaInput(ctx context.Context, id, ownerHash s
 
 func apiKeyRecordFromKey(key *ApiKey) apiKeyRecord {
 	return apiKeyRecord{
-		ID:                   key.ID,
-		Name:                 key.Name,
-		KeyHash:              key.KeyHash,
-		KeyPrefix:            key.KeyPrefix,
-		KeySuffix:            key.KeySuffix,
-		Enabled:              key.Enabled,
-		AllowedModels:        append([]string(nil), key.AllowedModels...),
-		RPMLimit:             key.RPMLimit,
-		MaxConcurrent:        key.MaxConcurrent,
-		BillingLimitUSDTicks: key.BillingLimitUSDTicks,
-		BillingUsedUSDTicks:  key.BillingUsedUSDTicks,
-		ExpiresAt:            key.ExpiresAt,
-		LastUsedAt:           key.LastUsedAt,
-		CreatedAt:            key.CreatedAt,
+		ID:                     key.ID,
+		Name:                   key.Name,
+		KeyHash:                key.KeyHash,
+		KeyPrefix:              key.KeyPrefix,
+		KeySuffix:              key.KeySuffix,
+		Enabled:                key.Enabled,
+		AllowedModels:          append([]string(nil), key.AllowedModels...),
+		RPMLimit:               key.RPMLimit,
+		MaxConcurrent:          key.MaxConcurrent,
+		BillingLimitUSDTicks:   key.BillingLimitUSDTicks,
+		BillingUsedUSDTicks:    key.BillingUsedUSDTicks,
+		BillingPeriodDays:      key.BillingPeriodDays,
+		BillingPeriodStartedAt: key.BillingPeriodStartedAt,
+		ExpiresAt:              key.ExpiresAt,
+		LastUsedAt:             key.LastUsedAt,
+		CreatedAt:              key.CreatedAt,
 	}
 }
 
 func (r apiKeyRecord) toApiKey() *ApiKey {
 	return &ApiKey{
-		ID:                   r.ID,
-		Name:                 r.Name,
-		KeyHash:              r.KeyHash,
-		KeyFull:              r.KeyFull,
-		KeyPrefix:            r.KeyPrefix,
-		KeySuffix:            r.KeySuffix,
-		Enabled:              r.Enabled,
-		AllowedModels:        append([]string(nil), r.AllowedModels...),
-		RPMLimit:             r.RPMLimit,
-		MaxConcurrent:        r.MaxConcurrent,
-		BillingLimitUSDTicks: r.BillingLimitUSDTicks,
-		BillingUsedUSDTicks:  r.BillingUsedUSDTicks,
-		ExpiresAt:            r.ExpiresAt,
-		LastUsedAt:           r.LastUsedAt,
-		CreatedAt:            r.CreatedAt,
+		ID:                     r.ID,
+		Name:                   r.Name,
+		KeyHash:                r.KeyHash,
+		KeyFull:                r.KeyFull,
+		KeyPrefix:              r.KeyPrefix,
+		KeySuffix:              r.KeySuffix,
+		Enabled:                r.Enabled,
+		AllowedModels:          append([]string(nil), r.AllowedModels...),
+		RPMLimit:               r.RPMLimit,
+		MaxConcurrent:          r.MaxConcurrent,
+		BillingLimitUSDTicks:   r.BillingLimitUSDTicks,
+		BillingUsedUSDTicks:    r.BillingUsedUSDTicks,
+		BillingPeriodDays:      r.BillingPeriodDays,
+		BillingPeriodStartedAt: r.BillingPeriodStartedAt,
+		ExpiresAt:              r.ExpiresAt,
+		LastUsedAt:             r.LastUsedAt,
+		CreatedAt:              r.CreatedAt,
 	}
 }
 

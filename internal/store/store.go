@@ -377,8 +377,15 @@ type ApiKey struct {
 	BillingLimitUSDTicks int64 `json:"billing_limit_usd_ticks,omitempty"`
 	// BillingUsedUSDTicks is a read-only projection of the settled usage
 	// counter. The Redis counter is authoritative; this field reports it.
-	BillingUsedUSDTicks int64      `json:"billing_used_usd_ticks,omitempty"`
-	ExpiresAt           *time.Time `json:"expires_at,omitempty"`
+	BillingUsedUSDTicks int64 `json:"billing_used_usd_ticks,omitempty"`
+	// BillingPeriodDays rolls the settled usage over on a fixed period, the way
+	// grok2api resets a key at the end of its billing period. Zero means the
+	// counter only ever moves when an operator resets it.
+	BillingPeriodDays int `json:"billing_period_days,omitempty"`
+	// BillingPeriodStartedAt is when the current period began. It is written by
+	// the rollover, not by the caller.
+	BillingPeriodStartedAt time.Time  `json:"billing_period_started_at,omitempty"`
+	ExpiresAt              *time.Time `json:"expires_at,omitempty"`
 	LastUsedAt          *time.Time `json:"last_used_at"`
 	CreatedAt           time.Time  `json:"created_at"`
 }
@@ -958,6 +965,36 @@ func (s *Store) CreateApiKey(ctx context.Context, key *ApiKey) error {
 	return fmt.Errorf("api keys store not configured")
 }
 
+// rolloverApiKeyBilling resets a key's settled usage when its billing period has
+// elapsed, so a limit is "per period" rather than "forever". The counter and the
+// period start are both Redis state; a concurrent pair of requests can at worst
+// reset twice, which is harmless because a fresh period starts empty either way.
+func (s *Store) rolloverApiKeyBilling(ctx context.Context, key *ApiKey, now time.Time) {
+	if key == nil || key.BillingPeriodDays <= 0 {
+		return
+	}
+	started := key.BillingPeriodStartedAt
+	if started.IsZero() {
+		key.BillingPeriodStartedAt = now
+		if err := s.UpdateApiKey(ctx, key); err != nil {
+			slog.Warn("failed to record the billing period start", "key_id", key.ID, "error", err)
+		}
+		return
+	}
+	if now.Before(started.AddDate(0, 0, key.BillingPeriodDays)) {
+		return
+	}
+	if err := s.ResetApiKeyBilling(ctx, key.ID); err != nil {
+		slog.Warn("failed to roll the billing period over", "key_id", key.ID, "error", err)
+		return
+	}
+	key.BillingUsedUSDTicks = 0
+	key.BillingPeriodStartedAt = now
+	if err := s.UpdateApiKey(ctx, key); err != nil {
+		slog.Warn("failed to advance the billing period", "key_id", key.ID, "error", err)
+	}
+}
+
 // AuthorizeApiKey authenticates a raw client key and atomically applies its
 // optional per-minute request limit. Raw keys are never persisted by this path.
 func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error) {
@@ -993,6 +1030,7 @@ func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error
 		}
 	}
 	key.LastUsedAt = &now
+	s.rolloverApiKeyBilling(ctx, key, now)
 	return key, nil
 }
 

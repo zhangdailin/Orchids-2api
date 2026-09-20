@@ -20,11 +20,15 @@ type requestObservation struct {
 	mu                                      sync.Mutex
 	input, cached, output, reasoning, total int64
 	usage                                   bool
-	attempts, failures, switches            int64
-	account                                 int64
-	providerReached                         bool
-	finalEvent                              *audit.Event
-	journal                                 audit.Logger
+	// costTicks sums every priced row the request produced, and priced marks that
+	// at least one of them carried a price.
+	costTicks                    int64
+	priced                       bool
+	attempts, failures, switches int64
+	account                      int64
+	providerReached              bool
+	finalEvent                   *audit.Event
+	journal                      audit.Logger
 }
 
 var requestJournal audit.Logger
@@ -44,6 +48,12 @@ func (l observedAuditLogger) Log(ctx context.Context, e audit.Event) {
 	deferJournal := false
 	if box, ok := ctx.Value(requestObservationKey{}).(*requestObservation); ok {
 		box.mu.Lock()
+		// A request can produce more than one priced row (a retry, or a media
+		// call after a text attempt), so the cost is summed rather than replaced.
+		if e.CostInUSDTicks > 0 {
+			box.costTicks += e.CostInUSDTicks
+			box.priced = true
+		}
 		if strings.HasSuffix(e.Action, "upstream_attempt") {
 			box.providerReached = true
 			box.attempts++

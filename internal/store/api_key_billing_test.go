@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -272,5 +274,92 @@ func TestApiKeyBillingRejectsInvalidReservations(t *testing.T) {
 	}
 	if err := s.ResetApiKeyBilling(ctx, 0); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("resetting key 0 = %v, want ErrNoRows", err)
+	}
+}
+
+// A key with a billing period starts a fresh period once it elapses, so a limit
+// is per period rather than forever.
+func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
+	s, mini := newApiKeyBillingStore(t, "period:")
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	key := &ApiKey{
+		Name: "period", KeyHash: "hash-period", Enabled: true,
+		BillingLimitUSDTicks: 1_000_000, BillingPeriodDays: 1,
+		BillingPeriodStartedAt: now.Add(-48 * time.Hour),
+	}
+	if err := s.CreateApiKey(ctx, key); err != nil {
+		t.Fatalf("CreateApiKey: %v", err)
+	}
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "req_old", 500_000); err != nil {
+		t.Fatalf("SettleApiKeyBilling: %v", err)
+	}
+	stored, err := s.GetApiKeyByID(ctx, key.ID)
+	if err != nil || stored.BillingUsedUSDTicks != 500_000 {
+		t.Fatalf("used=%d err=%v", stored.BillingUsedUSDTicks, err)
+	}
+
+	// Authorizing the key rolls an elapsed period over. The lookup hashes the raw
+	// value, so the key is created with the hash of the raw value the caller uses.
+	raw := "raw-period-key"
+	digest := sha256.Sum256([]byte(raw))
+	key.KeyHash = hex.EncodeToString(digest[:])
+	if err := s.UpdateApiKey(ctx, key); err != nil {
+		t.Fatalf("UpdateApiKey: %v", err)
+	}
+	if _, err := s.AuthorizeApiKey(ctx, raw); err != nil {
+		t.Fatalf("AuthorizeApiKey: %v", err)
+	}
+	rolled, err := s.GetApiKeyByID(ctx, key.ID)
+	if err != nil {
+		t.Fatalf("GetApiKeyByID: %v", err)
+	}
+	if rolled.BillingUsedUSDTicks != 0 {
+		t.Fatalf("the period did not roll over: used=%d", rolled.BillingUsedUSDTicks)
+	}
+	if !rolled.BillingPeriodStartedAt.After(now.Add(-time.Minute)) {
+		t.Fatalf("period start was not advanced: %v", rolled.BillingPeriodStartedAt)
+	}
+}
+
+// Resetting billing by hand zeroes the counter without touching the limit.
+func TestResetApiKeyBillingKeepsTheLimit(t *testing.T) {
+	s, mini := newApiKeyBillingStore(t, "reset:")
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+	ctx := context.Background()
+
+	key := &ApiKey{Name: "reset", KeyHash: "hash-reset", Enabled: true, BillingLimitUSDTicks: 2_000_000}
+	if err := s.CreateApiKey(ctx, key); err != nil {
+		t.Fatalf("CreateApiKey: %v", err)
+	}
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "req_1", 1_000_000); err != nil {
+		t.Fatalf("SettleApiKeyBilling: %v", err)
+	}
+	if err := s.ResetApiKeyBilling(ctx, key.ID); err != nil {
+		t.Fatalf("ResetApiKeyBilling: %v", err)
+	}
+	stored, err := s.GetApiKeyByID(ctx, key.ID)
+	if err != nil {
+		t.Fatalf("GetApiKeyByID: %v", err)
+	}
+	if stored.BillingUsedUSDTicks != 0 {
+		t.Fatalf("used=%d want 0", stored.BillingUsedUSDTicks)
+	}
+	if stored.BillingLimitUSDTicks != 2_000_000 {
+		t.Fatalf("the limit was lost: %d", stored.BillingLimitUSDTicks)
+	}
+	// Capacity is back: a reservation that the old usage would have blocked now
+	// succeeds.
+	ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "req_2", 2_000_000, time.Now().Add(time.Minute))
+	if err != nil || !ok {
+		t.Fatalf("reserve after reset ok=%v err=%v", ok, err)
 	}
 }

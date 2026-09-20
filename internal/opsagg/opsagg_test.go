@@ -349,3 +349,44 @@ func TestDetailedOutcomePreservesUsageCohortsAndTruePercentiles(t *testing.T) {
 		t.Fatalf("model ttft=%+v", models)
 	}
 }
+
+// A priced row contributes its cost to the bucket, the summary and the API view;
+// an unpriced row contributes usage but no cost, so a dashboard can show both
+// figures side by side instead of presenting one as the whole truth.
+func TestObserveAggregatesCostByPricedAndUnpriced(t *testing.T) {
+	aggregator, _ := newAggregator(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	aggregator.Observe(ctx, Outcome{
+		Channel: "grok", Model: "grok-4.6", Status: "2xx", OK: true,
+		InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
+		UsageReported: true, Priced: true, CostInUSDTicks: 1_500_000, At: now,
+	})
+	aggregator.Observe(ctx, Outcome{
+		Channel: "grok", Model: "future-model", Status: "2xx", OK: true,
+		InputTokens: 100, OutputTokens: 50, TotalTokens: 150,
+		UsageReported: true, Priced: false, At: now,
+	})
+
+	buckets, err := aggregator.Range(ctx, "grok", now.Add(-time.Minute), now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Range: %v", err)
+	}
+	if len(buckets) != 1 {
+		t.Fatalf("buckets=%d want 1", len(buckets))
+	}
+	if buckets[0].CostInUSDTicks != 1_500_000 {
+		t.Fatalf("bucket cost=%d want 1500000", buckets[0].CostInUSDTicks)
+	}
+	if buckets[0].PricedRequests != 1 || buckets[0].UnpricedRequests != 1 {
+		t.Fatalf("priced=%d unpriced=%d", buckets[0].PricedRequests, buckets[0].UnpricedRequests)
+	}
+	summary := aggregator.SummarizeWith(ctx, SummaryInput{Channel: "grok", Buckets: buckets, WindowMinutes: 1})
+	if summary.CostInUSDTicks != 1_500_000 {
+		t.Fatalf("summary cost=%d", summary.CostInUSDTicks)
+	}
+	if summary.PricedRequests != 1 || summary.UnpricedRequests != 1 {
+		t.Fatalf("summary priced=%d unpriced=%d", summary.PricedRequests, summary.UnpricedRequests)
+	}
+}

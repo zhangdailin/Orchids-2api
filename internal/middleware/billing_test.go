@@ -474,3 +474,36 @@ func TestBillingRequestModelFallsBackToPath(t *testing.T) {
 		t.Fatal("the path fallback must not resolve to a priced model")
 	}
 }
+
+// A media request hands in its own price, and the same claim-once rule applies so
+// a retry cannot charge twice.
+func TestSettleAPIKeyBillingResultBooksAnExplicitPrice(t *testing.T) {
+	stub := &stubBillingLedger{limit: 10_000_000_000, held: map[string]int64{"req_media_1": 1_000_000_000}}
+	reservation := &BillingReservation{KeyID: 7, EventID: "req_media_1", Amount: 1_000_000_000}
+	ctx := WithBillingReservation(context.Background(), reservation)
+
+	price := pricing.Result{Model: "grok-imagine-image", CostInUSDTicks: 200_000_000}
+	if !SettleAPIKeyBillingResult(ctx, stub, price) {
+		t.Fatal("an explicit price was not booked")
+	}
+	if len(stub.settles) != 1 || stub.settles[0] != 200_000_000 || stub.used != 200_000_000 {
+		t.Fatalf("settles=%v used=%d", stub.settles, stub.used)
+	}
+	// A second call for the same request charges nothing more.
+	SettleAPIKeyBillingResult(ctx, stub, price)
+	if len(stub.settles) != 1 || stub.used != 200_000_000 {
+		t.Fatalf("the request was charged twice: settles=%v used=%d", stub.settles, stub.used)
+	}
+	// An unpriced request is neither booked nor an error.
+	if SettleAPIKeyBillingResult(ctx, stub, pricing.Result{}) {
+		t.Fatal("an unpriced result was booked")
+	}
+	if len(stub.settles) != 1 {
+		t.Fatalf("settles=%v", stub.settles)
+	}
+	// A key with no hold still defines a price (the audit row carries it), but
+	// nothing is booked.
+	if !SettleAPIKeyBillingResult(context.Background(), stub, price) || len(stub.settles) != 1 {
+		t.Fatalf("an unheld request booked usage: settles=%v", stub.settles)
+	}
+}

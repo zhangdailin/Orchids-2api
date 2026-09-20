@@ -15,6 +15,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/goccy/go-json"
+
+	"orchids-api/internal/pricing"
 )
 
 const (
@@ -253,6 +255,13 @@ func (h *Handler) HandleTTS(w http.ResponseWriter, r *http.Request) {
 		"Content-Type": []string{"application/json"},
 		"Accept":       []string{"*/*"},
 	})
+	// xAI publishes TTS per character, so the price comes from the text that was
+	// actually spoken rather than from a token count.
+	if cost, priced := pricing.EstimateTTSCost(req.Text); priced {
+		h.settleMediaBilling(r.Context(), modelID, cost, map[string]interface{}{
+			"plane": "console", "endpoint": "tts", "characters": utf8.RuneCountInString(req.Text),
+		})
+	}
 }
 
 // HandleAudioSpeech maps the OpenAI /v1/audio/speech and /v1/audio/tasks
@@ -303,6 +312,8 @@ func (h *Handler) HandleAudioSpeech(w http.ResponseWriter, r *http.Request) {
 	subRequest.ContentLength = int64(len(body))
 	subRequest.Header = r.Header.Clone()
 	subRequest.Header.Set("Content-Type", "application/json")
+	// The mapped request keeps the caller's text, so the character price is
+	// computed once here and charged by HandleTTS.
 	h.HandleTTS(w, subRequest)
 }
 
@@ -765,11 +776,22 @@ func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, mo
 	h.forwardConsoleVoiceWith(w, r, modelID, method, path, body, headers, nil)
 }
 
+// forwardConsoleVoiceObserved is forwardConsoleVoice that hands the upstream JSON
+// body to observe after it has been written. STT pricing needs the duration the
+// upstream reports, which is only in that body.
+func (h *Handler) forwardConsoleVoiceObserved(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header, observe func([]byte)) {
+	h.forwardConsoleVoiceWithObserver(w, r, modelID, method, path, body, headers, nil, observe)
+}
+
 // forwardConsoleVoiceWith is forwardConsoleVoice with an optional JSON rewriter.
 // A nil rewriter keeps the byte-for-byte passthrough used by every audio
 // endpoint; a rewriter is used where the response shape is part of the public
 // contract (the voice list).
 func (h *Handler) forwardConsoleVoiceWith(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header, rewriteJSON func([]byte) []byte) {
+	h.forwardConsoleVoiceWithObserver(w, r, modelID, method, path, body, headers, rewriteJSON, nil)
+}
+
+func (h *Handler) forwardConsoleVoiceWithObserver(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header, rewriteJSON func([]byte) []byte, observe func([]byte)) {
 	// A voice request used to be sent to exactly one account. A 402/429/5xx is
 	// an account-scoped condition (the same allowance the chat path rotates on),
 	// so the request is retried on another account before the caller sees an
@@ -817,7 +839,14 @@ func (h *Handler) forwardConsoleVoiceWith(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(rewriteJSON(raw))
+	if rewriteJSON != nil {
+		_, _ = w.Write(rewriteJSON(raw))
+	} else {
+		_, _ = w.Write(raw)
+	}
+	if observe != nil {
+		observe(raw)
+	}
 }
 
 // maxVoiceAccountAttempts bounds how many accounts one voice request may try.
