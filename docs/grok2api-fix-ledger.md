@@ -437,6 +437,8 @@
 
 **有意保留的边界**（不影响条目关闭，但记录清楚）：图片/视频档计价与 `PricingBreakdown` 未移植（不在 A9-1 要求的 API 面内，且属 A9-12 的聚合维度）；管理端未暴露"重置 Key 用量"端点（store 层 `ResetApiKeyBilling` 已实现并测试）；成本聚合（opsagg）仍缺 priced/unpriced 维度，属 A9-12。
 
+> 第十三轮更新：图片/视频计价与结算已补（见第十七节），上面这条只剩 `PricingBreakdown`（成本重建结构）未移植。
+
 ## 十五、第十一轮：完全对齐 grok2api（12 条保留项）
 
 按"完全对齐参考实现"的要求逐条清除此前有意保留的差异。凡原先用测试锁定的旧契约，测试同步改写为参考实现语义（改动即契约变更，不再有"两个契约各留一份"）。
@@ -477,3 +479,16 @@
 
 - 审计 171 条：**171 已修复/已对齐、0 保留、0 未修**；6 条 P0 全部关闭。
 - 与 grok2api（906b9493 v3.1.6）的行为差异只剩**产品形态**层面：本项目是多通道聚合（Warp/Puter/WorkBuddy/Qoder + 统一 `/v1`）、自带管理端与 Redis 存储、部署形态为 systemd+Caddy+nft；这些不是审计条目，也不影响 Grok 通道的对外契约。
+
+## 十七、第十三～十四轮：与参考实现的行为对齐收尾（覆盖缺口）
+
+审计的 171 条已经全部关闭，这里记录的是此前**不在审计条目内、但参考实现有而本项目没有**的覆盖缺口，按"完全对齐"要求补齐。
+
+| 缺口 | 处理 |
+| --- | --- |
+| 图片/视频计价缺失 | `internal/pricing` 移植参考实现的三张表：文生图（按模型 + `resolution`/`quality`：1k/2k、low/medium，含 `grok-imagine-image` 平档与 `-quality` 1k/2k）、图片编辑（输出张数 × 档位 + 输入张数 × 处理费）、视频（时长 × 每秒费率 + 参考图张数，区分 `grok-imagine-video` 与 `-1.5` 的分辨率档）。未知组合保持 unpriced，不猜价。 |
+| 媒体请求不计费 | `middleware.SettleAPIKeyBillingResult` 让按资产计价的请求把真实成本记到同一个 Key 预留上；Grok 侧新增 `settleMediaBilling`，写一条 `grok_media_request` 审计行并带 `cost_in_usd_ticks` / `pricing_model` / `pricing_version`。已接入 Web 与 Console 的图片生成/编辑路径。 |
+| 质量 hold 阈值量纲 | 由"字符"改为与参考实现一致的 token 量纲（用同一套 rune/4 估算换算），上游上报的推理 token 数优先。 |
+| compaction blob 信封字段 | 明文信封字段名改为参考实现的 `version`/`session`/`summary`。 |
+
+**仍在进行（下一轮）**：TTS/STT/视频三条路径的结算接线（估值函数已就绪）；ops 聚合的 cost 与 priced/unpriced 维度；Key 账期重置与管理端入口；`PricingBreakdown`（成本重建结构）。
