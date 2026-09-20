@@ -27,6 +27,7 @@ import (
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/provider"
 	"orchids-api/internal/qoder"
+	"orchids-api/internal/secureblob"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/internal/tokencache"
@@ -157,6 +158,15 @@ func main() {
 	h := handler.NewWithLoadBalancer(cfg, lb)
 	defer h.Close()
 	grokHandler := grok.NewHandler(cfg, lb)
+	// Gateway-owned Responses compaction seals its summaries with a key derived
+	// from the credential key, so the state survives a restart and a request
+	// served by another account. Without a key the feature stays off.
+	compactionCipher, cipherErr := secureblob.NewCipher(credentialKey)
+	if cipherErr != nil {
+		slog.Error("Failed to derive the gateway compaction key", "error", cipherErr)
+		os.Exit(1)
+	}
+	grokHandler.SetCompactionCipher(compactionCipher)
 	apiHandler.SetConfigChangeHook(func(next *config.Config) {
 		configureRuntimeLogging(next)
 		h.SetConfig(next)
@@ -198,6 +208,9 @@ func main() {
 		// logger keeps requests and operations in one searchable journal.
 		middleware.SetOperationAuditLogger(auditLogger)
 		middleware.SetRequestAuditLogger(auditLogger)
+		// Client-key billing settles against the same store that took the
+		// reservation. Wiring it once keeps every channel's settle path identical.
+		middleware.SetAPIKeyBillingStore(s)
 		// Per-minute buckets back the operations overview. The trace middleware
 		// reports one observation per finished request, so the counters cannot
 		// double count an upstream retry.

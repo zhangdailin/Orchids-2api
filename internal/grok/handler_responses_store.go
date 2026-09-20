@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,19 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	toolAliases := collectBuildToolAliases(payload)
+	// Gateway-owned compaction state is expanded before the payload is
+	// normalized, so the summary reaches the upstream as an ordinary user
+	// message and the reasoning-replay machinery never sees a sealed blob.
+	if codec := h.compactionCodecSnapshot(); codec.available() {
+		drifted, expandErr := expandGatewayCompactionHistory(payload, codec, sessionFromContext(r.Context()).Key)
+		if expandErr != nil {
+			writeResponsesAPIErrorWithParam(w, http.StatusBadRequest, "invalid_compaction_blob", expandErr.Error(), compactionErrorParam(expandErr))
+			return
+		}
+		if drifted > 0 {
+			w.Header().Set("X-Grok2API-Compaction-Session-Drift", strconv.Itoa(drifted))
+		}
+	}
 	if err := normalizeBuildResponsesPayload(payload); err != nil {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -175,6 +189,15 @@ func (h *Handler) HandleResponsesCompact(w http.ResponseWriter, r *http.Request)
 	spec, ok := h.resolveConversationModel(r.Context(), modelID)
 	if !ok || !modelRoutedToCLI(spec, h.configSnapshot()) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "responses compact requires a Grok Build model")
+		return
+	}
+	// The whole point of this endpoint is compaction, so it takes the gateway
+	// path whenever the gateway can own the summary. The upstream blob a pure
+	// forward returns is readable only by the account that produced it, which is
+	// exactly what breaks a continuation served by another account.
+	if h.GatewayCompactionEnabled() {
+		payload["stream"] = false
+		h.handleGatewayCompaction(w, r, modelID, spec, payload, false)
 		return
 	}
 	payload["stream"] = false
@@ -529,6 +552,13 @@ func (c *boundedResponseCapture) Write(p []byte) (int, error) {
 }
 
 func writeResponsesAPIError(w http.ResponseWriter, status int, code, message string) {
+	writeResponsesAPIErrorWithParam(w, status, code, message, "")
+}
+
+// writeResponsesAPIErrorWithParam is the same envelope with a `param` that names
+// the offending request field. A blob that cannot be decoded has to say which
+// input item to drop, and "param" is where an OpenAI-shaped client looks.
+func writeResponsesAPIErrorWithParam(w http.ResponseWriter, status int, code, message, param string) {
 	// The type has to follow the status: a client retries an overload or a rate
 	// limit and stops on a bad request, and a constant invalid_request_error
 	// told every client to stop, including for a 503 it could have retried.
@@ -543,12 +573,16 @@ func writeResponsesAPIError(w http.ResponseWriter, status int, code, message str
 	case status >= 500:
 		errType = "server_error"
 	}
+	var paramValue interface{}
+	if strings.TrimSpace(param) != "" {
+		paramValue = param
+	}
 	writeJSONStatus(w, status, map[string]interface{}{
 		"error": map[string]interface{}{
 			"message": message,
 			"type":    errType,
 			"code":    code,
-			"param":   nil,
+			"param":   paramValue,
 		},
 	})
 }

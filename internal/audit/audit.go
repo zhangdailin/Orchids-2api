@@ -60,9 +60,17 @@ type Event struct {
 	ReasoningTokens   int         `json:"reasoning_tokens,omitempty"`
 	TotalTokens       int         `json:"total_tokens,omitempty"`
 	UsageSource       UsageSource `json:"usage_source,omitempty"`
-	ClientIP          string      `json:"client_ip,omitempty"`
-	UserAgent         string      `json:"user_agent,omitempty"`
-	Duration          int64       `json:"duration_ms,omitempty"`
+	// CostInUSDTicks is the priced cost of this request in USD ticks
+	// (1 USD = 10,000,000,000 ticks). PricingModel is the canonical model the
+	// rate was resolved to and PricingVersion identifies the rate table that
+	// produced it. An empty PricingModel means the row was deliberately not
+	// priced, which is distinct from a priced zero.
+	CostInUSDTicks int64  `json:"cost_in_usd_ticks,omitempty"`
+	PricingModel   string `json:"pricing_model,omitempty"`
+	PricingVersion string `json:"pricing_version,omitempty"`
+	ClientIP       string `json:"client_ip,omitempty"`
+	UserAgent      string `json:"user_agent,omitempty"`
+	Duration       int64  `json:"duration_ms,omitempty"`
 	// Target names the object a management change touched (account id, key id).
 	Target  string `json:"target,omitempty"`
 	Status  string `json:"status"`

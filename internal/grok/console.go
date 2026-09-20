@@ -385,7 +385,13 @@ func consoleUsage(v map[string]interface{}) map[string]interface{} {
 // reporting, quota sync, then streaming or collection. Shared by the console
 // and CLI chat paths. url is used for both error and request logging; headers
 // is evaluated lazily so it is only built on the success path.
-func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, sess *chatAccountSession, logger *debug.Logger, name, url string, headers func() http.Header, payload map[string]interface{}, resp *http.Response, err error) {
+// finishUpstreamChat completes a chat response after an upstream call.
+//
+// It reports a withheld turn: the response was held back by the quality guard,
+// nothing reached the client, and the caller may retry it on another account. The
+// parked body is returned so the last attempt can still be delivered when the
+// retry budget runs out (the default fail-open policy).
+func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, sess *chatAccountSession, logger *debug.Logger, name, url string, headers func() http.Header, payload map[string]interface{}, resp *http.Response, err error) (*parkedResponse, bool) {
 	if err != nil {
 		h.auditChatOutcome(ctx, sess.acc, req, chatOutcome{Finish: "error", Err: err})
 		slog.Error(name+" chat upstream failed", "url", url, "status", parseUpstreamStatus(err), "error", err)
@@ -402,7 +408,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 			h.markAccountStatus(ctx, sess.acc, fmt.Errorf("grok upstream status=429 body=anti-bot rejected session"))
 		}
 		writeGrokUpstreamError(w, err)
-		return
+		return nil, false
 	}
 	defer resp.Body.Close()
 	if recovery := resp.Header.Get("X-Grok2API-Reasoning-Recovery"); recovery != "" {
@@ -414,15 +420,61 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		}
 	}
 	h.syncGrokQuota(sess.acc, resp.Header)
+	provider := "web"
+	if sess.acc != nil {
+		provider = ProviderForAccount(sess.acc)
+	}
+	holdEnabled := h.shouldHoldQualityTurn(req, provider)
+
 	if req.Stream {
-		result := h.streamConsoleChat(w, req, resp.Body)
+		var hold *consoleQualityHold
+		if holdEnabled {
+			hold = newConsoleQualityHold(w, h.qualityHoldPolicy(), nil)
+		}
+		result := h.streamConsoleChatHolding(w, req, resp.Body, hold)
 		h.applyConsoleQualityGuard(ctx, sess.acc, result)
 		h.auditChatOutcome(ctx, sess.acc, req, result)
-		return
+		if result.Withheld && hold != nil {
+			h.auditQualityDegraded(ctx, sess.acc, req, result, "stream")
+			return hold.writer.Park(), true
+		}
+		return nil, false
 	}
-	result := h.collectConsoleChat(w, req, resp.Body)
+
+	if !holdEnabled {
+		result := h.collectConsoleChat(w, req, resp.Body)
+		h.applyConsoleQualityGuard(ctx, sess.acc, result)
+		h.auditChatOutcome(ctx, sess.acc, req, result)
+		return nil, false
+	}
+	// A collected response is buffered anyway, so holding it costs nothing: the
+	// body is only written once the guard has judged it.
+	deferred := newDeferredResponseWriter(w)
+	result := h.collectConsoleChat(deferred, req, resp.Body)
 	h.applyConsoleQualityGuard(ctx, sess.acc, result)
 	h.auditChatOutcome(ctx, sess.acc, req, result)
+	if result.Err != nil {
+		if commitErr := deferred.Commit(); commitErr != nil {
+			slog.Debug("held error response commit failed", "error", commitErr)
+		}
+		return nil, false
+	}
+	hold := &consoleQualityHold{
+		writer:  deferred,
+		policy:  h.qualityHoldPolicy(),
+		started: time.Now(),
+		outcome: &result,
+	}
+	if verdict, _ := hold.step(true); verdict == qualityWithhold {
+		result.Withheld = true
+		result.Quality.Terminal = true
+		h.auditQualityDegraded(ctx, sess.acc, req, result, "collected")
+		return deferred.Park(), true
+	}
+	if commitErr := deferred.Commit(); commitErr != nil {
+		slog.Debug("held response commit failed", "error", commitErr)
+	}
+	return nil, false
 }
 
 func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger, build bool) {
@@ -478,19 +530,70 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		}
 		return h.doConsole(withRateLimitAccount(ctx, sess.acc), sess.token, payload)
 	}
-	resp, err := h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond, request, openNext, nil)
-	if build && err == nil && resp != nil {
-		tools := append(append([]map[string]interface{}(nil), req.ResponsesTools...), consoleToolsFromOpenAI(req.Tools)...)
-		if aliases := collectBuildToolAliases(map[string]interface{}{"tools": tools}); len(aliases) > 0 {
-			resp.Body = rewriteBuildToolAliasResponse(resp.Body, resp.Header.Get("Content-Type"), aliases)
+	// Quality hold: a withheld turn never reached the client, so the request can
+	// be retried on another account. The budget is separate from (and smaller
+	// than) the transport retry budget, because every held attempt costs a full
+	// upstream generation.
+	policy := h.qualityHoldPolicy()
+	replayUnsafe := qualityRequestReplayUnsafe(req)
+	used := make([]int64, 0, policy.MaxAttempts+defaultAccountSwitchBudget)
+	var parked *parkedResponse
+	for attempt := 0; ; attempt++ {
+		if sess.acc != nil && sess.acc.ID != 0 {
+			used = append(used, sess.acc.ID)
 		}
+		resp, err := h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond, request, openNext, nil)
+		if build && err == nil && resp != nil {
+			tools := append(append([]map[string]interface{}(nil), req.ResponsesTools...), consoleToolsFromOpenAI(req.Tools)...)
+			if aliases := collectBuildToolAliases(map[string]interface{}{"tools": tools}); len(aliases) > 0 {
+				resp.Body = rewriteBuildToolAliasResponse(resp.Body, resp.Header.Get("Content-Type"), aliases)
+			}
+		}
+		body, withheld := h.finishUpstreamChat(ctx, w, req, sess, logger, provider, endpoint, func() http.Header {
+			if build {
+				return h.cliHeaders(sess.acc, sess.token)
+			}
+			return h.webClient().consoleHeaders(sess.token)
+		}, payload, resp, err)
+		if !withheld {
+			return
+		}
+		parked = body
+		action := boundQualityRetry(
+			decideQualityRetry(qualityWithhold, attempt, policy.MaxAttempts, policy.OnExhausted),
+			attempt+1 < policy.MaxAttempts && !replayUnsafe,
+			policy.OnExhausted,
+		)
+		if action != qualityActionRetry {
+			h.deliverParkedQualityTurn(w, parked, action)
+			return
+		}
+		next, switchErr := openNext(used)
+		if switchErr != nil {
+			// No other account can serve it: deliver the held turn instead of
+			// failing a request the upstream completed.
+			h.deliverParkedQualityTurn(w, parked, qualityActionDeliverLast)
+			return
+		}
+		sess.acc, sess.token, sess.poolCandidates, sess.release = next.acc, next.token, next.poolCandidates, next.release
 	}
-	h.finishUpstreamChat(ctx, w, req, sess, logger, provider, endpoint, func() http.Header {
-		if build {
-			return h.cliHeaders(sess.acc, sess.token)
-		}
-		return h.webClient().consoleHeaders(sess.token)
-	}, payload, resp, err)
+}
+
+// deliverParkedQualityTurn finishes a request whose attempts were all withheld.
+// Fail-open (the default) writes the last held response so the caller still gets
+// the answer the upstream produced; fail-closed reports the degradation instead.
+func (h *Handler) deliverParkedQualityTurn(w http.ResponseWriter, parked *parkedResponse, action qualityRetryAction) {
+	if action == qualityActionReject {
+		writeGrokErrorCode(w, http.StatusBadGateway, "quality_degraded", "every candidate account returned a degraded response")
+		return
+	}
+	if parked.isEmpty() {
+		writeGrokErrorCode(w, http.StatusBadGateway, "quality_degraded", "the upstream response was withheld and could not be delivered")
+		return
+	}
+	if err := parked.CommitTo(w); err != nil {
+		slog.Debug("withheld response delivery failed", "error", err)
+	}
 }
 
 const (

@@ -149,22 +149,81 @@ var (
 		if redis.call("GET", KEYS[1]) ~= ARGV[1] then return 0 end
 		return redis.call("DEL", KEYS[1])
 	`)
+	// reserveApiKeyBillingScript implements the whole reservation decision in one
+	// atomic step: expired holds are pruned, the live holds are summed with the
+	// settled counter, and the new hold is only inserted when the key's limit
+	// still covers it. A repeat of the same event id with the same amount is
+	// idempotent; the same event id with a different amount is a conflict.
+	// KEYS: reservations hash, used counter, limit mirror.
+	// ARGV: event id, amount ticks, now unix seconds, expiry unix seconds.
+	reserveApiKeyBillingScript = redis.NewScript(`
+		local event_id = ARGV[1]
+		local amount = tonumber(ARGV[2])
+		local now = tonumber(ARGV[3])
+		local expires_at = tonumber(ARGV[4])
+		local limit = tonumber(redis.call("GET", KEYS[3]) or "0") or 0
+		local used = tonumber(redis.call("GET", KEYS[2]) or "0") or 0
+		local live_sum = 0
+		local max_expiry = expires_at
+		local fields = redis.call("HGETALL", KEYS[1])
+		for i = 1, #fields, 2 do
+			local field = fields[i]
+			local raw = fields[i + 1]
+			local separator = string.find(raw, ":", 1, true)
+			local held = nil
+			local expiry = nil
+			if separator then
+				held = tonumber(string.sub(raw, 1, separator - 1))
+				expiry = tonumber(string.sub(raw, separator + 1))
+			end
+			if held == nil or expiry == nil or expiry <= now then
+				redis.call("HDEL", KEYS[1], field)
+			elseif field == event_id then
+				if held == amount then return 1 end
+				return redis.error_reply("billing reservation exists with a different amount")
+			else
+				live_sum = live_sum + held
+				if expiry > max_expiry then max_expiry = expiry end
+			end
+		end
+		if limit > 0 and used + live_sum + amount > limit then return 0 end
+		redis.call("HSET", KEYS[1], event_id, tostring(amount) .. ":" .. tostring(expires_at))
+		redis.call("PEXPIREAT", KEYS[1], max_expiry * 1000 + 60000)
+		return 1
+	`)
+	// settleApiKeyBillingScript books actual usage. The hold is dropped first and
+	// the charge is added regardless of whether it still existed: the request
+	// really ran, and an expired hold must not erase its cost.
+	settleApiKeyBillingScript = redis.NewScript(`
+		redis.call("HDEL", KEYS[1], ARGV[1])
+		return redis.call("INCRBY", KEYS[2], tonumber(ARGV[2]))
+	`)
+	releaseApiKeyBillingScript = redis.NewScript(`
+		return redis.call("HDEL", KEYS[1], ARGV[1])
+	`)
+	resetApiKeyBillingScript = redis.NewScript(`
+		redis.call("DEL", KEYS[1])
+		redis.call("SET", KEYS[2], 0)
+		return 1
+	`)
 )
 
 type apiKeyRecord struct {
-	ID            int64      `json:"id"`
-	Name          string     `json:"name"`
-	KeyHash       string     `json:"key_hash"`
-	KeyFull       string     `json:"key_full,omitempty"`
-	KeyPrefix     string     `json:"key_prefix"`
-	KeySuffix     string     `json:"key_suffix"`
-	Enabled       bool       `json:"enabled"`
-	AllowedModels []string   `json:"allowed_models,omitempty"`
-	RPMLimit      int        `json:"rpm_limit,omitempty"`
-	MaxConcurrent int        `json:"max_concurrent,omitempty"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt    *time.Time `json:"last_used_at"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID                   int64      `json:"id"`
+	Name                 string     `json:"name"`
+	KeyHash              string     `json:"key_hash"`
+	KeyFull              string     `json:"key_full,omitempty"`
+	KeyPrefix            string     `json:"key_prefix"`
+	KeySuffix            string     `json:"key_suffix"`
+	Enabled              bool       `json:"enabled"`
+	AllowedModels        []string   `json:"allowed_models,omitempty"`
+	RPMLimit             int        `json:"rpm_limit,omitempty"`
+	MaxConcurrent        int        `json:"max_concurrent,omitempty"`
+	BillingLimitUSDTicks int64      `json:"billing_limit_usd_ticks,omitempty"`
+	BillingUsedUSDTicks  int64      `json:"billing_used_usd_ticks,omitempty"`
+	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt           *time.Time `json:"last_used_at"`
+	CreatedAt            time.Time  `json:"created_at"`
 }
 
 func newRedisStore(addr, password string, db int, prefix string, credentialKey []byte) (*redisStore, error) {
@@ -536,6 +595,23 @@ var errAccountUnchanged = fmt.Errorf("account unchanged")
 // updateAccountAtomic applies a field mutation with optimistic locking. Every
 // account writer uses the same watched key, so a quota/stat update that lands
 // between read and write causes a retry instead of being silently overwritten.
+// UpdateAccountQuality persists the quality guard's verdict.
+//
+// UpdateAccount copies a fixed field list for safety and does not include these
+// two, so a park decided by the guard was only ever applied to the in-memory
+// account: the next load from Redis brought the credential straight back into
+// rotation. This writes exactly the verdict and nothing else.
+func (s *redisStore) UpdateAccountQuality(ctx context.Context, id int64, failures int, cooldownUntil time.Time) error {
+	if failures < 0 {
+		failures = 0
+	}
+	return s.updateAccountAtomic(ctx, id, func(existing *Account) error {
+		existing.QualityFailures = failures
+		existing.QualityCooldownUntil = cooldownUntil
+		return nil
+	})
+}
+
 func (s *redisStore) updateAccountAtomic(ctx context.Context, id int64, mutate func(*Account) error) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
@@ -1000,6 +1076,13 @@ func (s *redisStore) CreateApiKey(ctx context.Context, key *ApiKey) error {
 	if record.KeyHash != "" {
 		pipe.Set(ctx, s.apiKeysHashKey(record.KeyHash), id, 0)
 	}
+	// The limit is mirrored next to the reservations so the atomic reserve script
+	// does not need to parse the key record. BillingUsedUSDTicks only seeds the
+	// counter; the counter is authoritative afterwards.
+	pipe.Set(ctx, s.apiKeyBillingLimitKey(id), record.BillingLimitUSDTicks, 0)
+	if record.BillingUsedUSDTicks > 0 {
+		pipe.Set(ctx, s.apiKeyBillingUsedKey(id), record.BillingUsedUSDTicks, 0)
+	}
 	_, err = pipe.Exec(ctx)
 	return err
 }
@@ -1041,6 +1124,10 @@ func (s *redisStore) UpdateApiKey(ctx context.Context, key *ApiKey) error {
 			pipe.Set(ctx, s.apiKeysHashKey(record.KeyHash), key.ID, 0)
 		}
 	}
+	// Keep the reservation mirror in step with the stored policy. The settled
+	// usage counter is ledger state, not a policy field, so an update never
+	// rewrites it.
+	pipe.Set(ctx, s.apiKeyBillingLimitKey(key.ID), record.BillingLimitUSDTicks, 0)
 	_, err = pipe.Exec(ctx)
 	return err
 }
@@ -1063,6 +1150,7 @@ func (s *redisStore) DeleteApiKey(ctx context.Context, id int64) error {
 	if key.KeyHash != "" {
 		pipe.Del(ctx, s.apiKeysHashKey(key.KeyHash))
 	}
+	pipe.Del(ctx, s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id), s.apiKeyBillingLimitKey(id))
 	_, err = pipe.Exec(ctx)
 	return err
 }
@@ -1115,11 +1203,112 @@ func (s *redisStore) ConsumeApiKeyRPM(ctx context.Context, id int64, limit int, 
 	return count <= int64(limit), nil
 }
 
+// ReserveApiKeyBilling holds amount ticks of a key's spending limit until
+// expiresAt. The check and the insert are one Lua script so two replicas cannot
+// both admit a request that the limit only covers once.
+func (s *redisStore) ReserveApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64, expiresAt time.Time) (bool, error) {
+	if s == nil || s.client == nil {
+		return false, fmt.Errorf("redis store not configured")
+	}
+	if id == 0 || strings.TrimSpace(eventID) == "" {
+		return false, ErrNoRows
+	}
+	if amount <= 0 {
+		return false, fmt.Errorf("billing reservation amount must be positive")
+	}
+	if expiresAt.IsZero() {
+		return false, fmt.Errorf("billing reservation expiry is required")
+	}
+	now := time.Now().UTC()
+	reserved, err := reserveApiKeyBillingScript.Run(
+		ctx,
+		s.client,
+		[]string{s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id), s.apiKeyBillingLimitKey(id)},
+		eventID,
+		amount,
+		now.Unix(),
+		expiresAt.UTC().Unix(),
+	).Int64()
+	if err != nil {
+		return false, err
+	}
+	return reserved == 1, nil
+}
+
+// SettleApiKeyBilling charges actual usage: the hold for eventID is dropped and
+// amount ticks are added to the settled counter. An unknown event id is still
+// charged, because the request really ran and an expired hold must not erase it.
+func (s *redisStore) SettleApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("redis store not configured")
+	}
+	if id == 0 || strings.TrimSpace(eventID) == "" {
+		return ErrNoRows
+	}
+	if amount < 0 {
+		return fmt.Errorf("billing settlement amount must not be negative")
+	}
+	_, err := settleApiKeyBillingScript.Run(
+		ctx,
+		s.client,
+		[]string{s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id)},
+		eventID,
+		amount,
+	).Int64()
+	return err
+}
+
+// ReleaseApiKeyBilling drops a hold without charging it and reports whether one
+// was held, which is what stops a settling request from being charged twice.
+func (s *redisStore) ReleaseApiKeyBilling(ctx context.Context, id int64, eventID string) (bool, error) {
+	if s == nil || s.client == nil {
+		return false, fmt.Errorf("redis store not configured")
+	}
+	if id == 0 || strings.TrimSpace(eventID) == "" {
+		return false, ErrNoRows
+	}
+	released, err := releaseApiKeyBillingScript.Run(
+		ctx,
+		s.client,
+		[]string{s.apiKeyBillingReservationsKey(id)},
+		eventID,
+	).Int64()
+	if err != nil {
+		return false, err
+	}
+	return released == 1, nil
+}
+
+// ResetApiKeyBilling zeroes the settled counter and drops every pending hold.
+// The configured limit itself is untouched.
+func (s *redisStore) ResetApiKeyBilling(ctx context.Context, id int64) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("redis store not configured")
+	}
+	if id == 0 {
+		return ErrNoRows
+	}
+	_, err := resetApiKeyBillingScript.Run(
+		ctx,
+		s.client,
+		[]string{s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id)},
+	).Int64()
+	return err
+}
+
 func (s *redisStore) getApiKeyByID(ctx context.Context, id int64) (*ApiKey, error) {
 	if id == 0 {
 		return nil, ErrNoRows
 	}
-	value, err := s.client.Get(ctx, s.apiKeysKey(id)).Result()
+	// One round trip: the record and the settled-usage counter that projects into
+	// it. The counter, not the stored JSON, is the source of truth for usage.
+	pipe := s.client.Pipeline()
+	recordCmd := pipe.Get(ctx, s.apiKeysKey(id))
+	usedCmd := pipe.Get(ctx, s.apiKeyBillingUsedKey(id))
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+	value, err := recordCmd.Result()
 	if err == redis.Nil {
 		return nil, ErrNoRows
 	}
@@ -1133,6 +1322,9 @@ func (s *redisStore) getApiKeyByID(ctx context.Context, id int64) (*ApiKey, erro
 	key := record.toApiKey()
 	if key.ID == 0 {
 		key.ID = id
+	}
+	if used, err := usedCmd.Int64(); err == nil {
+		key.BillingUsedUSDTicks = used
 	}
 	return key, nil
 }
@@ -1148,14 +1340,23 @@ func (s *redisStore) getApiKeysByIDs(ctx context.Context, ids []string) ([]*ApiK
 	}
 
 	keys := make([]string, 0, len(idNums))
+	usedKeys := make([]string, 0, len(idNums))
 	for _, id := range idNums {
 		keys = append(keys, s.apiKeysKey(id))
+		usedKeys = append(usedKeys, s.apiKeyBillingUsedKey(id))
 	}
 
-	values, err := s.client.MGet(ctx, keys...).Result()
+	pipe := s.client.Pipeline()
+	recordsCmd := pipe.MGet(ctx, keys...)
+	usedCmd := pipe.MGet(ctx, usedKeys...)
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+	values, err := recordsCmd.Result()
 	if err != nil {
 		return nil, err
 	}
+	usedValues, _ := usedCmd.Result()
 
 	results := make([]*ApiKey, len(values))
 	decode := func(i int) {
@@ -1170,6 +1371,13 @@ func (s *redisStore) getApiKeysByIDs(ctx context.Context, ids []string) ([]*ApiK
 		key := record.toApiKey()
 		if key.ID == 0 {
 			key.ID = idNums[i]
+		}
+		if i < len(usedValues) {
+			if raw, ok := usedValues[i].(string); ok {
+				if used, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64); err == nil {
+					key.BillingUsedUSDTicks = used
+				}
+			}
 		}
 		results[i] = key
 	}
@@ -1239,6 +1447,25 @@ func (s *redisStore) apiKeysHashKey(hash string) string {
 
 func (s *redisStore) apiKeyRPMKey(id, minute int64) string {
 	return fmt.Sprintf("%sapi_keys:rpm:%d:%d", s.prefix, id, minute)
+}
+
+// apiKeyBillingReservationsKey holds the live holds of one key as a hash of
+// "eventID -> <amount ticks>:<expiry unix seconds>". Expired fields are pruned
+// by the reserve script, and the hash itself expires shortly after its last hold.
+func (s *redisStore) apiKeyBillingReservationsKey(id int64) string {
+	return fmt.Sprintf("%skeybilling:res:%d", s.prefix, id)
+}
+
+// apiKeyBillingUsedKey is the settled usage counter in ticks. It is the source
+// of truth for how much a key has spent.
+func (s *redisStore) apiKeyBillingUsedKey(id int64) string {
+	return fmt.Sprintf("%skeybilling:used:%d", s.prefix, id)
+}
+
+// apiKeyBillingLimitKey mirrors the key's billing limit so the reserve script
+// can decide without loading and parsing the key record.
+func (s *redisStore) apiKeyBillingLimitKey(id int64) string {
+	return fmt.Sprintf("%skeybilling:limit:%d", s.prefix, id)
 }
 
 func (s *redisStore) storedResponseKey(responseID, ownerHash string) string {
@@ -1657,36 +1884,40 @@ func (s *redisStore) DeleteStoredMediaInput(ctx context.Context, id, ownerHash s
 
 func apiKeyRecordFromKey(key *ApiKey) apiKeyRecord {
 	return apiKeyRecord{
-		ID:            key.ID,
-		Name:          key.Name,
-		KeyHash:       key.KeyHash,
-		KeyPrefix:     key.KeyPrefix,
-		KeySuffix:     key.KeySuffix,
-		Enabled:       key.Enabled,
-		AllowedModels: append([]string(nil), key.AllowedModels...),
-		RPMLimit:      key.RPMLimit,
-		MaxConcurrent: key.MaxConcurrent,
-		ExpiresAt:     key.ExpiresAt,
-		LastUsedAt:    key.LastUsedAt,
-		CreatedAt:     key.CreatedAt,
+		ID:                   key.ID,
+		Name:                 key.Name,
+		KeyHash:              key.KeyHash,
+		KeyPrefix:            key.KeyPrefix,
+		KeySuffix:            key.KeySuffix,
+		Enabled:              key.Enabled,
+		AllowedModels:        append([]string(nil), key.AllowedModels...),
+		RPMLimit:             key.RPMLimit,
+		MaxConcurrent:        key.MaxConcurrent,
+		BillingLimitUSDTicks: key.BillingLimitUSDTicks,
+		BillingUsedUSDTicks:  key.BillingUsedUSDTicks,
+		ExpiresAt:            key.ExpiresAt,
+		LastUsedAt:           key.LastUsedAt,
+		CreatedAt:            key.CreatedAt,
 	}
 }
 
 func (r apiKeyRecord) toApiKey() *ApiKey {
 	return &ApiKey{
-		ID:            r.ID,
-		Name:          r.Name,
-		KeyHash:       r.KeyHash,
-		KeyFull:       r.KeyFull,
-		KeyPrefix:     r.KeyPrefix,
-		KeySuffix:     r.KeySuffix,
-		Enabled:       r.Enabled,
-		AllowedModels: append([]string(nil), r.AllowedModels...),
-		RPMLimit:      r.RPMLimit,
-		MaxConcurrent: r.MaxConcurrent,
-		ExpiresAt:     r.ExpiresAt,
-		LastUsedAt:    r.LastUsedAt,
-		CreatedAt:     r.CreatedAt,
+		ID:                   r.ID,
+		Name:                 r.Name,
+		KeyHash:              r.KeyHash,
+		KeyFull:              r.KeyFull,
+		KeyPrefix:            r.KeyPrefix,
+		KeySuffix:            r.KeySuffix,
+		Enabled:              r.Enabled,
+		AllowedModels:        append([]string(nil), r.AllowedModels...),
+		RPMLimit:             r.RPMLimit,
+		MaxConcurrent:        r.MaxConcurrent,
+		BillingLimitUSDTicks: r.BillingLimitUSDTicks,
+		BillingUsedUSDTicks:  r.BillingUsedUSDTicks,
+		ExpiresAt:            r.ExpiresAt,
+		LastUsedAt:           r.LastUsedAt,
+		CreatedAt:            r.CreatedAt,
 	}
 }
 

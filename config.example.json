@@ -44,5 +44,11 @@
   "grok_clearance_refresh_interval": 600,
 
   "fidelity_comment": "Upstream fidelity: the gateway relays client content verbatim by default. Set to explicitly re-enable legacy rewriting.",
-  "cc_entrypoint_mode": "keep"
+  "cc_entrypoint_mode": "keep",
+
+  "quality_hold_comment": "Quality hold: withhold a degraded reasoning turn instead of streaming it, then retry it on another account. Fail-open delivers the last held response once the retry budget is spent.",
+  "quality_hold_enabled": true,
+  "quality_hold_max_attempts": 6,
+  "quality_hold_timeout_ms": 30000,
+  "quality_hold_on_exhausted": "fail_open"
 }

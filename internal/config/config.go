@@ -139,6 +139,13 @@ type Config struct {
 	MaxRetries             int      `json:"max_retries,omitempty"`
 	RetryDelay             int      `json:"retry_delay,omitempty"`
 	AccountSwitchCount     int      `json:"account_switch_count,omitempty"`
+	// Quality-hold policy. The gateway withholds a degraded reasoning turn
+	// instead of streaming it, then retries it on another account. Holding is on
+	// by default and fails open once the retry budget is spent.
+	QualityHoldEnabled     *bool  `json:"quality_hold_enabled,omitempty"`
+	QualityHoldMaxAttempts int    `json:"quality_hold_max_attempts,omitempty"`
+	QualityHoldTimeoutMs   int    `json:"quality_hold_timeout_ms,omitempty"`
+	QualityHoldOnExhausted string `json:"quality_hold_on_exhausted,omitempty"`
 	RequestTimeout         int      `json:"request_timeout,omitempty"`
 	Retry429Interval       int      `json:"retry_429_interval,omitempty"`
 	TokenRefreshInterval   int      `json:"-"`

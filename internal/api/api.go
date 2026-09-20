@@ -1421,14 +1421,23 @@ type CreateKeyResponse struct {
 	MaxConcurrent int        `json:"max_concurrent,omitempty"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
+	// BillingLimitUSDTicks is the spending cap in USD ticks
+	// (1 USD = 10,000,000,000 ticks); zero means unlimited.
+	BillingLimitUSDTicks int64 `json:"billing_limit_usd_ticks,omitempty"`
 }
 
+// maxApiKeyBillingLimitUSDTicks caps an admin-supplied billing limit at
+// 9,000,000,000,000,000 ticks (900,000 USD), which keeps the sum of live holds
+// and settled usage comfortably inside int64.
+const maxApiKeyBillingLimitUSDTicks int64 = 9_000_000_000_000_000
+
 type UpdateKeyRequest struct {
-	Enabled       *bool           `json:"enabled"`
-	AllowedModels *[]string       `json:"allowed_models"`
-	RPMLimit      *int            `json:"rpm_limit"`
-	MaxConcurrent *int            `json:"max_concurrent"`
-	ExpiresAt     json.RawMessage `json:"expires_at"`
+	Enabled              *bool           `json:"enabled"`
+	AllowedModels        *[]string       `json:"allowed_models"`
+	RPMLimit             *int            `json:"rpm_limit"`
+	MaxConcurrent        *int            `json:"max_concurrent"`
+	ExpiresAt            json.RawMessage `json:"expires_at"`
+	BillingLimitUSDTicks *int64          `json:"billing_limit_usd_ticks"`
 }
 
 func normalizeAllowedModels(models []string) []string {
@@ -2800,6 +2809,8 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			RPMLimit      int        `json:"rpm_limit"`
 			MaxConcurrent int        `json:"max_concurrent"`
 			ExpiresAt     *time.Time `json:"expires_at"`
+			// Billing limit in USD ticks; zero means unlimited.
+			BillingLimitUSDTicks int64 `json:"billing_limit_usd_ticks"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2816,6 +2827,10 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.MaxConcurrent < 0 || req.MaxConcurrent > 1024 {
 			http.Error(w, "max_concurrent must be between 0 and 1024", http.StatusBadRequest)
+			return
+		}
+		if req.BillingLimitUSDTicks < 0 || req.BillingLimitUSDTicks > maxApiKeyBillingLimitUSDTicks {
+			http.Error(w, "billing_limit_usd_ticks must be between 0 and 9000000000000000", http.StatusBadRequest)
 			return
 		}
 		if req.ExpiresAt != nil {
@@ -2837,16 +2852,17 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 		hash := sha256.Sum256([]byte(fullKey))
 		hashStr := hex.EncodeToString(hash[:])
 		key := store.ApiKey{
-			Name:          req.Name,
-			KeyHash:       hashStr,
-			KeyFull:       fullKey,
-			KeyPrefix:     "sk-",
-			KeySuffix:     fullKey[len(fullKey)-4:],
-			Enabled:       true,
-			AllowedModels: normalizeAllowedModels(req.AllowedModels),
-			RPMLimit:      req.RPMLimit,
-			MaxConcurrent: req.MaxConcurrent,
-			ExpiresAt:     req.ExpiresAt,
+			Name:                 req.Name,
+			KeyHash:              hashStr,
+			KeyFull:              fullKey,
+			KeyPrefix:            "sk-",
+			KeySuffix:            fullKey[len(fullKey)-4:],
+			Enabled:              true,
+			AllowedModels:        normalizeAllowedModels(req.AllowedModels),
+			RPMLimit:             req.RPMLimit,
+			MaxConcurrent:        req.MaxConcurrent,
+			ExpiresAt:            req.ExpiresAt,
+			BillingLimitUSDTicks: req.BillingLimitUSDTicks,
 		}
 		if err := a.store.CreateApiKey(r.Context(), &key); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2855,17 +2871,18 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(CreateKeyResponse{
-			ID:            key.ID,
-			Key:           fullKey,
-			Name:          key.Name,
-			KeyPrefix:     key.KeyPrefix,
-			KeySuffix:     key.KeySuffix,
-			Enabled:       key.Enabled,
-			AllowedModels: key.AllowedModels,
-			RPMLimit:      key.RPMLimit,
-			MaxConcurrent: key.MaxConcurrent,
-			ExpiresAt:     key.ExpiresAt,
-			CreatedAt:     key.CreatedAt,
+			ID:                   key.ID,
+			Key:                  fullKey,
+			Name:                 key.Name,
+			KeyPrefix:            key.KeyPrefix,
+			KeySuffix:            key.KeySuffix,
+			Enabled:              key.Enabled,
+			AllowedModels:        key.AllowedModels,
+			RPMLimit:             key.RPMLimit,
+			MaxConcurrent:        key.MaxConcurrent,
+			ExpiresAt:            key.ExpiresAt,
+			CreatedAt:            key.CreatedAt,
+			BillingLimitUSDTicks: key.BillingLimitUSDTicks,
 		})
 
 	default:
@@ -2890,7 +2907,7 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.Enabled == nil && req.AllowedModels == nil && req.RPMLimit == nil && req.MaxConcurrent == nil && len(req.ExpiresAt) == 0 {
+		if req.Enabled == nil && req.AllowedModels == nil && req.RPMLimit == nil && req.MaxConcurrent == nil && req.BillingLimitUSDTicks == nil && len(req.ExpiresAt) == 0 {
 			http.Error(w, "at least one policy field is required", http.StatusBadRequest)
 			return
 		}
@@ -2922,6 +2939,13 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			key.MaxConcurrent = *req.MaxConcurrent
+		}
+		if req.BillingLimitUSDTicks != nil {
+			if *req.BillingLimitUSDTicks < 0 || *req.BillingLimitUSDTicks > maxApiKeyBillingLimitUSDTicks {
+				http.Error(w, "billing_limit_usd_ticks must be between 0 and 9000000000000000", http.StatusBadRequest)
+				return
+			}
+			key.BillingLimitUSDTicks = *req.BillingLimitUSDTicks
 		}
 		if len(req.ExpiresAt) > 0 {
 			expiresAt, err := parseOptionalExpiry(req.ExpiresAt)

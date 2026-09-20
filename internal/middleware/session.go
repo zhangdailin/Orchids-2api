@@ -27,7 +27,11 @@ type APIKeyPrincipal struct {
 	ID            int64
 	AllowedModels []string
 	MaxConcurrent int
-	DenialCode    string
+	// BillingLimitUSDTicks is the key's spending cap in USD ticks
+	// (1 USD = 10,000,000,000 ticks). Zero means unlimited, which is what a key
+	// created before billing existed reports.
+	BillingLimitUSDTicks int64
+	DenialCode           string
 }
 
 type keyConcurrencyEntry struct {
@@ -174,8 +178,13 @@ func writeAPIKeyError(w http.ResponseWriter, status int, message, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	errorType := "authentication_error"
-	if status == http.StatusTooManyRequests {
+	switch status {
+	case http.StatusTooManyRequests:
 		errorType = "rate_limit_error"
+	case http.StatusPaymentRequired:
+		// A spent budget is a quota problem, not a credential one. The code stays
+		// explicit so a client can distinguish it from a malformed key.
+		errorType = "insufficient_quota"
 	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"error": map[string]interface{}{

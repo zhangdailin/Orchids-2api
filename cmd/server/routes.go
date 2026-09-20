@@ -56,7 +56,12 @@ func registerRoutes(
 				key, err := s.AuthorizeApiKey(ctx, token)
 				switch {
 				case err == nil:
-					return &middleware.APIKeyPrincipal{ID: key.ID, AllowedModels: key.AllowedModels, MaxConcurrent: key.MaxConcurrent}, nil
+					return &middleware.APIKeyPrincipal{
+						ID:                   key.ID,
+						AllowedModels:        key.AllowedModels,
+						MaxConcurrent:        key.MaxConcurrent,
+						BillingLimitUSDTicks: key.BillingLimitUSDTicks,
+					}, nil
 				case err == store.ErrNoRows:
 					return nil, nil
 				case err == store.ErrApiKeyExpired:
@@ -67,7 +72,13 @@ func registerRoutes(
 					return nil, err
 				}
 			},
-			middleware.APIKeyConcurrencyWithTracker(next, accountTracker),
+			// Billing is reserved after admission (a request rejected for
+			// concurrency must not hold budget) and before the handler runs, so a
+			// key whose limit cannot cover the request is answered 402 instead.
+			middleware.APIKeyConcurrencyWithTracker(
+				middleware.APIKeyBillingReservation(next, s, middleware.DefaultBillingReservationTTL),
+				accountTracker,
+			),
 		)
 	}
 	// channelPrefixes are the channels that share the generic Anthropic and

@@ -16,6 +16,9 @@ import (
 )
 
 type chatOutcome struct {
+	// Withheld marks a turn the quality hold refused to deliver. Nothing was
+	// written to the client, so the caller may retry it on another account.
+	Withheld bool
 	Usage       map[string]interface{}
 	UsageSource audit.UsageSource
 	Finish      string
@@ -145,7 +148,23 @@ func isAntiBotFailure(detail map[string]interface{}, message string) bool {
 }
 
 func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) (outcome chatOutcome) {
+	return h.streamConsoleChatHolding(w, req, body, nil)
+}
+
+// streamConsoleChatHolding is streamConsoleChat with the quality hold attached.
+//
+// While a hold is active nothing is written to the client: the deferred writer
+// buffers frames, and the classifier decides after every content event whether
+// to release them (deliver), keep waiting, or drop them and let the caller retry
+// on another account (withhold). A nil hold keeps the plain streaming path.
+func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader, hold *consoleQualityHold) (outcome chatOutcome) {
 	outcomeStarted := time.Now()
+	if hold != nil {
+		// The hold reads this stream's own accounting, so point it at the outcome
+		// being built. It never writes to it.
+		hold.outcome = &outcome
+		hold.started = outcomeStarted
+	}
 	defer func() {
 		outcome.Quality.ExpectReasoning = qualityExpectsReasoning(req, false)
 		outcome.Quality.Terminal = outcome.Err == nil
@@ -155,7 +174,30 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 			}
 		}
 	}()
-	flusher := streamResponseHeaders(w)
+	var output io.Writer = w
+	var respWriter http.ResponseWriter = w
+	var flusher http.Flusher
+	if hold != nil {
+		output, respWriter, flusher = hold.writer, hold.writer, hold.writer
+	} else {
+		flusher = streamResponseHeaders(w)
+	}
+	// withheld aborts the read loop as soon as the classifier refuses the turn.
+	var withheld bool
+	checkHold := func(terminalEvent bool) error {
+		if hold == nil {
+			return nil
+		}
+		verdict, waiting := hold.step(terminalEvent)
+		if waiting {
+			return nil
+		}
+		if verdict == qualityWithhold {
+			withheld = true
+			return errQualityWithheld
+		}
+		return hold.writer.Commit()
+	}
 	id, created := "chatcmpl_"+randomHex(8), time.Now().Unix()
 	var text, reasoning, refusal strings.Builder
 	tools := map[string]*responseToolState{}
@@ -188,16 +230,24 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		if err != nil {
 			return err
 		}
-		if _, err = fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
+		if _, err = fmt.Fprintf(output, "data: %s\n\n", raw); err != nil {
 			return err
 		}
 		flusher.Flush()
-		return nil
+		return checkHold(false)
 	}
 	fail := func(err error) {
 		outcome.Err = err
 		outcome.Finish = "error"
-		writeSSEStreamError(w, flusher, nil, err.Error())
+		if hold != nil {
+			// An upstream error is not a quality dump: it belongs to
+			// retryWithAccountSwitch, which retries before any body exists. Release
+			// whatever was held so the caller sees a real error instead of silence.
+			if commitErr := hold.writer.Commit(); commitErr != nil {
+				return
+			}
+		}
+		writeSSEStreamError(respWriter, flusher, nil, err.Error())
 	}
 	if err := emit(map[string]interface{}{"role": "assistant"}, "", nil); err != nil {
 		outcome.Err = err
@@ -284,6 +334,9 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		return thoughts[key]
 	}
 	emitThought := func(key, source, value string) error {
+		if hold != nil {
+			hold.markReasoningStarted()
+		}
 		state := thought(key)
 		if state.source == "" {
 			state.source = source
@@ -298,6 +351,9 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		return emit(map[string]interface{}{"reasoning_content": value, "reasoning_item_id": state.key}, "", nil)
 	}
 	err := readResponseSSE(body, func(event, data string) error {
+		if withheld {
+			return errQualityWithheld
+		}
 		if data == "[DONE]" {
 			if !terminal {
 				return fmt.Errorf("upstream stream ended without a response terminal event")
@@ -342,6 +398,9 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 				searchDone[searchIdentity(item)] = kind == "response.output_item.done"
 				return emit(map[string]interface{}{"x_grok_search": item, "x_grok_search_done": kind == "response.output_item.done"}, "", nil)
 			case "reasoning":
+				if hold != nil {
+					hold.markReasoningStarted()
+				}
 				key := interfaceString(item["id"])
 				if filter.matched != "" {
 					return nil
@@ -473,10 +532,21 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 				}
 			}
 			terminal = true
+			// The turn is over: the classifier can now judge what arrived and
+			// release a healthy answer instead of holding it to the timeout.
+			if holdErr := checkHold(true); holdErr != nil {
+				return holdErr
+			}
 			return io.EOF
 		}
 		return nil
 	})
+	if errors.Is(err, errQualityWithheld) || withheld {
+		outcome.Withheld = true
+		outcome.Quality.Terminal = true
+		outcome.Finish = "quality_degraded"
+		return
+	}
 	if err != nil && err != io.EOF {
 		fail(fmt.Errorf("console stream read error: %w", err))
 		return
@@ -528,7 +598,7 @@ func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsR
 		outcome.Err = err
 		return
 	}
-	if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
+	if _, err := io.WriteString(output, "data: [DONE]\n\n"); err != nil {
 		outcome.Err = err
 		return
 	}

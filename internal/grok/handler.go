@@ -11,6 +11,7 @@ import (
 	"orchids-api/internal/handler"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"path/filepath"
@@ -43,6 +44,11 @@ type Handler struct {
 	replay       map[string]reasoningReplayEntry
 	instanceID   string
 	auditLogger  audit.Logger
+	// compactionCode seals and opens gateway-owned remote-v2 compaction state.
+	// Nil (no credential key configured) means the gateway cannot own a summary
+	// and compaction requests stay a plain upstream forward.
+	compactionMu   sync.RWMutex
+	compactionCode *gatewayCompactionCodec
 }
 
 type chatAccountSession struct {
@@ -201,10 +207,20 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 			usageSource = audit.UsageSourceEstimated
 		}
 	}
-	logger.Log(ctx, audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
+	event := audit.Event{Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_request", APIKeyID: middleware.APIKeyID(ctx),
 		AccountID: accountID, Model: req.Model, Channel: "grok", Provider: provider, Status: status, Error: message, Duration: duration, Metadata: metadata,
 		InputTokens: interfaceToInt(usage["prompt_tokens"]), OutputTokens: interfaceToInt(usage["completion_tokens"]), TotalTokens: interfaceToInt(usage["total_tokens"]), UsageSource: usageSource,
-		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])})
+		CachedInputTokens: interfaceToInt(prompt["cached_tokens"]), ReasoningTokens: interfaceToInt(completion["reasoning_tokens"])}
+	// Price the turn and book it against the client key's reservation. Only
+	// upstream-reported usage is billed: an estimated count is this gateway's
+	// own guess and must never turn into money owed.
+	if cost, priced := middleware.SettleAPIKeyBilling(ctx, nil, req.Model, usageSource,
+		int64(event.InputTokens), int64(event.CachedInputTokens), int64(event.OutputTokens)); priced {
+		event.CostInUSDTicks = cost.CostInUSDTicks
+		event.PricingModel = cost.Model
+		event.PricingVersion = pricing.Version
+	}
+	logger.Log(ctx, event)
 }
 
 // SetConnTracker lets the Grok selectors share the deployment-wide tracker

@@ -26,6 +26,7 @@ import (
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/pricing"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
@@ -1302,7 +1303,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		if sh.useUpstreamUsage {
 			usageSource = audit.UsageSourceUpstream
 		}
-		h.auditLogger.Log(r.Context(), audit.Event{
+		event := audit.Event{
 			// One journal schema for every channel: the log centre must be able to
 			// compare a Grok request with a Warp request on the same fields.
 			Kind:      audit.KindRequest,
@@ -1323,7 +1324,18 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			OutputTokens: sh.outputTokens,
 			TotalTokens:  sh.inputTokens + sh.outputTokens,
 			UsageSource:  usageSource,
-		})
+		}
+		// Settle the reservation taken before the request and price the same
+		// event, so the journal answers "what did this cost" and the key's
+		// balance moves exactly once. An estimated row is never charged.
+		if result, priced := middleware.SettleAPIKeyBilling(
+			r.Context(), nil, req.Model, usageSource, int64(sh.inputTokens), 0, int64(sh.outputTokens),
+		); priced {
+			event.CostInUSDTicks = result.CostInUSDTicks
+			event.PricingModel = result.Model
+			event.PricingVersion = pricing.Version
+		}
+		h.auditLogger.Log(r.Context(), event)
 	}
 }
 

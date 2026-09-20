@@ -361,19 +361,26 @@ func AccountAuthActive(acc *Account) bool {
 }
 
 type ApiKey struct {
-	ID            int64      `json:"id"`
-	Name          string     `json:"name"`
-	KeyHash       string     `json:"-"`
-	KeyFull       string     `json:"-"`
-	KeyPrefix     string     `json:"key_prefix"`
-	KeySuffix     string     `json:"key_suffix"`
-	Enabled       bool       `json:"enabled"`
-	AllowedModels []string   `json:"allowed_models,omitempty"`
-	RPMLimit      int        `json:"rpm_limit,omitempty"`
-	MaxConcurrent int        `json:"max_concurrent,omitempty"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt    *time.Time `json:"last_used_at"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID            int64    `json:"id"`
+	Name          string   `json:"name"`
+	KeyHash       string   `json:"-"`
+	KeyFull       string   `json:"-"`
+	KeyPrefix     string   `json:"key_prefix"`
+	KeySuffix     string   `json:"key_suffix"`
+	Enabled       bool     `json:"enabled"`
+	AllowedModels []string `json:"allowed_models,omitempty"`
+	RPMLimit      int      `json:"rpm_limit,omitempty"`
+	MaxConcurrent int      `json:"max_concurrent,omitempty"`
+	// BillingLimitUSDTicks caps how much this key may spend, in USD ticks
+	// (1 USD = 10,000,000,000 ticks). Zero means unlimited, so a key created
+	// before this field existed keeps working unchanged.
+	BillingLimitUSDTicks int64 `json:"billing_limit_usd_ticks,omitempty"`
+	// BillingUsedUSDTicks is a read-only projection of the settled usage
+	// counter. The Redis counter is authoritative; this field reports it.
+	BillingUsedUSDTicks int64      `json:"billing_used_usd_ticks,omitempty"`
+	ExpiresAt           *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt          *time.Time `json:"last_used_at"`
+	CreatedAt           time.Time  `json:"created_at"`
 }
 
 // StoredResponse records the ownership needed to continue or manage an
@@ -529,6 +536,7 @@ type QoderAccountPatch struct {
 type accountStore interface {
 	CreateAccount(ctx context.Context, acc *Account) error
 	UpdateAccount(ctx context.Context, acc *Account) error
+	UpdateAccountQuality(ctx context.Context, id int64, failures int, cooldownUntil time.Time) error
 	UpdateWorkBuddyCredentials(ctx context.Context, id int64, patch WorkBuddyCredentialPatch) error
 	UpdateQoderAccount(ctx context.Context, id int64, patch QoderAccountPatch) error
 	DeleteAccount(ctx context.Context, id int64) error
@@ -553,6 +561,10 @@ type apiKeyStore interface {
 	GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error)
 	GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey, error)
 	ConsumeApiKeyRPM(ctx context.Context, id int64, limit int, now time.Time) (bool, error)
+	ReserveApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64, expiresAt time.Time) (bool, error)
+	SettleApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64) error
+	ReleaseApiKeyBilling(ctx context.Context, id int64, eventID string) (bool, error)
+	ResetApiKeyBilling(ctx context.Context, id int64) error
 }
 
 type modelStore interface {
@@ -841,6 +853,15 @@ func (s *Store) CreateAccount(ctx context.Context, acc *Account) error {
 	return fmt.Errorf("store not configured")
 }
 
+// UpdateAccountQuality records a quality verdict (failures + park window) for one
+// account without rewriting the rest of it.
+func (s *Store) UpdateAccountQuality(ctx context.Context, id int64, failures int, cooldownUntil time.Time) error {
+	if s == nil || s.accounts == nil {
+		return fmt.Errorf("account store not configured")
+	}
+	return s.accounts.UpdateAccountQuality(ctx, id, failures, cooldownUntil)
+}
+
 func (s *Store) UpdateAccount(ctx context.Context, acc *Account) error {
 	if s.accounts != nil {
 		return s.accounts.UpdateAccount(ctx, acc)
@@ -1001,6 +1022,45 @@ func (s *Store) GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error) {
 		return s.apiKeys.GetApiKeyByID(ctx, id)
 	}
 	return nil, fmt.Errorf("api keys store not configured")
+}
+
+// ReserveApiKeyBilling atomically holds amount ticks of a key's billing limit
+// for one in-flight request. It returns false (with no error) when the limit
+// does not cover the request, and true when the hold already existed for the
+// same event id — retrying a request must not double reserve.
+func (s *Store) ReserveApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64, expiresAt time.Time) (bool, error) {
+	if s == nil || s.apiKeys == nil {
+		return false, fmt.Errorf("api key store not configured")
+	}
+	return s.apiKeys.ReserveApiKeyBilling(ctx, id, eventID, amount, expiresAt)
+}
+
+// SettleApiKeyBilling converts a hold into settled usage: the reservation is
+// dropped and amount ticks are added to the key's used counter. Actual usage is
+// authoritative, so settling an event whose hold already expired still charges.
+func (s *Store) SettleApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64) error {
+	if s == nil || s.apiKeys == nil {
+		return fmt.Errorf("api key store not configured")
+	}
+	return s.apiKeys.SettleApiKeyBilling(ctx, id, eventID, amount)
+}
+
+// ReleaseApiKeyBilling drops a hold without charging it and reports whether one
+// was actually held, so a settling path cannot be charged twice.
+func (s *Store) ReleaseApiKeyBilling(ctx context.Context, id int64, eventID string) (bool, error) {
+	if s == nil || s.apiKeys == nil {
+		return false, fmt.Errorf("api key store not configured")
+	}
+	return s.apiKeys.ReleaseApiKeyBilling(ctx, id, eventID)
+}
+
+// ResetApiKeyBilling zeroes the settled usage counter and drops every
+// outstanding reservation for the key. The configured limit is left in place.
+func (s *Store) ResetApiKeyBilling(ctx context.Context, id int64) error {
+	if s == nil || s.apiKeys == nil {
+		return fmt.Errorf("api key store not configured")
+	}
+	return s.apiKeys.ResetApiKeyBilling(ctx, id)
 }
 
 func (s *Store) SaveStoredResponse(ctx context.Context, response *StoredResponse, ttl time.Duration) error {

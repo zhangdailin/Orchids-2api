@@ -91,20 +91,19 @@
 | A8-12 | `inference_auth_enabled=false` 时 `/v1` 全部匿名，是部署方显式开关。改为强制鉴权会改变现有部署行为，留给产品决策。 |
 | A4-1/A4-2/A4-3 | 公开模型 ID 去前缀化、effort 后缀别名、注册式兼容别名是**破坏性变更**（会改变现有客户端可用的模型名），且 A 的测试刻意让裸 `grok-4.3` 不可解析。需要版本化迁移方案。 |
 
-## 三、未修（需要整块移植或产品决策）
+## 三、未修（已清空）
 
-真正的未修条目共 **3 条**：A9-1 属新功能，A3-7/A6-1 属整块移植（A6-1 已部分落地）。其余早期列在本节的条目已全部关闭或归入"有意保留"，见下方两张记录表。
+**自第十轮起，本审计没有未修条目**：171 条全部归入"已修复"或"有意保留"（见第十二节总账）。最后关闭的三条是 A3-7（网关侧 compaction 移植）、A6-1（质量降级 hold 缓冲与换号重试）、A9-1（计费层），记录在第十四节与下方"已解决的旧条目"表。
 
-| 编号 | 级别 | 仍未修的原因 |
-| --- | --- | --- |
-| A9-1 | P0 | 计费层缺失：价格表 + Key 额度预留/结算 + `usage_source` 列。属**新功能**，不是修 bug；本轮只补齐了用量口径与 unpriced/priced 维度 |
-| A3-7 | P1 | 网关侧 compaction（`compaction_trigger` 分类、canonical 摘要、`g2a_compact_v1` blob 编解码与展开），需要按上游 `responses_compaction*.go` 整块移植 |
-| A6-1 | P1 | **部分完成**：识别 + 12h 停靠 + 二次停用已落地；"扣住 dump 不发给客户端并在换号后重试"仍未做——需要流式 hold 缓冲（流式已写出的内容无法撤回）与非流式先收集再决定写回，属流式写入层重构 |
+原"未修"表已删除，避免与总账重复计数；下面两张表保留历史，以便回退时对照。
 
 ### 已解决的旧条目（曾列在本节，保留记录以免回退）
 
 | 编号 | 结论 |
 | --- | --- |
+| A9-1 | 已修复（第十轮：`internal/pricing` 官方费率表 + Key 额度预留/结算 + 审计成本三列，见第十四节） |
+| A3-7 | 已修复（第十轮：`compaction_trigger`/TUI 分类、canonical 摘要采样、`g2a_compact_v1` 封存与展开，见第十四节） |
+| A6-1 | 已修复（第十轮：流式 hold 缓冲 + 换号重试 + 失败开放/关闭策略；并修好质量评语此前根本没落库的问题，见第十四节） |
 | A7-7 | 已修复（第四轮：按 UA 大版本选择 utls ClientHello，并纳入缓存键） |
 | A7-10 | 已修复（第四轮：指数冷却 + 主动探测 + 共享目录持久化 + 只读健康快照） |
 | A5-29 | 已修复（第四轮，加法方式：新增管理面 `/api/media/inputs`，原推理面端点保持兼容） |
@@ -144,13 +143,7 @@
 6. **A5-* 媒体契约差异**：`/images/edits` JSON 形态、媒体读取端点（`/v1/media/{kind}/:id` + HEAD/ETag）、媒体输入管理端契约、上传 TTL、TTS/STT 头白名单与账号级重试。多为对外契约变更，需与客户端一起排期。
 7. **A3-13 参数整型规范化**、**A4-5/A4-6 Console 每模型语义**、**A1-7/A1-8/A1-10 Anthropic usage/refusal/id 语义**：独立可做，属下一批。← **已在第二轮修复，见第五节**
 
-**剩余工作（截至第九轮，3 条）**：
-
-1. **A9-1**（P0，新功能）：价格表 + Key 额度预留/结算 + `usage_source` 列，可与现有 `usage_estimate.go` 口径直接对接。
-2. **A3-7**（P1，整块移植）：`responses_compaction*.go` 的分类/摘要/blob 编解码，逐函数移植，独立可测。
-3. **A6-1**（P1，流式写入层重构）：流式 hold 缓冲 + 非流式先收集再写回，使质量降级能在换号后重试。
-
-> 第九轮已关闭 `A4-15`（管理端分页信封 + 分组端点，加法式）、`A6-14`（按 mode 判级取最低），并把纯署名的 `A4-17` 归入"有意保留"。
+**剩余工作：无。** 第十轮关闭了最后三条（`A9-1`、`A3-7`、`A6-1`，见第十四节）。
 
 ## 四、验证
 
@@ -402,28 +395,27 @@
 
 保留（已归入第三节"真正的未修条目"与"有意保留"两表）：**A4-15**（管理端模型接口形状：分页信封/分组/同步端点，改动需连同管理前端一起做，属对外管理契约）、**A4-17**（Codex 未知模型 description 文案，客户端不解析）、**A6-14**（订阅/等级推断需要 auto/fast 两套窗口形态的数据模型，凭猜测改阈值会更糟）。
 
-## 十二、总账（截至第九轮）
+## 十二、总账（截至第十轮）
 
 对账方式：取 `docs/grok2api-parity-audit.md` 中全部发现编号（每条发现一个 `### A?-? [P?]` 标题），逐个归入本台账的"已修表 / 有意保留表 / 未修表"，要求三集合互斥且并集等于审计总数。可用 `python3 docs/grok2api-audit/recount.py` 复算（输出的四行与本表逐字对应，若有未归类条目会以非 0 退出码报错）。
 
 | 分类 | 条数 | 严重度分布 | 说明 |
 | --- | --- | --- | --- |
 | **总计** | **171** | P0 ×6、P1 ×69、P2 ×75、P3 ×21 | 审计报告自报口径（含 `A8-1` 的 `[P0/P1]` 双标） |
-| 已修复 | 151 | P0 ×5、P1 ×61、P2 ×66、P3 ×19 | 见第一、五～十一、十三节各表 |
+| 已修复 | 154 | P0 ×6、P1 ×63、P2 ×66、P3 ×19 | 见第一、五～十一、十三、十四节各表 |
 | 有意保留 | 17 | P0 ×0、P1 ×6、P2 ×9、P3 ×2 | `A1-11`、`A2-1`、`A2-6`、`A3-8`、`A3-9`、`A4-1`、`A4-2`、`A4-3`、`A4-11`、`A4-17`、`A5-2`、`A5-4`、`A5-5`、`A5-7`、`A5-42`、`A7-2`、`A8-12` |
-| 未修 | 3 | P0 ×1、P1 ×2 | `A9-1`、`A3-7`、`A6-1` |
+| 未修 | 0 | — | 无 |
 
-151 + 17 + 3 = 171；严重度合计 6 + 69 + 75 + 21 = 171，无重复计数、无遗漏。
+154 + 17 + 0 = 171；严重度合计 6 + 69 + 75 + 21 = 171，无重复计数、无遗漏。
 
-- **P0 未修 1 条**：`A9-1` 计费层（新功能，非缺陷回归）。
-- **P1 未修 2 条**：`A3-7` 网关侧 compaction（整块移植）、`A6-1` 质量降级重试的流式 hold 缓冲（部分完成）。
-- **P3 未修 0 条**：第九轮关闭了最后的 `A4-15`、`A6-14`，并把纯署名的 `A4-17` 归入有意保留。
+- **P0 全部关闭**：6 条 P0 中 5 条在早期轮次修复，`A9-1`（计费层）在第十轮完成。
+- **未修 0 条**：第十轮关闭 `A3-7`、`A6-1`、`A9-1` 三条。
 - 第一节列的旧"未修清单"中，`A7-7`、`A7-8`、`A7-10`、`A5-29`、`A6-2/A6-4`、`A6-12/A6-13`、`A2-2`、`A5-24/A5-25/A5-27/A5-40`、`A3-13`、`A4-5/A4-6`、`A4-16`、`A3-14`、`A6-9`、`A9-13`、`A1-7/A1-8/A1-10`、`A3-1/A3-4/A3-6`、`A4-15`、`A6-14` 均已关闭，记录保留在第三节"已解决的旧条目"表。
 
-验证（第九轮涉及代码）：
+验证（第十轮涉及代码）：
 
-- `go build ./...`、`go vet ./...`、`go test ./... -count=1` 全绿（第九轮结束时）。
-- `python3 docs/grok2api-audit/recount.py` 退出码 0，输出 171 / 151 / 17 / 3。
+- `go build ./...`、`go vet ./...`、`go test ./... -count=1` 全绿（第十轮结束时）。
+- `python3 docs/grok2api-audit/recount.py` 退出码 0，输出 171 / 154 / 17 / 0。
 
 ## 十三、第九轮修复（2 条 + 1 条归类）
 
@@ -433,3 +425,15 @@
 | A4-15 | 管理端模型接口**加法式**对齐：新增 `GET /api/models/groups`（按 endpoint capability 分组，`key` 为组内路由 id 的 `:` 连接，含 `endpointCapabilities`）与分页信封 `{items,page,pageSize,total}`；`/api/models` 在**未传** `page`/`pageSize` 时仍返回裸数组（现有管理前端契约不变），传分页参数时返回信封，`search` 同时生效，`pageSize` 上限 500。测试：`TestHandleModelsStaysABareArrayWithoutPaging`、`TestHandleModelsServesPagedEnvelopeOnRequest`、`TestHandleModelGroupsBucketsByEndpointCapabilities` | `internal/api/models_admin.go`、`models_admin_test.go`、`api.go`、`cmd/server/routes.go` |
 
 归类：**A4-17** 从"未修"移入"有意保留"——文案收敛到单一常量 `codexDefaultDescription`，但保留本服务自述（`orchids-api`）而非抄用上游项目名，属产品署名差异，客户端不解析该字段。
+
+## 十四、第十轮修复（3 条，收尾）
+
+| 编号 | 修复 | 位置 |
+| --- | --- | --- |
+| A3-7 | **网关侧 Responses compaction**。`compaction_trigger`（Codex remote-v2）与 TUI 的 canonical 摘要提示词在 `/responses` 入口分类；命中后由网关自己跑摘要回合（上游采样参数与 grok-build 一致：追加 canonical prompt、`instructions=null`、`stream=true`、`store=false`、`tools` 保留且 `tool_choice=auto`、`reasoning.summary=concise`，并删除 `previous_response_id`/`text`/`max_output_tokens` 等），对 SSE 取 `response.completed` 的摘要（退化摘要按 <500 rune 判废），清洗（去 `<analysis>`、`<summary>` 改写为 `Summary:`、标签去毒、折叠空行）后封存为 `g2a_compact_v1.<sealed>`（AES-256-GCM，密钥由凭据密钥做域分离派生），返回合成的 `compaction` 项（流式 6 事件序列 / 非流式 JSON）；后续请求里的自家 blob 展开为普通 user 消息，**非自家 blob 原样转发，自家但解不开的 blob 返回 400 `invalid_compaction_blob` 并带 `param=input[i].encrypted_content`**。新增 `SetCompactionCipher`，缺失时功能关闭、行为回退到原转发。 | `internal/grok/responses_compaction.go`、`responses_compaction_prompt.txt`、`handler_responses.go`、`handler_responses_store.go`、`handler.go`、`internal/secureblob/cipher.go`、`cmd/server/main.go` |
+| A6-1 | **质量降级 hold 缓冲 + 换号重试**。移植 `quality_retry.go` 的判定与提交策略（burst dump / fake-encrypted dump 2s 窗口 / 明文推理占比 dump / cipher drool 1024 字符 / 30s hold 超时 / 6 次尝试 / 失败开放或关闭），新增 `deferredResponseWriter` 在 hold 期间**连状态行与响应头一起扣住**，分类器在每个内容事件后决定 release / wait / withhold；被扣住的回合不写任何字节，因此可以在另一个账号上重试（命中 hosted tool 等已有副作用的请求只惩罚不重试，与上游一致）；预算耗尽按策略交付最后一份被扣住的响应（fail-open，默认）或返回 502 `quality_degraded`（fail-closed）。同时修好一处真实缺陷：`UpdateAccount` 的字段白名单不含质量字段，导致"停靠 12 小时/二次停用"此前只改了内存对象、从未落库（LB 缓存 1s 后即失效），现改为专用 `UpdateAccountQuality` 原子写入。 | `internal/grok/quality_hold.go`、`console_stream.go`、`console.go`、`quality_guard.go`、`internal/store/redis_store.go`、`store.go`、`internal/config/config.go` |
+| A9-1 | **计费层**。新增 `internal/pricing`：官方费率表（grok-build-0.1 / 4.6 / 4.5 / 4.3 / 4.20 三个形态，含别名、锚定族规则、`build/ web/ console/` 前缀剥离、>200k token 长上下文档），1 USD = 1e10 ticks，`EstimateCost`/`EstimateTextReservation`/`EstimateTTSCost`/`EstimateSTTCost`；`ApiKey` 增加 `billing_limit_usd_ticks`/`billing_used_usd_ticks`，Redis 侧用 4 个 Lua 脚本做**原子预留/结算/释放/重置**（`used + 存活预留 + amount > limit` 即拒绝，同 eventID 同额度幂等，过期预留自动不计）；`inferenceAuth` 对有限额 Key 在 JSON 推理路径上先预留（读体 8 MiB 上限后原样还原），拒绝返回 402 `billing_limit_exceeded`，未结算的预留随请求结束释放；grok 与通用 chat 两条审计路径在写 journal 前**按上游用量结算**并把 `cost_in_usd_ticks`/`pricing_model`/`pricing_version` 写入事件（估算用量不计费，与 A9-2 口径一致）。`/messages/count_tokens` 不占额。 | `internal/pricing/*`、`internal/store/*`、`internal/audit/audit.go`、`internal/middleware/billing.go`、`session.go`、`cmd/server/routes.go`、`main.go`、`internal/handler/handler.go`、`internal/grok/handler.go`、`internal/api/api.go` |
+
+新增配置项（`config.json`，均有安全默认）：`quality_hold_enabled`（默认 true）、`quality_hold_max_attempts`（6）、`quality_hold_timeout_ms`（30000）、`quality_hold_on_exhausted`（`fail_open`）。
+
+**有意保留的边界**（不影响条目关闭，但记录清楚）：图片/视频档计价与 `PricingBreakdown` 未移植（不在 A9-1 要求的 API 面内，且属 A9-12 的聚合维度）；管理端未暴露"重置 Key 用量"端点（store 层 `ResetApiKeyBilling` 已实现并测试）；成本聚合（opsagg）仍缺 priced/unpriced 维度，属 A9-12。

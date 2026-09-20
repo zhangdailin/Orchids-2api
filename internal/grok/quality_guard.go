@@ -123,8 +123,17 @@ func (h *Handler) applyQualityGuard(ctx context.Context, acc *store.Account, sig
 		slog.Warn("grok quality guard: credential parked after a degraded response",
 			"account_id", acc.ID, "failures", acc.QualityFailures)
 	}
-	if err := h.lb.Store.UpdateAccount(ctx, acc); err != nil {
+	// The verdict needs its own writer: UpdateAccount copies a fixed field list
+	// that does not include the quality fields, so going through it parked the
+	// credential only in memory. The Enabled change from a second offence still
+	// travels through UpdateAccount.
+	if err := h.lb.Store.UpdateAccountQuality(ctx, acc.ID, acc.QualityFailures, acc.QualityCooldownUntil); err != nil {
 		slog.Warn("grok quality guard: failed to persist the account verdict", "account_id", acc.ID, "error", err)
+	}
+	if acc.ID != 0 {
+		if err := h.lb.Store.UpdateAccount(ctx, acc); err != nil {
+			slog.Warn("grok quality guard: failed to persist the account state", "account_id", acc.ID, "error", err)
+		}
 	}
 	return true
 }
@@ -137,7 +146,7 @@ func (h *Handler) clearQualityGuard(ctx context.Context, acc *store.Account) {
 	}
 	acc.QualityFailures = 0
 	acc.QualityCooldownUntil = time.Time{}
-	if err := h.lb.Store.UpdateAccount(ctx, acc); err != nil {
+	if err := h.lb.Store.UpdateAccountQuality(ctx, acc.ID, 0, time.Time{}); err != nil {
 		slog.Warn("grok quality guard: failed to clear the account verdict", "account_id", acc.ID, "error", err)
 	}
 }

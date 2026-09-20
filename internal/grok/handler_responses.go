@@ -217,6 +217,14 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 
 	spec, resolved := h.resolveConversationModel(r.Context(), req.Model)
 	if resolved && modelRoutedToCLI(spec, h.configSnapshot()) {
+		// A compaction turn is not a conversation turn: Codex remote-v2 sends
+		// `compaction_trigger` and the Grok TUI appends the canonical summary
+		// prompt as its last user item. The gateway answers those itself so the
+		// resulting state stays portable across accounts.
+		if h.GatewayCompactionEnabled() && classifyResponsesCompactionPayload(nativePayload) != responsesCompactionNone {
+			h.handleGatewayCompaction(w, r, req.Model, spec, nativePayload, responsesPayloadStreaming(nativePayload, req.Stream))
+			return
+		}
 		h.handleNativeCLIResponses(w, r, req.Model, spec, nativePayload)
 		return
 	}
