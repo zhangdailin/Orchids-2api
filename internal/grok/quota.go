@@ -35,9 +35,18 @@ func ApplyWebQuotaInfo(acc *store.Account, windows map[string]*RateLimitInfo) bo
 		preferred = windows["fast"]
 	}
 	if preferred != nil {
-		if ApplyQuotaInfo(acc, preferred) {
+		// The aggregate projection carries a limit from ONE mode, so it must not
+		// decide the subscription: the same tier shows up as a different number in
+		// each mode (auto 150 vs fast 400), and classifying from a single
+		// mixed-mode number promotes basic accounts into paid pools. Gate the
+		// single-window inference off here and classify from both windows below.
+		if applyQuotaInfo(acc, preferred, false) {
 			changed = true
 		}
+	}
+	if sub := inferSubscriptionFromWebQuota(windows); sub != "" && acc.Subscription != sub {
+		acc.Subscription = sub
+		changed = true
 	}
 	return changed
 }
@@ -91,33 +100,92 @@ func InferQuotaLimit(acc *store.Account) float64 {
 	return basicDefaultQuota
 }
 
+// inferSubscriptionFromRateLimitInfo classifies an account from a SINGLE quota
+// window whose mode is not known (the Console/Build header paths). It must never
+// see a Web auto/fast projection: those windows describe the same tiers with
+// different numbers, so a mixed-mode number would pick the wrong pool. Web
+// snapshots go through inferSubscriptionFromWebQuota instead.
 func inferSubscriptionFromRateLimitInfo(info *RateLimitInfo) string {
 	if info == nil || !info.HasLimit {
 		return ""
 	}
-	switch limit := info.Limit; {
-	case limit >= 150:
+	// Exact shapes only: an unknown number is left unclassified rather than being
+	// rounded up into a paid tier by a ">= heavy" catch-all.
+	switch info.Limit {
+	case 150:
 		return "heavy"
-	case limit == 50 || limit == 140:
+	case 50, 140:
 		return "super"
-	case limit == 25 || limit == 70 || limit == 12:
+	case 25, 70, 12:
 		return "lite"
-	case limit == 30 || limit == 20 || limit == 8 || limit == 7:
+	case 30, 20, 8, 7:
 		return "basic"
 	default:
 		return ""
 	}
 }
 
+// webQuotaTierShapes maps each Web quota mode's window size onto the subscription
+// tier the upstream uses for it. The tiers repeat across modes with different
+// numbers, which is why the mode has to travel with the limit.
+var webQuotaTierShapes = map[string]map[int64]string{
+	"auto": {7: "basic", 20: "basic", 50: "super", 150: "heavy"},
+	"fast": {30: "basic", 140: "super", 400: "heavy"},
+}
+
+// subscriptionRank orders the pools from least to most privileged. Lite is an
+// explicit local tier (set by the admin API), never inferred from a window.
+var subscriptionRank = map[string]int{"basic": 0, "lite": 1, "super": 2, "heavy": 3}
+
+// inferSubscriptionFromWebQuota classifies a Web account from its independent
+// auto/fast windows, taking the LOWEST tier any window reports.
+//
+// A snapshot can carry contradictory windows (auto 150 while fast 30). Choosing
+// the lower tier keeps a basic account out of the paid pools; the reverse
+// mistake costs a wasted paid credential and an upstream refusal.
+func inferSubscriptionFromWebQuota(windows map[string]*RateLimitInfo) string {
+	detected := ""
+	// Fixed order so the result does not depend on Go's map iteration.
+	for _, mode := range []string{"auto", "fast", "heavy"} {
+		info := windows[mode]
+		if info == nil || !info.HasLimit || info.Limit <= 0 {
+			continue
+		}
+		candidate := ""
+		if mode == "heavy" {
+			// The heavy mode exposes a single paid window without tier shapes:
+			// any positive limit means the account is on the top tier.
+			candidate = "heavy"
+		} else if tier, ok := webQuotaTierShapes[mode][info.Limit]; ok {
+			candidate = tier
+		}
+		if candidate == "" {
+			continue
+		}
+		if detected == "" || subscriptionRank[candidate] < subscriptionRank[detected] {
+			detected = candidate
+		}
+	}
+	return detected
+}
+
 func ApplyQuotaInfo(acc *store.Account, info *RateLimitInfo) bool {
+	return applyQuotaInfo(acc, info, true)
+}
+
+// applyQuotaInfo persists one quota window. inferSubscription is false for the
+// Web aggregate projection, where the caller classifies from all modes itself.
+func applyQuotaInfo(acc *store.Account, info *RateLimitInfo, inferSubscription bool) bool {
 	if acc == nil || info == nil {
 		return false
 	}
 
 	changed := false
-	if sub := inferSubscriptionFromRateLimitInfo(info); sub != "" && acc.Subscription != sub {
-		acc.Subscription = sub
-		changed = true
+	if inferSubscription {
+		if sub := inferSubscriptionFromRateLimitInfo(info); sub != "" && acc.Subscription != sub {
+			acc.Subscription = sub
+			changed = true
+		}
 	}
 	if info.HasRemaining {
 		limit := InferQuotaLimit(acc)

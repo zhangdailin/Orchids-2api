@@ -191,3 +191,74 @@ func TestInferFreeProfileDoesNotClaimPaidAccountsAsFree(t *testing.T) {
 		t.Error("an unsynced account was inferred Free")
 	}
 }
+
+// A Web account's subscription has to come from the mode a limit belongs to:
+// the same tier is published as different numbers per mode (auto 150 vs fast
+// 400), so a single mixed-mode number cannot classify an account.
+func TestApplyWebQuotaInfoClassifiesByModeNotByMixedLimit(t *testing.T) {
+	cases := []struct {
+		name      string
+		autoLimit int64
+		fastLimit int64
+		want      string
+	}{
+		{name: "auto heavy with fast basic stays basic", autoLimit: 150, fastLimit: 30, want: "basic"},
+		{name: "fast heavy with auto basic stays basic", autoLimit: 7, fastLimit: 400, want: "basic"},
+		{name: "both heavy", autoLimit: 150, fastLimit: 400, want: "heavy"},
+		{name: "auto super with fast basic", autoLimit: 50, fastLimit: 30, want: "basic"},
+		{name: "both super", autoLimit: 50, fastLimit: 140, want: "super"},
+		{name: "auto basic only", autoLimit: 20, want: "basic"},
+		{name: "fast basic only", fastLimit: 30, want: "basic"},
+		{name: "unknown shapes leave the tier alone", autoLimit: 99, fastLimit: 98, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			windows := map[string]*RateLimitInfo{}
+			if tc.autoLimit > 0 {
+				windows["auto"] = &RateLimitInfo{Limit: tc.autoLimit, HasLimit: true, Remaining: 1, HasRemaining: true}
+			}
+			if tc.fastLimit > 0 {
+				windows["fast"] = &RateLimitInfo{Limit: tc.fastLimit, HasLimit: true, Remaining: 1, HasRemaining: true}
+			}
+			acc := &store.Account{AccountType: "grok"}
+			ApplyWebQuotaInfo(acc, windows)
+			if acc.Subscription != tc.want {
+				t.Fatalf("subscription=%q want %q", acc.Subscription, tc.want)
+			}
+		})
+	}
+}
+
+// inference from a window whose mode is unknown must not invent a paid tier for
+// an arbitrary large number, and must leave the lite tier to explicit config.
+func TestInferSubscriptionFromRateLimitInfoRequiresKnownShapes(t *testing.T) {
+	cases := map[int64]string{
+		7: "basic", 20: "basic", 8: "basic", 30: "basic",
+		50: "super", 140: "super",
+		150: "heavy",
+		25: "lite", 70: "lite", 12: "lite",
+		1000: "", 151: "", 149: "", 3: "",
+	}
+	for limit, want := range cases {
+		got := inferSubscriptionFromRateLimitInfo(&RateLimitInfo{Limit: limit, HasLimit: true})
+		if got != want {
+			t.Fatalf("limit=%d subscription=%q want %q", limit, got, want)
+		}
+	}
+}
+
+// The unused heavy mode still identifies the top tier when the upstream sends it.
+func TestInferSubscriptionFromWebQuotaHeavyMode(t *testing.T) {
+	got := inferSubscriptionFromWebQuota(map[string]*RateLimitInfo{
+		"heavy": {Limit: 12, HasLimit: true},
+	})
+	if got != "heavy" {
+		t.Fatalf("subscription=%q want heavy", got)
+	}
+	if got := inferSubscriptionFromWebQuota(map[string]*RateLimitInfo{
+		"heavy": {Limit: 12, HasLimit: true},
+		"fast":  {Limit: 30, HasLimit: true},
+	}); got != "basic" {
+		t.Fatalf("subscription=%q want basic (lowest tier wins)", got)
+	}
+}

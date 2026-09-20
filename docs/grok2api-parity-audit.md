@@ -1,6 +1,6 @@
 # Orchids-2api Grok 通道 × chenyme/grok2api 深度对比审计
 
-> 修复进展见 `docs/grok2api-fix-ledger.md`。**截至第八轮的总账**：171 条中已修复 149 条、有意保留 16 条、未修 6 条（`A9-1` P0 属新功能，`A3-7`/`A6-1` P1 属整块移植，`A4-15`/`A4-17`/`A6-14` P3）。逐条对账表与复算脚本见台账第十二节与 `docs/grok2api-audit/recount.py`。审计期间对 A5-10 做了更正（见该条）。
+> 修复进展见 `docs/grok2api-fix-ledger.md`。**截至第九轮的总账**：171 条中已修复 151 条、有意保留 17 条、未修 3 条（`A9-1` P0 属新功能，`A3-7`/`A6-1` P1 属整块移植）。逐条对账表与复算脚本见台账第十二节与 `docs/grok2api-audit/recount.py`。审计期间对 A5-10 做了更正（见该条）。
 
 - 审计对象 A（本项目）：`/home/zhangdailin/Documents/Orchids-2api`，Grok 通道实现位于 `internal/grok/`、`internal/handler/`、`internal/api/`、`internal/store/`、`internal/middleware/`、`cmd/server/`。
 - 参考实现 B：`chenyme/grok2api`，Go 后端根目录 `backend/`，审计基线 **HEAD = `906b9493`（v3.1.6，2026-09-16）**，克隆在 `.upstream/grok2api/`（未纳入版本控制）。

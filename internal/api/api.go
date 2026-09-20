@@ -2967,7 +2967,22 @@ func (a *API) HandleModels(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		json.NewEncoder(w).Encode(models)
+		// A bare array is the long-standing contract the bundled admin UI
+		// consumes. Asking for a page switches to the paged envelope that
+		// grok2api's admin client expects, without breaking the old shape.
+		page, pageSize, paged := adminModelPaging(r)
+		if !paged {
+			json.NewEncoder(w).Encode(models)
+			return
+		}
+		models = filterAdminModels(models, r.URL.Query().Get("search"))
+		items, total := paginateAdminModels(models, page, pageSize)
+		writeAdminModelEnvelope(w, adminModelListEnvelope{
+			Items:    items,
+			Page:     page,
+			PageSize: pageSize,
+			Total:    total,
+		})
 
 	case http.MethodPost:
 		var m store.Model

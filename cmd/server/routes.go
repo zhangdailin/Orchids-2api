@@ -236,6 +236,7 @@ func registerRoutes(
 	mux.HandleFunc("/api/keys", sessionAuth(apiHandler.HandleKeys))
 	mux.HandleFunc("/api/keys/", sessionAuth(apiHandler.HandleKeyByID))
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
+	mux.HandleFunc("/api/models/groups", sessionAuth(apiHandler.HandleModelGroups))
 	mux.HandleFunc("/api/models/refresh", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
 		makeModelRefreshHandler(currentConfig(), s)(w, r)
 	}))

@@ -104,9 +104,17 @@ var codexModelMetadataTable = map[string]codexModelMetadata{
 	"grok-composer-2.5-fast":       {200000, "xAI Grok Composer 2.5 model.", false},
 }
 
+// codexDefaultDescription is the single source for the unknown-model copy.
+//
+// It names THIS gateway (grok2api's equivalent string names grok2api). Copying
+// their wording would misattribute the service a client is talking to, so the
+// difference is deliberate; keeping it in one constant is what the parity audit
+// asked for, and clients never parse the field.
+const codexDefaultDescription = "Grok model served via orchids-api."
+
 var codexDefaultMetadata = codexModelMetadata{
 	contextWindow: 128000,
-	description:   "Grok model served via this gateway.",
+	description:   codexDefaultDescription,
 }
 
 // Reasoning levels and provider scoping live in modelpolicy so the wire
