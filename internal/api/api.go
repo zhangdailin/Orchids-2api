@@ -1431,6 +1431,10 @@ type CreateKeyResponse struct {
 // and settled usage comfortably inside int64.
 const maxApiKeyBillingLimitUSDTicks int64 = 9_000_000_000_000_000
 
+// maxApiKeyBillingPeriodDays bounds the rollover window: a decade is plenty and
+// keeps the arithmetic on the stored period start sane.
+const maxApiKeyBillingPeriodDays = 3650
+
 type UpdateKeyRequest struct {
 	Enabled              *bool           `json:"enabled"`
 	AllowedModels        *[]string       `json:"allowed_models"`
@@ -1438,6 +1442,7 @@ type UpdateKeyRequest struct {
 	MaxConcurrent        *int            `json:"max_concurrent"`
 	ExpiresAt            json.RawMessage `json:"expires_at"`
 	BillingLimitUSDTicks *int64          `json:"billing_limit_usd_ticks"`
+	BillingPeriodDays    *int            `json:"billing_period_days"`
 }
 
 func normalizeAllowedModels(models []string) []string {
@@ -2811,6 +2816,9 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			ExpiresAt     *time.Time `json:"expires_at"`
 			// Billing limit in USD ticks; zero means unlimited.
 			BillingLimitUSDTicks int64 `json:"billing_limit_usd_ticks"`
+			// BillingPeriodDays rolls the settled usage over; zero means only an
+			// explicit reset clears it.
+			BillingPeriodDays int `json:"billing_period_days"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -2831,6 +2839,10 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.BillingLimitUSDTicks < 0 || req.BillingLimitUSDTicks > maxApiKeyBillingLimitUSDTicks {
 			http.Error(w, "billing_limit_usd_ticks must be between 0 and 9000000000000000", http.StatusBadRequest)
+			return
+		}
+		if req.BillingPeriodDays < 0 || req.BillingPeriodDays > maxApiKeyBillingPeriodDays {
+			http.Error(w, "billing_period_days must be between 0 and 3650", http.StatusBadRequest)
 			return
 		}
 		if req.ExpiresAt != nil {
@@ -2863,6 +2875,7 @@ func (a *API) HandleKeys(w http.ResponseWriter, r *http.Request) {
 			MaxConcurrent:        req.MaxConcurrent,
 			ExpiresAt:            req.ExpiresAt,
 			BillingLimitUSDTicks: req.BillingLimitUSDTicks,
+			BillingPeriodDays:    req.BillingPeriodDays,
 		}
 		if err := a.store.CreateApiKey(r.Context(), &key); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2940,7 +2953,8 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if req.Enabled == nil && req.AllowedModels == nil && req.RPMLimit == nil && req.MaxConcurrent == nil && req.BillingLimitUSDTicks == nil && len(req.ExpiresAt) == 0 {
+		if req.Enabled == nil && req.AllowedModels == nil && req.RPMLimit == nil && req.MaxConcurrent == nil &&
+			req.BillingLimitUSDTicks == nil && req.BillingPeriodDays == nil && len(req.ExpiresAt) == 0 {
 			http.Error(w, "at least one policy field is required", http.StatusBadRequest)
 			return
 		}
@@ -2979,6 +2993,13 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			key.BillingLimitUSDTicks = *req.BillingLimitUSDTicks
+		}
+		if req.BillingPeriodDays != nil {
+			if *req.BillingPeriodDays < 0 || *req.BillingPeriodDays > maxApiKeyBillingPeriodDays {
+				http.Error(w, "billing_period_days must be between 0 and 3650", http.StatusBadRequest)
+				return
+			}
+			key.BillingPeriodDays = *req.BillingPeriodDays
 		}
 		if len(req.ExpiresAt) > 0 {
 			expiresAt, err := parseOptionalExpiry(req.ExpiresAt)

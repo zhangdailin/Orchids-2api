@@ -109,6 +109,17 @@
 
               <div class="form-row">
                 <div class="form-row-label">
+                  <label class="form-label" for="cfg_anonymous_allow_ips">免鉴权来源</label>
+                  <span class="helper-text">每行一个 IP 或 CIDR，名单内的来源可以不带 API Key 调用接口；留空则所有人必须带 Key（与 grok2api 一致）。仅用于暂时无法升级的调用方。</span>
+                </div>
+                <div class="form-row-control">
+                  <textarea id="cfg_anonymous_allow_ips" class="form-input" rows="3"
+                    placeholder="每行一个 IP 或 CIDR，例如 161.118.140.32 或 203.77.252.0/24"></textarea>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-row-label">
                   <label class="form-label" for="cfg_admin_token">API 管理 Token <span class="secret-badge">密钥</span></label>
                   <span class="helper-text">用于调用管理接口；可先显示再复制，避免明文回显。</span>
                 </div>

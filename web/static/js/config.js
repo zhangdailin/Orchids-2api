@@ -51,9 +51,21 @@ function normalizeStatsigSignerField() {
   return raw;
 }
 
+// parseAnonymousAllowIPs turns the textarea into a list of trimmed, non-empty
+// entries. An empty box means "nobody", which is the reference behaviour.
+function parseAnonymousAllowIPs() {
+  const field = document.getElementById("cfg_anonymous_allow_ips");
+  if (!field) return [];
+  return field.value
+    .split("\n")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 const CONFIG_TRACKED_FIELDS = [
   "cfg_admin_pass",
   "cfg_admin_token",
+  "cfg_anonymous_allow_ips",
   "cfg_grok_statsig_id",
   "cfg_grok_statsig_signer_url",
   "cfg_grok_cf_clearance",
@@ -321,6 +333,10 @@ async function loadConfiguration() {
     document.getElementById("cfg_admin_pass").value = cfg.admin_password || cfg.admin_pass || "";
     document.getElementById("cfg_admin_token").value = cfg.admin_token || "";
     document.getElementById("cfg_grok_statsig_id").value = cfg.grok_statsig_id || "";
+    const allowField = document.getElementById("cfg_anonymous_allow_ips");
+    if (allowField) {
+      allowField.value = Array.isArray(cfg.anonymous_allow_ips) ? cfg.anonymous_allow_ips.join("\n") : "";
+    }
     // Three states: unset (null) keeps grok2api's default signer, "-"/"" turns
     // signing off, anything else is that endpoint.
     const signerField = document.getElementById("cfg_grok_statsig_signer_url");
@@ -363,6 +379,7 @@ async function saveConfiguration() {
     grok_statsig_signer_url: normalizeStatsigSignerField(),
     grok_cf_clearance: document.getElementById("cfg_grok_cf_clearance").value.trim(),
     grok_cf_bm: document.getElementById("cfg_grok_cf_bm").value.trim(),
+    anonymous_allow_ips: parseAnonymousAllowIPs(),
     proxy_url: document.getElementById("cfg_proxy_url").value.trim(),
     proxy_bypass: parseProxyBypass(proxyBypassRaw),
     enable_token_cache: document.getElementById("cfg_enable_token_cache").checked ? "true" : "false",
@@ -710,7 +727,36 @@ function formatKeyPolicy(key) {
     : "全部模型";
   const rpm = Number(key.rpm_limit) > 0 ? `${key.rpm_limit} RPM` : "不限速";
   const expiry = key.expires_at ? `到期 ${formatTime(key.expires_at)}` : "永不过期";
-  return `${models}\n${rpm} · ${expiry}`;
+  const limit = Number(key.billing_limit_usd_ticks) > 0
+    ? `预算 ${formatUSD(ticksToUSD(key.billing_limit_usd_ticks))}`
+    : "预算不限";
+  const used = Number(key.billing_used_usd_ticks) > 0
+    ? ` · 已用 ${formatUSD(ticksToUSD(key.billing_used_usd_ticks))}`
+    : "";
+  const period = Number(key.billing_period_days) > 0 ? ` · ${key.billing_period_days} 天账期` : "";
+  return `${models}\n${rpm} · ${expiry}\n${limit}${used}${period}`;
+}
+
+// The ledger counts USD ticks (1 USD = 10_000_000_000 ticks) because it is
+// integer arithmetic; the admin plane shows dollars.
+const USD_TICKS = 10000000000;
+function ticksToUSD(ticks) {
+  return Math.floor(Number(ticks) || 0) / USD_TICKS;
+}
+function usdToTicks(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.round(parsed * USD_TICKS);
+}
+function formatUSD(amount) {
+  return `$${Number(amount || 0).toFixed(2)}`;
+}
+
+function periodSuffix(key) {
+  const days = Number(key.billing_period_days) || 0;
+  if (days <= 0) return "";
+  const started = key.billing_period_started_at ? `（本期始于 ${formatTime(key.billing_period_started_at)}）` : "";
+  return ` · ${days} 天账期${started}`;
 }
 
 function toDatetimeLocal(value) {
@@ -782,7 +828,14 @@ async function createApiKey(e) {
       const res = await fetch("/api/keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, allowed_models: allowedModels, rpm_limit: rpmLimit, expires_at: expiresAt }),
+        body: JSON.stringify({
+        name,
+        allowed_models: allowedModels,
+        rpm_limit: rpmLimit,
+        expires_at: expiresAt,
+        billing_limit_usd_ticks: usdToTicks(document.getElementById("keyBillingLimit").value),
+        billing_period_days: Number(document.getElementById("keyBillingPeriod").value || 0),
+      }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || "创建失败");
@@ -805,6 +858,15 @@ function openEditKeyModal(id) {
   document.getElementById("editKeyAllowedModels").value = (key.allowed_models || []).join("\n");
   document.getElementById("editKeyRPMLimit").value = String(key.rpm_limit || 0);
   document.getElementById("editKeyExpiresAt").value = toDatetimeLocal(key.expires_at);
+  document.getElementById("editKeyBillingLimit").value = String(ticksToUSD(key.billing_limit_usd_ticks));
+  document.getElementById("editKeyBillingPeriod").value = String(key.billing_period_days || 0);
+  const usageHint = document.getElementById("editKeyBillingUsage");
+  if (usageHint) {
+    const used = ticksToUSD(key.billing_used_usd_ticks);
+    usageHint.textContent = Number(key.billing_limit_usd_ticks) > 0
+      ? `已用 ${formatUSD(used)} / ${formatUSD(ticksToUSD(key.billing_limit_usd_ticks))}${periodSuffix(key)}`
+      : `已用 ${formatUSD(used)}${periodSuffix(key)}`;
+  }
   const modal = document.getElementById("editKeyModal");
   modal.classList.add("active");
   modal.style.display = "flex";
@@ -823,6 +885,8 @@ async function saveKeyPolicy(e) {
     allowed_models: parseAllowedModels(document.getElementById("editKeyAllowedModels").value),
     rpm_limit: Number(document.getElementById("editKeyRPMLimit").value || 0),
     expires_at: localExpiryValue("editKeyExpiresAt"),
+    billing_limit_usd_ticks: usdToTicks(document.getElementById("editKeyBillingLimit").value),
+    billing_period_days: Number(document.getElementById("editKeyBillingPeriod").value || 0),
   };
   try {
     const res = await fetch(`/api/keys/${id}`, {
