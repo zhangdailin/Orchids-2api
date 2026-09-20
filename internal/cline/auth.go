@@ -74,7 +74,11 @@ const (
 // Loopback is additionally accepted: a local endpoint cannot exfiltrate the
 // operator's credentials to a third party, and the deployment and test suites
 // both need to point the flow at a stub server.
-var loginHosts = []string{"api.workos.com", "workos.com", "dashboard.workos.com"}
+//
+// authkit.cline.bot is the host the production WorkOS tenant actually answers
+// with: WorkOS serves the device page on the customer's AuthKit domain, so the
+// generic WorkOS hosts alone would refuse the real login.
+var loginHosts = []string{"api.workos.com", "workos.com", "dashboard.workos.com", "authkit.cline.bot", "api.cline.bot"}
 
 // Errors classified for the admin API so the UI can explain the cause instead of
 // echoing upstream text.

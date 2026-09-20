@@ -132,7 +132,13 @@ func TestInferenceCapErrorNamesTheWait(t *testing.T) {
 // login and a third party: the operator's password is typed on the page this
 // decides about.
 func TestAllowedLoginHostRefusesForeignHosts(t *testing.T) {
-	allowed := []string{"api.workos.com", "workos.com", "dashboard.workos.com", "localhost", "127.0.0.1", "::1"}
+	allowed := []string{
+		"api.workos.com", "workos.com", "dashboard.workos.com",
+		// WorkOS serves the device page on the customer's AuthKit domain, which
+		// is what the production tenant actually answers with.
+		"authkit.cline.bot", "api.cline.bot",
+		"localhost", "127.0.0.1", "::1",
+	}
 	for _, host := range allowed {
 		if !allowedLoginHost(host, "") {
 			t.Errorf("allowedLoginHost(%q) = false, want true", host)
