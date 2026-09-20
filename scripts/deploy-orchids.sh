@@ -49,6 +49,20 @@ if [ -z "$ARTIFACT" ] || [ ! -f "$ARTIFACT" ]; then
   exit 2
 fi
 
+# 0. Resolve every input before anything changes directory. Step 3 installs from
+#    $INSTALL_DIR, so a relative --artifact (the documented `--artifact
+#    ./orchids-server-linux-amd64` usage) would resolve against the install dir
+#    and fail with "cannot stat" after the checksum had already passed.
+abs_path() {
+  case "$1" in
+    /*) printf '%s' "$1" ;;
+    *) printf '%s/%s' "$(pwd)" "$1" ;;
+  esac
+}
+ARTIFACT="$(abs_path "$ARTIFACT")"
+if [ -n "$CHECKSUM" ]; then CHECKSUM="$(abs_path "$CHECKSUM")"; fi
+if [ -n "$BUILD_INFO" ]; then BUILD_INFO="$(abs_path "$BUILD_INFO")"; fi
+
 # 1. Refuse anything that is not a Linux/amd64 ELF. This is the guard that the
 #    "uploaded server.exe" incident needs.
 file_type="$(file -b "$ARTIFACT" || true)"
