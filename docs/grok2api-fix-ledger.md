@@ -82,14 +82,17 @@
 
 - **A5-10 降级为 P2 并更正描述**：本项目已有 `TrustedProxyMiddleware`（`internal/middleware/trusted_proxy.go`），`trusted_proxies` 为空（默认）时**清除全部 `X-Forwarded-*`**，配置后也只接受来自受信代理的值并取最后一段。因此"任意客户端注入 `X-Forwarded-Host`"在默认配置下不可达；真实缺陷只剩"host 值未做字符校验"（本轮已修）。审计报告第 5 章已同步更新。
 
-## 二、保留差异（有意不改为与 grok2api 一致）
+## 二、保留差异
 
-| 编号 | 为什么不改 |
+**第十一轮按"完全对齐 grok2api"的要求清空了绝大部分**：A1-11、A2-1、A2-6、A3-8、A3-9、A4-1、A4-2、A4-3、A4-11、A4-17、A7-2、A8-12 已改为与参考实现一致（见第十五节），原先锁定旧契约的测试同步改写。
+
+仍然保留的 5 条全部属**对外媒体契约**，改动会连带前端与既有客户端，排在下一批（第十六节）：
+
+| 编号 | 为什么不改（待办） |
 | --- | --- |
-| A1-11 / A3-8 / A3-9 | 本项目的原生 Build Responses 中继**故意字节透明**，并有测试锁定：`relay_policy_test.go` 断言客户端 payload 除 `prompt_cache_key` 外原样到达上游、且重复 delta 不被抑制。强行注入 `store:false` / `include` 会破坏该契约。若产品决定改为 grok2api 语义，需要同时改这两条测试与文档，属于产品决策。 |
-| A2-1（阈值） | 采用 1024/2048 而非 grok2api 的 128/256：`TestRelayRepeatedResponsesDeltasArePreserved` 明确要求 300 次合法重复必须原样传递。当前值仍能终止真正的死循环。 |
-| A8-12 | `inference_auth_enabled=false` 时 `/v1` 全部匿名，是部署方显式开关。改为强制鉴权会改变现有部署行为，留给产品决策。 |
-| A4-1/A4-2/A4-3 | 公开模型 ID 去前缀化、effort 后缀别名、注册式兼容别名是**破坏性变更**（会改变现有客户端可用的模型名），且 A 的测试刻意让裸 `grok-4.3` 不可解析。需要版本化迁移方案。 |
+| A5-2 | `/images/generations` 缺省 model 时本项目回落到 `grok-imagine-image`，B 契约是 400。 |
+| A5-4 / A5-5 / A5-7 | 图像 `resolution`/像素别名校验、URL 形态（相对路径 + publicBase 补全）、图像模型目录（quality 走 imagine-lite 上游）三处契约不同。 |
+| A5-42 | 无 `[]` 的 `timestamp_granularities`：本项目 400，B 静默忽略。 |
 
 ## 三、未修（已清空）
 
@@ -101,6 +104,12 @@
 
 | 编号 | 结论 |
 | --- | --- |
+| A1-11 / A2-1 / A2-6 / A3-8 / A3-9 | 已对齐（第十一轮：Build 缺省注入 `store=false` + `include: reasoning.encrypted_content`、本地持久化与 `store` 解耦、原生 Responses 字节透传且不再追加 `[DONE]`、doom-loop 阈值回到 128/256 并覆盖 chat 转换路径） |
+| A4-1 / A4-2 / A4-3 | 已对齐（第十一轮：公开模型名去 provider 前缀并按外部 ID 去重、通用大小写不敏感前缀剥离、补齐 B 的注册别名表；`<model>-<effort>` 别名按模型支持档位解析） |
+| A4-11 | 已对齐（第十一轮：恢复 B 的三项目录派生：4.6 在位补 4.5、OAuth Build 补 Composer、Super 才有 video 1.5） |
+| A4-17 | 已对齐（第十一轮：Codex 未知模型描述与 B 逐字节相同） |
+| A7-2 | 已对齐（第十一轮：移植外部签名器 + 首页 metaContent + 1h 缓存 + 反爬失效重签 + URL 校验；签名地址由配置显式指定） |
+| A8-12 | 已对齐（第十一轮：推理前缀恒要求托管 Key，`inference_auth_enabled` 不再能关闭鉴权） |
 | A9-1 | 已修复（第十轮：`internal/pricing` 官方费率表 + Key 额度预留/结算 + 审计成本三列，见第十四节） |
 | A3-7 | 已修复（第十轮：`compaction_trigger`/TUI 分类、canonical 摘要采样、`g2a_compact_v1` 封存与展开，见第十四节） |
 | A6-1 | 已修复（第十轮：流式 hold 缓冲 + 换号重试 + 失败开放/关闭策略；并修好质量评语此前根本没落库的问题，见第十四节） |
@@ -120,16 +129,9 @@
 
 ### 有意保留（等价于第二节，单列方便对账）
 
-| 编号 | 为什么不改 |
-| --- | --- |
-| A7-2 | statsig 的**签名**需要外部签名服务（上游由首页 metaContent + 签名器生成），本项目没有该依赖：已改为"配置有效则沿用、否则安全省略"，不再伪造 |
-| A2-6 | 原生 Responses 流的 `[DONE]`/重新分帧：项目的 relay 测试明确要求保留该行为（字节透明契约），见"保留差异" |
-| A4-17 | Codex 未知模型 `description`：客户端不解析该字段；上游文案自述为 "grok2api"，抄用会误述客户端正在对话的服务。已把文案收敛到单一常量 `codexDefaultDescription`（`internal/handler/codex_models.go`），差异属产品署名而非缺陷 |
-| A5-42 | 无 `[]` 的 `timestamp_granularities`：本项目明确 400 而不是静默忽略（宁可报错也不静默丢选项），属有意保留 |
-| A4-11 | Build 账号目录不再用"合成 Composer / 4.6 时补 4.5 / 分级 video 1.5"补全：`provider.go` 明确注释"能力真相只来自上游目录"，补全等于本地上造能力并会随刷新重新发布 |
-| A5-2 | `/images/generations` 缺省 model 时回落到 `grok-imagine-image`（上游契约是 400）：本项目把它当作显式便利，管理端与前端都会传 model；若改为强制，需要同步改前端与文档 |
-| A5-4 / A5-5 / A5-7 | 图像 `resolution`/像素别名校验、URL 形态（相对路径 + publicBase 补全）、图像模型目录（quality 走 imagine-lite 上游）：三者都处在"两个实现各自可用但契约不同"的区间，改动会连带前端与客户端，保留并在审计报告留档 |
-| 其余 P2/P3 | 多为文案/字段集/边角校验差异（如流式图片事件 `size` 恒 auto、`/tts/voices` 未归一化、无 `[]` 的 `timestamp_granularities` 语义等），逐条列在 `docs/grok2api-parity-audit.md` 对应章节 |
+第十一轮后只剩 5 条媒体契约项：`A5-2`、`A5-4`、`A5-5`、`A5-7`、`A5-42`（原因见第二节）。其余条目已移入"已解决"。
+
+其余边角 P2/P3（流式图片事件 `size` 恒 auto、`/tts/voices` 未归一化等）逐条列在 `docs/grok2api-parity-audit.md` 对应章节，按同一轮次处理。
 
 按批次给出后续方案，工作量从大到小：
 
@@ -395,18 +397,18 @@
 
 保留（已归入第三节"真正的未修条目"与"有意保留"两表）：**A4-15**（管理端模型接口形状：分页信封/分组/同步端点，改动需连同管理前端一起做，属对外管理契约）、**A4-17**（Codex 未知模型 description 文案，客户端不解析）、**A6-14**（订阅/等级推断需要 auto/fast 两套窗口形态的数据模型，凭猜测改阈值会更糟）。
 
-## 十二、总账（截至第十轮）
+## 十二、总账（截至第十一轮）
 
 对账方式：取 `docs/grok2api-parity-audit.md` 中全部发现编号（每条发现一个 `### A?-? [P?]` 标题），逐个归入本台账的"已修表 / 有意保留表 / 未修表"，要求三集合互斥且并集等于审计总数。可用 `python3 docs/grok2api-audit/recount.py` 复算（输出的四行与本表逐字对应，若有未归类条目会以非 0 退出码报错）。
 
 | 分类 | 条数 | 严重度分布 | 说明 |
 | --- | --- | --- | --- |
 | **总计** | **171** | P0 ×6、P1 ×69、P2 ×75、P3 ×21 | 审计报告自报口径（含 `A8-1` 的 `[P0/P1]` 双标） |
-| 已修复 | 154 | P0 ×6、P1 ×63、P2 ×66、P3 ×19 | 见第一、五～十一、十三、十四节各表 |
-| 有意保留 | 17 | P0 ×0、P1 ×6、P2 ×9、P3 ×2 | `A1-11`、`A2-1`、`A2-6`、`A3-8`、`A3-9`、`A4-1`、`A4-2`、`A4-3`、`A4-11`、`A4-17`、`A5-2`、`A5-4`、`A5-5`、`A5-7`、`A5-42`、`A7-2`、`A8-12` |
+| 已修复 | 166 | P0 ×6、P1 ×69、P2 ×71、P3 ×20 | 见第一、五～十一、十三、十四、十五节各表 |
+| 有意保留 | 5 | P0 ×0、P1 ×0、P2 ×4、P3 ×1 | `A5-2`、`A5-4`、`A5-5`、`A5-7`、`A5-42`（媒体契约，第十六节处理） |
 | 未修 | 0 | — | 无 |
 
-154 + 17 + 0 = 171；严重度合计 6 + 69 + 75 + 21 = 171，无重复计数、无遗漏。
+166 + 5 + 0 = 171；严重度合计 6 + 69 + 75 + 21 = 171，无重复计数、无遗漏。
 
 - **P0 全部关闭**：6 条 P0 中 5 条在早期轮次修复，`A9-1`（计费层）在第十轮完成。
 - **未修 0 条**：第十轮关闭 `A3-7`、`A6-1`、`A9-1` 三条。
@@ -415,7 +417,7 @@
 验证（第十轮涉及代码）：
 
 - `go build ./...`、`go vet ./...`、`go test ./... -count=1` 全绿（第十轮结束时）。
-- `python3 docs/grok2api-audit/recount.py` 退出码 0，输出 171 / 154 / 17 / 0。
+- `python3 docs/grok2api-audit/recount.py` 退出码 0，输出 171 / 166 / 5 / 0。
 
 ## 十三、第九轮修复（2 条 + 1 条归类）
 
@@ -437,3 +439,27 @@
 新增配置项（`config.json`，均有安全默认）：`quality_hold_enabled`（默认 true）、`quality_hold_max_attempts`（6）、`quality_hold_timeout_ms`（30000）、`quality_hold_on_exhausted`（`fail_open`）。
 
 **有意保留的边界**（不影响条目关闭，但记录清楚）：图片/视频档计价与 `PricingBreakdown` 未移植（不在 A9-1 要求的 API 面内，且属 A9-12 的聚合维度）；管理端未暴露"重置 Key 用量"端点（store 层 `ResetApiKeyBilling` 已实现并测试）；成本聚合（opsagg）仍缺 priced/unpriced 维度，属 A9-12。
+
+## 十五、第十一轮：完全对齐 grok2api（12 条保留项）
+
+按"完全对齐参考实现"的要求逐条清除此前有意保留的差异。凡原先用测试锁定的旧契约，测试同步改写为参考实现语义（改动即契约变更，不再有"两个契约各留一份"）。
+
+| 条目 | 现在与 grok2api 的行为 |
+| --- | --- |
+| A1-11 / A3-9 | `applyBuildResponseDefaults`：Build 请求缺省写 `store=false`（显式值保留），并保证 `include` 含 `reasoning.encrypted_content`（保留其它项与顺序）。 |
+| A3-8 | 本地持久化与 `store` 解耦：任何成功 Responses 都记录 ownership（chat 桥同样），`previous_response_id` / `GET /responses/{id}` 对未设 `store` 的客户端可用。 |
+| A2-6 | 原生 Responses 中继字节透传：完整帧按上游原样透出（含 CRLF 与多行 data），仅当兼容层真的补字段时才重渲染；**不再追加 `data: [DONE]`**。 |
+| A2-1 | doom-loop 阈值回到 **128 / 256**，并且 **chat 转换路径也跟踪重复 delta**（B 在协议转换前跟踪），命中给出 `upstream_output_loop` 类型错误帧。 |
+| A4-1 | `/v1/models` 发布**外部 ID**（去掉 `console/`、`build/` 前缀），同外部 ID 的路由合并为一条；内部与外部两种写法都能解析，API Key 白名单两种写法都匹配。 |
+| A4-3 | provider 前缀**通用且大小写不敏感**剥离（`Build/`、`Console/`、`grok_build/` 等），精确表优先；补齐 B 注册的 beta/latest 4.20 族、`*-console` 后缀、`grok-code-fast` 等别名。 |
+| A4-2 | `<model>-<effort>` 别名按模型真实支持档位解析（`grok-4.5-xhigh` 仍为模型不存在）。 |
+| A4-11 | 恢复 B 的三项目录派生：4.6 在位补 4.5、OAuth Build 补 Composer 2.5 Fast、Super 才有 video 1.5（非 Super 会被移除）。 |
+| A4-17 | Codex 未知模型描述与 B 逐字节相同（`Grok model served via grok2api.`）。 |
+| A7-2 | 移植 B 的 statsig 签名器：读账号首页取 `grok-site-verification` → POST 签名服务 → 按 method+path 缓存 1h → 反爬时失效重签；签名 URL 有 SSRF 形态校验；手工值改用 B 的判定（base64 解出 70 字节）。签名地址由 `grok_statsig_signer_url` 显式配置（填 B 的默认值即完全一致）。 |
+| A8-12 | 推理前缀**恒要求托管 Key**（`InferenceAuthEnabled()` 恒 true）；`inference_auth_enabled` 仅保留存储与展示，不再能打开匿名代理。 |
+
+**行为变更提示（部署方须知）**
+1. `inference_auth_enabled=false` 的部署升级后，`/v1` 等推理入口会开始返回 401；需要先为客户端配置托管 Key。
+2. `/v1/models` 的模型名去掉 provider 前缀；旧名字仍可调用，但依赖"名字里必须有 `console/`"的客户端逻辑需要更新。
+3. 质量 hold 默认开启（第十轮引入），reasoning 请求被判降级时会扣住并换号重试。
+4. statsig 签名默认**关闭**（签名字段为空）；要完全对齐 B 需配置 `grok_statsig_signer_url`。
