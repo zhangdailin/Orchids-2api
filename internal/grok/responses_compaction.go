@@ -69,10 +69,14 @@ const (
 	responsesCompactionTUI
 )
 
+// Field names match grok2api's envelope. The blob is still only readable by the
+// deployment that sealed it (the key is derived from that deployment's
+// credential key), but the plaintext shape is the reference one, so tooling that
+// inspects a blob sees the same keys on both sides.
 type gatewayCompactionEnvelope struct {
-	Version int    `json:"v"`
-	Session string `json:"s"`
-	Summary string `json:"m"`
+	Version int    `json:"version"`
+	Session string `json:"session"`
+	Summary string `json:"summary"`
 }
 
 // gatewayCompactionCodec seals and opens gateway-owned compaction blobs. A

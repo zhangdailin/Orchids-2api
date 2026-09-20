@@ -24,12 +24,12 @@ func TestClassifyQualityHold(t *testing.T) {
 	}{
 		{
 			name: "plaintext reasoning releases immediately",
-			sig:  qualityStreamSignals{HasThinking: true, HasReasoningDelta: true, ReasoningChars: 40, VisibleChars: 12},
+			sig:  qualityStreamSignals{HasThinking: true, HasReasoningDelta: true, ReasoningTokens: 10, VisibleTokens: 3},
 			want: qualityDeliver,
 		},
 		{
 			name: "cipher-only thinking with no answer yet waits",
-			sig:  qualityStreamSignals{HasThinking: true, EncryptedChars: 400, EncryptedFloor: 256},
+			sig:  qualityStreamSignals{HasThinking: true, EncryptedBytes: 400, EncryptedFloor: 256},
 			want: qualityWait,
 		},
 		{
@@ -37,37 +37,37 @@ func TestClassifyQualityHold(t *testing.T) {
 			// 18190/18183 dumps answered in under two seconds and leaked through
 			// the minimum-output check.
 			name: "cipher blob then a fast answer is withheld even when short",
-			sig:  qualityStreamSignals{HasThinking: true, EncryptedChars: 400, EncryptedFloor: 256, VisibleChars: 20, FirstVisible: true, VisibleFlushMS: 150},
+			sig:  qualityStreamSignals{HasThinking: true, EncryptedBytes: 400, EncryptedFloor: 256, VisibleTokens: 5, FirstVisible: true, VisibleFlushMS: 150},
 			want: qualityWithhold,
 		},
 		{
 			name: "cipher-only thinking delivers after two seconds of visible text",
-			sig:  qualityStreamSignals{HasThinking: true, EncryptedChars: 400, EncryptedFloor: 256, VisibleChars: 400, FirstVisible: true, VisibleFlushMS: 2500},
+			sig:  qualityStreamSignals{HasThinking: true, EncryptedBytes: 400, EncryptedFloor: 256, VisibleTokens: 100, FirstVisible: true, VisibleFlushMS: 2500},
 			want: qualityDeliver,
 		},
 		{
 			// Cipher-only thinking with a zero reasoning bill and a large visible
 			// answer is the status-loop drool, terminal event or not.
 			name: "cipher-only thinking with zero reasoning tokens is withheld at the terminal event",
-			sig:  qualityStreamSignals{HasThinking: true, EncryptedChars: 400, EncryptedFloor: 256, VisibleChars: 800, Terminal: true},
+			sig:  qualityStreamSignals{HasThinking: true, EncryptedBytes: 400, EncryptedFloor: 256, VisibleTokens: 200, Terminal: true},
 			want: qualityWithhold,
 		},
 		{
 			// A healthy encrypted-thinking stream bills reasoning tokens, so the
 			// drool detector steps aside and the terminal event releases it.
 			name: "cipher-only thinking with a reasoning bill delivers at the terminal event",
-			sig:  qualityStreamSignals{HasThinking: true, EncryptedChars: 400, EncryptedFloor: 256, ReasoningTokens: 300, VisibleChars: 800, Terminal: true},
+			sig:  qualityStreamSignals{HasThinking: true, EncryptedBytes: 400, EncryptedFloor: 256, ReasoningTokens: 300, VisibleTokens: 200, Terminal: true},
 			want: qualityDeliver,
 		},
 		{
 			name: "no reasoning at all with enough visible text is withheld at the end",
-			sig:  qualityStreamSignals{VisibleChars: 300, Terminal: true},
+			sig:  qualityStreamSignals{VisibleTokens: 75, Terminal: true},
 			want: qualityWithhold,
 		},
 		{
 			name: "reasoning stub then a short dump is withheld (burst)",
 			sig: qualityStreamSignals{
-				ReasoningStarted: true, ReasoningTokens: 954, VisibleChars: 4,
+				ReasoningStarted: true, ReasoningTokens: 954, VisibleTokens: 1,
 				FirstVisible: true, VisibleFlushMS: 30,
 			},
 			want: qualityWithhold,
@@ -75,7 +75,7 @@ func TestClassifyQualityHold(t *testing.T) {
 		{
 			name: "large encrypted blob then a fast answer is withheld (fake encrypted dump)",
 			sig: qualityStreamSignals{
-				HasThinking: true, EncryptedChars: int64(len(dumpEncrypted)), VisibleChars: 4,
+				HasThinking: true, EncryptedBytes: int64(len(dumpEncrypted)), VisibleTokens: 1,
 				FirstVisible: true, VisibleFlushMS: 1800,
 			},
 			want: qualityWithhold,
@@ -83,16 +83,16 @@ func TestClassifyQualityHold(t *testing.T) {
 		{
 			name: "plaintext reasoning dumped in 1ms with an 80% bill is withheld",
 			sig: qualityStreamSignals{
-				HasThinking: true, HasReasoningDelta: true, ReasoningChars: 900, ReasoningTokens: 900,
-				OutputTokens: 1000, VisibleChars: 100, FirstVisible: true, VisibleFlushMS: 1,
+				HasThinking: true, HasReasoningDelta: true, ReasoningTokens: 900,
+				OutputTokens: 1000, VisibleTokens: 25, FirstVisible: true, VisibleFlushMS: 1,
 			},
 			want: qualityWithhold,
 		},
 		{
 			name: "cipher drool (status loop) is withheld once visible text is large",
 			sig: qualityStreamSignals{
-				HasThinking: true, EncryptedChars: 400, EncryptedFloor: 256,
-				VisibleChars: qualityCipherDroolVisible + 1,
+				HasThinking: true, EncryptedBytes: 400, EncryptedFloor: 256,
+				VisibleTokens: qualityCipherDroolVisible + 1,
 			},
 			want: qualityWithhold,
 		},

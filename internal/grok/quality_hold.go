@@ -43,11 +43,11 @@ const (
 	// degraded account into an out-of-memory event.
 	qualityHoldMaxBytes = 8 << 20
 
-	// Dump shapes. The upstream reports token counts; this gateway counts the
-	// characters it actually saw, which is the same measure for the ASCII/UTF-8
-	// text these dumps produce. qualityBurstFlushMS/qualityBurstReasoning and
-	// qualityMinVisible come from quality_guard.go so both halves judge the same
-	// shape with the same numbers.
+	// Dump shapes. grok2api compares token counts; this gateway measures the text
+	// it saw and converts it with the same rune/4 estimate its usage accounting
+	// uses, so a threshold means the same thing on both sides. The encrypted
+	// content floor is a byte measure in grok2api too, which is why it is
+	// compared against the raw cipher length.
 	//
 	// qualityFakeEncFlushMS catches the 1.8s / ~2000-token fake-encrypted dump.
 	qualityFakeEncFlushMS = int64(2000)
@@ -64,6 +64,15 @@ const (
 	// nothing at all while held.
 	qualityIdleAccountCooldown = 15 * time.Minute
 )
+
+// tokensFromChars applies the gateway's rune/4 text estimate, the same one the
+// usage accounting uses, so grok2api's token thresholds keep their meaning.
+func tokensFromChars(chars int64) int64 {
+	if chars <= 0 {
+		return 0
+	}
+	return (chars + 3) / 4
+}
 
 // errQualityWithheld aborts a held stream from the inside. It never reaches the
 // client: the caller turns it into a retry on another account.
@@ -135,13 +144,16 @@ type qualityStreamSignals struct {
 	// ReasoningStarted marks an empty reasoning item or the Chat SSE stub. That
 	// is not proof of thinking either: a degraded account still emits the stub.
 	ReasoningStarted bool
-	VisibleChars     int64
-	ReasoningChars   int64
-	ReasoningTokens  int64
-	OutputTokens     int64
-	EncryptedChars   int64
-	EncryptedFloor   int64
-	UsageReported    bool
+	//
+	// VisibleTokens is estimated from the visible text; ReasoningTokens is the
+	// billed count when the upstream reported one and an estimate otherwise.
+	VisibleTokens   int64
+	ReasoningTokens int64
+	OutputTokens    int64
+	// EncryptedBytes is the length of the cipher grok2api's floor is expressed in.
+	EncryptedBytes int64
+	EncryptedFloor int64
+	UsageReported  bool
 	// FirstVisible marks that visible text has arrived at all.
 	FirstVisible bool
 	// VisibleFlushMS is how long the visible text took to arrive after the turn
@@ -177,14 +189,14 @@ func qualityFastFlush(sig qualityStreamSignals, limitMS int64) bool {
 }
 
 func qualityMeetsEncryptedFloor(sig qualityStreamSignals) bool {
-	if sig.EncryptedChars <= 0 {
+	if sig.EncryptedBytes <= 0 {
 		return false
 	}
 	floor := sig.EncryptedFloor
 	if floor <= 0 {
 		floor = encryptedThinkingFloor(0, 0, sig.ReasoningTokens)
 	}
-	return sig.EncryptedChars >= floor
+	return sig.EncryptedBytes >= floor
 }
 
 func qualityHasDumpBill(sig qualityStreamSignals) bool {
@@ -197,7 +209,7 @@ func qualityIsBurstDump(sig qualityStreamSignals) bool {
 	if sig.HasReasoningDelta {
 		return false
 	}
-	shortVisible := sig.VisibleChars > 0 && sig.VisibleChars < qualityBurstVisible
+	shortVisible := sig.VisibleTokens > 0 && sig.VisibleTokens < qualityBurstVisible
 	if sig.HoldExpired && shortVisible && sig.ReasoningTokens >= qualityBurstReasoning {
 		return true
 	}
@@ -223,7 +235,7 @@ func qualityIsFastReasoningRatioDump(sig qualityStreamSignals) bool {
 	}
 	output := sig.OutputTokens
 	if output <= 0 {
-		output = sig.VisibleChars + sig.ReasoningChars
+		output = sig.VisibleTokens + sig.ReasoningTokens
 	}
 	if output <= 0 || sig.ReasoningTokens <= 0 {
 		return false
@@ -238,13 +250,13 @@ func qualityIsCipherDrool(sig qualityStreamSignals, minOutput int64) bool {
 	if minOutput <= 0 {
 		minOutput = qualityHoldMinOutputDefault
 	}
-	if sig.HasReasoningDelta || sig.ReasoningTokens > 0 || sig.EncryptedChars <= 0 {
+	if sig.HasReasoningDelta || sig.ReasoningTokens > 0 || sig.EncryptedBytes <= 0 {
 		return false
 	}
-	if sig.VisibleChars >= qualityCipherDroolVisible {
+	if sig.VisibleTokens >= qualityCipherDroolVisible {
 		return true
 	}
-	return sig.Terminal && sig.VisibleChars >= minOutput
+	return sig.Terminal && sig.VisibleTokens >= minOutput
 }
 
 // classifyQualityHold decides whether a held turn may be released.
@@ -269,12 +281,12 @@ func classifyQualityHold(sig qualityStreamSignals, minOutput int64) qualityVerdi
 		if sig.Terminal {
 			return qualityDeliver
 		}
-		if sig.VisibleChars >= minOutput && sig.FirstVisible && sig.VisibleFlushMS >= qualityFakeEncFlushMS {
+		if sig.VisibleTokens >= minOutput && sig.FirstVisible && sig.VisibleFlushMS >= qualityFakeEncFlushMS {
 			return qualityDeliver
 		}
 		return qualityWait
 	}
-	output := sig.VisibleChars
+	output := sig.VisibleTokens
 	if output <= 0 {
 		output = sig.OutputTokens
 	}
@@ -622,18 +634,17 @@ func newConsoleQualityHold(w http.ResponseWriter, policy qualityHoldPolicy, outc
 }
 
 // signals converts the stream's accounting into the classifier's inputs. The
-// upstream reports token counts while this gateway counts the characters it saw,
-// which is the same measure for the text these dumps produce.
+// character counts are converted to the token measure grok2api thresholds are
+// written in, with the same rune/4 estimate the usage accounting uses.
 func (c *consoleQualityHold) signals(terminal bool) qualityStreamSignals {
 	if c == nil || c.outcome == nil {
 		return qualityStreamSignals{Terminal: terminal}
 	}
 	quality := c.outcome.Quality
 	sig := qualityStreamSignals{
-		VisibleChars:    quality.VisibleChars,
-		ReasoningChars:  quality.ReasoningChars,
+		VisibleTokens:   tokensFromChars(quality.VisibleChars),
 		ReasoningTokens: quality.ReasoningTokens,
-		EncryptedChars:  quality.EncryptedChars,
+		EncryptedBytes:  quality.EncryptedChars,
 		UsageReported:   c.outcome.UsageSource == audit.UsageSourceUpstream,
 		// FirstVisibleMS is zero until visible text arrives, so the flag needs
 		// the character count too: an encrypted blob alone is not "visible text
