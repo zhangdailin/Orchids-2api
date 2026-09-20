@@ -72,10 +72,15 @@ type discoveredModel struct {
 	Name      string
 	SortOrder int
 	// Verified marks a candidate this refresh actually observed as usable
-	// upstream (a catalog read that succeeded, or a probe that was accepted).
+	// upstream (a catalog read that succeeded, or a probe that accepted it).
 	// It is set per candidate rather than inferred from the candidate count, so
 	// "discovered" and "verified" stay distinguishable in the admin report.
 	Verified bool
+	// Provider and UpstreamModel are the route metadata a catalog read observed
+	// alongside the identifier. They stay empty for a channel whose feed names
+	// neither, and a row keeps whatever it already had in that case.
+	Provider      string
+	UpstreamModel string
 }
 
 // noActiveAccountsError reports that a channel has no account eligible for an
@@ -455,7 +460,13 @@ func discoverClineModels(ctx context.Context, cfg *config.Config, s *store.Store
 // model records.
 //
 // The public identifier is the upstream id: a client that saw it in /v1/models
-// must be able to ask for it by that name.
+// must be able to ask for it by that name. The display name is the one the feed
+// published next to it, so the model list reads like the upstream's own catalog
+// instead of repeating the identifier in both columns.
+//
+// Provider is the vendor half the feed names before the first "/". It is what
+// the public list reports as owned_by, and it is the only distinction between
+// two free models of the same channel.
 func clineCatalogToDiscovered(models []cline.Model) []discoveredModel {
 	out := make([]discoveredModel, 0, len(models))
 	for i, model := range models {
@@ -463,7 +474,14 @@ func clineCatalogToDiscovered(models []cline.Model) []discoveredModel {
 		if id == "" {
 			continue
 		}
-		out = append(out, discoveredModel{ID: id, Name: id, SortOrder: i, Verified: true})
+		out = append(out, discoveredModel{
+			ID:            id,
+			Name:          util.FirstNonEmpty(strings.TrimSpace(model.Name), id),
+			SortOrder:     i,
+			Verified:      true,
+			Provider:      strings.TrimSpace(model.Provider),
+			UpstreamModel: id,
+		})
 	}
 	return out
 }
@@ -1171,11 +1189,36 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			// Creation alone was not enough: a row that predates the observation
 			// kept Verified=false forever, and an unverified Grok row is not
 			// visible, so the channel's own default model disappeared from
-			// /v1/models. Only the flag is touched — name, status, ordering and
-			// default are operator-owned and stay as they are.
-			if model.Verified && !existing.Verified {
-				updated := *existing
+			// /v1/models. Name, status, ordering and default are operator-owned
+			// and stay as they are.
+			//
+			// Route metadata is different: it is observed, not chosen, so a row
+			// published before the feed named a provider only gets it filled in
+			// when the field is still empty. An operator who set one by hand
+			// keeps theirs.
+			//
+			// The display name follows the same rule, with one allowance: a row
+			// whose name is still a copy of the identifier was never given one
+			// by a human, so it adopts the name the feed published. A row that
+			// was renamed keeps its name.
+			updated := *existing
+			if model.Verified && !updated.Verified {
 				updated.Verified = true
+			}
+			if strings.TrimSpace(model.Name) != "" &&
+				(strings.TrimSpace(updated.Name) == "" || strings.EqualFold(strings.TrimSpace(updated.Name), updated.ModelID)) {
+				updated.Name = strings.TrimSpace(model.Name)
+			}
+			if updated.Provider == "" && model.Provider != "" {
+				updated.Provider = model.Provider
+			}
+			if updated.UpstreamModel == "" && model.UpstreamModel != "" {
+				updated.UpstreamModel = model.UpstreamModel
+			}
+			if updated.Verified != existing.Verified ||
+				updated.Name != existing.Name ||
+				updated.Provider != existing.Provider ||
+				updated.UpstreamModel != existing.UpstreamModel {
 				if err := s.UpdateModel(ctx, &updated); err != nil {
 					return nil, err
 				}
@@ -1191,6 +1234,11 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			Verified:  model.Verified,
 			IsDefault: model.ID == defaultModelID,
 			SortOrder: model.SortOrder,
+			// Whatever the catalog read observed. A feed that names neither
+			// leaves both empty, and the row then carries no route metadata —
+			// the same state a manually added row is in.
+			Provider:      model.Provider,
+			UpstreamModel: model.UpstreamModel,
 		}
 		if strings.EqualFold(strings.TrimSpace(channel), "grok") {
 			store.ApplyGrokRouteDefaults(record)
