@@ -147,3 +147,48 @@ func TestAnonymousAllowlistUsesTheTrustedClientAddress(t *testing.T) {
 		t.Fatal("an untrusted peer spoofed its way onto the allowlist")
 	}
 }
+
+// Behind Cloudflare the original client is named by CF-Connecting-IP, and only a
+// trusted peer's value counts: a direct caller cannot name itself.
+func TestTrustedProxyPrefersCloudflareClientHeader(t *testing.T) {
+	wrap, err := TrustedProxyMiddleware([]string{"127.0.0.1/32", "173.245.48.0/20"})
+	if err != nil {
+		t.Fatalf("TrustedProxyMiddleware: %v", err)
+	}
+	var resolved string
+	handler := wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resolved = ClientIP(r)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Caddy on loopback forwards Cloudflare's client header, while the forwarded
+	// chain only carries edge addresses.
+	request := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
+	request.RemoteAddr = "127.0.0.1:5555"
+	request.Header.Set("CF-Connecting-IP", "161.118.140.32")
+	request.Header.Set("X-Forwarded-For", "173.245.48.9")
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+	if resolved != "161.118.140.32" {
+		t.Fatalf("resolved client=%q want the Cloudflare client address", resolved)
+	}
+
+	// A request from an untrusted peer has the header stripped, so the peer is the
+	// client and cannot claim to be someone else.
+	direct := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
+	direct.RemoteAddr = "203.0.113.9:5555"
+	direct.Header.Set("CF-Connecting-IP", "161.118.140.32")
+	handler.ServeHTTP(httptest.NewRecorder(), direct)
+	if resolved != "203.0.113.9" {
+		t.Fatalf("resolved client=%q want the real peer", resolved)
+	}
+
+	// With Cloudflare's ranges trusted, the forwarded chain also resolves to the
+	// original client past the edge.
+	chain := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
+	chain.RemoteAddr = "127.0.0.1:5555"
+	chain.Header.Set("X-Forwarded-For", "161.118.140.32, 173.245.48.9")
+	handler.ServeHTTP(httptest.NewRecorder(), chain)
+	if resolved != "161.118.140.32" {
+		t.Fatalf("resolved client=%q want the original client from the chain", resolved)
+	}
+}

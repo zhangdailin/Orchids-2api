@@ -28,7 +28,14 @@ func TrustedProxyMiddleware(values []string) (func(http.Handler) http.Handler, e
 				return
 			}
 
-			client := forwardedClientIP(remote, r.Header.Get("X-Forwarded-For"), networks)
+			// Cloudflare's CF-Connecting-IP names the original client and is
+			// authoritative *only* because the peer is trusted (Caddy on loopback, or
+			// a Cloudflare edge the deployment listed). The X-Forwarded-For walk is
+			// the fallback, and the peer itself the last resort.
+			client := cloudflareClientIP(remote, r.Header.Get("CF-Connecting-IP"))
+			if client == nil {
+				client = forwardedClientIP(remote, r.Header.Get("X-Forwarded-For"), networks)
+			}
 			if client == nil {
 				client = remote
 			}
@@ -133,9 +140,31 @@ func ipInNetworks(ip net.IP, networks []*net.IPNet) bool {
 }
 
 func clearForwardingHeaders(header http.Header) {
-	for _, name := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP"} {
+	for _, name := range []string{
+		"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-IP",
+		// A direct caller must not be able to name itself through the header the
+		// trusted path trusts; only a trusted peer's value survives.
+		"CF-Connecting-IP",
+	} {
 		header.Del(name)
 	}
+}
+
+// cloudflareClientIP reads Cloudflare's own client header. It returns nil when the
+// header is absent or unparsable, so the caller falls back to the forwarded chain.
+func cloudflareClientIP(remote net.IP, value string) net.IP {
+	if remote == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	// Cloudflare sends a single address; a comma means something else wrote here.
+	if strings.Contains(trimmed, ",") {
+		return nil
+	}
+	return net.ParseIP(trimmed)
 }
 
 func ipString(ip net.IP, fallback string) string {
