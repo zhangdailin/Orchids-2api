@@ -516,3 +516,21 @@
 - 管理端"上游与指纹"卡片新增该字段：留空＝默认签名服务，填 `-`＝关闭，填地址＝自定义。
 - imagine WebSocket 握手也走签名（`imagineWSHeaders` 改为按 method+path 解析 x-statsig-id），此前只有 HTTP 路径签名。
 - 测试：未设置 → 默认地址（含本地 stand-in 的端到端签名）、显式关闭 → 不发头、自定义地址生效、非法地址在保存时被拒；断言"只有某个请求到达上游"的既有测试改为应答签名器的页面读取（`signerProbePath`/`answerSignerProbe` 助手）或在配置里显式关闭签名。
+
+## 十九、第十九轮：部署到生产（us1）
+
+部署对象：`3.15.148.113`（t2.small，Ubuntu 24.04），产物从 `2256a90` 构建，`sha256=69197ef28538e7e633f49a038c5f3227d441d2f6259279dfff70213c0dbc7dd0`，`/opt/orchids-2api/orchids-server` 已校验一致（旧版保留为 `orchids-server.backup-20260920-032428`）。
+
+**部署前发现的阻塞点**：线上最近一小时 39 次推理请求（grok/workbuddy/qoder）**没有任何一个带 Key**，而完全对齐后 `inference_auth_enabled` 已不能关闭鉴权 → 直接部署会让所有现有调用方 401 且无法用配置恢复。按部署方选择，先落地一个"匿名来源白名单"（第十八节），再部署。
+
+**主机配置变更**（Redis 的 `settings:config` 与 `config.json` 同时写入，各自留有 `*.bak-preapply-20260920` 备份）：
+- `anonymous_allow_ips = ["161.118.140.32/32", "203.77.252.2/32"]`（实测的两个调用方来源），其余全部必须带 Key。
+- `trusted_proxies` 补入 Cloudflare 的 22 条官方网段（`https://api.cloudflare.com/client/v4/ips`），共 24 条。原配置只有回环地址，导致"客户端 IP"被解析成 Cloudflare 边缘地址（141.101.84.8 / 162.158.138.122 等），既污染审计行，也让按来源的白名单无法工作。
+- 配套代码改动：可信对端下优先采用 `CF-Connecting-IP`（不可信对端会被清除该头），见第十九轮提交 `2256a90`。
+
+**部署后实测**：
+- 启动日志确认：`Statsig signing enabled with the default endpoint (https://grok.wodf.de/sign)`、`anonymous inference access is allowed for the configured sources...`。
+- 真实调用方：`161.118.140.32` → `/workbuddy/v1/chat/completions` **200**、`/grok/v1/chat/completions` **200**（部署后持续正常）。
+- 未在白名单的来源（部署机自身出口 / 回环）→ `/v1/models` **401** `invalid_api_key`；`/health` 200；`/admin` 302。
+- 白名单逐一验证：临时把测试出口加入白名单后 `/v1/models` **200**、返回 **200 个模型且无任何带 `/` 前缀的 ID**（`grok-4.6`、`grok-4.6-xhigh`、`grok-4-3-low` 等），验证完立即恢复为仅两个生产来源（恢复后该来源立刻回到 401）。
+- 单元状态：`orchids-2api`/`caddy`/`orchids-3002-loopback`/`redis-server` 全部 active+enabled；10 分钟内无 warning/error；端口 3002 对外仍被 nft 丢弃；磁盘 65%。
