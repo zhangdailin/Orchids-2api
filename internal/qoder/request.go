@@ -82,15 +82,15 @@ type chatBody struct {
 // field the gateway does not know about into a body whose signature is already
 // computed.
 type modelConfigWire struct {
-	Key            string  `json:"key"`
-	Format         string  `json:"format"`
-	Source         string  `json:"source"`
-	Enable         bool    `json:"enable"`
-	DisplayName    string  `json:"display_name,omitempty"`
-	IsVL           bool    `json:"is_vl"`
-	IsReasoning    bool    `json:"is_reasoning"`
-	PriceFactor    float64 `json:"price_factor,omitempty"`
-	MaxInputTokens int     `json:"max_input_tokens,omitempty"`
+	Key            string   `json:"key"`
+	Format         string   `json:"format"`
+	Source         string   `json:"source"`
+	Enable         bool     `json:"enable"`
+	DisplayName    string   `json:"display_name,omitempty"`
+	IsVL           bool     `json:"is_vl"`
+	IsReasoning    bool     `json:"is_reasoning"`
+	PriceFactor    *float64 `json:"price_factor,omitempty"`
+	MaxInputTokens int      `json:"max_input_tokens,omitempty"`
 }
 
 func wireModelConfig(model modelEntry) modelConfigWire {

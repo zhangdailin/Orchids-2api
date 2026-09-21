@@ -196,14 +196,11 @@ func verifyWorkBuddyAccountWithStore(ctx context.Context, acc *store.Account, cf
 	} else {
 		workbuddy.ApplyQuota(acc, quota)
 		if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
-			// A spent credit package is NOT a scheduling verdict. WorkBuddy keeps
-			// serving its free models after the metered allowance is gone, so the
-			// synthetic "402" this path used to return parked the whole account for
-			// the 24h payment cooldown and took those free models out of rotation
-			// with it. The meter snapshot already carries remaining=0, which is what
-			// the 配额 column renders, so the operator still sees the spent package.
-			slog.Info("WorkBuddy credit package is spent; keeping the account schedulable (free models do not consume credits)",
-				"account_id", acc.ID, "plan", quota.PackageName, "usage_limit", acc.UsageLimit, "reset_at", acc.QuotaResetAt)
+			// The upstream currently rejects requests once this package is spent;
+			// WorkBuddy has no implemented free-model entitlement feed. Keep the
+			// account parked until the meter shows credits again instead of
+			// repeatedly offering it to the request path.
+			return "402", 0, nil
 		}
 	}
 	return "", 0, nil

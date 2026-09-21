@@ -269,6 +269,9 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 			"login_id", loginID, "error", catalogErr)
 	} else {
 		acc.QoderModelIDs = qoder.CatalogSnapshot(models)
+		if len(acc.QoderModelIDs) > 0 {
+			acc.QoderModelsSyncedAt = time.Now()
+		}
 	}
 
 	// Record the allowance at login so the account table can show the plan and
@@ -279,6 +282,11 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 			"login_id", loginID, "error", quotaErr)
 	} else {
 		qoder.ApplyQuota(acc, quota)
+		if quota.Exhausted {
+			acc.StatusCode = store.AccountStatusQoderQuotaExhausted
+			acc.StatusMessage = "Qoder allowance exhausted; free catalog models remain eligible"
+			acc.LastAttempt = time.Now()
+		}
 	}
 
 	if strings.TrimSpace(acc.QoderRefreshToken) == "" {

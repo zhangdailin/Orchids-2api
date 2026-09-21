@@ -272,35 +272,19 @@ func TestAccountHeld_429KeepsShortRetryAfter(t *testing.T) {
 	}
 }
 
-// TestClassify_WorkBuddyPaymentRefusalIsModelScoped pins the reported behaviour:
-// WorkBuddy's free models keep working once the metered credit package is spent,
-// so a payment refusal must cool down only the model that was asked for instead
-// of parking the whole account (and its free models) for the 24h payment cooldown.
-func TestClassify_WorkBuddyPaymentRefusalIsModelScoped(t *testing.T) {
+// TestClassify_WorkBuddyPaymentRefusalParksAccount pins the current behaviour:
+// WorkBuddy has no implemented free-model entitlement feed, so any 402 payment
+// refusal must take the exhausted account out of rotation.
+func TestClassify_WorkBuddyPaymentRefusalParksAccount(t *testing.T) {
 	acc := &store.Account{ID: 1, AccountType: "workbuddy", Enabled: true}
 	verdict := Classify(acc, errors.New("workbuddy API error: status=402 message=insufficient credits for model"), "claude-sonnet-4.5")
 
-	if verdict.Scope != ScopeModel || verdict.Model != "claude-sonnet-4.5" {
-		t.Fatalf("verdict = %+v, want a model-scoped cooldown", verdict)
-	}
-	if verdict.Status != "" {
-		t.Fatalf("status = %q, want no account status for a spent credit package", verdict.Status)
-	}
-	if verdict.Cooldown <= 0 || verdict.Cooldown >= CooldownPayment {
-		t.Fatalf("cooldown = %v, want the short model window", verdict.Cooldown)
+	if verdict.Scope != ScopeAccount || verdict.Status != "402" {
+		t.Fatalf("verdict = %+v, want account-scoped 402", verdict)
 	}
 	verdict.Apply(acc)
-	if acc.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want the account left schedulable", acc.StatusCode)
-	}
-	if AccountHeld(acc, time.Now()) {
-		t.Fatal("a WorkBuddy payment refusal must not hold the account")
-	}
-	// Without a model to name there is nothing to cool down, and the account must
-	// still not be parked.
-	anonymous := Classify(&store.Account{AccountType: "workbuddy"}, errors.New("status=402 insufficient credits"), "")
-	if anonymous.Status != "" || AccountHeld(&store.Account{AccountType: "workbuddy", StatusCode: anonymous.Status}, time.Now()) {
-		t.Fatalf("anonymous verdict = %+v, want the account left alone", anonymous)
+	if !AccountHeld(acc, time.Now()) {
+		t.Fatal("a WorkBuddy payment refusal must hold the account")
 	}
 }
 

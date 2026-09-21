@@ -479,6 +479,22 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 			lb.clearAccountStatus(ctx, acc, "Warp 额度已刷新，恢复完整能力")
 		}
 		return true
+	case store.AccountStatusPuterQuotaExhausted:
+		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "puter") {
+			return false
+		}
+		if acc.UsageLimit > 0 && acc.UsageCurrent > 0 {
+			lb.clearAccountStatus(ctx, acc, "Puter 额度已刷新，恢复完整能力")
+		}
+		return true
+	case store.AccountStatusQoderQuotaExhausted:
+		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "qoder") {
+			return false
+		}
+		if !acc.QoderQuota.Exhausted && acc.QoderQuota.Remaining > 0 {
+			lb.clearAccountStatus(ctx, acc, "Qoder 额度已刷新，恢复完整能力")
+		}
+		return true
 	case "401":
 		// A refused credential needs operator re-authentication. Legacy rows that
 		// only carry StatusCode=401 are also kept out rather than automatically
@@ -494,6 +510,14 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		return false
 	case "402":
+		// Older Puter/Qoder rows used the generic 402 marker before free-only
+		// capability states existed. Admit them to the model-aware selector; that
+		// selector accepts only an explicitly free current catalog row. This also
+		// makes upgrades effective without rewriting Redis by hand.
+		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "puter") ||
+			strings.EqualFold(strings.TrimSpace(acc.AccountType), "qoder") {
+			return true
+		}
 		// Paid Build exhaustion recovers at the billing period boundary rather
 		// than after an arbitrary 24-hour probe window.
 		if isPaidGrokBuildAccount(acc) {

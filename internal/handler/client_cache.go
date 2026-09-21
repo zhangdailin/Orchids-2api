@@ -438,6 +438,7 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 	writeString(acc.QoderRuntimeInfo)
 	writeString(acc.QoderRuntimeKey)
 	writeStrings(acc.QoderModelIDs)
+	writeInt64(acc.QoderModelsSyncedAt.UnixNano())
 	writeString(acc.ClineAccessToken)
 	writeString(acc.ClineRefreshToken)
 	writeInt64(acc.ClineExpiresAt.UnixNano())

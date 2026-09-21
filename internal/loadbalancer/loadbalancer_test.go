@@ -377,7 +377,7 @@ func TestIsAccountAvailable_WarpQuotaStatusClearsAfterQuotaRefresh(t *testing.T)
 	}
 }
 
-func TestIsAccountAvailable_402UsesPuterProbeCooldown(t *testing.T) {
+func TestIsAccountAvailable_LegacyPuter402ReachesModelFilter(t *testing.T) {
 	lb := &LoadBalancer{connTracker: NewMemoryConnTracker()}
 	acc := &store.Account{
 		ID:          1,
@@ -386,16 +386,11 @@ func TestIsAccountAvailable_402UsesPuterProbeCooldown(t *testing.T) {
 		LastAttempt: time.Now().Add(-5 * time.Minute),
 	}
 
-	if lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected Puter 402 account to remain unavailable before probe cooldown expires")
-	}
-
-	acc.LastAttempt = time.Now().Add(-(retry402Puter + time.Minute))
 	if !lb.isAccountAvailable(context.Background(), acc) {
-		t.Fatal("expected expired 402 cooldown to re-enable account")
+		t.Fatal("expected legacy Puter 402 account to reach the free-model filter")
 	}
-	if acc.StatusCode != "" {
-		t.Fatalf("expected status to be cleared after 402 cooldown, got %q", acc.StatusCode)
+	if acc.StatusCode != "402" {
+		t.Fatalf("expected legacy quota marker preserved, got %q", acc.StatusCode)
 	}
 }
 

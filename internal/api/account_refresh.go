@@ -147,7 +147,7 @@ func refreshPuterAccountState(a *API, ctx context.Context, acc *store.Account) (
 	if usageErr == nil {
 		applyPuterMonthlyUsage(acc, usage)
 		if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
-			return "402", 0, nil
+			return store.AccountStatusPuterQuotaExhausted, 0, nil
 		}
 		return "", 0, nil
 	}

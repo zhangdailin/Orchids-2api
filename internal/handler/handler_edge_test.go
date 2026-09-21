@@ -176,8 +176,8 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 	if err != nil {
 		t.Fatalf("GetAccount(first) error = %v", err)
 	}
-	if storedFirst.StatusCode != "402" {
-		t.Fatalf("expected first account to be cooled down as 402, got %q", storedFirst.StatusCode)
+	if storedFirst.StatusCode != store.AccountStatusPuterQuotaExhausted {
+		t.Fatalf("expected first account to enter Puter free-only mode, got %q", storedFirst.StatusCode)
 	}
 }
 

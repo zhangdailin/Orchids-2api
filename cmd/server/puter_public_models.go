@@ -17,13 +17,22 @@ type puterPublicModelDetailsResponse struct {
 }
 
 type puterPublicModelDetails struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID            string                 `json:"id"`
+	PuterID       string                 `json:"puterId"`
+	Name          string                 `json:"name"`
+	Provider      string                 `json:"provider"`
+	InputCostKey  string                 `json:"input_cost_key"`
+	OutputCostKey string                 `json:"output_cost_key"`
+	Costs         map[string]interface{} `json:"costs"`
 }
 
 type puterPublicModelChoice struct {
-	ID   string
-	Name string
+	ID            string
+	Name          string
+	Provider      string
+	UpstreamModel string
+	Free          bool
+	PricingKnown  bool
 }
 
 const puterPublicModelDetailsURL = "https://api.puter.com/puterai/chat/models/details"
@@ -82,8 +91,35 @@ func normalizePuterPublicModelDetails(rawModels []puterPublicModelDetails) []put
 		if name == "" {
 			name = id
 		}
-		out = append(out, puterPublicModelChoice{ID: id, Name: name})
+		pricingKnown, free := puterZeroCost(raw.Costs, raw.InputCostKey, raw.OutputCostKey)
+		upstreamModel := strings.TrimSpace(raw.PuterID)
+		if upstreamModel == "" {
+			upstreamModel = id
+		}
+		out = append(out, puterPublicModelChoice{
+			ID: id, Name: name,
+			Provider:      strings.ToLower(strings.TrimSpace(raw.Provider)),
+			UpstreamModel: upstreamModel,
+			Free:          free, PricingKnown: pricingKnown,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// puterZeroCost accepts only an explicit pair of zero input/output prices using
+// the cost keys the upstream row itself declares. Missing keys and partial price
+// objects stay unknown rather than turning a cached-token zero into "free".
+func puterZeroCost(costs map[string]interface{}, inputKey, outputKey string) (known, free bool) {
+	inputKey = strings.TrimSpace(inputKey)
+	outputKey = strings.TrimSpace(outputKey)
+	if len(costs) == 0 || inputKey == "" || outputKey == "" {
+		return false, false
+	}
+	input, inputOK := costs[inputKey].(float64)
+	output, outputOK := costs[outputKey].(float64)
+	if !inputOK || !outputOK {
+		return false, false
+	}
+	return true, input == 0 && output == 0
 }

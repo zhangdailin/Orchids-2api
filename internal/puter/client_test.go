@@ -351,6 +351,9 @@ func TestServiceForModelDerivesFromTheIdentifier(t *testing.T) {
 		// Not on the old policy list, but a real upstream identifier.
 		{"claude-opus-4-6", "claude"},
 		{"CLAUDE-OPUS-4-6", "claude"},
+		{"openrouter:openai/gpt-5.6", "openrouter"},
+		{"infron:deepseek/deepseek-v4-flash:free", "infron"},
+		{"gemma-4-26b-a4b-it", "google"},
 	}
 	for _, tt := range tests {
 		got, err := serviceForModel(tt.model)
@@ -358,7 +361,7 @@ func TestServiceForModelDerivesFromTheIdentifier(t *testing.T) {
 			t.Fatalf("serviceForModel(%q)=(%q,%v) want %q", tt.model, got, err, tt.want)
 		}
 	}
-	for _, unmappable := range []string{"openrouter:openai/gpt-5.6", "togetherai:qwen/model", "o3", "unknown", ""} {
+	for _, unmappable := range []string{"o3", "unknown", ""} {
 		if _, err := serviceForModel(unmappable); err == nil {
 			t.Fatalf("serviceForModel(%q) unexpectedly succeeded", unmappable)
 		}

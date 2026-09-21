@@ -349,6 +349,38 @@ func qoderQuotaRefreshDue(acc *store.Account, now time.Time) bool {
 	return now.Sub(acc.QoderQuota.SyncedAt) >= providerHealthRefreshInterval
 }
 
+func qoderCatalogRefreshDue(acc *store.Account, now time.Time) bool {
+	if acc == nil || len(acc.QoderModelIDs) == 0 || acc.QoderModelsSyncedAt.IsZero() {
+		return true
+	}
+	return now.Sub(acc.QoderModelsSyncedAt) >= providerHealthRefreshInterval
+}
+
+func refreshQoderCatalog(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) {
+	if acc == nil || s == nil || !qoderCatalogRefreshDue(acc, time.Now()) {
+		return
+	}
+	client := qoder.NewFromAccount(acc, cfg)
+	defer client.Close()
+	client.SetAccountStore(s)
+	catalogCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	catalog, err := client.FetchUpstreamModels(catalogCtx)
+	cancel()
+	if err != nil {
+		slog.Warn("Auto refresh qoder catalog failed; keeping the last snapshot", "account_id", acc.ID, "error", err)
+		return
+	}
+	ids := qoder.CatalogSnapshot(catalog)
+	if len(ids) == 0 {
+		return
+	}
+	acc.QoderModelIDs = ids
+	acc.QoderModelsSyncedAt = time.Now()
+	if err := s.UpdateAccount(ctx, acc); err != nil {
+		slog.Warn("Auto refresh qoder catalog: update account failed", "account_id", acc.ID, "error", err)
+	}
+}
+
 // refreshQoderQuota reads the same authoritative allowance endpoint used by a
 // manual account refresh. Inference-agent limit payloads are intentionally not
 // used here: they can be model-scoped while the account still has credits.
@@ -370,8 +402,8 @@ func refreshQoderQuota(ctx context.Context, cfg *config.Config, s *store.Store, 
 		qoder.ApplyQuota(acc, quota)
 		if quota.Exhausted {
 			accountpolicy.Verdict{
-				Status:  "402",
-				Message: "Qoder allowance exhausted; confirmed by the quota endpoint",
+				Status:  store.AccountStatusQoderQuotaExhausted,
+				Message: "Qoder allowance exhausted; free catalog models remain eligible",
 				Scope:   accountpolicy.ScopeAccount,
 				At:      time.Now(),
 			}.Apply(acc)
@@ -738,6 +770,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 				continue
 			}
 			if strings.EqualFold(acc.AccountType, "qoder") {
+				refreshQoderCatalog(refreshCtx, cfg, s, acc)
 				refreshQoderQuota(refreshCtx, cfg, s, acc)
 				continue
 			}

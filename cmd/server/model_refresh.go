@@ -81,6 +81,10 @@ type discoveredModel struct {
 	// neither, and a row keeps whatever it already had in that case.
 	Provider      string
 	UpstreamModel string
+	// BillingTier is dynamic upstream metadata, not a name-based guess. Only
+	// "free" grants routing to an account whose metered allowance is exhausted.
+	BillingTier   string
+	BillingSource string
 }
 
 // noActiveAccountsError reports that a channel has no account eligible for an
@@ -434,7 +438,15 @@ func qoderCatalogToDiscovered(catalog *qoder.Catalog) []discoveredModel {
 		// display name are both still accepted at request time, because the
 		// catalog resolves case-insensitively.
 		id = strings.ToLower(id)
-		out = append(out, discoveredModel{ID: id, Name: id, SortOrder: i, Verified: true})
+		candidate := discoveredModel{ID: id, Name: id, SortOrder: i, Verified: true}
+		if entry.PriceFactor != nil && *entry.PriceFactor == 0 {
+			candidate.BillingTier = "free"
+			candidate.BillingSource = "qoder_price_factor"
+		} else if entry.PriceFactor != nil {
+			candidate.BillingTier = "metered"
+			candidate.BillingSource = "qoder_price_factor"
+		}
+		out = append(out, candidate)
 	}
 	return out
 }
@@ -450,6 +462,7 @@ func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store
 		return
 	}
 	acc.QoderModelIDs = ids
+	acc.QoderModelsSyncedAt = time.Now()
 	if err := s.UpdateAccount(ctx, acc); err != nil {
 		slog.Warn("failed to persist qoder model snapshot", "account_id", acc.ID, "error", err)
 	}
@@ -608,8 +621,23 @@ func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *s
 		return nil, "", fmt.Errorf("puter has no discoverable models")
 	}
 
-	summary := verifyPuterDiscoveredModelsConcurrent(ctx, cfg, accounts, candidates, concurrency)
-	verified := summary.Verified
+	// A zero-cost catalog row is usable independently of the monthly paid
+	// allowance. Keep it visible even when every account is spent; metered and
+	// unknown rows still require the existing account test_mode proof.
+	free := make([]discoveredModel, 0)
+	probe := make([]discoveredModel, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.BillingTier == "free" {
+			free = append(free, candidate)
+			continue
+		}
+		probe = append(probe, candidate)
+	}
+	summary := verifyPuterDiscoveredModelsConcurrent(ctx, cfg, accounts, probe, concurrency)
+	verified := append(free, summary.Verified...)
+	for i := range verified {
+		verified[i].SortOrder = i
+	}
 	if len(verified) == 0 && summary.SawInsufficientFunds {
 		return nil, "", fmt.Errorf("puter accounts reported insufficient funds; no model could be observed as available")
 	}
@@ -630,7 +658,19 @@ func puterChoicesToDiscovered(items []puterPublicModelChoice) []discoveredModel 
 		if name == "" {
 			name = id
 		}
-		out = append(out, discoveredModel{ID: id, Name: name, SortOrder: i})
+		candidate := discoveredModel{
+			ID: id, Name: name, SortOrder: i,
+			Provider: item.Provider, UpstreamModel: item.UpstreamModel,
+		}
+		if item.PricingKnown {
+			candidate.BillingTier = "metered"
+			candidate.BillingSource = "puter_catalog_costs"
+			if item.Free {
+				candidate.BillingTier = "free"
+				candidate.Verified = true
+			}
+		}
+		out = append(out, candidate)
 	}
 	return out
 }
@@ -1256,10 +1296,17 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			if updated.UpstreamModel == "" && model.UpstreamModel != "" {
 				updated.UpstreamModel = model.UpstreamModel
 			}
+			// Charging metadata is an upstream fact that may change between
+			// refreshes (for example a temporary free Qoder model), so unlike
+			// operator-owned display fields it is replaced on every observation.
+			updated.BillingTier = strings.ToLower(strings.TrimSpace(model.BillingTier))
+			updated.BillingSource = strings.ToLower(strings.TrimSpace(model.BillingSource))
 			if updated.Verified != existing.Verified ||
 				updated.Name != existing.Name ||
 				updated.Provider != existing.Provider ||
-				updated.UpstreamModel != existing.UpstreamModel {
+				updated.UpstreamModel != existing.UpstreamModel ||
+				updated.BillingTier != existing.BillingTier ||
+				updated.BillingSource != existing.BillingSource {
 				if err := s.UpdateModel(ctx, &updated); err != nil {
 					return nil, err
 				}
@@ -1280,6 +1327,8 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 			// the same state a manually added row is in.
 			Provider:      model.Provider,
 			UpstreamModel: model.UpstreamModel,
+			BillingTier:   strings.ToLower(strings.TrimSpace(model.BillingTier)),
+			BillingSource: strings.ToLower(strings.TrimSpace(model.BillingSource)),
 		}
 		if strings.EqualFold(strings.TrimSpace(channel), "grok") {
 			store.ApplyGrokRouteDefaults(record)

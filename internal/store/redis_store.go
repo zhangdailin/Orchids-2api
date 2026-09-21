@@ -689,6 +689,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		if len(acc.QoderModelIDs) > 0 {
 			updated.QoderModelIDs = append([]string(nil), acc.QoderModelIDs...)
 		}
+		if !acc.QoderModelsSyncedAt.IsZero() && (existing.QoderModelsSyncedAt.IsZero() || !acc.QoderModelsSyncedAt.Before(existing.QoderModelsSyncedAt)) {
+			updated.QoderModelsSyncedAt = acc.QoderModelsSyncedAt
+		}
 		if !acc.QoderQuota.SyncedAt.IsZero() && (existing.QoderQuota.SyncedAt.IsZero() || !acc.QoderQuota.SyncedAt.Before(existing.QoderQuota.SyncedAt)) {
 			updated.QoderQuota = acc.QoderQuota
 		}

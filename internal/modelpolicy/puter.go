@@ -15,12 +15,28 @@ const DefaultPuterModelID = "claude-opus-5"
 // model is the catalog's decision, but routing it is this gateway's.
 func PuterServiceForModel(modelID string) (string, bool) {
 	id := strings.ToLower(strings.TrimSpace(modelID))
+	if namespace, _, ok := strings.Cut(id, ":"); ok {
+		switch strings.TrimSpace(namespace) {
+		case "openrouter", "infron", "alibaba", "togetherai", "deepinfra", "replicate":
+			return strings.TrimSpace(namespace), true
+		case "google", "gemini":
+			return "google", true
+		case "openai":
+			return "openai", true
+		case "anthropic", "claude":
+			return "claude", true
+		case "xai", "x-ai":
+			return "x-ai", true
+		case "deepseek", "mistral":
+			return strings.TrimSpace(namespace), true
+		}
+	}
 	switch {
 	case strings.HasPrefix(id, "claude-"):
 		return "claude", true
 	case strings.HasPrefix(id, "gpt-"):
 		return "openai", true
-	case strings.HasPrefix(id, "gemini-"):
+	case strings.HasPrefix(id, "gemini-"), strings.HasPrefix(id, "gemma-"):
 		return "google", true
 	case strings.HasPrefix(id, "grok-"):
 		return "x-ai", true

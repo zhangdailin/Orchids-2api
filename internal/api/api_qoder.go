@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"orchids-api/internal/config"
 	"orchids-api/internal/qoder"
@@ -100,6 +101,9 @@ func PreserveQoderCredentialsOnEdit(acc, existing *store.Account) {
 	// The catalog snapshot and its provenance are not editable through the form.
 	if len(acc.QoderModelIDs) == 0 {
 		acc.QoderModelIDs = append([]string(nil), existing.QoderModelIDs...)
+	}
+	if acc.QoderModelsSyncedAt.IsZero() {
+		acc.QoderModelsSyncedAt = existing.QoderModelsSyncedAt
 	}
 	// Provider-observed usage and health are not editable either.
 	acc.UsageLimit = existing.UsageLimit
@@ -231,6 +235,7 @@ func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 			"account_id", acc.ID, "error", catalogErr)
 	} else if ids := qoder.CatalogSnapshot(models); len(ids) > 0 {
 		acc.QoderModelIDs = ids
+		acc.QoderModelsSyncedAt = time.Now()
 	}
 
 	// The credit/plan read is what distinguishes "this credential is broken" from
@@ -242,11 +247,11 @@ func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 	} else {
 		qoder.ApplyQuota(acc, quota)
 		if quota.Exhausted {
-			// Quota exhausted is a scheduling fact, not a credential fault: the
-			// account stays valid and the status is the one the rest of the
-			// gateway uses for "no allowance left", so the pool alarm does not
-			// blame a channel that is working.
-			return "402", 0, nil
+			// Quota exhaustion is a capability downgrade when this account's
+			// current catalog contains an explicitly zero-factor model. The
+			// request selector admits only that free model; if the catalog has no
+			// such row the account matches no request and stays effectively parked.
+			return store.AccountStatusQoderQuotaExhausted, 0, nil
 		}
 	}
 	return "", 0, nil

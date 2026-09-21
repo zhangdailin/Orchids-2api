@@ -81,7 +81,7 @@ func (a *API) HandlePuterWebLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	applyPuterMonthlyUsage(acc, usage)
 	if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
-		acc.StatusCode = "402"
+		acc.StatusCode = store.AccountStatusPuterQuotaExhausted
 	}
 	existing, err := a.findDuplicateAccountByCredential(ctx, acc, 0)
 	if err != nil {

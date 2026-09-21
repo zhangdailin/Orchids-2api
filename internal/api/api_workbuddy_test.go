@@ -334,12 +334,10 @@ func TestRefreshAccountState_WorkBuddySyncsModelsAndQuota(t *testing.T) {
 	}
 }
 
-// TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable pins the
-// reported behaviour: WorkBuddy's free models keep working after the metered
-// credit package is spent, so a spent meter must NOT become an account status.
-// The old synthetic "402" parked the account for the 24h payment cooldown every
-// time the admin page synced it, which took the free models out of rotation too.
-func TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable(t *testing.T) {
+// TestRefreshAccountState_WorkBuddySpentMeterParksAccount pins the observed
+// behaviour: WorkBuddy has no implemented free-model entitlement feed, so an
+// empty credit package must remove the account from request scheduling.
+func TestRefreshAccountState_WorkBuddySpentMeterParksAccount(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -373,11 +371,8 @@ func TestRefreshAccountState_WorkBuddySpentMeterKeepsAccountSchedulable(t *testi
 	if err != nil {
 		t.Fatalf("refreshAccountState() error = %v", err)
 	}
-	if status != "" || httpStatus != 0 {
-		t.Fatalf("status = %q httpStatus = %d, want no verdict from a spent credit meter", status, httpStatus)
-	}
-	if acc.StatusCode != "" {
-		t.Fatalf("StatusCode = %q, want the account left schedulable", acc.StatusCode)
+	if status != "402" || httpStatus != 0 {
+		t.Fatalf("status = %q httpStatus = %d, want spent-package 402 verdict", status, httpStatus)
 	}
 	// The spent package must still be visible: the 配额 column renders remaining=0.
 	if acc.UsageLimit != 250 || acc.UsageCurrent != 0 {

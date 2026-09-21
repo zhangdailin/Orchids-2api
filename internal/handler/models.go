@@ -24,6 +24,8 @@ type PublicModelResponse struct {
 	Capabilities  []string `json:"capabilities,omitempty"`
 	Provider      string   `json:"provider,omitempty"`
 	UpstreamModel string   `json:"upstream_model,omitempty"`
+	BillingTier   string   `json:"billing_tier,omitempty"`
+	BillingSource string   `json:"billing_source,omitempty"`
 	// ContextLength is the model's real input-token window, as observed from the
 	// channel's own catalog. It is omitted when nothing was observed, because a
 	// client that reads a wrong number budgets against the wrong number: too low
@@ -232,6 +234,8 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.Capabilities = m.Capabilities
 		entry.Provider = m.Provider
 		entry.UpstreamModel = m.UpstreamModel
+		entry.BillingTier = m.BillingTier
+		entry.BillingSource = m.BillingSource
 		// The window is looked up by the route's own id first: that is what the
 		// channel's catalog was keyed by when it was observed. The public alias is
 		// the fallback for a channel that publishes a different spelling.

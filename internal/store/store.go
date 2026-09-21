@@ -20,29 +20,29 @@ var (
 )
 
 type Account struct {
-	ID                   int64   `json:"id"`
-	Name                 string  `json:"name"`
-	AccountType          string  `json:"account_type"`
-	NSFWEnabled          bool    `json:"nsfw_enabled"`
-	SessionID            string  `json:"session_id"`
-	ClientCookie         string  `json:"client_cookie"`
-	RefreshToken         string  `json:"refresh_token,omitempty"`
-	DeviceID             string  `json:"device_id,omitempty"`
-	RequestID            string  `json:"request_id,omitempty"`
-	SessionCookie        string  `json:"session_cookie"`
-	ClientUat            string  `json:"client_uat"`
-	ProjectID            string  `json:"project_id"`
-	UserID               string  `json:"user_id"`
-	AgentMode            string  `json:"agent_mode"`
-	Email                string  `json:"email"`
-	Weight               int     `json:"weight"`
-	MaxConcurrent        int     `json:"max_concurrent,omitempty"`
-	Enabled              bool    `json:"enabled"`
-	Token                string  `json:"token"`        // Runtime/display token for non-Warp channels
-	Subscription         string  `json:"subscription"` // "free", "pro", etc.
-	UsageCurrent         float64 `json:"usage_current"`
-	UsageTotal           float64 `json:"usage_total"` // Used as lifetime usage
-	UsageLimit           float64 `json:"usage_limit"` // Daily limit
+	ID            int64   `json:"id"`
+	Name          string  `json:"name"`
+	AccountType   string  `json:"account_type"`
+	NSFWEnabled   bool    `json:"nsfw_enabled"`
+	SessionID     string  `json:"session_id"`
+	ClientCookie  string  `json:"client_cookie"`
+	RefreshToken  string  `json:"refresh_token,omitempty"`
+	DeviceID      string  `json:"device_id,omitempty"`
+	RequestID     string  `json:"request_id,omitempty"`
+	SessionCookie string  `json:"session_cookie"`
+	ClientUat     string  `json:"client_uat"`
+	ProjectID     string  `json:"project_id"`
+	UserID        string  `json:"user_id"`
+	AgentMode     string  `json:"agent_mode"`
+	Email         string  `json:"email"`
+	Weight        int     `json:"weight"`
+	MaxConcurrent int     `json:"max_concurrent,omitempty"`
+	Enabled       bool    `json:"enabled"`
+	Token         string  `json:"token"`        // Runtime/display token for non-Warp channels
+	Subscription  string  `json:"subscription"` // "free", "pro", etc.
+	UsageCurrent  float64 `json:"usage_current"`
+	UsageTotal    float64 `json:"usage_total"` // Used as lifetime usage
+	UsageLimit    float64 `json:"usage_limit"` // Daily limit
 	// TokensToday is the token spend the gateway counted for the account inside
 	// the current local day, and TokensDate is the day it belongs to.
 	//
@@ -51,8 +51,8 @@ type Account struct {
 	// rate limit right now?" — because a total only ever grows. The pair is
 	// rolled by the counter itself: a request whose date differs from
 	// TokensDate starts a new day instead of adding to yesterday's figure.
-	TokensToday float64 `json:"tokens_today,omitempty"`
-	TokensDate  string  `json:"tokens_date,omitempty"`
+	TokensToday          float64 `json:"tokens_today,omitempty"`
+	TokensDate           string  `json:"tokens_date,omitempty"`
 	WarpMonthlyLimit     float64 `json:"warp_monthly_limit,omitempty"`
 	WarpMonthlyRemaining float64 `json:"warp_monthly_remaining,omitempty"`
 	WarpBonusRemaining   float64 `json:"warp_bonus_remaining,omitempty"`
@@ -200,7 +200,8 @@ type Account struct {
 	// QoderModelIDs is the last successful account-scoped model catalog
 	// snapshot. An empty snapshot means "not synced yet", not that the account
 	// supports every model.
-	QoderModelIDs []string `json:"qoder_model_ids,omitempty"`
+	QoderModelIDs       []string  `json:"qoder_model_ids,omitempty"`
+	QoderModelsSyncedAt time.Time `json:"qoder_models_synced_at,omitempty"`
 	// QoderQuota is the last successful credit/plan snapshot. The generic
 	// UsageLimit/UsageCurrent fields stay authoritative for scheduling; this keeps
 	// the extra detail the gateway reports (plan tier, the exhausted verdict and
@@ -387,6 +388,15 @@ type GrokFreeQuotaSnapshot struct {
 // capabilities while model/capability filters keep paid requests away from it.
 const AccountStatusWarpQuotaExhausted = "warp_quota_exhausted"
 
+// Puter and Qoder quota exhaustion are capability downgrades when, and only
+// when, the requested route is explicitly marked free by the current upstream
+// catalog. The selector keeps these accounts in the pool but its model filter
+// rejects every metered or unknown route.
+const (
+	AccountStatusPuterQuotaExhausted = "puter_quota_exhausted"
+	AccountStatusQoderQuotaExhausted = "qoder_quota_exhausted"
+)
+
 const (
 	AccountAuthStatusActive         = "active"
 	AccountAuthStatusReauthRequired = "reauthRequired"
@@ -428,8 +438,8 @@ type ApiKey struct {
 	// the rollover, not by the caller.
 	BillingPeriodStartedAt time.Time  `json:"billing_period_started_at,omitempty"`
 	ExpiresAt              *time.Time `json:"expires_at,omitempty"`
-	LastUsedAt          *time.Time `json:"last_used_at"`
-	CreatedAt           time.Time  `json:"created_at"`
+	LastUsedAt             *time.Time `json:"last_used_at"`
+	CreatedAt              time.Time  `json:"created_at"`
 }
 
 // StoredResponse records the ownership needed to continue or manage an

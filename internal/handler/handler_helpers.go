@@ -15,6 +15,7 @@ import (
 
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -409,8 +410,9 @@ func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetCha
 }
 
 // honorsModelCooldown reports whether a channel's selection consults the
-// per-model cooldown its own verdicts write. Qoder and WorkBuddy both scope a
-// refusal to a single model while the account stays usable for the others.
+// per-model cooldown its own verdicts write. Qoder scopes agent/model windows;
+// WorkBuddy may scope a plan refusal while accounts with a truly exhausted
+// package remain account-wide parked.
 func honorsModelCooldown(channel string) bool {
 	switch strings.ToLower(strings.TrimSpace(channel)) {
 	case "qoder", "workbuddy":
@@ -420,19 +422,41 @@ func honorsModelCooldown(channel string) bool {
 	}
 }
 
+func (h *Handler) isCurrentFreeModel(ctx context.Context, channel, modelID string) bool {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return false
+	}
+	model, err := h.loadBalancer.Store.GetModelByChannelAndModelID(ctx, channel, strings.ToLower(strings.TrimSpace(modelID)))
+	return err == nil && model != nil && strings.EqualFold(strings.TrimSpace(model.BillingTier), "free")
+}
+
 func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChannel string, failedAccountIDs []int64, opts accountSelectionOptions) (*store.Account, error) {
 	if h == nil || h.loadBalancer == nil {
 		return nil, errors.New("load balancer not configured")
 	}
 	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
-		// A per-model cooldown must be honoured by the channel that wrote it: Qoder
-		// business rate limits and WorkBuddy payment refusals both leave the account
-		// usable for its other models (WorkBuddy's free models keep working after the
-		// credit package is spent), and both record a model-scoped cooldown. Park the
-		// model, never the account.
-		if model := strings.TrimSpace(opts.ModelID); model != "" && honorsModelCooldown(targetChannel) {
+		model := strings.TrimSpace(opts.ModelID)
+		channel := strings.ToLower(strings.TrimSpace(targetChannel))
+		needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "puter" || channel == "qoder")
+		if needsFilter {
 			return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-				return store.ModelCooldownRemaining(acc, model, time.Now()) == 0
+				if honorsModelCooldown(channel) && store.ModelCooldownRemaining(acc, model, time.Now()) != 0 {
+					return false
+				}
+				switch strings.TrimSpace(acc.StatusCode) {
+				case store.AccountStatusPuterQuotaExhausted, "402":
+					if channel == "puter" {
+						return h.isCurrentFreeModel(ctx, "puter", model)
+					}
+					if channel == "qoder" {
+						return qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
+					}
+				case store.AccountStatusQoderQuotaExhausted:
+					return channel == "qoder" && qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
+				default:
+					return true
+				}
+				return false
 			})
 		}
 		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)

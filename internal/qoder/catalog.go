@@ -41,7 +41,7 @@ type modelEntry struct {
 	IsVL           bool     `json:"is_vl"`
 	IsReasoning    bool     `json:"is_reasoning"`
 	IsDefault      bool     `json:"is_default"`
-	PriceFactor    float64  `json:"price_factor"`
+	PriceFactor    *float64 `json:"price_factor,omitempty"`
 	MaxInputTokens int      `json:"max_input_tokens"`
 	OrgTags        []string `json:"organization_tags"`
 }
@@ -75,6 +75,38 @@ func (c *Catalog) Entries() []modelEntry {
 		return nil
 	}
 	return append([]modelEntry(nil), c.entries...)
+}
+
+// FreeModelIDs returns only models the current upstream catalog explicitly
+// prices at zero. A missing price_factor is unknown, not free; using a pointer
+// preserves that distinction across the stored account snapshot.
+func FreeModelIDs(ids []string) map[string]struct{} {
+	catalog := catalogFromIDs(ids)
+	if catalog == nil {
+		return nil
+	}
+	out := make(map[string]struct{})
+	for _, entry := range catalog.entries {
+		if entry.PriceFactor == nil || *entry.PriceFactor != 0 {
+			continue
+		}
+		for _, value := range []string{entry.Key, entry.Name, entry.DisplayName} {
+			if value = strings.ToLower(strings.TrimSpace(value)); value != "" {
+				out[value] = struct{}{}
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// IsFreeModel reports whether this account's latest observed catalog explicitly
+// marks the requested model as zero-factor. No free row means no downgrade mode.
+func IsFreeModel(ids []string, requested string) bool {
+	_, ok := FreeModelIDs(ids)[strings.ToLower(strings.TrimSpace(requested))]
+	return ok
 }
 
 // Resolve maps a client-facing model name onto a catalog row.

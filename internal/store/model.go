@@ -77,19 +77,25 @@ func (s ModelStatus) MarshalJSON() ([]byte, error) {
 }
 
 type Model struct {
-	ID              string      `json:"id"`
-	Channel         string      `json:"channel"`  // e.g., "warp", "grok"
-	ModelID         string      `json:"model_id"` // e.g., "claude-3-5-sonnet"
-	Name            string      `json:"name"`     // e.g., "Claude 3.5 Sonnet"
-	Status          ModelStatus `json:"status"`   // Enabled/Disabled
-	Verified        bool        `json:"verified,omitempty"`
-	IsDefault       bool        `json:"is_default"` // Is default for this channel
-	SortOrder       int         `json:"sort_order"`
-	Provider        string      `json:"provider,omitempty"`
-	UpstreamModel   string      `json:"upstream_model,omitempty"`
-	Capabilities    []string    `json:"capabilities,omitempty"`
-	Origin          string      `json:"origin,omitempty"`
-	BoundAccountIDs []int64     `json:"bound_account_ids,omitempty"`
+	ID            string      `json:"id"`
+	Channel       string      `json:"channel"`  // e.g., "warp", "grok"
+	ModelID       string      `json:"model_id"` // e.g., "claude-3-5-sonnet"
+	Name          string      `json:"name"`     // e.g., "Claude 3.5 Sonnet"
+	Status        ModelStatus `json:"status"`   // Enabled/Disabled
+	Verified      bool        `json:"verified,omitempty"`
+	IsDefault     bool        `json:"is_default"` // Is default for this channel
+	SortOrder     int         `json:"sort_order"`
+	Provider      string      `json:"provider,omitempty"`
+	UpstreamModel string      `json:"upstream_model,omitempty"`
+	Capabilities  []string    `json:"capabilities,omitempty"`
+	// BillingTier is the upstream-observed charging class for this route. Empty
+	// means unknown; only the exact value "free" may keep an exhausted account
+	// eligible. It is deliberately separate from capabilities because charging
+	// can change while the model's protocol features do not.
+	BillingTier     string  `json:"billing_tier,omitempty"`
+	BillingSource   string  `json:"billing_source,omitempty"`
+	Origin          string  `json:"origin,omitempty"`
+	BoundAccountIDs []int64 `json:"bound_account_ids,omitempty"`
 	// CreatedAt records when the route row was first seen. The public model
 	// list reports it as `created`; a row stored before this field existed
 	// leaves it zero and the caller falls back to the legacy constant.
@@ -102,6 +108,8 @@ func (m *Model) NormalizeRoute() {
 	}
 	m.Provider = strings.ToLower(strings.TrimSpace(m.Provider))
 	m.UpstreamModel = strings.TrimSpace(m.UpstreamModel)
+	m.BillingTier = strings.ToLower(strings.TrimSpace(m.BillingTier))
+	m.BillingSource = strings.ToLower(strings.TrimSpace(m.BillingSource))
 	m.Origin = strings.ToLower(strings.TrimSpace(m.Origin))
 	if m.Origin == "" {
 		m.Origin = "manual"

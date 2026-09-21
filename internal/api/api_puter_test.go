@@ -75,7 +75,7 @@ func TestRefreshAccountState_PuterSyncsMonthlyUsage(t *testing.T) {
 	}
 }
 
-func TestRefreshAccountState_PuterMonthlyUsageExhaustedCompletesWith402Status(t *testing.T) {
+func TestRefreshAccountState_PuterMonthlyUsageExhaustedCompletesWithFreeOnlyStatus(t *testing.T) {
 	prevUsage := puterFetchMonthlyUsage
 	t.Cleanup(func() { puterFetchMonthlyUsage = prevUsage })
 
@@ -94,8 +94,8 @@ func TestRefreshAccountState_PuterMonthlyUsageExhaustedCompletesWith402Status(t 
 	if err != nil {
 		t.Fatalf("refreshAccountState() error = %v", err)
 	}
-	if status != "402" {
-		t.Fatalf("status=%q want 402", status)
+	if status != store.AccountStatusPuterQuotaExhausted {
+		t.Fatalf("status=%q want %q", status, store.AccountStatusPuterQuotaExhausted)
 	}
 	if httpStatus != 0 {
 		t.Fatalf("httpStatus=%d want 0", httpStatus)
