@@ -65,7 +65,7 @@ func buildChatBody(req upstream.UpstreamRequest, model string) ([]byte, error) {
 	}
 	if !req.NoTools {
 		body.Tools = normalizeToolDefinitions(req)
-		body.ToolChoice = req.ToolChoice
+		body.ToolChoice = normalizeToolChoice(req.ToolChoice)
 	}
 	return json.Marshal(body)
 }
@@ -230,26 +230,70 @@ func toolResultText(content interface{}) string {
 	}
 }
 
-// normalizeToolDefinitions forwards the caller's tool declarations unchanged.
-//
-// The upstream speaks the OpenAI tool schema, which is the same shape the
-// shared request already carries, so there is nothing to translate. `null`
-// entries are dropped because the upstream rejects an array containing them.
+// normalizeToolDefinitions converts Anthropic declarations into the OpenAI
+// function envelope required by Cline. OpenAI declarations are retained as-is.
 func normalizeToolDefinitions(req upstream.UpstreamRequest) []interface{} {
 	if len(req.Tools) == 0 {
 		return nil
 	}
 	out := make([]interface{}, 0, len(req.Tools))
-	for _, tool := range req.Tools {
-		if tool == nil {
+	for _, raw := range req.Tools {
+		tool, ok := raw.(map[string]interface{})
+		if !ok || tool == nil {
 			continue
 		}
-		out = append(out, tool)
+		if strings.EqualFold(strings.TrimSpace(util.StringValue(tool["type"])), "function") {
+			if function, ok := tool["function"].(map[string]interface{}); ok && strings.TrimSpace(util.StringValue(function["name"])) != "" {
+				out = append(out, tool)
+			}
+			continue
+		}
+		name := strings.TrimSpace(util.StringValue(tool["name"]))
+		if name == "" {
+			continue
+		}
+		parameters := tool["input_schema"]
+		if parameters == nil {
+			parameters = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+		}
+		function := map[string]interface{}{
+			"name":       name,
+			"parameters": parameters,
+		}
+		if description := strings.TrimSpace(util.StringValue(tool["description"])); description != "" {
+			function["description"] = description
+		}
+		out = append(out, map[string]interface{}{"type": "function", "function": function})
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+func normalizeToolChoice(choice interface{}) interface{} {
+	object, ok := choice.(map[string]interface{})
+	if !ok {
+		return choice
+	}
+	typeName := strings.ToLower(strings.TrimSpace(util.StringValue(object["type"])))
+	switch typeName {
+	case "auto", "none", "required":
+		return typeName
+	case "any":
+		return "required"
+	case "tool", "function":
+		name := strings.TrimSpace(util.StringValue(object["name"]))
+		if name == "" {
+			if function, ok := object["function"].(map[string]interface{}); ok {
+				name = strings.TrimSpace(util.StringValue(function["name"]))
+			}
+		}
+		if name != "" {
+			return map[string]interface{}{"type": "function", "function": map[string]interface{}{"name": name}}
+		}
+	}
+	return choice
 }
 
 // attemptStreamError carries the retry decision an attempt reached.

@@ -3,7 +3,9 @@ package cline
 import (
 	"bufio"
 	"fmt"
+	"html"
 	"io"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -126,12 +128,180 @@ func (a *toolCallAccumulator) completeAll() []*toolCallState {
 	return out
 }
 
+var clineTextToolBlockRE = regexp.MustCompile(`(?s)<tool_call>\s*(.*?)\s*</tool_call>`)
+var clineTextToolArgumentRE = regexp.MustCompile(`(?s)<arg_key>\s*([^<]+?)\s*</arg_key>\s*<arg_value>\s*(.*?)\s*</arg_value>`)
+var clineTextToolNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+
+const maxClineTextToolBufferBytes = 1 << 20
+
+// parseClineTextToolCalls converts the textual fallbacks emitted by some Cline
+// models (notably z-ai/glm) when the gateway returns a tool call inside the text
+// delta instead of OpenAI tool_calls deltas. Two formats have been observed:
+//
+//   - <tool_call>bash:ignored</arg_value><arg_key>command</arg_key>...</tool_call>
+//   - <tool_call>glob<tool_call>glob: *<tool_call>args: {"pattern":"*"}...
+//
+// The first format's value before arg_key is an unlabelled duplicate and is
+// intentionally ignored.
+func parseClineTextToolCalls(text string) (string, []toolCall) {
+	visible, calls := parseClineClosedTextToolCalls(text)
+	if len(calls) > 0 {
+		return visible, calls
+	}
+	return parseClineRepeatedTagToolCall(text)
+}
+
+func parseClineClosedTextToolCalls(text string) (string, []toolCall) {
+	matches := clineTextToolBlockRE.FindAllStringSubmatchIndex(text, -1)
+	if len(matches) == 0 {
+		return text, nil
+	}
+	calls := make([]toolCall, 0, len(matches))
+	var visible strings.Builder
+	last := 0
+	for _, match := range matches {
+		if len(match) < 4 {
+			continue
+		}
+		visible.WriteString(text[last:match[0]])
+		body := text[match[2]:match[3]]
+		colon := strings.IndexByte(body, ':')
+		if colon <= 0 {
+			visible.WriteString(text[match[0]:match[1]])
+			last = match[1]
+			continue
+		}
+		name := strings.TrimSpace(body[:colon])
+		args := map[string]interface{}{}
+		for _, arg := range clineTextToolArgumentRE.FindAllStringSubmatch(body[colon+1:], -1) {
+			if len(arg) != 3 {
+				continue
+			}
+			key := strings.TrimSpace(html.UnescapeString(arg[1]))
+			value := html.UnescapeString(strings.TrimSpace(arg[2]))
+			var typed interface{}
+			if json.Unmarshal([]byte(value), &typed) == nil {
+				args[key] = typed
+			} else {
+				args[key] = value
+			}
+		}
+		if name == "" || len(args) == 0 {
+			visible.WriteString(text[match[0]:match[1]])
+			last = match[1]
+			continue
+		}
+		raw, err := json.Marshal(args)
+		if err != nil {
+			visible.WriteString(text[match[0]:match[1]])
+			last = match[1]
+			continue
+		}
+		calls = append(calls, toolCall{ID: NewToolCallID(), Type: "function", Function: toolCallFunction{Name: name, Arguments: string(raw)}})
+		last = match[1]
+	}
+	visible.WriteString(text[last:])
+	return visible.String(), calls
+}
+
+func parseClineRepeatedTagToolCall(text string) (string, []toolCall) {
+	const marker = "<tool_call>"
+	first := strings.Index(text, marker)
+	if first < 0 {
+		return text, nil
+	}
+	segments := strings.Split(text[first+len(marker):], marker)
+	if len(segments) < 1 {
+		return text, nil
+	}
+	calls := make([]toolCall, 0, len(segments))
+	for index := 0; index < len(segments); {
+		segment := strings.TrimSpace(segments[index])
+		// Compact GLM fallback: <tool_call>glob,{"pattern":"*"}
+		if comma := strings.IndexByte(segment, ','); comma > 0 {
+			name := strings.TrimSpace(segment[:comma])
+			arguments := strings.TrimSpace(segment[comma+1:])
+			if clineTextToolNameRE.MatchString(name) && json.Valid([]byte(arguments)) {
+				calls = append(calls, toolCall{ID: NewToolCallID(), Type: "function", Function: toolCallFunction{Name: name, Arguments: arguments}})
+				index++
+				continue
+			}
+		}
+		if !clineTextToolNameRE.MatchString(segment) {
+			index++
+			continue
+		}
+		name := segment
+		args := map[string]interface{}{}
+		cursor := index + 1
+		for ; cursor < len(segments); cursor++ {
+			part := strings.TrimSpace(segments[cursor])
+			if clineTextToolNameRE.MatchString(part) {
+				break
+			}
+			colon := strings.IndexByte(part, ':')
+			if colon <= 0 {
+				continue
+			}
+			key := strings.TrimSpace(part[:colon])
+			value := strings.TrimSpace(part[colon+1:])
+			if key == "" || value == "" || strings.EqualFold(key, name) || strings.EqualFold(key, "run_in_background") {
+				continue
+			}
+			if strings.EqualFold(key, "args") || strings.EqualFold(key, "arguments") {
+				var object map[string]interface{}
+				if json.Unmarshal([]byte(value), &object) == nil {
+					for objectKey, objectValue := range object {
+						args[objectKey] = objectValue
+					}
+				}
+				continue
+			}
+			var typed interface{}
+			if json.Unmarshal([]byte(value), &typed) == nil {
+				args[key] = typed
+			} else {
+				args[key] = value
+			}
+		}
+		if len(args) > 0 {
+			raw, err := json.Marshal(args)
+			if err == nil {
+				calls = append(calls, toolCall{ID: NewToolCallID(), Type: "function", Function: toolCallFunction{Name: name, Arguments: string(raw)}})
+			}
+		}
+		if cursor <= index {
+			index++
+		} else {
+			index = cursor
+		}
+	}
+	if len(calls) == 0 {
+		return text, nil
+	}
+	return text[:first], calls
+}
+
 // consumeStream parses the SSE body and forwards deltas to the caller.
-func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamResult, error) {
+func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SSEMessage)) (streamResult, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	result := streamResult{}
 	tools := newToolCallAccumulator()
+	var pendingText strings.Builder
+	sawNativeTools := false
+
+	emitText := func(text string) {
+		if text == "" {
+			return
+		}
+		result.SawMeaningfulEvent = true
+		if onMessage != nil {
+			onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{
+				"delta": text,
+			}})
+		}
+	}
 
 	emitTools := func() {
 		for _, state := range tools.completeAll() {
@@ -208,15 +378,28 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 			}
 		}
 		if delta.Content != "" {
-			result.SawMeaningfulEvent = true
-			if onMessage != nil {
-				onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{
-					"delta": delta.Content,
-				}})
+			if toolsEnabled && !sawNativeTools {
+				pendingText.WriteString(delta.Content)
+				if pendingText.Len() > maxClineTextToolBufferBytes {
+					emitText(pendingText.String())
+					pendingText.Reset()
+				}
+			} else {
+				emitText(delta.Content)
 			}
 		}
 		for _, call := range delta.ToolCalls {
 			result.SawMeaningfulEvent = true
+			if !sawNativeTools {
+				sawNativeTools = true
+				// Textual tool markup and native deltas are duplicate encodings.
+				// Preserve ordinary prose but strip any complete fallback blocks.
+				if pendingText.Len() > 0 {
+					visible, _ := parseClineTextToolCalls(pendingText.String())
+					emitText(visible)
+					pendingText.Reset()
+				}
+			}
 			tools.add(call.Index, call.ID, call.Function.Name, call.Function.Arguments)
 		}
 		// OpenAI-style tool arguments can span several deltas. Emitting on the
@@ -228,6 +411,14 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 	}
 	if err := scanner.Err(); err != nil {
 		return result, fmt.Errorf("failed to read cline stream: %w", err)
+	}
+	if toolsEnabled && !sawNativeTools && pendingText.Len() > 0 {
+		visible, calls := parseClineTextToolCalls(pendingText.String())
+		emitText(visible)
+		for index, call := range calls {
+			tools.add(index, call.ID, call.Function.Name, call.Function.Arguments)
+		}
+		pendingText.Reset()
 	}
 	emitTools()
 	return result, nil

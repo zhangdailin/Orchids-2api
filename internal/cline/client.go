@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goccy/go-json"
+
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/prompt"
@@ -418,7 +420,16 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 		return streamResult{}, classifyStatus(resp.StatusCode, raw)
 	}
 
-	return consumeStream(resp.Body, emit)
+	return consumeStream(resp.Body, requestCarriesTools(body), emit)
+}
+
+// requestCarriesTools keeps fallback parsing disabled for plain-text requests:
+// without declared tools, literal <tool_call> text is user-visible content.
+func requestCarriesTools(body []byte) bool {
+	var payload struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	return json.Unmarshal(body, &payload) == nil && len(payload.Tools) > 0
 }
 
 // VerifyModel performs a minimal streaming completion to prove the account can
