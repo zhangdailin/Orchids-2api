@@ -201,6 +201,54 @@ func TestGetNextAccountExcludingByChannelWithTrackerFilter_ModelFilterEmptiesThe
 	}
 }
 
+// TestGetNextAccountExcludingByChannelWithTracker_MixedPoolNamesTheSplit is the
+// regression test for the 2026-09-21 WorkBuddy outage.
+//
+// The pool held three accounts cooling down from a 429 and four parked for a
+// spent allowance at the same time. Both group-only rules require *every*
+// account to share one reason, so neither matched, the selector fell through to
+// the bare "no enabled accounts available for channel: workbuddy", and that
+// sentence classifies to no capacity cause at all — the caller was answered with
+// a 503 "server fault" instead of a retryable 429, and the operator could not
+// tell rate limits from spent credits.
+func TestGetNextAccountExcludingByChannelWithTracker_MixedPoolNamesTheSplit(t *testing.T) {
+	now := time.Now()
+	lb := &LoadBalancer{
+		connTracker: NewMemoryConnTracker(),
+		cachedAccounts: []*store.Account{
+			{ID: 1, Name: "WB1", AccountType: "workbuddy", Enabled: true, StatusCode: "429", LastAttempt: now, RateLimitFailures: 1},
+			{ID: 2, Name: "WB2", AccountType: "workbuddy", Enabled: true, StatusCode: "429", LastAttempt: now, RateLimitFailures: 1},
+			{ID: 3, Name: "WB3", AccountType: "workbuddy", Enabled: true, StatusCode: "429", LastAttempt: now, RateLimitFailures: 1},
+			{ID: 4, Name: "WB4", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
+			{ID: 5, Name: "WB5", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
+			{ID: 6, Name: "WB6", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
+			{ID: 7, Name: "WB7", AccountType: "workbuddy", Enabled: true, StatusCode: "402", StatusMessage: "credits exhausted", LastAttempt: now, QuotaResetAt: now.Add(48 * time.Hour)},
+		},
+		cacheExpires: now.Add(time.Minute),
+	}
+
+	_, err := lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), nil, "workbuddy", nil)
+	if err == nil {
+		t.Fatal("expected a mixed-pool selector error, got nil")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "rate-limited or cooling down") {
+		t.Fatalf("mixed pool must name the rate limit: %v", err)
+	}
+	if !strings.Contains(message, "3 rate-limited") || !strings.Contains(message, "4 parked for a spent allowance") {
+		t.Fatalf("mixed pool must report both counts: %v", err)
+	}
+	// The phrase "exhausted their allowance" would make the shared pool rule
+	// classify a recoverable mixed pool as a permanent quota verdict.
+	if strings.Contains(message, "exhausted their allowance") {
+		t.Fatalf("mixed pool must not claim every account is out of quota: %v", err)
+	}
+	// And it must not degrade to the bare sentence that answered 503.
+	if strings.HasSuffix(message, "channel: workbuddy") {
+		t.Fatalf("mixed pool fell back to the unexplained selector sentence: %v", err)
+	}
+}
+
 func TestGetNextAccountExcludingByChannelWithTracker_RejectsSingleAccountAtLimit(t *testing.T) {
 	tracker := NewMemoryConnTracker()
 	tracker.Acquire(1)

@@ -183,13 +183,20 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 	accounts = filtered
 
 	if len(accounts) == 0 {
-		// An empty pool has three different causes and they need three different
+		// An empty pool has four different causes and they need four different
 		// answers: a request whose model is cooling down on every account, a pool
-		// that is rate-limited, and a pool whose allowance is spent. All three used
-		// to arrive as the bare sentence below, so "every account is cooling down
-		// for this model" reached the operator as "no enabled accounts available
-		// for channel", which reads like the channel has no accounts at all — and
-		// the caller answered it with a 503 instead of a retryable 429.
+		// that is rate-limited, a pool whose allowance is spent, and a pool that is
+		// partly one and partly the other. The first three used to arrive as the
+		// bare sentence below, so "every account is cooling down for this model"
+		// reached the operator as "no enabled accounts available for channel",
+		// which reads like the channel has no accounts at all — and the caller
+		// answered it with a 503 instead of a retryable 429.
+		//
+		// The mixed case is not a formality: WorkBuddy's outage was three accounts
+		// rate-limited and four parked for a spent allowance at once. Each
+		// group-only rule failed, the bare sentence was reported, the client got a
+		// 503 "server fault" with no capacity cause to retry on, and the operator
+		// could see neither the reason nor the split.
 		switch {
 		case channel != "" && channelCandidates > 0 && channelMatched == 0:
 			// The caller's filter (a per-model cooldown) rejected every candidate.
@@ -198,6 +205,24 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 			return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are rate-limited or cooling down)", channel)
 		case channel != "" && channelMatched > 0 && allowanceParked == channelMatched:
 			return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts have exhausted their allowance)", channel)
+		case channel != "" && allowanceParked > 0 && rateLimitedUnavailable > 0:
+			// A mixed pool: some accounts are cooling down from a throttle, the rest
+			// are parked for a spent allowance. Neither group-only rule above can
+			// describe it, and falling through to the bare sentence is what let the
+			// WorkBuddy outage reach its callers as an unexplained 503.
+			//
+			// The answer leads with the rate limit on purpose. A throttle clears on
+			// its own, so "retry after the cooldown" is the one instruction that can
+			// actually succeed; the parked group is reported beside it so the
+			// operator sees the split without opening the account table.
+			//
+			// The wording is chosen so the shared pool-exhaustion rule reads the
+			// mixed pool as a capacity problem: "exhausted their allowance" would
+			// classify it as a permanent quota verdict, and "out of credits"
+			// (IsCreditExhaustion) would do the same on the entrances that pass the
+			// selector error as the last upstream error. "Parked for a spent
+			// allowance" describes the same accounts without tripping either rule.
+			return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are rate-limited or cooling down: %d rate-limited, %d parked for a spent allowance)", channel, rateLimitedUnavailable, allowanceParked)
 		}
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s", channel)
 	}

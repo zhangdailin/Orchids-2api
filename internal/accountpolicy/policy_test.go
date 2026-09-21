@@ -210,6 +210,68 @@ func TestAccountHeldUsesLaterBoundedReset(t *testing.T) {
 	}
 }
 
+// TestAccountHeld_429IgnoresBillingCycleReset is the regression test for the
+// WorkBuddy outage of 2026-09-21.
+//
+// The quota sync writes the free plan's billing-cycle end into the same
+// QuotaResetAt field a throttle uses for its retry-after, so a single one-minute
+// 429 ("code=14003 too many requests") was read as "hold this account until the
+// cycle resets" — days away. Every WorkBuddy account that hit one 429 left the
+// pool for the rest of the month, the channel answered 503 to every request, and
+// the log showed only eighteen 429s against 116 failures. A rate limit is a short
+// capacity problem, so its hold is capped at the same ceiling RateLimitCooldown
+// uses; a genuinely longer 402 allowance verdict is untouched.
+func TestAccountHeld_429IgnoresBillingCycleReset(t *testing.T) {
+	now := time.Now()
+	cycleEnd := now.Add(9 * 24 * time.Hour) // the free-plan boundary the upstream reports
+
+	acc := &store.Account{
+		AccountType:       "workbuddy",
+		StatusCode:        "429",
+		LastAttempt:       now,
+		RateLimitFailures: 2,
+		QuotaResetAt:      cycleEnd,
+	}
+
+	if !AccountHeld(acc, now.Add(time.Minute)) {
+		// One minute is well inside both the exponential cooldown and the cap.
+		t.Fatal("a freshly rate-limited account must stay held during its cooldown")
+	}
+	if AccountHeld(acc, now.Add(CooldownRateLimitMax+time.Minute)) {
+		t.Fatalf("429 held for %v; a billing-cycle reset must not extend a rate limit past %v",
+			9*24*time.Hour, CooldownRateLimitMax)
+	}
+	if AccountHeld(acc, now.Add(2*time.Hour)) {
+		t.Fatal("account should be back in rotation within the rate-limit ceiling")
+	}
+
+	// The same far-future reset on a 402 is a real allowance verdict: it must keep
+	// the account parked, or a spent account is offered again on every request.
+	spent := &store.Account{
+		AccountType:  "workbuddy",
+		StatusCode:   "402",
+		LastAttempt:  now,
+		QuotaResetAt: cycleEnd,
+	}
+	if !AccountHeld(spent, now.Add(2*time.Hour)) {
+		t.Fatal("a spent allowance must still hold the account until its reset")
+	}
+}
+
+// TestAccountHeld_429KeepsShortRetryAfter pins the other direction: the ceiling
+// bounds an over-long reset, it does not replace a shorter one the upstream
+// actually stated.
+func TestAccountHeld_429KeepsShortRetryAfter(t *testing.T) {
+	now := time.Now()
+	acc := &store.Account{StatusCode: "429", LastAttempt: now, RateLimitFailures: 1, QuotaResetAt: now.Add(20 * time.Minute)}
+	if !AccountHeld(acc, now.Add(10*time.Minute)) {
+		t.Fatal("a stated 20m retry-after must still hold the account past its 30s exponential cooldown")
+	}
+	if AccountHeld(acc, now.Add(21*time.Minute)) {
+		t.Fatal("account should recover once the stated retry-after passed")
+	}
+}
+
 // TestClassify_WorkBuddyPaymentRefusalIsModelScoped pins the reported behaviour:
 // WorkBuddy's free models keep working once the metered credit package is spent,
 // so a payment refusal must cool down only the model that was asked for instead

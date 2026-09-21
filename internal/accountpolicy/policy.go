@@ -306,10 +306,27 @@ func AccountHeld(acc *store.Account, now time.Time) bool {
 	// QuotaResetAt is an explicit deadline somebody recorded: the rate-limit
 	// reset for a 429/402, or the short server-fault hold the gateway applies
 	// after a 5xx. It is never allowed to shorten a definitive block (401/403).
-	if !strings.HasPrefix(status, "4") && acc.QuotaResetAt.After(until) {
-		until = acc.QuotaResetAt
-	} else if (status == "429" || status == "402") && acc.QuotaResetAt.After(until) {
-		until = acc.QuotaResetAt
+	//
+	// A 429 is the one status whose recorded reset cannot be taken at face value
+	// as its hold length. Providers leave their billing-cycle end in the same
+	// field a throttle leaves its reset in, and WorkBuddy's quota sync does
+	// exactly that: a free-plan cycle end days away. Honouring it unclamped held
+	// every WorkBuddy account until the cycle boundary after a single one-minute
+	// throttle — the pool emptied, the channel answered 503, and the log showed
+	// only a handful of 429s. A rate limit is a short capacity problem, so its
+	// extension is capped at the same ceiling RateLimitCooldown itself uses; a
+	// genuine retry-after shorter than that still wins.
+	if acc.QuotaResetAt.After(until) {
+		switch {
+		case status == "429":
+			if ceiling := acc.LastAttempt.Add(CooldownRateLimitMax); ceiling.Before(acc.QuotaResetAt) {
+				until = ceiling
+			} else {
+				until = acc.QuotaResetAt
+			}
+		case status == "402", !strings.HasPrefix(status, "4"):
+			until = acc.QuotaResetAt
+		}
 	}
 	return now.Before(until)
 }

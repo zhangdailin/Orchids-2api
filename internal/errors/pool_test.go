@@ -43,6 +43,18 @@ func TestClassifyPoolExhaustion_SelectorReasonsPickTheAnswer(t *testing.T) {
 			wantMessage:  "has exhausted its allowance",
 		},
 		{
+			// The 2026-09-21 WorkBuddy outage shape: three accounts cooling down
+			// from a 429 and four parked for a spent allowance at once. The old
+			// selector reported this as the bare sentence, which classified to
+			// nothing, so the caller got a 503 "server fault" instead of a
+			// retryable 429.
+			name:         "a pool split between rate limits and a spent allowance stays retryable",
+			selectErr:    errors.New("no enabled accounts available for channel: workbuddy (all matching accounts are rate-limited or cooling down: 3 rate-limited, 4 parked for a spent allowance)"),
+			wantCategory: "rate_limit",
+			wantStatus:   http.StatusTooManyRequests,
+			wantMessage:  "currently rate-limited",
+		},
+		{
 			name:         "every account is busy with other requests",
 			selectErr:    errors.New("no enabled accounts available for channel: warp (all matching accounts are at their concurrency limit)"),
 			wantCategory: "rate_limit",
