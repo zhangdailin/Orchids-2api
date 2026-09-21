@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"orchids-api/internal/store"
@@ -27,6 +28,9 @@ const (
 	maxResolvedMediaBytes     = 32 << 20
 	localMediaInputPrefix     = "orchids-media-input:"
 )
+
+var mediaInputQuotaMu sync.Mutex
+var mediaInputReservedBytes int64
 
 func (h *Handler) HandleMediaInputs(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
@@ -50,6 +54,7 @@ func (h *Handler) HandleMediaInputs(w http.ResponseWriter, r *http.Request) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", "invalid media input upload")
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	files := r.MultipartForm.File["file"]
 	if len(files) != 1 {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", "exactly one file is required")
@@ -84,13 +89,17 @@ func (h *Handler) HandleMediaInputs(w http.ResponseWriter, r *http.Request) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_media", err.Error())
 		return
 	}
-	if used, err := mediaInputUsageBytes(); err == nil && used+int64(len(data)) > maxMediaInputTotalBytes {
-		// The TTL frees a record, but nothing reclaims the bytes until the
-		// sweeper runs; without a ceiling repeated uploads can fill the volume.
+	if !reserveMediaInputBytes(int64(len(data))) {
 		writeResponsesAPIError(w, http.StatusInsufficientStorage, "media_storage_full",
 			"media input storage is full; retry after the expired inputs are reclaimed")
 		return
 	}
+	reserved := true
+	defer func() {
+		if reserved {
+			releaseMediaInputBytes(int64(len(data)))
+		}
+	}()
 	id, err := newMediaInputID()
 	if err != nil {
 		writeResponsesAPIError(w, http.StatusInternalServerError, "internal_error", "failed to allocate media input")
@@ -112,6 +121,7 @@ func (h *Handler) HandleMediaInputs(w http.ResponseWriter, r *http.Request) {
 		writeResponsesAPIError(w, http.StatusServiceUnavailable, "service_unavailable", "failed to persist media input")
 		return
 	}
+	reserved = false
 	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{
 		"file_id": id, "object": "file", "kind": kind, "mime_type": mimeType,
 		"bytes": len(data), "created_at": now.Unix(), "expires_at": now.Add(mediaInputTTL).Format(time.RFC3339),
@@ -129,6 +139,30 @@ const mediaInputFilePrefix = "input-"
 // refuses an upload past a configured total (507) rather than filling the disk
 // and discovering it later.
 const maxMediaInputTotalBytes = 2 << 30
+
+// reserveMediaInputBytes serializes the usage check with concurrent uploads.
+func reserveMediaInputBytes(size int64) bool {
+	if size <= 0 {
+		return false
+	}
+	mediaInputQuotaMu.Lock()
+	defer mediaInputQuotaMu.Unlock()
+	used, err := mediaInputUsageBytes()
+	if err != nil || used+mediaInputReservedBytes > maxMediaInputTotalBytes-size {
+		return false
+	}
+	mediaInputReservedBytes += size
+	return true
+}
+
+func releaseMediaInputBytes(size int64) {
+	mediaInputQuotaMu.Lock()
+	mediaInputReservedBytes -= size
+	if mediaInputReservedBytes < 0 {
+		mediaInputReservedBytes = 0
+	}
+	mediaInputQuotaMu.Unlock()
+}
 
 // mediaInputUsageBytes sums the size of the namespaced media input files.
 func mediaInputUsageBytes() (int64, error) {
@@ -495,6 +529,7 @@ func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request)
 		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_request", "invalid media input upload"))
 		return
 	}
+	defer r.MultipartForm.RemoveAll()
 	files := r.MultipartForm.File["file"]
 	if len(files) != 1 {
 		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_request", "exactly one file is required"))
@@ -521,10 +556,16 @@ func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request)
 		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_media", err.Error()))
 		return
 	}
-	if used, usageErr := mediaInputUsageBytes(); usageErr == nil && used+int64(len(data)) > maxMediaInputTotalBytes {
+	if !reserveMediaInputBytes(int64(len(data))) {
 		writeJSONStatus(w, http.StatusInsufficientStorage, adminMediaError("media_storage_full", "media input storage is full"))
 		return
 	}
+	reserved := true
+	defer func() {
+		if reserved {
+			releaseMediaInputBytes(int64(len(data)))
+		}
+	}()
 	id, err := newMediaInputID()
 	if err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, adminMediaError("internal_error", "failed to allocate media input"))
@@ -546,6 +587,7 @@ func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request)
 		writeJSONStatus(w, http.StatusServiceUnavailable, adminMediaError("service_unavailable", "failed to persist media input"))
 		return
 	}
+	reserved = false
 	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{"data": adminMediaInputJSON(input)})
 }
 

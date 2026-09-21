@@ -14,6 +14,68 @@ import (
 	"github.com/goccy/go-json"
 )
 
+func TestDPoPSessionManagerCleansExpiredSessions(t *testing.T) {
+	manager := newDPoPSessionManager()
+	now := time.Now().UTC()
+	manager.sessions["expired"] = dpopSession{accessToken: "expired", expiresAt: now.Add(dpopRefreshSkew)}
+	manager.sessions["valid"] = dpopSession{accessToken: "valid", expiresAt: now.Add(time.Minute)}
+	manager.lastCleanup = now.Add(-dpopSessionCleanupPeriod)
+
+	if session, ok := manager.cached("valid"); !ok || session.accessToken != "valid" {
+		t.Fatalf("valid session missing: ok=%v session=%+v", ok, session)
+	}
+	manager.mu.Lock()
+	_, expiredExists := manager.sessions["expired"]
+	manager.mu.Unlock()
+	if expiredExists {
+		t.Fatal("expired session survived global cleanup")
+	}
+}
+
+func TestDPoPSessionManagerCapacityBound(t *testing.T) {
+	manager := newDPoPSessionManager()
+	now := time.Now().UTC()
+	for i := 0; i < maxDPoPSessions+128; i++ {
+		manager.store(string(rune(i)), dpopSession{
+			accessToken: "token",
+			expiresAt:   now.Add(time.Hour + time.Duration(i)*time.Second),
+		})
+	}
+	manager.mu.Lock()
+	got := len(manager.sessions)
+	manager.mu.Unlock()
+	if got != maxDPoPSessions {
+		t.Fatalf("sessions=%d want %d", got, maxDPoPSessions)
+	}
+}
+
+func TestDPoPSessionManagerConcurrentCapacityBound(t *testing.T) {
+	manager := newDPoPSessionManager()
+	now := time.Now().UTC()
+	const workers = 16
+	const entriesPerWorker = 128
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		worker := worker
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for entry := 0; entry < entriesPerWorker; entry++ {
+				key := string(rune(worker*entriesPerWorker + entry))
+				manager.store(key, dpopSession{accessToken: key, expiresAt: now.Add(time.Hour)})
+				manager.cached(key)
+			}
+		}()
+	}
+	wg.Wait()
+	manager.mu.Lock()
+	got := len(manager.sessions)
+	manager.mu.Unlock()
+	if got > maxDPoPSessions {
+		t.Fatalf("sessions=%d exceeds limit %d", got, maxDPoPSessions)
+	}
+}
+
 func TestDPoPSessionCoalescesConcurrentFetches(t *testing.T) {
 	var calls atomic.Int32
 	entered := make(chan struct{})

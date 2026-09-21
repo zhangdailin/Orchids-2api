@@ -90,6 +90,24 @@ func TestRedisCacheClear(t *testing.T) {
 	}
 }
 
+func TestRedisCacheClearPreservesOtherPrefixes(t *testing.T) {
+	cache, mr := setupRedisCache(t, 5*time.Minute)
+	ctx := context.Background()
+
+	cache.Put(ctx, "owned", 1)
+	mr.Set("other:key", "keep")
+
+	if err := cache.Clear(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if mr.Exists("test:tcache:owned") {
+		t.Fatal("expected cache-owned key to be unlinked")
+	}
+	if !mr.Exists("other:key") {
+		t.Fatal("clear removed key outside cache prefix")
+	}
+}
+
 func TestRedisCacheSetTTL(t *testing.T) {
 	cache, mr := setupRedisCache(t, 10*time.Second)
 	ctx := context.Background()

@@ -18,7 +18,8 @@ type Cache interface {
 
 type MemoryCache struct {
 	memoryStore[cacheItem]
-	done chan struct{}
+	done    chan struct{}
+	stopped chan struct{}
 }
 
 type cacheItem struct {
@@ -29,6 +30,7 @@ func NewMemoryCache(ttl time.Duration, maxEntries ...int) *MemoryCache {
 	c := &MemoryCache{
 		memoryStore: newMemoryStore[cacheItem](ttl, maxEntries...),
 		done:        make(chan struct{}),
+		stopped:     make(chan struct{}),
 	}
 	// Start background cleanup
 	go c.cleanupLoop()

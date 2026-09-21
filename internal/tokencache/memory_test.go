@@ -7,6 +7,33 @@ import (
 )
 
 // TestLRUEviction verifies that the cache evicts the least recently accessed item
+func TestMemoryCacheCloseStopsCleanup(t *testing.T) {
+	cache := NewMemoryCache(time.Minute)
+	cache.Close()
+
+	select {
+	case <-cache.stopped:
+	default:
+		t.Fatal("Close returned before cleanup goroutine stopped")
+	}
+
+	// Close is idempotent and must not panic or block.
+	cache.Close()
+}
+
+func TestMemoryPromptCacheCloseStopsCleanup(t *testing.T) {
+	cache := NewMemoryPromptCache(time.Minute)
+	cache.Close()
+
+	select {
+	case <-cache.stopped:
+	default:
+		t.Fatal("Close returned before cleanup goroutine stopped")
+	}
+
+	cache.Close()
+}
+
 func TestLRUEviction(t *testing.T) {
 	ctx := context.Background()
 

@@ -16,7 +16,8 @@ type PromptCache interface {
 
 type MemoryPromptCache struct {
 	memoryStore[promptCacheItem]
-	done chan struct{}
+	done    chan struct{}
+	stopped chan struct{}
 }
 
 // promptCacheItem carries no payload: presence in the map is the cached signal.
@@ -26,21 +27,24 @@ func NewMemoryPromptCache(ttl time.Duration, maxEntries ...int) *MemoryPromptCac
 	c := &MemoryPromptCache{
 		memoryStore: newMemoryStore[promptCacheItem](ttl, maxEntries...),
 		done:        make(chan struct{}),
+		stopped:     make(chan struct{}),
 	}
 	go c.cleanupLoop()
 	return c
 }
 
 func (c *MemoryPromptCache) cleanupLoop() {
+	defer close(c.stopped)
 	c.runCleanup(c.done, 5*time.Minute)
 }
 
-// Close 停止后台清理 goroutine
+// Close stops the background cleanup goroutine and waits for it to exit.
 func (c *MemoryPromptCache) Close() {
 	if c == nil {
 		return
 	}
 	stopCleanup(c.done)
+	<-c.stopped
 }
 
 func (c *MemoryPromptCache) SetTTL(ttl time.Duration) {

@@ -539,7 +539,7 @@ func buildWarpFileGlobV2Result(payload string, isError bool) *warpapi.FileGlobV2
 		return warpapi.FileGlobV2Result_builder{Error: warpapi.FileGlobV2Result_Error_builder{Message: stringPtr(payload)}.Build()}.Build()
 	}
 	matches := make([]*warpapi.FileGlobV2Result_Success_FileGlobMatch, 0)
-	for _, line := range strings.Split(payload, "\n") {
+	for line := range strings.SplitSeq(payload, "\n") {
 		path := strings.TrimSpace(line)
 		if path == "" {
 			continue
@@ -559,7 +559,7 @@ func buildWarpGrepResult(payload string, isError bool) *warpapi.GrepResult {
 	}
 	ordered := make([]fileLines, 0)
 	indexes := make(map[string]int)
-	for _, line := range strings.Split(payload, "\n") {
+	for line := range strings.SplitSeq(payload, "\n") {
 		match := warpGrepLinePattern.FindStringSubmatch(strings.TrimSpace(line))
 		if len(match) != 3 {
 			continue

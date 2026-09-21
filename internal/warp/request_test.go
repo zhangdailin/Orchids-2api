@@ -503,6 +503,20 @@ func TestConvertTools_PreservesCustomMCPTools(t *testing.T) {
 	}
 }
 
+func TestBuildWarpFileGlobV2Result_StreamsLines(t *testing.T) {
+	result := buildWarpFileGlobV2Result(" /repo/a.go \n\n/repo/b.go\n", false)
+	matches := result.GetSuccess().GetMatchedFiles()
+	if len(matches) != 2 {
+		t.Fatalf("matches=%d want=2", len(matches))
+	}
+	if got := matches[0].GetFilePath(); got != "/repo/a.go" {
+		t.Fatalf("first path=%q", got)
+	}
+	if got := matches[1].GetFilePath(); got != "/repo/b.go" {
+		t.Fatalf("second path=%q", got)
+	}
+}
+
 func TestBuildRequestBytes_GroupsToolsInMCPServer(t *testing.T) {
 	req := upstream.UpstreamRequest{
 		Prompt: "use the tool",

@@ -117,6 +117,8 @@ func parsePositiveInt(raw string, fallback int) int {
 	return v
 }
 
+const maxCachePageSize = 1000
+
 func resolveCacheMediaType(query url.Values) string {
 	for _, key := range []string{"media_type", "type", "cache_type"} {
 		v := strings.ToLower(strings.TrimSpace(query.Get(key)))
@@ -138,12 +140,19 @@ func paginateCacheEntries(entries []cacheEntry, page int, pageSize int) ([]cache
 	if pageSize <= 0 {
 		pageSize = total
 	}
+	if pageSize > maxCachePageSize {
+		pageSize = maxCachePageSize
+	}
+	// Avoid (page-1)*pageSize overflow for attacker-controlled page values.
+	if page > (total-1)/pageSize+1 {
+		return []cacheEntry{}, total
+	}
 	start := (page - 1) * pageSize
 	if start >= total {
 		return []cacheEntry{}, total
 	}
 	end := start + pageSize
-	if end > total {
+	if end < start || end > total {
 		end = total
 	}
 	return entries[start:end], total
@@ -546,8 +555,11 @@ func (h *Handler) HandleAdminCacheList(w http.ResponseWriter, r *http.Request) {
 		page = 1
 		pageSize = len(entries)
 		if pageSize == 0 {
-			pageSize = 1000
+			pageSize = maxCachePageSize
 		}
+	}
+	if pageSize > maxCachePageSize {
+		pageSize = maxCachePageSize
 	}
 	paged, total := paginateCacheEntries(entries, page, pageSize)
 

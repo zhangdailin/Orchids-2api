@@ -197,11 +197,20 @@ func main() {
 		tokenCache = tokencache.NewMemoryCache(time.Duration(cfg.CacheTTL)*time.Minute, 10000)
 		slog.Debug("Token cache initialized", "backend", "memory")
 	}
+	// Memory-backed caches own a cleanup goroutine. Close them during shutdown;
+	// Redis-backed caches do not implement Close and keep their shared client
+	// lifecycle owned by the store.
+	defer func() {
+		if closer, ok := tokenCache.(interface{ Close() }); ok {
+			closer.Close()
+		}
+	}()
 	h.SetTokenCache(tokenCache)
 	apiHandler.SetTokenCache(tokenCache)
 
 	// Prompt cache: memory-based for now (simulating Anthropic prompt caching)
 	promptCache := tokencache.NewMemoryPromptCache(time.Duration(cfg.TokenCacheTTL)*time.Second, 10000)
+	defer promptCache.Close()
 	h.SetPromptCache(promptCache)
 	apiHandler.SetPromptCache(promptCache)
 	slog.Debug("Prompt cache initialized", "ttl", cfg.TokenCacheTTL)
@@ -247,6 +256,7 @@ func main() {
 		// only after it has been persisted, and the bus coalesces bursts by account
 		// ID so a multi-field update invalidates each cache once.
 		accountBus := accountevents.NewBus()
+		defer accountBus.Close()
 		accountBus.Subscribe(lb)
 		accountBus.Subscribe(h)
 		accountBus.Subscribe(refreshKick)

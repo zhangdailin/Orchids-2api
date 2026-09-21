@@ -163,7 +163,14 @@ func (s *redisStore) flushChanges() {
 	}
 }
 
-const redisBatchParallelThreshold = 32
+const (
+	redisBatchParallelThreshold = 32
+	// storedVideoJobsListBatchSize bounds both the sorted-set page and each
+	// MGET issued by ListStoredVideoJobs. The method still returns every live
+	// job (its existing contract), but never materializes the whole Redis index
+	// or sends an unbounded variadic MGET.
+	storedVideoJobsListBatchSize = 256
+)
 
 var (
 	consumeApiKeyRPMScript = redis.NewScript(`
@@ -2302,10 +2309,10 @@ func (s *redisStore) GetModelByModelID(ctx context.Context, modelID string) (*Mo
 	id, err := s.client.HGet(ctx, s.modelsModelIDMapKey(), modelID).Result()
 	if err == nil && id != "" {
 		m, err := s.GetModel(ctx, id)
-		if err == nil && m != nil {
+		if err == nil && m != nil && strings.TrimSpace(m.ModelID) == modelID {
 			return m, nil
 		}
-		// Index stale, fall through to scan
+		// Index stale or points to a different model, fall through to scan.
 	}
 
 	// Fallback to scan (for backward compatibility with existing data)
@@ -2336,9 +2343,10 @@ func (s *redisStore) GetModelByChannelAndModelID(ctx context.Context, channel, m
 	id, err := s.client.HGet(ctx, s.modelsChannelModelIDMapKey(), channelKey).Result()
 	if err == nil && id != "" {
 		m, err := s.GetModel(ctx, id)
-		if err == nil && m != nil {
+		if err == nil && m != nil && strings.TrimSpace(m.ModelID) == modelID && normalizeModelChannelKey(m.Channel) == normalizeModelChannelKey(channel) {
 			return m, nil
 		}
+		// Index stale or points to a different channel/model, fall through to scan.
 	}
 
 	models, err := s.ListModels(ctx)

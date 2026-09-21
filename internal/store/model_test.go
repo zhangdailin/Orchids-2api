@@ -8,6 +8,29 @@ import (
 	"github.com/alicebob/miniredis/v2"
 )
 
+func TestGetModelByModelID_FallsBackWhenIndexPointsToWrongModel(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close(); mini.Close() })
+	ctx := context.Background()
+	want := &Model{Channel: "grok", ModelID: "target", Name: "target"}
+	other := &Model{Channel: "grok", ModelID: "other", Name: "other"}
+	if err := s.CreateModel(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateModel(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	mini.HSet("test:models:model_id_map", "target", other.ID)
+	got, err := s.GetModelByModelID(ctx, "target")
+	if err != nil || got.ModelID != "target" {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
 func TestModelStatus_UnmarshalJSON(t *testing.T) {
 	t.Parallel()
 

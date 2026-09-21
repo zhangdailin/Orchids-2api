@@ -312,24 +312,54 @@ func (a *Aggregator) Channels(ctx context.Context, from, to time.Time) ([]string
 	if !a.Enabled() {
 		return nil, nil
 	}
+	if to.Before(from) {
+		from, to = to, from
+	}
+	fromMinute := from.Truncate(time.Minute)
+	toMinute := to.Truncate(time.Minute)
 	seen := map[string]bool{}
-	minute := from.Truncate(time.Minute)
-	for !minute.After(to) {
-		pattern := a.prefix + "ops:agg:" + strconv.FormatInt(minute.Unix()/60, 10) + ":*"
-		keys, err := a.client.Keys(ctx, pattern).Result()
+
+	// Scan the namespace once instead of issuing KEYS for every minute in the
+	// requested window. KEYS blocks Redis while it walks the entire keyspace;
+	// SCAN is incremental and the minute encoded in each key lets us retain the
+	// same inclusive range semantics as the old implementation.
+	const scanCount int64 = 256
+	var cursor uint64
+	for {
+		keys, next, err := a.client.Scan(ctx, cursor, a.prefix+"ops:agg:*", scanCount).Result()
 		if err != nil {
 			return nil, err
 		}
+		candidates := make([]struct{ key, channel string }, 0, len(keys))
 		for _, key := range keys {
-			channel, ok := channelFromBucketKey(a.prefix, key)
-			if !ok {
-				continue
-			}
-			if a.client.HExists(ctx, key, "requests").Val() {
-				seen[channel] = true
+			minute, channel, ok := bucketKeyParts(a.prefix, key)
+			if ok && !minute.Before(fromMinute) && !minute.After(toMinute) {
+				candidates = append(candidates, struct{ key, channel string }{key, channel})
 			}
 		}
-		minute = minute.Add(time.Minute)
+		for start := 0; start < len(candidates); start += 256 {
+			end := start + 256
+			if end > len(candidates) {
+				end = len(candidates)
+			}
+			pipe := a.client.Pipeline()
+			checks := make([]*redis.BoolCmd, 0, end-start)
+			for _, candidate := range candidates[start:end] {
+				checks = append(checks, pipe.HExists(ctx, candidate.key, "requests"))
+			}
+			if _, err := pipe.Exec(ctx); err != nil {
+				return nil, err
+			}
+			for i, check := range checks {
+				if check.Val() {
+					seen[candidates[start+i].channel] = true
+				}
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
 	}
 	channels := make([]string, 0, len(seen))
 	for channel := range seen {
@@ -337,6 +367,25 @@ func (a *Aggregator) Channels(ctx context.Context, from, to time.Time) ([]string
 	}
 	sort.Strings(channels)
 	return channels, nil
+}
+
+// bucketKeyParts parses a base bucket key and returns its minute and channel.
+// Side lists and per-model keys are rejected by channelFromBucketKey.
+func bucketKeyParts(prefix, key string) (time.Time, string, bool) {
+	trimmed := strings.TrimPrefix(key, prefix+"ops:agg:")
+	parts := strings.SplitN(trimmed, ":", 2)
+	if len(parts) != 2 {
+		return time.Time{}, "", false
+	}
+	epochMinute, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	channel, ok := channelFromBucketKey(prefix, key)
+	if !ok {
+		return time.Time{}, "", false
+	}
+	return time.Unix(epochMinute*60, 0), channel, true
 }
 
 // channelFromBucketKey extracts the channel from a bucket key, rejecting the

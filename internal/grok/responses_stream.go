@@ -1,6 +1,7 @@
 package grok
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -90,16 +91,16 @@ func writeResponsesStreamFromChatReaderRequestWithHook(w http.ResponseWriter, re
 	if writer.err != nil {
 		return
 	}
-	err := readResponseSSE(reader, func(event, data string) error {
+	err := readResponseSSEBytes(reader, func(event string, data []byte) error {
 		if writer.err != nil {
 			return writer.err
 		}
-		if data == "[DONE]" {
+		if bytes.Equal(data, []byte("[DONE]")) {
 			sawDone = true
 			return io.EOF
 		}
 		var chunk map[string]interface{}
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		if err := json.Unmarshal(data, &chunk); err != nil {
 			return fmt.Errorf("invalid chat SSE: %w", err)
 		}
 		if chunk == nil {

@@ -88,14 +88,23 @@ type responseReasoningState struct {
 	text                   strings.Builder
 }
 
-// readResponseSSE consumes whole SSE frames, including multi-line data. Event
-// names are reset between frames; JSON type wins when a server supplies both.
-func readResponseSSE(reader io.Reader, consume func(string, string) error) error {
+// readResponseSSEBytes consumes whole SSE frames, including multi-line data,
+// while keeping payloads as bytes. Callers that decode JSON can therefore pass
+// the payload straight to json.Unmarshal without a string -> []byte round trip.
+func readResponseSSEBytes(reader io.Reader, consume func(string, []byte) error) error {
 	return consumeCompatibleSSE(reader, func(event compatibleSSEEvent) error {
 		if !event.HasData() {
 			return nil
 		}
-		return consume(event.Event, string(event.Data()))
+		return consume(event.Event, event.Data())
+	})
+}
+
+// readResponseSSE retains the string callback used by text-oriented callers.
+// Names are reset between frames; JSON type wins when a server supplies both.
+func readResponseSSE(reader io.Reader, consume func(string, string) error) error {
+	return readResponseSSEBytes(reader, func(event string, data []byte) error {
+		return consume(event, string(data))
 	})
 }
 

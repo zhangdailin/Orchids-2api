@@ -29,7 +29,23 @@ type compatibleSSEEvent struct {
 }
 
 func (e compatibleSSEEvent) Data() []byte {
-	return []byte(strings.Join(e.data, "\n"))
+	if len(e.data) == 0 {
+		return nil
+	}
+	size := len(e.data) - 1
+	for _, line := range e.data {
+		size += len(line)
+	}
+	joined := make([]byte, size)
+	offset := 0
+	for index, line := range e.data {
+		if index > 0 {
+			joined[offset] = '\n'
+			offset++
+		}
+		offset += copy(joined[offset:], line)
+	}
+	return joined
 }
 
 func (e compatibleSSEEvent) HasData() bool { return len(e.data) > 0 }

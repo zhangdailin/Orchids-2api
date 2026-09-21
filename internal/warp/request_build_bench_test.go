@@ -40,6 +40,15 @@ func benchmarkWarpConversation(turns, blockChars int) upstream.UpstreamRequest {
 	}
 }
 
+func BenchmarkBuildWarpFileGlobV2Result(b *testing.B) {
+	payload := strings.Repeat("/repo/file.go\n", 128)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = buildWarpFileGlobV2Result(payload, false)
+	}
+}
+
 // One upstream payload build per request: this is what turns the re-sent
 // conversation into the protobuf Warp receives, so it carries the whole request
 // body's worth of work on the channel DeepSeek Harness drives.

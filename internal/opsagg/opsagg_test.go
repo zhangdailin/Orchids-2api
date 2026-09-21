@@ -163,7 +163,29 @@ func TestChannels_ListsOnlyObservedChannels(t *testing.T) {
 	}
 }
 
-// TestPercentile_NearestRank pins the percentile definition used by the API.
+func TestChannels_ReversedRangeAndExpiredEmpty(t *testing.T) {
+	agg, _ := newAggregator(t)
+	ctx := context.Background()
+	old := time.Now().Truncate(time.Minute).Add(-2 * time.Minute)
+	agg.Observe(ctx, Outcome{Channel: "old", OK: true, At: old})
+	newer := old.Add(time.Minute)
+	agg.Observe(ctx, Outcome{Channel: "new", OK: true, At: newer})
+	channels, err := agg.Channels(ctx, newer, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(channels) != 2 || channels[0] != "new" || channels[1] != "old" {
+		t.Fatalf("channels=%v", channels)
+	}
+	channels, err = agg.Channels(ctx, old.Add(2*time.Minute), old.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(channels) != 0 {
+		t.Fatalf("channels=%v, want empty", channels)
+	}
+}
+
 func TestPercentile_NearestRank(t *testing.T) {
 	values := []int64{10, 20, 30, 40, 50, 60, 70, 80, 90, 100}
 	if got := percentile(values, 0.95); got != 100 {

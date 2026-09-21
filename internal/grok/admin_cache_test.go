@@ -18,6 +18,18 @@ import (
 	"orchids-api/internal/store"
 )
 
+func TestPaginateCacheEntriesRejectsOverflowAndCapsPageSize(t *testing.T) {
+	entries := []cacheEntry{{Name: "a"}, {Name: "b"}}
+	got, total := paginateCacheEntries(entries, int(^uint(0)>>1), int(^uint(0)>>1))
+	if total != len(entries) || len(got) != 0 {
+		t.Fatalf("overflow pagination got total=%d items=%d", total, len(got))
+	}
+	got, _ = paginateCacheEntries(entries, 1, maxCachePageSize+1)
+	if len(got) != len(entries) {
+		t.Fatalf("capped page size unexpectedly dropped entries: %d", len(got))
+	}
+}
+
 func TestListCacheOnlineAccountsUsesOnlyCanonicalVisibleWebSource(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {

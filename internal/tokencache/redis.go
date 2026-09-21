@@ -97,8 +97,15 @@ func (c *RedisCache) Clear(ctx context.Context) error {
 			return fmt.Errorf("scan failed: %w", err)
 		}
 		if len(keys) > 0 {
-			if err := c.client.Del(ctx, keys...).Err(); err != nil {
-				return fmt.Errorf("del failed: %w", err)
+			// UNLINK removes keys asynchronously, avoiding a large synchronous
+			// delete from blocking Redis. Batch the commands in one pipeline so
+			// clearing a populated cache does not incur one round trip per key.
+			_, err := c.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Unlink(ctx, keys...)
+				return nil
+			})
+			if err != nil {
+				return fmt.Errorf("unlink failed: %w", err)
 			}
 		}
 		cursor = nextCursor

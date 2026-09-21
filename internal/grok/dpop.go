@@ -24,9 +24,11 @@ import (
 )
 
 const (
-	consoleDPoPTokenURL = "https://console.x.ai/v1/dpop/token"
-	dpopRefreshSkew     = 20 * time.Second
-	maxDPoPLifetime     = time.Hour
+	consoleDPoPTokenURL      = "https://console.x.ai/v1/dpop/token"
+	dpopRefreshSkew          = 20 * time.Second
+	maxDPoPLifetime          = time.Hour
+	dpopSessionCleanupPeriod = time.Minute
+	maxDPoPSessions          = 1024
 )
 
 type dpopJWK struct {
@@ -45,13 +47,40 @@ type dpopSession struct {
 }
 
 type dpopSessionManager struct {
-	mu       sync.Mutex
-	sessions map[string]dpopSession
-	fetches  singleflight.Group
+	mu          sync.Mutex
+	sessions    map[string]dpopSession
+	lastCleanup time.Time
+	fetches     singleflight.Group
 }
 
 func newDPoPSessionManager() *dpopSessionManager {
 	return &dpopSessionManager{sessions: make(map[string]dpopSession)}
+}
+
+func (m *dpopSessionManager) cleanupLocked(now time.Time, force bool) {
+	if !force && len(m.sessions) < maxDPoPSessions && now.Sub(m.lastCleanup) < dpopSessionCleanupPeriod {
+		return
+	}
+	m.lastCleanup = now
+	usableAfter := now.Add(dpopRefreshSkew)
+	for key, session := range m.sessions {
+		if !session.expiresAt.After(usableAfter) {
+			delete(m.sessions, key)
+		}
+	}
+}
+
+func (m *dpopSessionManager) evictOldestLocked() {
+	var oldestKey string
+	var oldestExpiry time.Time
+	for key, session := range m.sessions {
+		if oldestKey == "" || session.expiresAt.Before(oldestExpiry) {
+			oldestKey, oldestExpiry = key, session.expiresAt
+		}
+	}
+	if oldestKey != "" {
+		delete(m.sessions, oldestKey)
+	}
 }
 
 func dpopCacheKey(token string) string {
@@ -73,8 +102,10 @@ func TokenFingerprint(token string) string {
 func (m *dpopSessionManager) cached(key string) (dpopSession, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	m.cleanupLocked(now, false)
 	s, ok := m.sessions[key]
-	if ok && s.expiresAt.After(time.Now().UTC().Add(dpopRefreshSkew)) {
+	if ok && s.expiresAt.After(now.Add(dpopRefreshSkew)) {
 		return s, true
 	}
 	delete(m.sessions, key)
@@ -83,8 +114,12 @@ func (m *dpopSessionManager) cached(key string) (dpopSession, bool) {
 
 func (m *dpopSessionManager) store(key string, s dpopSession) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleanupLocked(time.Now().UTC(), len(m.sessions) >= maxDPoPSessions)
 	m.sessions[key] = s
-	m.mu.Unlock()
+	if len(m.sessions) > maxDPoPSessions {
+		m.evictOldestLocked()
+	}
 }
 
 func (m *dpopSessionManager) invalidate(key, accessToken string) {
