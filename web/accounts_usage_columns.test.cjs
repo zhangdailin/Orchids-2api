@@ -197,3 +197,25 @@ test('the desktop header and the mobile card both carry the three columns', () =
   assert.match(card, /创建时间/);
   assert.match(card, /能力/);
 });
+
+// --- Cline 等级 / 配额 ------------------------------------------------------
+
+test('the Cline tier badge reads the plan the upstream actually answered', () => {
+  const { context } = loadUI();
+  // "free" is a verdict the plan endpoint returned, not an inference from the
+  // catalog: the feed publishes the free list to every account, subscriber
+  // included, so it cannot tell the two apart.
+  const free = context.subscriptionBadge({ account_type: 'cline', cline_plan: 'free', cline_model_ids: ['a'] });
+  assert.equal(free.text, '免费');
+  assert.match(free.tip, /没有套餐记录/);
+  // A subscriber keeps the plan name; flattening it to 免费 would hide it.
+  const paid = context.subscriptionBadge({ account_type: 'cline', cline_plan: 'Cline Pass', cline_model_ids: ['a'] });
+  assert.equal(paid.text, 'Cline Pass');
+});
+
+test('a Cline account whose tier was never read is not labelled free', () => {
+  const { context } = loadUI();
+  const badge = context.subscriptionBadge({ account_type: 'cline', cline_model_ids: ['a', 'b'] });
+  assert.notEqual(badge.text, '免费');
+  assert.equal(badge.text, '未同步');
+});

@@ -228,6 +228,16 @@ func (a *API) buildClineAccountFromCredentialsWithFactory(ctx context.Context, l
 		acc.ClineModelIDs = cline.CatalogSnapshot(models)
 	}
 
+	// The tier is read at login so a freshly added account is labelled on its
+	// first render instead of waiting for the next refresh cycle. Like the
+	// catalog, a failed read is not a failed login.
+	if plan, planErr := client.FetchPlan(ctx); planErr != nil {
+		slog.Warn("Cline plan read failed at login; leaving the tier unset",
+			"login_id", loginID, "error", planErr)
+	} else if plan.Explicit {
+		acc.ClinePlan = plan.Name
+	}
+
 	// Without a refresh token the account cannot survive its first token expiry,
 	// and the login would look successful until it silently dies.
 	if strings.TrimSpace(acc.ClineRefreshToken) == "" {

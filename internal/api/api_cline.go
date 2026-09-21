@@ -138,6 +138,16 @@ func verifyClineAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 		acc.ClineModelIDs = ids
 	}
 
+	// The tier is decoration on top of a verdict the refresh call is about to
+	// prove, so it is read first and never allowed to fail the verification:
+	// an account whose plan endpoint is unreachable is still a working account.
+	if plan, planErr := client.FetchPlan(ctx); planErr != nil {
+		slog.Warn("Cline plan read failed; leaving the recorded tier unchanged",
+			"account_id", acc.ID, "error", planErr)
+	} else if plan.Explicit {
+		acc.ClinePlan = plan.Name
+	}
+
 	// Renewing is the proof the credential still works: the refresh endpoint is
 	// the only control-plane call that answers for a rotated token, and a
 	// rejection there means the account has to be authorized again.

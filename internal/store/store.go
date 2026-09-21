@@ -221,6 +221,16 @@ type Account struct {
 	ClineRefreshToken string    `json:"cline_refresh_token,omitempty"`
 	ClineExpiresAt    time.Time `json:"cline_expires_at,omitempty"`
 	ClineEmail        string    `json:"cline_email,omitempty"`
+	// ClinePlan is the account's subscription tier as the upstream states it.
+	//
+	// The recommended-models feed is per-account, but it lists four tiers at
+	// once, so "the free list is non-empty" proves free access and says nothing
+	// about whether the account also holds a paid plan — which is exactly the
+	// question the 等级 column asks. The upstream answers it at /users/me/plan:
+	// a subscriber gets a plan name, an account that never subscribed gets
+	// "no plan history found for user". Empty means not probed yet, and that is
+	// different from "free", so it is never defaulted.
+	ClinePlan string `json:"cline_plan,omitempty"`
 	// ReplaceClineCredentials is an explicit write intent. Ordinary full
 	// account updates carry a snapshot and must not overwrite a refresh token
 	// that rotated after that snapshot was read.

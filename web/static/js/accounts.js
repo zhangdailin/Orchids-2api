@@ -357,18 +357,25 @@ function subscriptionBadge(acc) {
     };
   }
   if (type === "cline") {
-    // No plan name is published. The catalog the server observed is the free
-    // tier of recommended-models, so the badge says what was actually observed
-    // rather than inventing a tier.
-    const plan = String(acc?.quota_plan || "").trim();
+    // The tier comes from the upstream plan endpoint, not from the catalog:
+    // recommended-models lists four tiers in one payload, so "the free list is
+    // non-empty" proves free access and says nothing about a paid plan held
+    // alongside it. The server records what /users/me/plan actually answered —
+    // a plan name for a subscriber, "free" for an account with no plan history.
+    const plan = String(acc?.cline_plan || "").trim();
     if (plan) {
+      const free = plan.toLowerCase() === "free";
       return {
-        text: plan,
-        bg: "rgba(167, 139, 250, 0.16)",
-        color: "#c4b5fd",
-        tip: `Cline 套餐: ${plan}`,
+        text: free ? "免费" : plan,
+        bg: free ? "rgba(52, 211, 153, 0.16)" : "rgba(167, 139, 250, 0.16)",
+        color: free ? "#34d399" : "#c4b5fd",
+        tip: free
+          ? "Cline 免费账号：上游 /users/me/plan 返回没有套餐记录"
+          : `Cline 套餐: ${plan}`,
       };
     }
+    // No tier recorded yet: an unread plan endpoint is not evidence of free, so
+    // the badge says what is missing rather than asserting a tier.
     const modelCount = Array.isArray(acc?.cline_model_ids) ? acc.cline_model_ids.length : 0;
     if (modelCount === 0) {
       return {
@@ -379,10 +386,10 @@ function subscriptionBadge(acc) {
       };
     }
     return {
-      text: "免费目录",
-      bg: "rgba(167, 139, 250, 0.16)",
-      color: "#c4b5fd",
-      tip: `Cline 未下发套餐名；当前 ${modelCount} 个模型来自官方 recommended-models 免费清单`,
+      text: "未同步",
+      bg: "rgba(100, 116, 139, 0.12)",
+      color: "#94a3b8",
+      tip: `已读到 ${modelCount} 个免费模型，但尚未读到套餐档位；点「刷新」重新探测`,
     };
   }
   if (type === "workbuddy") {
@@ -1159,6 +1166,16 @@ const ACCOUNT_TYPE_NAMES = { warp: "Warp", puter: "Puter", workbuddy: "WorkBuddy
 
 // One name for the selected channel, used by the strip, the subtitle, the toasts and the
 // empty state. currentPlatform stays the lower-case key the API stores; nothing shows it.
+// clinePageOnly reports whether the page is showing the Cline channel alone.
+//
+// The console renders one platform at a time; the unfiltered view mixes every
+// channel, and a column that is noise for one of them is still the only place
+// another reports its balance. So the decision is made on the filter, never on
+// the row: mixed rows keep every column.
+function clinePageOnly() {
+  return String(currentPlatform || "").trim().toLowerCase() === "cline";
+}
+
 function currentPlatformLabel() {
   const key = String(currentPlatform || "").trim();
   if (!key) return "";
@@ -1556,12 +1573,17 @@ function renderAccounts() {
   table.className = "accounts-table";
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
+  // Cline has no numeric allowance, so its 配额 cell could only ever read
+  // "未计量" — a column of noise. It is dropped on the Cline page only: the
+  // other five channels report a real balance and keep theirs. The whole page
+  // renders one channel at a time, so one filter decision covers every row.
+  const quotaColumnVisible = !clinePageOnly();
   const headers = [
     { label: "", className: "col-check" },
     { label: "ID", className: "col-id" },
     { label: "账号" },
     { label: "等级", className: "col-tier" },
-    { label: "配额", className: "col-quota" },
+    ...(quotaColumnVisible ? [{ label: "配额", className: "col-quota" }] : []),
     { label: "状态", className: "col-status" },
     { label: "能力", className: "col-capability" },
     // 今日/累计 Tokens is the only spend figure an unmetered channel can
@@ -1650,46 +1672,50 @@ function renderAccounts() {
     tdTier.innerHTML = buildSubscriptionMarkup(acc);
     tr.appendChild(tdTier);
 
-    const tdQuota = document.createElement("td");
-    tdQuota.className = "col-quota";
-    // One shared renderer for the desktop table and the mobile cards.
-    tdQuota.innerHTML = buildQuotaMarkup(acc);
-    const quota = getQuotaStats(acc);
-    if (normalizeAccountType(acc) === "workbuddy") {
-      if (quota && quota.workbuddy) {
-        tdQuota.title = [
-          quota.plan ? `计量包: ${quota.plan}` : "",
-          `单位: ${quota.unit || "credit"}`,
-          "口径: 当前周期剩余 / 周期上限",
-          quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
-        ].filter(Boolean).join(" · ");
-      } else {
-        tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
+    // Dropped on the Cline page for the same reason the header is: a column that
+    // can only ever say "未计量" is not worth a column.
+    if (quotaColumnVisible) {
+      const tdQuota = document.createElement("td");
+      tdQuota.className = "col-quota";
+      // One shared renderer for the desktop table and the mobile cards.
+      tdQuota.innerHTML = buildQuotaMarkup(acc);
+      const quota = getQuotaStats(acc);
+      if (normalizeAccountType(acc) === "workbuddy") {
+        if (quota && quota.workbuddy) {
+          tdQuota.title = [
+            quota.plan ? `计量包: ${quota.plan}` : "",
+            `单位: ${quota.unit || "credit"}`,
+            "口径: 当前周期剩余 / 周期上限",
+            quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
+          ].filter(Boolean).join(" · ");
+        } else {
+          tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
+        }
+      } else if (normalizeAccountType(acc) === "cline") {
+        const models = clineObservedModelCount(acc);
+        tdQuota.title = models > 0
+          ? `Cline 未下发数值额度；已观测 ${models} 个免费模型（点「刷新」重新同步）`
+          : "Cline 未下发数值额度；点「刷新」同步模型目录";
+      } else if (normalizeAccountType(acc) === "qoder") {
+        if (quota && quota.supported) {
+          tdQuota.title = [
+            quota.plan ? `计划: ${quota.plan}` : "",
+            `单位: ${quota.unit || "credits"}`,
+            "口径: 当前窗口剩余 / 窗口额度",
+            quota.exhausted ? "该账号额度已用尽，窗口重置后自动恢复" : "",
+            quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
+            quota.upgradeUrl ? `升级: ${quota.upgradeUrl}` : "",
+          ].filter(Boolean).join(" · ");
+        } else {
+          tdQuota.title = "尚未读取到 Qoder 计划与额度；点「检查」立即同步";
+        }
+      } else if (quota && (quota.estimated || quota.quotaUnavailable)) {
+        // Every number in this cell carries its provenance, so an estimate is never
+        // mistaken for a reported balance.
+        tdQuota.title = quotaTooltip(acc, quota);
       }
-    } else if (normalizeAccountType(acc) === "cline") {
-      const models = clineObservedModelCount(acc);
-      tdQuota.title = models > 0
-        ? `Cline 未下发数值额度；已观测 ${models} 个免费模型（点「刷新」重新同步）`
-        : "Cline 未下发数值额度；点「刷新」同步模型目录";
-    } else if (normalizeAccountType(acc) === "qoder") {
-      if (quota && quota.supported) {
-        tdQuota.title = [
-          quota.plan ? `计划: ${quota.plan}` : "",
-          `单位: ${quota.unit || "credits"}`,
-          "口径: 当前窗口剩余 / 窗口额度",
-          quota.exhausted ? "该账号额度已用尽，窗口重置后自动恢复" : "",
-          quota.resetAt ? `重置: ${new Date(quota.resetAt).toLocaleString()}` : "",
-          quota.upgradeUrl ? `升级: ${quota.upgradeUrl}` : "",
-        ].filter(Boolean).join(" · ");
-      } else {
-        tdQuota.title = "尚未读取到 Qoder 计划与额度；点「检查」立即同步";
-      }
-    } else if (quota && (quota.estimated || quota.quotaUnavailable)) {
-      // Every number in this cell carries its provenance, so an estimate is never
-      // mistaken for a reported balance.
-      tdQuota.title = quotaTooltip(acc, quota);
+      tr.appendChild(tdQuota);
     }
-    tr.appendChild(tdQuota);
 
     // Health only. Capability (e.g. NSFW) is a different dimension and lives in
     // its own column so "正常" and "NSFW" never read as alternatives.
@@ -2088,10 +2114,11 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
           <span class="account-mobile-label">等级</span>
           <div class="account-mobile-inline">${buildSubscriptionMarkup(acc)}</div>
         </div>
+        ${clinePageOnly() ? "" : `
         <div class="account-mobile-item">
           <span class="account-mobile-label">配额</span>
           <div class="account-mobile-value">${buildQuotaMarkup(acc)}</div>
-        </div>
+        </div>`}
         <div class="account-mobile-item">
           <span class="account-mobile-label">能力</span>
           <div class="account-mobile-inline">${buildCapabilityMarkup(acc)}</div>

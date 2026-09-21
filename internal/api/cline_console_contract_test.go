@@ -119,17 +119,24 @@ func TestAccountsJSRendersTheClineRowCells(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read accounts.js: %v", err)
 	}
-	// 配额: an unmetered channel must be rendered as a verdict, not a dash.
+	// 配额: an unmetered channel is now dropped from the Cline page rather than
+	// rendered as a permanent "未计量". The verdict itself stays in the source
+	// for every other surface that still renders the cell.
 	if !strings.Contains(source, "unmetered: true") {
 		t.Error("getQuotaStats has no unmetered verdict for Cline")
 	}
 	if !strings.Contains(source, "未计量") {
 		t.Error("buildQuotaMarkup does not name the unmetered verdict")
 	}
-	// 等级: no plan name is published, so the badge falls back to what the
-	// server actually observed.
-	if !strings.Contains(source, `免费目录`) {
-		t.Error("subscriptionBadge has no Cline tier")
+	if !strings.Contains(source, "clinePageOnly") {
+		t.Error("the 配额 column is not hidden on the Cline page")
+	}
+	// 等级: the tier now comes from the upstream plan endpoint. What is pinned
+	// is that the badge reads that field at all — a tier inferred from the
+	// catalog cannot tell a free account from a subscriber's, which is exactly
+	// the mistake the old "免费目录" label made.
+	if !strings.Contains(source, `cline_plan`) {
+		t.Error("subscriptionBadge does not read the Cline plan the server observed")
 	}
 	// 状态: the credential verdict must come from has_credential, not from the
 	// session columns this channel never writes.

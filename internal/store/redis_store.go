@@ -616,6 +616,13 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		if email := strings.TrimSpace(acc.ClineEmail); email != "" {
 			updated.ClineEmail = email
 		}
+		// The tier follows the same rule as the credentials: an account update
+		// is frequently partial, so an empty value means "keep what is stored".
+		// That matters because "no tier recorded" and "tier is free" are
+		// different states, and only one of them is evidence.
+		if plan := strings.TrimSpace(acc.ClinePlan); plan != "" {
+			updated.ClinePlan = plan
+		}
 		if len(acc.ClineModelIDs) > 0 {
 			updated.ClineModelIDs = append([]string(nil), acc.ClineModelIDs...)
 		}
