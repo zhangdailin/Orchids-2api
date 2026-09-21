@@ -35,6 +35,26 @@ import (
 	"orchids-api/internal/warp"
 )
 
+type responseWriterUnwrapper interface {
+	Unwrap() http.ResponseWriter
+}
+
+func responseWriterSupportsFlush(w http.ResponseWriter) bool {
+	for depth := 0; w != nil && depth < 32; depth++ {
+		unwrapper, ok := w.(responseWriterUnwrapper)
+		if !ok {
+			_, supports := w.(http.Flusher)
+			return supports
+		}
+		next := unwrapper.Unwrap()
+		if next == nil || next == w {
+			return false
+		}
+		w = next
+	}
+	return false
+}
+
 // ClientFactory creates an upstream client for a given account.
 // Used to decouple provider-specific client construction from the handler.
 type ClientFactory func(acc *store.Account, cfg *config.Config) UpstreamClient
@@ -752,15 +772,17 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	isStream := req.Stream
 
 	if isStream {
+		// Check the complete middleware chain before committing SSE headers. A
+		// wrapper may expose Flush while its underlying writer cannot actually
+		// flush, so unwrap to the real server writer before accepting the stream.
+		if !responseWriterSupportsFlush(w) {
+			apperrors.New("api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError).WriteResponse(w)
+			return
+		}
 		// 设置 SSE 响应头
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-
-		if _, ok := w.(http.Flusher); !ok {
-			apperrors.New("api_error", "Streaming not supported by underlying connection", http.StatusInternalServerError).WriteResponse(w)
-			return
-		}
 		streamingStarted = true
 	} else {
 		w.Header().Set("Content-Type", "application/json")

@@ -2,9 +2,13 @@ package cline
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/upstream"
@@ -94,6 +98,62 @@ func TestApplyClientHeadersKeepsAnExplicitValue(t *testing.T) {
 	}
 	if got := h.Get("X-CLIENT-TYPE"); got != "cline-cli" {
 		t.Errorf("X-CLIENT-TYPE = %q, want cline-cli", got)
+	}
+}
+
+// TestChat401RefreshRetryRebuildsThePOSTBody guards the consumed-body bug from
+// the reference proxy's PR #4: every attempt must create a fresh POST request.
+func TestChat401RefreshRetryRebuildsThePOSTBody(t *testing.T) {
+	t.Parallel()
+
+	var chatAttempts atomic.Int32
+	var refreshAttempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/refresh":
+			refreshAttempts.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":{"accessToken":"access-2","refreshToken":"refresh-2","expiresAt":"2099-01-01T00:00:00Z"}}`)
+		case "/chat/completions":
+			attempt := chatAttempts.Add(1)
+			raw, _ := io.ReadAll(r.Body)
+			if len(raw) == 0 || !strings.Contains(string(raw), `"content":"retry body"`) {
+				t.Errorf("attempt %d body=%q, want the complete POST body", attempt, raw)
+			}
+			if attempt == 1 {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = io.WriteString(w, `{"error":{"message":"expired"}}`)
+				return
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer workos:access-2" {
+				t.Errorf("retry authorization=%q", got)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		apiBase: server.URL,
+		control: server.Client(),
+		stream:  server.Client(),
+		creds: Credentials{
+			AccessToken:  "access-1",
+			RefreshToken: "refresh-1",
+			ExpiresAt:    time.Now().Add(time.Hour),
+		},
+	}
+	if err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
+		Model:    "z-ai/glm-5.3-flash",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "retry body"}}},
+	}, nil, nil); err != nil {
+		t.Fatalf("SendRequestWithPayload() error=%v", err)
+	}
+	if chatAttempts.Load() != 2 || refreshAttempts.Load() != 1 {
+		t.Fatalf("chat attempts=%d refresh attempts=%d", chatAttempts.Load(), refreshAttempts.Load())
 	}
 }
 

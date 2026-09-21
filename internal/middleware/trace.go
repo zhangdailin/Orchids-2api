@@ -200,12 +200,20 @@ func (w *TracedResponseWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// Flush 实现 http.Flusher
+// Flush implements http.Flusher without losing the implicit HTTP 200 in the
+// request metrics. A Flush commits the response even when no body was written.
 func (w *TracedResponseWriter) Flush() {
+	if w.firstWriteAt.IsZero() {
+		w.firstWriteAt = time.Now()
+	}
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
+
+// Unwrap lets http.ResponseController and capability checks reach the real
+// server writer through every observability layer.
+func (w *TracedResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // Hijack 实现 http.Hijacker，保证 WebSocket 升级等场景可用。
 func (w *TracedResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {

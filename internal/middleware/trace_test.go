@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -161,6 +162,27 @@ func TestTracedResponseWriter(t *testing.T) {
 
 		// Should not panic
 		traced.Flush()
+	})
+
+	t.Run("flush records an implicit response start", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		traced := NewTracedResponseWriter(w)
+		before := time.Now()
+		traced.Flush()
+		if traced.FirstWriteAt().Before(before) {
+			t.Fatalf("FirstWriteAt=%v, want a flush timestamp", traced.FirstWriteAt())
+		}
+		if !w.Flushed {
+			t.Fatal("Flush was not forwarded")
+		}
+	})
+
+	t.Run("unwrap exposes the underlying writer", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		traced := NewTracedResponseWriter(w)
+		if traced.Unwrap() != w {
+			t.Fatal("Unwrap did not return the underlying writer")
+		}
 	})
 
 	t.Run("hijack delegates to underlying writer", func(t *testing.T) {
