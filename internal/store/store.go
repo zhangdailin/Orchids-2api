@@ -393,8 +393,9 @@ const AccountStatusWarpQuotaExhausted = "warp_quota_exhausted"
 // catalog. The selector keeps these accounts in the pool but its model filter
 // rejects every metered or unknown route.
 const (
-	AccountStatusPuterQuotaExhausted = "puter_quota_exhausted"
-	AccountStatusQoderQuotaExhausted = "qoder_quota_exhausted"
+	AccountStatusPuterQuotaExhausted     = "puter_quota_exhausted"
+	AccountStatusQoderQuotaExhausted     = "qoder_quota_exhausted"
+	AccountStatusWorkBuddyQuotaExhausted = "workbuddy_quota_exhausted"
 )
 
 const (

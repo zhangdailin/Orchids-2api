@@ -196,11 +196,10 @@ func verifyWorkBuddyAccountWithStore(ctx context.Context, acc *store.Account, cf
 	} else {
 		workbuddy.ApplyQuota(acc, quota)
 		if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
-			// The upstream currently rejects requests once this package is spent;
-			// WorkBuddy has no implemented free-model entitlement feed. Keep the
-			// account parked until the meter shows credits again instead of
-			// repeatedly offering it to the request path.
-			return "402", 0, nil
+			// A spent metered package narrows this account to the confirmed free
+			// catalog rather than parking it. The model-aware selector enforces the
+			// intersection with this account's latest advertised model snapshot.
+			return store.AccountStatusWorkBuddyQuotaExhausted, 0, nil
 		}
 	}
 	return "", 0, nil

@@ -799,7 +799,7 @@ func httpStatusFromAccountStatus(status string) int {
 	switch strings.TrimSpace(status) {
 	case "401":
 		return http.StatusUnauthorized
-	case "402", store.AccountStatusPuterQuotaExhausted, store.AccountStatusQoderQuotaExhausted:
+	case "402", store.AccountStatusPuterQuotaExhausted, store.AccountStatusQoderQuotaExhausted, store.AccountStatusWorkBuddyQuotaExhausted:
 		return http.StatusPaymentRequired
 	case "403":
 		return http.StatusForbidden

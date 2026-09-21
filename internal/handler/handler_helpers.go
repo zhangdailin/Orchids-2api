@@ -18,6 +18,7 @@ import (
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
+	"orchids-api/internal/workbuddy"
 )
 
 func normalizeRequestedModelID(modelID string) string {
@@ -437,7 +438,7 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
 		model := strings.TrimSpace(opts.ModelID)
 		channel := strings.ToLower(strings.TrimSpace(targetChannel))
-		needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "puter" || channel == "qoder")
+		needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "puter" || channel == "qoder" || channel == "workbuddy")
 		if needsFilter {
 			return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
 				if honorsModelCooldown(channel) && store.ModelCooldownRemaining(acc, model, time.Now()) != 0 {
@@ -451,8 +452,13 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 					if channel == "qoder" {
 						return qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
 					}
+					if channel == "workbuddy" {
+						return workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model)
+					}
 				case store.AccountStatusQoderQuotaExhausted:
 					return channel == "qoder" && qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
+				case store.AccountStatusWorkBuddyQuotaExhausted:
+					return channel == "workbuddy" && workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model)
 				default:
 					return true
 				}

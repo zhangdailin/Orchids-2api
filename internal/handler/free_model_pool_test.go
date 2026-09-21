@@ -31,6 +31,27 @@ func TestSelectAccountRecord_ExhaustedPuterOnlyServesCatalogFreeModel(t *testing
 	}
 }
 
+func TestSelectAccountRecord_ExhaustedWorkBuddyRequiresConfirmedAdvertisedFreeModel(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() { _ = s.Close(); mini.Close() }()
+	ctx := context.Background()
+	acc := &store.Account{
+		AccountType: "workbuddy", WorkBuddyRefreshToken: "token", Enabled: true, Weight: 1,
+		StatusCode:        store.AccountStatusWorkBuddyQuotaExhausted,
+		WorkBuddyModelIDs: []string{`{"id":"hy3"}`, `{"id":"gpt-5.6-sol"}`},
+	}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.selectAccountRecordWithOptions(ctx, "workbuddy", nil, accountSelectionOptions{ModelID: "hy3"}); err != nil || got.ID != acc.ID {
+		t.Fatalf("free selection got=%v err=%v", got, err)
+	}
+	for _, model := range []string{"gpt-5.6-sol", "hy4-preview-f"} {
+		if _, err := h.selectAccountRecordWithOptions(ctx, "workbuddy", nil, accountSelectionOptions{ModelID: model}); err == nil {
+			t.Fatalf("model %q unexpectedly selected exhausted WorkBuddy account", model)
+		}
+	}
+}
 func TestSelectAccountRecord_ExhaustedQoderRequiresExplicitAccountFreeFactor(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() { _ = s.Close(); mini.Close() }()

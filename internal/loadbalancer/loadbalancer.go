@@ -495,6 +495,14 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 			lb.clearAccountStatus(ctx, acc, "Qoder 额度已刷新，恢复完整能力")
 		}
 		return true
+	case store.AccountStatusWorkBuddyQuotaExhausted:
+		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "workbuddy") {
+			return false
+		}
+		if acc.UsageCurrent > 0 {
+			lb.clearAccountStatus(ctx, acc, "WorkBuddy 额度已刷新，恢复完整能力")
+		}
+		return true
 	case "401":
 		// A refused credential needs operator re-authentication. Legacy rows that
 		// only carry StatusCode=401 are also kept out rather than automatically

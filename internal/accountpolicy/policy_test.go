@@ -272,19 +272,19 @@ func TestAccountHeld_429KeepsShortRetryAfter(t *testing.T) {
 	}
 }
 
-// TestClassify_WorkBuddyPaymentRefusalParksAccount pins the current behaviour:
-// WorkBuddy has no implemented free-model entitlement feed, so any 402 payment
-// refusal must take the exhausted account out of rotation.
-func TestClassify_WorkBuddyPaymentRefusalParksAccount(t *testing.T) {
+// TestClassify_WorkBuddyPaymentRefusalEnablesFreeOnlyMode pins the distinction:
+// a spent WorkBuddy package remains selectable, but the handler permits only the
+// explicitly confirmed free models for that account.
+func TestClassify_WorkBuddyPaymentRefusalEnablesFreeOnlyMode(t *testing.T) {
 	acc := &store.Account{ID: 1, AccountType: "workbuddy", Enabled: true}
-	verdict := Classify(acc, errors.New("workbuddy API error: status=402 message=insufficient credits for model"), "claude-sonnet-4.5")
+	verdict := Classify(acc, errors.New("workbuddy API error: status=429 message=Credits exhausted code=14018"), "claude-sonnet-4.5")
 
-	if verdict.Scope != ScopeAccount || verdict.Status != "402" {
-		t.Fatalf("verdict = %+v, want account-scoped 402", verdict)
+	if verdict.Scope != ScopeAccount || verdict.Status != store.AccountStatusWorkBuddyQuotaExhausted {
+		t.Fatalf("verdict = %+v, want WorkBuddy free-only status", verdict)
 	}
 	verdict.Apply(acc)
-	if !AccountHeld(acc, time.Now()) {
-		t.Fatal("a WorkBuddy payment refusal must hold the account")
+	if AccountHeld(acc, time.Now()) {
+		t.Fatal("a WorkBuddy quota-exhausted account must remain selectable for free models")
 	}
 }
 
@@ -308,7 +308,7 @@ func TestCredentialMessageIsProviderAware(t *testing.T) {
 // is a fact about the whole account — it is returned for every model — but it was
 // read as a model-scoped payment refusal, so the account stayed in rotation, every
 // request retried the whole pool, and the account table carried no reason for it.
-func TestClassify_WorkBuddyCreditExhaustionParksTheAccount(t *testing.T) {
+func TestClassify_WorkBuddyCreditExhaustionEnablesFreeOnlyMode(t *testing.T) {
 	// The production message, verbatim in shape: the upstream wraps it in JSON and
 	// the transport wraps that in a status.
 	production := `workbuddy API error: status=429, message={"error":{"data":{"code":14018,` +
@@ -321,12 +321,12 @@ func TestClassify_WorkBuddyCreditExhaustionParksTheAccount(t *testing.T) {
 	if verdict.Scope != ScopeAccount {
 		t.Fatalf("scope = %v, want an account-scoped verdict: an exhausted allowance refuses every model", verdict.Scope)
 	}
-	if verdict.Status != "402" {
-		t.Fatalf("status = %q, want 402 so the account table can explain the account", verdict.Status)
+	if verdict.Status != store.AccountStatusWorkBuddyQuotaExhausted {
+		t.Fatalf("status = %q, want WorkBuddy free-only status", verdict.Status)
 	}
 	verdict.Apply(acc)
-	if !AccountHeld(acc, time.Now()) {
-		t.Fatal("a credit-exhausted account must be held, or every request retries it")
+	if AccountHeld(acc, time.Now()) {
+		t.Fatal("credit exhaustion must not hide the account from confirmed free models")
 	}
 	// The reason reaches the operator, including what to do about it.
 	if !strings.Contains(acc.StatusMessage, "codebuddy.ai/profile/usage") {
