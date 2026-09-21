@@ -332,9 +332,6 @@ func main() {
 	// Alert evaluation runs beside the refresh loop: it reads the same metric
 	// buckets the overview shows, so an alert and the page never disagree.
 	startAlertLoop(ctx, wiredOps, s, alertEngine, wiredAuditLogger)
-	// Probes answer "can this channel serve right now?" when there is no real
-	// traffic; their outcomes are counted apart from user requests.
-	startProbeLoop(ctx, s, apiHandler.ConfigSnapshot, wiredAuditLogger, cfg.Port)
 	logWorkBuddyReachability(cfg)
 	logQoderReachability(cfg)
 	logClineReachability(cfg)

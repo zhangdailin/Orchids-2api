@@ -64,7 +64,6 @@ function parseAnonymousAllowIPs() {
 
 const CONFIG_TRACKED_FIELDS = [
   "cfg_admin_pass",
-  "cfg_admin_token",
   "cfg_anonymous_allow_ips",
   "cfg_grok_statsig_id",
   "cfg_grok_statsig_signer_url",
@@ -331,7 +330,6 @@ async function loadConfiguration() {
     const cfg = payload && payload.data ? payload.data : payload;
 
     document.getElementById("cfg_admin_pass").value = cfg.admin_password || cfg.admin_pass || "";
-    document.getElementById("cfg_admin_token").value = cfg.admin_token || "";
     document.getElementById("cfg_grok_statsig_id").value = cfg.grok_statsig_id || "";
     const allowField = document.getElementById("cfg_anonymous_allow_ips");
     if (allowField) {
@@ -374,7 +372,6 @@ async function saveConfiguration() {
   const proxyBypassRaw = document.getElementById("cfg_proxy_bypass").value;
   const data = {
     admin_password: document.getElementById("cfg_admin_pass").value,
-    admin_token: document.getElementById("cfg_admin_token").value,
     grok_statsig_id: document.getElementById("cfg_grok_statsig_id").value.trim(),
     grok_statsig_signer_url: normalizeStatsigSignerField(),
     grok_cf_clearance: document.getElementById("cfg_grok_cf_clearance").value.trim(),

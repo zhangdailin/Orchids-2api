@@ -3246,6 +3246,10 @@ func configPayload(cfg *config.Config) (map[string]interface{}, error) {
 	if v, ok := payload["admin_pass"]; ok {
 		payload["admin_password"] = v
 	}
+	// The static admin token remains a deployment-level compatibility secret,
+	// but it is intentionally absent from configuration management. Browser
+	// operators use sessions; inference callers use managed API keys.
+	delete(payload, "admin_token")
 	if rawProxyURL, ok := payload["proxy_url"].(string); !ok || strings.TrimSpace(rawProxyURL) == "" {
 		if proxyURL := util.ProxyURLFromConfig(cfg); proxyURL != nil {
 			payload["proxy_url"] = proxyURL.String()
@@ -3271,6 +3275,9 @@ func buildConfigFromPatch(r *http.Request, current *config.Config) (*config.Conf
 		return nil, err
 	}
 
+	if _, forbidden := patch["admin_token"]; forbidden {
+		return nil, fmt.Errorf("admin_token is deployment-managed and cannot be changed through configuration management")
+	}
 	if v, ok := patch["admin_password"]; ok {
 		patch["admin_pass"] = v
 	}

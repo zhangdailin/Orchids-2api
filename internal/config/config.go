@@ -137,12 +137,6 @@ type Config struct {
 	WarpStreamIdleSeconds        int `json:"warp_stream_idle_seconds,omitempty"`
 	PuterStreamIdleSeconds       int `json:"puter_stream_idle_seconds,omitempty"`
 
-	// ── Channel probes (synthetic reachability checks) ──
-	// The model a probe asks for. Empty means the built-in cheap default; a
-	// deployment on a plan that does not serve the default can point probes at a
-	// model it does serve instead of recording a permanent false outage.
-	GrokProbeModel string `json:"grok_probe_model,omitempty"`
-
 	// ── Grok egress (proxy pool + FlareSolverr + clearance) ──
 	GrokEgressEnabled          bool               `json:"grok_egress_enabled,omitempty"`
 	GrokEgressNodes            []EgressNodeConfig `json:"grok_egress_nodes,omitempty"`

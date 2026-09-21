@@ -64,8 +64,8 @@ func TestHandleConfigListReturnsCodeFreeMaxShape(t *testing.T) {
 	if got := resp.Data["admin_password"]; got != "initial-secret" {
 		t.Fatalf("admin_password=%v want initial-secret", got)
 	}
-	if got := resp.Data["admin_token"]; got != "initial-token" {
-		t.Fatalf("admin_token=%v want initial-token", got)
+	if _, ok := resp.Data["admin_token"]; ok {
+		t.Fatal("config list must not expose admin_token")
 	}
 	if got := resp.Data["token_cache_strategy"]; got != "1" {
 		t.Fatalf("token_cache_strategy=%v want 1", got)
@@ -75,6 +75,13 @@ func TestHandleConfigListReturnsCodeFreeMaxShape(t *testing.T) {
 	}
 }
 
+func TestBuildConfigFromPatchRejectsAdminToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/api/config/save", strings.NewReader(`{"admin_token":"browser-controlled"}`))
+	_, err := buildConfigFromPatch(req, &config.Config{AdminToken: "deployment-secret"})
+	if err == nil || !strings.Contains(err.Error(), "deployment-managed") {
+		t.Fatalf("buildConfigFromPatch() error=%v, want deployment-managed rejection", err)
+	}
+}
 func TestHandleConfigSaveAcceptsCodeFreeMaxStylePayload(t *testing.T) {
 	api, s, mini := setupConfigAPI(t)
 	defer func() {

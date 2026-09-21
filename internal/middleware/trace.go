@@ -336,11 +336,6 @@ func RequestModelFromContext(ctx context.Context) string {
 	return box.model
 }
 
-// ProbeHeader marks a request as a synthetic probe. The probe loop sets it; the
-// metric recorder then counts the request apart from real traffic so an injected
-// failure cannot distort the user-facing success rate.
-const ProbeHeader = "X-Orchids-Probe"
-
 func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, duration time.Duration, model string) {
 	if detailedOutcomeRecorder == nil || r == nil || wrapped == nil {
 		return
@@ -382,11 +377,6 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 			outcome.ProviderReached = box.providerReached
 			box.mu.Unlock()
 		}
-		if strings.TrimSpace(r.Header.Get(ProbeHeader)) != "" {
-			outcome.Channel = ProbeChannel
-			outcome.Model = probeModel
-			outcome.Synthetic = true
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		detailedOutcomeRecorder(ctx, outcome)
@@ -395,16 +385,7 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 
 // Reserved synthetic-traffic labels. They are not routable models, so a client
 // cannot use them to move its own traffic out of the real figures.
-const (
-	// ProbeChannel is the label synthetic probes are recorded under. The probe
-	// loop journals the same value, so the overview and the log centre name the
-	// same thing.
-	ProbeChannel = "probe"
-	// HTTPChannel is the label for requests that are not inference traffic.
-	HTTPChannel = "http"
-
-	probeModel = "__probe__"
-)
+const HTTPChannel = "http"
 
 // streamFailureClass is the status class recorded for a response that committed
 // a 2xx status and then failed mid-stream. It counts as a failure and is kept

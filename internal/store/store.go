@@ -1104,6 +1104,14 @@ func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error
 		}
 	}
 	key.LastUsedAt = &now
+	if key.RPMLimit <= 0 {
+		// The RPM Lua path persists last_used_at atomically. Unlimited keys do not
+		// enter that script, so explicitly persist their successful authentication
+		// or the management page misleadingly reports that they were never used.
+		if err := s.apiKeys.UpdateApiKey(ctx, key); err != nil {
+			return nil, err
+		}
+	}
 	s.rolloverApiKeyBilling(ctx, key, now)
 	return key, nil
 }

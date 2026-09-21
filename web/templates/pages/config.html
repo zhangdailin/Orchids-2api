@@ -92,7 +92,7 @@
               <h2 class="settings-card-title">认证与密钥</h2>
               <span class="mini-badge">访问控制</span>
             </div>
-            <p class="settings-card-note">后台登录凭据与管理接口 Token。密钥字段使用独立配色与「密钥」标记，并保留显示/隐藏开关。</p>
+            <p class="settings-card-note">后台登录凭据与推理 API Key 访问控制。API Key 请在侧栏“API 密钥”页面单独创建、禁用和撤销。</p>
             <div class="settings-card-body">
               <div class="form-row">
                 <div class="form-row-label">
@@ -118,21 +118,6 @@
                 </div>
               </div>
 
-              <div class="form-row">
-                <div class="form-row-label">
-                  <label class="form-label" for="cfg_admin_token">API 管理 Token <span class="secret-badge">密钥</span></label>
-                  <span class="helper-text">用于调用管理接口；可先显示再复制，避免明文回显。</span>
-                </div>
-                <div class="form-row-control">
-                  <div class="input-wrapper">
-                    <input type="password" id="cfg_admin_token" class="form-input secret-field" placeholder="用于调用管理接口">
-                    <div class="input-actions">
-                      <button type="button" class="btn-icon" onclick="togglePassword('cfg_admin_token')">••</button>
-                      <button type="button" class="btn-icon" onclick="copyFieldValue('cfg_admin_token')">CP</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           </section>
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,9 +33,15 @@ func TestAuthorizeApiKeyBasicValidation(t *testing.T) {
 		t.Fatalf("CreateApiKey() error = %v", err)
 	}
 
-	authorized, err := s.AuthorizeApiKey(context.Background(), raw)
-	if err != nil || authorized == nil {
+	if authorized, err := s.AuthorizeApiKey(context.Background(), raw); err != nil || authorized == nil {
 		t.Fatalf("AuthorizeApiKey(valid) = %#v, %v", authorized, err)
+	}
+	persisted, err := s.GetApiKeyByID(context.Background(), key.ID)
+	if err != nil || persisted.LastUsedAt == nil {
+		t.Fatalf("unlimited key last_used_at was not persisted: key=%#v err=%v", persisted, err)
+	}
+	if rawRecord, err := mini.Get("auth-test:api_keys:id:1"); err != nil || strings.Contains(rawRecord, raw) || strings.Contains(rawRecord, "key_full") {
+		t.Fatalf("Redis must not contain the plaintext key: record=%q err=%v", rawRecord, err)
 	}
 	if _, err = s.AuthorizeApiKey(context.Background(), "sk-wrong"); !errors.Is(err, ErrNoRows) {
 		t.Fatalf("AuthorizeApiKey(wrong) error = %v, want ErrNoRows", err)
