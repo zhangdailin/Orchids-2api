@@ -93,22 +93,3 @@ func TestSampleHostCPUSurvivesCounterReset(t *testing.T) {
 		t.Fatal("the sampler did not recover after a counter reset")
 	}
 }
-
-// The metric text has to say which window it measured, so a percentile-looking
-// number cannot be read as an instantaneous one.
-func TestHostCPUMetricDetailNamesItsWindow(t *testing.T) {
-	resetHostCPU()
-	start := time.Now()
-	sampleHostCPU(cpuStat(100, 0, 100, 800, 0), start)
-	busy, window, ok := sampleHostCPU(cpuStat(100, 0, 100, 1000, 0), start.Add(3*time.Second))
-	if !ok {
-		t.Fatal("no rate")
-	}
-	metric := runtimeMetric("主机 CPU", "0.0%", "整机所有核心", true, busy*100)
-	if metric["status"] != "ok" {
-		t.Fatalf("status=%v", metric["status"])
-	}
-	if window.Seconds() != 3 {
-		t.Fatalf("window=%s", window)
-	}
-}

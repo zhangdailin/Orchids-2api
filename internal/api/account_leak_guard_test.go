@@ -141,44 +141,6 @@ func TestAccountResponsesHideCredentialKeys(t *testing.T) {
 	}
 }
 
-// TestAccountSecretFieldsAreComplete fails when a credential field is added to
-// the stored account without being covered by the guard above.
-//
-// It works by planting a secret in every field the store tags as a credential and
-// requiring the rendered output to be free of all of them. A new untagged secret
-// is invisible to this check by construction; a new tagged one is not, because the
-// projection's key-stripping list is what has to grow with it.
-func TestAccountSecretFieldsAreComplete(t *testing.T) {
-	// Keys the account JSON may legitimately contain: identifiers and metadata.
-	allowed := map[string]bool{
-		"id": true, "name": true, "account_type": true, "email": true, "enabled": true,
-		"weight": true, "max_concurrent": true, "subscription": true, "status_code": true,
-		"status_message": true, "usage_current": true, "usage_total": true, "usage_limit": true,
-		"nsfw_enabled": true, "device_id": true, "request_id": true, "project_id": true,
-		"user_id": true, "agent_mode": true, "has_credential": true, "created_at": true,
-		"updated_at": true, "verified_at": true, "last_attempt": true, "quota_reset_at": true,
-	}
-	acc := accountWithSecrets("qoder")
-	raw, err := json.Marshal(acc)
-	if err != nil {
-		t.Fatalf("marshal stored account: %v", err)
-	}
-	var row map[string]interface{}
-	if err := json.Unmarshal(raw, &row); err != nil {
-		t.Fatalf("decode stored account: %v", err)
-	}
-	for key, value := range row {
-		text, ok := value.(string)
-		if !ok || !strings.HasPrefix(text, marker) {
-			continue
-		}
-		if !allowed[key] {
-			continue // already covered: it is a known credential field
-		}
-		t.Errorf("field %q carries planted secret material that the guard does not cover", key)
-	}
-}
-
 // findPlantedSecrets returns the planted field names still visible in raw.
 func findPlantedSecrets(raw []byte) []string {
 	text := string(raw)

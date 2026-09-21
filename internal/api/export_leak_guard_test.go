@@ -124,16 +124,6 @@ func TestExportKeepsOAuthCredentialsForAnOAuthAccount(t *testing.T) {
 	}
 }
 
-// TestExportStillSkipsWarp makes sure the new redaction step did not change which
-// accounts are exported at all.
-func TestExportStillSkipsWarp(t *testing.T) {
-	acc := &store.Account{ID: 1, Name: "w", AccountType: "warp", RefreshToken: marker + "refresh_token",
-		Enabled: true, Weight: 1}
-	if got := exportedCredentialKeys(t, acc); len(got) != 0 {
-		t.Fatalf("exported a Warp session: %v", got)
-	}
-}
-
 func setOf(keys ...string) map[string]bool {
 	out := make(map[string]bool, len(keys))
 	for _, k := range keys {

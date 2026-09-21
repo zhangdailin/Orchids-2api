@@ -17,7 +17,7 @@ func TestSanitizeSystemItems_DefaultPreservesVerbatim(t *testing.T) {
 	}
 
 	// 空配置（未显式设置模式）与显式 "keep" 都必须原样透传。
-	for _, cfg := range []*config.Config{nil, {}, {}, {}} {
+	for _, cfg := range []*config.Config{nil, {}} {
 		got, changed := sanitizeSystemItems(system, false, false, cfg)
 		if changed {
 			t.Fatalf("cfg=%#v: fidelity default must not change system, got changed=true", cfg)
