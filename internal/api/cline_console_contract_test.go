@@ -143,14 +143,6 @@ func TestAccountsJSRendersTheClineRowCells(t *testing.T) {
 	if !strings.Contains(source, `type === 'cline'`) {
 		t.Error("evaluateAccountStatus has no Cline branch")
 	}
-	// 能力: NSFW is a Grok switch, so the column is a dash for every other
-	// channel unless the renderer knows what to show.
-	if !strings.Contains(source, `function buildCapabilityMarkup`) {
-		t.Error("the 能力 cell has no channel-aware renderer")
-	}
-	if !strings.Contains(source, `cline_model_ids`) {
-		t.Error("the Cline cells never read the observed catalog")
-	}
 }
 
 // TestCommonJSCountsTheClineCredentialPresence pins the verdict behind the whole

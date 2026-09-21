@@ -164,7 +164,7 @@ test('the status cell carries the recovery line on both the table and the card',
   // Both have to carry it, or one layout drops the recovery time.
   assert.match(source, /cooldown\.innerHTML = buildCooldownMarkup\(acc\)/);
   assert.match(source, /if \(cooldown\.innerHTML\) tdStatus\.appendChild\(cooldown\)/);
-  assert.match(source, /\$\{buildNSFWBadgeMarkup\(acc\)\}\$\{buildCooldownMarkup\(acc\)\}/);
+  assert.match(source, /\$\{buildCooldownMarkup\(acc\)\}/);
   assert.equal(typeof context.buildCooldownMarkup, 'function');
 });
 
@@ -195,7 +195,6 @@ test('the desktop header and the mobile card both carry the three columns', () =
   const card = source.slice(start, end);
   assert.match(card, /今日\/累计 Tokens/);
   assert.match(card, /创建时间/);
-  assert.match(card, /能力/);
 });
 
 // --- Cline 等级 / 配额 ------------------------------------------------------

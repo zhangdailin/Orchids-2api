@@ -816,7 +816,7 @@ test('the session fingerprint never exposes the credential', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Qoder account row: 等级 / 配额 / 状态 / 能力 must all render.
+// Qoder account row: 等级 / 配额 / 状态 must all render.
 //
 // A live Qoder account is a "Pro Trial" plan with a daily credit window, and the
 // allowance is reported by the channel's quota read. Before these cases the row
@@ -947,10 +947,10 @@ test('an exhausted Qoder quota is reported as a quota state, not as a fault', ()
 });
 
 
-// Renders the four allowance columns for the exact payload the live server
+// Renders the three allowance columns for the exact payload the live server
 // returned for the two real Qoder accounts. This is a regression fixture, not a
 // synthetic case: it is what the operator saw as blank cells.
-test('the live Qoder account payloads render 等级 / 配额 / 状态 / 能力', () => {
+test('the live Qoder account payloads render 等级 / 配额 / 状态', () => {
   const fixtures = [
     {
       id: 184,
@@ -1009,8 +1009,6 @@ test('the live Qoder account payloads render 等级 / 配额 / 状态 / 能力',
     assert.match(quota, expect.quota, `id ${account.id}: 配额 was ${quota}`);
     assert.doesNotMatch(quota, /未知/, `id ${account.id}: 配额 claimed to be unknown while a snapshot existed`);
     assert.equal(status.text, expect.status, `id ${account.id}: 状态 was ${status.text}`);
-    // 能力 is a real column and must render a placeholder rather than nothing.
-    assert.equal(context.shouldShowNSFWBadge(account), false);
   }
 });
 

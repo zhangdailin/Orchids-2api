@@ -492,39 +492,6 @@ function qoderQuotaExhausted(acc) {
   return normalizeAccountType(acc) === "qoder" && acc?.quota_exhausted === true;
 }
 
-function shouldShowNSFWBadge(acc) {
-  return normalizeAccountType(acc) === "grok" && !!acc?.nsfw_enabled;
-}
-
-// clineObservedModelCount is how many identifiers the server last read from the
-// account's recommended-models feed. It is the only capability signal the channel
-// publishes, and it is what makes an account with a refresh-but-empty catalog
-// visibly different from one that synced.
-function clineObservedModelCount(acc) {
-  if (normalizeAccountType(acc) !== "cline") return 0;
-  return Array.isArray(acc?.cline_model_ids) ? acc.cline_model_ids.length : 0;
-}
-
-// buildCapabilityMarkup renders the 能力 cell.
-//
-// NSFW is a Grok switch, so for every other channel this column is a dash — and
-// a dash in a column titled 能力 reads as "this account can do nothing". For a
-// catalog-driven channel the honest content is what was actually observed, so
-// Cline shows its model count instead.
-function buildCapabilityMarkup(acc) {
-  if (shouldShowNSFWBadge(acc)) return buildNSFWBadgeMarkup(acc);
-  const modelCount = clineObservedModelCount(acc);
-  if (modelCount > 0) {
-    return `<span class="tag" title="Cline 官方 recommended-models 免费清单中观测到的模型数" style="background:rgba(167, 139, 250, 0.14);color:#c4b5fd;border:none;">模型 ${modelCount}</span>`;
-  }
-  return `<span class="muted">—</span>`;
-}
-
-function buildNSFWBadgeMarkup(acc) {
-  if (!shouldShowNSFWBadge(acc)) return "";
-  return `<span class="tag account-nsfw-tag" title="Grok NSFW 已开启" style="background:rgba(244, 114, 182, 0.14);color:#f472b6;border:none;">NSFW</span>`;
-}
-
 function applyTokenLabels(type) {
   const normalized = String(type || "").trim().toLowerCase();
   const label = document.getElementById("tokenLabel");
@@ -1585,7 +1552,6 @@ function renderAccounts() {
     { label: "等级", className: "col-tier" },
     ...(quotaColumnVisible ? [{ label: "配额", className: "col-quota" }] : []),
     { label: "状态", className: "col-status" },
-    { label: "能力", className: "col-capability" },
     // 今日/累计 Tokens is the only spend figure an unmetered channel can
     // offer, and the only one that answers "how close is this account to the
     // upstream rate limit right now".
@@ -1691,11 +1657,6 @@ function renderAccounts() {
         } else {
           tdQuota.title = "尚未读取到 WorkBuddy 计量额度；点刷新立即同步";
         }
-      } else if (normalizeAccountType(acc) === "cline") {
-        const models = clineObservedModelCount(acc);
-        tdQuota.title = models > 0
-          ? `Cline 未下发数值额度；已观测 ${models} 个免费模型（点「刷新」重新同步）`
-          : "Cline 未下发数值额度；点「刷新」同步模型目录";
       } else if (normalizeAccountType(acc) === "qoder") {
         if (quota && quota.supported) {
           tdQuota.title = [
@@ -1717,8 +1678,6 @@ function renderAccounts() {
       tr.appendChild(tdQuota);
     }
 
-    // Health only. Capability (e.g. NSFW) is a different dimension and lives in
-    // its own column so "正常" and "NSFW" never read as alternatives.
     const tdStatus = document.createElement("td");
     tdStatus.className = "col-status";
     const statusSpan = document.createElement("span");
@@ -1736,11 +1695,6 @@ function renderAccounts() {
     cooldown.innerHTML = buildCooldownMarkup(acc);
     if (cooldown.innerHTML) tdStatus.appendChild(cooldown);
     tr.appendChild(tdStatus);
-
-    const tdCapability = document.createElement("td");
-    tdCapability.className = "col-capability";
-    tdCapability.innerHTML = buildCapabilityMarkup(acc);
-    tr.appendChild(tdCapability);
 
     const tdTokens = document.createElement("td");
     tdTokens.className = "col-tokens";
@@ -2075,7 +2029,7 @@ function buildQuotaMarkup(acc) {
 }
 
 function buildStatusMarkup(acc, badge) {
-  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildNSFWBadgeMarkup(acc)}${buildCooldownMarkup(acc)}`;
+  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildCooldownMarkup(acc)}`;
 }
 
 function renderAccountsMobile(container, pageItems, total, totalPages) {
@@ -2119,10 +2073,6 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
           <span class="account-mobile-label">配额</span>
           <div class="account-mobile-value">${buildQuotaMarkup(acc)}</div>
         </div>`}
-        <div class="account-mobile-item">
-          <span class="account-mobile-label">能力</span>
-          <div class="account-mobile-inline">${buildCapabilityMarkup(acc)}</div>
-        </div>
         <div class="account-mobile-item">
           <span class="account-mobile-label">今日/累计 Tokens</span>
           <div class="account-mobile-value">${buildTokensMarkup(acc)}</div>
