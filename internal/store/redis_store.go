@@ -123,6 +123,7 @@ var (
 		local usage = tonumber(ARGV[1])
 		local count = tonumber(ARGV[2])
 		local now_str = ARGV[3]
+		local today = ARGV[4]
 		local val = redis.call("GET", key)
 		if not val then return redis.error_reply("account not found") end
 		local acc = cjson.decode(val)
@@ -134,6 +135,15 @@ var (
 			acc.usage_current = (acc.usage_current or 0) + usage
 		end
 		acc.usage_total = (acc.usage_total or 0) + usage
+		-- The daily figure is rolled here rather than by a scheduled job: a
+		-- request observed on a different date than the one recorded starts a
+		-- new day. A total that never resets cannot answer how much of the
+		-- upstream rate limit this account has spent today.
+		if acc.tokens_date ~= today then
+			acc.tokens_date = today
+			acc.tokens_today = 0
+		end
+		acc.tokens_today = (acc.tokens_today or 0) + usage
 		acc.request_count = (acc.request_count or 0) + count
 		acc.last_used_at = now_str
 		acc.updated_at = now_str
@@ -442,6 +452,11 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		updated.UsageCurrent = acc.UsageCurrent
 		updated.UsageTotal = acc.UsageTotal
 		updated.UsageLimit = acc.UsageLimit
+		// The daily counters travel with a partial update so an admin edit does
+		// not erase what the gateway counted; the date is what lets the next
+		// request decide whether today's figure is still today's.
+		updated.TokensToday = acc.TokensToday
+		updated.TokensDate = acc.TokensDate
 		updated.WarpMonthlyLimit = acc.WarpMonthlyLimit
 		updated.WarpMonthlyRemaining = acc.WarpMonthlyRemaining
 		updated.WarpBonusRemaining = acc.WarpBonusRemaining
@@ -862,8 +877,11 @@ func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage 
 		return nil
 	}
 	nowStr := time.Now().Format(time.RFC3339Nano)
+	// The day boundary is the gateway's own local day, so "today" means the same
+	// window for every account regardless of which upstream reported the usage.
+	today := time.Now().Format("2006-01-02")
 	keys := []string{s.accountsKey(id)}
-	args := []interface{}{usage, count, nowStr}
+	args := []interface{}{usage, count, nowStr, today}
 
 	err := incrementAccountStatsScript.Run(ctx, s.client, keys, args...).Err()
 	if err != nil && err != redis.Nil {

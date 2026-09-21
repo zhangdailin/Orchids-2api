@@ -18,6 +18,16 @@ func TestSecretsCoversEveryCredentialShapedField(t *testing.T) {
 		lower := strings.ToLower(name)
 		for _, marker := range []string{"token", "cookie", "uat", "runtimeinfo", "runtimekey", "sessionid"} {
 			if strings.Contains(lower, marker) {
+				// A name that ends in a measurement suffix is a counter, not a
+				// secret: the "token" marker matches "tokens_date"/"tokens_today"
+				// because the daily spend is counted in tokens. No credential
+				// field ends in one of these, so this narrows the heuristic
+				// instead of weakening it.
+				for _, suffix := range []string{"date", "today", "count", "total", "current", "limit"} {
+					if strings.HasSuffix(lower, suffix) {
+						return false
+					}
+				}
 				return true
 			}
 		}

@@ -43,6 +43,16 @@ type Account struct {
 	UsageCurrent         float64 `json:"usage_current"`
 	UsageTotal           float64 `json:"usage_total"` // Used as lifetime usage
 	UsageLimit           float64 `json:"usage_limit"` // Daily limit
+	// TokensToday is the token spend the gateway counted for the account inside
+	// the current local day, and TokensDate is the day it belongs to.
+	//
+	// A lifetime total alone cannot answer the question an operator actually
+	// asks of an unmetered channel — "how close is this account to the upstream
+	// rate limit right now?" — because a total only ever grows. The pair is
+	// rolled by the counter itself: a request whose date differs from
+	// TokensDate starts a new day instead of adding to yesterday's figure.
+	TokensToday float64 `json:"tokens_today,omitempty"`
+	TokensDate  string  `json:"tokens_date,omitempty"`
 	WarpMonthlyLimit     float64 `json:"warp_monthly_limit,omitempty"`
 	WarpMonthlyRemaining float64 `json:"warp_monthly_remaining,omitempty"`
 	WarpBonusRemaining   float64 `json:"warp_bonus_remaining,omitempty"`

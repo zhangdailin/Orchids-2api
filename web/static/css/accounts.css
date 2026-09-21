@@ -98,10 +98,28 @@
 .accounts-table .col-check { width: 40px; }
 .accounts-table .col-tier { width: 132px; }
 .accounts-table .col-quota { width: 148px; }
-.accounts-table .col-status { width: 120px; }
+.accounts-table .col-status { width: 140px; }
 .accounts-table .col-capability { width: 96px; }
+/* A spend column is read by comparing it with the same column in another row, so
+   it is right-aligned and monospaced like the request count beside it. */
+.accounts-table .col-tokens {
+  width: 118px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
 .accounts-table .col-usage { width: 96px; text-align: right; }
+.accounts-table .col-created {
+  width: 100px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+}
 .accounts-table .col-actions { width: 190px; text-align: right; }
+
+/* The recovery line sits under the status badge: it says when a cooled account
+   comes back, so the badge alone never reads as a permanent verdict. */
+.account-cooldown-until { white-space: nowrap; }
 
 /* Identity: the address/identifier is the row's subject; the credential summary
    is supporting detail underneath, never the headline. */
@@ -326,6 +344,8 @@
   .accounts-table .col-quota { width: 180px; }
   .accounts-table .col-status { width: 150px; }
   .accounts-table .col-capability { width: 120px; }
+  .accounts-table .col-tokens { width: 140px; }
+  .accounts-table .col-created { width: 116px; }
   .accounts-table .col-usage { width: 120px; }
   .accounts-table .col-actions { width: 230px; }
 }
@@ -339,6 +359,8 @@
   .accounts-table .col-quota { width: 220px; }
   .accounts-table .col-status { width: 170px; }
   .accounts-table .col-capability { width: 150px; }
+  .accounts-table .col-tokens { width: 160px; }
+  .accounts-table .col-created { width: 132px; }
   .accounts-table .col-usage { width: 150px; }
   .accounts-table .col-actions { width: 270px; }
 }

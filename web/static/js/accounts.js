@@ -1564,12 +1564,18 @@ function renderAccounts() {
     { label: "配额", className: "col-quota" },
     { label: "状态", className: "col-status" },
     { label: "能力", className: "col-capability" },
+    // 今日/累计 Tokens is the only spend figure an unmetered channel can
+    // offer, and the only one that answers "how close is this account to the
+    // upstream rate limit right now".
+    { label: "今日/累计 Tokens", className: "col-tokens", title: "本网关本地统计，不代表官方额度" },
     { label: "调用", className: "col-usage" },
+    { label: "创建时间", className: "col-created" },
     { label: "操作", className: "col-actions" },
   ];
   headers.forEach((h, idx) => {
     const th = document.createElement("th");
     if (h.className) th.className = h.className;
+    if (h.title) th.title = h.title;
     if (idx === 0) {
       const selectAll = document.createElement("input");
       selectAll.type = "checkbox";
@@ -1697,12 +1703,23 @@ function renderAccounts() {
     statusSpan.style.border = "none";
     statusSpan.textContent = badge.text;
     tdStatus.appendChild(statusSpan);
+    // A cooled account without a stated recovery time reads as broken forever.
+    // The scheduler always writes a deadline when it cools one, so the line
+    // appears exactly when the account is held and says when to come back.
+    const cooldown = document.createElement("div");
+    cooldown.innerHTML = buildCooldownMarkup(acc);
+    if (cooldown.innerHTML) tdStatus.appendChild(cooldown);
     tr.appendChild(tdStatus);
 
     const tdCapability = document.createElement("td");
     tdCapability.className = "col-capability";
     tdCapability.innerHTML = buildCapabilityMarkup(acc);
     tr.appendChild(tdCapability);
+
+    const tdTokens = document.createElement("td");
+    tdTokens.className = "col-tokens";
+    tdTokens.innerHTML = buildTokensMarkup(acc);
+    tr.appendChild(tdTokens);
 
     // One usage cell: the count carries the meaning, the last-use time is a
     // sub-line instead of a column of its own.
@@ -1720,6 +1737,11 @@ function renderAccounts() {
     tdUsage.appendChild(count);
     tdUsage.appendChild(when);
     tr.appendChild(tdUsage);
+
+    const tdCreated = document.createElement("td");
+    tdCreated.className = "col-created";
+    tdCreated.innerHTML = buildCreatedMarkup(acc);
+    tr.appendChild(tdCreated);
 
     const tdActions = document.createElement("td");
     tdActions.className = "col-actions";
@@ -1812,6 +1834,116 @@ function formatQuotaReset(iso) {
   const hours = Math.floor(remaining / 3600000);
   if (hours < 24) return `${Math.max(1, hours)} 小时后重置`;
   return `${Math.floor(hours / 24)} 天后重置`;
+}
+
+// formatTokenCount abbreviates a token count the way a usage column has to: the
+// interesting values are five and six digits long, and "23849" next to a model
+// name costs more attention than "23.8K".
+function formatTokenCount(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1000000) return (n / 1000000).toFixed(2).replace(/\.?0+$/, "") + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+  return String(Math.round(n));
+}
+
+// accountTokensToday is the spend counted for the account's current local day.
+//
+// The counter stamps the day it counted, so a figure whose date is not today is
+// yesterday's: it must read as 0 rather than as a stale number. An account that
+// predates the counter has no date at all, which is "not measured yet" — the
+// lifetime total is still the honest answer, so it is reported as-is.
+function accountTokensToday(acc) {
+  const value = Number(acc?.tokens_today || 0);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const stamp = String(acc?.tokens_date || "").trim();
+  if (!stamp) return 0;
+  return stamp === localDayStamp() ? value : 0;
+}
+
+// localDayStamp is the same YYYY-MM-DD boundary the server rolls the counter on.
+function localDayStamp(date) {
+  const d = date instanceof Date ? date : new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// buildTokensMarkup renders the 今日/累计 Tokens cell.
+//
+// A lifetime total alone cannot answer how much of the upstream rate limit the
+// account has spent right now, because it only ever grows — which is the one
+// number an unmetered channel has to offer. Both figures are local: the gateway
+// counts what it saw, and the tooltip says so instead of implying the upstream
+// reported them.
+function buildTokensMarkup(acc) {
+  const today = accountTokensToday(acc);
+  const total = Number(acc?.usage_total || 0);
+  const title = `今日 ${Math.round(today).toLocaleString()} / 累计 ${Math.round(total).toLocaleString()} tokens（本网关本地统计：上游返回 usage 时精确，否则按请求体估算）`;
+  return `<span class="account-tokens" title="${escapeHtml(title)}">${formatTokenCount(today)} / ${formatTokenCount(total)}</span>`;
+}
+
+// cooldownRecoveryAt is the instant the account is expected to serve again.
+//
+// The scheduler writes one deadline per cause; whichever is furthest out is the
+// one that still holds the account, so that is the one worth printing.
+function cooldownRecoveryAt(acc) {
+  const candidates = [acc?.quota_reset_at, acc?.quality_cooldown_until];
+  let latest = 0;
+  for (const raw of candidates) {
+    const at = Date.parse(String(raw || ""));
+    if (Number.isFinite(at) && at > latest) latest = at;
+  }
+  return latest > 0 ? latest : 0;
+}
+
+// buildCooldownMarkup renders the recovery line under the status badge.
+//
+// A cooled account with no stated recovery time looks broken forever. The
+// scheduler always sets a deadline when it cools one, so the absence of a line
+// means "not cooled" — and its presence should say when to come back.
+function buildCooldownMarkup(acc) {
+  const badge = evaluateAccountStatus(acc);
+  if (badge.normal) return "";
+  const at = cooldownRecoveryAt(acc);
+  if (!at) return "";
+  const remaining = at - Date.now();
+  const when = new Date(at).toLocaleString("zh-CN", {
+    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const tail = remaining > 0 ? `（${formatRemainingCompact(remaining)}）` : "（已到期，等待下一次调度）";
+  return `<div class="account-cooldown-until" style="font-size:0.68rem;color:#64748b;margin-top:2px">预计 ${escapeHtml(when)} 恢复${escapeHtml(tail)}</div>`;
+}
+
+// formatRemainingCompact renders a cooldown span as hours/minutes.
+//
+// Rounding happens once, at the finest unit, and the coarser units derive from
+// it: flooring the hours directly turned a 2h59m59s wait into "2 小时后" while
+// the clock above it already read 12:00.
+function formatRemainingCompact(ms) {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `${Math.max(1, minutes)} 分钟后`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时后`;
+  return `${Math.floor(hours / 24)} 天后`;
+}
+
+// buildCreatedMarkup renders the account creation time.
+//
+// It is the only column that lets an operator tell a freshly added account from
+// one that has been rotated several times, and it is what makes an aged account
+// with a low request count read as "idle" rather than "broken".
+function buildCreatedMarkup(acc) {
+  const createdAt = Date.parse(String(acc?.created_at || ""));
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return `<span style="color:#64748b">-</span>`;
+  return `<span class="account-created" style="font-size:0.74rem">${escapeHtml(formatDate(new Date(createdAt)))}</span>`;
+}
+
+// formatDate renders a calendar date without the relative-time shortcut: an
+// absolute date is what you compare against another account's date.
+function formatDate(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return "-";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // accountUsageCounter is the value the 调用 column shows. WorkBuddy accounts have
@@ -1917,7 +2049,7 @@ function buildQuotaMarkup(acc) {
 }
 
 function buildStatusMarkup(acc, badge) {
-  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildNSFWBadgeMarkup(acc)}`;
+  return `<span class="tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>${buildNSFWBadgeMarkup(acc)}${buildCooldownMarkup(acc)}`;
 }
 
 function renderAccountsMobile(container, pageItems, total, totalPages) {
@@ -1961,8 +2093,20 @@ function renderAccountsMobile(container, pageItems, total, totalPages) {
           <div class="account-mobile-value">${buildQuotaMarkup(acc)}</div>
         </div>
         <div class="account-mobile-item">
+          <span class="account-mobile-label">能力</span>
+          <div class="account-mobile-inline">${buildCapabilityMarkup(acc)}</div>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">今日/累计 Tokens</span>
+          <div class="account-mobile-value">${buildTokensMarkup(acc)}</div>
+        </div>
+        <div class="account-mobile-item">
           <span class="account-mobile-label">调用</span>
           <span class="account-mobile-value">${escapeHtml(String(accountUsageCounter(acc)))} · ${escapeHtml(acc.last_used_at && !acc.last_used_at.startsWith("0001") ? formatTime(acc.last_used_at) : "未调用")}</span>
+        </div>
+        <div class="account-mobile-item">
+          <span class="account-mobile-label">创建时间</span>
+          <span class="account-mobile-value">${buildCreatedMarkup(acc)}</span>
         </div>
         ${buildMobileEmailMarkup(acc)}
       </div>
