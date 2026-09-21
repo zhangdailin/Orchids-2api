@@ -290,6 +290,7 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 	tools := newToolCallAccumulator()
 	var pendingText strings.Builder
 	sawNativeTools := false
+	sawFinish := false
 
 	emitText := func(text string) {
 		if text == "" {
@@ -332,6 +333,7 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
+			sawFinish = true
 			break
 		}
 		if payload == "" {
@@ -406,11 +408,17 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 		// first delta loses every later fragment and produces invalid JSON. A
 		// non-empty finish reason closes the choice; [DONE]/EOF is handled below.
 		if strings.TrimSpace(chunk.Choices[0].FinishReason) != "" {
+			sawFinish = true
 			emitTools()
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return result, fmt.Errorf("failed to read cline stream: %w", err)
+	}
+	if !sawFinish {
+		// EOF before either an explicit finish_reason or [DONE] is a truncated
+		// attempt. Returning success would silently accept a partial answer.
+		return result, ErrStreamTruncated
 	}
 	if toolsEnabled && !sawNativeTools && pendingText.Len() > 0 {
 		visible, calls := parseClineTextToolCalls(pendingText.String())

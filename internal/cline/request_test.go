@@ -1,6 +1,7 @@
 package cline
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -175,6 +176,28 @@ func TestConsumeStreamEmitsTextAndUsage(t *testing.T) {
 	}
 	if finish {
 		t.Error("consumeStream emitted a finish event; the caller owns it")
+	}
+}
+
+func TestConsumeStreamRejectsEOFBeforeFinish(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+	result, err := consumeStream(strings.NewReader(stream), false, nil)
+	if !errors.Is(err, ErrStreamTruncated) {
+		t.Fatalf("error=%v, want ErrStreamTruncated", err)
+	}
+	if !result.SawMeaningfulEvent {
+		t.Fatal("partial data should remain observable even though the stream failed")
+	}
+}
+
+func TestConsumeStreamAcceptsFinishReasonWithoutDone(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"complete\"},\"finish_reason\":\"stop\"}]}\n\n"
+	result, err := consumeStream(strings.NewReader(stream), false, nil)
+	if err != nil {
+		t.Fatalf("error=%v", err)
+	}
+	if !result.SawMeaningfulEvent {
+		t.Fatal("complete stream was not observed")
 	}
 }
 
