@@ -485,13 +485,6 @@ function buildSubscriptionMarkup(acc) {
   return `<span class="tag account-tier-tag" title="${escapeHtml(badge.tip || "")}" style="background:${badge.bg};color:${badge.color};border:none;">${escapeHtml(badge.text)}</span>`;
 }
 
-// qoderQuotaExhausted reports whether the channel's own verdict says the account
-// has nothing left in its window. It is separate from the credential verdict, so
-// the row can say "额度用尽" instead of implying the account is broken.
-function qoderQuotaExhausted(acc) {
-  return normalizeAccountType(acc) === "qoder" && acc?.quota_exhausted === true;
-}
-
 function applyTokenLabels(type) {
   const normalized = String(type || "").trim().toLowerCase();
   const label = document.getElementById("tokenLabel");

@@ -50,11 +50,6 @@ func (c *Config) GrokRequestTimeout(provider string) time.Duration {
 	return time.Duration(boundedDefault(value, fallback, 86400)) * time.Second
 }
 
-// GrokStreamIdleTimeout keeps the legacy API and represents Build semantics.
-func (c *Config) GrokStreamIdleTimeout() time.Duration {
-	return c.GrokStreamIdleTimeoutFor("build")
-}
-
 // GrokStreamIdleTimeoutFor returns a channel-specific inactivity budget. A
 // legacy grok_stream_idle_seconds value remains an all-channel fallback.
 func (c *Config) GrokStreamIdleTimeoutFor(provider string) time.Duration {

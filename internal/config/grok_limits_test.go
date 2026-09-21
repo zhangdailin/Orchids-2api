@@ -33,7 +33,7 @@ func TestGrokLimitsSurviveConfigRoundTrip(t *testing.T) {
 			t.Fatal(test)
 		}
 	}
-	if restored.GrokStreamIdleTimeout() != 300*time.Second {
+	if restored.GrokStreamIdleTimeoutFor("build") != 300*time.Second {
 		t.Fatal("idle setting lost")
 	}
 	if restored.WarpStreamIdleTimeout() != 420*time.Second || restored.PuterStreamIdleTimeout() != 180*time.Second {
@@ -48,7 +48,7 @@ func TestGrokLimitsDefaultsAndBounds(t *testing.T) {
 	}
 	cfg = &Config{RequestTimeout: 999999, GrokWebTimeout: 999999, GrokConsoleRPS: 999999, GrokBuildRPS: -1, GrokStreamIdleSeconds: 999999, WarpStreamIdleSeconds: 999999, PuterStreamIdleSeconds: 999999}
 	ApplyHardcoded(cfg)
-	if cfg.RequestTimeout != 86400 || cfg.GrokRequestTimeout("web") != 24*time.Hour || cfg.GrokStreamIdleTimeout() != 10*time.Minute || cfg.GrokRequestsPerSecond("console") != 1000 || cfg.GrokRequestsPerSecond("build") != 0 {
+	if cfg.RequestTimeout != 86400 || cfg.GrokRequestTimeout("web") != 24*time.Hour || cfg.GrokStreamIdleTimeoutFor("build") != 10*time.Minute || cfg.GrokRequestsPerSecond("console") != 1000 || cfg.GrokRequestsPerSecond("build") != 0 {
 		t.Fatal("invalid bounds")
 	}
 	if cfg.WarpStreamIdleTimeout() != time.Hour || cfg.PuterStreamIdleTimeout() != time.Hour {

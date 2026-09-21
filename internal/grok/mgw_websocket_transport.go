@@ -46,9 +46,7 @@ func newAppChatFallbackTransport(client *Client) *appChatFallbackTransport {
 
 func (t *appChatFallbackTransport) Chat(ctx context.Context, client *Client, token string, payload map[string]interface{}) (*http.Response, error) {
 	if t != nil && t.mgw != nil {
-		if _, err := t.mgw.fromLegacyPayload(token, payload); err != nil && !errors.Is(err, errMGWRequiresExplicitRequest) {
-			return nil, err
-		}
+		_, _ = t.mgw.fromLegacyPayload(token, payload)
 	}
 	if t == nil || t.rest == nil {
 		return restAppChatTransport{}.Chat(ctx, client, token, payload)
