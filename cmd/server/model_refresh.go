@@ -141,7 +141,41 @@ type modelRefreshFunc func(ctx context.Context, cfg *config.Config, s *store.Sto
 
 var runModelRefresh modelRefreshFunc = syncModelsForChannelConcurrent
 
+type modelRefreshCoordinator struct {
+	mu      sync.Mutex
+	running map[string]struct{}
+}
+
+func newModelRefreshCoordinator() *modelRefreshCoordinator {
+	return &modelRefreshCoordinator{running: make(map[string]struct{})}
+}
+
+func (c *modelRefreshCoordinator) tryAcquire(channel string) (func(), bool) {
+	if c == nil {
+		return func() {}, true
+	}
+	key := strings.ToLower(strings.TrimSpace(channel))
+	if key == "" {
+		key = "*"
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.running[key]; exists {
+		return nil, false
+	}
+	c.running[key] = struct{}{}
+	return func() {
+		c.mu.Lock()
+		delete(c.running, key)
+		c.mu.Unlock()
+	}, true
+}
+
 func makeModelRefreshHandler(cfg *config.Config, s *store.Store) http.HandlerFunc {
+	return makeCoordinatedModelRefreshHandler(func() *config.Config { return cfg }, s, newModelRefreshCoordinator())
+}
+
+func makeCoordinatedModelRefreshHandler(configSnapshot func() *config.Config, s *store.Store, coordinator *modelRefreshCoordinator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -164,6 +198,13 @@ func makeModelRefreshHandler(cfg *config.Config, s *store.Store) http.HandlerFun
 			}
 		}
 
+		release, acquired := coordinator.tryAcquire(channel)
+		if !acquired {
+			http.Error(w, "model refresh already running for this channel", http.StatusConflict)
+			return
+		}
+		defer release()
+		cfg := configSnapshot()
 		result, err := runModelRefresh(r.Context(), cfg, s, channel, concurrency)
 		if err != nil {
 			// No active account is a legitimate state, not a failure: nothing was

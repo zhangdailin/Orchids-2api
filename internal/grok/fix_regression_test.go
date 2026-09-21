@@ -914,10 +914,10 @@ func TestImageEventSizeReportsRealPixels(t *testing.T) {
 func TestUnbindAffinityDropsTheSessionBinding(t *testing.T) {
 	h := &Handler{affinity: map[string]sessionAffinityEntry{}}
 	ctx := withGrokSession(context.Background(), grokSessionContext{Key: "session-1", Model: "grok-4.6"})
-	h.affinityMu.Lock()
+	h.sessionMu.Lock()
 	key := affinityMapKey(grokSessionContext{Key: "session-1", Model: "grok-4.6"}, ProviderWeb)
 	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
-	h.affinityMu.Unlock()
+	h.sessionMu.Unlock()
 
 	h.unbindAffinity(ctx, ProviderWeb, 7)
 
@@ -925,9 +925,9 @@ func TestUnbindAffinityDropsTheSessionBinding(t *testing.T) {
 		t.Fatalf("affinityAccount() = %d, want 0 after an unbind", id)
 	}
 	// An unrelated account id must not clear the binding.
-	h.affinityMu.Lock()
+	h.sessionMu.Lock()
 	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
-	h.affinityMu.Unlock()
+	h.sessionMu.Unlock()
 	h.unbindAffinity(ctx, ProviderWeb, 9)
 	if id := h.affinityAccount(ctx, ProviderWeb); id != 7 {
 		t.Fatalf("affinityAccount() = %d, want the binding to survive a mismatch", id)

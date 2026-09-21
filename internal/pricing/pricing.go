@@ -9,6 +9,7 @@
 package pricing
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
 	"regexp"
@@ -178,6 +179,122 @@ func EstimateCost(model string, inputTokens, cachedInputTokens, outputTokens, co
 		Model:          price.CanonicalModel,
 		CostInUSDTicks: uncachedTokens*inputPrice + cachedTokens*cachedPrice + outputTokens*outputPrice,
 	}, true
+}
+
+// EstimateTextReservationFromBody scans a JSON request once to obtain its model,
+// approximate input tokens and output cap. Unlike the legacy estimator it does
+// not build a map[string]any tree and then parse the same body again.
+func EstimateTextReservationFromBody(body []byte) (Result, bool) {
+	model, inputTokens, outputTokens, _ := scanReservationJSON(body)
+	if strings.TrimSpace(model) == "" {
+		return Result{}, false
+	}
+	if _, priced := resolveOfficialTokenPrice(model); !priced {
+		return Result{}, false
+	}
+	return EstimateCost(model, inputTokens, 0, outputTokens, inputTokens)
+}
+
+func scanReservationJSON(body []byte) (model string, inputTokens, outputTokens int64, ok bool) {
+	const defaultOutputTokens int64 = 16_384
+	const maximumOutputTokens int64 = 131_072
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var outputByPriority [3]int64
+	var walk func(bool) (int64, error)
+	walk = func(top bool) (int64, error) {
+		token, err := decoder.Token()
+		if err != nil {
+			return 0, err
+		}
+		switch typed := token.(type) {
+		case json.Delim:
+			switch typed {
+			case '{':
+				var total int64
+				for decoder.More() {
+					keyToken, err := decoder.Token()
+					if err != nil {
+						return 0, err
+					}
+					key, _ := keyToken.(string)
+					total += int64((len(key)+2)/3) + 1
+					if top && key == "model" {
+						var value string
+						if err := decoder.Decode(&value); err != nil {
+							return 0, err
+						}
+						model = strings.TrimSpace(value)
+						total += max(1, int64((len(value)+2)/3))
+						continue
+					}
+					priority := -1
+					if top {
+						switch key {
+						case "max_output_tokens":
+							priority = 0
+						case "max_completion_tokens":
+							priority = 1
+						case "max_tokens":
+							priority = 2
+						}
+					}
+					if priority >= 0 {
+						var number json.Number
+						if err := decoder.Decode(&number); err != nil {
+							return 0, err
+						}
+						if value, err := number.Int64(); err == nil && value > 0 {
+							outputByPriority[priority] = min(value, maximumOutputTokens)
+						}
+						total++
+						continue
+					}
+					child, err := walk(false)
+					if err != nil {
+						return 0, err
+					}
+					total += child
+				}
+				_, err = decoder.Token()
+				return total, err
+			case '[':
+				var total int64
+				for decoder.More() {
+					child, err := walk(false)
+					if err != nil {
+						return 0, err
+					}
+					total += 1 + child
+				}
+				_, err = decoder.Token()
+				return total, err
+			}
+		case string:
+			trimmed := strings.TrimSpace(typed)
+			if strings.HasPrefix(trimmed, "data:image/") || strings.HasPrefix(trimmed, "data:video/") {
+				return 256, nil
+			}
+			return max(1, int64((len(typed)+2)/3)), nil
+		case json.Number, float64, bool:
+			return 1, nil
+		case nil:
+			return 0, nil
+		}
+		return 0, nil
+	}
+	tokens, err := walk(true)
+	if err != nil {
+		return model, max(256, int64((len(body)+2)/3)), defaultOutputTokens, false
+	}
+	outputTokens = defaultOutputTokens
+	for _, value := range outputByPriority {
+		if value > 0 {
+			outputTokens = value
+			break
+		}
+	}
+	return model, max(256, tokens+128), outputTokens, true
 }
 
 // EstimateTextReservation prices the worst case of a request that has not run

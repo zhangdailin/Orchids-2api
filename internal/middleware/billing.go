@@ -254,7 +254,7 @@ func APIKeyBillingReservation(next http.HandlerFunc, reserver APIKeyBillingReser
 			next(w, r)
 			return
 		}
-		reservation, priced := pricing.EstimateTextReservation(billingRequestModel(r, body), body)
+		reservation, priced := pricing.EstimateTextReservationFromBody(body)
 		if !priced {
 			// An unpriced model cannot be estimated, and guessing a rate would be
 			// worse than not holding a budget for it.

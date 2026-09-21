@@ -17,11 +17,23 @@ func resetImagineSessionsForTest() {
 }
 
 func TestImagineErrorRetryDelay_UsesLongDelayForRateLimit(t *testing.T) {
-	if got := imagineErrorRetryDelay(errors.New("grok upstream status=429 body=too many requests")); got != time.Minute {
+	if got := imagineErrorRetryDelay(errors.New("grok upstream status=429 body=too many requests"), 1); got != time.Minute {
 		t.Fatalf("delay=%v want 1m", got)
 	}
-	if got := imagineErrorRetryDelay(errors.New("no image generated")); got != time.Minute {
+	if got := imagineErrorRetryDelay(errors.New("no image generated"), 1); got != time.Minute {
 		t.Fatalf("delay=%v want 1m", got)
+	}
+}
+
+func TestImagineErrorRetryDelay_UsesBoundedExponentialBackoff(t *testing.T) {
+	want := []time.Duration{1500 * time.Millisecond, 3 * time.Second, 6 * time.Second, 12 * time.Second, 24 * time.Second, 48 * time.Second, time.Minute}
+	for index, expected := range want {
+		if got := imagineErrorRetryDelay(errors.New("temporary upstream failure"), index+1); got != expected {
+			t.Fatalf("attempt %d delay=%v want=%v", index+1, got, expected)
+		}
+	}
+	if got := imagineErrorRetryDelay(errors.New("temporary upstream failure"), 50); got != time.Minute {
+		t.Fatalf("capped delay=%v want=1m", got)
 	}
 }
 

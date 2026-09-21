@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -26,7 +27,14 @@ type redisStore struct {
 	// changeEmitter announces persisted account mutations. It is nil when nobody
 	// listens (tests, a store without the notification bus), and a nil emitter is
 	// simply silent rather than an error.
+	changeMu      sync.Mutex
 	changeEmitter ChangeEmitter
+	changePending map[int64]AccountChange
+	changeWake    chan struct{}
+	changeStop    chan struct{}
+	changeDone    chan struct{}
+	changeOnce    sync.Once
+	changeClosed  bool
 }
 
 // ChangeEmitter receives one notification per persisted account mutation. The
@@ -72,33 +80,87 @@ func (s *redisStore) SetChangeEmitter(emitter ChangeEmitter) {
 	if s == nil {
 		return
 	}
+	s.changeMu.Lock()
 	s.changeEmitter = emitter
+	s.changeMu.Unlock()
 }
 
-// publishChange announces a persisted mutation. It is deliberately asynchronous:
-// the emitter runs on its own goroutine so a slow or stuck subscriber can never
-// turn a successful write into a slow or failed one. The store hands over the
-// previous state and the id; reading the after-state is the emitter's job, which
-// keeps the store free of subscriber concerns.
+// publishChange coalesces pending mutations by account and wakes one dispatcher.
+// This preserves the write path's non-blocking contract without creating one
+// goroutine per API request. Keeping the earliest Previous value means a burst of
+// writes is classified against the state before the burst, which is sufficient
+// for every cache/status subscriber while bounding memory by account count.
 func (s *redisStore) publishChange(ctx context.Context, previous *Account, id int64) {
-	if s == nil || s.changeEmitter == nil || id == 0 {
+	if s == nil || id == 0 {
 		return
 	}
-	emitter := s.changeEmitter
 	var previousCopy *Account
 	if previous != nil {
 		copied := *previous
 		previousCopy = &copied
 	}
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// A bad subscriber must never take down the process that wrote.
-				slog.Error("Account change emitter panicked", "error", r)
-			}
+	change := AccountChange{AccountID: id, Previous: previousCopy, Origin: accountChangeOrigin(ctx)}
+
+	s.changeMu.Lock()
+	if s.changeEmitter == nil || s.changePending == nil || s.changeClosed {
+		s.changeMu.Unlock()
+		return
+	}
+	if existing, ok := s.changePending[id]; ok {
+		// Preserve the state before the first mutation in the coalesced burst, but
+		// keep the newest origin for scheduler feedback suppression.
+		existing.Origin = change.Origin
+		s.changePending[id] = existing
+	} else {
+		s.changePending[id] = change
+	}
+	s.changeMu.Unlock()
+	select {
+	case s.changeWake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *redisStore) dispatchChanges() {
+	defer close(s.changeDone)
+	for {
+		select {
+		case <-s.changeWake:
+			s.flushChanges()
+		case <-s.changeStop:
+			s.flushChanges()
+			return
+		}
+	}
+}
+
+func (s *redisStore) flushChanges() {
+	for {
+		s.changeMu.Lock()
+		if len(s.changePending) == 0 {
+			s.changeMu.Unlock()
+			return
+		}
+		var change AccountChange
+		for id, pending := range s.changePending {
+			change = pending
+			delete(s.changePending, id)
+			break
+		}
+		emitter := s.changeEmitter
+		s.changeMu.Unlock()
+		if emitter == nil {
+			continue
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("Account change emitter panicked", "error", r)
+				}
+			}()
+			emitter.Publish(change)
 		}()
-		emitter.Publish(AccountChange{AccountID: id, Previous: previousCopy, Origin: accountChangeOrigin(ctx)})
-	}()
+	}
 }
 
 const redisBatchParallelThreshold = 32
@@ -272,7 +334,17 @@ func newRedisStore(addr, password string, db int, prefix string, credentialKey [
 		_ = client.Close()
 		return nil, err
 	}
-	return &redisStore{client: client, prefix: prefix, credentials: credentials}, nil
+	s := &redisStore{
+		client:        client,
+		prefix:        prefix,
+		credentials:   credentials,
+		changePending: make(map[int64]AccountChange),
+		changeWake:    make(chan struct{}, 1),
+		changeStop:    make(chan struct{}),
+		changeDone:    make(chan struct{}),
+	}
+	go s.dispatchChanges()
+	return s, nil
 }
 
 func (s *redisStore) Client() *redis.Client {
@@ -285,6 +357,22 @@ func (s *redisStore) Client() *redis.Client {
 func (s *redisStore) Close() error {
 	if s == nil || s.client == nil {
 		return nil
+	}
+	if s.changeStop != nil && s.changeDone != nil {
+		s.changeOnce.Do(func() {
+			s.changeMu.Lock()
+			s.changeClosed = true
+			s.changeMu.Unlock()
+			close(s.changeStop)
+		})
+		// A permanently blocked external emitter must not make service shutdown hang.
+		// Normal emitters drain completely; after the grace period Redis still closes
+		// and the process can terminate.
+		select {
+		case <-s.changeDone:
+		case <-time.After(2 * time.Second):
+			slog.Warn("Account change dispatcher did not stop before store close")
+		}
 	}
 	return s.client.Close()
 }

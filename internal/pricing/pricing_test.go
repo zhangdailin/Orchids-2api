@@ -1,7 +1,10 @@
 package pricing
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/goccy/go-json"
 )
 
 // TestEstimateCostUsesOfficialRates pins the transcribed rate table: each entry
@@ -162,6 +165,40 @@ func TestEstimateTextReservation(t *testing.T) {
 	}
 	if floor := int64(131_072) * 60000; huge.CostInUSDTicks < floor {
 		t.Fatalf("clamped reservation %d < output floor %d", huge.CostInUSDTicks, floor)
+	}
+}
+
+func TestEstimateTextReservationFromBodyMatchesLegacyEstimator(t *testing.T) {
+	bodies := [][]byte{
+		[]byte(`{"model":"grok-4.6","max_tokens":1000,"messages":[{"role":"user","content":"hello"}]}`),
+		[]byte(`{"messages":[{"content":[{"type":"text","text":"你好"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]}],"max_completion_tokens":42,"model":"grok-4.5"}`),
+		[]byte(`{"model":"build/grok-4.6","max_output_tokens":7,"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`),
+	}
+	for _, body := range bodies {
+		var envelope struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		legacy, legacyOK := EstimateTextReservation(envelope.Model, body)
+		got, ok := EstimateTextReservationFromBody(body)
+		if ok != legacyOK || got != legacy {
+			t.Fatalf("body=%s\nnew=%#v/%v\nlegacy=%#v/%v", body, got, ok, legacy, legacyOK)
+		}
+	}
+	malformed, ok := EstimateTextReservationFromBody([]byte(`{"model":"grok-4.6"`))
+	if !ok || malformed.CostInUSDTicks <= 0 {
+		t.Fatal("a truncated body with a complete model must use the conservative fallback")
+	}
+}
+
+func BenchmarkEstimateTextReservationFromBody(b *testing.B) {
+	body := []byte(`{"model":"grok-4.6","max_tokens":4096,"messages":[{"role":"user","content":"` + strings.Repeat("large prompt ", 10000) + `"}]}`)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(body)))
+	for i := 0; i < b.N; i++ {
+		_, _ = EstimateTextReservationFromBody(body)
 	}
 }
 

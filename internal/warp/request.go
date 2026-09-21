@@ -320,8 +320,14 @@ func normalizeWarpModel(model string) string {
 	return canonical
 }
 
+type warpToolUseInfo struct {
+	name  string
+	input string
+}
+
 func buildRequestInput(query string, messages []prompt.Message, workdir string, toolContexts map[string]upstream.WarpToolContext, tools []toolDef) (*warpapi.Request_Input, int) {
 	resultBlocks := latestWarpToolResultBlocks(messages)
+	toolUses := indexWarpToolUses(messages)
 	inputs := make([]*warpapi.Request_Input_UserInputs_UserInput, 0, len(resultBlocks)+1)
 	var declaredTools map[string]struct{}
 	if len(resultBlocks) > 0 {
@@ -331,7 +337,7 @@ func buildRequestInput(query string, messages []prompt.Message, workdir string, 
 		}
 	}
 	for _, block := range resultBlocks {
-		if result := buildWarpToolResult(block, messages, toolContexts, declaredTools); result != nil {
+		if result := buildWarpToolResult(block, toolUses, toolContexts, declaredTools); result != nil {
 			inputs = append(inputs, warpapi.Request_Input_UserInputs_UserInput_builder{ToolCallResult: result}.Build())
 		}
 	}
@@ -395,19 +401,41 @@ func latestWarpToolResultBlocks(messages []prompt.Message) []prompt.ContentBlock
 	return results
 }
 
-func buildWarpToolResult(block prompt.ContentBlock, messages []prompt.Message, toolContexts map[string]upstream.WarpToolContext, declaredTools map[string]struct{}) *warpapi.Request_Input_ToolCallResult {
+func indexWarpToolUses(messages []prompt.Message) map[string]warpToolUseInfo {
+	uses := make(map[string]warpToolUseInfo)
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Content.IsString() {
+			continue
+		}
+		blocks := messages[i].Content.GetBlocks()
+		for j := len(blocks) - 1; j >= 0; j-- {
+			block := blocks[j]
+			id := strings.TrimSpace(block.ID)
+			if block.Type != "tool_use" || id == "" {
+				continue
+			}
+			if _, exists := uses[id]; exists {
+				continue
+			}
+			uses[id] = warpToolUseInfo{name: strings.TrimSpace(block.Name), input: stringifyValue(block.Input)}
+		}
+	}
+	return uses
+}
+
+func buildWarpToolResult(block prompt.ContentBlock, toolUses map[string]warpToolUseInfo, toolContexts map[string]upstream.WarpToolContext, declaredTools map[string]struct{}) *warpapi.Request_Input_ToolCallResult {
 	id := strings.TrimSpace(block.ToolUseID)
 	if id == "" {
 		return nil
 	}
 	ctx := toolContexts[id]
 	if ctx.Name == "" || ctx.Input == "" {
-		name, input := findWarpToolUse(messages, id)
+		indexed := toolUses[id]
 		if ctx.Name == "" {
-			ctx.Name = name
+			ctx.Name = indexed.name
 		}
 		if ctx.Input == "" {
-			ctx.Input = input
+			ctx.Input = indexed.input
 		}
 	}
 	payload := stringifyValue(block.Content)
@@ -439,22 +467,6 @@ func buildWarpToolResult(block prompt.ContentBlock, messages []prompt.Message, t
 		builder.CallMcpTool = buildWarpMCPToolResult(payload, block.IsError)
 	}
 	return builder.Build()
-}
-
-func findWarpToolUse(messages []prompt.Message, id string) (string, string) {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Content.IsString() {
-			continue
-		}
-		blocks := messages[i].Content.GetBlocks()
-		for j := len(blocks) - 1; j >= 0; j-- {
-			block := blocks[j]
-			if block.Type == "tool_use" && strings.TrimSpace(block.ID) == id {
-				return strings.TrimSpace(block.Name), stringifyValue(block.Input)
-			}
-		}
-	}
-	return "", ""
 }
 
 func buildWarpMCPToolResult(payload string, isError bool) *warpapi.CallMCPToolResult {

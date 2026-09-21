@@ -134,6 +134,23 @@ func TestBuildSSEActivityDetectorRecognizesSplitGeneratedEvents(t *testing.T) {
 	}
 }
 
+func TestBuildSSEActivityDetectorDoesNotRescanSplitLinePrefix(t *testing.T) {
+	var detector buildSSEActivityDetector
+	line := strings.Repeat("x", 256*1024)
+	for index := range line {
+		detector.Observe([]byte(line[index : index+1]))
+		if detector.scanOffset != len(detector.pending) {
+			t.Fatalf("scan offset=%d pending=%d", detector.scanOffset, len(detector.pending))
+		}
+	}
+	if detector.Observe([]byte("\n\n")) {
+		t.Fatal("unknown long line must not count as activity")
+	}
+	if len(detector.pending) != 0 || detector.scanOffset != 0 {
+		t.Fatalf("detector retained consumed input: pending=%d offset=%d", len(detector.pending), detector.scanOffset)
+	}
+}
+
 func TestBuildSSEActivityDetectorRequiresJSONGeneratedEvent(t *testing.T) {
 	var detector buildSSEActivityDetector
 	if detector.Observe([]byte("event: response.output_text.delta\ndata: not-json\n\n")) {

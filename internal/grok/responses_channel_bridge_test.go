@@ -448,6 +448,21 @@ func TestModelDispatcherPublishesTheResolvedModel(t *testing.T) {
 
 // An unreadable body is a client-side fault; answering from the native handler
 // would blame the model instead.
+func TestModelDispatcherRejectsOversizedBodyBeforeHandler(t *testing.T) {
+	called := false
+	dispatch := ModelDispatcher(func(http.ResponseWriter, *http.Request) { called = true }, func(http.ResponseWriter, *http.Request) { called = true }, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", io.LimitReader(strings.NewReader(strings.Repeat("x", 1024)), 1024))
+	req.ContentLength = maxModelDispatcherBodyBytes + 1
+	rec := httptest.NewRecorder()
+	dispatch(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status=%d want 413", rec.Code)
+	}
+	if called {
+		t.Fatal("oversized request reached a downstream handler")
+	}
+}
+
 func TestModelDispatcherFailsClosedOnUnreadableBody(t *testing.T) {
 	t.Parallel()
 

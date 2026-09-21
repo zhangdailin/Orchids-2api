@@ -203,6 +203,28 @@ func TestConsumeStreamNativeToolSuppressesTextDuplicate(t *testing.T) {
 	}
 }
 
+func TestConsumeStreamLongSplitWhitespacePrefixStaysLinearAndFlushes(t *testing.T) {
+	const chunks = 4096
+	var body strings.Builder
+	for range chunks {
+		body.WriteString(envelope(`{"choices":[{"delta":{"content":" "}}]}`))
+	}
+	body.WriteString(envelope(`{"choices":[{"delta":{"content":"ordinary text"},"finish_reason":"stop"}]}`))
+	body.WriteString("event:finish\ndata: {}\n\n")
+	var text strings.Builder
+	result, err := consumeStreamWithTools(strings.NewReader(body.String()), true, func(message upstream.SSEMessage) {
+		if message.Type == "model.text-delta" {
+			text.WriteString(message.Event["delta"].(string))
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text.Len() != chunks+len("ordinary text") || result.ToolCallCount != 0 {
+		t.Fatalf("text bytes=%d calls=%d", text.Len(), result.ToolCallCount)
+	}
+}
+
 func TestConsumeStreamOversizedTextFallbackDegradesToText(t *testing.T) {
 	large := "Tool calls: " + strings.Repeat("x", maxTextToolFallbackBytes+1)
 	inner, err := json.Marshal(map[string]interface{}{"choices": []interface{}{map[string]interface{}{

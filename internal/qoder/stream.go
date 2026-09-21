@@ -249,6 +249,10 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 	tools := newToolCallAccumulator()
 	var pendingText strings.Builder
 	bufferingToolText := toolsEnabled
+	// Leading whitespace is only relevant while deciding whether the stream can
+	// still begin with "Tool calls:". Tracking this offset incrementally avoids
+	// rescanning an ever-growing whitespace prefix on every tiny SSE delta.
+	toolPrefixOffset := 0
 	sawNativeTools := false
 
 	emitText := func(text string) {
@@ -414,7 +418,17 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 				emitText(delta.Content)
 			} else {
 				pendingText.WriteString(delta.Content)
-				if pendingText.Len() > maxTextToolFallbackBytes || !isPotentialTextToolCall(pendingText.String()) {
+				candidate := pendingText.String()
+				for toolPrefixOffset < len(candidate) {
+					switch candidate[toolPrefixOffset] {
+					case ' ', '\t', '\r', '\n':
+						toolPrefixOffset++
+					default:
+						goto prefixReady
+					}
+				}
+			prefixReady:
+				if pendingText.Len() > maxTextToolFallbackBytes || !isPotentialTextToolCallAt(candidate, toolPrefixOffset) {
 					bufferingToolText = false
 					flushPendingText()
 				}
@@ -483,10 +497,23 @@ type textToolCall struct {
 }
 
 func isPotentialTextToolCall(text string) bool {
-	candidate := strings.TrimLeft(text, " \t\r\n")
-	if candidate == "" {
+	offset := 0
+	for offset < len(text) {
+		switch text[offset] {
+		case ' ', '\t', '\r', '\n':
+			offset++
+		default:
+			return isPotentialTextToolCallAt(text, offset)
+		}
+	}
+	return true
+}
+
+func isPotentialTextToolCallAt(text string, offset int) bool {
+	if offset >= len(text) {
 		return true
 	}
+	candidate := text[offset:]
 	const prefix = "Tool calls:"
 	return strings.HasPrefix(prefix, candidate) || strings.HasPrefix(candidate, prefix)
 }

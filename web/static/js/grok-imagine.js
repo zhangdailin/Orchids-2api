@@ -519,9 +519,20 @@
         const batch = createBatch(prompt, ratio, quality, round);
         if (!batch) throw new Error("瀑布流容器不存在");
         setStatus(`生成中 · 第 ${round} 轮`);
-        await runBatch(batch, prompt, ratio, model, quality, state.nsfwEnabled, state.abortController.signal);
+        const results = await runBatch(batch, prompt, ratio, model, quality, state.nsfwEnabled, state.abortController.signal);
         updateBatch(batch, true);
         if (!state.running || runMode !== "continuous") break;
+        // A failed batch used to resolve normally and immediately start another
+        // one forever. Stop after a completely failed round; partial failures
+        // yield before retrying so continuous mode cannot become a request storm.
+        const succeeded = results.filter(Boolean).length;
+        if (succeeded === 0) {
+          state.running = false;
+          setStatus("连续生成已停止：本轮全部失败");
+          toast("连续生成已停止：本轮全部失败，请检查配置或稍后重试", "error");
+          break;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, succeeded < results.length ? 3000 : 500));
       }
       if (state.running) setStatus("完成");
     } catch (err) {

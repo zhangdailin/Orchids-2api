@@ -50,6 +50,33 @@ func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
 	}
 }
 
+func TestModelRefreshCoordinatorRejectsDuplicateChannel(t *testing.T) {
+	prev := runModelRefresh
+	defer func() { runModelRefresh = prev }()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	runModelRefresh = func(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (*modelRefreshResult, error) {
+		close(started)
+		<-release
+		return &modelRefreshResult{Channel: channel}, nil
+	}
+	coordinator := newModelRefreshCoordinator()
+	handler := makeCoordinatedModelRefreshHandler(func() *config.Config { return &config.Config{} }, nil, coordinator)
+	firstDone := make(chan struct{})
+	go func() {
+		handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=puter", nil))
+		close(firstDone)
+	}()
+	<-started
+	second := httptest.NewRecorder()
+	handler(second, httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=puter", nil))
+	if second.Code != http.StatusConflict {
+		t.Fatalf("duplicate status=%d want 409", second.Code)
+	}
+	close(release)
+	<-firstDone
+}
+
 func TestNormalizeModelRefreshConcurrency(t *testing.T) {
 	tests := []struct {
 		name string

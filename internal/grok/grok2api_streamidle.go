@@ -216,6 +216,7 @@ func (r *semanticIdleReadCloser) TimedOut() bool {
 // the bytes returned to downstream response wrappers.
 type buildSSEActivityDetector struct {
 	pending    []byte
+	scanOffset int
 	eventName  string
 	data       []byte
 	eventBytes int
@@ -230,12 +231,15 @@ func (d *buildSSEActivityDetector) Observe(chunk []byte) bool {
 	d.pending = append(d.pending, chunk...)
 	active := false
 	for {
-		newline := bytes.IndexByte(d.pending, '\n')
-		if newline < 0 {
+		relative := bytes.IndexByte(d.pending[d.scanOffset:], '\n')
+		if relative < 0 {
+			d.scanOffset = len(d.pending)
 			break
 		}
+		newline := d.scanOffset + relative
 		line := d.pending[:newline]
 		d.pending = d.pending[newline+1:]
+		d.scanOffset = 0
 		line = bytes.TrimSuffix(line, []byte{'\r'})
 		if !d.firstLine {
 			line = bytes.TrimPrefix(line, []byte("\xef\xbb\xbf"))
@@ -249,7 +253,12 @@ func (d *buildSSEActivityDetector) Observe(chunk []byte) bool {
 	}
 	if len(d.pending)+d.eventBytes > upstreamMaxEventBytes {
 		d.pending = nil
+		d.scanOffset = 0
 		d.overLimit = true
+	} else if len(d.pending) == 0 {
+		// Drop references to a large consumed backing array between events.
+		d.pending = nil
+		d.scanOffset = 0
 	}
 	return active
 }

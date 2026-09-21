@@ -15,6 +15,9 @@
     // Set when a refresh interval elapses while the tab is hidden; the work is
     // deferred to the moment the operator looks at the dashboard again.
     refreshPending: false,
+    // Prevent slow overview/runtime requests from overlapping on each refresh
+    // tick and multiplying server aggregation plus SVG rendering work.
+    loading: false,
     overview: null,
     series: [],
     // outcome selects which cohort the latency cards describe: every request, the
@@ -1290,6 +1293,11 @@
   }
 
   async function load() {
+    if (state.loading) {
+      state.refreshPending = true;
+      return;
+    }
+    state.loading = true;
     if (!state.overview) renderSkeletons();
     setStatus('读取中…', 'is-warn');
     const windowMinutes = state.window;
@@ -1331,6 +1339,14 @@
       const coverage = el('opsCoverage');
       if (coverage) coverage.textContent = `指标读取失败：${String(error.message || error)}。会话可能已过期，请重新登录后刷新。`;
       setStatus('读取失败', 'is-error');
+    } finally {
+      state.loading = false;
+      // Coalesce every refresh requested while this one was in flight into one
+      // follow-up pass, rather than losing a filter change or starting N passes.
+      if (state.refreshPending && (typeof document === 'undefined' || !document.hidden)) {
+        state.refreshPending = false;
+        window.setTimeout(load, 0);
+      }
     }
   }
 

@@ -208,14 +208,24 @@ func ResponsesBridgeHandler(chat http.HandlerFunc, opts ResponsesBridgeOptions) 
 // outage, or a model that belongs to another channel). Such a request goes to
 // the bridged handler, which resolves channels properly and reports a
 // channel-aware error.
+const maxModelDispatcherBodyBytes = 32 << 20
+
 func ModelDispatcher(native, bridged http.HandlerFunc, isNativeModel func(context.Context, string) (bool, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			native(w, r)
 			return
 		}
-		body, err := io.ReadAll(r.Body)
+		if r.ContentLength > maxModelDispatcherBodyBytes {
+			writeResponsesAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body too large")
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxModelDispatcherBodyBytes))
 		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "request body too large") {
+				writeResponsesAPIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body too large")
+				return
+			}
 			// The body is already half-read; neither handler can produce a
 			// meaningful answer, so fail where the fault is.
 			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body")

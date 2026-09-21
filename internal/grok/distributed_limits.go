@@ -16,6 +16,7 @@ type redisGrokLimits struct {
 	client *redis.Client
 	prefix string
 	note   *redis.Script
+	pace   *redis.Script
 }
 
 var distributedGrokLimits struct {
@@ -35,6 +36,17 @@ func configureDistributedGrokLimits(client *redis.Client, prefix string) {
 			local wanted = tonumber(ARGV[1])
 			if current < wanted then redis.call("PSETEX", KEYS[1], wanted, "1") end
 			return 1
+		`),
+		// One script call both tries the slot and reports its remaining wait.
+		// This halves Redis traffic under contention and removes the 10ms polling
+		// fallback caused by the SetNX/PTTL race around key expiry.
+		pace: redis.NewScript(`
+			if redis.call("SET", KEYS[1], "1", "PX", ARGV[1], "NX") then
+				return 0
+			end
+			local remaining = redis.call("PTTL", KEYS[1])
+			if remaining < 1 then remaining = 1 end
+			return remaining
 		`),
 	}
 	distributedGrokLimits.Lock()
@@ -85,23 +97,42 @@ func (b *redisGrokLimits) waitPacing(ctx context.Context, identity string, rate 
 		interval = time.Millisecond
 	}
 	key := b.key("pace", identity)
+	pace := b.pace
+	if pace == nil {
+		pace = redis.NewScript(`
+			if redis.call("SET", KEYS[1], "1", "PX", ARGV[1], "NX") then return 0 end
+			local remaining = redis.call("PTTL", KEYS[1])
+			if remaining < 1 then remaining = 1 end
+			return remaining
+		`)
+	}
 	for {
-		acquired, err := b.client.SetNX(ctx, key, "1", interval).Result()
+		remainingMS, err := pace.Run(ctx, b.client, []string{key}, interval.Milliseconds()).Int64()
 		if err != nil {
 			return err
 		}
-		if acquired {
+		if remainingMS == 0 {
 			return nil
 		}
-		remaining, err := b.client.PTTL(ctx, key).Result()
-		if err != nil || remaining <= 0 {
-			remaining = 10 * time.Millisecond
+		// Spread waiters across the last 10% of the window. Without jitter every
+		// replica wakes on the same millisecond and all but one immediately collide.
+		remaining := time.Duration(remainingMS) * time.Millisecond
+		jitterRange := remaining / 10
+		if jitterRange > 25*time.Millisecond {
+			jitterRange = 25 * time.Millisecond
+		}
+		if jitterRange > 0 {
+			digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", identity, time.Now().UnixNano())))
+			remaining += time.Duration(digest[0]) * jitterRange / 255
 		}
 		timer := time.NewTimer(remaining)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
-				<-timer.C
+				select {
+				case <-timer.C:
+				default:
+				}
 			}
 			return ctx.Err()
 		case <-timer.C:

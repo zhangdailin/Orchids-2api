@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -125,6 +126,11 @@ func affinityMapKey(session grokSessionContext, provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider)) + "\x00" + session.Model + "\x00" + session.Key
 }
 
+func (h *Handler) affinityLock(key string) *sync.Mutex {
+	digest := sha256.Sum256([]byte(key))
+	return &h.affinityLocks[int(digest[0])%len(h.affinityLocks)]
+}
+
 func (h *Handler) affinityAccount(ctx context.Context, provider string) int64 {
 	session := sessionFromContext(ctx)
 	if h == nil || session.Key == "" {
@@ -144,10 +150,11 @@ func (h *Handler) affinityAccount(ctx context.Context, provider string) int64 {
 	if h.lb == nil || h.lb.Store == nil {
 		return 0
 	}
-	// Serialize a cache miss with concurrent rebinding. Without this second
-	// gate, a slow persistent read can overwrite a newer in-memory binding.
-	h.affinityMu.Lock()
-	defer h.affinityMu.Unlock()
+	// Serialize only this key with concurrent rebinding. The striped lock is held
+	// across Redis I/O, but unrelated sessions continue independently.
+	gate := h.affinityLock(key)
+	gate.Lock()
+	defer gate.Unlock()
 	h.sessionMu.Lock()
 	if latest, exists := h.affinity[key]; exists && time.Now().Before(latest.ExpiresAt) {
 		h.sessionMu.Unlock()
@@ -169,11 +176,13 @@ func (h *Handler) bindAffinity(ctx context.Context, provider string, accountID i
 	if h == nil || session.Key == "" || accountID == 0 {
 		return
 	}
-	h.affinityMu.Lock()
-	defer h.affinityMu.Unlock()
+	key := affinityMapKey(session, provider)
+	gate := h.affinityLock(key)
+	gate.Lock()
+	defer gate.Unlock()
 	expiresAt := time.Now().Add(grokSessionStateTTL)
 	h.sessionMu.Lock()
-	h.affinity[affinityMapKey(session, provider)] = sessionAffinityEntry{AccountID: accountID, ExpiresAt: expiresAt}
+	h.affinity[key] = sessionAffinityEntry{AccountID: accountID, ExpiresAt: expiresAt}
 	h.sessionMu.Unlock()
 	if h.lb != nil && h.lb.Store != nil {
 		_ = h.lb.Store.SaveSessionAffinity(ctx, &store.StoredSessionAffinity{
@@ -192,8 +201,9 @@ func (h *Handler) unbindAffinity(ctx context.Context, provider string, accountID
 		return
 	}
 	key := affinityMapKey(session, provider)
-	h.affinityMu.Lock()
-	defer h.affinityMu.Unlock()
+	gate := h.affinityLock(key)
+	gate.Lock()
+	defer gate.Unlock()
 	h.sessionMu.Lock()
 	entry, existed := h.affinity[key]
 	if existed && (accountID == 0 || entry.AccountID == accountID) {
@@ -223,21 +233,24 @@ func (h *Handler) loadReasoningReplayItems(model, key string) []interface{} {
 		return nil
 	}
 	h.sessionMu.Lock()
-	defer h.sessionMu.Unlock()
 	mapKey := replayMapKey(model, key)
 	entry, ok := h.replay[mapKey]
 	if ok && time.Now().Before(entry.ExpiresAt) {
-		return cloneReplayItems(entry.Items)
+		cached := entry.Items
+		h.sessionMu.Unlock()
+		return cloneReplayItems(cached)
 	}
 	if ok {
 		delete(h.replay, mapKey)
 	}
+	generation := h.replayGen[mapKey]
+	h.sessionMu.Unlock()
 	if h.lb == nil || h.lb.Store == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
 	persisted, err := h.lb.Store.GetReasoningReplay(ctx, model, key)
+	cancel()
 	if err != nil || persisted == nil {
 		return nil
 	}
@@ -245,14 +258,24 @@ func (h *Handler) loadReasoningReplayItems(model, key string) []interface{} {
 	if len(items) == 0 {
 		return nil
 	}
+	cacheItems := cloneReplayItems(items)
+	if len(cacheItems) == 0 {
+		return nil
+	}
+	h.sessionMu.Lock()
 	if latest, ok := h.replay[mapKey]; ok && time.Now().Before(latest.ExpiresAt) {
+		h.sessionMu.Unlock()
 		return cloneReplayItems(latest.Items)
+	}
+	if h.replayGen[mapKey] != generation {
+		h.sessionMu.Unlock()
+		return nil
 	}
 	if h.replay == nil {
 		h.replay = map[string]reasoningReplayEntry{}
 	}
-	cacheItems := cloneReplayItems(items)
 	h.replay[mapKey] = reasoningReplayEntry{Items: cacheItems, ExpiresAt: persisted.ExpiresAt}
+	h.sessionMu.Unlock()
 	return cloneReplayItems(cacheItems)
 }
 
@@ -298,18 +321,33 @@ func (h *Handler) storeReasoningReplayItems(model, key string, items []interface
 		}
 		raw = append(raw, encoded)
 	}
+	mapKey := replayMapKey(model, key)
 	h.sessionMu.Lock()
-	defer h.sessionMu.Unlock()
 	if h.replay == nil {
 		h.replay = map[string]reasoningReplayEntry{}
 	}
-	h.replay[replayMapKey(model, key)] = reasoningReplayEntry{Items: cacheItems, ExpiresAt: time.Now().Add(grokSessionStateTTL)}
-	// Serialize persistence with invalidation. A detached save must not resurrect
-	// a rejected ciphertext after a later request has already cleared it.
+	if h.replayGen == nil {
+		h.replayGen = make(map[string]uint64)
+	}
+	h.replayGen[mapKey]++
+	generation := h.replayGen[mapKey]
+	h.replay[mapKey] = reasoningReplayEntry{Items: cacheItems, ExpiresAt: time.Now().Add(grokSessionStateTTL)}
+	h.sessionMu.Unlock()
+	// Persistence is outside sessionMu: slow Redis must not serialize unrelated
+	// sessions. The in-memory generation prevents stale reads from resurrecting
+	// data after an invalidate.
 	if h.lb != nil && h.lb.Store != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		defer cancel()
 		_ = h.lb.Store.SaveReasoningReplay(ctx, &store.StoredReasoningReplay{Model: model, SessionKey: key, Items: raw}, grokSessionStateTTL)
+		cancel()
+		h.sessionMu.Lock()
+		stale := h.replayGen[mapKey] != generation
+		h.sessionMu.Unlock()
+		if stale {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			_ = h.lb.Store.DeleteReasoningReplay(cleanupCtx, model, key)
+			cleanupCancel()
+		}
 	}
 }
 
@@ -407,9 +445,14 @@ func (h *Handler) clearReasoningReplay(ctx context.Context, model, key string) {
 	if h == nil || strings.TrimSpace(key) == "" {
 		return
 	}
+	mapKey := replayMapKey(model, key)
 	h.sessionMu.Lock()
-	defer h.sessionMu.Unlock()
-	delete(h.replay, replayMapKey(model, key))
+	if h.replayGen == nil {
+		h.replayGen = make(map[string]uint64)
+	}
+	h.replayGen[mapKey]++
+	delete(h.replay, mapKey)
+	h.sessionMu.Unlock()
 	if h.lb != nil && h.lb.Store != nil {
 		_ = h.lb.Store.DeleteReasoningReplay(ctx, model, key)
 	}

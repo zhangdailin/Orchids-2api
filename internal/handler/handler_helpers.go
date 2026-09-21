@@ -684,20 +684,55 @@ func sameModelChannel(a, b string) bool {
 	return normalize(a) == normalize(b)
 }
 
+type accountStatsDelta struct {
+	usage float64
+	count int64
+}
+
 func (h *Handler) updateAccountStats(account *store.Account, inputTokens, outputTokens int) {
 	if account == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return
 	}
-	go func(accountID int64, inputTokens, outputTokens int) {
-		usage := float64(inputTokens + outputTokens)
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		// Count each completed request exactly once here. This avoids the old
-		// pre-selection increment plus post-response stats update double-counting.
-		if err := h.loadBalancer.Store.IncrementAccountStats(ctx, accountID, usage, 1); err != nil {
-			slog.Error("Failed to update account stats", "account_id", accountID, "error", err)
+	h.statsOnce.Do(func() {
+		h.statsPending = make(map[int64]accountStatsDelta)
+		h.statsWake = make(chan struct{}, 1)
+		go h.runAccountStatsWriter()
+	})
+	h.statsMu.Lock()
+	delta := h.statsPending[account.ID]
+	delta.usage += float64(inputTokens + outputTokens)
+	delta.count++
+	h.statsPending[account.ID] = delta
+	h.statsMu.Unlock()
+	select {
+	case h.statsWake <- struct{}{}:
+	default:
+	}
+}
+
+func (h *Handler) runAccountStatsWriter() {
+	for range h.statsWake {
+		for {
+			h.statsMu.Lock()
+			var accountID int64
+			var delta accountStatsDelta
+			for id, pending := range h.statsPending {
+				accountID, delta = id, pending
+				delete(h.statsPending, id)
+				break
+			}
+			h.statsMu.Unlock()
+			if accountID == 0 {
+				break
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := h.loadBalancer.Store.IncrementAccountStats(ctx, accountID, delta.usage, delta.count)
+			cancel()
+			if err != nil {
+				slog.Error("Failed to update account stats", "account_id", accountID, "error", err)
+			}
 		}
-	}(account.ID, inputTokens, outputTokens)
+	}
 }
 
 func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {

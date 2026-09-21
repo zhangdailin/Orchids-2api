@@ -176,14 +176,12 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	return c.runChat(ctx, url, body, model, requestID, fields, toolsEnabled, onMessage)
 }
 
-// runChat performs the upstream call with the CLI's retry policy: transport
-// errors and retryable statuses are retried with backoff, and a 401 on the
-// first attempt — and only the first — forces one token refresh.
-//
-// Retrying after output has been handed to the caller would duplicate content,
-// so a retry is only attempted while the callback has not seen anything.
+// runChat performs one upstream attempt. The shared request handler owns
+// transport/status retry and account switching, so retrying four times here as
+// well multiplied one API call by both budgets. The only local retry retained is
+// a single 401 credential refresh, because that repairs this account in place.
 func (c *Client) runChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, toolsEnabled bool, onMessage func(upstream.SSEMessage)) error {
-	const maxAttempts = 4
+	const maxAttempts = 2
 	emitted := false
 	emit := func(msg upstream.SSEMessage) {
 		emitted = true
@@ -234,14 +232,10 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 				return err
 			}
 			continue
-		case isRetryable(err) && attempt < maxAttempts:
-			wait := retryDelay(err, attempt)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(wait):
-			}
-			continue
+		case isRetryable(err):
+			// Return the typed retryable error to the shared handler. It applies the
+			// configured backoff and can switch accounts without multiplying budgets.
+			return err
 		default:
 			return err
 		}

@@ -54,6 +54,12 @@ type Handler struct {
 	sessionStore SessionStore
 	// Coalesces upstream model-config refresh signals per Warp account.
 	warpModelRefreshes sync.Map
+	// Completed API requests update usage asynchronously. Coalescing by account
+	// keeps this path at one worker instead of spawning a goroutine per request.
+	statsOnce    sync.Once
+	statsMu      sync.Mutex
+	statsPending map[int64]accountStatsDelta
+	statsWake    chan struct{}
 }
 
 type UpstreamClient interface {
@@ -775,28 +781,27 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	logger.LogConvertedPrompt(builtPrompt)
 
-	breakdown := estimateInputTokenBreakdown(builtPrompt, effectiveTools)
+	var breakdown inputTokenBreakdown
 	breakdownProfile := "warp"
-	if isPuterRequest {
-		breakdownProfile = "puter"
-	}
-	if isWorkBuddyRequest {
-		// WorkBuddy receives raw OpenAI-style messages like Puter does, so the
-		// generic (non-Warp) breakdown is the accurate profile here too.
-		breakdownProfile = "workbuddy"
-	}
-	if isQoderRequest {
-		breakdownProfile = "qoder"
-	}
-	if isClineRequest {
-		breakdownProfile = "cline"
-	}
 	if isWarpRequest {
 		if warpBD, profile, err := estimateWarpInputTokenBreakdown(builtPrompt, mappedModel, upstreamMessages, req.System, effectiveTools, gateNoTools, chatSessionID); err == nil {
 			breakdown = warpBD
 			breakdownProfile = profile
 		} else {
 			slog.Warn("Warp token estimation fallback to generic breakdown", "error", err)
+			breakdown = estimateInputTokenBreakdown(builtPrompt, effectiveTools)
+		}
+	} else {
+		breakdown = estimateInputTokenBreakdown(builtPrompt, effectiveTools)
+		switch {
+		case isPuterRequest:
+			breakdownProfile = "puter"
+		case isWorkBuddyRequest:
+			breakdownProfile = "workbuddy"
+		case isQoderRequest:
+			breakdownProfile = "qoder"
+		case isClineRequest:
+			breakdownProfile = "cline"
 		}
 	}
 	if verboseDiagnostics {

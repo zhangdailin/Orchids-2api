@@ -548,7 +548,10 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		if sess.acc != nil && sess.acc.ID != 0 {
 			used = append(used, sess.acc.ID)
 		}
-		resp, err := h.retryWithAccountSwitch(ctx, sess, 1500*time.Millisecond, request, openNext, nil)
+		// Quality retries already switch to the next account below. Restrict this
+		// inner transport attempt to one account so the two bounded policies do not
+		// multiply into as many as 6×100 full upstream generations.
+		resp, err := h.retryWithAccountSwitchLimit(ctx, sess, 1500*time.Millisecond, request, openNext, nil, 1)
 		if build && err == nil && resp != nil {
 			tools := append(append([]map[string]interface{}(nil), req.ResponsesTools...), consoleToolsFromOpenAI(req.Tools)...)
 			if aliases := collectBuildToolAliases(map[string]interface{}{"tools": tools}); len(aliases) > 0 {
@@ -613,9 +616,16 @@ const (
 // onSwitch runs after each successful account swap (e.g. to rebuild the request
 // payload for the new account).
 func (h *Handler) retryWithAccountSwitch(ctx context.Context, sess *chatAccountSession, switchPace time.Duration, doRequest func() (*http.Response, error), openNext func(used []int64) (*chatAccountSession, error), onSwitch func() error) (*http.Response, error) {
+	return h.retryWithAccountSwitchLimit(ctx, sess, switchPace, doRequest, openNext, onSwitch, 0)
+}
+
+func (h *Handler) retryWithAccountSwitchLimit(ctx context.Context, sess *chatAccountSession, switchPace time.Duration, doRequest func() (*http.Response, error), openNext func(used []int64) (*chatAccountSession, error), onSwitch func() error, hardLimit int) (*http.Response, error) {
 	maxAttempts := defaultAccountSwitchBudget
 	if h != nil && h.configSnapshot() != nil && h.configSnapshot().AccountSwitchCount > 0 {
 		maxAttempts = min(h.configSnapshot().AccountSwitchCount, maxAccountSwitchBudget)
+	}
+	if hardLimit > 0 && maxAttempts > hardLimit {
+		maxAttempts = hardLimit
 	}
 
 	used := make([]int64, 0)

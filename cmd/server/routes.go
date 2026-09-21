@@ -49,6 +49,7 @@ func registerRoutes(
 		}
 		return cfg
 	}
+	modelRefreshHandler := makeCoordinatedModelRefreshHandler(currentConfig, s, newModelRefreshCoordinator())
 	inferenceAuth := func(next http.HandlerFunc) http.HandlerFunc {
 		return middleware.APIKeyAuthWithRequest(
 			// A key is required, exactly as grok2api mounts middleware.ClientAuth on
@@ -274,9 +275,7 @@ func registerRoutes(
 	// on the trailing path segment.
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
 	mux.HandleFunc("/api/models/groups", sessionAuth(apiHandler.HandleModelGroups))
-	mux.HandleFunc("/api/models/refresh", sessionAuth(func(w http.ResponseWriter, r *http.Request) {
-		makeModelRefreshHandler(currentConfig(), s)(w, r)
-	}))
+	mux.HandleFunc("/api/models/refresh", sessionAuth(modelRefreshHandler))
 	mux.HandleFunc("/api/models/", sessionAuth(apiHandler.HandleModelByID))
 	mux.HandleFunc("/api/export", sessionAuth(apiHandler.HandleExport))
 	mux.HandleFunc("/api/import", sessionAuth(apiHandler.HandleImport))

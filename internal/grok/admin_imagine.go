@@ -18,6 +18,11 @@ const (
 	imagineRoute      = "ws"
 	// Use single-image batches to improve "real-time waterfall" responsiveness.
 	imagineBatchImageCount = 1
+	// Continuous generation must yield between batches. Besides protecting the
+	// upstream, this prevents an immediately-successful/failing stub from turning
+	// the session loop into a CPU and request storm.
+	imagineContinuousMinInterval = 500 * time.Millisecond
+	imagineRetryDelayMax         = time.Minute
 )
 
 var imagineUpgrader = websocket.Upgrader{
@@ -347,6 +352,7 @@ func (h *Handler) runImagineLoop(
 		}
 	}()
 
+	consecutiveErrors := 0
 	for {
 		if ctx.Err() != nil {
 			return
@@ -359,7 +365,8 @@ func (h *Handler) runImagineLoop(
 
 		images, elapsedMS, err := h.generateImagineBatch(ctx, prompt, aspectRatio, model, imagineBatchImageCount, nsfw)
 		if err != nil {
-			delay := imagineErrorRetryDelay(err)
+			consecutiveErrors++
+			delay := imagineErrorRetryDelay(err, consecutiveErrors)
 			if !emit(map[string]interface{}{
 				"type":    "error",
 				"message": err.Error(),
@@ -372,6 +379,7 @@ func (h *Handler) runImagineLoop(
 			}
 			continue
 		}
+		consecutiveErrors = 0
 
 		nowMillis := time.Now().UnixMilli()
 		for _, img := range images {
@@ -394,22 +402,34 @@ func (h *Handler) runImagineLoop(
 				return
 			}
 		}
+		if !util.SleepWithContext(ctx, imagineContinuousMinInterval) {
+			return
+		}
 	}
 }
 
-func imagineErrorRetryDelay(err error) time.Duration {
-	if err == nil {
-		return 1500 * time.Millisecond
+func imagineErrorRetryDelay(err error, consecutiveErrors int) time.Duration {
+	if err != nil {
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "429") ||
+			strings.Contains(msg, "rate-limited") ||
+			strings.Contains(msg, "cooling down") ||
+			strings.Contains(msg, "no image generated") ||
+			strings.Contains(msg, "no enabled accounts available for channel: grok") {
+			return imagineRetryDelayMax
+		}
 	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "429") ||
-		strings.Contains(msg, "rate-limited") ||
-		strings.Contains(msg, "cooling down") ||
-		strings.Contains(msg, "no image generated") ||
-		strings.Contains(msg, "no enabled accounts available for channel: grok") {
-		return time.Minute
+	if consecutiveErrors < 1 {
+		consecutiveErrors = 1
 	}
-	return 1500 * time.Millisecond
+	delay := 1500 * time.Millisecond
+	for attempt := 1; attempt < consecutiveErrors && delay < imagineRetryDelayMax; attempt++ {
+		delay *= 2
+		if delay >= imagineRetryDelayMax {
+			return imagineRetryDelayMax
+		}
+	}
+	return delay
 }
 
 func (h *Handler) HandleAdminImagineStart(w http.ResponseWriter, r *http.Request) {

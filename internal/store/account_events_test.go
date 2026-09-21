@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -159,6 +160,30 @@ func TestChangeEmitter_DoesNotBlockTheWrite(t *testing.T) {
 type blockingEmitter struct{ release chan struct{} }
 
 func (b blockingEmitter) Publish(AccountChange) { <-b.release }
+
+func TestChangeEmitter_CoalescesBurstWithoutGoroutinePerWrite(t *testing.T) {
+	s, _ := newEmitterStore(t)
+	release := make(chan struct{})
+	s.SetChangeEmitter(blockingEmitter{release: release})
+
+	acc := &Account{AccountType: "puter", Token: "t", Enabled: true}
+	if err := s.CreateAccount(context.Background(), acc); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+	before := runtime.NumGoroutine()
+	for i := 0; i < 500; i++ {
+		acc.Weight = i + 1
+		if err := s.UpdateAccount(context.Background(), acc); err != nil {
+			close(release)
+			t.Fatalf("UpdateAccount %d: %v", i, err)
+		}
+	}
+	after := runtime.NumGoroutine()
+	close(release)
+	if growth := after - before; growth > 10 {
+		t.Fatalf("account event burst created %d goroutines; want fixed dispatcher", growth)
+	}
+}
 
 // TestChangeEmitter_IgnoresWritesToAMissingRow documents the delete-then-write
 // race: the store's UpdateAccount is a documented no-op for a row that is gone,

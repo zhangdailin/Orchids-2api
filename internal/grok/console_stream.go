@@ -18,7 +18,7 @@ import (
 type chatOutcome struct {
 	// Withheld marks a turn the quality hold refused to deliver. Nothing was
 	// written to the client, so the caller may retry it on another account.
-	Withheld bool
+	Withheld    bool
 	Usage       map[string]interface{}
 	UsageSource audit.UsageSource
 	Finish      string
@@ -79,10 +79,14 @@ func (f *stopFilter) push(delta string, flush bool) string {
 }
 
 type responseToolState struct {
-	itemID, callID, name, arguments string
-	index                           int
+	itemID, callID, name string
+	arguments            strings.Builder
+	index                int
 }
-type responseReasoningState struct{ source, text, signature, key string }
+type responseReasoningState struct {
+	source, signature, key string
+	text                   strings.Builder
+}
 
 // readResponseSSE consumes whole SSE frames, including multi-line data. Event
 // names are reset between frames; JSON type wins when a server supplies both.
@@ -273,15 +277,16 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 			if value == "" {
 				value = "{}"
 			}
-			if !strings.HasPrefix(value, tc.arguments) {
+			current := tc.arguments.String()
+			if !strings.HasPrefix(value, current) {
 				return fmt.Errorf("tool %s arguments snapshot conflicts with streamed arguments", tc.callID)
 			}
-			value = strings.TrimPrefix(value, tc.arguments)
+			value = strings.TrimPrefix(value, current)
 		}
 		if value == "" {
 			return nil
 		}
-		tc.arguments += value
+		tc.arguments.WriteString(value)
 		return emit(map[string]interface{}{"tool_calls": []map[string]interface{}{{"index": tc.index, "function": map[string]interface{}{"arguments": value}}}}, "", nil)
 	}
 	toolItem := func(item, ev map[string]interface{}) error {
@@ -347,7 +352,7 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 		if state.source != source || value == "" {
 			return nil
 		}
-		state.text += value
+		state.text.WriteString(value)
 		reasoning.WriteString(value)
 		outcome.Quality.SawReasoning = true
 		outcome.Quality.ReasoningChars += int64(len(value))
@@ -424,7 +429,7 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 				}
 				state := thought(key)
 				if kind == "response.output_item.done" {
-					if state.text == "" {
+					if state.text.Len() == 0 {
 						value := consoleExtractReasoningText(map[string]interface{}{"output": []interface{}{item}})
 						if err := emitThought(key, "snapshot", value); err != nil {
 							return err
@@ -501,7 +506,7 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 					if signature := interfaceString(entry["encrypted_content"]); signature != "" {
 						lastSignature = signature
 					}
-					if state.text == "" {
+					if state.text.Len() == 0 {
 						if err := emitThought(key, "snapshot", consoleExtractReasoningText(map[string]interface{}{"output": []interface{}{entry}})); err != nil {
 							return err
 						}
@@ -576,17 +581,18 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 	}
 	var calls []map[string]interface{}
 	for _, tc := range ordered {
-		if tc.arguments == "" {
+		if tc.arguments.Len() == 0 {
 			if err := emitArgs(tc, "{}", false); err != nil {
 				fail(err)
 				return
 			}
 		}
-		if !json.Valid([]byte(tc.arguments)) && finish != "length" {
+		arguments := tc.arguments.String()
+		if !json.Valid([]byte(arguments)) && finish != "length" {
 			fail(fmt.Errorf("invalid JSON arguments for tool %s", tc.callID))
 			return
 		}
-		calls = append(calls, map[string]interface{}{"id": tc.callID, "type": "function", "function": map[string]interface{}{"name": tc.name, "arguments": tc.arguments}})
+		calls = append(calls, map[string]interface{}{"id": tc.callID, "type": "function", "function": map[string]interface{}{"name": tc.name, "arguments": arguments}})
 	}
 	if finish != "length" && len(calls) > 0 {
 		finish = "tool_calls"

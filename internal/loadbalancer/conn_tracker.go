@@ -231,12 +231,17 @@ func (t *RedisConnTracker) GetCount(accountID int64) int64 {
 }
 
 func (t *RedisConnTracker) GetCounts(accountIDs []int64) map[int64]int64 {
-	ctx := context.Background()
 	result := make(map[int64]int64, len(accountIDs))
 
 	if len(accountIDs) == 0 {
 		return result
 	}
+	// Account selection is on every API request. One failing pipeline must not
+	// degrade into N sequential two-second Redis calls and amplify an outage by
+	// the account-pool size. Use one bounded batch and fail open with zero counts;
+	// TryAcquire remains the authoritative atomic limit check.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
 	pipe := t.client.Pipeline()
 	now := fmt.Sprint(time.Now().UnixMilli())
@@ -248,9 +253,8 @@ func (t *RedisConnTracker) GetCounts(accountIDs []int64) map[int64]int64 {
 	}
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		// Fallback to individual gets
 		for _, id := range accountIDs {
-			result[id] = t.GetCount(id)
+			result[id] = 0
 		}
 		return result
 	}
