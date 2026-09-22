@@ -247,6 +247,9 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 	// 仅对 deepseek 服务开启回传，其余服务行为不变。
 	msgs := convertMessages(req.Messages, req.System, service == "deepseek")
 	toolChoice, parallelTools := normalizePuterToolControls(req, service, len(tools) > 0)
+	// DeepSeek 思考模式开关：客户端显式要求思考（任意 effort 级别或 thinking 配置）
+	// 时开启；显式 "none" 时关闭。其余服务不受影响。
+	reasoning := normalizePuterReasoning(req, service)
 	if service == "deepseek" {
 		// OpenAI-compatible DeepSeek gateways require assistant/tool history to
 		// follow a stricter role sequence than Anthropic clients do. Clients may
@@ -269,9 +272,39 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 			Tools:             tools,
 			ToolChoice:        toolChoice,
 			ParallelToolCalls: parallelTools,
+			ReasoningEffort:   reasoning.effort,
+			EnableThinking:    reasoning.enabled,
 		},
 		AuthToken: c.authToken,
 	}, nil
+}
+
+// puterReasoning carries the thinking hint resolved from the client's request.
+type puterReasoning struct {
+	effort  string
+	enabled *bool
+}
+
+// normalizePuterReasoning maps the client's effort hint onto the fields the
+// DeepSeek gateway reads. Any stated effort turns thinking on and is forwarded;
+// an explicit "none" turns it off. Other services get no thinking fields, so a
+// non-DeepSeek request keeps its previous wire shape.
+func normalizePuterReasoning(req upstream.UpstreamRequest, service string) puterReasoning {
+	out := puterReasoning{}
+	if service != "deepseek" {
+		return out
+	}
+	effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
+	switch effort {
+	case "":
+		return out
+	case "none":
+		off := false
+		return puterReasoning{enabled: &off}
+	default:
+		enabled := true
+		return puterReasoning{effort: effort, enabled: &enabled}
+	}
 }
 
 // normalizePuterToolControls uses the provider-neutral controls accepted by

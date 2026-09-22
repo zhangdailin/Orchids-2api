@@ -227,6 +227,12 @@ func (c *Client) buildBody(req upstream.UpstreamRequest) ([]byte, error) {
 		"stream_options": map[string]interface{}{"include_usage": true},
 		"messages":       buildMessages(req),
 	}
+	// The upstream accepts the OpenAI-style reasoning_effort hint. Forward only
+	// what the client actually asked for; "none" means the client explicitly
+	// asked for no reasoning and becomes an omitted field instead.
+	if effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort)); effort != "" && effort != "none" {
+		body["reasoning_effort"] = effort
+	}
 	if conversationID := strings.TrimSpace(req.ConversationID); conversationID != "" {
 		body["conversationId"] = conversationID
 	}

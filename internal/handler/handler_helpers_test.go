@@ -388,6 +388,12 @@ func TestHandleMessages_WarpResolvesBareModelToEffortVariant(t *testing.T) {
 	if client.calls[0].Model != "gpt-5-6-sol-low" {
 		t.Fatalf("upstream model = %q, want the effort variant gpt-5-6-sol-low", client.calls[0].Model)
 	}
+	// The client-stated effort must reach the provider request so channels
+	// whose wire contract carries it (qoder/workbuddy/puter/cline) can forward
+	// the thinking hint instead of silently dropping it.
+	if client.calls[0].ReasoningEffort != "low" {
+		t.Fatalf("upstream ReasoningEffort = %q, want low", client.calls[0].ReasoningEffort)
+	}
 }
 
 func TestRequestReasoningEffort(t *testing.T) {

@@ -2,6 +2,8 @@ package cline
 
 import (
 	"bufio"
+	cryptorand "crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"html"
 	"io"
@@ -22,6 +24,9 @@ type streamResult struct {
 	SawMeaningfulEvent bool
 	ToolCallCount      int
 	Usage              map[string]interface{}
+	// ThinkingSignature is one stable signature for every reasoning delta of
+	// the stream, generated on first sight so a multi-delta block stays signed.
+	ThinkingSignature string
 }
 
 // FinishReason maps the accumulated stream onto an Anthropic-style stop reason.
@@ -37,6 +42,17 @@ var toolCallSequence atomic.Uint64
 // NewToolCallID mints a local tool-call id for upstream deltas that omit one.
 func NewToolCallID() string {
 	return fmt.Sprintf("toolu_%d_%d", time.Now().UnixNano(), toolCallSequence.Add(1))
+}
+
+// newThinkingSignature mints the per-stream thinking signature the Anthropic
+// surface attaches to a thinking block. The prefix names the channel so a
+// signature can be attributed when it round-trips in history replay.
+func newThinkingSignature() string {
+	var raw [24]byte
+	if _, err := cryptorand.Read(raw[:]); err == nil {
+		return "cline-v1:" + base64.RawURLEncoding.EncodeToString(raw[:])
+	}
+	return fmt.Sprintf("cline-v1:%d", time.Now().UnixNano())
 }
 
 // streamChunk is one `data:` line of the SSE response.
@@ -374,8 +390,15 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 		if delta.ReasoningContent != "" {
 			result.SawMeaningfulEvent = true
 			if onMessage != nil {
+				// One signature per stream keeps every thinking delta inside a
+				// single signed block, matching the WorkBuddy/Qoder/Puter
+				// conversion; Anthropic clients validate the signature.
+				if result.ThinkingSignature == "" {
+					result.ThinkingSignature = newThinkingSignature()
+				}
 				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{
-					"delta": delta.ReasoningContent,
+					"delta":     delta.ReasoningContent,
+					"signature": result.ThinkingSignature,
 				}})
 			}
 		}

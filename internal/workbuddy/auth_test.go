@@ -769,3 +769,47 @@ func TestBuildMessages_DefaultSystemPromptOnly(t *testing.T) {
 		t.Fatalf("messages[1] = %+v, want a user turn", messages[1])
 	}
 }
+
+func TestBuildBodyForwardsReasoningEffort(t *testing.T) {
+	t.Parallel()
+
+	// A stated effort is forwarded as the OpenAI-style field.
+	body, err := NewFromAccount(nil, nil).buildBody(upstream.UpstreamRequest{ReasoningEffort: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]interface{}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded["reasoning_effort"]; got != "high" {
+		t.Fatalf("reasoning_effort = %#v, want high", got)
+	}
+
+	// A silent request stays byte-compatible with the previous wire shape.
+	body, err = NewFromAccount(nil, nil).buildBody(upstream.UpstreamRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := decoded["reasoning_effort"]; present {
+		t.Fatalf("silent request must omit reasoning_effort, got %#v", decoded["reasoning_effort"])
+	}
+
+	// "none" means the client asked for no reasoning; omit the field instead of
+	// sending a level the upstream would reject.
+	body, err = NewFromAccount(nil, nil).buildBody(upstream.UpstreamRequest{ReasoningEffort: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded = nil
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := decoded["reasoning_effort"]; present {
+		t.Fatalf("none must omit reasoning_effort, got %#v", decoded["reasoning_effort"])
+	}
+}

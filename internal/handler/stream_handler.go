@@ -381,6 +381,12 @@ func (h *streamHandler) rewriteToolCallToClientWithWarpType(name, input, warpToo
 	if strings.EqualFold(strings.TrimSpace(warpToolType), "run_shell_command") {
 		input = ensureClientRequiredBashDescription(mapped, input, clientTools)
 	}
+	// Cline may return fields that are valid for its internal TodoWrite schema
+	// but are not declared by the client schema. In particular, recent Cline
+	// builds add `id` to every `todos[]` item while Claude Code declares
+	// additionalProperties:false. Prune only fields rejected by that schema,
+	// recursively (including array item objects), before emitting tool_use.
+	input = sanitizeToolInputAgainstClientSchema(mapped, input, clientTools)
 	return mapped, input
 }
 
@@ -416,6 +422,108 @@ func ensureClientRequiredBashDescription(name, input string, clientTools []inter
 		return input
 	}
 	return string(normalized)
+}
+
+func sanitizeToolInputAgainstClientSchema(name, input string, clientTools []interface{}) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return input
+	}
+	var payload interface{}
+	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
+		return input
+	}
+	if strings.EqualFold(strings.TrimSpace(name), "todowrite") || strings.EqualFold(strings.TrimSpace(name), "todo_write") || strings.EqualFold(strings.TrimSpace(name), "update_todo_list") {
+		if todos, ok := payload.(map[string]interface{})["todos"].([]interface{}); ok {
+			changed := false
+			for _, item := range todos {
+				if obj, ok := item.(map[string]interface{}); ok {
+					if _, exists := obj["id"]; exists {
+						delete(obj, "id")
+						changed = true
+					}
+				}
+			}
+			if changed {
+				encoded, err := json.Marshal(payload)
+				if err == nil {
+					return string(encoded)
+				}
+			}
+		}
+	}
+	var schema map[string]interface{}
+	wanted := strings.TrimSpace(toolname.NormalizeToolNameFallback(name))
+	for _, tool := range clientTools {
+		toolName, _, candidate := toolname.ExtractToolSpecFields(tool)
+		if strings.EqualFold(toolName, name) || strings.EqualFold(strings.TrimSpace(toolname.NormalizeToolNameFallback(toolName)), wanted) {
+			schema = candidate
+			break
+		}
+	}
+	if len(schema) == 0 && len(clientTools) == 1 {
+		_, _, schema = toolname.ExtractToolSpecFields(clientTools[0])
+	}
+	if len(schema) == 0 {
+		return input
+	}
+	sanitized, changed := pruneToolInputBySchema(payload, schema)
+	if !changed {
+		return input
+	}
+	encoded, err := json.Marshal(sanitized)
+	if err != nil {
+		return input
+	}
+	return string(encoded)
+}
+
+// pruneToolInputBySchema removes only properties explicitly forbidden by a
+// schema with additionalProperties:false. Nested object and array-item schemas
+// are handled as well; unconstrained objects are left untouched.
+func pruneToolInputBySchema(value interface{}, schema map[string]interface{}) (interface{}, bool) {
+	changed := false
+	if items, ok := schema["items"].(map[string]interface{}); ok {
+		if arr, ok := value.([]interface{}); ok {
+			out := make([]interface{}, len(arr))
+			for i, item := range arr {
+				out[i], _ = pruneToolInputBySchema(item, items)
+				if !sameJSONValue(out[i], item) {
+					changed = true
+				}
+			}
+			return out, changed
+		}
+	}
+	obj, ok := value.(map[string]interface{})
+	if !ok {
+		return value, false
+	}
+	props, _ := schema["properties"].(map[string]interface{})
+	strict, _ := schema["additionalProperties"].(bool)
+	out := make(map[string]interface{}, len(obj))
+	for key, item := range obj {
+		propertySchema, hasSchema := props[key].(map[string]interface{})
+		if strict && !hasSchema {
+			changed = true
+			continue
+		}
+		if hasSchema {
+			var next interface{}
+			next, nestedChanged := pruneToolInputBySchema(item, propertySchema)
+			out[key] = next
+			changed = changed || nestedChanged
+		} else {
+			out[key] = item
+		}
+	}
+	return out, changed
+}
+
+func sameJSONValue(left, right interface{}) bool {
+	lb, lerr := json.Marshal(left)
+	rb, rerr := json.Marshal(right)
+	return lerr == nil && rerr == nil && string(lb) == string(rb)
 }
 
 func clientToolRequiresProperty(name string, clientTools []interface{}, property string) bool {

@@ -1037,6 +1037,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			ToolChoice:             req.ToolChoice,
 			ParallelToolCalls:      req.ParallelToolCalls,
 			NoTools:                gateNoTools,
+			ReasoningEffort:        effort,
 			RequestID:              workBuddyConversationRequestID(r),
 			ConversationID:         explicitConversationID(r, req),
 			TraceID:                middleware.GetTraceID(r.Context()),

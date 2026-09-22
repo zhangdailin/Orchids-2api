@@ -389,3 +389,64 @@ func TestNewFromAccountReusesSharedHTTPClient(t *testing.T) {
 		t.Fatal("expected shared HTTP client")
 	}
 }
+
+// TestNormalizePuterReasoningOnlyTouchesDeepSeek: thinking hints apply to the
+// DeepSeek service only, and a client that stays silent must not get any
+// thinking fields added to its request.
+func TestNormalizePuterReasoningOnlyTouchesDeepSeek(t *testing.T) {
+	if got := normalizePuterReasoning(upstream.UpstreamRequest{ReasoningEffort: "high"}, "claude"); got.effort != "" || got.enabled != nil {
+		t.Fatalf("non-deepseek must ignore the hint, got %#v", got)
+	}
+	silent := normalizePuterReasoning(upstream.UpstreamRequest{}, "deepseek")
+	if silent.effort != "" || silent.enabled != nil {
+		t.Fatalf("silent request must stay untouched, got %#v", silent)
+	}
+	off := normalizePuterReasoning(upstream.UpstreamRequest{ReasoningEffort: "none"}, "deepseek")
+	if off.enabled == nil || *off.enabled || off.effort != "" {
+		t.Fatalf("none must disable thinking, got %#v", off)
+	}
+	high := normalizePuterReasoning(upstream.UpstreamRequest{ReasoningEffort: "high"}, "deepseek")
+	if high.effort != "high" || high.enabled == nil || !*high.enabled {
+		t.Fatalf("a stated effort must enable thinking, got %#v", high)
+	}
+}
+
+// TestBuildRequestCarriesDeepSeekThinkingSwitch pins the wire shape: an effort
+// request reaches the args block, a "none" request carries only the toggle.
+func TestBuildRequestCarriesDeepSeekThinkingSwitch(t *testing.T) {
+	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "t"}, nil)
+	req, err := client.buildRequest(upstream.UpstreamRequest{
+		Model:           "deepseek-v4-flash",
+		ReasoningEffort: "medium",
+		Messages:        []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest() error = %v", err)
+	}
+	if req.Args.ReasoningEffort != "medium" || req.Args.EnableThinking == nil || !*req.Args.EnableThinking {
+		t.Fatalf("args = %+v, want effort=medium with thinking enabled", req.Args)
+	}
+
+	req, err = client.buildRequest(upstream.UpstreamRequest{
+		Model:           "deepseek-v4-flash",
+		ReasoningEffort: "none",
+		Messages:        []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest() error = %v", err)
+	}
+	if req.Args.ReasoningEffort != "" || req.Args.EnableThinking == nil || *req.Args.EnableThinking {
+		t.Fatalf("args = %+v, want thinking disabled and no effort", req.Args)
+	}
+
+	req, err = client.buildRequest(upstream.UpstreamRequest{
+		Model:    "gpt-5-nano",
+		Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
+	}, false)
+	if err != nil {
+		t.Fatalf("buildRequest() error = %v", err)
+	}
+	if req.Args.ReasoningEffort != "" || req.Args.EnableThinking != nil {
+		t.Fatalf("non-deepseek args must stay clean, got %+v", req.Args)
+	}
+}

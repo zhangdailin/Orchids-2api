@@ -431,3 +431,66 @@ func TestNewToolCallIDIsUnique(t *testing.T) {
 		t.Errorf("unique ids = %d, want 200", len(seen))
 	}
 }
+
+// TestConsumeStreamSignsReasoningDeltas pins the WorkBuddy/Qoder/Puter parity:
+// every reasoning delta of one stream carries the same signature so the
+// Anthropic surface keeps them inside a single signed thinking block.
+func TestConsumeStreamSignsReasoningDeltas(t *testing.T) {
+	stream := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"step one\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"step two\"},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	var signatures []string
+	var reasoning strings.Builder
+	_, err := consumeStream(strings.NewReader(stream), false, func(msg upstream.SSEMessage) {
+		if msg.Type != "model.reasoning-delta" {
+			return
+		}
+		reasoning.WriteString(msg.Event["delta"].(string))
+		if sig, ok := msg.Event["signature"].(string); ok {
+			signatures = append(signatures, sig)
+		}
+	})
+	if err != nil {
+		t.Fatalf("consumeStream() error = %v", err)
+	}
+	if reasoning.String() != "step onestep two" {
+		t.Fatalf("reasoning = %q", reasoning.String())
+	}
+	if len(signatures) != 2 || signatures[0] == "" || signatures[0] != signatures[1] {
+		t.Fatalf("signatures = %v, want one stable non-empty signature", signatures)
+	}
+	if !strings.HasPrefix(signatures[0], "cline-v1:") {
+		t.Fatalf("signature = %q, want the cline-v1 prefix", signatures[0])
+	}
+}
+
+// TestBuildChatBodyHonorsClientReasoningEffort: a stated effort overrides the
+// default, and "none" omits the field rather than sending an invalid level.
+func TestBuildChatBodyHonorsClientReasoningEffort(t *testing.T) {
+	body, err := buildChatBody(upstream.UpstreamRequest{
+		Model:           "z-ai/glm-5.3-flash",
+		ReasoningEffort: "low",
+		Messages:        []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
+	}, "z-ai/glm-5.3-flash")
+	if err != nil {
+		t.Fatalf("buildChatBody() error = %v", err)
+	}
+	if !strings.Contains(string(body), `"reasoning_effort":"low"`) {
+		t.Fatalf("body missing client effort: %s", body)
+	}
+
+	body, err = buildChatBody(upstream.UpstreamRequest{
+		Model:           "z-ai/glm-5.3-flash",
+		ReasoningEffort: "none",
+		Messages:        []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "hi"}}},
+	}, "z-ai/glm-5.3-flash")
+	if err != nil {
+		t.Fatalf("buildChatBody() error = %v", err)
+	}
+	if strings.Contains(string(body), `"reasoning_effort":"none"`) {
+		t.Fatalf("none must not reach the wire: %s", body)
+	}
+	if !strings.Contains(string(body), `"reasoning_effort":"high"`) {
+		t.Fatalf("none must fall back to the default effort: %s", body)
+	}
+}

@@ -55,11 +55,20 @@ type chatBody struct {
 func buildChatBody(req upstream.UpstreamRequest, model string) ([]byte, error) {
 	sessionID := newTaskID(time.Now())
 	maxTokens := DefaultMaxTokens
+	// The upstream needs a reasoning_effort on every request, so the default
+	// stands in when the client did not state one; a stated effort wins.
+	effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
+	if effort == "none" {
+		effort = ""
+	}
+	if effort == "" {
+		effort = DefaultReasoningEffort
+	}
 	body := chatBody{
 		Model:           model,
 		MaxTokens:       maxTokens,
 		SessionID:       sessionID,
-		ReasoningEffort: DefaultReasoningEffort,
+		ReasoningEffort: effort,
 		Messages:        buildMessages(req),
 		Stream:          true,
 	}

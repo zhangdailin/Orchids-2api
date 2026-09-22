@@ -673,6 +673,43 @@ func TestNormalizeUpstreamToolCall_RewritesProjectRootProbeCommandToRelativeList
 	}
 }
 
+func TestRewriteToolCallToClient_PrunesNestedUnknownTodoFields(t *testing.T) {
+	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic, "")
+	defer h.release()
+	h.setClientTools([]interface{}{map[string]interface{}{
+		"name": "TodoWrite",
+		"input_schema": map[string]interface{}{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]interface{}{
+				"todos": map[string]interface{}{
+					"type": "array",
+					"items": map[string]interface{}{
+						"type":                 "object",
+						"additionalProperties": false,
+						"properties": map[string]interface{}{
+							"content": map[string]interface{}{"type": "string"},
+							"status":  map[string]interface{}{"type": "string"},
+						},
+					},
+				},
+			},
+		},
+	}})
+	name, input := h.rewriteToolCallToClient("TodoWrite", `{"todos":[{"content":"one","status":"pending","id":"1"}]}`)
+	if name != "TodoWrite" || strings.Contains(input, `"id"`) {
+		t.Fatalf("unexpected sanitized todo call: name=%s input=%s", name, input)
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		t.Fatal(err)
+	}
+	todos := payload["todos"].([]interface{})
+	if _, ok := todos[0].(map[string]interface{})["content"]; !ok {
+		t.Fatalf("content was lost: %s", input)
+	}
+}
+
 func TestRewriteToolCallToClient_AddsRequiredDescriptionToNativeWarpBashCall(t *testing.T) {
 	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic, "")
 	defer h.release()

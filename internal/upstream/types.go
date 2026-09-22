@@ -13,6 +13,12 @@ type UpstreamRequest struct {
 	ParallelToolCalls *bool
 	NoTools           bool
 	Attempt           int
+	// ReasoningEffort is the OpenAI-style effort hint the client asked for
+	// (reasoning_effort, or the Anthropic thinking/output_config dialect mapped
+	// onto the same coarse levels). Providers whose wire contract exposes an
+	// effort or thinking switch forward it; the value stays empty when the
+	// client did not state one.
+	ReasoningEffort string
 	// RequestID identifies one downstream request across provider retries and
 	// account switches. Providers that expose an upstream request-correlation
 	// header can reuse it instead of making every retry look like a new turn.

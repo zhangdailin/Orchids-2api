@@ -247,3 +247,57 @@ func TestConsumeStreamOversizedTextFallbackDegradesToText(t *testing.T) {
 		t.Fatalf("text bytes=%d want=%d, tool calls=%d", textBytes, len(large), result.ToolCallCount)
 	}
 }
+
+// TestBuildChatBodyCarriesThinkingSwitch pins the reasoning wire contract: a
+// reasoning-capable model row defaults thinking on, a client effort scales it,
+// and "none" turns it off. A non-reasoning model must not grow a thinking flag.
+func TestBuildChatBodyCarriesThinkingSwitch(t *testing.T) {
+	reasoning := modelEntry{Key: "qwen-plus", Source: "system", IsReasoning: true}
+	plain := modelEntry{Key: "qwen-turbo", Source: "system"}
+
+	// Default: a reasoning model thinks, a plain model does not.
+	body := decodeChatBodyForTestWithModel(t, reasoning, upstream.UpstreamRequest{})
+	params, _ := body["parameters"].(map[string]interface{})
+	if params["enable_thinking"] != true {
+		t.Fatalf("reasoning model parameters = %#v, want enable_thinking=true", params)
+	}
+	body = decodeChatBodyForTestWithModel(t, plain, upstream.UpstreamRequest{})
+	params, _ = body["parameters"].(map[string]interface{})
+	if _, present := params["enable_thinking"]; present {
+		t.Fatalf("plain model must not carry enable_thinking, got %#v", params)
+	}
+
+	// A stated effort is forwarded.
+	body = decodeChatBodyForTestWithModel(t, reasoning, upstream.UpstreamRequest{ReasoningEffort: "low"})
+	params, _ = body["parameters"].(map[string]interface{})
+	if params["enable_thinking"] != true || params["reasoning_effort"] != "low" {
+		t.Fatalf("parameters = %#v, want thinking on with effort=low", params)
+	}
+
+	// "none" disables thinking explicitly.
+	body = decodeChatBodyForTestWithModel(t, reasoning, upstream.UpstreamRequest{ReasoningEffort: "none"})
+	params, _ = body["parameters"].(map[string]interface{})
+	if params["enable_thinking"] != false {
+		t.Fatalf("parameters = %#v, want enable_thinking=false", params)
+	}
+	if _, present := params["reasoning_effort"]; present {
+		t.Fatalf("none must not forward an effort level, got %#v", params["reasoning_effort"])
+	}
+}
+
+func decodeChatBodyForTestWithModel(t *testing.T, model modelEntry, req upstream.UpstreamRequest) map[string]interface{} {
+	t.Helper()
+	encoded, err := buildChatBody(req, model, "session-id", "request-id")
+	if err != nil {
+		t.Fatalf("buildChatBody() error = %v", err)
+	}
+	raw, err := decodeBodyForTest(encoded)
+	if err != nil {
+		t.Fatalf("DecodeBody() error = %v", err)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	return body
+}

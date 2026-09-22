@@ -22,6 +22,14 @@ type RequestArgs struct {
 	Tools             []interface{} `json:"tools,omitempty"`
 	ToolChoice        interface{}   `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool         `json:"parallel_tool_calls,omitempty"`
+	// ReasoningEffort carries the OpenAI-style effort hint for providers whose
+	// gateway reads it (DeepSeek reasoning mode). Empty when the client did not
+	// state one.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// EnableThinking is the explicit reasoning toggle. The pointer is nil when
+	// the client did not state a preference, so untouched requests stay
+	// byte-identical to the previous wire shape.
+	EnableThinking *bool `json:"enable_thinking,omitempty"`
 }
 
 type Message struct {
