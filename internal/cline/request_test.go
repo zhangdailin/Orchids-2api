@@ -464,8 +464,29 @@ func TestConsumeStreamSignsReasoningDeltas(t *testing.T) {
 	}
 }
 
-// TestBuildChatBodyHonorsClientReasoningEffort: a stated effort overrides the
-// default, and "none" omits the field rather than sending an invalid level.
+func TestConsumeStreamAcceptsGLMReasoningAliases(t *testing.T) {
+	stream := `data: {"choices":[{"delta":{"reasoning":"step one"}}]}` + "\n\n" +
+		`data: {"choices":[{"delta":{"thinking":"step two","content":"answer"},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	var reasoning, text strings.Builder
+	result, err := consumeStream(strings.NewReader(stream), false, func(msg upstream.SSEMessage) {
+		switch msg.Type {
+		case "model.reasoning-delta":
+			reasoning.WriteString(msg.Event["delta"].(string))
+		case "model.text-delta":
+			text.WriteString(msg.Event["delta"].(string))
+		}
+	})
+	if err != nil {
+		t.Fatalf("consumeStream() error = %v", err)
+	}
+	if reasoning.String() != "step onestep two" {
+		t.Fatalf("reasoning = %q, want aliases merged", reasoning.String())
+	}
+	if text.String() != "answer" || !result.SawMeaningfulEvent {
+		t.Fatalf("text/result = %q/%+v", text.String(), result)
+	}
+}
 func TestBuildChatBodyHonorsClientReasoningEffort(t *testing.T) {
 	body, err := buildChatBody(upstream.UpstreamRequest{
 		Model:           "z-ai/glm-5.3-flash",

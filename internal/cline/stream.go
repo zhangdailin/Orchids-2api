@@ -67,6 +67,11 @@ type streamChunk struct {
 			Role             string `json:"role"`
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"`
+			// GLM-compatible gateways have emitted the same channel under
+			// `reasoning` or `thinking`; keep all aliases so the reasoning block
+			// is not silently lost at the Cline boundary.
+			Reasoning string `json:"reasoning"`
+			Thinking  string `json:"thinking"`
 			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -387,7 +392,16 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 		}
 		delta := chunk.Choices[0].Delta
 
-		if delta.ReasoningContent != "" {
+		// Providers are not consistent about the GLM reasoning field name.
+		// Normalize aliases before emitting the shared reasoning event.
+		reasoning := delta.ReasoningContent
+		if reasoning == "" {
+			reasoning = delta.Reasoning
+		}
+		if reasoning == "" {
+			reasoning = delta.Thinking
+		}
+		if reasoning != "" {
 			result.SawMeaningfulEvent = true
 			if onMessage != nil {
 				// One signature per stream keeps every thinking delta inside a
@@ -397,7 +411,7 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 					result.ThinkingSignature = newThinkingSignature()
 				}
 				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{
-					"delta":     delta.ReasoningContent,
+					"delta":     reasoning,
 					"signature": result.ThinkingSignature,
 				}})
 			}
