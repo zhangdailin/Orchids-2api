@@ -109,13 +109,6 @@ var modelByID = func() map[string]ModelSpec {
 
 // providerCompatibilityAliases preserve the provider-qualified IDs while also
 // accepting the unqualified and historical names published by grok2api.
-// ExternalPublicID is the model name clients see (grok2api's ExternalPublicID).
-// The provider-qualifier rules live in modelpolicy because both this package and
-// the public model list need them, and this package already imports handler.
-func ExternalPublicID(internalID string) string {
-	return modelpolicy.ExternalPublicID(internalID)
-}
-
 var providerCompatibilityAliases = map[string]string{
 	"grok-4.3":                             "console/grok-4.3",
 	"grok-4.3-console":                     "console/grok-4.3",

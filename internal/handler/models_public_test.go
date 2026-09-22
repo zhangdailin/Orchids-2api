@@ -26,8 +26,8 @@ func TestHandleModels_FiltersAPIKeyModelAllowlist(t *testing.T) {
 		&store.Model{Channel: "Grok", ModelID: "grok-imagine-image"},
 	)
 
-	wrapper := middleware.APIKeyAuth(
-		func() bool { return true },
+	wrapper := middleware.APIKeyAuthWithRequest(
+		func(*http.Request) bool { return true },
 		func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
 			return &middleware.APIKeyPrincipal{AllowedModels: []string{"grok-4.6"}}, nil
 		},

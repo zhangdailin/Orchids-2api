@@ -118,10 +118,6 @@ func getSharedBrowserHTTPClient(proxyKey string, timeout, headerTimeout time.Dur
 	return client
 }
 
-func dialUTLSHTTP2Context(ctx context.Context, network, addr string, cfg *stdtls.Config, proxyFunc func(*http.Request) (*url.URL, error)) (net.Conn, error) {
-	return dialUTLSHTTP2ContextWithHello(ctx, network, addr, cfg, proxyFunc, utls.HelloChrome_Auto)
-}
-
 func dialUTLSHTTP2ContextWithHello(ctx context.Context, network, addr string, cfg *stdtls.Config, proxyFunc func(*http.Request) (*url.URL, error), hello utls.ClientHelloID) (net.Conn, error) {
 	rawConn, targetHost, err := dialHTTPSProxyAware(ctx, network, addr, proxyFunc)
 	if err != nil {

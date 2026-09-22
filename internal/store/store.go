@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"orchids-api/internal/modelpolicy"
 )
 
 var (
@@ -761,72 +763,36 @@ func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
 	}
 }
 
-// deprecatedModelIDsAreChannelScoped documents the rule below: a retired
-// identifier is retired *within a channel's namespace*, not everywhere.
+// deprecatedModelIDsByChannel documents the rule below: a retired identifier is
+// retired *within a channel's namespace*, not everywhere.
 //
 // The list used to be applied by identifier alone. That deleted working models:
 // the Puter and Warp upstream catalogs legitimately advertise grok-4.3,
 // grok-4.20-* and grok-build-0.1 (they route xAI models), so every restart
 // removed rows a refresh had just published, and a refresh put them back. The
 // channel is therefore part of the entry.
-var deprecatedModelIDsByChannel = map[string][]string{
-	"Warp": {
-		// Warp virtual modes are no longer public; Warp models must come from
-		// the upstream account catalog.
-		"warp-chat",
-		"warp-agent",
-	},
-	"Grok": {
-		// Retired Grok console and web routes. These names are only retired for
-		// the Grok channel.
-		"grok-4.20-0309-non-reasoning",
-		"grok-4.20-0309",
-		"grok-4.20-0309-reasoning",
-		"grok-4.20-0309-non-reasoning-super",
-		"grok-4.20-0309-super",
-		"grok-4.20-0309-reasoning-super",
-		"grok-4.20-0309-non-reasoning-heavy",
-		"grok-4.20-0309-heavy",
-		"grok-4.20-0309-reasoning-heavy",
-		"grok-4.20-multi-agent-0309",
-		"grok-4.20-fast",
-		"grok-4.20-auto",
-		"grok-4.20-expert",
-		"grok-4.20-heavy",
-		"grok-4.3-beta",
-		"grok-imagine-image-pro",
-		"grok-3",
-		"grok-3-thinking",
-		"grok-3-fast",
-		"grok-4",
-		"grok-4-mini",
-		"grok-4-fast",
-		"grok-4-heavy",
-		"grok-4.1-mini",
-		"grok-4.1-fast",
-		"grok-4.1-thinking",
-		"grok-4.1",
-		"grok-4-1-thinking-1129",
-		"grok-4.2",
-		"grok-4.20-beta",
-		"grok-4.20-reasoning",
-		"grok-4.20-non-reasoning",
-		"grok-4.20-multi-agent",
-		"grok-420",
-		"grok-4.3",
-		"grok-build-0.1",
-		"grok-code-fast",
-		"grok-code-fast-1",
-		"grok-imagine-1.0",
-		"grok-imagine-1.0-fast",
-		"grok-imagine-1.0-edit",
-		"grok-imagine-1.0-video",
-		"grok-2",
-		"grok-2.1",
-		"grok-3.1",
-		"grok-4.21",
-	},
-}
+//
+// The Grok entries are the runtime interception list in modelpolicy
+// (deprecatedGrokModelIDs) plus the Grok-channel extra "grok-4.3"; keep the two
+// in step by deriving from modelpolicy rather than editing both lists.
+var deprecatedModelIDsByChannel = func() map[string][]string {
+	grokIDs := make([]string, 0, len(modelpolicy.DeprecatedGrokModelIDs)+1)
+	for id := range modelpolicy.DeprecatedGrokModelIDs {
+		grokIDs = append(grokIDs, id)
+	}
+	// grok-4.3 is deprecated for the Grok channel only: other channels may still
+	// route it.
+	grokIDs = append(grokIDs, "grok-4.3")
+	return map[string][]string{
+		"Warp": {
+			// Warp virtual modes are no longer public; Warp models must come from
+			// the upstream account catalog.
+			"warp-chat",
+			"warp-agent",
+		},
+		"Grok": grokIDs,
+	}
+}()
 
 // cleanupDeprecatedModelIDs removes retired identifiers from the channel whose
 // namespace retired them. It inspects stored rows and never adds any.

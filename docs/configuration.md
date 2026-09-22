@@ -128,9 +128,6 @@ cp config.example.json config.json
 | `warp_stream_idle_seconds` | `300` | Warp 响应体连续无字节空闲超时，上限 3600 秒；有持续输出的长任务不受影响 |
 | `puter_stream_idle_seconds` | `120` | Puter NDJSON 响应体连续无字节空闲超时，上限 3600 秒；非法或未知事件会按协议错误记录 |
 | `grok_web_rps` / `grok_console_rps` / `grok_build_rps` | `0` | 0 关闭主动限速；正数按账号/团队限速，范围 0.01–1000，每个桶 burst=1 |
-| `grok_probe_model` | `grok-4.6` | 渠道探测循环请求的模型。探测只测可达性、不测能力，因此默认用一个便宜模型；部署套餐不提供该模型时改成自己的可用模型，否则探测会长期误报故障 |
-
-探测循环每 5 分钟向有可用账号的渠道发一次合成请求，启动后 90 秒才发第一次（监听套接字此时才就绪）。探测结果以 `channel_probe` 记入系统日志，指标里记在保留渠道名 `probe` 下，绝不参与真实渠道的成功率。开启推理鉴权（`inference_auth_enabled`，默认开启）时必须配置 `public_key`，探测才会带上 `Authorization`；未配置则整轮跳过，不会产生一串本地 401。
 
 限流状态按 provider、账号/已知团队、模型隔离；真实 429 冷却不随主动限速关闭。优先使用 `Retry-After`，再使用响应中的 reset 信息；信息缺失时只冷却受影响的账号/模型，不再全局停顿。配置 Redis 时，Grok 主动 pacing 和团队/模型冷却会跨副本共享；Redis 暂时不可用时退化到进程内 pacing。
 

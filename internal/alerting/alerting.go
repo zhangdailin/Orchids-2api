@@ -24,7 +24,7 @@ const (
 // ChannelSnapshot is the per-channel evidence a rule may inspect.
 type ChannelSnapshot struct {
 	Channel string `json:"channel"`
-	// Requests counts real (non-probe) requests in the window.
+	// Requests counts the requests in the window that alerting may judge.
 	Requests    int64   `json:"requests"`
 	Success     int64   `json:"success"`
 	Failed      int64   `json:"failed"`
@@ -129,8 +129,9 @@ func DefaultRules() Rules {
 // UI's own redirects, health checks, and whatever a public scanner tries. Its
 // failure ratio therefore measures exposure to the internet rather than upstream
 // health, so alerting on it meant a page visit could page the operator.
-// "probe" is synthetic by definition and is judged by its own channel outcome,
-// not by the request-outcome ratio.
+//
+// "probe" stays listed for legacy Redis aggregates written by older builds that
+// ran the removed synthetic probe loop; no new probe rows are ever recorded.
 var nonAlertableChannels = map[string]bool{
 	"http":  true,
 	"probe": true,

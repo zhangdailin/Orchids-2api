@@ -60,10 +60,6 @@ const (
 
 	qualityRetryFailOpen   = "fail_open"
 	qualityRetryFailClosed = "fail_closed"
-
-	// qualityIdleAccountCooldown applies to an upstream stream that produced
-	// nothing at all while held.
-	qualityIdleAccountCooldown = 15 * time.Minute
 )
 
 // tokensFromChars applies the gateway's rune/4 text estimate, the same one the

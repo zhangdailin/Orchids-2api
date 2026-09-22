@@ -160,11 +160,8 @@ func isAntiBotFailure(detail map[string]interface{}, message string) bool {
 	return strings.Contains(strings.ToLower(message), "anti-bot")
 }
 
-func (h *Handler) streamConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) (outcome chatOutcome) {
-	return h.streamConsoleChatHolding(w, req, body, nil)
-}
-
-// streamConsoleChatHolding is streamConsoleChat with the quality hold attached.
+// streamConsoleChatHolding is the console streaming entry with the quality hold
+// attached.
 //
 // While a hold is active nothing is written to the client: the deferred writer
 // buffers frames, and the classifier decides after every content event whether

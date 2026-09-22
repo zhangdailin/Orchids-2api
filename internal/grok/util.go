@@ -168,40 +168,6 @@ func randomUUID() string {
 	)
 }
 
-func buildStatsigID() string {
-	seed := randomHex(1)
-	if seed == "" {
-		return base64.StdEncoding.EncodeToString([]byte("x1:TypeError: Cannot read properties of undefined (reading 'children')"))
-	}
-	if seed[0]%2 == 0 {
-		suffix := randomStringFromCharset(5, "abcdefghijklmnopqrstuvwxyz0123456789")
-		if suffix == "" {
-			suffix = "child"
-		}
-		return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("x1:TypeError: Cannot read properties of null (reading 'children[\\'%s\\']')", suffix)))
-	}
-	property := randomStringFromCharset(10, "abcdefghijklmnopqrstuvwxyz")
-	if property == "" {
-		property = "children"
-	}
-	return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("x1:TypeError: Cannot read properties of undefined (reading '%s')", property)))
-}
-
-func randomStringFromCharset(length int, charset string) string {
-	if length <= 0 || charset == "" {
-		return ""
-	}
-	buf := make([]byte, length)
-	if _, err := rand.Read(buf); err != nil {
-		return ""
-	}
-	out := make([]byte, length)
-	for i, b := range buf {
-		out[i] = charset[int(b)%len(charset)]
-	}
-	return string(out)
-}
-
 func parseUpstreamLines(body io.Reader, onLine func(map[string]interface{}) error) error {
 	decoder := json.NewDecoder(body)
 

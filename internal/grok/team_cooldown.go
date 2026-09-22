@@ -1,9 +1,6 @@
 package grok
 
 import (
-	"context"
-	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -97,31 +94,6 @@ func (r *teamCooldownRegistry) RetryAfterFor(scope RateLimitScope, teamID, model
 		}
 	}
 	return remaining
-}
-
-// Wait blocks until the scope+team+model cooldown clears or ctx is done.
-// Returns nil when it is safe to proceed, or ctx.Err() on cancellation.
-func (r *teamCooldownRegistry) Wait(ctx context.Context, scope RateLimitScope, teamID, model string) error {
-	for {
-		remaining := r.RetryAfterFor(scope, teamID, model)
-		if remaining <= 0 {
-			return nil
-		}
-		slog.Debug("Rate limiter: team+model cooldown", "scope", scope, "team", teamID, "model", model, "wait", remaining.String())
-		timer := time.NewTimer(remaining)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			return fmt.Errorf("grok upstream status=429 body=too_many_requests team %s model %s cooling down until %s: %w",
-				teamID, model, time.Now().Add(remaining).UTC().Format(time.RFC3339), ctx.Err())
-		case <-timer.C:
-		}
-	}
 }
 
 // maybeGC prunes expired entries when the store exceeds a bound or a GC

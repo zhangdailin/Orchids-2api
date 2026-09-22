@@ -315,15 +315,6 @@ func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
 	return flusher
 }
 
-// writeSSEEventName writes an SSE event name, preferring StringWriter when available.
-func writeSSEEventName(w http.ResponseWriter, event string) {
-	if sw, ok := w.(io.StringWriter); ok {
-		_, _ = sw.WriteString(event)
-		return
-	}
-	_, _ = w.Write([]byte(event))
-}
-
 const responseWriteTimeout = 30 * time.Second
 
 // setResponseWriteDeadline bounds downstream backpressure when the writer's

@@ -280,10 +280,6 @@ func isGrok(acc *store.Account) bool {
 	return acc != nil && strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok")
 }
 
-func isWorkBuddy(acc *store.Account) bool {
-	return acc != nil && strings.EqualFold(strings.TrimSpace(acc.AccountType), "workbuddy")
-}
-
 func accountType(acc *store.Account) string {
 	if acc == nil {
 		return ""

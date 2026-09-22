@@ -144,7 +144,7 @@ func TestMediaInputUploadAndConsoleFileIDResolution(t *testing.T) {
 		return &middleware.APIKeyPrincipal{ID: 1}, nil
 	}
 	key := "sk-media-owner"
-	upload := middleware.APIKeyAuth(func() bool { return true }, validator, h.HandleMediaInputs)
+	upload := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, validator, h.HandleMediaInputs)
 	req := httptest.NewRequest(http.MethodPost, "/v1/media/inputs", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+key)
@@ -200,7 +200,7 @@ func TestMediaInputUploadAndConsoleFileIDResolution(t *testing.T) {
 		t.Fatalf("wrong-kind resolution error = %v", err)
 	}
 
-	resource := middleware.APIKeyAuth(func() bool { return true }, validator, h.HandleMediaInputResource)
+	resource := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, validator, h.HandleMediaInputResource)
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/media/inputs/"+response.FileID, nil)
 	deleteReq.Header.Set("Authorization", "Bearer "+key)
 	deleted := httptest.NewRecorder()
@@ -582,7 +582,7 @@ func TestStandardVideoTaskOwnership(t *testing.T) {
 	validator := func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
 		return &middleware.APIKeyPrincipal{ID: 1}, nil
 	}
-	protected := middleware.APIKeyAuth(func() bool { return true }, validator, h.HandleVideosRetrieve)
+	protected := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, validator, h.HandleVideosRetrieve)
 	request := func(key string) int {
 		req := httptest.NewRequest(http.MethodGet, "/v1/videos/"+job.ID, nil)
 		req.Header.Set("Authorization", "Bearer "+key)

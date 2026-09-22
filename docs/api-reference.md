@@ -499,7 +499,7 @@ Qoder 的免费额度是**按账号的每日窗口**发放和重置的，与是�
 | `GET /api/v2/user/plan` | 计划档位（如 `Free`）、`is_paid_plan`、起始时间 |
 | `GET /api/v3/user/status` | 计划标签与 `nextResetAt`（上面两个失败时的回退） |
 
-账号响应会带上：`quota_plan`、`quota_limit`、`quota_remaining`、`quota_used`、`quota_exhausted`、`quota_upgrade_url`、`quota_reset_at`，且 `quota_limit_known=true`（窗口总额由上游自己给出，不是估算），管理页「等级 / 配额 / 状态 / 能力」四列因此都有内容。
+账号响应会带上：`quota_plan`、`quota_limit`、`quota_remaining`、`quota_used`、`quota_exhausted`、`quota_upgrade_url`、`quota_reset_at`，且 `quota_limit_known=true`（窗口总额由上游自己给出，不是估算），管理页「等级 / 配额 / 状态」三列因此都有内容（能力列已随 ea80e99 移除）。
 
 实测到的活动形态是 **`Pro Trial`**（例如 300 credits、有效期到 `period_end`），随后按日窗口重置；额度耗尽后记为 `402` 并在上游给出的重置时间后自动恢复。除付费外，Qoder 官网的 `https://qoder.com/activities` 是活动入口（实测桌面端登录会触发试用发放；是否为安装/桌面端专属由 Qoder 侧策略决定，代码层面无需做任何事）。
 

@@ -28,7 +28,7 @@ func TestAPIKeyAuth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			called := false
-			h := APIKeyAuth(func() bool { return tt.enabled }, func(_ context.Context, token string) (*APIKeyPrincipal, error) {
+			h := APIKeyAuthWithRequest(func(*http.Request) bool { return tt.enabled }, func(_ context.Context, token string) (*APIKeyPrincipal, error) {
 				if token != tt.token {
 					t.Fatalf("token=%q want=%q", token, tt.token)
 				}
@@ -55,7 +55,7 @@ func TestAPIKeyAuth(t *testing.T) {
 
 func TestAPIKeyAuthAcceptsAnthropicHeader(t *testing.T) {
 	called := false
-	h := APIKeyAuth(func() bool { return true }, func(_ context.Context, token string) (*APIKeyPrincipal, error) {
+	h := APIKeyAuthWithRequest(func(*http.Request) bool { return true }, func(_ context.Context, token string) (*APIKeyPrincipal, error) {
 		if token == "anthropic-key" {
 			return &APIKeyPrincipal{}, nil
 		}
@@ -75,7 +75,7 @@ func TestAPIKeyAuthAcceptsAnthropicHeader(t *testing.T) {
 
 func TestAPIKeyAuthAddsNonSecretFingerprint(t *testing.T) {
 	const token = "sk-sensitive"
-	h := APIKeyAuth(func() bool { return true }, func(_ context.Context, got string) (*APIKeyPrincipal, error) {
+	h := APIKeyAuthWithRequest(func(*http.Request) bool { return true }, func(_ context.Context, got string) (*APIKeyPrincipal, error) {
 		if got == token {
 			return &APIKeyPrincipal{}, nil
 		}
@@ -111,7 +111,7 @@ func TestAPIKeyAuthEnforcesDenialsAndModelPolicy(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := APIKeyAuth(func() bool { return true }, func(context.Context, string) (*APIKeyPrincipal, error) {
+			h := APIKeyAuthWithRequest(func(*http.Request) bool { return true }, func(context.Context, string) (*APIKeyPrincipal, error) {
 				return tt.principal, nil
 			}, func(w http.ResponseWriter, r *http.Request) {
 				if !APIKeyAllowsModel(r.Context(), "grok-4.5") {

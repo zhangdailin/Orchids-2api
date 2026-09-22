@@ -18,7 +18,7 @@ func TestStreamConsoleChatSeparatesReasoningFromContent(t *testing.T) {
 		`data: {"type":"response.output_text.delta","delta":"final answer"}`,
 		"",
 	}, "\n")
-	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream))
+	(&Handler{}).streamConsoleChatHolding(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream), nil)
 	raw := recorder.Body.String()
 	if !strings.Contains(raw, `"reasoning_content":"plan first"`) {
 		t.Fatalf("reasoning delta missing: %q", raw)
@@ -44,7 +44,7 @@ func TestStreamConsoleChatStreamsFirstReasoningSourceWithoutDuplicates(t *testin
 		`data: {"type":"response.output_text.delta","delta":"answer"}`,
 		"",
 	}, "\n")
-	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream))
+	(&Handler{}).streamConsoleChatHolding(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader(stream), nil)
 	raw := recorder.Body.String()
 	if !strings.Contains(raw, `"reasoning_content":"duplicate summary"`) || strings.Contains(raw, "raw reasoning") {
 		t.Fatalf("first reasoning source should stream immediately without later duplication: %q", raw)
@@ -80,7 +80,7 @@ func (r *failingConsoleStreamReader) Read(dst []byte) (int, error) {
 
 func TestStreamConsoleChatReportsMalformedSSEData(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader("data: {not-json}\n"))
+	(&Handler{}).streamConsoleChatHolding(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, strings.NewReader("data: {not-json}\n"), nil)
 
 	body := recorder.Body.String()
 	if !strings.Contains(body, "event: error") || !strings.Contains(body, "Use the request ID") || !strings.Contains(body, "data: [DONE]") {
@@ -90,7 +90,7 @@ func TestStreamConsoleChatReportsMalformedSSEData(t *testing.T) {
 
 func TestStreamConsoleChatReportsScannerError(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	(&Handler{}).streamConsoleChat(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, &failingConsoleStreamReader{})
+	(&Handler{}).streamConsoleChatHolding(recorder, &ChatCompletionsRequest{Model: "grok-4.3"}, &failingConsoleStreamReader{}, nil)
 
 	body := recorder.Body.String()
 	if !strings.Contains(body, "event: error") || !strings.Contains(body, "Use the request ID") || strings.Contains(body, "upstream connection interrupted") || !strings.Contains(body, "data: [DONE]") {

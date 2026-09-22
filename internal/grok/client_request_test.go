@@ -65,16 +65,6 @@ func TestBuildGrokCookie_PreservesAppChatCookieFields(t *testing.T) {
 	}
 }
 
-func assertBrowserStatsigID(t *testing.T, got string) {
-	t.Helper()
-	decoded, err := base64.StdEncoding.DecodeString(got)
-	if err != nil {
-		t.Fatalf("x-statsig-id=%q is not base64: %v", got, err)
-	}
-	if !strings.HasPrefix(string(decoded), "x1:TypeError: Cannot read properties of ") {
-		t.Fatalf("x-statsig-id decoded=%q", string(decoded))
-	}
-}
 
 func TestAppChatHeaders_MatchBrowserProfile(t *testing.T) {
 	c := New(nil)

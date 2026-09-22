@@ -48,33 +48,28 @@ func TestObserve_RollsUpIntoOneMinuteBucket(t *testing.T) {
 	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.6", OK: true, DurationMS: 1200, FirstTokenMS: 300, At: at})
 	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.6", OK: true, DurationMS: 800, FirstTokenMS: 200, At: at})
 	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.6", OK: false, DurationMS: 5000, At: at})
-	// A probe must not be mixed into real traffic.
-	agg.Observe(ctx, Outcome{Channel: "grok", Model: "grok-4.6", OK: false, Synthetic: true, DurationMS: 10, At: at})
 
 	buckets, err := agg.Range(ctx, "grok", at, at)
 	if err != nil || len(buckets) != 1 {
 		t.Fatalf("buckets = %v err = %v", buckets, err)
 	}
 	bucket := buckets[0]
-	if bucket.Requests != 4 || bucket.Success != 2 || bucket.Failed != 2 || bucket.Probes != 1 {
+	if bucket.Requests != 3 || bucket.Success != 2 || bucket.Failed != 1 {
 		t.Fatalf("bucket = %+v", bucket)
 	}
 
 	summary := agg.Summarize(ctx, "grok", buckets)
-	if summary.Requests != 4 || summary.Probes != 1 {
+	if summary.Requests != 3 {
 		t.Fatalf("summary = %+v", summary)
 	}
-	// Real traffic is 3 requests, 2 of which succeeded.
 	if got, want := summary.SuccessRate, 2.0/3.0; got < want-0.001 || got > want+0.001 {
-		t.Fatalf("success rate = %v, want %v (probes excluded)", got, want)
+		t.Fatalf("success rate = %v, want %v", got, want)
 	}
 	if summary.DurationP95MS == 0 || summary.FirstTokenP95MS == 0 {
 		t.Fatalf("percentiles missing: %+v", summary)
 	}
-	// The probe contributes a latency sample (it is a real round trip) but never
-	// counts as a user request in the success ratio.
-	if summary.Samples != 4 {
-		t.Fatalf("samples = %d, want 4 latency observations", summary.Samples)
+	if summary.Samples != 3 {
+		t.Fatalf("samples = %d, want 3 latency observations", summary.Samples)
 	}
 }
 
@@ -262,37 +257,6 @@ func TestSummarizeWith_RateUsesTheWindowNotTheBuckets(t *testing.T) {
 	}
 }
 
-// TestSummarizeWith_SuccessRateNeverExceedsOne is the reported 200% bug: a probe
-// recorded in the probe channel was subtracted from another scope's request count,
-// so the ratio could exceed one.
-func TestSummarizeWith_SuccessRateNeverExceedsOne(t *testing.T) {
-	agg, _ := newAggregator(t)
-	ctx := context.Background()
-	at := time.Now().Truncate(time.Minute)
-	agg.Observe(ctx, Outcome{Channel: "grok", OK: true, DurationMS: 100, At: at})
-	agg.Observe(ctx, Outcome{Channel: "probe", OK: true, DurationMS: 10, Synthetic: true, At: at})
-
-	// Merging both channels is what the overview's "全部渠道" view does before the
-	// infrastructure aggregates are filtered out.
-	grok, _ := agg.Range(ctx, "grok", at, at)
-	probe, _ := agg.Range(ctx, "probe", at, at)
-	merged := append(append([]Bucket(nil), grok...), probe...)
-	durations, ttfts := agg.SamplesFor(ctx, "grok", grok)
-	probeDurations, probeTTFTs := agg.SamplesFor(ctx, "probe", probe)
-	durations = append(durations, probeDurations...)
-	ttfts = append(ttfts, probeTTFTs...)
-
-	summary := agg.SummarizeWith(ctx, SummaryInput{
-		Channel: "mixed", Buckets: merged, WindowMinutes: 60,
-		Durations: durations, FirstTokenMS: ttfts, SamplesProvided: true,
-	})
-	if summary.SuccessRate > 1 {
-		t.Fatalf("success rate = %v, want at most 1", summary.SuccessRate)
-	}
-	if summary.Requests != 2 {
-		t.Fatalf("requests = %d, want both counted", summary.Requests)
-	}
-}
 
 // TestSummarizeWith_MergedSamplesProducePercentiles is the reported P95 bug: the
 // merged scope had no samples of its own, so both percentiles were flat zero while

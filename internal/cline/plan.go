@@ -2,7 +2,6 @@ package cline
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -132,19 +131,4 @@ func (c *Client) fetchPlan(ctx context.Context) (Plan, error) {
 // FetchPlan is the provider-facing alias of fetchPlan.
 func (c *Client) FetchPlan(ctx context.Context) (Plan, error) {
 	return c.fetchPlan(ctx)
-}
-
-// ErrPlanUnavailable marks a plan read that could not be completed.
-var ErrPlanUnavailable = errors.New("cline plan unavailable")
-
-// planFromError keeps the call sites honest: only an explicit upstream answer
-// becomes a recorded tier.
-func planFromError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, ErrAuthUnavailable) || errors.Is(err, ErrCredentialMissing) {
-		return err
-	}
-	return fmt.Errorf("%w: %v", ErrPlanUnavailable, err)
 }

@@ -2,7 +2,6 @@ package grok
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"strings"
 	"time"
@@ -149,99 +148,6 @@ func (h *Handler) clearQualityGuard(ctx context.Context, acc *store.Account) {
 	if err := h.lb.Store.UpdateAccountQuality(ctx, acc.ID, 0, time.Time{}); err != nil {
 		slog.Warn("grok quality guard: failed to clear the account verdict", "account_id", acc.ID, "error", err)
 	}
-}
-
-// qualitySignalsFromResponse derives the signals from a complete non-streaming
-// response body, which is what the buffered path has.
-func qualitySignalsFromResponse(chat map[string]interface{}, elapsed time.Duration, expectReasoning bool) qualitySignals {
-	sig := qualitySignals{ExpectReasoning: expectReasoning, Terminal: true, FirstVisibleMS: -1}
-	if chat == nil {
-		return sig
-	}
-	if usage, _ := chat["usage"].(map[string]interface{}); usage != nil {
-		if details, _ := usage["completion_tokens_details"].(map[string]interface{}); details != nil {
-			sig.ReasoningTokens = int64(interfaceToInt(details["reasoning_tokens"]))
-		}
-		if sig.ReasoningTokens == 0 {
-			sig.ReasoningTokens = int64(interfaceToInt(usage["reasoning_tokens"]))
-		}
-	}
-	choices, _ := chat["choices"].([]interface{})
-	if len(choices) == 0 {
-		return sig
-	}
-	choice, _ := choices[0].(map[string]interface{})
-	message, _ := choice["message"].(map[string]interface{})
-	if message == nil {
-		return sig
-	}
-	sig.VisibleChars = int64(len(streamString(message["content"])))
-	if reasoning := streamString(firstDefined(message["reasoning_content"], message["reasoning"])); reasoning != "" {
-		sig.SawReasoning = true
-		sig.ReasoningChars = int64(len(reasoning))
-	}
-	if encrypted := streamString(message["reasoning_encrypted_content"]); encrypted != "" {
-		sig.EncryptedChars = int64(len(encrypted))
-	}
-	if items := interfaceSlice(message["x_grok_reasoning"]); len(items) > 0 {
-		sig.SawReasoning = true
-		sig.ReasoningChars++
-	}
-	sig.ToolCalls = len(interfaceSlice(message["tool_calls"]))
-	if sig.VisibleChars > 0 {
-		sig.FirstVisibleMS = elapsed.Milliseconds()
-	}
-	return sig
-}
-
-// qualitySignalsFromSSE derives the signals from a buffered SSE transcript.
-func qualitySignalsFromSSE(raw []byte, elapsed time.Duration, expectReasoning bool) qualitySignals {
-	sig := qualitySignals{ExpectReasoning: expectReasoning, FirstVisibleMS: -1}
-	_ = readResponseSSE(strings.NewReader(string(raw)), func(_ string, data string) error {
-		if data == "[DONE]" {
-			sig.Terminal = true
-			return nil
-		}
-		var event map[string]interface{}
-		if json.Unmarshal([]byte(data), &event) != nil {
-			return nil
-		}
-		switch interfaceString(event["type"]) {
-		case "response.completed", "response.done", "response.failed", "error":
-			sig.Terminal = true
-		}
-		if delta := streamString(event["delta"]); delta != "" {
-			switch interfaceString(event["type"]) {
-			case "response.output_text.delta":
-				if sig.FirstVisibleMS < 0 {
-					sig.FirstVisibleMS = elapsed.Milliseconds()
-				}
-				sig.VisibleChars += int64(len(delta))
-			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-				sig.SawReasoning = true
-				sig.ReasoningChars += int64(len(delta))
-			}
-		}
-		item, _ := event["item"].(map[string]interface{})
-		if item != nil {
-			if encrypted := streamString(item["encrypted_content"]); encrypted != "" {
-				sig.EncryptedChars = int64(len(encrypted))
-			}
-			if interfaceString(item["type"]) == "reasoning" {
-				sig.SawReasoning = true
-			}
-			if interfaceString(item["type"]) == "function_call" || interfaceString(item["type"]) == "custom_tool_call" {
-				sig.ToolCalls++
-			}
-		}
-		if usage := consoleUsage(event); len(usage) > 0 {
-			if details, _ := usage["completion_tokens_details"].(map[string]interface{}); details != nil {
-				sig.ReasoningTokens = int64(interfaceToInt(details["reasoning_tokens"]))
-			}
-		}
-		return nil
-	})
-	return sig
 }
 
 // applyConsoleQualityGuard feeds one finished turn into the quality policy.

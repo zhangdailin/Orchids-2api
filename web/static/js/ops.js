@@ -530,7 +530,7 @@
     if (!container) return;
     container.replaceChildren();
     const totals = payload.totals || {};
-    const real = Math.max((totals.requests || 0) - (totals.probes || 0), 0);
+    const real = Math.max(totals.requests || 0, 0);
 
     if (payload.available === false) {
       const card = kpiCard('指标聚合');
@@ -569,7 +569,6 @@
       { label: '成功数', value: fmtInt(slaSuccess) },
       { label: '异常数', value: fmtInt(totals.failed || 0) },
       { label: '业务限制', value: fmtInt(limited) + '（限流 ' + fmtInt(totals.rate_limited || 0) + ' / 额度 ' + fmtInt(totals.quota_exhausted || 0) + ' / 网关拒绝 ' + fmtInt(totals.rejected || 0) + '）' },
-      { label: '探测（已排除）', value: fmtInt(totals.probes || 0) },
     ]);
     container.appendChild(sla);
 
@@ -651,10 +650,6 @@
     return liveBuckets(Math.max(1, Math.min(1440, minutes)));
   }
 
-  function seriesWindowPoints(minutes, pick) {
-    return liveBuckets(minutes).map(point => ({ label: fmtMinute(point.minute), value: pick(point) || 0 }));
-  }
-
   function renderHero(payload) {
     const totals = payload.totals || {};
     state.overview = payload;
@@ -682,7 +677,7 @@
 
     // Health: the SLA of the window, with the traffic level deciding whether the
     // console is "serving" or "standby".
-    const real = Math.max((totals.requests || 0) - (totals.probes || 0), 0);
+    const real = Math.max(totals.requests || 0, 0);
     const rate = real > 0 ? Math.min((totals.success || 0) / real, 1) : 0;
     const gauge = el('opsGaugeRing');
     const score = real > 0 ? rate * 100 : 0;
@@ -694,7 +689,7 @@
     setText('opsGaugeValue', real === 0 ? '待机' : (rate * 100).toFixed(1) + '%');
     setText('opsGaugeLabel', real === 0 ? '无流量' : rate >= 0.95 ? '健康' : rate >= 0.8 ? '降级' : '异常');
     setText('opsGaugeState', real === 0 ? '待机' : '服务中');
-    // The gauge's sub-line carries the two failure figures and the probe count, so
+    // The gauge's sub-line carries the two failure figures, so
     // the health number can be reconciled with the error cards at a glance.
     const gaugeSub = el('opsGaugeSub');
     if (gaugeSub) {
@@ -703,7 +698,6 @@
         `${payload.window_minutes} 分钟 ${fmtInt(real)} 次请求`,
         `最终失败 ${fmtInt(totals.failed || 0)}`,
         `上游尝试失败 ${fmtInt(totals.attempt_failures || 0)}`,
-        `探测（已排除）${fmtInt(totals.probes || 0)}`,
       ];
       parts.forEach((part) => {
         const span = document.createElement('span');
@@ -985,7 +979,7 @@
         errorMix.appendChild(row);
       });
       const total = totals.failed || 0;
-      setText('opsErrorMixHint', Number(totals.detailed_requests || 0) < Math.max(0, (totals.requests || 0) - (totals.probes || 0)) ? '窗口含旧数据，错误分类未完整采集' : total === 0 ? '该时间窗口内暂无最终失败。' : `最终失败 ${total} 次 · 点击分类可下钻`);
+      setText('opsErrorMixHint', Number(totals.detailed_requests || 0) < Math.max(0, totals.requests || 0) ? '窗口含旧数据，错误分类未完整采集' : total === 0 ? '该时间窗口内暂无最终失败。' : `最终失败 ${total} 次 · 点击分类可下钻`);
     }
   }
 
@@ -1141,7 +1135,7 @@
     tr.appendChild(accounts);
 
     const requests = document.createElement('td');
-    requests.textContent = options.isModel ? String(row.requests || 0) : String(Math.max((row.summary && row.summary.requests || 0) - (row.summary && row.summary.probes || 0), 0));
+    requests.textContent = options.isModel ? String(row.requests || 0) : String(Math.max((row.summary && row.summary.requests) || 0, 0));
     tr.appendChild(requests);
 
     const rate = document.createElement('td');
@@ -1238,7 +1232,7 @@
     if (excluded.length) {
       const labels = excluded.map((name) => {
         if (name === 'http') return 'http（非推理路径：管理页、健康检查、公网扫描）';
-        if (name === 'probe') return 'probe（本系统主动探测的合成流量）';
+        if (name === 'probe') return 'probe（旧版本探测流量的历史聚合，已不再产生）';
         return name;
       });
       parts.push('已计数但不在渠道矩阵中显示：' + labels.join('；'));

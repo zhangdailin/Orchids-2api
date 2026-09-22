@@ -112,15 +112,9 @@ func buildOfficialTokenPrices() map[string]tokenPrice {
 	return prices
 }
 
-// Priced reports whether a model name resolves to an official rate. An unpriced
-// model must never be treated as costing zero.
-func Priced(model string) bool {
-	_, ok := resolveOfficialTokenPrice(model)
-	return ok
-}
-
 // resolveOfficialTokenPrice handles the internal source prefixes and the exact
-// published aliases first, then the anchored family rules.
+// published aliases first, then the anchored family rules. An unpriced model
+// must never be treated as costing zero.
 func resolveOfficialTokenPrice(model string) (tokenPrice, bool) {
 	normalized := normalizePricingModel(model)
 	if price, ok := officialTokenPrices[normalized]; ok {
@@ -297,19 +291,6 @@ func scanReservationJSON(body []byte) (model string, inputTokens, outputTokens i
 	return model, max(256, tokens+128), outputTokens, true
 }
 
-// EstimateTextReservation prices the worst case of a request that has not run
-// yet: the tokens observed in the body plus the output limit the caller asked
-// for. It is intentionally conservative — an over-reservation is released when
-// the request settles.
-func EstimateTextReservation(model string, body []byte) (Result, bool) {
-	if _, ok := resolveOfficialTokenPrice(model); !ok {
-		return Result{}, false
-	}
-	inputTokens := estimateRequestInputTokens(body)
-	outputTokens := estimateRequestOutputLimit(body)
-	return EstimateCost(model, inputTokens, 0, outputTokens, inputTokens)
-}
-
 // EstimateTTSCost prices unary TTS from the exact Unicode character count that
 // was accepted by the upstream request ($15 per 1M characters).
 func EstimateTTSCost(text string) (Result, bool) {
@@ -321,84 +302,6 @@ func EstimateTTSCost(text string) (Result, bool) {
 		Model:          "grok-voice-tts",
 		CostInUSDTicks: int64(characters) * officialTTSCharacterTicks,
 	}, true
-}
-
-// EstimateSTTCost prices a completed STT request from the duration reported by
-// the upstream: REST costs $0.10/hour and streaming costs $0.20/hour.
-func EstimateSTTCost(durationSeconds float64, streaming bool) (Result, bool) {
-	if durationSeconds <= 0 || math.IsNaN(durationSeconds) || math.IsInf(durationSeconds, 0) {
-		return Result{}, false
-	}
-	hourlyTicks := int64(1_000_000_000)
-	model := "grok-stt-rest"
-	if streaming {
-		hourlyTicks = 2_000_000_000
-		model = "grok-stt-streaming"
-	}
-	// Round upward to one USD tick so a positive billable duration never
-	// disappears through integer truncation.
-	cost := int64(math.Ceil(durationSeconds * float64(hourlyTicks) / 3600))
-	return Result{Model: model, CostInUSDTicks: max(int64(1), cost)}, true
-}
-
-// estimateRequestOutputLimit reads the caller's output cap. A request without
-// one is assumed to be allowed the gateway default, which is what makes the
-// reservation an upper bound rather than a guess.
-func estimateRequestOutputLimit(body []byte) int64 {
-	const defaultOutputTokens int64 = 16_384
-	const maximumOutputTokens int64 = 131_072
-	var payload map[string]json.RawMessage
-	if json.Unmarshal(body, &payload) != nil {
-		return defaultOutputTokens
-	}
-	for _, key := range []string{"max_output_tokens", "max_completion_tokens", "max_tokens"} {
-		var value int64
-		if raw, ok := payload[key]; ok && json.Unmarshal(raw, &value) == nil && value > 0 {
-			return min(value, maximumOutputTokens)
-		}
-	}
-	return defaultOutputTokens
-}
-
-// estimateRequestInputTokens approximates prompt tokens from the request JSON.
-// JSON structure and keys are counted as text, matching the upstream
-// implementation's estimate so the two reserve comparable amounts.
-func estimateRequestInputTokens(body []byte) int64 {
-	var payload any
-	if json.Unmarshal(body, &payload) != nil {
-		return max(256, int64((len(body)+2)/3))
-	}
-	return max(256, estimateJSONTokens(payload)+128)
-}
-
-func estimateJSONTokens(value any) int64 {
-	switch typed := value.(type) {
-	case map[string]any:
-		var total int64
-		for key, child := range typed {
-			total += int64((len(key)+2)/3) + 1 + estimateJSONTokens(child)
-		}
-		return total
-	case []any:
-		var total int64
-		for _, child := range typed {
-			total += 1 + estimateJSONTokens(child)
-		}
-		return total
-	case string:
-		trimmed := strings.TrimSpace(typed)
-		if strings.HasPrefix(trimmed, "data:image/") || strings.HasPrefix(trimmed, "data:video/") {
-			return 256
-		}
-		return max(1, int64((len(typed)+2)/3))
-	case json.Number, float64, bool:
-		return 1
-	case nil:
-		return 0
-	default:
-		encoded, _ := json.Marshal(typed)
-		return max(1, int64((len(encoded)+2)/3))
-	}
 }
 
 // ── Media pricing (images, videos) ────────────────────────────────────────────

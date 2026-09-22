@@ -133,19 +133,11 @@ func APIKeyAllowsModel(ctx context.Context, model string) bool {
 	return false
 }
 
-// APIKeyAuth protects model and inference endpoints with a managed key. It
-// accepts OpenAI-style Bearer auth and Anthropic's x-api-key header. enabled is
-// evaluated per request so config hot reloads take effect.
-func APIKeyAuth(enabled func() bool, validate APIKeyValidator, next http.HandlerFunc) http.HandlerFunc {
-	return APIKeyAuthWithRequest(func(*http.Request) bool {
-		return enabled == nil || enabled()
-	}, validate, next)
-}
-
-// APIKeyAuthWithRequest is APIKeyAuth with a predicate that can look at the
-// request. It exists for a deployment that must keep a known source reachable
-// without a key while every other caller still needs one; require returns whether
-// a key is required for this request.
+// APIKeyAuthWithRequest protects model and inference endpoints with a managed
+// key. It accepts OpenAI-style Bearer auth and Anthropic's x-api-key header.
+// require returns whether a key is required for this request; a deployment that
+// must keep a known source reachable without a key names that source here, while
+// every other caller still needs one.
 func APIKeyAuthWithRequest(require func(*http.Request) bool, validate APIKeyValidator, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if require != nil && !require(r) {

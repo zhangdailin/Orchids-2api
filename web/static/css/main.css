@@ -809,12 +809,6 @@ input[type="range"],
 
 .input-wrapper .input-icon ~ input { padding-left: var(--space-8); }
 
-.input-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .password-toggle,
 .key-toggle {
   position: absolute;
@@ -1289,7 +1283,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .models-default-badge,
 .models-meta-pill,
 .protocol-tag,
-.account-nsfw-tag,
 .account-tier-tag,
 .model-chip,
 .selected-count {
@@ -1354,7 +1347,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .badge-qoder { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.14); }
 .badge-cline { color: var(--accent-purple); border-color: rgba(167, 139, 250, 0.35); background: rgba(167, 139, 250, 0.14); }
 
-.account-nsfw-tag { color: var(--accent-pink); border-color: rgba(240, 166, 189, 0.35); background: rgba(240, 166, 189, 0.12); }
 .account-tier-tag { color: var(--text-soft); }
 
 .token-text,

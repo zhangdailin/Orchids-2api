@@ -287,7 +287,6 @@
 .ops-resource.is-ok .ops-resource-value { color: var(--ok); }
 .ops-resource.is-warn .ops-resource-value { color: var(--warn); }
 .ops-resource.is-critical .ops-resource-value { color: var(--bad); }
-.ops-resource.is-unknown .ops-resource-value { color: var(--text-muted); font-size: 0.9rem; font-weight: 550; }
 .ops-resource-detail { color: var(--text-muted); font-size: 0.7rem; line-height: 1.45; }
 
 /* -----------------------------------------------------------------------------

@@ -40,7 +40,7 @@ func TestBuildStoredResponseLifecycleAndOwnerIsolation(t *testing.T) {
 	configureStoredResponseTestHandler(t, h, s, upstream)
 
 	call := func(token, method, path, body string, handler http.HandlerFunc) *httptest.ResponseRecorder {
-		wrapped := middleware.APIKeyAuth(func() bool { return true }, func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
+		wrapped := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
 			return &middleware.APIKeyPrincipal{}, nil
 		}, handler)
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -91,7 +91,7 @@ func TestCompatibilityStoredResponseResourceAndHistoryExpansion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wrapper := middleware.APIKeyAuth(func() bool { return false }, nil, h.HandleResponseResource)
+	wrapper := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return false }, nil, h.HandleResponseResource)
 	get := httptest.NewRecorder()
 	wrapper(get, httptest.NewRequest(http.MethodGet, "/v1/responses/resp_web", nil))
 	if get.Code != http.StatusOK || get.Body.String() != string(body) {
@@ -131,7 +131,7 @@ func TestBuildPreviousResponsePinsCreatingAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wrapped := middleware.APIKeyAuth(func() bool { return true }, func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
+	wrapped := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
 		return &middleware.APIKeyPrincipal{}, nil
 	}, h.HandleResponses)
 	request := func(body string) *httptest.ResponseRecorder {

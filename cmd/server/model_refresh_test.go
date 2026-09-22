@@ -25,7 +25,7 @@ func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
 		return &modelRefreshResult{Channel: channel, Source: "stub", Concurrency: concurrency, Discovered: 3, Verified: 2}, nil
 	}
 
-	handler := makeModelRefreshHandler(&config.Config{}, nil)
+	handler := makeCoordinatedModelRefreshHandler(func() *config.Config { return &config.Config{} }, nil, newModelRefreshCoordinator())
 	req := httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=warp&concurrency=99", strings.NewReader(`{"channel":"puter","concurrency":8}`))
 	rec := httptest.NewRecorder()
 

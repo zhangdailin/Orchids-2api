@@ -38,7 +38,6 @@
   "grok_cli_oauth_client_id": "b1a00492-073a-47ea-816f-4c329264a828",
   "grok_cli_oauth_token_url": "https://auth.x.ai/oauth2/token",
   "grok_cli_model_ids": [],
-  "grok_probe_model": "grok-4.6",
 
   "egress_comment": "Egress proxy pool + FlareSolverr + Cloudflare clearance auto-refresh. Disabled by default; keep grok_egress_enabled=false unless you run multiple exit nodes.",
   "grok_egress_enabled": false,
@@ -48,9 +47,6 @@
   "grok_flaresolverr_url": "",
   "grok_clearance_mode": "manual",
   "grok_clearance_refresh_interval": 600,
-
-  "fidelity_comment": "Upstream fidelity: the gateway relays client content verbatim by default. Set to explicitly re-enable legacy rewriting.",
-  "cc_entrypoint_mode": "keep",
 
   "grok_statsig_comment": "Statsig signing. Omit grok_statsig_signer_url to use grok2api's own signer (https://grok.wodf.de/sign); set it to \"\" to send no x-statsig-id (grok_statsig_id is then used when it is a valid 70-byte id); any other value is that endpoint.",
   "grok_statsig_signer_url": null,

@@ -2905,22 +2905,6 @@ func (h *streamHandler) injectMessageText(logMsg, errorMsg string) {
 	}
 }
 
-func (h *streamHandler) InjectAuthError(errStr string) {
-	var errorMsg, category string
-	switch {
-	case strings.Contains(errStr, "401"):
-		category = "auth"
-		errorMsg = "Authentication Error: Session expired (401). Please update your account credentials."
-	case strings.Contains(errStr, "403"):
-		category = "auth_blocked"
-		errorMsg = "Access Forbidden (403): This account cannot use the requested AI feature right now. It may be unavailable for the current plan, quota, or Warp AI feature status."
-	default:
-		category = "auth"
-		errorMsg = "Request Failed. Please check your account status."
-	}
-	h.reportRequestFailure("Injecting auth error to client", category, errorMsg)
-}
-
 // reportRequestFailure tells the client the request failed without producing an
 // answer.
 //

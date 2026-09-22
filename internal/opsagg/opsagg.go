@@ -26,18 +26,14 @@ const (
 	MaxTrendMinutes = 24 * 60
 )
 
-// Outcome is one finished request (or probe) attributed to a channel, model and
-// account.
+// Outcome is one finished request attributed to a channel, model and account.
 type Outcome struct {
 	HTTPStatus                               int
 	Detailed, UsageReported, ProviderReached bool
 	AttemptFailures, AccountSwitches         int64
-	// Synthetic marks a probe. Probes are counted separately from real traffic so
-	// an injected failure cannot distort the user-facing success rate.
-	Synthetic bool
-	Channel   string
-	Model     string
-	Status    string
+	Channel                                  string
+	Model                                    string
+	Status                                   string
 	// OK decides the success ratio. A retry that eventually succeeded is OK.
 	OK bool
 	// DurationMS is the whole request; FirstTokenMS is when the first byte was
@@ -71,7 +67,6 @@ type Bucket struct {
 	Requests                                                             int64     `json:"requests"`
 	Success                                                              int64     `json:"success"`
 	Failed                                                               int64     `json:"failed"`
-	Probes                                                               int64     `json:"probes"`
 	Input                                                                int64     `json:"input_tokens"`
 	Cached                                                               int64     `json:"cached_input_tokens"`
 	Output                                                               int64     `json:"output_tokens"`
@@ -107,7 +102,6 @@ type Summary struct {
 	Requests          int64   `json:"requests"`
 	Success           int64   `json:"success"`
 	Failed            int64   `json:"failed"`
-	Probes            int64   `json:"probes"`
 	SuccessRate       float64 `json:"success_rate"`
 	RPM               float64 `json:"rpm"`
 	DurationP95MS     int64   `json:"duration_p95_ms"`
@@ -178,9 +172,6 @@ func (a *Aggregator) Observe(ctx context.Context, outcome Outcome) {
 	pipe := a.client.Pipeline()
 	pipe.HIncrBy(ctx, key, "requests", 1)
 	a.observeDetails(ctx, pipe, key, outcome)
-	if outcome.Synthetic {
-		pipe.HIncrBy(ctx, key, "probes", 1)
-	}
 	if outcome.OK {
 		pipe.HIncrBy(ctx, key, "success", 1)
 	} else {
@@ -453,7 +444,6 @@ func bucketFromFields(minute time.Time, channel string, fields map[string]string
 		Requests:         toInt("requests"),
 		Success:          toInt("success"),
 		Failed:           toInt("failed"),
-		Probes:           toInt("probes"),
 		Input:            toInt("input_tokens"),
 		Cached:           toInt("cached_input_tokens"),
 		Output:           toInt("output_tokens"),
@@ -517,7 +507,6 @@ func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summ
 		summary.Requests += bucket.Requests
 		summary.Success += bucket.Success
 		summary.Failed += bucket.Failed
-		summary.Probes += bucket.Probes
 		summary.InputTokens += bucket.Input
 		summary.CachedInputTokens += bucket.Cached
 		summary.OutputTokens += bucket.Output
@@ -539,16 +528,7 @@ func (a *Aggregator) SummarizeWith(ctx context.Context, input SummaryInput) Summ
 		}
 	}
 
-	// Probes are counted in their own channel, so a scope's request count is its
-	// real traffic. The probe count is only subtracted when it belongs to the same
-	// scope, otherwise a successful probe could push the ratio above 100%.
 	real := summary.Requests
-	if summary.Probes > 0 {
-		real -= summary.Probes
-	}
-	if real < 0 {
-		real = 0
-	}
 	if real > 0 {
 		ratio := float64(summary.Success) / float64(real)
 		if ratio > 1 {

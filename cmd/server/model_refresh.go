@@ -175,10 +175,6 @@ func (c *modelRefreshCoordinator) tryAcquire(channel string) (func(), bool) {
 	}, true
 }
 
-func makeModelRefreshHandler(cfg *config.Config, s *store.Store) http.HandlerFunc {
-	return makeCoordinatedModelRefreshHandler(func() *config.Config { return cfg }, s, newModelRefreshCoordinator())
-}
-
 func makeCoordinatedModelRefreshHandler(configSnapshot func() *config.Config, s *store.Store, coordinator *modelRefreshCoordinator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

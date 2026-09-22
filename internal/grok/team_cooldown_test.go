@@ -109,46 +109,8 @@ func TestTeamCooldownNoteKeepsLongest(t *testing.T) {
 	}
 }
 
-func TestTeamCooldownWaitBlocking(t *testing.T) {
-	registry := newTeamCooldownRegistry()
-	registry.Note(RateLimitScopeRPM, "team-a", "grok-4.5", 50*time.Millisecond)
 
-	start := time.Now()
-	err := registry.Wait(context.Background(), RateLimitScopeRPM, "team-a", "grok-4.5")
-	if err != nil {
-		t.Fatalf("wait failed: %v", err)
-	}
-	elapsed := time.Since(start)
-	if elapsed < 40*time.Millisecond {
-		t.Fatalf("wait returned too early: %s", elapsed)
-	}
-}
 
-func TestTeamCooldownWaitCancel(t *testing.T) {
-	registry := newTeamCooldownRegistry()
-	registry.Note(RateLimitScopeRPM, "team-a", "grok-4.5", time.Minute)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		cancel()
-	}()
-	start := time.Now()
-	err := registry.Wait(ctx, RateLimitScopeRPM, "team-a", "grok-4.5")
-	if err == nil {
-		t.Fatal("expected cancellation error")
-	}
-	if time.Since(start) > 2*time.Second {
-		t.Fatalf("wait did not honour cancellation promptly")
-	}
-}
-
-func TestTeamCooldownWaitNoEntry(t *testing.T) {
-	registry := newTeamCooldownRegistry()
-	if err := registry.Wait(context.Background(), RateLimitScopeRPS, "team-x", "grok-4.5"); err != nil {
-		t.Fatalf("wait without entry should return nil, got %v", err)
-	}
-}
 
 func TestTeamCooldownConcurrentNote(t *testing.T) {
 	registry := newTeamCooldownRegistry()

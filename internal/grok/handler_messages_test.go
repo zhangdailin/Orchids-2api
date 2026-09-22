@@ -98,7 +98,7 @@ func TestTranslateOpenAIChatStreamToAnthropic(t *testing.T) {
 		``,
 	}, "\n")
 	var out bytes.Buffer
-	if err := translateOpenAIChatStreamToAnthropic(&out, strings.NewReader(input), "grok-4.6"); err != nil {
+	if err := translateOpenAIChatStreamToAnthropicWithInput(&out, strings.NewReader(input), "grok-4.6", 0); err != nil {
 		t.Fatalf("translate error = %v", err)
 	}
 	text := out.String()

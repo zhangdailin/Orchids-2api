@@ -351,15 +351,6 @@ func TestSettleAPIKeyBillingRules(t *testing.T) {
 		}
 	})
 
-	t.Run("estimated usage can be opted in", func(t *testing.T) {
-		ledger := &stubBillingLedger{limit: 1_000_000_000_000}
-		ctx := reserved(t, ledger)
-		result, priced := SettleAPIKeyBilling(ctx, ledger, "grok-4.6", audit.UsageSourceEstimated, 1000, 0, 500, AllowEstimatedUsage())
-		if !priced || len(ledger.settles) != 1 || ledger.settles[0] != result.CostInUSDTicks {
-			t.Fatalf("priced=%v result=%#v ledger=%#v", priced, result, ledger.settles)
-		}
-	})
-
 	t.Run("unpriced model", func(t *testing.T) {
 		ledger := &stubBillingLedger{limit: 1_000_000_000_000}
 		ctx := reserved(t, ledger)
@@ -459,19 +450,6 @@ func TestBillingRequestPathMatching(t *testing.T) {
 		if billingRequestPath(path) {
 			t.Fatalf("billingRequestPath(%q) = true, want false", path)
 		}
-	}
-}
-
-func TestBillingRequestModelFallsBackToPath(t *testing.T) {
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	if got := billingRequestModel(request, []byte(`{"model":"build/grok-4.6"}`)); got != "build/grok-4.6" {
-		t.Fatalf("model = %q", got)
-	}
-	if got := billingRequestModel(request, []byte(`{"messages":[]}`)); got != "v1/chat/completions" {
-		t.Fatalf("fallback model = %q", got)
-	}
-	if pricing.Priced("v1/chat/completions") {
-		t.Fatal("the path fallback must not resolve to a priced model")
 	}
 }
 

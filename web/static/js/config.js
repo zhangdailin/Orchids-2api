@@ -26,14 +26,6 @@ function togglePassword(fieldId) {
   }
 }
 
-// Copy field value to clipboard
-function copyFieldValue(fieldId) {
-  const field = document.getElementById(fieldId);
-  if (field && field.value) {
-    copyToClipboard(field.value);
-  }
-}
-
 // ── Unsaved-change tracking ───────────────────────────────────────────────────
 // The sticky save bar compares the live control values against the values the
 // server returned on load. Only the fields the save payload actually reads are

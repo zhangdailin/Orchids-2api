@@ -777,13 +777,6 @@ func (h *Handler) forwardConsoleVoice(w http.ResponseWriter, r *http.Request, mo
 	h.forwardConsoleVoiceWith(w, r, modelID, method, path, body, headers, nil)
 }
 
-// forwardConsoleVoiceObserved is forwardConsoleVoice that hands the upstream JSON
-// body to observe after it has been written. STT pricing needs the duration the
-// upstream reports, which is only in that body.
-func (h *Handler) forwardConsoleVoiceObserved(w http.ResponseWriter, r *http.Request, modelID, method, path string, body []byte, headers http.Header, observe func([]byte)) {
-	h.forwardConsoleVoiceWithObserver(w, r, modelID, method, path, body, headers, nil, observe)
-}
-
 // forwardConsoleVoiceWith is forwardConsoleVoice with an optional JSON rewriter.
 // A nil rewriter keeps the byte-for-byte passthrough used by every audio
 // endpoint; a rewriter is used where the response shape is part of the public

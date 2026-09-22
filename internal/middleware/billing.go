@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
-
 	"orchids-api/internal/audit"
 	"orchids-api/internal/pricing"
 )
@@ -128,21 +126,14 @@ type settleOptions struct {
 // can stay conservative: only upstream-reported usage is billable.
 type SettleOption func(*settleOptions)
 
-// AllowEstimatedUsage permits charging a request whose token counters came from
-// the local estimator instead of the upstream. It exists for channels that never
-// report usage; without it an estimated row is priced for the audit journal but
-// is never charged (A9-2 semantics: an estimate must not become an invoice).
-func AllowEstimatedUsage() SettleOption {
-	return func(options *settleOptions) { options.allowEstimates = true }
-}
-
 // SettleAPIKeyBilling computes the official cost of one finished request and
 // books it against the reservation taken before the request ran, returning the
 // pricing result for the audit row.
 //
 // Rules:
-//   - Only upstream-reported usage is billable unless AllowEstimatedUsage was
-//     passed. An estimated row returns false and is never charged.
+//   - Only upstream-reported usage is billable. An estimated row returns false
+//     and is never charged (A9-2 semantics: an estimate must not become an
+//     invoice).
 //   - An unpriced model returns false, which stays distinguishable from a
 //     genuine zero cost.
 //   - Settlement is idempotent per event id: a repeated call returns the first
@@ -316,53 +307,6 @@ func billingRequestPath(path string) bool {
 		}
 	}
 	return false
-}
-
-// billingRequestModel reads the model from the request body. The published
-// inference APIs all carry it as a JSON "model" field; a body without one falls
-// back to the host-free request path, which no official rate matches, so nothing
-// is reserved for it.
-func billingRequestModel(r *http.Request, body []byte) string {
-	if model := jsonModelField(body); model != "" {
-		return model
-	}
-	if r == nil {
-		return ""
-	}
-	return strings.Trim(strings.TrimSpace(r.URL.Path), "/")
-}
-
-// jsonModelField reads the top-level "model" field without parsing the whole
-// body, so a body truncated by the estimation cap still yields its model.
-func jsonModelField(body []byte) string {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	token, err := decoder.Token()
-	if err != nil {
-		return ""
-	}
-	if delim, ok := token.(json.Delim); !ok || delim != '{' {
-		return ""
-	}
-	for decoder.More() {
-		keyToken, err := decoder.Token()
-		if err != nil {
-			return ""
-		}
-		key, _ := keyToken.(string)
-		if key != "model" {
-			var skipped json.RawMessage
-			if err := decoder.Decode(&skipped); err != nil {
-				return ""
-			}
-			continue
-		}
-		var model string
-		if err := decoder.Decode(&model); err != nil {
-			return ""
-		}
-		return strings.TrimSpace(model)
-	}
-	return ""
 }
 
 // readBillingBody buffers the request body for estimation and restores it for

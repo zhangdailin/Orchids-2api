@@ -2,7 +2,10 @@ package modelpolicy
 
 import "strings"
 
-var deprecatedGrokModelIDs = map[string]struct{}{
+// DeprecatedGrokModelIDs lists model identifiers retired from the Grok
+// channel. The store's startup cleanup derives its Grok entries from this map,
+// so this is the single source of truth.
+var DeprecatedGrokModelIDs = map[string]struct{}{
 	"grok-4.20-0309-non-reasoning":       {},
 	"grok-4.20-0309":                     {},
 	"grok-4.20-0309-reasoning":           {},
@@ -56,7 +59,7 @@ var deprecatedGrokModelIDs = map[string]struct{}{
 
 func IsDeprecatedGrokModelID(modelID string) bool {
 	id := strings.ToLower(strings.TrimSpace(modelID))
-	_, ok := deprecatedGrokModelIDs[id]
+	_, ok := DeprecatedGrokModelIDs[id]
 	return ok
 }
 

@@ -419,7 +419,6 @@ func (e *gatewayCompactionStreamError) Error() string { return e.message }
 var (
 	errGatewayCompactionStreamClosed = fmt.Errorf("compaction stream closed before response.completed")
 	errGatewayCompactionDegenerate   = fmt.Errorf("compaction model returned an empty or degenerate summary")
-	errGatewayCompactionCodec        = fmt.Errorf("gateway compaction codec is not configured")
 )
 
 // parseGatewayCompactionStream reads the summary out of the sample turn. The

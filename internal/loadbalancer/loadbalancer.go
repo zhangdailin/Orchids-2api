@@ -427,8 +427,6 @@ const (
 	// Puter 的路由额度可能在短窗口内恢复，且当前错误不提供 reset 时间。
 	// 每 15 分钟允许一次探测，在避免请求风暴的同时防止整个通道停用一天。
 	retry402Puter = accountpolicy.CooldownPuterQuota
-	// 429 冷却时间：限流通常是暂时性的，优先等待较短窗口再恢复尝试
-	retry429Default = accountpolicy.CooldownRateLimit
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
 	retry403Default = accountpolicy.CooldownBlocked
 	// Grok 的 403 很多是 Cloudflare challenge/临时风控，不应长时间拉黑

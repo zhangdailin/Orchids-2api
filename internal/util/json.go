@@ -27,16 +27,3 @@ func StringValue(value interface{}) string {
 	}
 	return fmt.Sprint(value)
 }
-
-// SchemaJSONLen reports the marshalled byte length of a JSON schema map.
-// It is used to size-compare schemas during compaction.
-func SchemaJSONLen(schema map[string]interface{}) int {
-	if schema == nil {
-		return 0
-	}
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		return 0
-	}
-	return len(raw)
-}

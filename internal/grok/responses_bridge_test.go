@@ -106,7 +106,7 @@ func TestHandleResponses_ForbiddenModelIsNotServerError(t *testing.T) {
 	// A key restricted to another model must be refused with 403, never 500.
 	rec := httptest.NewRecorder()
 
-	wrapped := middleware.APIKeyAuth(func() bool { return true }, func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
+	wrapped := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
 		return &middleware.APIKeyPrincipal{ID: 1, AllowedModels: []string{"grok-chat-heavy"}}, nil
 	}, h.HandleResponses)
 	req.Header.Set("Authorization", "Bearer test-key")

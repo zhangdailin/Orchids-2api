@@ -90,7 +90,8 @@ test('the matrix renders per-model rows and never paints a traffic-free channel 
 });
 test('the overview explains the aggregates it leaves out of the matrix', () => {
   const script = read('static/js/ops.js');
-  // The http catch-all and synthetic probes are counted but are not channels.
+  // The http catch-all (and the legacy probe aggregates from older builds) are
+  // counted but are not channels.
   assert.ok(script.includes('excluded_aggregates'), 'the page never reads the excluded aggregates');
-  assert.ok(script.includes('合成流量') || script.includes('探测量'), 'the probe KPI label is missing');
+  assert.ok(script.includes("name === 'probe'"), 'the legacy probe aggregate label is missing');
 });

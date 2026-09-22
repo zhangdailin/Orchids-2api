@@ -930,13 +930,6 @@ func consoleToolCallFromItem(raw interface{}) map[string]interface{} {
 	}
 }
 
-func firstUsage(a, b map[string]interface{}) map[string]interface{} {
-	if len(a) > 0 {
-		return a
-	}
-	return b
-}
-
 func consoleUsageFromStreamEvent(ev map[string]interface{}) map[string]interface{} {
 	if ev == nil {
 		return nil

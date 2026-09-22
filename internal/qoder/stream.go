@@ -496,19 +496,6 @@ type textToolCall struct {
 	Arguments string
 }
 
-func isPotentialTextToolCall(text string) bool {
-	offset := 0
-	for offset < len(text) {
-		switch text[offset] {
-		case ' ', '\t', '\r', '\n':
-			offset++
-		default:
-			return isPotentialTextToolCallAt(text, offset)
-		}
-	}
-	return true
-}
-
 func isPotentialTextToolCallAt(text string, offset int) bool {
 	if offset >= len(text) {
 		return true

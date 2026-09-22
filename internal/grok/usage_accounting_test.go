@@ -20,20 +20,6 @@ func TestAnthropicStreamMessageStartCarriesEstimatedInput(t *testing.T) {
 	}
 }
 
-func TestConsumeSuccessfulQuotaOnlyConsumesObservedWindow(t *testing.T) {
-	acc := &store.Account{GrokProvider: ProviderBuild, GrokRateLimits: store.GrokRateLimitSnapshot{Requests: store.GrokQuotaWindow{HasRemaining: true, Remaining: 2}}}
-	if !ConsumeSuccessfulQuota(acc, ProviderBuild, false) || acc.GrokRateLimits.Requests.Remaining != 1 {
-		t.Fatalf("quota not consumed: %+v", acc.GrokRateLimits.Requests)
-	}
-	if ConsumeSuccessfulQuota(acc, ProviderBuild, true) || acc.GrokRateLimits.Requests.Remaining != 1 {
-		t.Fatalf("authoritative response was double-consumed: %+v", acc.GrokRateLimits.Requests)
-	}
-	empty := &store.Account{GrokProvider: ProviderBuild}
-	if ConsumeSuccessfulQuota(empty, ProviderBuild, false) {
-		t.Fatal("consumption invented a missing quota window")
-	}
-}
-
 func TestApplyCLIBillingDerivesPercentFromMonthly(t *testing.T) {
 	info := &CLIBillingInfo{MonthlyLimit: 200, MonthlyUsed: 50, HasMonthly: true}
 	acc := &store.Account{}

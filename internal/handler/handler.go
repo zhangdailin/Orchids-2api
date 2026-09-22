@@ -701,7 +701,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if isPuterRequest {
-		if sanitized, changed := sanitizeSystemItems(req.System, false, true, cfg); changed {
+		if sanitized, changed := sanitizeSystemItems(req.System); changed {
 			req.System = sanitized
 			if verboseDiagnostics {
 				slog.Debug("puter: sanitized forwarded system items")

@@ -85,7 +85,7 @@ func buildAlertSnapshot(ctx context.Context, agg *opsagg.Aggregator, s *store.St
 		entry := alerting.ChannelSnapshot{Channel: channel}
 		if rangeErr == nil {
 			summary := agg.Summarize(ctx, channel, buckets)
-			entry.Requests = summary.Requests - summary.Probes
+			entry.Requests = summary.Requests
 			entry.Success = summary.Success
 			entry.Failed = summary.Failed
 			entry.Samples = summary.Samples

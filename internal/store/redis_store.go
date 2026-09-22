@@ -163,14 +163,7 @@ func (s *redisStore) flushChanges() {
 	}
 }
 
-const (
-	redisBatchParallelThreshold = 32
-	// storedVideoJobsListBatchSize bounds both the sorted-set page and each
-	// MGET issued by ListStoredVideoJobs. The method still returns every live
-	// job (its existing contract), but never materializes the whole Redis index
-	// or sends an unbounded variadic MGET.
-	storedVideoJobsListBatchSize = 256
-)
+const redisBatchParallelThreshold = 32
 
 var (
 	consumeApiKeyRPMScript = redis.NewScript(`
@@ -1932,24 +1925,30 @@ func (s *redisStore) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob
 	if err != nil || len(keys) == 0 {
 		return nil, err
 	}
-	values, err := s.client.MGet(ctx, keys...).Result()
-	if err != nil {
-		return nil, err
-	}
-	jobs := make([]*StoredVideoJob, 0, len(values))
+	// Page each MGET so no single variadic command grows without bound. The
+	// method still returns every live job (its existing contract).
+	jobs := make([]*StoredVideoJob, 0, len(keys))
 	stale := make([]interface{}, 0)
-	for index, value := range values {
-		text, ok := value.(string)
-		if !ok || strings.TrimSpace(text) == "" {
-			stale = append(stale, keys[index])
-			continue
+	const mgetBatch = 256
+	for start := 0; start < len(keys); start += mgetBatch {
+		end := min(start+mgetBatch, len(keys))
+		values, err := s.client.MGet(ctx, keys[start:end]...).Result()
+		if err != nil {
+			return nil, err
 		}
-		var job StoredVideoJob
-		if json.Unmarshal([]byte(text), &job) != nil || (!job.ExpiresAt.IsZero() && !now.Before(job.ExpiresAt)) {
-			stale = append(stale, keys[index])
-			continue
+		for index, value := range values {
+			text, ok := value.(string)
+			if !ok || strings.TrimSpace(text) == "" {
+				stale = append(stale, keys[start+index])
+				continue
+			}
+			var job StoredVideoJob
+			if json.Unmarshal([]byte(text), &job) != nil || (!job.ExpiresAt.IsZero() && !now.Before(job.ExpiresAt)) {
+				stale = append(stale, keys[start+index])
+				continue
+			}
+			jobs = append(jobs, &job)
 		}
-		jobs = append(jobs, &job)
 	}
 	if len(stale) > 0 {
 		_ = s.client.ZRem(ctx, indexKey, stale...).Err()

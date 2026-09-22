@@ -321,17 +321,6 @@ async function logout() {
   }
 }
 
-// Switch between tabs (placeholder - will be implemented with proper routing)
-function switchTab(tabName, skipSidebar = false) {
-  if (!skipSidebar) {
-    setSidebarOpen(false);
-  }
-  const url = new URL(window.location);
-  if (url.searchParams.get('tab') === tabName) return;
-  url.searchParams.set('tab', tabName);
-  window.location.href = url.toString();
-}
-
 // Every switch in the console is a <label class="toggle"> wrapping a checkbox, and the
 // paint comes from the .active class. Pages that render a switch without setting that
 // class leaned on the .toggle:has(input:checked) fallback in the stylesheet — which

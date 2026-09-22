@@ -337,15 +337,6 @@ func ResponsesChannelSubpath(chat http.HandlerFunc, opts ResponsesBridgeOptions)
 	}
 }
 
-// storeRequested reports whether the caller asked the upstream to keep the
-// response. It no longer decides whether this gateway records ownership:
-// grok2api writes ownership for every successful Responses request regardless of
-// `store`, which is what makes previous_response_id and GET /responses/{id} work
-// for clients that never set the field (OpenAI treats storage as on by default).
-func storeRequested(req ResponsesCreateRequest) bool {
-	return req.Store != nil && *req.Store
-}
-
 func applyBridgedResponseExtras(response map[string]interface{}, req ResponsesCreateRequest) {
 	if response == nil {
 		return

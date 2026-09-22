@@ -961,10 +961,6 @@ type anthropicStreamState struct {
 	reasoningSigned  map[int]bool
 }
 
-func translateOpenAIChatStreamToAnthropic(w io.Writer, reader io.Reader, model string) error {
-	return translateOpenAIChatStreamToAnthropicWithInput(w, reader, model, 0)
-}
-
 func translateOpenAIChatStreamToAnthropicWithInput(w io.Writer, reader io.Reader, model string, inputTokens int) error {
 	tracked := &checkedStreamWriter{target: w}
 	w = tracked

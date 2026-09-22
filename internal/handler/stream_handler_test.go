@@ -273,23 +273,6 @@ func TestStreamError_OpenAIFormatEndsTheStream(t *testing.T) {
 	}
 }
 
-// TestReportRequestFailure_AuthErrorAnswers401 pins the same contract for the auth
-// path, which also used to answer 200 with the message as content.
-func TestReportRequestFailure_AuthErrorAnswers401(t *testing.T) {
-	rec := httptest.NewRecorder()
-	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
-
-	sh.InjectAuthError(`upstream API error: status=401, body={"message":"signed out"}`)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "Session expired") {
-		t.Fatalf("expected an auth error envelope, got: %s", body)
-	}
-}
-
 func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
 	tests := []struct {
 		name     string

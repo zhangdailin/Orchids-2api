@@ -222,41 +222,6 @@ func applyQuotaInfo(acc *store.Account, info *RateLimitInfo, inferSubscription b
 	return changed
 }
 
-func ConsumeSuccessfulQuota(acc *store.Account, provider string, observedHeaders bool) bool {
-	if acc == nil || observedHeaders {
-		return false
-	}
-	changed := false
-	if provider == ProviderBuild {
-		window := &acc.GrokRateLimits.Requests
-		if window.HasRemaining && window.Remaining > 0 {
-			window.Remaining = max(0, window.Remaining-1)
-			acc.GrokRateLimits.ObservedAt = time.Now().UTC()
-			changed = true
-		}
-		return changed
-	}
-	// Web quota is request-unit based. Match ApplyWebQuotaInfo's compatibility
-	// projection: auto is preferred, with fast used only when auto is absent.
-	// Weekly paid percentage billing is intentionally never decremented.
-	window := &acc.GrokWebQuota.Auto
-	if !window.HasRemaining {
-		window = &acc.GrokWebQuota.Fast
-	}
-	if window.HasRemaining && window.Remaining > 0 {
-		window.Remaining = max(0, window.Remaining-1)
-		changed = true
-	}
-	if acc.UsageCurrent > 0 {
-		acc.UsageCurrent = max(0, acc.UsageCurrent-1)
-		changed = true
-	}
-	if changed && !acc.GrokWebQuota.SyncedAt.IsZero() {
-		acc.GrokWebQuota.SyncedAt = time.Now().UTC()
-	}
-	return changed
-}
-
 // ApplyBuildRateLimits persists passive Build response headers separately from
 // subscription Billing. These values often describe a minute-scale request or
 // token bucket (such as 8300 tokens), never a remaining paid-plan balance.

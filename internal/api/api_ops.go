@@ -27,12 +27,12 @@ const alertRulesRedisKey = "ops:alert_rules"
 // nonProviderChannels are aggregates that are counted but must not be presented
 // as provider channels in the matrix or the channel picker:
 //
-//   - "http" is every request whose path matched no provider prefix: the admin
-//     UI, health checks, and whatever a public scanner asks for. It has no
-//     accounts and no models, so it cannot be "healthy" or "unhealthy".
-//   - "probe" is our own synthetic traffic, recorded with the reserved model
-//     "__probe__" so it can never be confused with a real request. It is shown as
-//     the "探测量" KPI instead.
+// "http" is every request whose path matched no provider prefix: the admin UI,
+// health checks, and whatever a public scanner asks for. It has no accounts and
+// no models, so it cannot be "healthy" or "unhealthy".
+//
+// "probe" stays listed for legacy Redis aggregates written by older builds that
+// ran the removed synthetic probe loop; no new probe rows are ever recorded.
 var nonProviderChannels = map[string]bool{
 	"http":  true,
 	"probe": true,
@@ -101,7 +101,8 @@ func (a *API) HandleOpsOverview(w http.ResponseWriter, r *http.Request) {
 		"until":          until.UTC().Format(time.RFC3339),
 		"channels":       channels,
 		// Named so the page can explain why some traffic is counted but not shown
-		// as a channel (the http catch-all and our own synthetic probes).
+		// as a channel (the http catch-all, plus legacy probe aggregates from
+		// builds that still ran the removed synthetic probe loop).
 		"excluded_aggregates": aggregates,
 		"channel":             target,
 		"totals":              opsagg.Summary{},
@@ -555,7 +556,6 @@ func (a *API) opsBucketsWithSamples(ctx context.Context, scope string, since, un
 			combined.Requests += bucket.Requests
 			combined.Success += bucket.Success
 			combined.Failed += bucket.Failed
-			combined.Probes += bucket.Probes
 			combined.Input += bucket.Input
 			combined.Output += bucket.Output
 			merged[bucket.Minute] = combined
@@ -577,7 +577,6 @@ func opsSeries(buckets []opsagg.Bucket) []map[string]interface{} {
 			"requests":     bucket.Requests,
 			"success":      bucket.Success,
 			"failed":       bucket.Failed,
-			"probes":       bucket.Probes,
 			"input_tokens": bucket.Input, "output_tokens": bucket.Output, "usage_samples": bucket.UsageSamples, "attempt_failures": bucket.AttemptFailures, "account_switch_count": bucket.AccountSwitchCount, "account_switch_sum": bucket.AccountSwitchSum,
 		})
 	}

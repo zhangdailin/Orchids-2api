@@ -60,10 +60,9 @@ const realPayload = {
   channels: ['grok', 'puter', 'warp', 'workbuddy'],
   excluded_aggregates: ['http', 'probe'],
   totals: {
-    requests: 253,
+    requests: 248,
     success: 230,
     failed: 23,
-    probes: 5,
     success_rate: 0.909,
     rpm: 1.4,
     duration_p95_ms: 8536,
@@ -79,8 +78,8 @@ const realPayload = {
     counts: { request: 1974, operation: 10, system: 16 },
   },
   series: [
-    { minute: '2026-09-12T13:53:00Z', requests: 3, success: 1, failed: 2, probes: 0 },
-    { minute: '2026-09-12T13:54:00Z', requests: 5, success: 5, failed: 0, probes: 1 },
+    { minute: '2026-09-12T13:53:00Z', requests: 3, success: 1, failed: 2 },
+    { minute: '2026-09-12T13:54:00Z', requests: 5, success: 5, failed: 0 },
   ],
   matrix: [
     {
@@ -90,9 +89,9 @@ const realPayload = {
       accounts_needing_login: 0,
       model_cooldowns: 1,
       has_sample: true,
-      summary: { requests: 20, success: 20, failed: 0, probes: 0, success_rate: 1, rpm: 0.1, duration_p95_ms: 8536, first_token_p95_ms: 3550, samples: 20 },
+      summary: { requests: 20, success: 20, failed: 0, success_rate: 1, rpm: 0.1, duration_p95_ms: 8536, first_token_p95_ms: 3550, samples: 20 },
       models: [{ model: 'grok-4.6', requests: 8, success: 8, failed: 0, success_rate: 1, duration_p95_ms: 8536, samples: 8 }],
-      series: [{ minute: '2026-09-12T13:53:00Z', requests: 2, success: 2, failed: 0, probes: 0 }],
+      series: [{ minute: '2026-09-12T13:53:00Z', requests: 2, success: 2, failed: 0 }],
     },
     {
       channel: 'warp',
@@ -101,7 +100,7 @@ const realPayload = {
       accounts_needing_login: 0,
       model_cooldowns: 0,
       has_sample: false,
-      summary: { requests: 0, success: 0, failed: 0, probes: 0, success_rate: 0, rpm: 0, duration_p95_ms: 0, first_token_p95_ms: 0, samples: 0 },
+      summary: { requests: 0, success: 0, failed: 0, success_rate: 0, rpm: 0, duration_p95_ms: 0, first_token_p95_ms: 0, samples: 0 },
       models: [],
       series: [],
     },

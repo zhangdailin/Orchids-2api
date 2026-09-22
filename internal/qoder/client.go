@@ -265,19 +265,6 @@ func isRetryable(err error) bool {
 	return asAttemptError(err, &target) && (target.retryable || target.busy)
 }
 
-func retryDelay(err error, attempt int) time.Duration {
-	var target *attemptStreamError
-	if asAttemptError(err, &target) && target.wait > 0 {
-		return target.wait
-	}
-	// 1s, 2s, 4s.
-	wait := time.Duration(1<<uint(attempt-1)) * time.Second
-	if wait > 30*time.Second {
-		wait = 30 * time.Second
-	}
-	return wait
-}
-
 func asAttemptError(err error, target **attemptStreamError) bool {
 	for err != nil {
 		if typed, ok := err.(*attemptStreamError); ok {

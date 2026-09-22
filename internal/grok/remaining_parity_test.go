@@ -133,7 +133,7 @@ func TestRemainingEarlyMessagesSignature(t *testing.T) {
 		t.Fatal(out.Err)
 	}
 	var messages bytes.Buffer
-	err := translateOpenAIChatStreamToAnthropic(&messages, strings.NewReader(body), "grok-4.6")
+	err := translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(body), "grok-4.6", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestRemainingLateMessagesSignatureKeepsOriginalBlock(t *testing.T) {
 		t.Fatal(out.Err)
 	}
 	var messages bytes.Buffer
-	if err := translateOpenAIChatStreamToAnthropic(&messages, strings.NewReader(chat), "grok-4.6"); err != nil {
+	if err := translateOpenAIChatStreamToAnthropicWithInput(&messages, strings.NewReader(chat), "grok-4.6", 0); err != nil {
 		t.Fatal(err)
 	}
 	thinkingIndex := -1
