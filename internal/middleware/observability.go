@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -128,6 +129,7 @@ func Diagnostics(store *debug.DiagnosticStore, enabled func() bool) func(http.Ha
 			writer := &diagnosticWriter{TracedResponseWriter: NewTracedResponseWriter(w), capture: capture}
 			defer func() {
 				capture.Set("6_http_summary.json", fmtJSON(map[string]interface{}{"status": writer.StatusCode, "bytes": writer.BytesWritten, "stream_failed": writer.StreamFailed()}))
+				writer.saveResponseDiagnostic()
 				saveCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
 				if err := store.Save(saveCtx, capture.Bundle()); err != nil {
@@ -155,12 +157,30 @@ func (r *diagnosticReader) Read(p []byte) (int, error) {
 type diagnosticWriter struct {
 	*TracedResponseWriter
 	capture *debug.Capture
+	body    bytes.Buffer
 }
 
 func (w *diagnosticWriter) Write(p []byte) (int, error) {
 	n, err := w.TracedResponseWriter.Write(p)
-	w.capture.Append("5_http_response.txt", string(p[:n]))
+	if n > 0 {
+		_, _ = w.body.Write(p[:n])
+	}
 	return n, err
+}
+
+func (w *diagnosticWriter) saveResponseDiagnostic() {
+	if w == nil || w.capture == nil {
+		return
+	}
+	// The regular response is already represented by the structured client SSE
+	// capture. Keep the raw HTTP copy only when it explains a failure or when the
+	// response is not SSE/JSON and therefore cannot be reconstructed reliably.
+	contentType := strings.ToLower(strings.TrimSpace(w.Header().Get("Content-Type")))
+	failed := w.StatusCode >= 400 || w.StreamFailed()
+	structured := strings.Contains(contentType, "text/event-stream") || strings.Contains(contentType, "application/json")
+	if failed || !structured {
+		w.capture.Set("5_http_response.txt", w.body.String())
+	}
 }
 
 func RecordUpstreamAttempt(ctx context.Context, accountID int64, failed bool) {

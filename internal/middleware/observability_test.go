@@ -71,3 +71,27 @@ func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
 		t.Fatal("response diagnostic missing")
 	}
 }
+
+func TestDiagnosticsOmitsSuccessfulStructuredRawResponse(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	defer client.Close()
+	store := debug.NewDiagnosticStore(client, "test:")
+	handler := TraceMiddleware(Diagnostics(store, func() bool { return true })(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: message_stop\\ndata: {}\\n\\n")
+	})))
+	req := httptest.NewRequest("POST", "/cline/v1/messages", strings.NewReader(`{"model":"test","messages":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	b, err := store.Get(context.Background(), recorder.Header().Get(TraceIDHeader))
+	if err != nil || b == nil {
+		t.Fatalf("diagnostics=%v err=%v", b, err)
+	}
+	for _, section := range b.Sections {
+		if section.Name == "5_http_response.txt" {
+			t.Fatalf("successful structured response should not be duplicated: %q", section.Payload)
+		}
+	}
+}
