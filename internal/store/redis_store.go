@@ -289,7 +289,7 @@ var (
 	`)
 	reconcileDiscoveredModelsScript = redis.NewScript(`
 		local row_prefix, channel = ARGV[1], ARGV[2]
-		local prune, incoming = ARGV[3] == "1", cjson.decode(ARGV[4])
+		local prune, incoming, provider_scope = ARGV[3] == "1", cjson.decode(ARGV[4]), string.lower(tostring(ARGV[5] or ""))
 		local wanted, existing = {}, {}
 		local result = {added = {}, updated = {}, deleted = {}, protected = {}}
 		for _, id in ipairs(redis.call("SMEMBERS", KEYS[1])) do
@@ -298,7 +298,8 @@ var (
 				local row = cjson.decode(raw)
 				local row_channel = string.lower(tostring(row.channel or ""))
 				row_channel = string.gsub(string.gsub(row_channel, "_", "-"), " ", "-")
-				if row_channel == channel and row.model_id then existing[tostring(row.model_id)] = {id=id,row=row} end
+				local row_provider = string.lower(tostring(row.provider or ""))
+				if row_channel == channel and row.model_id and (provider_scope == "" or row_provider == provider_scope) then existing[tostring(row.model_id)] = {id=id,row=row} end
 			end
 		end
 		for _, row in ipairs(incoming) do
@@ -308,7 +309,10 @@ var (
 			local current = existing[model_id]
 			if current then
 				local origin = string.lower(tostring(current.row.origin or ""))
-				if origin == "discovery" then
+				if (provider_scope ~= "" and prune) or origin == "discovery" then
+					-- An authoritative scoped catalog owns every row in its plane,
+					-- including older admin/catalog rows. Non-pruning refreshes retain
+					-- the operator-field protection below.
 					row.id, row.created_at = current.id, current.row.created_at or row.created_at
 				else
 					-- Manual/config/legacy rows are never replaced or pruned. A matching
@@ -340,7 +344,7 @@ var (
 			for model_id, current in pairs(existing) do
 				if not wanted[model_id] then
 					local origin = string.lower(tostring(current.row.origin or ""))
-					if origin == "discovery" then
+					if (provider_scope ~= "" and prune) or origin == "discovery" then
 						redis.call("DEL", row_prefix .. current.id)
 						redis.call("SREM", KEYS[1], current.id)
 						if redis.call("HGET", KEYS[3], model_id) == current.id then redis.call("HDEL", KEYS[3], model_id) end
@@ -2360,7 +2364,7 @@ func (s *redisStore) ReconcileDiscoveredModels(ctx context.Context, channel stri
 	}
 	raw, err := reconcileDiscoveredModelsScript.Run(ctx, s.client, []string{
 		s.modelsIDsKey(), s.modelsNextIDKey(), s.modelsModelIDMapKey(), s.modelsChannelModelIDMapKey(),
-	}, s.prefix+"models:id:", channelKey, prune, payload).Text()
+	}, s.prefix+"models:id:", channelKey, prune, payload, strings.ToLower(strings.TrimSpace(options.ProviderScope))).Text()
 	if err != nil {
 		return nil, err
 	}

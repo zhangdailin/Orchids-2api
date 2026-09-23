@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -935,10 +936,9 @@ func clearModelsForChannel(t *testing.T, ctx context.Context, s *store.Store, ch
 	}
 }
 
-// TestShouldDeleteMissingModelsOnRefresh_NeverPrunesOnTheBuildTextCatalog pins
-// the regression guard: the Grok Build read is a text-model catalog and cannot
-// speak for the media, voice and STT routes the channel implements.
-func TestShouldDeleteMissingModelsOnRefresh_NeverPrunesOnTheBuildTextCatalog(t *testing.T) {
+// TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog pins
+// the scope guard: Grok Build is reconciled separately from Web and Console.
+func TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog(t *testing.T) {
 	if shouldDeleteMissingModelsOnRefresh("Grok", "grok_build_models") {
 		t.Fatal("a Build text-catalog read must not prune the channel catalog")
 	}
@@ -974,8 +974,9 @@ func TestShouldDeleteMissingModelsOnRefresh_NeverPrunesOnTheBuildTextCatalog(t *
 // observes an existing row promotes it to verified.
 //
 // Creation-only verification left rows that predate the observation permanently
-// unverified, and an unverified Grok row is not visible — which is how the
-// channel's own default model vanished from /v1/models.
+// unverified, and an unverified Grok row is not visible. An authoritative Grok
+// Build round now also transfers the matching row to discovery ownership so it
+// can be removed when the upstream later withdraws it.
 func TestApplyModelRefresh_MarksObservedExistingRowsVerified(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
@@ -1009,7 +1010,68 @@ func TestApplyModelRefresh_MarksObservedExistingRowsVerified(t *testing.T) {
 	if !stored.IsDefault {
 		t.Fatal("the operator-owned default was changed by the promotion")
 	}
-	if stored.Origin != "catalog" {
-		t.Fatalf("origin=%q, want the operator-owned value preserved", stored.Origin)
+	if stored.Origin != "discovery" {
+		t.Fatalf("origin=%q, want authoritative upstream ownership", stored.Origin)
+	}
+}
+
+func TestApplyGrokRefreshPrunesWithdrawnBuildRowsButKeepsOtherPlanes(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	clearModelsForChannel(t, ctx, s, "Grok")
+	for _, model := range []*store.Model{
+		{Channel: "Grok", ModelID: "withdrawn", Name: "withdrawn", Status: store.ModelStatusAvailable, Verified: true, Provider: "build", Origin: "discovery"},
+		{Channel: "Grok", ModelID: "web-media", Name: "web-media", Status: store.ModelStatusAvailable, Verified: true, Provider: "web", Origin: "discovery"},
+		{Channel: "Grok", ModelID: "console-media", Name: "console-media", Status: store.ModelStatusAvailable, Verified: true, Provider: "console", Origin: "discovery"},
+	} {
+		if err := s.CreateModel(ctx, model); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := applyModelRefreshWithPrune(ctx, s, "Grok", "grok_build_models", []discoveredModel{{ID: "grok-4.7", Name: "Grok 4.7", Verified: true}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted != 1 || len(result.DeletedModelIDs) != 1 || result.DeletedModelIDs[0] != "withdrawn" {
+		t.Fatalf("result=%+v", result)
+	}
+	for _, id := range []string{"web-media", "console-media", "grok-4.7"} {
+		if _, err := s.GetModelByChannelAndModelID(ctx, "Grok", id); err != nil {
+			t.Fatalf("%s missing: %v", id, err)
+		}
+	}
+}
+
+func TestGrokPartialCatalogNeverPrunes(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	clearModelsForChannel(t, ctx, s, "Grok")
+	for id := int64(1); id <= 2; id++ {
+		if err := s.CreateAccount(ctx, &store.Account{AccountType: "grok", Name: fmt.Sprintf("build-%d", id), Enabled: true, AuthStatus: store.AccountAuthStatusActive, CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "token", GrokModels: []string{"old"}, GrokModelsSyncedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CreateModel(ctx, &store.Model{Channel: "Grok", ModelID: "old", Name: "old", Provider: "build", Origin: "discovery", Status: store.ModelStatusAvailable, Verified: true}); err != nil {
+		t.Fatal(err)
+	}
+	previous := fetchGrokBuildModelsForRefresh
+	defer func() { fetchGrokBuildModelsForRefresh = previous }()
+	fetchGrokBuildModelsForRefresh = func(_ context.Context, _ *config.Config, _ *store.Store, acc *store.Account) ([]string, error) {
+		if acc.Name == "build-1" {
+			return []string{"new"}, nil
+		}
+		return nil, fmt.Errorf("temporary")
+	}
+	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Grok", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Partial || result.Deleted != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+	if _, err := s.GetModelByChannelAndModelID(ctx, "Grok", "old"); err != nil {
+		t.Fatalf("partial refresh deleted LKG: %v", err)
 	}
 }

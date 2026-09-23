@@ -1827,7 +1827,12 @@
         return Array.isArray(payload?.data) ? payload.data : [];
       }));
       const routes = await catalogPromise;
-      const supports = (item, capability) => Array.isArray(item.capabilities) && item.capabilities.includes(capability);
+      const supports = (item, capability) => {
+        const capabilities = Array.isArray(item?.capabilities) ? item.capabilities : [];
+        // Match the backend's legacy compatibility rule: an old row with no
+        // capability metadata is a conversation route, not an invisible model.
+        return capabilities.length === 0 ? capability === "chat" : capabilities.includes(capability);
+      };
       chatState.routes = routes;
       const videoSelect = document.getElementById("videoModel");
       if (videoSelect) {

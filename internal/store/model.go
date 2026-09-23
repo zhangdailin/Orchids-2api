@@ -76,12 +76,14 @@ func (s ModelStatus) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(s))
 }
 
-// ModelReconcileOptions controls one channel-scoped discovery publication.
-// Prune removes discovery-owned rows absent from the supplied snapshot. Rows
-// whose Origin is "manual" (including legacy rows with an empty origin) are
-// never overwritten or pruned.
+// ModelReconcileOptions controls one authoritative catalog publication.
+// ProviderScope limits replacement/pruning to one provider plane (for example,
+// Grok Build). An empty scope covers the whole channel. When Prune is true the
+// upstream snapshot is the truth: every in-scope row absent from it is removed,
+// including rows previously created through the admin UI.
 type ModelReconcileOptions struct {
-	Prune bool
+	Prune         bool
+	ProviderScope string
 }
 
 // ModelReconcileResult describes the atomic changes made by a reconciliation.

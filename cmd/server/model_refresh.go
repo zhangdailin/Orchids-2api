@@ -429,7 +429,7 @@ func discoverModelsForChannelReport(ctx context.Context, cfg *config.Config, s *
 	case "puter":
 		candidates, source, err = discoverPuterModelsConcurrent(ctx, cfg, s, concurrency)
 	case "grok":
-		candidates, source, err = discoverGrokModelsConcurrent(ctx, cfg, s, concurrency)
+		return discoverGrokModelsReport(ctx, cfg, s, concurrency)
 	default:
 		err = fmt.Errorf("unsupported channel: %s", channel)
 	}
@@ -1004,12 +1004,18 @@ type grokBuildModelDiscovery struct {
 // observation, and re-publishing them would report a stale catalog as freshly
 // discovered.
 func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
+	report, err := discoverGrokModelsReport(ctx, cfg, s, concurrency)
+	return report.Candidates, report.Source, err
+}
+
+func discoverGrokModelsReport(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) (accountModelDiscoveryReport, error) {
+	report := accountModelDiscoveryReport{}
 	accounts, err := grokBuildModelDiscoveryAccounts(ctx, s)
 	if err != nil {
-		return nil, "", err
+		return report, err
 	}
 	if len(accounts) == 0 {
-		return nil, "", &noActiveAccountsError{Channel: "Grok"}
+		return report, &noActiveAccountsError{Channel: "Grok"}
 	}
 
 	ordered := make([]grokBuildModelDiscovery, len(accounts))
@@ -1020,57 +1026,56 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 	})
 
 	now := time.Now().UTC()
-	merged := make([]discoveredModel, 0, len(accounts)*2)
 	seen := make(map[string]struct{})
-	successes := 0
-	var lastErr error
 	for _, result := range ordered {
-		if result.account == nil || result.err != nil || len(result.models) == 0 {
-			if result.err != nil {
-				lastErr = result.err
-			}
+		attempt := accountModelDiscoveryAttempt{Err: result.err}
+		if result.account != nil {
+			attempt.AccountID = result.account.ID
+		}
+		if result.account == nil {
+			attempt.Err = fmt.Errorf("missing Grok Build account")
+			report.Attempts = append(report.Attempts, attempt)
 			continue
 		}
-		successes++
-		// Persist the full official account capability snapshot, including an
-		// ID that this gateway intentionally does not route yet.  That keeps
-		// capability truth separate from the public compatibility surface.
-		grok.NormalizeProvider(result.account)
-		grok.ApplyCLIModels(result.account, result.models, now)
-		if updateErr := s.UpdateAccount(ctx, result.account); updateErr != nil {
-			return nil, "", fmt.Errorf("persist grok build model catalog: %w", updateErr)
+		if result.err == nil && len(result.models) > 0 {
+			grok.NormalizeProvider(result.account)
+			grok.ApplyCLIModels(result.account, result.models, now)
+			if updateErr := s.UpdateAccount(ctx, result.account); updateErr != nil {
+				attempt.Err = fmt.Errorf("persist grok build model catalog: %w", updateErr)
+			}
+		} else {
+			// A failed account contributes its last-known-good union, but its Err
+			// prevents negative reconciliation for the entire round.
+			attempt.UsedLastKnownGood = len(result.account.GrokModels) > 0
 		}
-		// Publish the normalized capability view as well: Build intentionally
-		// omits stable Composer and compatibility aliases from sparse /models
-		// responses even though the account can route them.
 		for _, rawID := range result.account.GrokModels {
 			id := canonicalGrokRefreshModelID(rawID)
+			if id == "" {
+				continue
+			}
 			spec, ok := grok.ResolveModel(id)
 			if !ok {
-				// Build's account catalog is the source of truth. Unknown but
-				// advertised IDs are published as dynamic Build routes.
 				spec = grok.ModelSpec{ID: id, Name: id, UpstreamModel: id, Upstream: grok.UpstreamCLI}
 			} else if spec.Upstream != grok.UpstreamCLI {
 				continue
 			}
-			key := strings.ToLower(id)
-			if _, exists := seen[key]; exists {
-				continue
+			candidate := discoveredModel{ID: spec.ID, Name: util.FirstNonEmpty(spec.Name, spec.ID), Verified: true}
+			attempt.Candidates = append(attempt.Candidates, candidate)
+			key := strings.ToLower(candidate.ID)
+			if _, exists := seen[key]; !exists {
+				seen[key] = struct{}{}
+				candidate.SortOrder = len(report.Candidates)
+				report.Candidates = append(report.Candidates, candidate)
 			}
-			seen[key] = struct{}{}
-			merged = append(merged, discoveredModel{ID: spec.ID, Name: util.FirstNonEmpty(spec.Name, spec.ID), SortOrder: len(merged), Verified: true})
 		}
+		report.Attempts = append(report.Attempts, attempt)
 	}
-	if len(merged) > 0 {
-		return merged, "grok_build_models", nil
+	succeeded, _ := report.counts()
+	if succeeded == 0 {
+		return report, fmt.Errorf("official Grok Build model discovery failed for all enabled OAuth accounts")
 	}
-	if successes > 0 {
-		return nil, "", fmt.Errorf("official Grok Build catalog contains no locally routable models")
-	}
-	if lastErr != nil {
-		return nil, "", fmt.Errorf("official Grok Build model discovery failed for all enabled OAuth accounts: %w", lastErr)
-	}
-	return nil, "", fmt.Errorf("official Grok Build model discovery failed for all enabled OAuth accounts")
+	report.Source = "grok_build_models"
+	return report, nil
 }
 
 func canonicalGrokRefreshModelID(modelID string) string {
@@ -1087,7 +1092,7 @@ func canonicalGrokRefreshModelID(modelID string) string {
 	if spec, ok := grok.ResolveModel(id); ok {
 		return spec.ID
 	}
-	return id
+	return strings.ToLower(id)
 }
 
 func grokBuildModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.Account, error) {
@@ -1362,9 +1367,14 @@ func applyModelRefreshWithPrune(ctx context.Context, s *store.Store, channel str
 		}
 		records = append(records, record)
 	}
-	applied, err := s.ReconcileDiscoveredModels(ctx, channel, records, store.ModelReconcileOptions{
+	reconcileOptions := store.ModelReconcileOptions{
 		Prune: allowPrune && shouldDeleteMissingModelsOnRefresh(channel, source),
-	})
+	}
+	if strings.EqualFold(strings.TrimSpace(channel), "grok") && source == "grok_build_models" && allowPrune {
+		reconcileOptions.Prune = true
+		reconcileOptions.ProviderScope = grok.ProviderBuild
+	}
+	applied, err := s.ReconcileDiscoveredModels(ctx, channel, records, reconcileOptions)
 	if err != nil {
 		return nil, err
 	}
@@ -1373,18 +1383,9 @@ func applyModelRefreshWithPrune(ctx context.Context, s *store.Store, channel str
 	return result, nil
 }
 
-// shouldDeleteMissingModelsOnRefresh reports whether a refresh may prune rows
-// that the upstream catalog no longer advertises.
-//
-// Pruning is only allowed on a source that is authoritative for the whole
-// channel. It is refused for two different reasons:
-//
-//   - A non-upstream source observed nothing, so a missing row is not evidence.
-//   - The Grok Build OAuth read is a *text-model* catalog. It deliberately omits
-//     the Composer capability and every media, voice and STT route the channel
-//     implements, so a row missing from it may still be perfectly routable.
-//     Pruning on it deleted 16 working models in production, which is why the
-//     Build source is excluded here.
+// shouldDeleteMissingModelsOnRefresh reports whether a whole-channel catalog is
+// authoritative. Grok Build is handled as a provider-scoped catalog by apply;
+// it must remain false here so it can never prune Web or Console planes.
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 	source = strings.TrimSpace(source)
 	if source == "grok_build_models" || source == "puter_public_models_test_mode" || source == "workbuddy_cli_models" {
