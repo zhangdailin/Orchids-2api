@@ -2362,7 +2362,7 @@ func (s *redisStore) ReconcileDiscoveredModels(ctx context.Context, channel stri
 	if options.Prune {
 		prune = "1"
 	}
-	raw, err := reconcileDiscoveredModelsScript.Run(ctx, s.client, []string{
+	text, err := reconcileDiscoveredModelsScript.Run(ctx, s.client, []string{
 		s.modelsIDsKey(), s.modelsNextIDKey(), s.modelsModelIDMapKey(), s.modelsChannelModelIDMapKey(),
 	}, s.prefix+"models:id:", channelKey, prune, payload, strings.ToLower(strings.TrimSpace(options.ProviderScope))).Text()
 	if err != nil {
@@ -2374,8 +2374,24 @@ func (s *redisStore) ReconcileDiscoveredModels(ctx context.Context, channel stri
 		Deleted   []string `json:"deleted"`
 		Protected []string `json:"protected"`
 	}
-	if err := json.Unmarshal([]byte(raw), &applied); err != nil {
-		return nil, fmt.Errorf("decode model reconciliation result: %w", err)
+	if err := json.Unmarshal([]byte(text), &applied); err != nil {
+		// Redis Lua represents an empty array as an empty object. Decode through
+		// RawMessage so production Redis and miniredis have one stable contract.
+		var raw map[string]json.RawMessage
+		if rawErr := json.Unmarshal([]byte(text), &raw); rawErr != nil {
+			return nil, fmt.Errorf("decode model reconciliation result: %w", err)
+		}
+		decodeIDs := func(key string) []string {
+			value := raw[key]
+			if len(value) == 0 || string(value) == "{}" || string(value) == "null" {
+				return nil
+			}
+			var ids []string
+			_ = json.Unmarshal(value, &ids)
+			return ids
+		}
+		applied.Added, applied.Updated = decodeIDs("added"), decodeIDs("updated")
+		applied.Deleted, applied.Protected = decodeIDs("deleted"), decodeIDs("protected")
 	}
 	for _, ids := range [][]string{applied.Added, applied.Updated, applied.Deleted, applied.Protected} {
 		sort.Strings(ids)
