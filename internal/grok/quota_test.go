@@ -160,6 +160,35 @@ func TestInferFreeProfileDoesNotClaimPaidAccountsAsFree(t *testing.T) {
 	}
 }
 
+func TestApplyWebQuotaInfoPreservesMissingActiveWindow(t *testing.T) {
+	reset := time.Now().Add(time.Hour).UTC()
+	acc := &store.Account{AccountType: "grok", GrokWebQuota: store.GrokWebQuotaSnapshot{
+		Auto: store.GrokQuotaWindow{Limit: 20, Remaining: 9, HasLimit: true, HasRemaining: true, ResetAt: reset},
+		Fast: store.GrokQuotaWindow{Limit: 30, Remaining: 17, HasLimit: true, HasRemaining: true, ResetAt: reset},
+	}}
+	ApplyWebQuotaInfo(acc, map[string]*RateLimitInfo{
+		"auto": {Limit: 20, Remaining: 8, HasLimit: true, HasRemaining: true, ResetAt: reset},
+	})
+	if acc.GrokWebQuota.Auto.Remaining != 8 {
+		t.Fatalf("auto remaining=%v want 8", acc.GrokWebQuota.Auto.Remaining)
+	}
+	if acc.GrokWebQuota.Fast.Remaining != 17 || !acc.GrokWebQuota.Fast.ResetAt.Equal(reset) {
+		t.Fatalf("active missing fast window was lost: %+v", acc.GrokWebQuota.Fast)
+	}
+}
+
+func TestApplyWebQuotaInfoClearsMissingExpiredWindow(t *testing.T) {
+	acc := &store.Account{AccountType: "grok", GrokWebQuota: store.GrokWebQuotaSnapshot{
+		Fast: store.GrokQuotaWindow{Limit: 30, Remaining: 0, HasLimit: true, HasRemaining: true, ResetAt: time.Now().Add(-time.Minute)},
+	}}
+	ApplyWebQuotaInfo(acc, map[string]*RateLimitInfo{
+		"auto": {Limit: 20, Remaining: 8, HasLimit: true, HasRemaining: true, ResetAt: time.Now().Add(time.Hour)},
+	})
+	if acc.GrokWebQuota.Fast.HasLimit || acc.GrokWebQuota.Fast.HasRemaining || acc.GrokWebQuota.Fast.Remaining != 0 || !acc.GrokWebQuota.Fast.ResetAt.IsZero() {
+		t.Fatalf("expired missing fast window was preserved: %+v", acc.GrokWebQuota.Fast)
+	}
+}
+
 // A Web account's subscription has to come from the mode a limit belongs to:
 // the same tier is published as different numbers per mode (auto 150 vs fast
 // 400), so a single mixed-mode number cannot classify an account.
@@ -204,7 +233,7 @@ func TestInferSubscriptionFromRateLimitInfoRequiresKnownShapes(t *testing.T) {
 		7: "basic", 20: "basic", 8: "basic", 30: "basic",
 		50: "super", 140: "super",
 		150: "heavy",
-		25: "lite", 70: "lite", 12: "lite",
+		25:  "lite", 70: "lite", 12: "lite",
 		1000: "", 151: "", 149: "", 3: "",
 	}
 	for limit, want := range cases {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/store"
 )
 
@@ -48,7 +49,7 @@ func (h *Handler) openCLIAccountSessionByID(ctx context.Context, accountID int64
 	if err != nil {
 		return nil, fmt.Errorf("stored response account is unavailable: %w", err)
 	}
-	if acc == nil || !acc.Enabled || ProviderForAccount(acc) != ProviderBuild || !AccountSupportsModel(acc, modelID) || !h.routeAllowsAccount(ctx, modelID, acc.ID) || !h.accountCapacityAvailable(acc) {
+	if acc == nil || !acc.Enabled || ProviderForAccount(acc) != ProviderBuild || !AccountSupportsModel(acc, modelID) || !h.routeAllowsAccount(ctx, modelID, acc.ID) || !accountUsableForModel(ctx, acc) || accountpolicy.AccountHeld(acc, time.Now()) || !h.accountCapacityAvailable(acc) {
 		return nil, fmt.Errorf("stored response account is unavailable")
 	}
 	token := strings.TrimSpace(acc.OAuthAccessToken)

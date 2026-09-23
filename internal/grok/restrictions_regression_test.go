@@ -202,6 +202,35 @@ func TestRestrictionsConsoleChatRoutesImagesNatively(t *testing.T) {
 	}
 }
 
+func TestAppChatRateLimitRequest(t *testing.T) {
+	token, model := appChatRateLimitRequest([]byte(`{"modelName":"grok-4.20"}`), http.Header{
+		"Cookie": {"foo=bar; sso=web-token; sso-rw=web-token"},
+	})
+	if token != "web-token" || model != "grok-4.20" {
+		t.Fatalf("token=%q model=%q", token, model)
+	}
+}
+
+func TestWebScopedCooldownUsesAccountContext(t *testing.T) {
+	old := teamCooldown
+	teamCooldown = newTeamCooldownRegistry()
+	defer func() { teamCooldown = old }()
+
+	ctx := withRateLimitAccount(context.Background(), &store.Account{ID: 7, TeamID: "web-team"})
+	meta := noteScopedRateLimit(ctx, ProviderWeb, "web-token", "grok-4.20", http.StatusTooManyRequests,
+		http.Header{"Retry-After": []string{"2"}}, []byte(`{"error":"limited"}`))
+	if meta == nil {
+		t.Fatal("expected Web 429 metadata")
+	}
+	if err := waitScopedRateLimit(ctx, ProviderWeb, "web-token", "grok-4.20", 0); err == nil {
+		t.Fatal("expected Web team/model cooldown to be enforced")
+	}
+	other := withRateLimitAccount(context.Background(), &store.Account{ID: 8, TeamID: "other-team"})
+	if err := waitScopedRateLimit(other, ProviderWeb, "other-token", "grok-4.20", 0); err != nil {
+		t.Fatalf("unrelated Web team blocked: %v", err)
+	}
+}
+
 func TestRestrictionsScopedCooldownAndPacing(t *testing.T) {
 	old := teamCooldown
 	teamCooldown = newTeamCooldownRegistry()

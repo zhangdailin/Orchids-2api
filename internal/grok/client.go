@@ -790,6 +790,20 @@ func (c *Client) doAppChatRequest(ctx context.Context, reqURL string, body []byt
 	return c.doRequestWithHTTPClient(ctx, c.clientForAppChat(), reqURL, http.MethodPost, body, headers, http.StatusOK, false)
 }
 
+func appChatRateLimitRequest(body []byte, headers http.Header) (token, model string) {
+	if headers != nil {
+		token = NormalizeSSOToken(headers.Get("Cookie"))
+	}
+	if len(body) == 0 {
+		return token, ""
+	}
+	var payload map[string]interface{}
+	if json.Unmarshal(body, &payload) == nil {
+		model = firstNonEmpty(parseLooseStringAny(payload["modelName"]), parseLooseStringAny(payload["model"]))
+	}
+	return token, model
+}
+
 func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.Client, reqURL string, method string, body []byte, headers http.Header, okStatus int, retry429 bool) (*http.Response, error) {
 	if okStatus == 0 {
 		okStatus = http.StatusOK
@@ -888,7 +902,12 @@ func (c *Client) doRequestWithHTTPClient(ctx context.Context, httpClient *http.C
 		lastBody = string(raw)
 
 		if lastStatus == http.StatusTooManyRequests {
-			if meta := noteTeamRateLimit(lastStatus, resp.Header, raw); meta != nil {
+			// Web/app-chat must use the same scoped registry as Console and Build.
+			// noteTeamRateLimit only recorded a raw TeamID key, while request
+			// admission checks provider+account/team identities; that mismatch made
+			// every later Web request miss the cooldown and hit upstream again.
+			token, model := appChatRateLimitRequest(body, headers)
+			if meta := noteScopedRateLimit(ctx, ProviderWeb, token, model, lastStatus, resp.Header, raw); meta != nil {
 				if desc := meta.Describe(); desc != "" {
 					lastBody = lastBody + " " + desc
 				}

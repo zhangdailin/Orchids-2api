@@ -91,7 +91,10 @@ func TestMarkAllGrokAccountStatuses(t *testing.T) {
 		{name: "cloudflare 403", err: errors.New("grok upstream status=403 body=<html>cf-mitigated: challenge</html>"), wantMark: false, wantSwitch: false},
 		{name: "dpop 403", err: errors.New("grok upstream status=403 body={\"code\":\"unauthorized_dpop_required\"}"), wantMark: false, wantSwitch: false},
 		{name: "401", err: errors.New("grok upstream status=401 body=unauthorized"), wantMark: true, wantSwitch: true},
-		{name: "shared 429", err: errors.New("grok upstream status=429 body=too many requests"), wantMark: false, wantSwitch: true},
+		{name: "shared synthetic cooldown", err: errors.New("grok upstream status=429 body=too_many_requests team build:team:abc model grok-4 cooling down; retry-after=30s"), wantMark: false, wantSwitch: true},
+		{name: "structured team 429", err: errors.New("grok upstream status=429 body=Requests per Minute (actual / limit): 31 / 30 for team 123e4567-e89b-12d3-a456-426614174000 model grok-4.20"), wantMark: false, wantSwitch: true},
+		{name: "console free quota exhausted", err: errors.New("grok upstream status=429 body={\"code\":\"resource-exhausted\",\"error\":\"Free usage quota exceeded. Purchase credits\"}"), wantMark: true, wantSwitch: true},
+		{name: "plain too many requests", err: errors.New("grok upstream status=429 body=too many requests"), wantMark: true, wantSwitch: true},
 		{name: "account 429", err: errors.New("grok upstream status=429 body=rate limit exceeded"), wantMark: true, wantSwitch: true},
 		{name: "network", err: errors.New("read: connection reset by peer"), wantMark: true, wantSwitch: true},
 	}

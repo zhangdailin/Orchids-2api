@@ -17,7 +17,19 @@ func ApplyWebQuotaInfo(acc *store.Account, windows map[string]*RateLimitInfo) bo
 	if acc == nil || len(windows) == 0 {
 		return false
 	}
-	snapshot := store.GrokWebQuotaSnapshot{SyncedAt: time.Now().UTC(), Source: "grok_web_rate_limits"}
+	now := time.Now().UTC()
+	// A mode may be absent from a partial upstream response. Preserve its last
+	// still-active observation instead of replacing it with a zero-value window;
+	// once its reset passes, absence is allowed to clear it.
+	snapshot := acc.GrokWebQuota
+	if snapshot.Auto.ResetAt.IsZero() || !now.Before(snapshot.Auto.ResetAt) {
+		snapshot.Auto = store.GrokQuotaWindow{}
+	}
+	if snapshot.Fast.ResetAt.IsZero() || !now.Before(snapshot.Fast.ResetAt) {
+		snapshot.Fast = store.GrokQuotaWindow{}
+	}
+	snapshot.SyncedAt = now
+	snapshot.Source = "grok_web_rate_limits"
 	if info := windows["auto"]; info != nil {
 		snapshot.Auto = quotaWindowFromRateLimitInfo(info)
 	}

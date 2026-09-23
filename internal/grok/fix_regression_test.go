@@ -180,6 +180,20 @@ func TestIsModelScopedRefusal(t *testing.T) {
 	}
 }
 
+func TestConsoleFreeQuotaExhaustedError(t *testing.T) {
+	if !isConsoleFreeQuotaExhaustedError(errors.New(`grok upstream status=429 body={"code":"resource-exhausted","error":"Free usage quota exceeded. Purchase credits"}`)) {
+		t.Fatal("Console Free quota refusal not detected")
+	}
+	for _, raw := range []string{
+		`grok upstream status=429 body={"code":"resource-exhausted","error":"Too many requests for team"}`,
+		`grok upstream status=403 body=Free usage quota exceeded`,
+	} {
+		if isConsoleFreeQuotaExhaustedError(errors.New(raw)) {
+			t.Fatalf("non-Console-quota response misclassified: %s", raw)
+		}
+	}
+}
+
 func TestModelScopedFreeQuotaRefusal(t *testing.T) {
 	if !modelScopedFreeQuotaRefusal([]byte("You've used all the included free usage for model grok-4.6.")) {
 		t.Fatal("model-scoped free usage refusal not detected")

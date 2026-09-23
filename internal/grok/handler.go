@@ -557,6 +557,21 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	if isEgressChallengeError(err) {
 		return
 	}
+	// Console returns HTTP 429 for a fully spent Free chat allowance. This is not
+	// an RPS/RPM throttle: the response explicitly says the usage quota is gone.
+	// Persist it as quota exhaustion and hold the hidden Console runtime account
+	// for the same conservative 24-hour recovery window used by grok2api's
+	// /usage reconciliation. Otherwise the row stays "healthy" and gets selected
+	// every few minutes, producing an endless sequence of identical upstream 429s.
+	if acc != nil && ProviderForAccount(acc) == ProviderConsole && isConsoleFreeQuotaExhaustedError(err) {
+		acc.StatusMessage = strings.TrimSpace(err.Error())
+		acc.QuotaResetAt = time.Now().Add(accountpolicy.CooldownPayment)
+		h.unbindAffinity(ctx, ProviderConsole, acc.ID)
+		if h.lb != nil {
+			h.lb.MarkAccountStatus(ctx, acc, "402")
+		}
+		return
+	}
 	// Team-level resource-exhausted 429: the rate limit is on the token/session,
 	// not the account. Set a cooldown so the RPM window can reset. Without this,
 	// unmarked sibling accounts sharing the same token immediately hit the same
@@ -636,6 +651,15 @@ func isModelScopedRefusal(err error) bool {
 		}
 	}
 	return false
+}
+
+func isConsoleFreeQuotaExhaustedError(err error) bool {
+	if err == nil || parseUpstreamStatus(err) != http.StatusTooManyRequests {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "free usage quota exceeded") ||
+		strings.Contains(lower, "free usage exhausted")
 }
 
 func isResourceExhaustedError(err error) bool {
@@ -833,7 +857,8 @@ func (h *Handler) doSingleAccountRequest(
 	if client == nil {
 		return nil, fmt.Errorf("grok client not configured")
 	}
-	resp, err := callAPI(client, ctx, sess.token, payload)
+	requestCtx := withRateLimitAccount(ctx, sess.acc)
+	resp, err := callAPI(client, requestCtx, sess.token, payload)
 	if err != nil {
 		if shouldMarkStatus == nil || shouldMarkStatus(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
@@ -848,6 +873,13 @@ type grokAccountStatusPolicy func(error) bool
 func markAllGrokAccountStatuses(err error) bool {
 	if err == nil {
 		return false
+	}
+	// A Console Free allowance refusal is account quota exhaustion, not a shared
+	// Team+Model throttle, even though xAI uses the resource-exhausted code for
+	// both. It must reach markAccountStatus so the dead Console row leaves the
+	// pool instead of being selected forever while its Web parent looks healthy.
+	if isConsoleFreeQuotaExhaustedError(err) {
+		return true
 	}
 	// Egress challenges and shared team rate limits are not account failures.
 	if isEgressChallengeError(err) {
@@ -900,7 +932,9 @@ func (h *Handler) doAutoSwitchRequest(
 		return nil, fmt.Errorf("grok client not configured")
 	}
 	return h.retryWithAccountSwitch(ctx, sess, 100*time.Millisecond,
-		func() (*http.Response, error) { return callAPI(client, ctx, sess.token, *payload) },
+		func() (*http.Response, error) {
+			return callAPI(client, withRateLimitAccount(ctx, sess.acc), sess.token, *payload)
+		},
 		func(used []int64) (*chatAccountSession, error) {
 			return h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
 		},
@@ -983,12 +1017,18 @@ func isSharedGrokRateLimitError(err error) bool {
 	if parseUpstreamStatus(err) != http.StatusTooManyRequests && !strings.Contains(lower, "too many requests") {
 		return false
 	}
-	return strings.Contains(lower, "too_many_requests") ||
-		strings.Contains(lower, "too many requests for team") ||
-		strings.Contains(lower, "resource-exhausted") ||
-		strings.Contains(lower, "resource_exhausted") ||
-		strings.Contains(lower, "please try again in a bit") ||
-		strings.Contains(lower, "body=too many requests")
+	// Only a parsed Team+Model response is shared. A bare 429/"too many
+	// requests" is account-scoped in grok2api and must cool the selected account;
+	// treating it as shared left every account looking healthy while requests
+	// repeatedly rotated through a pool of throttled credentials.
+	if ParseRateLimitMetadata([]byte(err.Error())) != nil {
+		return true
+	}
+	// Errors emitted by waitScopedRateLimit are synthetic: the structured
+	// response was parsed on the preceding attempt and the team/model cooldown
+	// is already registered, so there is no response body left to parse here.
+	return strings.Contains(lower, "body=too_many_requests team ") &&
+		strings.Contains(lower, " cooling down; retry-after=")
 }
 
 func upstreamHTTPResponseStatus(err error) int {

@@ -29,6 +29,10 @@ const maxNativeResponsesBytes = 128 << 20
 
 func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Request, modelID string, spec ModelSpec, payload map[string]interface{}, upstreamPath string, saveOwnership bool) {
 	spec.Upstream, spec.ConsoleModel = UpstreamCLI, ""
+	// Native Responses bypasses the chat handler that normally installs Grok's
+	// model context. Keep the upstream model on every selection/request/retry so a
+	// model-scoped Free refusal cannot be escalated into a 24-hour account block.
+	r = r.WithContext(WithRequestModel(r.Context(), spec.UpstreamModel))
 	started := time.Now()
 	if err := validatePayloadReasoning(payload); err != nil {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
