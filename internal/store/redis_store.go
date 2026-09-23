@@ -291,7 +291,7 @@ var (
 		local row_prefix, channel = ARGV[1], ARGV[2]
 		local prune, incoming, provider_scope = ARGV[3] == "1", cjson.decode(ARGV[4]), string.lower(tostring(ARGV[5] or ""))
 		local wanted, existing = {}, {}
-		local result = {added = {}, updated = {}, deleted = {}, protected = {}}
+		local added, updated, deleted, protected = {}, {}, {}, {}
 		for _, id in ipairs(redis.call("SMEMBERS", KEYS[1])) do
 			local raw = redis.call("GET", row_prefix .. id)
 			if raw then
@@ -324,11 +324,11 @@ var (
 					if (not row.upstream_model or tostring(row.upstream_model) == "") and current_incoming.upstream_model then row.upstream_model = current_incoming.upstream_model end
 					if current_incoming.billing_tier ~= nil then row.billing_tier = current_incoming.billing_tier end
 					if current_incoming.billing_source ~= nil then row.billing_source = current_incoming.billing_source end
-					table.insert(result.protected, model_id)
+					table.insert(protected, model_id)
 				end
 				redis.call("SET", row_prefix .. current.id, cjson.encode(row))
 				redis.call("HSET", KEYS[4], channel .. "|" .. model_id, current.id)
-				table.insert(result.updated, model_id)
+				table.insert(updated, model_id)
 			else
 				local id = tostring(redis.call("INCR", KEYS[2]))
 				row.id = id
@@ -336,7 +336,7 @@ var (
 				redis.call("SADD", KEYS[1], id)
 				redis.call("HSETNX", KEYS[3], model_id, id)
 				redis.call("HSET", KEYS[4], channel .. "|" .. model_id, id)
-				table.insert(result.added, model_id)
+				table.insert(added, model_id)
 			end
 		end
 		if prune then
@@ -350,12 +350,12 @@ var (
 						if redis.call("HGET", KEYS[3], model_id) == current.id then redis.call("HDEL", KEYS[3], model_id) end
 						local index_key = channel .. "|" .. model_id
 						if redis.call("HGET", KEYS[4], index_key) == current.id then redis.call("HDEL", KEYS[4], index_key) end
-						table.insert(result.deleted, model_id)
-					elseif origin == "" or origin == "manual" then table.insert(result.protected, model_id) end
+						table.insert(deleted, model_id)
+					elseif origin == "" or origin == "manual" then table.insert(protected, model_id) end
 				end
 			end
 		end
-		return cjson.encode(result)
+		return cjson.encode({added = added, updated = updated, deleted = deleted, protected = protected})
 	`)
 )
 
