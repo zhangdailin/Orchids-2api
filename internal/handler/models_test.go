@@ -24,6 +24,27 @@ func TestPublicModelResponseUsesRouteCreatedAt(t *testing.T) {
 	}
 }
 
+func TestAppendGrokCompatibilityAliasesUsesCaseInsensitiveIndex(t *testing.T) {
+	items := []PublicModelResponse{{ID: "GROK-4.6-HIGH", OwnedBy: "grok"}}
+	seen := map[string]struct{}{publicModelIDKey(items[0].ID): {}}
+	entry := PublicModelResponse{ID: "grok-4.6", OwnedBy: "Grok"}
+
+	items = appendGrokCompatibilityAliases(items, seen, entry)
+
+	counts := make(map[string]int)
+	for _, item := range items {
+		counts[publicModelIDKey(item.ID)]++
+	}
+	if counts["grok-4.6-high"] != 1 {
+		t.Fatalf("case-insensitive alias count=%d want 1: %#v", counts["grok-4.6-high"], items)
+	}
+	for _, want := range []string{"grok-4.6-low", "grok-4.6-medium", "grok-4.6-xhigh"} {
+		if counts[want] != 1 {
+			t.Fatalf("alias %q count=%d want 1: %#v", want, counts[want], items)
+		}
+	}
+}
+
 // grok2api publishes bare model names: the console/ and build/ qualifiers are
 // routing details, and two routes that differ only by plane are the same public
 // model. Resolution keeps accepting both spellings.

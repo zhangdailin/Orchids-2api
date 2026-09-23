@@ -131,16 +131,11 @@ func externalPublicModelID(channel, internalID string) string {
 	return normalizeRequestedModelID(internalID)
 }
 
-func containsPublicModel(items []PublicModelResponse, id string) bool {
-	for _, item := range items {
-		if strings.EqualFold(strings.TrimSpace(item.ID), strings.TrimSpace(id)) {
-			return true
-		}
-	}
-	return false
+func publicModelIDKey(id string) string {
+	return strings.ToLower(strings.TrimSpace(id))
 }
 
-func appendGrokCompatibilityAliases(items []PublicModelResponse, entry PublicModelResponse) []PublicModelResponse {
+func appendGrokCompatibilityAliases(items []PublicModelResponse, seen map[string]struct{}, entry PublicModelResponse) []PublicModelResponse {
 	if !strings.EqualFold(entry.OwnedBy, "grok") {
 		return items
 	}
@@ -156,16 +151,11 @@ func appendGrokCompatibilityAliases(items []PublicModelResponse, entry PublicMod
 		}
 	}
 	for _, alias := range aliases {
-		duplicate := false
-		for _, existing := range items {
-			if strings.EqualFold(existing.ID, alias) {
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
+		key := publicModelIDKey(alias)
+		if _, duplicate := seen[key]; duplicate {
 			continue
 		}
+		seen[key] = struct{}{}
 		copy := entry
 		copy.ID = alias
 		items = append(items, copy)
@@ -199,6 +189,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		warpVisible = h.visibleWarpModelSet(ctx)
 	}
 	var publicModels []PublicModelResponse
+	seenPublicModelIDs := make(map[string]struct{}, len(allModels))
 	// One read of the observed catalogs answers every row below, so the model
 	// list reports the same window the request path forwards upstream.
 	contextWindows := h.observedModelContextWindows(ctx)
@@ -223,9 +214,11 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		}
 		// One public entry per external ID: routes that differ only by plane are
 		// the same public model (the admin plane lists them grouped).
-		if containsPublicModel(publicModels, publicID) {
+		publicIDKey := publicModelIDKey(publicID)
+		if _, duplicate := seenPublicModelIDs[publicIDKey]; duplicate {
 			continue
 		}
+		seenPublicModelIDs[publicIDKey] = struct{}{}
 
 		entry := publicModelResponse(publicID, mChannel, m.CreatedAt)
 		entry.Capabilities = m.Capabilities
@@ -241,7 +234,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.MaxInputTokens = input
 		entry.MaxOutputTokens = output
 		publicModels = append(publicModels, entry)
-		publicModels = appendGrokCompatibilityAliases(publicModels, entry)
+		publicModels = appendGrokCompatibilityAliases(publicModels, seenPublicModelIDs, entry)
 	}
 
 	// Codex-family clients ask for a richer catalog that carries the context

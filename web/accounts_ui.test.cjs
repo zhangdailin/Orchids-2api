@@ -326,104 +326,12 @@ test('loading accounts never starts upstream account checks', async () => {
   context.renderPlatformTabs = () => {};
   context.renderAccounts = () => {};
   context.updateStats = () => {};
-  let syncCalls = 0;
-  context.autoSyncStaleAccounts = () => { syncCalls += 1; };
   context.fetch = async () => ({ status: 200, json: async () => [
     { id: 3, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', enabled: true },
   ] });
 
   await context.loadAccounts();
-  assert.equal(syncCalls, 0, 'opening the account page must remain read-only');
-});
-
-test('manual stale-account sync helper remains bounded when explicitly called', async () => {
-  const { context } = loadUI();
-  const stale = new Date(Date.now() - 90 * 60 * 1000).toISOString();
-  const fresh = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-
-  vm.runInContext(`accounts = ${JSON.stringify([
-    // WorkBuddy: stale credit-meter snapshot.
-    { id: 1, account_type: 'workbuddy', enabled: true, email: 'wb@example.com', quota_supported: true, quota_limit: 350, quota_remaining: 100, workbuddy_quota: { synced_at: stale } },
-    // WorkBuddy: fresh snapshot, must not be re-fetched.
-    { id: 2, account_type: 'workbuddy', enabled: true, quota_supported: true, quota_limit: 350, quota_remaining: 100, workbuddy_quota: { synced_at: fresh } },
-    // Grok SSO: stale web quota window.
-    { id: 3, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', enabled: true, client_cookie: 'sso=x', grok_web_quota: { synced_at: stale } },
-    // Grok Build: stale billing snapshot.
-    { id: 4, account_type: 'grok', credential_type: 'oauth', grok_provider: 'build', enabled: true, oauth_access_token: 'a', grok_billing: { synced_at: stale } },
-    // Grok Build: fresh billing snapshot.
-    { id: 5, account_type: 'grok', credential_type: 'oauth', grok_provider: 'build', enabled: true, oauth_access_token: 'a', grok_billing: { synced_at: fresh } },
-    // Warp: no settings snapshot at all.
-    { id: 6, account_type: 'warp', enabled: true, warp_authenticated: true },
-    // Puter: no quota snapshot timestamp exists for this channel.
-    { id: 7, account_type: 'puter', enabled: true, client_cookie: 'puter-token', usage_limit: 500, usage_current: 400 },
-    // Disabled accounts are never auto-synced.
-    { id: 8, account_type: 'workbuddy', enabled: false },
-  ])}`, context);
-
-  const checked = [];
-  // Exercise the real checkAccount path with a stubbed transport: a successful
-  // sync returns the account with a fresh snapshot timestamp.
-  context.fetch = async (url) => {
-    const parts = String(url).split('/');
-    const id = Number(parts[3]);
-    if (parts[4] !== 'check') {
-      return { ok: true, status: 200, json: async () => vm.runInContext(`accounts.find(a => a.id === ${id})`, context) };
-    }
-    checked.push(id);
-    const syncedAt = new Date().toISOString();
-    const account = vm.runInContext(`accounts.find(a => a.id === ${id})`, context);
-    const updated = { ...account };
-    if (updated.account_type === 'workbuddy') updated.workbuddy_quota = { synced_at: syncedAt };
-    if (updated.account_type === 'grok') {
-      if (updated.credential_type === 'oauth') updated.grok_billing = { synced_at: syncedAt };
-      else updated.grok_web_quota = { synced_at: syncedAt };
-    }
-    return { ok: true, status: 200, json: async () => updated };
-  };
-  context.showToast = () => {};
-
-  await vm.runInContext('autoSyncStaleAccounts()', context);
-
-  // Channels with a server-side snapshot use it; the timestamp-less channels
-  // (Warp / Puter) are covered by the ledger.
-  assert.deepEqual(checked, [1, 3, 4, 6, 7]);
-
-  // A second call inside the same page load must not re-check anything.
-  checked.length = 0;
-  await vm.runInContext('autoSyncStaleAccounts()', context);
-  assert.deepEqual(checked, []);
-
-  // A reload right after a successful sync must not re-check either: the fresh
-  // snapshot timestamps and the persisted ledger both say "up to date".
-  vm.runInContext('resetAutoSyncLoadGuard()', context);
-  checked.length = 0;
-  await vm.runInContext('autoSyncStaleAccounts()', context);
-  assert.deepEqual(checked, [], 'a reload right after a sync must not re-check anything');
-
-  // Once a timestamp-less channel ages out, only that one is refreshed again.
-  vm.runInContext('accountSyncLedger.set(7, Date.now() - 31 * 60 * 1000); resetAutoSyncLoadGuard()', context);
-  checked.length = 0;
-  await vm.runInContext('autoSyncStaleAccounts()', context);
-  assert.deepEqual(checked, [7], 'only the aged-out timestamp-less account may refresh after a reload');
-});
-
-test('auto-sync retries an account whose previous attempt failed', async () => {
-  const { context } = loadUI();
-  vm.runInContext(`accounts = ${JSON.stringify([
-    { id: 1, account_type: 'workbuddy', enabled: true, quota_supported: true, quota_limit: 10, quota_remaining: 5 },
-  ])}`, context);
-
-  vm.runInContext(`globalThis.__attempts = 0;
-    globalThis.checkAccount = () => { globalThis.__attempts += 1; return Promise.resolve(globalThis.__attempts > 1); }`, context);
-
-  await vm.runInContext('autoSyncStaleAccounts()', context);
-  assert.equal(vm.runInContext('globalThis.__attempts', context), 1);
-  // A failed attempt must be retried on the next page load, not remembered as done.
-  await vm.runInContext('resetAutoSyncLoadGuard(); autoSyncStaleAccounts()', context);
-  assert.equal(vm.runInContext('globalThis.__attempts', context), 2);
-  // After it succeeds, the ledger keeps the next load from repeating it.
-  await vm.runInContext('resetAutoSyncLoadGuard(); autoSyncStaleAccounts()', context);
-  assert.equal(vm.runInContext('globalThis.__attempts', context), 2);
+  assert.equal('autoSyncStaleAccounts' in context, false, 'obsolete auto-sync machinery must stay removed');
 });
 
 test('linked Console rows are filtered and SSO saves target the Web source', async () => {
@@ -439,7 +347,6 @@ test('linked Console rows are filtered and SSO saves target the Web source', asy
   context.renderPlatformTabs = () => {};
   context.renderAccounts = () => {};
   context.updateStats = () => {};
-  context.autoSyncStaleAccounts = () => {};
   context.fetch = async () => ({ status: 200, json: async () => [
     { id: 42, account_type: 'grok', credential_type: 'sso', grok_provider: 'console', grok_sso_parent_id: 7, client_cookie: 'sso=internal', enabled: true },
     { id: 7, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', client_cookie: 'sso=visible', enabled: true, weight: 2 },
@@ -783,6 +690,62 @@ test('the shared device-auth driver reserves the popup before its first await', 
   // The authorization URL must be surfaced so a blocked popup or a remote
   // session can still complete the flow.
   assert.match(source, /setLink\(authURL\)/);
+});
+
+test('Grok and Warp share one lifecycle but keep provider URL allowlists isolated', async () => {
+  const cases = [
+    { provider: 'Grok', start: 'startGrokDeviceLogin()', endpoint: '/api/grok/device-auth', statusId: 'grokDeviceLoginStatus', buttonId: 'grokDeviceLoginButton', allowed: 'https://auth.x.ai/device?code=ok', rejected: 'https://app.warp.dev/device?code=wrong' },
+    { provider: 'Warp', start: 'startWarpDeviceLogin()', endpoint: '/api/warp/device-auth', statusId: 'warpDeviceLoginStatus', buttonId: 'warpDeviceLoginButton', allowed: 'https://app.warp.dev/device?code=ok', rejected: 'https://auth.x.ai/device?code=wrong' },
+  ];
+  for (const scenario of cases) {
+    for (const [url, shouldOpen] of [[scenario.allowed, true], [scenario.rejected, false]]) {
+      const { context, node } = loadUI();
+      const requests = [];
+      const opened = [];
+      context.URL = URL;
+      context.window.open = (target) => opened.push(target);
+      context.fetch = async (target, options = {}) => {
+        requests.push([target, options.method || 'GET']);
+        if (target === scenario.endpoint) return { ok: true, json: async () => ({ id: 'login/id', status: 'pending', user_code: 'ABCD', verification_uri_complete: url }) };
+        if (target === `${scenario.endpoint}/login%2Fid`) return { ok: true, json: async () => ({ status: 'complete' }) };
+        throw new Error(`unexpected request ${target}`);
+      };
+      context.loadAccounts = () => {};
+      context.closeModal = () => {};
+      context.showToast = () => {};
+      await vm.runInContext(scenario.start, context);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(requests.slice(0, 2), [[scenario.endpoint, 'POST'], [`${scenario.endpoint}/login%2Fid`, 'GET']]);
+      assert.deepEqual(opened, shouldOpen ? [url] : [], `${scenario.provider}: cross-provider URL must not open`);
+      assert.equal(node(scenario.buttonId).disabled, false);
+      assert.match(node(scenario.statusId).innerHTML, new RegExp(`${scenario.provider} 账号已添加`));
+    }
+  }
+});
+
+test('shared Grok/Warp lifecycle preserves cancellation and ignores stale poll results', async () => {
+  for (const scenario of [
+    { start: 'startGrokDeviceLogin()', stop: 'stopGrokDeviceLogin(true)', endpoint: '/api/grok/device-auth', url: 'https://auth.x.ai/device' },
+    { start: 'startWarpDeviceLogin()', stop: 'stopWarpDeviceLogin(true)', endpoint: '/api/warp/device-auth', url: 'https://app.warp.dev/device' },
+  ]) {
+    const { context } = loadUI();
+    const requests = [];
+    let releasePoll;
+    context.URL = URL;
+    context.window.open = () => {};
+    context.fetch = async (target, options = {}) => {
+      requests.push([target, options.method || 'GET']);
+      if (target === scenario.endpoint) return { ok: true, json: async () => ({ id: 'cancel-me', status: 'pending', verification_uri: scenario.url }) };
+      if (options.method === 'DELETE') return { ok: true };
+      return new Promise((resolve) => { releasePoll = () => resolve({ ok: true, json: async () => ({ status: 'complete' }) }); });
+    };
+    await vm.runInContext(scenario.start, context);
+    vm.runInContext(scenario.stop, context);
+    assert.deepEqual(requests.at(-1), [`${scenario.endpoint}/cancel-me`, 'DELETE']);
+    releasePoll();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(requests.filter(([, method]) => method === 'DELETE').length, 1);
+  }
 });
 
 test('a rejected credential shows the reason, not the raw error envelope', () => {

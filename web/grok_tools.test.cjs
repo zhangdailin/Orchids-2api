@@ -17,7 +17,7 @@ test('chat model picker constrains long labels and dropdowns to the viewport', (
 });
 
 test('legacy reasoning migrates all blocks without dropping answers or history', () => {
-  const helpers = source.slice(source.indexOf('  function trimChatSessionMessages('), source.indexOf('  function saveChatSessions('));
+  const helpers = source.slice(source.indexOf('  function normalizeAssistantMessage('), source.indexOf('  function saveChatSessions('));
   const ctx = vm.createContext({}); vm.runInContext(helpers, ctx);
   const migrated = ctx.normalizeAssistantMessage({role:'assistant',content:'<think>one</think>A<think>two</think>B'});
   assert.equal(migrated.content, 'AB'); assert.equal(migrated.reasoning, 'one\n\ntwo');
@@ -36,8 +36,6 @@ test('legacy reasoning migrates all blocks without dropping answers or history',
   assert.equal(lead.content,'ANS'); assert.equal(lead.reasoning,'a');
   const spaced = ctx.normalizeAssistantMessage({role:'assistant',content:'  <think>a</think>ANS'});
   assert.equal(spaced.content,'ANS'); assert.equal(spaced.reasoning,'a');
-  const session = {messages:Array.from({length:100}, (_,i)=>({role:i%2?'assistant':'user',content:String(i)}))};
-  ctx.trimChatSessionMessages(session); assert.equal(session.messages.length,100);
 });
 
 test('stream stores interleaved reasoning and partial failure exactly once', async () => {

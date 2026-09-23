@@ -1,9 +1,13 @@
 /* Grok tools: page-specific layout only. Visual primitives come from main.css. */
 
 .grok-tools-page {
+  --grok-card-border: var(--border-color);
+  --grok-soft-bg: rgba(255, 255, 255, 0.045);
+  --grok-muted-bg: rgba(255, 255, 255, 0.075);
+  --grok-line: var(--border-color);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--space-3);
   /* Horizontal geometry belongs to the shell: main.css gives .main-content
      `width: 100%`, `max-width: var(--content-max)` and the
      `margin-left: var(--sidebar-w)` that keeps the page clear of the fixed
@@ -16,7 +20,8 @@
 }
 
 .grok-tools-page .header-section {
-  margin-bottom: 6px;
+  margin-bottom: 0;
+  padding: 0;
 }
 
 /* One compact row: eyebrow, title, one-line lede and the account link. The
@@ -159,18 +164,32 @@
 }
 
 .grok-tools-toolbar {
+  position: sticky;
+  top: 54px;
+  z-index: 20;
   align-items: center;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
   padding: var(--space-1);
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--grok-line);
   border-radius: var(--radius-md);
-  background: var(--bg-surface);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(12px);
 }
 
 .grok-tabs {
+  width: 100%;
   min-width: 0;
+  gap: var(--space-1);
+  flex-wrap: nowrap;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   scrollbar-width: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
 }
 
 .grok-tabs::-webkit-scrollbar {
@@ -183,6 +202,12 @@
   min-width: 0;
   height: var(--control-h);
   padding: 0 var(--space-4);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  font-weight: 650;
   white-space: nowrap;
 }
 
@@ -214,7 +239,7 @@
 .grok-panel {
   padding: 16px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
+  border-radius: 10px;
   background: var(--bg-surface);
   box-shadow: var(--shadow-sm);
 }
@@ -312,7 +337,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
@@ -347,7 +372,7 @@
 .voice-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.9fr);
-  gap: 16px;
+  gap: 12px;
   align-items: start;
   min-width: 0;
 }
@@ -391,7 +416,7 @@
 .video-stage,
 .cache-list {
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 10px;
   background: var(--bg-surface-hover);
 }
 
@@ -419,12 +444,13 @@
 .selected-count {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 4px 8px;
+  min-height: 22px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
   border-radius: 999px;
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.05);
-  font-size: 0.78rem;
+  background: var(--bg-surface-hover);
+  font-size: 0.72rem;
   font-weight: 700;
 }
 
@@ -455,8 +481,8 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
+  border-radius: 8px;
+  background: var(--grok-soft-bg);
   color: var(--text-secondary);
   cursor: pointer;
   transition: var(--transition);
@@ -467,13 +493,12 @@
 .sidebar-expand-btn:hover,
 .action-btn:hover {
   color: var(--text-main);
-  background: var(--surface-3);
+  background: var(--grok-muted-bg);
 }
 
 .send-btn {
   color: var(--text-on-accent);
   border-color: var(--primary);
-  background: var(--primary);
 }
 
 .model-chip {
@@ -487,7 +512,7 @@
   padding: 0 10px;
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--surface-3);
+  background: var(--bg-surface-hover);
   color: var(--text-main);
   cursor: pointer;
 }
@@ -602,8 +627,8 @@
 
 .chat-layout {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 12px;
   align-items: stretch;
 }
 
@@ -622,22 +647,22 @@
 
 .chat-sidebar {
   position: sticky;
-  top: 24px;
+  top: 72px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   max-height: calc(100vh - 160px);
-  padding: 14px;
+  padding: 12px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--bg-surface);
+  border-radius: 10px;
+  background: var(--bg-elevated);
   overflow: hidden;
 }
 
 .sidebar-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   overflow: auto;
 }
 
@@ -647,18 +672,23 @@
   flex-direction: column;
   gap: 4px;
   width: 100%;
-  padding: 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  background: var(--surface-3);
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
   color: var(--text-main);
   text-align: left;
   cursor: pointer;
 }
 
+.session-item:hover {
+  background: var(--grok-muted-bg);
+}
+
 .session-item.active {
-  border-color: var(--primary);
-  background: var(--primary-light);
+  border-color: var(--border-highlight);
+  background: var(--bg-surface);
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 
 .session-delete {
@@ -709,8 +739,8 @@
 .chat-shell {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-height: calc(100vh - 230px);
+  gap: 10px;
+  min-height: calc(100vh - 220px);
 }
 
 .chat-title-main {
@@ -719,8 +749,8 @@
 
 .chat-thread {
   flex: 1 1 auto;
-  min-height: 360px;
-  padding: 16px;
+  min-height: 390px;
+  padding: 18px;
   overflow: auto;
 }
 
@@ -731,7 +761,7 @@
 
 .message-row {
   display: flex;
-  margin: 12px 0;
+  margin: 10px 0;
 }
 
 .message-row.user {
@@ -739,7 +769,7 @@
 }
 
 .message-bubble {
-  max-width: min(88%, 760px);
+  max-width: min(86%, 780px);
   color: var(--text-main);
   line-height: 1.6;
 }
@@ -748,7 +778,7 @@
   padding: 10px 12px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: var(--surface-3);
+  background: var(--bg-elevated);
 }
 
 .message-content.rendered img,
@@ -759,7 +789,7 @@
 
 .composer-shell {
   position: sticky;
-  bottom: 16px;
+  bottom: 18px;
   z-index: 5;
 }
 
@@ -769,9 +799,10 @@
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
   box-shadow: var(--shadow-md);
+  backdrop-filter: blur(16px);
 }
 
 .composer-textarea {
@@ -1364,6 +1395,7 @@
 .cache-progress-bar {
   width: 180px;
   height: 8px;
+  accent-color: var(--accent);
 }
 
 @media (max-width: 1080px) {
@@ -1380,7 +1412,7 @@
     z-index: 70;
     width: min(320px, 86vw);
     max-height: none;
-    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+    border-radius: 0 10px 10px 0;
     transform: translateX(-100%);
     transition: transform 0.2s ease;
   }
@@ -1441,71 +1473,12 @@
 
 /* Focused polish for the Grok workspace. Keep this page calmer and denser than the
    general admin views without changing shared primitives. */
-.grok-tools-page {
-  --grok-card-border: var(--border-color);
-  --grok-soft-bg: rgba(255, 255, 255, 0.045);
-  --grok-muted-bg: rgba(255, 255, 255, 0.075);
-  --grok-line: var(--border-color);
-  gap: var(--space-3);
-}
-
-.grok-tools-page .header-section {
-  margin-bottom: 0;
-  padding: 0;
-}
-
 .grok-tools-page .header-section h1 {
   font-size: 1.15rem;
 }
 
 .grok-tools-page .header-section p {
   max-width: none;
-}
-
-.grok-tools-workspace {
-  gap: var(--space-2);
-}
-
-.grok-tools-toolbar {
-  position: sticky;
-  top: 54px;
-  z-index: 20;
-  width: 100%;
-  max-width: 100%;
-  padding: var(--space-1);
-  margin: 0;
-  border: 1px solid var(--grok-line);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(12px);
-}
-
-.grok-tabs {
-  width: 100%;
-  gap: var(--space-1);
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
-  background: transparent;
-  border: 0;
-  padding: 0;
-}
-
-.grok-tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.grok-tabs .tab-item {
-  min-width: 0;
-  height: var(--control-h);
-  padding: 0 var(--space-4);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.84rem;
-  font-weight: 650;
 }
 
 .grok-tabs .tab-item:hover {
@@ -1542,15 +1515,6 @@
 }
 
 .function-header-row,
-.chat-title,
-.chat-sidebar .sidebar-header,
-.status-header,
-.voice-log-header,
-.video-preview-header {
-  gap: 10px;
-}
-
-.function-header-row,
 .chat-title {
   padding: 4px 4px 0;
 }
@@ -1570,114 +1534,6 @@
 
 .function-divider {
   background: var(--grok-line);
-}
-
-.grok-panel {
-  border-radius: 10px;
-}
-
-.grok-panel,
-.chat-sidebar {
-  background: var(--bg-surface);
-}
-
-.icon-btn,
-.send-btn,
-.sidebar-expand-btn,
-.action-btn {
-  border-radius: 8px;
-  background: var(--grok-soft-bg);
-}
-
-.icon-btn:hover,
-.send-btn:hover,
-.sidebar-expand-btn:hover,
-.action-btn:hover {
-  background: var(--grok-muted-bg);
-}
-
-.chat-layout {
-  grid-template-columns: 230px minmax(0, 1fr);
-  gap: 12px;
-}
-
-.chat-sidebar {
-  top: 72px;
-  padding: 12px;
-  border-radius: 10px;
-  background: var(--bg-elevated);
-}
-
-.sidebar-list {
-  gap: 6px;
-}
-
-.session-item {
-  padding: 9px 10px;
-  border-color: transparent;
-  border-radius: 9px;
-  background: transparent;
-}
-
-.session-item:hover {
-  background: var(--grok-muted-bg);
-}
-
-.session-item.active {
-  border-color: var(--border-highlight);
-  background: var(--bg-surface);
-  box-shadow: inset 3px 0 0 var(--primary);
-}
-
-.chat-shell {
-  gap: 10px;
-  min-height: calc(100vh - 220px);
-}
-
-.chat-thread {
-  min-height: 390px;
-  padding: 18px;
-  border-radius: 10px;
-  background: var(--bg-surface-hover);
-}
-
-.message-row {
-  margin: 10px 0;
-}
-
-.message-bubble {
-  max-width: min(86%, 780px);
-}
-
-.message-row.user .message-bubble {
-  border-color: var(--border-color);
-  background: var(--bg-elevated);
-}
-
-.composer-shell {
-  bottom: 18px;
-}
-
-.composer-input {
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
-  box-shadow: var(--shadow-md);
-  backdrop-filter: blur(16px);
-}
-
-.model-chip {
-  border-color: var(--border-color);
-  background: var(--bg-surface-hover);
-}
-
-.status-text,
-.selected-count {
-  min-height: 22px;
-  padding: 3px 8px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-surface-hover);
-  color: var(--text-secondary);
-  font-size: 0.72rem;
 }
 
 /* Result area: denser tiles, no duplicated composer overrides. */
@@ -1716,24 +1572,6 @@
   background: var(--bg-surface);
 }
 
-.function-top-grid,
-.video-top-grid,
-.voice-grid {
-  gap: 12px;
-}
-
-.grok-kv,
-.meta-item,
-.video-empty,
-.video-stage,
-.audio-root,
-.visualizer,
-.voice-log,
-.cache-list {
-  border-radius: 10px;
-  background: var(--bg-surface-hover);
-}
-
 .cache-list table {
   background: var(--bg-surface);
 }
@@ -1744,45 +1582,13 @@
     width: 100%;
     border-radius: 12px;
   }
-
-  .chat-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .chat-sidebar {
-    top: 0;
-    position: fixed;
-    inset: 0 auto 0 0;
-    z-index: 70;
-    width: min(320px, 86vw);
-    max-height: none;
-    border-radius: 0 10px 10px 0;
-    transform: translateX(-100%);
-    transition: transform 0.2s ease;
-  }
-
-  .chat-sidebar.open,
-  .chat-sidebar.show {
-    transform: translateX(0);
-  }
-
-  .chat-layout.collapsed .chat-sidebar {
-    display: flex;
-  }
 }
 
 @media (max-width: 760px) {
   .grok-tools-page .header-section {
     flex-direction: row;
+    align-items: center;
     gap: var(--space-1) var(--space-2);
-  }
-
-  .grok-tabs {
-    width: 100%;
-  }
-
-  .grok-tabs .tab-item {
-    flex: 0 0 auto;
   }
 
   .composer-input,
@@ -2277,13 +2083,6 @@
   font-size: 0.78rem;
 }
 
-/* ---- Cache batch progress (grok-tools.js batch runner) -------------------------------------------- */
-.cache-progress-bar {
-  width: 180px;
-  height: 8px;
-  accent-color: var(--accent);
-}
-
 .cache-progress-text {
   font-variant-numeric: tabular-nums;
 }
@@ -2336,12 +2135,6 @@
 }
 
 @media (max-width: 760px) {
-  .grok-tools-page .header-section {
-    flex-direction: row;
-    align-items: center;
-    gap: var(--space-1) var(--space-2);
-  }
-
   .grok-page-header p {
     flex: 1 1 100%;
     overflow: visible;
@@ -2386,10 +2179,6 @@
 
   .imagine-masonry-textarea {
     min-height: 120px;
-  }
-
-  .imagine-masonry-actions {
-    width: 100%;
   }
 
   .imagine-masonry-send {

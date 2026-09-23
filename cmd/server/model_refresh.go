@@ -133,7 +133,6 @@ func isUpstreamCatalogSource(source string) bool {
 }
 
 type warpAccountDiscovery struct {
-	index         int
 	id            int64
 	choices       []warp.ModelChoice
 	source        string
@@ -310,6 +309,32 @@ func boundedModelRefreshWorkers(total int, concurrency int) int {
 		workers = total
 	}
 	return workers
+}
+
+// runIndexedModelRefreshWorkers applies work to every index using at most the
+// configured number of workers. Each index is handed out once, so callers can
+// safely write results[index] without a mutex and retain input ordering.
+func runIndexedModelRefreshWorkers(total, concurrency int, work func(index int)) {
+	workerCount := boundedModelRefreshWorkers(total, concurrency)
+	if workerCount == 0 || work == nil {
+		return
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				work(index)
+			}
+		}()
+	}
+	for index := range total {
+		jobs <- index
+	}
+	close(jobs)
+	wg.Wait()
 }
 
 func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) ([]discoveredModel, string, error) {
@@ -680,32 +705,17 @@ func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Conf
 	if len(accounts) == 0 || len(candidates) == 0 {
 		return puterModelVerificationSummary{}
 	}
-	workerCount := boundedModelRefreshWorkers(len(candidates), concurrency)
-	if workerCount <= 1 {
+	if boundedModelRefreshWorkers(len(candidates), concurrency) <= 1 {
 		return verifyPuterDiscoveredModelsSerial(ctx, cfg, accounts, candidates)
 	}
-
 	results := make([]puterModelProbeResult, len(candidates))
-	jobs := make(chan int, len(candidates))
-	var wg sync.WaitGroup
-	wg.Add(workerCount)
-	for worker := 0; worker < workerCount; worker++ {
-		go func() {
-			defer wg.Done()
-			for idx := range jobs {
-				candidate := candidates[idx]
-				if strings.TrimSpace(candidate.ID) == "" {
-					continue
-				}
-				results[idx], _ = probePuterCandidate(ctx, cfg, accounts, candidate.ID, idx%len(accounts))
-			}
-		}()
-	}
-	for idx := range candidates {
-		jobs <- idx
-	}
-	close(jobs)
-	wg.Wait()
+	runIndexedModelRefreshWorkers(len(candidates), concurrency, func(idx int) {
+		candidate := candidates[idx]
+		if strings.TrimSpace(candidate.ID) == "" {
+			return
+		}
+		results[idx], _ = probePuterCandidate(ctx, cfg, accounts, candidate.ID, idx%len(accounts))
+	})
 
 	verified := make([]discoveredModel, 0, len(candidates))
 	sawInsufficientFunds := false
@@ -843,34 +853,12 @@ func discoverGrokModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		return nil, "", &noActiveAccountsError{Channel: "Grok"}
 	}
 
-	workerCount := boundedModelRefreshWorkers(len(accounts), concurrency)
-	jobs := make(chan int, len(accounts))
-	results := make(chan grokBuildModelDiscovery, len(accounts))
-	var wg sync.WaitGroup
-	wg.Add(workerCount)
-	for worker := 0; worker < workerCount; worker++ {
-		go func() {
-			defer wg.Done()
-			for index := range jobs {
-				acc := accounts[index]
-				models, fetchErr := fetchGrokBuildModelsForRefresh(ctx, cfg, s, acc)
-				results <- grokBuildModelDiscovery{index: index, account: acc, models: models, err: fetchErr}
-			}
-		}()
-	}
-	for index := range accounts {
-		jobs <- index
-	}
-	close(jobs)
-	wg.Wait()
-	close(results)
-
 	ordered := make([]grokBuildModelDiscovery, len(accounts))
-	for result := range results {
-		if result.index >= 0 && result.index < len(ordered) {
-			ordered[result.index] = result
-		}
-	}
+	runIndexedModelRefreshWorkers(len(accounts), concurrency, func(index int) {
+		acc := accounts[index]
+		models, fetchErr := fetchGrokBuildModelsForRefresh(ctx, cfg, s, acc)
+		ordered[index] = grokBuildModelDiscovery{account: acc, models: models, err: fetchErr}
+	})
 
 	now := time.Now().UTC()
 	merged := make([]discoveredModel, 0, len(accounts)*2)
@@ -1003,69 +991,43 @@ func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *st
 		})
 	}
 
-	workerCount := boundedModelRefreshWorkers(len(accounts), concurrency)
-	if workerCount > 0 {
-		jobs := make(chan int, len(accounts))
-		results := make(chan warpAccountDiscovery, len(accounts))
-		var wg sync.WaitGroup
-		wg.Add(workerCount)
-		for worker := 0; worker < workerCount; worker++ {
-			go func() {
-				defer wg.Done()
-				for idx := range jobs {
-					acc := accounts[idx]
-					client := warp.NewFromAccount(acc, cfg)
-					features, source, discoverErr := client.FetchDiscoveredFeatureModelChoices(ctx)
-					client.Close()
-					if discoverErr != nil {
-						continue
-					}
-					choices := warp.AgentModeModelChoices(features)
-					featureConfig := warp.AccountFeatureConfigFromChoices(features)
-					if len(choices) == 0 {
-						continue
-					}
-					results <- warpAccountDiscovery{
-						index:         idx,
-						id:            acc.ID,
-						choices:       choices,
-						source:        source,
-						featureConfig: featureConfig,
-						ok:            true,
-					}
-				}
-			}()
+	ordered := make([]warpAccountDiscovery, len(accounts))
+	runIndexedModelRefreshWorkers(len(accounts), concurrency, func(idx int) {
+		acc := accounts[idx]
+		client := warp.NewFromAccount(acc, cfg)
+		features, source, discoverErr := client.FetchDiscoveredFeatureModelChoices(ctx)
+		client.Close()
+		if discoverErr != nil {
+			return
 		}
-		for idx := range accounts {
-			jobs <- idx
+		choices := warp.AgentModeModelChoices(features)
+		if len(choices) == 0 {
+			return
 		}
-		close(jobs)
-		wg.Wait()
-		close(results)
-
-		ordered := make([]warpAccountDiscovery, len(accounts))
-		for result := range results {
-			if result.index >= 0 && result.index < len(ordered) {
-				ordered[result.index] = result
+		ordered[idx] = warpAccountDiscovery{
+			id:            acc.ID,
+			choices:       choices,
+			source:        source,
+			featureConfig: warp.AccountFeatureConfigFromChoices(features),
+			ok:            true,
+		}
+	})
+	for _, result := range ordered {
+		if !result.ok {
+			continue
+		}
+		for _, part := range strings.Split(result.source, "+") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				sourceSet[part] = struct{}{}
 			}
 		}
-		for _, result := range ordered {
-			if !result.ok {
-				continue
-			}
-			for _, part := range strings.Split(result.source, "+") {
-				part = strings.TrimSpace(part)
-				if part != "" {
-					sourceSet[part] = struct{}{}
-				}
-			}
-			for _, choice := range result.choices {
-				appendChoice(choice)
-			}
+		for _, choice := range result.choices {
+			appendChoice(choice)
 		}
-		if len(out) > 0 {
-			saveWarpAccountModelChoices(ctx, s, ordered)
-		}
+	}
+	if len(out) > 0 {
+		saveWarpAccountModelChoices(ctx, s, ordered)
 	}
 
 	if len(out) > 0 {

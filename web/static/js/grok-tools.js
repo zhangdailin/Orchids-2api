@@ -30,7 +30,6 @@
 
   const videoState = {
     taskID: "",
-    stream: null,
     running: false,
     fileDataURL: "",
     startAt: 0,
@@ -604,11 +603,6 @@
     return `grok-tools-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
-  function trimChatSessionMessages(session) {
-    // Preserve complete turns. Request limits must never silently delete history.
-    return 0;
-  }
-
   function normalizeAssistantMessage(message) {
     if (message.role !== "assistant" || !/<think>/i.test(String(message.content || ""))) return message;
     // New-format messages store reasoning separately; content is the pure answer and must never be re-scanned.
@@ -694,7 +688,6 @@
       if (session) session.webSearch = session.webSearch === true;
       if (session) session.xSearch = session.xSearch === true;
       if (Array.isArray(session?.messages)) session.messages = session.messages.map(normalizeAssistantMessage);
-      trimChatSessionMessages(session);
     });
   }
 
@@ -1671,10 +1664,6 @@
       }
       persistAssistant();
       session.updatedAt = Date.now();
-      const trimmed = trimChatSessionMessages(session);
-      if (trimmed > 0) {
-        rerenderChatThread();
-      }
       saveChatSessions();
       if (finishReason === "length") {
         updateChatStatus("回复因达到长度上限被截断", "error");
@@ -2049,7 +2038,6 @@
     if (!session) return;
     session.messages.push({ role: "user", content: prompt });
     session.updatedAt = Date.now();
-    trimChatSessionMessages(session);
     ensureChatTitle(session);
     renderChatSessions();
     rerenderChatThread();
@@ -2966,16 +2954,6 @@
     if (handleUnauthorized(res)) return;
   }
 
-  function closeVideoStream() {
-    if (!videoState.stream) return;
-    try {
-      videoState.stream.close();
-    } catch (err) {
-      // ignore
-    }
-    videoState.stream = null;
-  }
-
   function stopVideoPoll() {
     if (videoState.pollTimer) {
       clearTimeout(videoState.pollTimer);
@@ -2985,7 +2963,6 @@
 
   function finishVideoRun(hasError) {
     if (!videoState.running) return;
-    closeVideoStream();
     stopVideoPoll();
     videoState.running = false;
     setVideoButtons(false);
@@ -3098,7 +3075,6 @@
 
   async function stopVideo() {
     videoState.running = false;
-    closeVideoStream();
     stopVideoPoll();
     stopVideoElapsedTimer();
     setVideoButtons(false);
@@ -4104,8 +4080,7 @@
       if (window.GrokImagine && typeof window.GrokImagine.stop === "function") {
         window.GrokImagine.stop({ silent: true });
       }
-      closeVideoStream();
-      stopVideoElapsedTimer();
+        stopVideoElapsedTimer();
       if (videoState.taskID) {
         try {
           const payload = JSON.stringify({ task_ids: [videoState.taskID] });

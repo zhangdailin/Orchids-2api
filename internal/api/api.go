@@ -595,8 +595,6 @@ type deviceLoginResponse struct {
 	Message                 string `json:"message,omitempty"`
 }
 
-type grokDeviceLogin = deviceLogin
-
 var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
 	client := puter.NewFromAccount(acc, cfg)
 	defer client.Close()
@@ -614,30 +612,23 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 		}
 		cliClient := grok.NewCLIClient(cfg)
 		cliClient.SetAccountStore(accountStore)
-		verifyCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		status, verifyErr := cliClient.VerifyAccount(verifyCtx, acc)
-		cancel()
-		if verifyErr != nil {
-			if status != "" {
-				return fmt.Errorf("%s: %w", status, verifyErr)
+		result := grok.RefreshBuildAccount(ctx, cliClient, acc, grok.BuildRefreshOptions{
+			Verify: true, VerifyTimeout: 20 * time.Second,
+			Billing: true,
+			Models:  true, ModelsTimeout: 15 * time.Second,
+		})
+		if result.VerifyErr != nil {
+			if result.VerifyStatus != "" {
+				return fmt.Errorf("%s: %w", result.VerifyStatus, result.VerifyErr)
 			}
-			return verifyErr
+			return result.VerifyErr
 		}
-		// Billing is a separate, optional official CLI endpoint. Failure to read
-		// its percentage window must not turn an authenticated account into a
-		// false 401 or make up a subscription allowance.
-		if billing, billingErr := cliClient.FetchBilling(ctx, acc); billingErr != nil {
-			slog.Warn("Grok CLI billing sync failed; leaving quota unavailable", "account_id", acc.ID, "error", billingErr)
-		} else {
-			grok.ApplyCLIBillingInfo(acc, billing)
+		if result.BillingErr != nil {
+			slog.Warn("Grok CLI billing sync failed; leaving quota unavailable", "account_id", acc.ID, "error", result.BillingErr)
 		}
-		modelsCtx, modelsCancel := context.WithTimeout(ctx, 15*time.Second)
-		if models, modelsErr := cliClient.FetchModels(modelsCtx, acc); modelsErr != nil {
-			slog.Warn("Grok CLI model catalog sync failed", "account_id", acc.ID, "error", modelsErr)
-		} else {
-			grok.ApplyCLIModels(acc, models, time.Now())
+		if result.ModelsErr != nil {
+			slog.Warn("Grok CLI model catalog sync failed; keeping last catalog", "account_id", acc.ID, "error", result.ModelsErr)
 		}
-		modelsCancel()
 		return nil
 	}
 
@@ -648,111 +639,30 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	acc.ClientCookie = credential
 
 	client := grok.New(cfg)
-	// Session identity is the authentication check. Quota availability is a
-	// separate concern and must not be allowed to invalidate a valid cookie.
-	identity, identityErr, authRejected := fetchGrokSSOIdentity(ctx, client, credential)
-	if authRejected {
-		return fmt.Errorf("%s: %w", classifyGrokAuthStatus(identityErr), identityErr)
+	result := grok.ProbeWebAccount(ctx, client, credential, grok.WebRefreshOptions{
+		IdentityTimeout: 15 * time.Second,
+		QuotaTimeout:    25 * time.Second,
+		RetryDelay:      grokSSOAuthRetryDelay,
+	})
+	if result.AuthRejected {
+		err := result.IdentityErr
+		if err == nil {
+			err = result.QuotaErr
+		}
+		return fmt.Errorf("%s: %w", classifyGrokAuthStatus(err), err)
 	}
-	if identityErr == nil {
-		if identity.UserID != "" {
-			acc.UserID = identity.UserID
-		}
-		if identity.Email != "" {
-			acc.Email = identity.Email
-		}
-		if identity.TeamID != "" {
-			acc.TeamID = identity.TeamID
-		}
-	} else {
-		slog.Warn("Grok SSO identity sync unavailable; continuing with quota sync", "account_id", acc.ID, "error", identityErr)
+	grok.ApplyWebRefresh(acc, result)
+	if result.IdentityErr != nil {
+		slog.Warn("Grok SSO identity sync unavailable; continuing with quota sync", "account_id", acc.ID, "error", result.IdentityErr)
 	}
-
-	quotaCtx, quotaCancel := context.WithTimeout(ctx, 25*time.Second)
-	windows, quotaErr := client.GetWebQuota(quotaCtx, credential)
-	quotaCancel()
-	if quotaErr != nil {
-		if grok.IsAuthenticationFailure(quotaErr) {
-			// The quota endpoint is the second witness: require it to reject the
-			// cookie twice as well before the account is declared unauthorized.
-			if second, secondErr := grokWebQuotaWithRetry(client, credential, ctx); secondErr == nil {
-				grok.ApplyWebQuotaInfo(acc, second)
-				return nil
-			} else if grok.IsAuthenticationFailure(secondErr) {
-				quotaErr = secondErr
-			}
-			return fmt.Errorf("%s: %w", classifyGrokAuthStatus(quotaErr), quotaErr)
-		}
-		// A quota read can be rate limited or unsupported; neither means the
-		// credential is invalid. Keep the account usable and let the caller
-		// classify whatever error carries.
-		slog.Warn("Grok SSO quota unavailable; account remains authenticated", "account_id", acc.ID, "error", quotaErr)
-		return nil
+	if result.QuotaErr != nil {
+		slog.Warn("Grok SSO quota unavailable; account remains authenticated", "account_id", acc.ID, "error", result.QuotaErr)
 	}
-	grok.ApplyWebQuotaInfo(acc, windows)
 	return nil
 }
 
-// grokSSOAuthRetryDelay is the pause before re-asking a rejected session, giving
-// an upstream hiccup a chance to clear before an account is declared dead.
-// A variable so tests can drive the retry without sleeping.
+// Configurable in tests; the shared helper owns the context-aware retry.
 var grokSSOAuthRetryDelay = 800 * time.Millisecond
-
-// retryGrokSSOAuthAttempt runs one upstream attempt and, when it reports an
-// authentication rejection, runs it once more. A single rejection is not proof:
-// the upstream answers "unauthenticated" for transient conditions too, and
-// treating one bad answer as final takes a working account out of the pool until
-// an operator notices. Returns whether the credential stands definitively
-// rejected after the retry.
-func retryGrokSSOAuthAttempt(attempt func() (grok.AccountIdentity, error)) (grok.AccountIdentity, error, bool) {
-	identity, err := attempt()
-	if err == nil || !grok.IsAuthenticationFailure(err) {
-		return identity, err, false
-	}
-	firstErr := err
-	time.Sleep(grokSSOAuthRetryDelay)
-	identity, err = attempt()
-	switch {
-	case err == nil:
-		slog.Warn("Grok SSO session rejected once and accepted on retry; keeping the account",
-			"first_error", firstErr)
-		return identity, nil, false
-	case grok.IsAuthenticationFailure(err):
-		return grok.AccountIdentity{}, err, true
-	default:
-		return grok.AccountIdentity{}, err, false
-	}
-}
-
-// fetchGrokSSOIdentity resolves the session identity with the retry policy above.
-func fetchGrokSSOIdentity(ctx context.Context, client *grok.Client, credential string) (grok.AccountIdentity, error, bool) {
-	return retryGrokSSOAuthAttempt(func() (grok.AccountIdentity, error) {
-		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		return client.FetchSessionIdentity(attemptCtx, credential)
-	})
-}
-
-// grokWebQuotaWithRetry reads the Web quota, retrying once on an authentication
-// rejection so the second verdict matches the identity check's strictness.
-func grokWebQuotaWithRetry(client *grok.Client, credential string, ctx context.Context) (map[string]*grok.RateLimitInfo, error) {
-	read := func() (map[string]*grok.RateLimitInfo, error) {
-		quotaCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-		defer cancel()
-		return client.GetWebQuota(quotaCtx, credential)
-	}
-	if windows, err := read(); err == nil {
-		return windows, nil
-	} else if !grok.IsAuthenticationFailure(err) {
-		return nil, err
-	}
-	time.Sleep(grokSSOAuthRetryDelay)
-	windows, err := read()
-	if err == nil {
-		slog.Warn("Grok SSO quota rejected once and accepted on retry; keeping the account")
-	}
-	return windows, err
-}
 
 // classifyGrokAuthStatus maps a definitive SSO authentication failure to "401".
 func classifyGrokAuthStatus(err error) string {
@@ -2068,7 +1978,7 @@ func (a *API) startGrokDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	pollContext, pollCancel := context.WithCancel(context.Background())
-	login := &grokDeviceLogin{
+	login := &deviceLogin{
 		deviceCode: details.DeviceCode,
 		userCode:   details.UserCode,
 		verifyURI:  details.VerificationURI,

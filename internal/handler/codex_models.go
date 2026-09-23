@@ -198,11 +198,6 @@ func splitEffortVariantSuffix(modelID string) (family, level string) {
 	return modelID, ""
 }
 
-// splitCodexEffortSuffix is the catalog-side name for the same split.
-func splitCodexEffortSuffix(modelID string) (family, level string) {
-	return splitEffortVariantSuffix(modelID)
-}
-
 func effortLevelRank(level string) int {
 	for index, suffix := range codexEffortSuffixes {
 		if suffix == level {
@@ -226,7 +221,7 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 	families := make(map[string]*effortFamily, len(items))
 	order := make([]string, 0, len(items))
 	for _, item := range items {
-		name, level := splitCodexEffortSuffix(item.ID)
+		name, level := splitEffortVariantSuffix(item.ID)
 		if level == "" {
 			// Not an effort variant: it stands alone under its exact id.
 			families[item.ID] = &effortFamily{representative: item, variants: 1}

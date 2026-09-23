@@ -203,7 +203,7 @@ func TestCodexCatalogGroupsEffortVariantsIntoOneFamily(t *testing.T) {
 	}
 }
 
-func TestSplitCodexEffortSuffix(t *testing.T) {
+func TestSplitEffortVariantSuffix(t *testing.T) {
 	cases := map[string][2]string{
 		"gpt-5-6-sol-low":        {"gpt-5-6-sol", "low"},
 		"gpt-5-3-codex-xhigh":    {"gpt-5-3-codex", "xhigh"},
@@ -212,9 +212,9 @@ func TestSplitCodexEffortSuffix(t *testing.T) {
 		"grok-composer-2.5-fast": {"grok-composer-2.5-fast", ""},
 	}
 	for input, want := range cases {
-		family, level := splitCodexEffortSuffix(input)
+		family, level := splitEffortVariantSuffix(input)
 		if family != want[0] || level != want[1] {
-			t.Fatalf("splitCodexEffortSuffix(%q) = (%q, %q), want (%q, %q)", input, family, level, want[0], want[1])
+			t.Fatalf("splitEffortVariantSuffix(%q) = (%q, %q), want (%q, %q)", input, family, level, want[0], want[1])
 		}
 	}
 }

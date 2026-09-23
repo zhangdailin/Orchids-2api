@@ -77,6 +77,33 @@ func TestModelRefreshCoordinatorRejectsDuplicateChannel(t *testing.T) {
 	<-firstDone
 }
 
+func TestRunIndexedModelRefreshWorkersVisitsEachIndexOnce(t *testing.T) {
+	const total = 37
+	counts := make([]int, total)
+	var mu sync.Mutex
+
+	runIndexedModelRefreshWorkers(total, 5, func(index int) {
+		mu.Lock()
+		counts[index]++
+		mu.Unlock()
+	})
+
+	for index, count := range counts {
+		if count != 1 {
+			t.Fatalf("index %d visited %d times, want once", index, count)
+		}
+	}
+}
+
+func TestRunIndexedModelRefreshWorkersHandlesEmptyWork(t *testing.T) {
+	called := false
+	runIndexedModelRefreshWorkers(0, 4, func(int) { called = true })
+	runIndexedModelRefreshWorkers(3, 4, nil)
+	if called {
+		t.Fatal("worker called for empty input")
+	}
+}
+
 func TestNormalizeModelRefreshConcurrency(t *testing.T) {
 	tests := []struct {
 		name string

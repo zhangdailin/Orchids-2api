@@ -1,10 +1,5 @@
 // Accounts management JavaScript
 
-let warpDeviceLoginId = "";
-let warpDeviceLoginTimer = null;
-let grokDeviceLoginId = "";
-let grokDeviceLoginTimer = null;
-
 let accounts = [];
 let currentPlatform = '';
 let accountHealth = {};
@@ -567,202 +562,135 @@ function applyTokenLabels(type) {
   if (accountId) input.required = false;
 }
 
-function getWarpDeviceLoginStatusNode() {
-  return document.getElementById("warpDeviceLoginStatus");
-}
+// Grok and Warp expose the same server-owned device-auth protocol. Keep the
+// lifecycle shared while provider endpoints, copy and URL allowlists remain
+// explicit, so changing one provider cannot silently widen another.
+function createAccountDeviceLogin(options) {
+  const state = { id: "", timer: null };
+  const statusNode = () => document.getElementById(options.statusId);
 
-function getGrokDeviceLoginStatusNode() {
-  return document.getElementById("grokDeviceLoginStatus");
-}
+  function render(message, type = "info", html = "") {
+    const node = statusNode();
+    if (!node) return;
+    node.hidden = false;
+    node.classList.toggle("is-active", type === "info");
+    node.classList.toggle("is-error", type === "error");
+    node.innerHTML = `<strong>${escapeImportStatusText(message)}</strong>${html}`;
+  }
 
-function renderGrokDeviceLoginStatus(message, type = "info", html = "") {
-  const node = getGrokDeviceLoginStatusNode();
-  if (!node) return;
-  node.hidden = false;
-  node.classList.toggle("is-active", type === "info");
-  node.classList.toggle("is-error", type === "error");
-  node.innerHTML = `<strong>${escapeImportStatusText(message)}</strong>${html}`;
-}
-
-function resetGrokDeviceLoginStatus() {
-  const node = getGrokDeviceLoginStatusNode();
-  if (node) {
+  function reset() {
+    const node = statusNode();
+    if (!node) return;
     node.hidden = true;
     node.classList.remove("is-active", "is-error");
     node.innerHTML = "";
   }
-}
 
-function stopGrokDeviceLogin(cancel = false) {
-  if (grokDeviceLoginTimer) {
-    clearTimeout(grokDeviceLoginTimer);
-    grokDeviceLoginTimer = null;
-  }
-  const id = grokDeviceLoginId;
-  grokDeviceLoginId = "";
-  const button = document.getElementById("grokDeviceLoginButton");
-  if (button) button.disabled = false;
-  if (cancel && id) {
-    fetch(`/api/grok/device-auth/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
-  }
-}
-
-async function startGrokDeviceLogin() {
-  if (grokDeviceLoginId) return;
-  const button = document.getElementById("grokDeviceLoginButton");
-  if (button) button.disabled = true;
-  resetGrokDeviceLoginStatus();
-  try {
-    const res = await fetch("/api/grok/device-auth", { method: "POST" });
-    if (!res.ok) throw new Error(await res.text());
-    const login = await res.json();
-    grokDeviceLoginId = String(login.id || "");
-    if (!grokDeviceLoginId || login.status !== "pending") {
-      throw new Error("Grok 登录初始化响应无效");
+  function stop(cancel = false) {
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
     }
-    const link = String(login.verification_uri_complete || login.verification_uri || "");
-    let safeLink = "";
+    const id = state.id;
+    state.id = "";
+    const button = document.getElementById(options.buttonId);
+    if (button) button.disabled = false;
+    if (cancel && id) {
+      fetch(`${options.endpoint}/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+    }
+  }
+
+  async function poll() {
+    const id = state.id;
+    if (!id) return;
     try {
-      const parsed = new URL(link);
-      if (parsed.protocol === "https:" && (parsed.hostname === "auth.x.ai" || parsed.hostname === "accounts.x.ai")) {
-        safeLink = parsed.href;
+      const res = await fetch(`${options.endpoint}/${encodeURIComponent(id)}`);
+      if (!res.ok) throw new Error(await res.text());
+      const login = await res.json();
+      if (id !== state.id) return;
+      if (login.status === "pending") {
+        state.timer = setTimeout(poll, 1500);
+        return;
       }
-    } catch (_) {
-      // Keep an unexpected upstream URL from becoming an open redirect.
+      stop(false);
+      if (login.status === "complete") {
+        const message = login.message || `${options.provider} 账号已添加`;
+        render(message, "info");
+        showToast(message, "success");
+        loadAccounts();
+        setTimeout(closeModal, 800);
+        return;
+      }
+      render(login.message || `${options.provider} 官方登录未完成`, "error");
+    } catch (err) {
+      if (id !== state.id) return;
+      stop(false);
+      render(`${options.provider} 登录状态查询失败：` + (err.message || String(err)), "error");
     }
-    const linkHTML = safeLink
-      ? `<div style="margin-top:8px"><a href="${escapeImportStatusText(safeLink)}" target="_blank" rel="noopener noreferrer">打开 Grok 官方授权页面</a></div>`
-      : "";
-    renderGrokDeviceLoginStatus(`请在 Grok 官方页面输入设备码：${login.user_code || ""}`, "info", linkHTML);
-    if (safeLink) window.open(safeLink, "_blank", "noopener");
-    pollGrokDeviceLogin();
-  } catch (err) {
-    stopGrokDeviceLogin(false);
-    renderGrokDeviceLoginStatus("无法启动 Grok 官方登录：" + (err.message || String(err)), "error");
   }
-}
 
-async function pollGrokDeviceLogin() {
-  const id = grokDeviceLoginId;
-  if (!id) return;
-  try {
-    const res = await fetch(`/api/grok/device-auth/${encodeURIComponent(id)}`);
-    if (!res.ok) throw new Error(await res.text());
-    const login = await res.json();
-    if (id !== grokDeviceLoginId) return;
-    if (login.status === "pending") {
-      grokDeviceLoginTimer = setTimeout(pollGrokDeviceLogin, 1500);
-      return;
-    }
-    stopGrokDeviceLogin(false);
-    if (login.status === "complete") {
-      renderGrokDeviceLoginStatus(login.message || "Grok 账号已添加", "info");
-      showToast(login.message || "Grok 账号已添加", "success");
-      loadAccounts();
-      setTimeout(closeModal, 800);
-      return;
-    }
-    renderGrokDeviceLoginStatus(login.message || "Grok 官方登录未完成", "error");
-  } catch (err) {
-    if (id !== grokDeviceLoginId) return;
-    stopGrokDeviceLogin(false);
-    renderGrokDeviceLoginStatus("Grok 登录状态查询失败：" + (err.message || String(err)), "error");
-  }
-}
-
-function renderWarpDeviceLoginStatus(message, type = "info", html = "") {
-  const node = getWarpDeviceLoginStatusNode();
-  if (!node) return;
-  node.hidden = false;
-  node.classList.toggle("is-active", type === "info");
-  node.classList.toggle("is-error", type === "error");
-  node.innerHTML = `<strong>${escapeImportStatusText(message)}</strong>${html}`;
-}
-
-function resetWarpDeviceLoginStatus() {
-  const node = getWarpDeviceLoginStatusNode();
-  if (node) {
-    node.hidden = true;
-    node.classList.remove("is-active", "is-error");
-    node.innerHTML = "";
-  }
-}
-
-function stopWarpDeviceLogin(cancel = false) {
-  if (warpDeviceLoginTimer) {
-    clearTimeout(warpDeviceLoginTimer);
-    warpDeviceLoginTimer = null;
-  }
-  const id = warpDeviceLoginId;
-  warpDeviceLoginId = "";
-  const button = document.getElementById("warpDeviceLoginButton");
-  if (button) button.disabled = false;
-  if (cancel && id) {
-    fetch(`/api/warp/device-auth/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
-  }
-}
-
-async function startWarpDeviceLogin() {
-  if (warpDeviceLoginId) return;
-  const button = document.getElementById("warpDeviceLoginButton");
-  if (button) button.disabled = true;
-  resetWarpDeviceLoginStatus();
-  try {
-    const res = await fetch("/api/warp/device-auth", { method: "POST" });
-    if (!res.ok) throw new Error(await res.text());
-    const login = await res.json();
-    warpDeviceLoginId = String(login.id || "");
-    if (!warpDeviceLoginId || login.status !== "pending") {
-      throw new Error("Warp 登录初始化响应无效");
-    }
-    const link = String(login.verification_uri_complete || login.verification_uri || "");
-    let safeLink = "";
+  async function start() {
+    if (state.id) return;
+    const button = document.getElementById(options.buttonId);
+    if (button) button.disabled = true;
+    reset();
     try {
-      const parsed = new URL(link);
-      if (parsed.origin === "https://app.warp.dev") safeLink = parsed.href;
-    } catch (_) {
-      // The backend only returns Warp's official URL; keep the UI safe if an
-      // unexpected upstream response is ever received.
+      const res = await fetch(options.endpoint, { method: "POST" });
+      if (!res.ok) throw new Error(await res.text());
+      const login = await res.json();
+      state.id = String(login.id || "");
+      if (!state.id || login.status !== "pending") {
+        throw new Error(`${options.provider} 登录初始化响应无效`);
+      }
+      const link = String(login.verification_uri_complete || login.verification_uri || "");
+      let safeLink = "";
+      try {
+        const parsed = new URL(link);
+        if (options.isAllowedURL(parsed)) safeLink = parsed.href;
+      } catch (_) {
+        // An unexpected upstream URL must never become an open redirect.
+      }
+      const linkHTML = safeLink
+        ? `<div style="margin-top:8px"><a href="${escapeImportStatusText(safeLink)}" target="_blank" rel="noopener noreferrer">打开 ${options.provider} 官方授权页面</a></div>`
+        : "";
+      render(`请在 ${options.provider} 官方页面输入设备码：${login.user_code || ""}`, "info", linkHTML);
+      if (safeLink) window.open(safeLink, "_blank", "noopener");
+      poll();
+    } catch (err) {
+      stop(false);
+      render(`无法启动 ${options.provider} 官方登录：` + (err.message || String(err)), "error");
     }
-    const linkHTML = safeLink
-      ? `<div style="margin-top:8px"><a href="${escapeImportStatusText(safeLink)}" target="_blank" rel="noopener noreferrer">打开 Warp 官方授权页面</a></div>`
-      : "";
-    renderWarpDeviceLoginStatus(`请在 Warp 官方页面输入设备码：${login.user_code || ""}`, "info", linkHTML);
-    if (safeLink) window.open(safeLink, "_blank", "noopener");
-    pollWarpDeviceLogin();
-  } catch (err) {
-    stopWarpDeviceLogin(false);
-    renderWarpDeviceLoginStatus("无法启动 Warp 官方登录：" + (err.message || String(err)), "error");
   }
+
+  return { render, reset, stop, start, poll };
 }
 
-async function pollWarpDeviceLogin() {
-  const id = warpDeviceLoginId;
-  if (!id) return;
-  try {
-    const res = await fetch(`/api/warp/device-auth/${encodeURIComponent(id)}`);
-    if (!res.ok) throw new Error(await res.text());
-    const login = await res.json();
-    if (id !== warpDeviceLoginId) return;
-    if (login.status === "pending") {
-      warpDeviceLoginTimer = setTimeout(pollWarpDeviceLogin, 1500);
-      return;
-    }
-    stopWarpDeviceLogin(false);
-    if (login.status === "complete") {
-      renderWarpDeviceLoginStatus(login.message || "Warp 账号已添加", "info");
-      showToast(login.message || "Warp 账号已添加", "success");
-      loadAccounts();
-      setTimeout(closeModal, 800);
-      return;
-    }
-    renderWarpDeviceLoginStatus(login.message || "Warp 官方登录未完成", "error");
-  } catch (err) {
-    if (id !== warpDeviceLoginId) return;
-    stopWarpDeviceLogin(false);
-    renderWarpDeviceLoginStatus("Warp 登录状态查询失败：" + (err.message || String(err)), "error");
-  }
-}
+const grokDeviceLogin = createAccountDeviceLogin({
+  provider: "Grok",
+  endpoint: "/api/grok/device-auth",
+  statusId: "grokDeviceLoginStatus",
+  buttonId: "grokDeviceLoginButton",
+  isAllowedURL: (url) => url.protocol === "https:" && (url.hostname === "auth.x.ai" || url.hostname === "accounts.x.ai"),
+});
+
+const warpDeviceLogin = createAccountDeviceLogin({
+  provider: "Warp",
+  endpoint: "/api/warp/device-auth",
+  statusId: "warpDeviceLoginStatus",
+  buttonId: "warpDeviceLoginButton",
+  isAllowedURL: (url) => url.origin === "https://app.warp.dev",
+});
+
+function renderGrokDeviceLoginStatus(message, type = "info", html = "") { grokDeviceLogin.render(message, type, html); }
+function resetGrokDeviceLoginStatus() { grokDeviceLogin.reset(); }
+function stopGrokDeviceLogin(cancel = false) { grokDeviceLogin.stop(cancel); }
+function startGrokDeviceLogin() { return grokDeviceLogin.start(); }
+function pollGrokDeviceLogin() { return grokDeviceLogin.poll(); }
+function renderWarpDeviceLoginStatus(message, type = "info", html = "") { warpDeviceLogin.render(message, type, html); }
+function resetWarpDeviceLoginStatus() { warpDeviceLogin.reset(); }
+function stopWarpDeviceLogin(cancel = false) { warpDeviceLogin.stop(cancel); }
+function startWarpDeviceLogin() { return warpDeviceLogin.start(); }
+function pollWarpDeviceLogin() { return warpDeviceLogin.poll(); }
 
 // Grok credential mode: SSO cookie vs Build CLI OAuth.
 //
@@ -1343,121 +1271,6 @@ async function checkAccount(id, silent = false, actionText = "刷新") {
     updateStats();
   }
   return succeeded;
-}
-
-// Refresh-on-load: the account table is only as fresh as the last sync, and most
-// channels do NOT report when their quota snapshot was taken (Warp and Puter have
-// no timestamp at all). A page-session ledger plus a persisted one therefore
-// drives auto-sync, with the channel's own snapshot timestamp used when present.
-const ACCOUNT_SYNC_MAX_AGE_MS = 30 * 60 * 1000;
-const ACCOUNT_SYNC_LEDGER_KEY = 'orchids_account_sync_v1';
-const ACCOUNT_AUTO_SYNC_PACE_MS = 200;
-
-function parseAccountTime(value) {
-  const parsed = Date.parse(String(value || ""));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-// accountSyncTimestamp resolves when this account's displayed numbers were last
-// obtained from the upstream. 0 means "this channel does not report one".
-function accountSyncTimestamp(acc) {
-  if (!acc) return 0;
-  const type = normalizeAccountType(acc);
-  if (type === "workbuddy") {
-    return parseAccountTime(acc?.workbuddy_quota?.synced_at) || parseAccountTime(acc?.workbuddy_models_synced_at);
-  }
-  if (type === "grok") {
-    if (isSidebarGrokOAuthAccount(acc)) {
-      // Build OAuth: billing windows carry the weekly/monthly allowance the
-      // 配额 column renders.
-      return parseAccountTime(acc?.grok_billing?.synced_at) || parseAccountTime(acc?.grok_models_synced_at);
-    }
-    return parseAccountTime(acc?.grok_web_quota?.synced_at) || parseAccountTime(acc?.grok_models_synced_at);
-  }
-  return 0;
-}
-
-// The ledger survives reloads so a channel without timestamps is refreshed at
-// most once per ACCOUNT_SYNC_MAX_AGE_MS instead of on every page view.
-const accountSyncLedger = {
-  entries: {},
-  loaded: false,
-  load() {
-    if (this.loaded) return;
-    this.loaded = true;
-    try {
-      const raw = window.localStorage?.getItem(ACCOUNT_SYNC_LEDGER_KEY);
-      const parsed = raw ? JSON.parse(raw) : null;
-      if (parsed && typeof parsed === "object") this.entries = parsed;
-    } catch (_) {
-      this.entries = {};
-    }
-  },
-  get(id) {
-    this.load();
-    const value = Number(this.entries[String(id)]);
-    return Number.isFinite(value) ? value : 0;
-  },
-  set(id, at) {
-    this.load();
-    this.entries[String(id)] = at;
-    try {
-      window.localStorage?.setItem(ACCOUNT_SYNC_LEDGER_KEY, JSON.stringify(this.entries));
-    } catch (_) {
-      /* storage may be unavailable; the in-memory copy still applies */
-    }
-  },
-};
-
-const accountAutoSyncState = { attemptedThisLoad: false, inFlight: new Set() };
-
-function accountLastSyncAt(acc) {
-  if (!acc) return 0;
-  return Math.max(accountSyncTimestamp(acc), accountSyncLedger.get(acc.id));
-}
-
-function shouldAutoSyncAccount(acc) {
-  if (!acc || !acc.enabled || !acc.id) return false;
-  if (accountAutoSyncState.inFlight.has(String(acc.id))) return false;
-  // Warp credentials are never submitted by the UI, but a loaded account with no
-  // settings snapshot still needs one official sync.
-  if (normalizeAccountType(acc) === "warp" && acc.token) return false;
-
-  const lastSync = accountLastSyncAt(acc);
-  if (!lastSync) return true;
-  return Date.now() - lastSync >= ACCOUNT_SYNC_MAX_AGE_MS;
-}
-
-function sleepForPace(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// autoSyncStaleAccounts refreshes, at most once per page load, every enabled
-// account whose last successful sync is older than the TTL. Sequential and paced
-// on purpose: a channel may rate limit per account pool, and the table
-// re-renders as results arrive.
-async function autoSyncStaleAccounts() {
-  if (accountAutoSyncState.attemptedThisLoad) return;
-  accountAutoSyncState.attemptedThisLoad = true;
-  let synced = 0;
-  for (const acc of accounts) {
-    if (!shouldAutoSyncAccount(acc)) continue;
-    const id = String(acc.id);
-    accountAutoSyncState.inFlight.add(id);
-    const ok = await checkAccount(acc.id, true);
-    accountAutoSyncState.inFlight.delete(id);
-    if (ok) {
-      accountSyncLedger.set(id, Date.now());
-      synced += 1;
-    }
-    await sleepForPace(ACCOUNT_AUTO_SYNC_PACE_MS);
-  }
-  return synced;
-}
-
-// resetAutoSyncLoadGuard simulates a fresh page load for the per-load guard.
-function resetAutoSyncLoadGuard() {
-  accountAutoSyncState.attemptedThisLoad = false;
 }
 
 // Clear abnormal accounts
