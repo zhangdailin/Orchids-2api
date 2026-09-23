@@ -31,6 +31,26 @@ ssh root@HOST 'cd /root/release && bash deploy-orchids.sh \
   --build-info ./orchids-server-linux-amd64.build-info.txt'
 ```
 
+## Host access
+
+The wrappers in `.rsh/` run a command or copy files to the host:
+
+```sh
+./.rsh/run 'systemctl status orchids-2api'        # run from the repository root
+./.rsh/scp.sh dist/orchids-server-linux-amd64* root@3.15.148.113:/root/release/
+```
+
+`.rsh/` is **not tracked**. It used to be, with the host's root password as a
+literal default in `.rsh/run`, which put that password in the public repository
+history — so the directory is now in `.gitignore` and the password is read from
+the environment or from an untracked file:
+
+- `RSH_PASS`, or
+- `.rsh/pass` (mode 0600), used when `RSH_PASS` is unset.
+
+Both wrappers refuse to run with neither set. Anything that needs to reach the
+host in CI should use a deploy key, not this password.
+
 ## Bring up Caddy
 
 ```sh

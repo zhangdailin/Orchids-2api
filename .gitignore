@@ -56,6 +56,12 @@ data/tmp/
 internal/grok/data/
 /config.json
 
+# Host-access credentials. .rsh/ holds the deployment host's password (.rsh/pass)
+# and the askpass/ssh/scp wrappers that read it. A literal password default in
+# .rsh/run is how this host's root password once reached the public repository,
+# so the whole directory stays out of git.
+.rsh/
+
 # Database
 *.db
 *.sqlite
