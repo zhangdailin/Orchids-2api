@@ -291,7 +291,7 @@ func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason st
 		blockType, _ := sh.contentBlocks[i]["type"].(string)
 		switch blockType {
 		case "thinking":
-			if builder, ok := sh.thinkingBlockBuilders[i]; ok {
+			if builder := builderAt(sh.thinkingBlockBuilders, i); builder != nil {
 				if reasoning := builder.String(); reasoning != "" {
 					reasoningParts = append(reasoningParts, reasoning)
 					continue
@@ -301,7 +301,7 @@ func buildOpenAINonStreamResponse(sh *streamHandler, model string, stopReason st
 				reasoningParts = append(reasoningParts, reasoning)
 			}
 		case "text":
-			if builder, ok := sh.textBlockBuilders[i]; ok {
+			if builder := builderAt(sh.textBlockBuilders, i); builder != nil {
 				if text := builder.String(); text != "" {
 					textParts = append(textParts, text)
 					continue
@@ -1296,13 +1296,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			blockType, _ := sh.contentBlocks[i]["type"].(string)
 			switch blockType {
 			case "text":
-				if builder, ok := sh.textBlockBuilders[i]; ok {
+				if builder := builderAt(sh.textBlockBuilders, i); builder != nil {
 					sh.contentBlocks[i]["text"] = builder.String()
 				} else if _, ok := sh.contentBlocks[i]["text"]; !ok {
 					sh.contentBlocks[i]["text"] = ""
 				}
 			case "thinking":
-				if builder, ok := sh.thinkingBlockBuilders[i]; ok {
+				if builder := builderAt(sh.thinkingBlockBuilders, i); builder != nil {
 					sh.contentBlocks[i]["thinking"] = builder.String()
 				} else if _, ok := sh.contentBlocks[i]["thinking"]; !ok {
 					sh.contentBlocks[i]["thinking"] = ""

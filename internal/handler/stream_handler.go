@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -50,18 +51,41 @@ var (
 	sseDataPrefixBytes  = []byte(sseDataPrefix)
 	sseLineBreakBytes   = []byte(sseLineBreak)
 	sseDataJoinBytes    = []byte(sseDataJoin)
-	sseEventBytesByName = map[string][]byte{
-		"message_start":       []byte("message_start"),
-		"message_delta":       []byte("message_delta"),
-		"message_stop":        []byte("message_stop"),
-		"content_block_start": []byte("content_block_start"),
-		"content_block_delta": []byte("content_block_delta"),
-		"content_block_stop":  []byte("content_block_stop"),
-	}
-	quotedPathRegex       = regexp.MustCompile(`"([^"\n\r]+)"`)
-	windowsDrivePathRegex = regexp.MustCompile(`(?i)\b[a-z]:[\\/]`)
-	tmpAgentPathRegex     = regexp.MustCompile("(^|[\\s(=;&|])(/tmp/cc-agent/[^\\s\"';|&)]+)")
+	// Complete "event: <name>\ndata: " frame headers, one per event the relay
+	// emits. Folding the prefix, the name and the data join into a single slice
+	// makes a frame header one Write instead of three, and looking them up
+	// through the switch below compiles to length-and-bytes comparisons against
+	// the constants the callers pass — replacing a map hash on every frame.
+	ssePrefixMessageStart      = []byte(sseEventPrefix + "message_start" + sseDataJoin)
+	ssePrefixMessageDelta      = []byte(sseEventPrefix + "message_delta" + sseDataJoin)
+	ssePrefixMessageStop       = []byte(sseEventPrefix + "message_stop" + sseDataJoin)
+	ssePrefixContentBlockStart = []byte(sseEventPrefix + "content_block_start" + sseDataJoin)
+	ssePrefixContentBlockDelta = []byte(sseEventPrefix + "content_block_delta" + sseDataJoin)
+	ssePrefixContentBlockStop  = []byte(sseEventPrefix + "content_block_stop" + sseDataJoin)
+	quotedPathRegex            = regexp.MustCompile(`"([^"\n\r]+)"`)
+	windowsDrivePathRegex      = regexp.MustCompile(`(?i)\b[a-z]:[\\/]`)
+	tmpAgentPathRegex          = regexp.MustCompile("(^|[\\s(=;&|])(/tmp/cc-agent/[^\\s\"';|&)]+)")
 )
+
+// sseFramePrefix returns the complete header bytes for a known wire event, or nil
+// for anything the relay does not emit on the Anthropic event stream.
+func sseFramePrefix(event string) []byte {
+	switch event {
+	case "message_start":
+		return ssePrefixMessageStart
+	case "message_delta":
+		return ssePrefixMessageDelta
+	case "message_stop":
+		return ssePrefixMessageStop
+	case "content_block_start":
+		return ssePrefixContentBlockStart
+	case "content_block_delta":
+		return ssePrefixContentBlockDelta
+	case "content_block_stop":
+		return ssePrefixContentBlockStop
+	}
+	return nil
+}
 
 func mapKeys(m map[string]interface{}) []string {
 	if m == nil {
@@ -81,11 +105,9 @@ func writeOpenAIFrame(w io.Writer, payload []byte) error {
 	return err
 }
 
+// writeSSEEventName writes the event name alone, for the rare frame whose event
+// is not one of the relay's own framed types.
 func writeSSEEventName(w io.Writer, event string) error {
-	if raw, ok := sseEventBytesByName[event]; ok {
-		_, err := w.Write(raw)
-		return err
-	}
 	if sw, ok := w.(io.StringWriter); ok {
 		_, err := sw.WriteString(event)
 		return err
@@ -95,6 +117,18 @@ func writeSSEEventName(w io.Writer, event string) error {
 }
 
 func writeSSEFrameBytes(w io.Writer, event string, data []byte) error {
+	if prefix := sseFramePrefix(event); prefix != nil {
+		if _, err := w.Write(prefix); err != nil {
+			return err
+		}
+		if _, err := w.Write(data); err != nil {
+			return err
+		}
+		_, err := w.Write(sseLineBreakBytes)
+		return err
+	}
+	// An event the relay does not frame itself (error, a vendor extension): spell
+	// the header out field by field.
 	if _, err := w.Write(sseEventPrefixBytes); err != nil {
 		return err
 	}
@@ -186,8 +220,11 @@ type streamHandler struct {
 	flusher http.Flusher
 
 	// State
-	mu                       sync.Mutex
-	outputMu                 sync.Mutex
+	mu sync.Mutex
+	// returned mirrors hasReturn for the lock-free early-out at the top of
+	// handleMessage. The check runs once per upstream event, and taking h.mu just
+	// to read one bool was measurable on the per-token path.
+	returned                 atomic.Bool
 	blockIndex               int
 	msgID                    string
 	startTime                time.Time
@@ -204,11 +241,15 @@ type streamHandler struct {
 	activeBlockType          string // "thinking", "text", "tool_use"
 
 	// Buffers and Builders
-	responseText          *strings.Builder
-	outputEstimator       tiktoken.Estimator
-	textBlockBuilders     map[int]*strings.Builder
-	thinkingBlockBuilders map[int]*strings.Builder
-	thinkingBlockSigs     map[int]string
+	responseText    *strings.Builder
+	outputEstimator tiktoken.Estimator
+	// History builders are indexed by content-block position, not keyed by it.
+	// The position is exactly len(contentBlocks)-1 at creation, so the indices are
+	// dense and monotonic and a slice replaces the map the per-token delta paths
+	// used to hash into once per frame.
+	textBlockBuilders     []*strings.Builder
+	thinkingBlockBuilders []*strings.Builder
+	thinkingBlockSigs     []string
 	contentBlocks         []map[string]interface{}
 	pendingThinkingSig    string
 	hasTextOutput         bool
@@ -272,9 +313,6 @@ func newStreamHandler(
 
 		blockIndex:               -1,
 		responseText:             perf.AcquireStringBuilder(),
-		textBlockBuilders:        make(map[int]*strings.Builder),
-		thinkingBlockBuilders:    make(map[int]*strings.Builder),
-		thinkingBlockSigs:        make(map[int]string),
 		toolInputNames:           make(map[string]string),
 		toolInputBuffers:         make(map[string]*strings.Builder),
 		toolInputHadDelta:        make(map[string]bool),
@@ -337,6 +375,60 @@ func (h *streamHandler) setEmptyOutputFallback(text string) {
 	h.mu.Unlock()
 }
 
+// growBuilderSlots extends a builder slice so idx is addressable. Content-block
+// indices are dense and monotonic, so this grows by one slot per block in
+// practice and keeps append's amortised doubling for the rest.
+func growBuilderSlots(slots []*strings.Builder, idx int) []*strings.Builder {
+	for len(slots) <= idx {
+		slots = append(slots, nil)
+	}
+	return slots
+}
+
+// growSigSlots extends the signature slice so idx is addressable. The slice is
+// grown only by the thinking-block creation path, so its length is exactly one
+// past the highest index that path ever wrote — which is what makes the bounds
+// check in thinkingBlockSigAt reproduce the map's "key present" test.
+func growSigSlots(sigs []string, idx int) []string {
+	for len(sigs) <= idx {
+		sigs = append(sigs, "")
+	}
+	return sigs
+}
+
+// thinkingBlockSigAt returns the stored signature for a thinking-block index. The
+// boolean reproduces the map's "key present" result, so an index past the end
+// reads as absent rather than as present-and-empty — the difference that keeps
+// the callers below from writing outside the slice.
+func (h *streamHandler) thinkingBlockSigAt(idx int) (string, bool) {
+	if idx < 0 || idx >= len(h.thinkingBlockSigs) {
+		return "", false
+	}
+	return h.thinkingBlockSigs[idx], true
+}
+
+// builderAt returns the history builder already recorded at idx, or nil. It
+// never allocates, for readers that must not grow the slice.
+func builderAt(slots []*strings.Builder, idx int) *strings.Builder {
+	if idx < 0 || idx >= len(slots) {
+		return nil
+	}
+	return slots[idx]
+}
+
+// historyBuilderAt returns the history builder for a content-block index,
+// allocating the slot and the builder on first use. The caller must hold h.mu.
+func (h *streamHandler) historyBuilderAt(slots *[]*strings.Builder, idx int) *strings.Builder {
+	if idx < 0 {
+		return nil
+	}
+	*slots = growBuilderSlots(*slots, idx)
+	if (*slots)[idx] == nil {
+		(*slots)[idx] = perf.AcquireStringBuilder()
+	}
+	return (*slots)[idx]
+}
+
 func (h *streamHandler) currentReasoningText() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -347,7 +439,7 @@ func (h *streamHandler) currentReasoningText() string {
 		if blockType != "thinking" {
 			continue
 		}
-		if builder, ok := h.thinkingBlockBuilders[i]; ok {
+		if builder := builderAt(h.thinkingBlockBuilders, i); builder != nil {
 			if value := strings.TrimSpace(builder.String()); value != "" {
 				parts = append(parts, value)
 				continue
@@ -863,31 +955,26 @@ func (h *streamHandler) writeKeepAlive() {
 	h.flushSSELocked("keep-alive", sseKeepAlive, true)
 }
 
-func (h *streamHandler) addThinkingTokens(text string) {
-	if text == "" {
-		return
-	}
-	h.outputMu.Lock()
-	if !h.useUpstreamUsage {
-		h.outputTokens += tiktoken.EstimateTextTokens(text)
-	}
-	h.outputMu.Unlock()
-}
-
+// addOutputTokens folds a fragment into the running output estimate.
+//
+// Token accounting lives under h.mu rather than a mutex of its own: resetRoundState
+// already cleared outputTokens and the estimator under h.mu, so a second mutex
+// gave no real exclusion over the same fields. One lock for the handler's state
+// is what lets the per-token delta paths take the lock once per frame.
 func (h *streamHandler) addOutputTokens(text string) {
 	if text == "" {
 		return
 	}
-	h.outputMu.Lock()
+	h.mu.Lock()
 	if !h.useUpstreamUsage {
 		h.outputEstimator.Add(text)
 	}
-	h.outputMu.Unlock()
+	h.mu.Unlock()
 }
 
 func (h *streamHandler) finalizeOutputTokens() {
-	h.outputMu.Lock()
-	defer h.outputMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	if h.useUpstreamUsage {
 		return
@@ -921,6 +1008,7 @@ func (h *streamHandler) resetRoundState() {
 	h.activeTextSSEIndex = -1
 	h.activeBlockType = ""
 	h.hasReturn = false
+	h.returned.Store(false)
 
 	h.responseText.Reset()
 	h.contentBlocks = nil
@@ -928,12 +1016,13 @@ func (h *streamHandler) resetRoundState() {
 	for _, sb := range h.textBlockBuilders {
 		perf.ReleaseStringBuilder(sb)
 	}
-	clear(h.textBlockBuilders)
+	h.textBlockBuilders = h.textBlockBuilders[:0]
 
 	for _, sb := range h.thinkingBlockBuilders {
 		perf.ReleaseStringBuilder(sb)
 	}
-	clear(h.thinkingBlockBuilders)
+	h.thinkingBlockBuilders = h.thinkingBlockBuilders[:0]
+	h.thinkingBlockSigs = h.thinkingBlockSigs[:0]
 
 	h.pendingToolCalls = nil
 	clear(h.toolInputNames)
@@ -1968,11 +2057,11 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		fallback := h.emptyOutputFallback
 		h.mu.Unlock()
 		if fallback != "" {
-			h.outputMu.Lock()
+			h.mu.Lock()
 			h.useUpstreamUsage = false
 			h.outputTokens = 0
 			h.outputEstimator.Reset()
-			h.outputMu.Unlock()
+			h.mu.Unlock()
 			h.handleMessage(upstream.SSEMessage{
 				Type:  "model.text-delta",
 				Event: map[string]interface{}{"delta": fallback},
@@ -1986,6 +2075,7 @@ func (h *streamHandler) finishResponse(stopReason string) {
 		return
 	}
 	h.hasReturn = true
+	h.returned.Store(true)
 	h.finalStopReason = stopReason
 	h.mu.Unlock()
 
@@ -2071,7 +2161,9 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		internalIdx := len(h.contentBlocks) - 1
 		h.activeThinkingBlockIndex = internalIdx
 		h.activeThinkingSSEIndex = sseIdx
+		h.thinkingBlockBuilders = growBuilderSlots(h.thinkingBlockBuilders, internalIdx)
 		h.thinkingBlockBuilders[internalIdx] = perf.AcquireStringBuilder()
+		h.thinkingBlockSigs = growSigSlots(h.thinkingBlockSigs, internalIdx)
 		h.thinkingBlockSigs[internalIdx] = signature
 
 		raw, err := appendSSEContentBlockStartThinking(h.ssePayloadScratch[:0], sseIdx, signature)
@@ -2088,6 +2180,7 @@ func (h *streamHandler) ensureBlock(blockType string) int {
 		internalIdx := len(h.contentBlocks) - 1
 		h.activeTextBlockIndex = internalIdx
 		h.activeTextSSEIndex = sseIdx
+		h.textBlockBuilders = growBuilderSlots(h.textBlockBuilders, internalIdx)
 		h.textBlockBuilders[internalIdx] = perf.AcquireStringBuilder()
 
 		h.writeSSEContentBlockStartTextLocked(sseIdx, false)
@@ -2396,6 +2489,7 @@ func (h *streamHandler) markWriteErrorLocked(event string, err error) {
 		return
 	}
 	h.hasReturn = true
+	h.returned.Store(true)
 	h.finalStopReason = "write_error"
 	slog.Warn("SSE write failed", "event", event, "error", err)
 }
@@ -2473,10 +2567,9 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 		slog.Debug("Incoming SSE", fields...)
 	}
-	h.mu.Lock()
-	done := h.hasReturn
-	h.mu.Unlock()
-	if done {
+	// Lock-free early-out: this runs once per upstream event, and taking h.mu only
+	// to read a bool was measurable on the per-token path.
+	if h.returned.Load() {
 		return
 	}
 
@@ -2487,8 +2580,10 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 	}
 
-	// Instrument: Log detailed error info
-	if strings.HasSuffix(eventKey, ".error") || strings.Contains(eventKey, "error") {
+	// Instrument: Log detailed error info. A trailing ".error" is subsumed by the
+	// substring test, so spelling both only bought a second scan of the event key
+	// on every frame that was not an error.
+	if strings.Contains(eventKey, "error") {
 		if msg.Event != nil {
 			if data, ok := msg.Event["data"]; ok {
 				slog.Warn("SSE Error Payload", "type", eventKey, "data", data)
@@ -2550,14 +2645,20 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 
 	case "model.reasoning-delta":
-		sig := ""
-		if h.pendingThinkingSig == "" {
+		// Same single-critical-section shape as model.text-delta: the reasoning
+		// stream is one delta per token too, and it previously took the lock six
+		// times per frame. pendingThinkingSig is read under the lock because
+		// ensureBlock consumes and clears it under the same lock.
+		h.mu.Lock()
+		sig := h.pendingThinkingSig
+		h.mu.Unlock()
+		if sig == "" {
 			sig = extractThinkingSignature(msg.Event)
 			if sig != "" {
+				h.mu.Lock()
 				h.pendingThinkingSig = sig
+				h.mu.Unlock()
 			}
-		} else {
-			sig = h.pendingThinkingSig
 		}
 		delta, _ := msg.Event["delta"].(string)
 		if delta == "" {
@@ -2566,7 +2667,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 				h.mu.Lock()
 				internalIdx := h.activeThinkingBlockIndex
 				if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
-					if existing, ok := h.thinkingBlockSigs[internalIdx]; ok && existing == "" {
+					if existing, ok := h.thinkingBlockSigAt(internalIdx); ok && existing == "" {
 						h.thinkingBlockSigs[internalIdx] = sig
 						h.contentBlocks[internalIdx]["signature"] = sig
 					}
@@ -2577,40 +2678,31 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		}
 		h.mu.Lock()
 		h.hasReasoningOutput = true
-		h.mu.Unlock()
-
-		h.mu.Lock()
 		sseIdx := h.activeThinkingSSEIndex
 		internalIdx := h.activeThinkingBlockIndex
 		if sig != "" && internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
-			if existing, ok := h.thinkingBlockSigs[internalIdx]; ok && existing == "" {
+			if existing, ok := h.thinkingBlockSigAt(internalIdx); ok && existing == "" {
 				h.thinkingBlockSigs[internalIdx] = sig
 				h.contentBlocks[internalIdx]["signature"] = sig
 			}
 		}
-		h.mu.Unlock()
 		if sseIdx < 0 {
-			// If we get delta but no thinking block is active, try to ensure one
+			// If we get a delta but no thinking block is active, open one.
+			h.mu.Unlock()
 			sseIdx = h.ensureBlock("thinking")
 			h.mu.Lock()
 			internalIdx = h.activeThinkingBlockIndex
-			h.mu.Unlock()
 		}
-		if h.isStream {
-			h.addThinkingTokens(delta)
+		if h.isStream && !h.useUpstreamUsage {
+			h.outputTokens += tiktoken.EstimateTextTokens(delta)
 		}
 		// Always update internal state for history
-		h.mu.Lock()
 		if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
-			builder, ok := h.thinkingBlockBuilders[internalIdx]
-			if !ok {
-				builder = perf.AcquireStringBuilder()
-				h.thinkingBlockBuilders[internalIdx] = builder
-			}
+			builder := h.historyBuilderAt(&h.thinkingBlockBuilders, internalIdx)
 			builder.WriteString(delta)
 		}
+		h.writeSSEContentBlockDeltaThinkingLocked(sseIdx, delta, false)
 		h.mu.Unlock()
-		h.writeSSEContentBlockDeltaThinking(sseIdx, delta, false)
 
 	case "model.reasoning-end":
 		h.closeActiveBlock()
@@ -2623,35 +2715,37 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		if delta == "" {
 			return
 		}
-		h.markTextOutput()
 
+		// One critical section for the whole frame. This case used to take the
+		// lock five separate times per delta — once to mark text output, once for
+		// the block indices, once for the estimator and twice for the history
+		// builder and the SSE write — which at one delta per token made lock
+		// traffic the single largest cost in the relay. The block-opening path
+		// owns the lock itself, so it is the one step taken outside this section.
 		h.mu.Lock()
+		h.hasTextOutput = true
 		sseIdx := h.activeTextSSEIndex
 		internalIdx := h.activeTextBlockIndex
-		h.mu.Unlock()
 		if sseIdx < 0 {
-			// If we get delta but no text block is active, try to ensure one
+			// If we get a delta but no text block is active, open one.
+			h.mu.Unlock()
 			sseIdx = h.ensureBlock("text")
 			h.mu.Lock()
 			internalIdx = h.activeTextBlockIndex
-			h.mu.Unlock()
 		}
-		h.addOutputTokens(delta)
+		if !h.useUpstreamUsage {
+			h.outputEstimator.Add(delta)
+		}
 		if !h.isStream {
 			h.responseText.WriteString(delta)
 		}
 		// Always update internal state for history
-		h.mu.Lock()
 		if internalIdx >= 0 && internalIdx < len(h.contentBlocks) {
-			builder, ok := h.textBlockBuilders[internalIdx]
-			if !ok {
-				builder = perf.AcquireStringBuilder()
-				h.textBlockBuilders[internalIdx] = builder
-			}
+			builder := h.historyBuilderAt(&h.textBlockBuilders, internalIdx)
 			builder.WriteString(delta)
 		}
+		h.writeSSEContentBlockDeltaTextLocked(sseIdx, delta, false)
 		h.mu.Unlock()
-		h.writeSSEContentBlockDeltaText(sseIdx, delta, false)
 
 	case "model.text-end":
 		h.closeActiveBlock()
@@ -2898,7 +2992,7 @@ func (h *streamHandler) injectMessageText(logMsg, errorMsg string) {
 		h.writeSSEBytes("content_block_delta", data)
 	} else {
 		h.mu.Lock()
-		if builder, ok := h.textBlockBuilders[internalIdx]; ok {
+		if builder := builderAt(h.textBlockBuilders, internalIdx); builder != nil {
 			builder.WriteString(errorMsg)
 		}
 		h.mu.Unlock()
@@ -2940,6 +3034,7 @@ func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
 	// Claim the response under the lock so a concurrent finisher cannot also write
 	// a body; finishResponse then returns early and leaves the error in place.
 	h.hasReturn = true
+	h.returned.Store(true)
 	h.mu.Unlock()
 	apperrors.New(category, message, apperrors.StatusForCategory(category)).WriteResponse(h.w)
 }
@@ -2960,6 +3055,7 @@ func (h *streamHandler) writeStreamError(category, message string) {
 		return
 	}
 	h.hasReturn = true
+	h.returned.Store(true)
 
 	if h.responseFormat == adapter.FormatOpenAI {
 		data, err := marshalOpenAIErrorBytes(category, message)

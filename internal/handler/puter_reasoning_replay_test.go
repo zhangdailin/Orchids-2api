@@ -69,9 +69,11 @@ func TestBuildOpenAINonStreamResponseIncludesReasoningContent(t *testing.T) {
 		{"type": "text", "text": ""},
 		{"type": "tool_use", "id": "call_1", "name": "pwsh", "input": map[string]interface{}{"command": "Get-Date"}},
 	}
-	sh.thinkingBlockBuilders[0] = &strings.Builder{}
+	// History builders are indexed by block position, so the fixture places them
+	// at the positions the blocks occupy rather than keying a map.
+	sh.thinkingBlockBuilders = []*strings.Builder{{}, nil}
 	sh.thinkingBlockBuilders[0].WriteString("first reason")
-	sh.textBlockBuilders[1] = &strings.Builder{}
+	sh.textBlockBuilders = []*strings.Builder{nil, {}}
 	sh.textBlockBuilders[1].WriteString("done")
 
 	response := buildOpenAINonStreamResponse(sh, "deepseek-v4-flash", "tool_use")

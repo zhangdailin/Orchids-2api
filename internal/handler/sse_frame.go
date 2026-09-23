@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"strconv"
 	"unicode/utf8"
@@ -8,14 +9,107 @@ import (
 
 const (
 	jsonHexDigits = "0123456789abcdef"
+
+	// SWAR ("SIMD within a register") constants: eight bytes' worth of 0x01 and
+	// of 0x80, the masks the byte-wise bit tricks below are built from.
+	swarLo = 0x0101010101010101
+	swarHi = 0x8080808080808080
 )
 
 var (
 	sseMessageStopBytes = []byte(`{"type":"message_stop"}`)
 )
 
+// swarHasZero returns a nonzero word iff any of v's eight bytes is zero. The
+// zero lane borrows out of its own byte, and the final mask reads that borrow out
+// of the 0x80 bit.
+func swarHasZero(v uint64) uint64 {
+	return (v - swarLo) & ^v & swarHi
+}
+
+// swarHasByte returns a nonzero word iff any of w's eight bytes equals c.
+func swarHasByte(w uint64, c byte) uint64 {
+	return swarHasZero(w ^ (uint64(c) * swarLo))
+}
+
+// The five characters encoding/json escapes beyond the control range are not
+// five independent tests' worth of work. Two of them sit exactly one bit away
+// from a partner — '"' (0x22) from '&' (0x26) in bit 2, '<' (0x3C) from '>'
+// (0x3E) in bit 1 — so masking that bit away turns each pair into a single
+// masked-equality test. Only '\\' is left on its own: three predicates where the
+// obvious spelling needs five, on a predicate the streaming path runs once per
+// eight bytes of every answer.
+const (
+	swarQuoteAmpMask  = 0xFBFBFBFBFBFBFBFB
+	swarQuoteAmpValue = 0x2222222222222222
+	swarAngleMask     = 0xFDFDFDFDFDFDFDFD
+	swarAngleValue    = 0x3C3C3C3C3C3C3C3C
+)
+
+// swarHasMaskedByte returns a nonzero word iff any byte of w matches value on the
+// bits mask keeps. With the masks above the only bytes that match are the two
+// members of each pair.
+func swarHasMaskedByte(w, mask, value uint64) uint64 {
+	return swarHasZero((w & mask) ^ value)
+}
+
+// load8LE reads eight bytes of a string as one little-endian word. The copy into
+// a fixed eight-byte array is not a pessimisation: it compiles to a single wide
+// move plus a single wide load, which measured about twice as fast as assembling
+// the word from eight indexed byte reads.
+func load8LE(s string, i int) uint64 {
+	var buf [8]byte
+	copy(buf[:], s[i:i+8])
+	return binary.LittleEndian.Uint64(buf[:])
+}
+
+// jsonRawChunkClean reports whether all eight bytes of w may be copied into a
+// JSON string literal verbatim.
+//
+// Each predicate is an exact "any byte in this set" test over the whole word, so
+// a true answer is a licence to skip eight bytes outright and a false answer
+// costs only a fallback to the scalar scanner — never correctness.
+//
+// A byte >= 0x80 is rejected wholesale because it may begin U+2028/U+2029, which
+// encoding/json escapes too but which cannot be recognised without decoding the
+// rune.
+func jsonRawChunkClean(w uint64) bool {
+	if w&swarHi != 0 {
+		return false
+	}
+	// hasless(w, 0x20): the standard subtract-and-mask form, exact for thresholds
+	// below 0x80.
+	if (w-swarLo*0x20)&^w&swarHi != 0 {
+		return false
+	}
+	escapes := swarHasMaskedByte(w, swarQuoteAmpMask, swarQuoteAmpValue) |
+		swarHasMaskedByte(w, swarAngleMask, swarAngleValue) |
+		swarHasByte(w, '\\')
+	return escapes == 0
+}
+
+// canAppendJSONRawString reports whether value survives a trip through a JSON
+// string literal unchanged, i.e. whether encoding/json would emit it verbatim
+// between the quotes.
+//
+// It is the cheap half of a two-pass encoder: it fails at the first byte that
+// needs an escape, so a payload dense in quotes and backslashes — every JSON
+// tool argument — is rejected after a single window rather than scanned in full,
+// and only a payload that really is clean pays for a complete pass. That pass is
+// where the wide scanner earns its keep, and it is the pass the streaming path
+// pays for on every text delta.
 func canAppendJSONRawString(value string) bool {
-	for i := 0; i < len(value); {
+	n := len(value)
+	i := 0
+	for i < n {
+		// Eight bytes at a time while the window is provably clean. The leading
+		// single-byte test keeps non-ASCII (CJK answers, which are common) out of
+		// the wide path entirely rather than paying for a window test that is
+		// guaranteed to fail.
+		if value[i] < utf8.RuneSelf && i+8 <= n && jsonRawChunkClean(load8LE(value, i)) {
+			i += 8
+			continue
+		}
 		b := value[i]
 		if b < utf8.RuneSelf {
 			if b < 0x20 || b == '\\' || b == '"' || b == '<' || b == '>' || b == '&' {
@@ -36,6 +130,7 @@ func canAppendJSONRawString(value string) bool {
 	return true
 }
 
+// appendJSONBytes appends value to dst as a quoted JSON string literal.
 func appendJSONBytes(dst []byte, value string) ([]byte, error) {
 	if canAppendJSONRawString(value) {
 		dst = append(dst, '"')
@@ -80,6 +175,9 @@ func appendJSONBytes(dst []byte, value string) ([]byte, error) {
 		}
 		r, size := utf8.DecodeRuneInString(value[i:])
 		if r == utf8.RuneError && size == 1 {
+			// Invalid UTF-8: encoding/json substitutes U+FFFD, and reproducing
+			// that here would mean reimplementing the decoder's error policy. Hand
+			// the whole value over instead.
 			dst = dst[:originLen]
 			quoted, err := json.Marshal(value)
 			if err != nil {

@@ -15,6 +15,14 @@ import (
 	"github.com/kballard/go-shellquote"
 )
 
+// policyCommandLine matches the "Command: <line>" line of a policy spec.
+//
+// It is compiled once at package scope. As a call-local regexp.MustCompile it
+// recompiled the pattern on every request that carried a policy spec — the
+// compiler's program cache only helps regexp.Compile, and MustCompile still paid
+// the whole parse-and-compile path on each call.
+var policyCommandLine = regexp.MustCompile(`(?m)^Command:\s*(.+)$`)
+
 func isCommandPrefixRequest(req ClaudeRequest) (bool, string) {
 	userText := extractUserText(req.Messages)
 	if userText == "" {
@@ -32,8 +40,7 @@ func isCommandPrefixRequest(req ClaudeRequest) (bool, string) {
 }
 
 func extractCommandFromPolicy(text string) string {
-	re := regexp.MustCompile(`(?m)^Command:\s*(.+)$`)
-	if match := re.FindStringSubmatch(text); len(match) > 1 {
+	if match := policyCommandLine.FindStringSubmatch(text); len(match) > 1 {
 		return strings.TrimSpace(match[1])
 	}
 	if idx := strings.Index(text, "Command:"); idx >= 0 {

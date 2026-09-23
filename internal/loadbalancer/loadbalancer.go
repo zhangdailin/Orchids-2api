@@ -324,6 +324,47 @@ func (lb *LoadBalancer) getEnabledAccounts(ctx context.Context) ([]*store.Accoun
 	return val.([]*store.Account), nil
 }
 
+// selectionScratch holds the per-call working slices of one account selection.
+// Selection runs on every request that has to be routed, and it used to allocate
+// an id slice plus three account slices per call; keeping the buffers in a pool
+// makes the steady state allocation-free.
+type selectionScratch struct {
+	ids     []int64
+	best    []int
+	unseen  []int
+	coldest []int
+}
+
+var selectionScratchPool = sync.Pool{
+	New: func() any {
+		return &selectionScratch{
+			ids:     make([]int64, 0, 64),
+			best:    make([]int, 0, 16),
+			unseen:  make([]int, 0, 16),
+			coldest: make([]int, 0, 16),
+		}
+	},
+}
+
+func acquireSelectionScratch() *selectionScratch {
+	return selectionScratchPool.Get().(*selectionScratch)
+}
+
+func releaseSelectionScratch(s *selectionScratch) {
+	if s == nil {
+		return
+	}
+	// Drop oversized buffers rather than park them for the process lifetime.
+	if cap(s.ids) > 1<<14 || cap(s.best) > 1<<10 || cap(s.unseen) > 1<<10 || cap(s.coldest) > 1<<10 {
+		return
+	}
+	s.ids = s.ids[:0]
+	s.best = s.best[:0]
+	s.unseen = s.unseen[:0]
+	s.coldest = s.coldest[:0]
+	selectionScratchPool.Put(s)
+}
+
 func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, tracker ConnTracker) *store.Account {
 	if len(accounts) == 0 {
 		return nil
@@ -335,17 +376,24 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		tracker = NewMemoryConnTracker()
 	}
 
-	// Batch-fetch connection counts
-	ids := make([]int64, len(accounts))
-	for i, acc := range accounts {
-		ids[i] = acc.ID
+	scratch := acquireSelectionScratch()
+	defer releaseSelectionScratch(scratch)
+
+	// Batch-fetch connection counts. The slice is borrowed from the pool and
+	// reused; GetCounts reads it synchronously and does not retain it.
+	ids := scratch.ids[:0]
+	for _, acc := range accounts {
+		ids = append(ids, acc.ID)
 	}
+	scratch.ids = ids
 	connCounts := tracker.GetCounts(ids)
 
-	var bestAccounts []*store.Account
+	// Candidates are held as positions into accounts rather than as a second
+	// slice of pointers: the position is all the later passes need, and it costs
+	// four bytes instead of a slice header plus backing array per candidate set.
+	best := scratch.best[:0]
 	minScore := float64(-1)
-
-	for _, acc := range accounts {
+	for i, acc := range accounts {
 		weight := acc.Weight
 		if weight <= 0 {
 			weight = 1
@@ -357,14 +405,15 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		}
 		score := float64(conns) / float64(weight)
 
-		if bestAccounts == nil || score < minScore {
-			bestAccounts = []*store.Account{acc}
+		if len(best) == 0 || score < minScore {
+			best = append(best[:0], i)
 			minScore = score
 		} else if score == minScore {
-			bestAccounts = append(bestAccounts, acc)
+			best = append(best, i)
 		}
 	}
-	if len(bestAccounts) == 0 {
+	scratch.best = best
+	if len(best) == 0 {
 		return nil
 	}
 
@@ -378,30 +427,33 @@ func (lb *LoadBalancer) selectAccountWithTracker(accounts []*store.Account, trac
 		// A LoadBalancer built as a struct literal (tests, embedders) has no map.
 		lb.lastSelected = make(map[int64]time.Time)
 	}
-	var unseen, coldest []*store.Account
+	unseen := scratch.unseen[:0]
+	coldest := scratch.coldest[:0]
 	var oldest time.Time
-	for _, acc := range bestAccounts {
-		last, seen := lb.lastSelected[acc.ID]
+	for _, i := range best {
+		last, seen := lb.lastSelected[accounts[i].ID]
 		if !seen {
-			unseen = append(unseen, acc)
+			unseen = append(unseen, i)
 			continue
 		}
 		switch {
-		case coldest == nil || last.Before(oldest):
+		case len(coldest) == 0 || last.Before(oldest):
 			oldest = last
-			coldest = []*store.Account{acc}
+			coldest = append(coldest[:0], i)
 		case last.Equal(oldest):
-			coldest = append(coldest, acc)
+			coldest = append(coldest, i)
 		}
 	}
-	pool := unseen
-	if len(pool) == 0 {
+	scratch.unseen, scratch.coldest = unseen, coldest
+
+	pool := best
+	switch {
+	case len(unseen) > 0:
+		pool = unseen
+	case len(coldest) > 0:
 		pool = coldest
 	}
-	if len(pool) == 0 {
-		pool = bestAccounts
-	}
-	picked := pool[rand.IntN(len(pool))]
+	picked := accounts[pool[rand.IntN(len(pool))]]
 	lb.lastSelected[picked.ID] = time.Now()
 	return picked
 }
