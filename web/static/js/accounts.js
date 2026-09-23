@@ -1050,8 +1050,12 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
 // Cline is listed here because this list is the only thing that renders a channel
 // tab: a channel missing from it has no tab, so its login group in the account
 // modal can never be selected and the channel is unreachable from the console.
-const ACCOUNT_PLATFORM_ORDER = ["warp", "puter", "workbuddy", "qoder", "cline", "grok"];
-const ACCOUNT_TYPE_NAMES = { warp: "Warp", puter: "Puter", workbuddy: "WorkBuddy", qoder: "Qoder", cline: "Cline", grok: "Grok" };
+const ACCOUNT_PLATFORM_ORDER = Array.isArray(window.OrchidsProviderRegistry?.keys)
+  ? [...window.OrchidsProviderRegistry.keys]
+  : [];
+const ACCOUNT_TYPE_NAMES = Object.fromEntries(
+  (window.OrchidsProviderRegistry?.providers || []).map((item) => [item.key, item.label]),
+);
 
 // One name for the selected channel, used by the strip, the subtitle, the toasts and the
 // empty state. currentPlatform stays the lower-case key the API stores; nothing shows it.

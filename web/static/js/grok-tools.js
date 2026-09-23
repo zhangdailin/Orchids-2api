@@ -61,22 +61,8 @@
     abortController: null,
     renderFrame: 0,
     sidebarOpen: false,
-    // The list below is only a placeholder for the moment before the model
-    // catalog loads (or when it cannot be fetched). Every id here must be one
-    // the backend serves: the previous list was made entirely of retired
-    // models, so a failed fetch left the tool preconfigured with a request the
-    // gateway rejects.
-    model: "grok-4.6",
-    models: [
-      "grok-4.6",
-      "grok-4.5",
-      "grok-4.5-low",
-      "grok-4.5-high",
-      "grok-4.3",
-      "grok-4.3-low",
-      "grok-4.3-high",
-      "grok-composer-2.5-fast",
-    ],
+    model: "",
+    models: [],
     capabilities: { chat: false, imagine: false, video: false, voice: false },
     modelsLoaded: false,
   };
@@ -1449,6 +1435,10 @@
   }
 
   async function requestChatCompletion(session, contentEl) {
+    if (!chatState.modelsLoaded || !chatState.model) {
+      updateChatStatus("模型目录尚未加载，无法发送", "error");
+      return;
+    }
     let assistantText = "";
     let answerText = "";
     let reasoningText = "";
@@ -1823,24 +1813,20 @@
     });
   }
 
-  // Preference order for the app-chat plane. The retired 4.20 ids that used to
-  // head this list are no longer served, so a saved selection pointing at one
-  // of them is replaced by the first model the catalog actually reports.
   function preferredAppChatModel(models) {
     const list = Array.isArray(models) ? models : [];
-    for (const model of ["grok-4.6", "grok-4.5", "grok-4.3"]) {
-      if (list.includes(model)) return model;
-    }
-    return list[0] || "grok-4.6";
+    return list[0] || "";
   }
 
   async function loadChatModels() {
     try {
-      const res = await fetch("/grok/v1/models");
-      if (handleUnauthorized(res)) return;
-      if (!res.ok) return;
-      const data = await res.json();
-      const routes = Array.isArray(data?.data) ? data.data : [];
+      const catalogPromise = window.GrokModelCatalogPromise || (window.GrokModelCatalogPromise = fetch("/api/grok/models").then(async (res) => {
+        if (handleUnauthorized(res)) throw new Error("登录已失效");
+        if (!res.ok) throw new Error("模型目录加载失败");
+        const payload = await res.json();
+        return Array.isArray(payload?.data) ? payload.data : [];
+      }));
+      const routes = await catalogPromise;
       const supports = (item, capability) => Array.isArray(item.capabilities) && item.capabilities.includes(capability);
       chatState.routes = routes;
       const videoSelect = document.getElementById("videoModel");
@@ -1861,18 +1847,20 @@
         voice: routes.some((item) => supports(item, "realtime") || supports(item, "tts") || supports(item, "stt")),
       };
       chatState.modelsLoaded = true;
-      const models = Array.isArray(data?.data)
-        ? data.data
-            .filter((item) => supports(item, "chat"))
-            .map((item) => String(item?.id || "").trim())
-        : [];
-      if (models.length === 0) return;
+      const models = routes
+        .filter((item) => supports(item, "chat"))
+        .map((item) => String(item?.id || "").trim())
+        .filter(Boolean);
+      if (models.length === 0) throw new Error("模型目录为空");
       chatState.models = models;
       if (!models.includes(chatState.model)) {
         chatState.model = preferredAppChatModel(models);
       }
     } catch (err) {
-      // ignore model fetch failures and keep fallback list
+      chatState.modelsLoaded = false;
+      chatState.models = [];
+      chatState.model = "";
+      updateChatStatus(`模型目录不可用：${err?.message || "加载失败"}`, "error");
     }
   }
 

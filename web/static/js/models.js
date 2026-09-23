@@ -13,7 +13,9 @@ let modelRefreshResults = {};
 let modelRefreshConcurrency = 4;
 
 function modelChannels() {
-  const defaultChannels = ["Warp", "Puter", "WorkBuddy", "Qoder", "Cline", "Grok"];
+  const defaultChannels = Array.isArray(window.OrchidsProviderRegistry?.channels)
+    ? [...window.OrchidsProviderRegistry.channels]
+    : [];
   const seen = new Set();
   const ordered = [];
 

@@ -41,7 +41,8 @@
       select.value = previous;
     }
     window.addEventListener('grok-models-loaded', (event) => acceptRoutes(event.detail));
-    fetch('/grok/v1/models').then((r) => { if (!r.ok) throw new Error('模型加载失败'); return r.json(); }).then((r) => acceptRoutes(r.data)).catch((e) => { el('audioStatus').textContent = e.message; });
+    const catalog = window.GrokModelCatalogPromise;
+    if (catalog) catalog.then(acceptRoutes).catch((e) => { el('audioStatus').textContent = e.message; });
     el('audioOperation').addEventListener('change', refresh);
     el('imagineModel')?.addEventListener('change', () => { el('imagineResolution').disabled = !el('imagineModel').value; });
     el('audioSubmit').addEventListener('click', async () => {

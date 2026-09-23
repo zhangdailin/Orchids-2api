@@ -23,30 +23,22 @@ func readConsoleScript(name string) (string, error) {
 	return string(raw), nil
 }
 
-// TestAccountsJSListClineInTheChannelStrip asserts the channel is in both console
-// lists: the tab order that renders it and the name map that labels it.
+// TestAccountsJSListClineInTheChannelStrip asserts both console pages consume
+// the shared registry and that the registry contains the Cline key and label.
 func TestAccountsJSListClineInTheChannelStrip(t *testing.T) {
 	source, err := readConsoleScript("accounts.js")
 	if err != nil {
 		t.Fatalf("read accounts.js: %v", err)
 	}
-	// The strip is rendered from ACCOUNT_PLATFORM_ORDER, so a channel absent
-	// from that array has no tab and cannot be selected.
-	line := consoleLineContaining(source, "ACCOUNT_PLATFORM_ORDER =")
-	if line == "" {
-		t.Fatal("accounts.js has no ACCOUNT_PLATFORM_ORDER")
+	registry, err := readConsoleScript("provider-registry.js")
+	if err != nil {
+		t.Fatalf("read provider-registry.js: %v", err)
 	}
-	if !strings.Contains(line, `"cline"`) {
-		t.Errorf("the channel strip omits cline: %s", line)
+	if !strings.Contains(source, "OrchidsProviderRegistry?.keys") || !strings.Contains(source, "OrchidsProviderRegistry?.providers") {
+		t.Error("accounts.js does not consume the shared provider registry")
 	}
-	// The tab label comes from the name map; without it the tab renders the
-	// lower-case key, which is not how any other channel is shown.
-	nameLine := consoleLineContaining(source, "ACCOUNT_TYPE_NAMES =")
-	if nameLine == "" {
-		t.Fatal("accounts.js has no ACCOUNT_TYPE_NAMES")
-	}
-	if !strings.Contains(nameLine, `cline: "Cline"`) {
-		t.Errorf("the channel name map omits cline: %s", nameLine)
+	if !strings.Contains(registry, `{ key: "cline", label: "Cline" }`) {
+		t.Error("the shared provider registry omits Cline")
 	}
 	if !strings.Contains(source, `case "cline":`) {
 		t.Error("accounts.js does not resolve the cline account type")
@@ -88,8 +80,8 @@ func TestModelsJSListClineInTheChannelStrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read models.js: %v", err)
 	}
-	if !strings.Contains(source, `"Cline"`) {
-		t.Error("models.js has no Cline channel")
+	if !strings.Contains(source, "OrchidsProviderRegistry?.channels") {
+		t.Error("models.js does not consume the shared provider registry")
 	}
 	if !strings.Contains(source, "cline_recommended_models") {
 		t.Error("models.js does not label the Cline catalog source")

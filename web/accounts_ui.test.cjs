@@ -75,7 +75,7 @@ function loadUI() {
     // Immediate pacing so the auto-sync loop settles synchronously in tests.
     setTimeout: (fn) => { fn(); return 0; },
   });
-  for (const file of ['common.js', 'accounts.js']) {
+  for (const file of ['common.js', 'provider-registry.js', 'accounts.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/js', file), 'utf8'), context);
   }
   return { context, node, storage };

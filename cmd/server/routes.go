@@ -274,6 +274,9 @@ func registerRoutes(
 	// POST /api/keys/{id}/reset-usage lands on the same handler, which dispatches
 	// on the trailing path segment.
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
+	// The tools page is an admin surface and must read the same public Grok
+	// catalog as inference clients without requiring a separate API key.
+	mux.HandleFunc("/api/grok/models", sessionAuth(h.HandleModels))
 	mux.HandleFunc("/api/models/groups", sessionAuth(apiHandler.HandleModelGroups))
 	mux.HandleFunc("/api/models/refresh", sessionAuth(modelRefreshHandler))
 	mux.HandleFunc("/api/models/", sessionAuth(apiHandler.HandleModelByID))

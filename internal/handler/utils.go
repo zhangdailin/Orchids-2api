@@ -109,6 +109,9 @@ func extractWorkdirFromRequest(r *http.Request, req ClaudeRequest) (string, stri
 }
 
 func channelFromPath(path string) string {
+	if strings.HasPrefix(path, "/api/grok/models") {
+		return "grok"
+	}
 	if strings.HasPrefix(path, "/warp/") {
 		return "warp"
 	}
