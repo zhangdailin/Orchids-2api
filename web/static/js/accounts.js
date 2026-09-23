@@ -44,8 +44,9 @@ async function loadAccounts() {
     renderPlatformTabs();
     renderAccounts();
     updateStats();
-    // Fire-and-forget: the table renders immediately, refreshed rows stream in.
-    autoSyncStaleAccounts();
+    // Loading the management page is read-only. Upstream checks can rotate
+    // credentials, alter quota/status fields, and re-render rows one by one, so
+    // they must only run after the operator clicks the account's refresh action.
   } catch (err) {
     console.error("Failed to load accounts:", err);
     showToast("加载账号失败", "error");

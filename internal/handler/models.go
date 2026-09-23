@@ -207,9 +207,6 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		if isWarpVirtualModel(m.ModelID) {
-			continue
-		}
 		if strings.EqualFold(mChannel, "warp") && warpVisible != nil {
 			modelID := normalizeRequestedModelID(m.ModelID)
 			if _, ok := warpVisible[modelID]; !ok {
@@ -289,10 +286,6 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 
 	if id == "" {
 		apperrors.New("invalid_request_error", "Model ID required", http.StatusBadRequest).WriteResponse(w)
-		return
-	}
-	if isWarpVirtualModel(id) {
-		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}
 	if !middleware.APIKeyAllowsModel(r.Context(), id) {

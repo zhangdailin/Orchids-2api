@@ -1113,57 +1113,20 @@ func warpModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.A
 }
 
 func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoveries []warpAccountDiscovery) {
-	if s == nil {
-		return
-	}
-	// Start from what is already stored rather than from an empty struct: this
-	// function writes the whole setting, so rebuilding it from scratch would drop
-	// the window table every account that failed discovery in this pass.
-	accountChoices, err := warp.LoadAccountModelChoices(ctx, s)
-	if err != nil {
-		slog.Warn("warp account model choices could not be read; rebuilding", "error", err)
-		accountChoices = nil
-	}
-	if accountChoices == nil {
-		accountChoices = &warp.AccountModelChoices{}
-	}
-	if accountChoices.Accounts == nil {
-		accountChoices.Accounts = make(map[string][]string)
-	}
-	if accountChoices.Sources == nil {
-		accountChoices.Sources = make(map[string]string)
-	}
-	if accountChoices.FeatureConfigs == nil {
-		accountChoices.FeatureConfigs = make(map[string]warp.AccountFeatureConfig)
-	}
+	items := make([]warp.AccountModelDiscovery, 0, len(discoveries))
 	for _, result := range discoveries {
 		if !result.ok || result.id == 0 || len(result.choices) == 0 {
 			continue
 		}
-		models := make([]string, 0, len(result.choices))
-		for _, choice := range result.choices {
-			models = append(models, choice.ID)
-		}
-		key := strconv.FormatInt(result.id, 10)
-		accountChoices.Accounts[key] = models
-		if source := strings.TrimSpace(result.source); source != "" {
-			accountChoices.Sources[key] = source
-		}
-		if !result.featureConfig.IsEmpty() {
-			accountChoices.FeatureConfigs[key] = result.featureConfig
-		}
-		// The input window belongs to the model, not to the account, so every
-		// account's discovery feeds one shared table. Dropping it here is what
-		// left the request builder with no window to state upstream.
-		accountChoices.ContextWindows = warp.MergeContextWindows(accountChoices.ContextWindows, warp.ContextWindowsFromChoices(result.choices))
+		items = append(items, warp.AccountModelDiscovery{
+			AccountID:     result.id,
+			Source:        result.source,
+			Choices:       result.choices,
+			FeatureConfig: result.featureConfig,
+		})
 	}
-	if len(accountChoices.Accounts) == 0 {
-		return
-	}
-	if err := warp.SaveAccountModelChoices(ctx, s, accountChoices); err != nil {
-		// Model refresh should still succeed when the advisory account/model
-		// cache cannot be written.
-		return
+	if err := warp.UpsertAccountModelDiscoveries(ctx, s, items...); err != nil {
+		slog.Warn("warp account model choices could not be saved", "error", err)
 	}
 }
 

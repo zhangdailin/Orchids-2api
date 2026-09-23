@@ -215,7 +215,7 @@ type featureModelGroupResponse struct {
 
 func normalizeFeatureModelGroup(raw featureModelGroupResponse) FeatureModelGroup {
 	group := FeatureModelGroup{
-		DefaultID: NormalizeModelID(raw.DefaultID),
+		DefaultID: normalizeModelID(raw.DefaultID),
 		Choices:   make([]ModelChoice, 0, len(raw.Choices)),
 	}
 	for _, choice := range raw.Choices {
@@ -264,7 +264,7 @@ func mergeFeatureModelGroup(current, next FeatureModelGroup) FeatureModelGroup {
 }
 
 func normalizeWarpModelChoice(id, name string) (ModelChoice, bool) {
-	id = NormalizeModelID(id)
+	id = normalizeModelID(id)
 	if id == "" {
 		return ModelChoice{}, false
 	}
@@ -279,7 +279,7 @@ func normalizeWarpModelChoice(id, name string) (ModelChoice, bool) {
 }
 
 func mergeWarpModelChoices(defaultID string, groups ...[]ModelChoice) []ModelChoice {
-	defaultID = NormalizeModelID(defaultID)
+	defaultID = normalizeModelID(defaultID)
 
 	out := make([]ModelChoice, 0)
 	seen := map[string]struct{}{}

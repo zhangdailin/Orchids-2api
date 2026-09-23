@@ -45,7 +45,7 @@ const (
 
 const defaultModel = "auto-open"
 
-func NormalizeModelID(model string) string {
+func normalizeModelID(model string) string {
 	model = strings.ToLower(strings.TrimSpace(model))
 	switch model {
 	case "auto", "auto-efficient", "auto-genius":
@@ -67,8 +67,6 @@ func applyWarpClientHeaders(req *http.Request) {
 	category := warpOSCategory()
 	if category != "" {
 		req.Header.Set("X-Warp-OS-Category", category)
-	}
-	if category != "" {
 		req.Header.Set("X-Warp-OS-Name", category)
 	}
 	req.Header.Set("User-Agent", "")

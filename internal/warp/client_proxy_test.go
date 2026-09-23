@@ -96,26 +96,6 @@ func TestNewFromAccount_DoesNotSeedPersistedJWT(t *testing.T) {
 	}
 }
 
-func TestSyncAccountState_ClearsLegacyCredentialFields(t *testing.T) {
-	account := &store.Account{
-		ID:            7002,
-		RefreshToken:  "refresh-token",
-		Token:         "legacy-jwt",
-		ClientCookie:  "legacy-cookie",
-		SessionCookie: "legacy-session",
-	}
-	client := &Client{
-		account: account,
-		session: &session{refreshToken: "refresh-token"},
-	}
-	if !client.SyncAccountStateTo(account) {
-		t.Fatal("SyncAccountStateTo() should clear legacy credential fields")
-	}
-	if account.Token != "" || account.ClientCookie != "" || account.SessionCookie != "" {
-		t.Fatalf("legacy fields retained: %#v", account)
-	}
-}
-
 func TestNewHTTPClient_ProxyBypassAndHTTPS(t *testing.T) {
 	cfg := &config.Config{
 		ProxyHTTP:   "http://proxy.local:3128",

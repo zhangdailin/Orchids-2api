@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -585,39 +584,13 @@ func (h *Handler) refreshWarpModelConfigAsync(acc *store.Account) {
 			return
 		}
 
-		existing, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
-		if err != nil {
-			slog.Warn("Warp model config cache load failed", "account_id", account.ID, "error", err)
-			return
+		discovery := warp.AccountModelDiscovery{
+			AccountID:     account.ID,
+			Source:        source,
+			Choices:       choices,
+			FeatureConfig: warp.AccountFeatureConfigFromChoices(features),
 		}
-		if existing == nil {
-			existing = &warp.AccountModelChoices{}
-		}
-		if existing.Accounts == nil {
-			existing.Accounts = make(map[string][]string)
-		}
-		if existing.Sources == nil {
-			existing.Sources = make(map[string]string)
-		}
-		if existing.FeatureConfigs == nil {
-			existing.FeatureConfigs = make(map[string]warp.AccountFeatureConfig)
-		}
-		models := make([]string, 0, len(choices))
-		for _, choice := range choices {
-			models = append(models, choice.ID)
-		}
-		key := strconv.FormatInt(account.ID, 10)
-		existing.Accounts[key] = models
-		existing.Sources[key] = source
-		// The per-model window is a property of the model, not of the account, so
-		// it is merged into one table instead of being keyed by account id. Without
-		// it the request builder has nothing to state and Warp falls back to the
-		// model's default max.
-		existing.ContextWindows = warp.MergeContextWindows(existing.ContextWindows, warp.ContextWindowsFromChoices(choices))
-		if config := warp.AccountFeatureConfigFromChoices(features); !config.IsEmpty() {
-			existing.FeatureConfigs[key] = config
-		}
-		if err := warp.SaveAccountModelChoices(ctx, h.loadBalancer.Store, existing); err != nil {
+		if err := warp.UpsertAccountModelDiscoveries(ctx, h.loadBalancer.Store, discovery); err != nil {
 			slog.Warn("Warp model config cache save failed", "account_id", account.ID, "error", err)
 			return
 		}

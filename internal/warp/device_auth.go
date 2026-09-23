@@ -15,9 +15,9 @@ import (
 	"orchids-api/internal/config"
 )
 
-// WarpAgentCLIClientID is the public client identifier used by Warp's open
+// warpAgentCLIClientID is the public client identifier used by Warp's open
 // source Agent CLI device-authorization implementation.
-const WarpAgentCLIClientID = "warp-agent-cli"
+const warpAgentCLIClientID = "warp-agent-cli"
 
 var (
 	warpDeviceAuthorizationURL = warpAPIBaseURL + "/api/v1/oauth/device/auth"
@@ -80,7 +80,7 @@ func (a *DeviceAuthenticator) Start(ctx context.Context) (*DeviceAuthorization, 
 		ExpiresIn               int    `json:"expires_in"`
 		Interval                int    `json:"interval"`
 	}
-	if err := a.postForm(ctx, a.deviceURL, url.Values{"client_id": {WarpAgentCLIClientID}}, &upstreamResponse); err != nil {
+	if err := a.postForm(ctx, a.deviceURL, url.Values{"client_id": {warpAgentCLIClientID}}, &upstreamResponse); err != nil {
 		return nil, fmt.Errorf("request warp device code: %w", err)
 	}
 	response := DeviceAuthorization{
@@ -119,7 +119,7 @@ func (a *DeviceAuthenticator) Exchange(ctx context.Context, deviceCode string) (
 		AccessToken string `json:"access_token"`
 	}
 	form := url.Values{
-		"client_id":   {WarpAgentCLIClientID},
+		"client_id":   {warpAgentCLIClientID},
 		"device_code": {deviceCode},
 		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
 	}

@@ -601,14 +601,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	effectiveTools := req.Tools
-	if cfg.WarpDisableTools != nil && *cfg.WarpDisableTools {
-		effectiveTools = nil
-		if preSelectWarpRequest {
-			gateNoTools = true
-			toolGateReasons = append(toolGateReasons, "warp_tools_disabled")
-			toolGateMessage = buildToolGateMessage(req.Messages, suggestionMode)
-		}
-	}
 	// An API client that declares no tools cannot execute Warp's native tools.
 	// Treat both an omitted tools field and tools:[] as an authoritative deny.
 	if preSelectWarpRequest && len(req.Tools) == 0 {
@@ -637,7 +629,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	failedAccountSet := make(map[int64]struct{})
 
 	apiClient, currentAccount, releaseClient, trackedAccountID, err := h.acquireReservedAccountSelection(r.Context(), targetChannel, forcedChannel != "", failedAccountIDs, accountSelectionOptions{
-		ModelID:            upstreamWarpModelID(req.Model),
+		ModelID:            strings.TrimSpace(req.Model),
 		PreferredAccountID: warpContinuationState.accountID,
 	})
 	// The client is held for the whole request: a credential change during it
@@ -730,7 +722,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// 映射模型（用于上游请求与提示一致）
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
-		mappedModel = upstreamWarpModelID(req.Model)
+		mappedModel = strings.TrimSpace(req.Model)
 	} else if isPuterRequest || isWorkBuddyRequest || isQoderRequest || isClineRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	}

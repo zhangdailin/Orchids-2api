@@ -5,7 +5,16 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, 'static/js/grok-tools.js'), 'utf8');
+const styles = fs.readFileSync(path.join(__dirname, 'static/css/grok-tools.css'), 'utf8');
 const render = source.slice(source.indexOf('  function renderChatSessions()'), source.indexOf('  function syncChatModelUI()'));
+
+test('chat model picker constrains long labels and dropdowns to the viewport', () => {
+  assert.match(styles, /\.model-chip\s*\{[^}]*max-width:\s*min\(360px, 100%\)/s);
+  assert.match(styles, /\.model-label\s*\{[^}]*text-overflow:\s*ellipsis/s);
+  assert.match(styles, /\.model-dropdown\s*\{[^}]*max-width:\s*min\(420px, calc\(100vw - 32px\)\)/s);
+  assert.match(styles, /\.model-dropdown\s*\{[^}]*overflow-y:\s*auto/s);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.model-dropdown\s*\{[^}]*position:\s*fixed[^}]*left:\s*max\(12px/s);
+});
 
 test('legacy reasoning migrates all blocks without dropping answers or history', () => {
   const helpers = source.slice(source.indexOf('  function trimChatSessionMessages('), source.indexOf('  function saveChatSessions('));

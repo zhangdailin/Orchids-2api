@@ -88,8 +88,8 @@ func TestModelContextWindowLimitForResolvesEffortVariant(t *testing.T) {
 func TestStatelessTranscriptKeepsWholeHistoryByDefault(t *testing.T) {
 	SetStatelessHistoryMaxChars(0)
 	defer SetStatelessHistoryMaxChars(0)
-	if StatelessHistoryMaxChars < 1<<20 {
-		t.Fatalf("default ceiling = %d, want at least 1 MiB", StatelessHistoryMaxChars)
+	if statelessHistoryMaxChars < 1<<20 {
+		t.Fatalf("default ceiling = %d, want at least 1 MiB", statelessHistoryMaxChars)
 	}
 
 	// A transcript far beyond the old 48 KiB ceiling must survive intact.
@@ -113,7 +113,7 @@ func TestStatelessTranscriptKeepsWholeHistoryByDefault(t *testing.T) {
 func TestSetStatelessHistoryMaxCharsHonoursExplicitCeiling(t *testing.T) {
 	SetStatelessHistoryMaxChars(1024)
 	defer SetStatelessHistoryMaxChars(0)
-	if StatelessHistoryMaxChars != 1024 {
-		t.Fatalf("ceiling = %d, want the configured 1024", StatelessHistoryMaxChars)
+	if statelessHistoryMaxChars != 1024 {
+		t.Fatalf("ceiling = %d, want the configured 1024", statelessHistoryMaxChars)
 	}
 }

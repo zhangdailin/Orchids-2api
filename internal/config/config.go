@@ -155,7 +155,6 @@ type Config struct {
 	// They are gone rather than documented, because an inert knob is a trap. The
 	// passthrough behaviour they pretended to govern is covered by
 	// TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem.
-	WarpDisableTools    *bool `json:"-"`
 	Stream              *bool `json:"-"`
 	ImageNSFW           *bool `json:"-"`
 	ImageFinalMinBytes  int   `json:"-"`
@@ -221,7 +220,6 @@ func (c *Config) Clone() *Config {
 	clone.InferenceAuth = cloneBool(c.InferenceAuth)
 	clone.GrokTemporary = cloneBool(c.GrokTemporary)
 	clone.GrokDisableMemory = cloneBool(c.GrokDisableMemory)
-	clone.WarpDisableTools = cloneBool(c.WarpDisableTools)
 	clone.Stream = cloneBool(c.Stream)
 	clone.ImageNSFW = cloneBool(c.ImageNSFW)
 	clone.PublicEnabled = cloneBool(c.PublicEnabled)
@@ -363,8 +361,6 @@ func ApplyHardcoded(cfg *Config) {
 	cfg.UpstreamMode = "ws"
 	cfg.GrokAPIBaseURL = "https://grok.com"
 	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
-	v := false
-	cfg.WarpDisableTools = &v
 	vTrue := true
 	cfg.Stream = &vTrue
 	cfg.ImageNSFW = &vTrue

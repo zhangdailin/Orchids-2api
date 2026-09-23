@@ -595,7 +595,6 @@ type deviceLoginResponse struct {
 	Message                 string `json:"message,omitempty"`
 }
 
-type warpDeviceLogin = deviceLogin
 type grokDeviceLogin = deviceLogin
 
 var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
@@ -1915,7 +1914,7 @@ func (a *API) startWarpDeviceAuthorization(w http.ResponseWriter, r *http.Reques
 	}
 	expiresAt := time.Now().Add(time.Duration(details.ExpiresIn) * time.Second)
 	pollContext, pollCancel := context.WithCancel(context.Background())
-	login := &warpDeviceLogin{
+	login := &deviceLogin{
 		deviceCode: details.DeviceCode,
 		userCode:   details.UserCode,
 		verifyURI:  details.VerificationURI,

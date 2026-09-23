@@ -34,9 +34,13 @@ type Client struct {
 	accountMu  sync.Mutex
 }
 
-const (
-	defaultRequestTimeout = 600 * time.Second
-)
+const defaultRequestTimeout = 600 * time.Second
+
+// AccountRefreshResult separates an authenticated session from the advisory
+// quota read. Callers may keep an account active when QuotaError is non-nil.
+type AccountRefreshResult struct {
+	QuotaError error
+}
 
 func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	if acc == nil {
@@ -278,6 +282,20 @@ func (c *Client) handleStreamResponseWithCancel(ctx context.Context, req upstrea
 	return processStreamBodyWithTaskContext(ctx, body, onMessage, logger, req.WarpTaskContext)
 }
 
+func (c *Client) RefreshAccountState(ctx context.Context, account *store.Account, force bool) (AccountRefreshResult, error) {
+	if _, err := c.refreshAccount(ctx, force); err != nil {
+		return AccountRefreshResult{}, err
+	}
+	c.SyncAccountStateTo(account)
+	limitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	info, bonuses, err := c.GetRequestLimitInfo(limitCtx)
+	if err == nil && info != nil {
+		ApplyRequestLimitInfoToAccount(account, info, bonuses)
+	}
+	return AccountRefreshResult{QuotaError: err}, nil
+}
+
 func (c *Client) RefreshAccount(ctx context.Context) (string, error) {
 	return c.refreshAccount(ctx, false)
 }
@@ -319,20 +337,6 @@ func (c *Client) syncAccountStateTo(account *store.Account) bool {
 	refresh := c.session.currentRefreshToken()
 
 	changed := false
-	// These fields were legacy Warp credential inputs. Clear them whenever the
-	// account is synchronized so persisted records converge on refresh_token.
-	if account.Token != "" {
-		account.Token = ""
-		changed = true
-	}
-	if account.ClientCookie != "" {
-		account.ClientCookie = ""
-		changed = true
-	}
-	if account.SessionCookie != "" {
-		account.SessionCookie = ""
-		changed = true
-	}
 	if refresh != "" && refresh != account.RefreshToken {
 		account.RefreshToken = refresh
 		changed = true

@@ -39,23 +39,23 @@ var warpGrepLinePattern = regexp.MustCompile(`^(.+?):(\d+)(?::|-)`)
 //
 // The historical value was 48 KiB, which silently replaced everything older
 // than roughly 12k tokens with "[Earlier conversation omitted for length]" and
-// made a 1M-token model behave like a 16k one. StatelessHistoryMaxChars is a
+// made a 1M-token model behave like a 16k one. The configured ceiling is a
 // variable so the deployment can tune it; the default is deliberately far above
 // any single model window (1M tokens of text is only a few MiB).
 const defaultStatelessHistoryMaxChars = 8 << 20
 
-// StatelessHistoryMaxChars caps the transcript rendered when no server-issued
+// statelessHistoryMaxChars caps the transcript rendered when no server-issued
 // Warp conversation id is available. Set it once from the deployment config.
-var StatelessHistoryMaxChars = defaultStatelessHistoryMaxChars
+var statelessHistoryMaxChars = defaultStatelessHistoryMaxChars
 
 // SetStatelessHistoryMaxChars installs the configured ceiling. A non-positive
 // value restores the default.
 func SetStatelessHistoryMaxChars(limit int) {
 	if limit <= 0 {
-		StatelessHistoryMaxChars = defaultStatelessHistoryMaxChars
+		statelessHistoryMaxChars = defaultStatelessHistoryMaxChars
 		return
 	}
-	StatelessHistoryMaxChars = limit
+	statelessHistoryMaxChars = limit
 }
 
 func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
@@ -145,7 +145,7 @@ func renderWarpStatelessTranscript(messages []prompt.Message, systemItems []prom
 	}
 	selected := make([]string, 0, len(parts)-start)
 	used := len(systemPart)
-	limit := StatelessHistoryMaxChars
+	limit := statelessHistoryMaxChars
 	for i := len(parts) - 1; i >= start; i-- {
 		part := parts[i]
 		if used+len(part)+2 > limit && len(selected) > 0 {
@@ -313,7 +313,7 @@ func DefaultModel() string {
 }
 
 func normalizeWarpModel(model string) string {
-	canonical := NormalizeModelID(model)
+	canonical := normalizeModelID(model)
 	if canonical == "" {
 		return defaultModel
 	}
@@ -622,11 +622,11 @@ func buildInputContext(workdir string) *warpapi.InputContext {
 }
 
 func buildRequestSettings(req upstream.UpstreamRequest, disableTools bool) *warpapi.Request_Settings {
-	cliAgentModel := NormalizeModelID(req.WarpCliAgentModel)
+	cliAgentModel := normalizeModelID(req.WarpCliAgentModel)
 	if cliAgentModel == "" {
 		cliAgentModel = identifier
 	}
-	computerAgentModel := NormalizeModelID(req.WarpComputerUseModel)
+	computerAgentModel := normalizeModelID(req.WarpComputerUseModel)
 	if computerAgentModel == "" {
 		computerAgentModel = computerUseModel
 	}

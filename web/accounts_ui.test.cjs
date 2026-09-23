@@ -320,7 +320,23 @@ test('Warp save cannot submit a manual creation request', async () => {
   assert.match(notices[0], /官方网页登录/);
 });
 
-test('auto-sync refreshes stale accounts on every channel, once per page load', async () => {
+test('loading accounts never starts upstream account checks', async () => {
+  const { context } = loadUI();
+  context.sortAccounts = () => {};
+  context.renderPlatformTabs = () => {};
+  context.renderAccounts = () => {};
+  context.updateStats = () => {};
+  let syncCalls = 0;
+  context.autoSyncStaleAccounts = () => { syncCalls += 1; };
+  context.fetch = async () => ({ status: 200, json: async () => [
+    { id: 3, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', enabled: true },
+  ] });
+
+  await context.loadAccounts();
+  assert.equal(syncCalls, 0, 'opening the account page must remain read-only');
+});
+
+test('manual stale-account sync helper remains bounded when explicitly called', async () => {
   const { context } = loadUI();
   const stale = new Date(Date.now() - 90 * 60 * 1000).toISOString();
   const fresh = new Date(Date.now() - 2 * 60 * 1000).toISOString();

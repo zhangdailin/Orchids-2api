@@ -724,7 +724,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 					continue
 				}
 				warpClient := warp.NewFromAccount(acc, cfg)
-				_, err := warpClient.RefreshAccount(refreshCtx)
+				result, err := warpClient.RefreshAccountState(refreshCtx, acc, false)
 				if err != nil {
 					retryAfter := warp.RetryAfter(err)
 					httpStatus := warp.HTTPStatusCode(err)
@@ -743,22 +743,15 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 					slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "warp", "http_status", httpStatus, "error", err)
 					continue
 				}
-				warpClient.SyncAccountStateTo(acc)
 				accountpolicy.Success(time.Now()).Apply(acc)
 
-				// Sync Warp usage quota via GraphQL
-				limitCtx, limitCancel := context.WithTimeout(refreshCtx, 15*time.Second)
-				limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
-				limitCancel()
-				if limitErr != nil {
-					slog.Warn("Warp usage sync failed", "account", acc.Name, "error", limitErr)
-				} else if limitInfo != nil {
-					warp.ApplyRequestLimitInfoToAccount(acc, limitInfo, bonuses)
-					// If the GraphQL succeeded but returned no tier info and
-					// the account has no subscription yet, default to free.
-					if strings.TrimSpace(acc.Subscription) == "" || strings.EqualFold(acc.Subscription, "unknown") {
-						acc.Subscription = "free"
-					}
+				if result.QuotaError != nil {
+					slog.Warn("Warp usage sync failed", "account", acc.Name, "error", result.QuotaError)
+				} else if strings.TrimSpace(acc.Subscription) == "" || strings.EqualFold(acc.Subscription, "unknown") {
+					// A successful quota response with no recognizable paid tier is Free.
+					acc.Subscription = "free"
+				}
+				if result.QuotaError == nil {
 					slog.Debug("Warp usage synced", "account", acc.Name, "limit", acc.UsageLimit, "used", acc.UsageCurrent, "subscription", acc.Subscription)
 				}
 

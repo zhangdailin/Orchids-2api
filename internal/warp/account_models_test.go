@@ -9,6 +9,51 @@ import (
 	"orchids-api/internal/store"
 )
 
+func TestUpsertAccountModelDiscoveries_MergesWithoutDroppingLastKnownState(t *testing.T) {
+	mini := miniredis.RunT(t)
+	defer mini.Close()
+	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "warp_upsert_test:"})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if err := SaveAccountModelChoices(ctx, s, &AccountModelChoices{
+		Accounts:       map[string][]string{"1": {"old-model"}},
+		Sources:        map[string]string{"1": "old-source"},
+		ContextWindows: map[string]ModelContextWindow{"old-model": {Max: 1000}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertAccountModelDiscoveries(ctx, s, AccountModelDiscovery{
+		AccountID: 2,
+		Source:    "feature_model_choice_all",
+		Choices: []ModelChoice{
+			{ID: "new-model", ContextWindow: ModelContextWindow{Max: 2000}},
+			{ID: "new-model", ContextWindow: ModelContextWindow{Max: 2000}},
+		},
+		FeatureConfig: AccountFeatureConfig{CliAgentModel: "cli-agent-team-auto"},
+	}); err != nil {
+		t.Fatalf("UpsertAccountModelDiscoveries() error = %v", err)
+	}
+	got, err := LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Accounts["1"]) != 1 || got.Accounts["1"][0] != "old-model" {
+		t.Fatalf("old account was dropped: %+v", got.Accounts)
+	}
+	if len(got.Accounts["2"]) != 1 || got.Accounts["2"][0] != "new-model" {
+		t.Fatalf("new account was not normalized: %+v", got.Accounts)
+	}
+	if got.ContextWindows["old-model"].Max != 1000 || got.ContextWindows["new-model"].Max != 2000 {
+		t.Fatalf("context windows were not merged: %+v", got.ContextWindows)
+	}
+	if got.FeatureConfigs["2"].CliAgentModel != "cli-agent-team-auto" {
+		t.Fatalf("feature config missing: %+v", got.FeatureConfigs)
+	}
+}
+
 func TestAccountModelChoices_RoundTripAndSupport(t *testing.T) {
 	mini := miniredis.RunT(t)
 	defer mini.Close()

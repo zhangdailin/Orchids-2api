@@ -40,7 +40,7 @@ var accountRefreshers = map[string]func(*API, context.Context, *store.Account) (
 func refreshWarpAccountState(a *API, ctx context.Context, acc *store.Account) (string, int, error) {
 	cfg := a.config.Load()
 	warpClient := warp.NewFromAccount(acc, cfg)
-	_, err := warpClient.ForceRefreshAccount(ctx)
+	result, err := warpClient.RefreshAccountState(ctx, acc, true)
 	if err != nil {
 		httpStatus := http.StatusBadRequest
 		if code := warp.HTTPStatusCode(err); code >= 400 {
@@ -52,15 +52,8 @@ func refreshWarpAccountState(a *API, ctx context.Context, acc *store.Account) (s
 		}
 		return accountStatus, httpStatus, fmt.Errorf("failed to refresh warp account: %w", err)
 	}
-	warpClient.SyncAccountStateTo(acc)
-
-	limitCtx, limitCancel := context.WithTimeout(ctx, 15*time.Second)
-	limitInfo, bonuses, limitErr := warpClient.GetRequestLimitInfo(limitCtx)
-	limitCancel()
-	if limitErr == nil && limitInfo != nil {
-		warp.ApplyRequestLimitInfoToAccount(acc, limitInfo, bonuses)
-	} else if limitErr != nil {
-		slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", limitErr)
+	if result.QuotaError != nil {
+		slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", result.QuotaError)
 	}
 	modelDiscoveryConfirmed := false
 	var modelDiscoveryErr error
@@ -72,39 +65,14 @@ func refreshWarpAccountState(a *API, ctx context.Context, acc *store.Account) (s
 		featureConfig := warp.AccountFeatureConfigFromChoices(features)
 		if modelErr == nil && len(choices) > 0 {
 			modelDiscoveryConfirmed = true
-			models := make([]string, 0, len(choices))
-			for _, choice := range choices {
-				models = append(models, choice.ID)
+			discovery := warp.AccountModelDiscovery{
+				AccountID:     acc.ID,
+				Source:        source,
+				Choices:       choices,
+				FeatureConfig: featureConfig,
 			}
-			existing, err := warp.LoadAccountModelChoices(ctx, a.store)
-			if err != nil {
+			if err := warp.UpsertAccountModelDiscoveries(ctx, a.store, discovery); err != nil {
 				slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
-			} else {
-				if existing == nil {
-					existing = &warp.AccountModelChoices{Accounts: map[string][]string{}}
-				}
-				if existing.Accounts == nil {
-					existing.Accounts = map[string][]string{}
-				}
-				if existing.Sources == nil {
-					existing.Sources = map[string]string{}
-				}
-				if existing.FeatureConfigs == nil {
-					existing.FeatureConfigs = map[string]warp.AccountFeatureConfig{}
-				}
-				key := strconv.FormatInt(acc.ID, 10)
-				existing.Accounts[key] = models
-				existing.Sources[key] = source
-				if !featureConfig.IsEmpty() {
-					existing.FeatureConfigs[key] = featureConfig
-				}
-				// Record the per-model input window alongside the model list. The
-				// request path states it upstream so Warp does not fall back to a
-				// smaller default for a model that actually accepts far more.
-				existing.ContextWindows = warp.MergeContextWindows(existing.ContextWindows, warp.ContextWindowsFromChoices(choices))
-				if err := warp.SaveAccountModelChoices(ctx, a.store, existing); err != nil {
-					slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
-				}
 			}
 		} else if modelErr != nil {
 			modelDiscoveryErr = modelErr

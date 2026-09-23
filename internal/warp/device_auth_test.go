@@ -17,8 +17,8 @@ func TestDeviceAuthenticatorStartAndExchange(t *testing.T) {
 		form, _ := url.ParseQuery(string(body))
 		switch r.URL.Path {
 		case "/device":
-			if got := form.Get("client_id"); got != WarpAgentCLIClientID {
-				t.Errorf("client_id=%q want %q", got, WarpAgentCLIClientID)
+			if got := form.Get("client_id"); got != warpAgentCLIClientID {
+				t.Errorf("client_id=%q want %q", got, warpAgentCLIClientID)
 			}
 			_, _ = w.Write([]byte(`{"device_code":"device-secret","user_code":"ABCD-1234","verification_uri":"https://app.warp.dev/device","verification_uri_complete":"https://app.warp.dev/device?user_code=ABCD-1234","expires_in":599,"interval":2}`))
 		case "/token":

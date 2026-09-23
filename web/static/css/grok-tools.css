@@ -481,12 +481,19 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: min(360px, 100%);
   min-height: 36px;
   padding: 0 10px;
   border: 1px solid var(--border-color);
   border-radius: 999px;
   background: var(--surface-3);
   color: var(--text-main);
+  cursor: pointer;
+}
+
+.model-chip > svg {
+  flex: 0 0 auto;
 }
 
 .ref-file-input {
@@ -504,6 +511,17 @@
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
+}
+
+.model-dropdown {
+  left: 0;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: min(420px, calc(100vw - 32px));
+  max-height: min(360px, 52vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .popover {
@@ -548,9 +566,14 @@
 }
 
 .model-option {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   color: var(--text-main);
+  overflow-wrap: anywhere;
+  white-space: normal;
   cursor: pointer;
 }
 
@@ -1832,7 +1855,20 @@
   }
 
   .model-chip {
-    max-width: calc(100vw - 128px);
+    flex: 1 1 auto;
+    max-width: calc(100% - 88px);
+  }
+
+  .model-dropdown {
+    position: fixed;
+    right: max(12px, env(safe-area-inset-right, 0px));
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+    left: max(12px, env(safe-area-inset-left, 0px));
+    z-index: 90;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    max-height: min(46vh, 360px);
   }
 
   .imagine-basic-row,
