@@ -37,7 +37,7 @@ The wrappers in `.rsh/` run a command or copy files to the host:
 
 ```sh
 ./.rsh/run 'systemctl status orchids-2api'        # run from the repository root
-./.rsh/scp.sh dist/orchids-server-linux-amd64* root@3.15.148.113:/root/release/
+./.rsh/scp.sh dist/orchids-server-linux-amd64* root@<PROD_IP>:/root/release/
 ```
 
 `.rsh/` is **not tracked**. It used to be, with the host's root password as a

@@ -331,7 +331,7 @@ func TestPersistConfigValidatesAnonymousAllowIPs(t *testing.T) {
 		t.Fatalf("the rejected value reached the store: %q err=%v", saved, err)
 	}
 
-	valid := &config.Config{AnonymousAllowIPs: []string{"161.118.140.32", "203.77.252.0/24"}}
+	valid := &config.Config{AnonymousAllowIPs: []string{"203.0.113.20", "198.51.100.0/24"}}
 	if err := a.persistConfig(ctx, nil, valid); err != nil {
 		t.Fatalf("a valid allowlist was rejected: %v", err)
 	}

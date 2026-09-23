@@ -77,12 +77,12 @@ func TestAnonymousAllowlistAllowsOnlyNamedSources(t *testing.T) {
 		t.Fatal("a nil list is not empty")
 	}
 	request := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
-	request.RemoteAddr = "161.118.140.32:4444"
+	request.RemoteAddr = "203.0.113.20:4444"
 	if empty.Allows(request) {
 		t.Fatal("an empty allowlist allowed a caller")
 	}
 
-	list, err := NewAnonymousAllowlist([]string{"161.118.140.32", "203.77.252.0/24", "2001:db8::1"})
+	list, err := NewAnonymousAllowlist([]string{"203.0.113.20", "198.51.100.0/24", "2001:db8::1"})
 	if err != nil {
 		t.Fatalf("NewAnonymousAllowlist: %v", err)
 	}
@@ -90,10 +90,10 @@ func TestAnonymousAllowlistAllowsOnlyNamedSources(t *testing.T) {
 		remote string
 		want   bool
 	}{
-		{"161.118.140.32:1111", true},
-		{"161.118.140.33:1111", false},
-		{"203.77.252.9:1111", true},
-		{"203.77.253.9:1111", false},
+		{"203.0.113.20:1111", true},
+		{"203.0.113.21:1111", false},
+		{"198.51.100.40:1111", true},
+		{"198.51.101.40:1111", false},
 		{"[2001:db8::1]:1111", true},
 		{"[2001:db8::2]:1111", false},
 		{"not-an-address", false},
@@ -115,7 +115,7 @@ func TestAnonymousAllowlistAllowsOnlyNamedSources(t *testing.T) {
 // A forwarded client address is only honoured when the peer is a trusted proxy,
 // which is what the allowlist must decide on.
 func TestAnonymousAllowlistUsesTheTrustedClientAddress(t *testing.T) {
-	list, err := NewAnonymousAllowlist([]string{"161.118.140.32"})
+	list, err := NewAnonymousAllowlist([]string{"203.0.113.20"})
 	if err != nil {
 		t.Fatalf("NewAnonymousAllowlist: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestAnonymousAllowlistUsesTheTrustedClientAddress(t *testing.T) {
 	// A trusted peer's forwarded address is the client.
 	trusted := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
 	trusted.RemoteAddr = "127.0.0.1:5555"
-	trusted.Header.Set("X-Forwarded-For", "161.118.140.32")
+	trusted.Header.Set("X-Forwarded-For", "203.0.113.20")
 	handler.ServeHTTP(httptest.NewRecorder(), trusted)
 	if !allowed {
 		t.Fatal("a trusted proxy's forwarded client address was not honoured")
@@ -141,7 +141,7 @@ func TestAnonymousAllowlistUsesTheTrustedClientAddress(t *testing.T) {
 	// The same header from an untrusted peer is cleared, so the peer itself decides.
 	untrusted := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
 	untrusted.RemoteAddr = "203.0.113.9:5555"
-	untrusted.Header.Set("X-Forwarded-For", "161.118.140.32")
+	untrusted.Header.Set("X-Forwarded-For", "203.0.113.20")
 	handler.ServeHTTP(httptest.NewRecorder(), untrusted)
 	if allowed {
 		t.Fatal("an untrusted peer spoofed its way onto the allowlist")
@@ -165,10 +165,10 @@ func TestTrustedProxyPrefersCloudflareClientHeader(t *testing.T) {
 	// chain only carries edge addresses.
 	request := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
 	request.RemoteAddr = "127.0.0.1:5555"
-	request.Header.Set("CF-Connecting-IP", "161.118.140.32")
+	request.Header.Set("CF-Connecting-IP", "203.0.113.20")
 	request.Header.Set("X-Forwarded-For", "173.245.48.9")
 	handler.ServeHTTP(httptest.NewRecorder(), request)
-	if resolved != "161.118.140.32" {
+	if resolved != "203.0.113.20" {
 		t.Fatalf("resolved client=%q want the Cloudflare client address", resolved)
 	}
 
@@ -176,7 +176,7 @@ func TestTrustedProxyPrefersCloudflareClientHeader(t *testing.T) {
 	// client and cannot claim to be someone else.
 	direct := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
 	direct.RemoteAddr = "203.0.113.9:5555"
-	direct.Header.Set("CF-Connecting-IP", "161.118.140.32")
+	direct.Header.Set("CF-Connecting-IP", "203.0.113.20")
 	handler.ServeHTTP(httptest.NewRecorder(), direct)
 	if resolved != "203.0.113.9" {
 		t.Fatalf("resolved client=%q want the real peer", resolved)
@@ -186,9 +186,9 @@ func TestTrustedProxyPrefersCloudflareClientHeader(t *testing.T) {
 	// original client past the edge.
 	chain := httptest.NewRequest(http.MethodPost, "http://example.com/v1/chat/completions", nil)
 	chain.RemoteAddr = "127.0.0.1:5555"
-	chain.Header.Set("X-Forwarded-For", "161.118.140.32, 173.245.48.9")
+	chain.Header.Set("X-Forwarded-For", "203.0.113.20, 173.245.48.9")
 	handler.ServeHTTP(httptest.NewRecorder(), chain)
-	if resolved != "161.118.140.32" {
+	if resolved != "203.0.113.20" {
 		t.Fatalf("resolved client=%q want the original client from the chain", resolved)
 	}
 }

@@ -32,8 +32,8 @@ const plain=v=>Array.from(v);
 
 test('anonymous_allow_ips is parsed into a trimmed list, and an empty box means nobody',()=>{
  const {api,node}=loadConfig();
- node('cfg_anonymous_allow_ips').value=' 161.118.140.32 \n\n203.77.252.0/24\n';
- assert.deepStrictEqual(plain(api.parseAnonymousAllowIPs()),['161.118.140.32','203.77.252.0/24']);
+ node('cfg_anonymous_allow_ips').value=' 203.0.113.20 \n\n198.51.100.0/24\n';
+ assert.deepStrictEqual(plain(api.parseAnonymousAllowIPs()),['203.0.113.20','198.51.100.0/24']);
  node('cfg_anonymous_allow_ips').value='   \n ';
  assert.deepStrictEqual(plain(api.parseAnonymousAllowIPs()),[]);
  node('cfg_anonymous_allow_ips').value='';
