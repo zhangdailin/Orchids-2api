@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"orchids-api/internal/channel"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/opsagg"
@@ -395,43 +396,43 @@ const streamFailureClass = "stream_error"
 // requestChannel includes only routes that perform inference. Model discovery,
 // token counting, administration, resource polling and downloads are HTTP traffic.
 func requestChannel(path string) string {
-	channel, endpoint := "", ""
-	for _, candidate := range []string{"warp", "puter", "workbuddy", "qoder", "cline", "grok"} {
-		if rest, ok := strings.CutPrefix(path, "/"+candidate+"/v1/"); ok {
-			channel, endpoint = candidate, rest
-			break
-		}
+	channelID, endpoint := channel.ID(""), ""
+	if matched, ok := channel.FromPath(path); ok {
+		channelID = matched
+		definition, _ := channel.DefinitionFor(matched)
+		endpoint = strings.TrimPrefix(path, definition.APIPrefix+"/")
 	}
-	if channel == "" {
+	channelName := string(channelID)
+	if channelName == "" {
 		if rest, ok := strings.CutPrefix(path, "/v1/"); ok {
-			channel, endpoint = "grok", rest
+			channelName, endpoint = string(channel.Grok), rest
 		}
 	}
 	switch endpoint {
 	case "messages", "chat/completions":
-		if channel != "" {
-			return channel
+		if channelName != "" {
+			return channelName
 		}
 	}
-	if channel == "grok" {
+	if channelName == "grok" {
 		switch endpoint {
 		case "responses", "responses/compact", "images/generations", "images/edits",
 			"videos", "videos/generations", "videos/edits", "videos/extensions",
 			"tts", "stt", "audio/speech", "audio/tasks", "audio/transcriptions", "realtime":
-			return channel
+			return channelName
 		}
 	}
 	return HTTPChannel
 }
 
 func inferenceRequestChannel(r *http.Request) string {
-	channel := requestChannel(r.URL.Path)
+	channelName := requestChannel(r.URL.Path)
 	if r.Method == http.MethodPost {
-		return channel
+		return channelName
 	}
-	if r.Method == http.MethodGet && channel == "grok" &&
+	if r.Method == http.MethodGet && channelName == "grok" &&
 		(strings.HasSuffix(r.URL.Path, "/stt") || strings.HasSuffix(r.URL.Path, "/realtime")) {
-		return channel
+		return channelName
 	}
 	return HTTPChannel
 }

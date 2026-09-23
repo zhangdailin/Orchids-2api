@@ -689,7 +689,8 @@ function openModelModal(model = null) {
     title.textContent = "添加模型";
     form.reset();
     document.getElementById("modelId").value = "";
-    setSelectValue(document.getElementById("modelChannel"), currentModelChannel || "Warp");
+    const defaultProvider = window.OrchidsProviderRegistry?.get(window.OrchidsProviderRegistry?.defaultProviderKey);
+    setSelectValue(document.getElementById("modelChannel"), currentModelChannel || defaultProvider?.label || "");
     document.getElementById("modelSortOrder").value = "0";
     setSelectValue(document.getElementById("modelStatus"), "available");
   }
@@ -902,7 +903,8 @@ async function deleteOfflineModelsForCurrentChannel() {
 
 
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
+  await window.OrchidsProviderRegistry?.ready;
   const searchInput = document.getElementById("modelSearchInput");
   const statusFilter = document.getElementById("modelStatusFilter");
   const pageSize = document.getElementById("modelPageSize");

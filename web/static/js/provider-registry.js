@@ -1,26 +1,22 @@
+// Code generated from internal/channel definitions; DO NOT EDIT.
 (() => {
   "use strict";
-
-  // One UI registry for every provider-facing page. Provider keys are the API
-  // account/channel values; labels are presentation only. Unknown providers are
-  // appended by callers instead of being hidden.
   const providers = Object.freeze([
-    Object.freeze({ key: "warp", label: "Warp" }),
-    Object.freeze({ key: "puter", label: "Puter" }),
-    Object.freeze({ key: "workbuddy", label: "WorkBuddy" }),
-    Object.freeze({ key: "qoder", label: "Qoder" }),
-    Object.freeze({ key: "cline", label: "Cline" }),
-    Object.freeze({ key: "grok", label: "Grok" }),
+    Object.freeze({"key":"warp","label":"Warp","apiPrefix":"/warp/v1","generic":true,"default":true,"theme":"cyan","accountCreate":"device"}),
+    Object.freeze({"key":"puter","label":"Puter","apiPrefix":"/puter/v1","generic":true,"theme":"purple","accountCreate":"browser"}),
+    Object.freeze({"key":"workbuddy","label":"WorkBuddy","apiPrefix":"/workbuddy/v1","generic":true,"theme":"orange","accountCreate":"browser"}),
+    Object.freeze({"key":"qoder","label":"Qoder","apiPrefix":"/qoder/v1","generic":true,"theme":"green","accountCreate":"browser"}),
+    Object.freeze({"key":"cline","label":"Cline","apiPrefix":"/cline/v1","generic":true,"theme":"blue","accountCreate":"browser"}),
+    Object.freeze({"key":"grok","label":"Grok","apiPrefix":"/grok/v1","generic":false,"theme":"red","accountCreate":"hybrid"}),
   ]);
   const byKey = Object.freeze(Object.fromEntries(providers.map((item) => [item.key, item])));
-
   window.OrchidsProviderRegistry = Object.freeze({
     providers,
     keys: Object.freeze(providers.map((item) => item.key)),
     channels: Object.freeze(providers.map((item) => item.label)),
-    label(value) {
-      const raw = String(value || "").trim();
-      return byKey[raw.toLowerCase()]?.label || raw;
-    },
+    defaultProviderKey: providers.find((item) => item.default)?.key || "",
+    ready: Promise.resolve(),
+    get(value) { return byKey[String(value || "").trim().toLowerCase()] || null; },
+    label(value) { const raw = String(value || "").trim(); return this.get(raw)?.label || raw; },
   });
 })();

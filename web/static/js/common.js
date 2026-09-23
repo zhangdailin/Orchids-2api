@@ -12,7 +12,7 @@ function setSidebarAccountStats(total, normal, abnormal) {
 }
 
 function normalizeSidebarAccountType(acc) {
-  return String(acc?.account_type || "warp").toLowerCase();
+  return String(acc?.account_type || "").toLowerCase();
 }
 
 function normalizeSidebarStatusCode(statusCode) {
@@ -173,7 +173,7 @@ function isSidebarAccountAbnormal(acc) {
   }
 
   const type = normalizeSidebarAccountType(acc);
-  const credentialChannels = new Set(["warp", "grok", "puter", "workbuddy", "qoder", "cline"]);
+  const credentialChannels = new Set(window.OrchidsProviderRegistry?.keys || []);
   if (credentialChannels.has(type)) {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {

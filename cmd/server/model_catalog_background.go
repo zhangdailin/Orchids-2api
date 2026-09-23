@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"orchids-api/internal/channel"
 	"orchids-api/internal/config"
 	"orchids-api/internal/store"
 )
@@ -32,20 +33,21 @@ func startModelCatalogRefreshLoop(ctx context.Context, configSnapshot func() *co
 		case <-timer.C:
 		}
 		refresh := func() {
-			for _, channel := range []string{"Warp", "Puter", "WorkBuddy", "Qoder", "Cline", "Grok"} {
-				release, acquired := acquireDistributedModelRefresh(ctx, s, channel)
+			for _, definition := range channel.All() {
+				channelName := definition.Label
+				release, acquired := acquireDistributedModelRefresh(ctx, s, channelName)
 				if !acquired {
 					continue
 				}
-				result, err := syncModelsForChannelConcurrent(ctx, configSnapshot(), s, channel, defaultModelRefreshConcurrency)
+				result, err := syncModelsForChannelConcurrent(ctx, configSnapshot(), s, channelName, defaultModelRefreshConcurrency)
 				release()
 				if err != nil {
 					if !isNoActiveAccounts(err) && ctx.Err() == nil {
-						slog.Warn("Automatic model catalog refresh failed; keeping last known state", "channel", channel, "error", err)
+						slog.Warn("Automatic model catalog refresh failed; keeping last known state", "channel", channelName, "error", err)
 					}
 					continue
 				}
-				slog.Info("Automatic model catalog reconciled", "channel", channel, "added", result.Added, "updated", result.Updated, "deleted", result.Deleted, "partial", result.Partial)
+				slog.Info("Automatic model catalog reconciled", "channel", channelName, "added", result.Added, "updated", result.Updated, "deleted", result.Deleted, "partial", result.Partial)
 			}
 		}
 		refresh()

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"orchids-api/internal/channel"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/util"
@@ -109,67 +110,22 @@ func extractWorkdirFromRequest(r *http.Request, req ClaudeRequest) (string, stri
 }
 
 func channelFromPath(path string) string {
-	if strings.HasPrefix(path, "/api/grok/models") {
-		return "grok"
-	}
-	if strings.HasPrefix(path, "/warp/") {
-		return "warp"
-	}
-	if strings.HasPrefix(path, "/puter/") {
-		return "puter"
-	}
-	if strings.HasPrefix(path, "/workbuddy/") {
-		return "workbuddy"
-	}
-	if strings.HasPrefix(path, "/qoder/") {
-		return "qoder"
-	}
-	if strings.HasPrefix(path, "/cline/") {
-		return "cline"
-	}
-	if strings.HasPrefix(path, "/grok/v1/") {
-		return "grok"
+	if id, ok := channel.FromPath(path); ok {
+		return string(id)
 	}
 	return ""
 }
 
-// mapModel 将请求的 model 名称映射为上游实际支持的规范化模型 ID。
+// mapModel normalizes only syntax. Availability and upstream identity come from
+// the discovered Store.Model row; unknown IDs are never rewritten to a compiled
+// fallback model.
 func mapModel(requestModel string) string {
 	normalized := strings.ToLower(strings.TrimSpace(requestModel))
 	if strings.HasPrefix(normalized, "claude-") {
 		normalized = strings.ReplaceAll(normalized, "4.6", "4-6")
 		normalized = strings.ReplaceAll(normalized, "4.5", "4-5")
 	}
-	if normalized == "" {
-		return "claude-sonnet-4-6"
-	}
-	if mapped, ok := modelMap[normalized]; ok {
-		return mapped
-	}
-	return "claude-sonnet-4-6"
-}
-
-// modelMap 维护跨通道共享的模型别名到上游模型 ID 的规范化映射。
-var modelMap = map[string]string{
-	"claude-sonnet-4-5":          "claude-sonnet-4-6",
-	"claude-sonnet-4-6":          "claude-sonnet-4-6",
-	"claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
-	"claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
-	"claude-opus-4-6":            "claude-opus-4-6",
-	"claude-opus-4-5":            "claude-opus-4-6",
-	"claude-opus-4-5-thinking":   "claude-opus-4-5-thinking",
-	"claude-opus-4-6-thinking":   "claude-opus-4-6",
-	"claude-haiku-4-5":           "claude-haiku-4-5",
-	"claude-sonnet-4-20250514":   "claude-sonnet-4-20250514",
-	"claude-3-7-sonnet-20250219": "claude-3-7-sonnet-20250219",
-	"gemini-3-flash":             "gemini-3-flash",
-	"gemini-3-pro":               "gemini-3-pro",
-	"gpt-5.3-codex":              "gpt-5.3-codex",
-	"gpt-5.2-codex":              "gpt-5.2-codex",
-	"gpt-5.2":                    "gpt-5.2",
-	"grok-4.1-fast":              "grok-4.1-fast",
-	"glm-5":                      "glm-5",
-	"kimi-k2.5":                  "kimi-k2.5",
+	return normalized
 }
 
 func conversationKeyForRequest(r *http.Request, req ClaudeRequest) string {

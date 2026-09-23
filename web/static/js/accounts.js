@@ -889,27 +889,12 @@ function buildAccountPayload(type, baseData, credential) {
 }
 
 function accountTypeLabel(type) {
-  switch (String(type || "").trim().toLowerCase()) {
-    case "warp":
-      return "Warp";
-    case "puter":
-      return "Puter";
-    case "grok":
-      return "Grok";
-    case "workbuddy":
-      return "WorkBuddy";
-    case "qoder":
-      return "Qoder";
-    case "cline":
-      return "Cline";
-    default:
-      return "Warp";
-  }
+  return window.OrchidsProviderRegistry?.label(type) || String(type || "").trim();
 }
 
 function getActiveAccountType() {
   const platform = String(currentPlatform || "").trim().toLowerCase();
-  return platform || "warp";
+  return platform || window.OrchidsProviderRegistry?.defaultProviderKey || "";
 }
 
 // selectedPlatformAccountType resolves the account type for a brand-new account.
@@ -936,21 +921,12 @@ function selectedPlatformAccountType(typeEl) {
 // so an unrecognised value must not silently create a Warp account.
 function platformAccountType(platform) {
   const key = String(platform || "").trim().toLowerCase();
-  switch (key) {
-    case "warp":
-    case "grok":
-    case "puter":
-    case "workbuddy":
-    case "qoder":
-    case "cline":
-      return key;
-    default:
-      return getActiveAccountType();
-  }
+  return window.OrchidsProviderRegistry?.get(key)?.key || getActiveAccountType();
 }
 
 function setAccountModalType(type) {
-  const normalized = String(type || "warp").trim().toLowerCase() || "warp";
+  const fallback = window.OrchidsProviderRegistry?.defaultProviderKey || "";
+  const normalized = String(type || fallback).trim().toLowerCase() || fallback;
   const typeEl = document.getElementById("accountType");
   const displayEl = document.getElementById("accountTypeDisplay");
   if (typeEl) typeEl.value = normalized;
@@ -1050,9 +1026,7 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
 // Cline is listed here because this list is the only thing that renders a channel
 // tab: a channel missing from it has no tab, so its login group in the account
 // modal can never be selected and the channel is unreachable from the console.
-const ACCOUNT_PLATFORM_ORDER = Array.isArray(window.OrchidsProviderRegistry?.keys)
-  ? [...window.OrchidsProviderRegistry.keys]
-  : [];
+const ACCOUNT_PLATFORM_ORDER = window.OrchidsProviderRegistry?.keys || [];
 const ACCOUNT_TYPE_NAMES = Object.fromEntries(
   (window.OrchidsProviderRegistry?.providers || []).map((item) => [item.key, item.label]),
 );
@@ -2449,7 +2423,8 @@ function exportAccounts() {
 }
 
 // Load accounts on page load
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  await window.OrchidsProviderRegistry?.ready;
   initDOMCache();
   loadAccounts();
   const typeSelect = document.getElementById("accountType");

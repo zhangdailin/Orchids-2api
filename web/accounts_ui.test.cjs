@@ -64,6 +64,7 @@ function loadUI() {
       setInterval: (fn) => { timers.push(fn); return timers.length; },
       clearInterval: () => {},
       addEventListener() {},
+      dispatchEvent() {},
       matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
       innerWidth: 1440,
       localStorage: {
@@ -75,6 +76,14 @@ function loadUI() {
     // Immediate pacing so the auto-sync loop settles synchronously in tests.
     setTimeout: (fn) => { fn(); return 0; },
   });
+  context.fetch = async (url) => {
+    if (url === '/api/providers') return { ok: true, json: async () => ({ defaultProviderKey:'warp', providers:[
+      {key:'warp',label:'Warp'},{key:'puter',label:'Puter'},{key:'workbuddy',label:'WorkBuddy'},
+      {key:'qoder',label:'Qoder'},{key:'cline',label:'Cline'},{key:'grok',label:'Grok'},
+    ]}) };
+    return { ok: true, json: async () => [] };
+  };
+  context.CustomEvent = class { constructor(type, init={}) { this.type=type; this.detail=init.detail; } };
   for (const file of ['common.js', 'provider-registry.js', 'accounts.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, 'static/js', file), 'utf8'), context);
   }
@@ -1005,7 +1014,7 @@ const CHANNEL_SELECT_TEMPLATES = [
   'templates/components/modals/model-modal.html',
 ];
 
-const CHANNEL_KEYS = ['warp', 'puter', 'workbuddy', 'qoder', 'grok'];
+const CHANNEL_KEYS = ['warp', 'puter', 'workbuddy', 'qoder', 'cline', 'grok'];
 
 test('every channel in the tutorial list appears in the tutorial quick-reference table', () => {
   const template = fs.readFileSync(path.join(__dirname, 'templates/pages/tutorial.html'), 'utf8');
@@ -1024,14 +1033,12 @@ test('every channel in the tutorial list appears in the tutorial quick-reference
   }
 });
 
-test('every channel is selectable in the forms that pick a channel', () => {
-  for (const relative of CHANNEL_SELECT_TEMPLATES) {
-    const template = fs.readFileSync(path.join(__dirname, relative), 'utf8');
-    for (const key of CHANNEL_KEYS) {
-      const option = new RegExp(`<option value="${key}">`, 'i');
-      assert.match(template, option, `${relative} cannot select the ${key} channel`);
-    }
-  }
+test('channel forms are populated from the backend provider registry', () => {
+  const template = fs.readFileSync(path.join(__dirname, CHANNEL_SELECT_TEMPLATES[0]), 'utf8');
+  const models = fs.readFileSync(path.join(__dirname, 'static/js/models.js'), 'utf8');
+  assert.match(template, /id="modelChannel"/);
+  assert.match(models, /OrchidsProviderRegistry\?\.channels/);
+  for (const key of CHANNEL_KEYS) assert.doesNotMatch(template, new RegExp(`<option value="${key}">`, 'i'));
 });
 
 test('every channel has a badge style, so the tutorial row is not unstyled', () => {

@@ -11,6 +11,7 @@ import (
 
 	"orchids-api/internal/api"
 	"orchids-api/internal/auth"
+	"orchids-api/internal/channel"
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/handler"
@@ -108,13 +109,9 @@ func registerRoutes(
 	// OpenAI handlers. Grok is not among them: it has a native implementation of
 	// both. /v1 is excluded too, because it is the unified prefix — it dispatches
 	// by model instead of by path.
-	channelPrefixes := []string{"/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1", "/cline/v1"}
+	channelPrefixes := channel.GenericPrefixes()
 	// allPrefixes additionally serves the native Grok prefix and the unified one.
-	// It is for the routes whose answer comes from shared state and is the same
-	// whichever prefix carried the request.
-	allPrefixes := make([]string, 0, len(channelPrefixes)+2)
-	allPrefixes = append(allPrefixes, channelPrefixes...)
-	allPrefixes = append(allPrefixes, "/grok/v1", "/v1")
+	allPrefixes := append(channel.AllPrefixes(), "/v1")
 
 	// --- Channel-specific message routes ---
 	// Every channel answers the same two endpoints; the path only tells the
@@ -251,6 +248,7 @@ func registerRoutes(
 	}
 
 	// Admin routes under /api/* only (no dual prefix)
+	mux.HandleFunc("/api/providers", sessionAuth(channel.HandleRegistry))
 	mux.HandleFunc("/api/accounts", sessionAuth(apiHandler.HandleAccounts))
 	mux.HandleFunc("/api/accounts/", sessionAuth(apiHandler.HandleAccountByID))
 	mux.HandleFunc("/api/grok/availability", sessionAuth(apiHandler.HandleGrokAvailability))

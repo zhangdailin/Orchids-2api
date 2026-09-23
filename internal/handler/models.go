@@ -10,6 +10,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/channel"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/modelpolicy"
@@ -273,17 +274,9 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// Extract ID from path
-	// Paths could be: /v1/models/{id}, /warp/v1/models/{id}, /puter/v1/models/{id}, /grok/v1/models/{id}
 	path := r.URL.Path
-	var id string
-	if strings.HasPrefix(path, "/warp/v1/models/") {
-		id = strings.TrimPrefix(path, "/warp/v1/models/")
-	} else if strings.HasPrefix(path, "/puter/v1/models/") {
-		id = strings.TrimPrefix(path, "/puter/v1/models/")
-	} else if strings.HasPrefix(path, "/grok/v1/models/") {
-		id = strings.TrimPrefix(path, "/grok/v1/models/")
-	} else {
+	_, id, matched := channel.TrimModelPath(path)
+	if !matched {
 		id = strings.TrimPrefix(path, "/v1/models/")
 	}
 

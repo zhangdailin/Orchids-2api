@@ -11,6 +11,7 @@ import (
 
 	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/auth"
+	"orchids-api/internal/channel"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 
@@ -40,12 +41,10 @@ func EffectiveAccountConcurrencyLimit(acc *store.Account) int64 {
 	if acc.MaxConcurrent > 0 {
 		return int64(acc.MaxConcurrent)
 	}
-	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
-	case "warp", "puter", "workbuddy", "qoder", "cline", "grok":
+	if channel.IsSupported(acc.AccountType) {
 		return DefaultAccountConcurrency
-	default:
-		return 0
 	}
+	return 0
 }
 
 type LoadBalancer struct {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/channel"
 	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
@@ -331,23 +332,13 @@ func syncModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *
 	return result, err
 }
 
-func normalizeAdminModelChannel(channel string) string {
-	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "warp":
-		return "Warp"
-	case "puter":
-		return "Puter"
-	case "workbuddy":
-		return "WorkBuddy"
-	case "qoder":
-		return "Qoder"
-	case "cline":
-		return "Cline"
-	case "grok":
-		return "Grok"
-	default:
+func normalizeAdminModelChannel(value string) string {
+	id, ok := channel.Parse(value)
+	if !ok {
 		return ""
 	}
+	definition, _ := channel.DefinitionFor(id)
+	return definition.Label
 }
 
 func parseModelRefreshConcurrency(raw string) (int, bool) {

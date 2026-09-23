@@ -37,10 +37,10 @@ func TestAccountsJSListClineInTheChannelStrip(t *testing.T) {
 	if !strings.Contains(source, "OrchidsProviderRegistry?.keys") || !strings.Contains(source, "OrchidsProviderRegistry?.providers") {
 		t.Error("accounts.js does not consume the shared provider registry")
 	}
-	if !strings.Contains(registry, `{ key: "cline", label: "Cline" }`) {
-		t.Error("the shared provider registry omits Cline")
+	if !strings.Contains(registry, `Code generated from internal/channel definitions`) {
+		t.Error("the frontend registry is not generated from the backend provider registry")
 	}
-	if !strings.Contains(source, `case "cline":`) {
+	if !strings.Contains(source, `OrchidsProviderRegistry?.get(key)`) {
 		t.Error("accounts.js does not resolve the cline account type")
 	}
 	// The login lifecycle must be stopped with the others: a transaction left

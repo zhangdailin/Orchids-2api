@@ -61,7 +61,7 @@ func TestModelModalOffersClineChannel(t *testing.T) {
 	if err := renderer.RenderIndex(recorder, request, &config.Config{AdminPath: "/admin"}, nil); err != nil {
 		t.Fatalf("RenderIndex() error = %v", err)
 	}
-	if page := recorder.Body.String(); !strings.Contains(page, `<option value="Cline">Cline</option>`) {
-		t.Error("the model modal has no Cline channel option")
+	if page := recorder.Body.String(); !strings.Contains(page, `provider-registry.js`) || !strings.Contains(page, `id="modelChannel"`) {
+		t.Error("the model modal is not wired to the shared provider registry")
 	}
 }

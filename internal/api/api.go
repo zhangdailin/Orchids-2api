@@ -22,6 +22,7 @@ import (
 	"orchids-api/internal/alerting"
 	"orchids-api/internal/audit"
 	"orchids-api/internal/auth"
+	"orchids-api/internal/channel"
 	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
@@ -1110,12 +1111,7 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 }
 
 func isSupportedAccountType(accountType string) bool {
-	switch strings.ToLower(strings.TrimSpace(accountType)) {
-	case "warp", "puter", "grok", "workbuddy", "qoder", "cline":
-		return true
-	default:
-		return false
-	}
+	return channel.IsSupported(accountType)
 }
 
 // validateAccountType rejects an account whose type is missing or unknown.

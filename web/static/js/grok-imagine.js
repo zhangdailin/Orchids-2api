@@ -2,11 +2,14 @@
   const batchSize = () => Math.max(1, Math.min(6, Number(document.getElementById("imagineCount")?.value) || 6));
   const PARALLELISM = 2;
   const STORAGE_KEY = "grok_tools_ui_v1";
-  const QUALITY_MODELS = {
-    basic: "grok-imagine-image-lite",
-    lite: "grok-imagine-image-lite",
-    quality: "grok-imagine-image-pro",
-  };
+  let imageModels = [];
+
+  function qualityModels() {
+    const ids = imageModels.map((item) => String(item?.id || "")).filter(Boolean);
+    const basic = ids.find((id) => /(?:lite|fast)$/i.test(id)) || ids[0] || "";
+    const quality = ids.find((id) => /(?:2\.0|quality)$/i.test(id)) || ids.find((id) => id !== basic) || basic;
+    return { basic, lite: basic, quality };
+  }
 
   const state = {
     initialized: false,
@@ -67,7 +70,8 @@
   }
 
   function qualityModel(quality) {
-    return QUALITY_MODELS[quality] || QUALITY_MODELS.lite;
+    const models = qualityModels();
+    return models[quality] || models.lite;
   }
 
   function normalizeQuality(value) {
@@ -802,7 +806,8 @@
     state.showToast = options.showToast || null;
     const ui = options.uiState || loadState();
     if ($("imagineRatio") && typeof ui.imagineRatio === "string" && ui.imagineRatio) $("imagineRatio").value = ui.imagineRatio;
-    const quality = normalizeQuality(ui.imagineQuality || (ui.imagineModel === QUALITY_MODELS.quality ? "quality" : "lite"));
+    const models = qualityModels();
+    const quality = normalizeQuality(ui.imagineQuality || (ui.imagineModel === models.quality ? "quality" : "lite"));
     setToggle("#imagineQualityToggle", "imagineQuality", quality);
     setToggle("#imagineRunModeToggle", "imagineRunMode", ui.imagineRunMode === "continuous" ? "continuous" : "single");
     bindEvents();
@@ -811,6 +816,10 @@
     setButtons(false);
     setStatus("未连接");
   }
+
+  window.addEventListener("grok-models-loaded", (event) => {
+    imageModels = (Array.isArray(event.detail) ? event.detail : []).filter((item) => Array.isArray(item?.capabilities) && item.capabilities.includes("image"));
+  });
 
   window.GrokImagine = {
     init,
