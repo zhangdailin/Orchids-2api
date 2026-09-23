@@ -11,11 +11,11 @@ import (
 )
 
 func TestToolCallOnlyAssistantAlwaysSerializesContent(t *testing.T) {
-	raw, err := json.Marshal(Message{
+	raw, err := json.Marshal(message{
 		Role: "assistant",
-		ToolCalls: []ToolCall{{
+		ToolCalls: []toolCall{{
 			ID: "call-a", Type: "function",
-			Function: ToolCallFunction{Name: "Read", Arguments: `{}`},
+			Function: toolCallFunction{Name: "Read", Arguments: `{}`},
 		}},
 	})
 	if err != nil {
@@ -27,10 +27,10 @@ func TestToolCallOnlyAssistantAlwaysSerializesContent(t *testing.T) {
 }
 
 func TestSplitMultiToolCallsSplitsPairedTurns(t *testing.T) {
-	in := []Message{
-		{Role: "assistant", Content: "I will read two files", ToolCalls: []ToolCall{
-			{ID: "call_a", Type: "function", Function: ToolCallFunction{Name: "Read", Arguments: `{"file_path":"a"}`}},
-			{ID: "call_b", Type: "function", Function: ToolCallFunction{Name: "Read", Arguments: `{"file_path":"b"}`}},
+	in := []message{
+		{Role: "assistant", Content: "I will read two files", ToolCalls: []toolCall{
+			{ID: "call_a", Type: "function", Function: toolCallFunction{Name: "Read", Arguments: `{"file_path":"a"}`}},
+			{ID: "call_b", Type: "function", Function: toolCallFunction{Name: "Read", Arguments: `{"file_path":"b"}`}},
 		}},
 		{Role: "tool", ToolCallID: "call_a", Content: "contents of a"},
 		{Role: "tool", ToolCallID: "call_b", Content: "contents of b"},
@@ -59,11 +59,11 @@ func TestSplitMultiToolCallsSplitsPairedTurns(t *testing.T) {
 }
 
 func TestSplitMultiToolCallsThreeCalls(t *testing.T) {
-	in := []Message{
-		{Role: "assistant", ToolCalls: []ToolCall{
-			{ID: "c1", Function: ToolCallFunction{Name: "Grep", Arguments: `{}`}},
-			{ID: "c2", Function: ToolCallFunction{Name: "Grep", Arguments: `{}`}},
-			{ID: "c3", Function: ToolCallFunction{Name: "Grep", Arguments: `{}`}},
+	in := []message{
+		{Role: "assistant", ToolCalls: []toolCall{
+			{ID: "c1", Function: toolCallFunction{Name: "Grep", Arguments: `{}`}},
+			{ID: "c2", Function: toolCallFunction{Name: "Grep", Arguments: `{}`}},
+			{ID: "c3", Function: toolCallFunction{Name: "Grep", Arguments: `{}`}},
 		}},
 		{Role: "tool", ToolCallID: "c1", Content: "r1"},
 		{Role: "tool", ToolCallID: "c2", Content: "r2"},
@@ -84,10 +84,10 @@ func TestSplitMultiToolCallsThreeCalls(t *testing.T) {
 }
 
 func TestSplitMultiToolCallsLeavesIncompleteTurnsUntouched(t *testing.T) {
-	in := []Message{
-		{Role: "assistant", ToolCalls: []ToolCall{
-			{ID: "call_a", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
-			{ID: "call_b", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
+	in := []message{
+		{Role: "assistant", ToolCalls: []toolCall{
+			{ID: "call_a", Function: toolCallFunction{Name: "Read", Arguments: `{}`}},
+			{ID: "call_b", Function: toolCallFunction{Name: "Read", Arguments: `{}`}},
 		}},
 		// 只有 call_a 的回应,缺少 call_b。
 		{Role: "tool", ToolCallID: "call_a", Content: "r1"},
@@ -103,9 +103,9 @@ func TestSplitMultiToolCallsLeavesIncompleteTurnsUntouched(t *testing.T) {
 }
 
 func TestSplitMultiToolCallsIgnoresNonToolScenarios(t *testing.T) {
-	in := []Message{
+	in := []message{
 		{Role: "system", Content: "sys"},
-		{Role: "assistant", ToolCalls: []ToolCall{{ID: "one", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}}}},
+		{Role: "assistant", ToolCalls: []toolCall{{ID: "one", Function: toolCallFunction{Name: "Read", Arguments: `{}`}}}},
 		{Role: "tool", ToolCallID: "one", Content: "r"},
 	}
 	got := splitMultiToolCalls(in)
@@ -120,7 +120,7 @@ func TestSplitMultiToolCallsIgnoresNonToolScenarios(t *testing.T) {
 
 // 显式传入 SystemItem;convertMessages 将 system 条目逐字透传为独立 system 消息。
 func TestBuildRequestSplitsMultiToolCallsOnlyForDeepseek(t *testing.T) {
-	build := func(model string) []Message {
+	build := func(model string) []message {
 		client := NewFromAccount(nil, nil)
 		req, err := client.buildRequest(upstream.UpstreamRequest{
 			Model:  model,
@@ -190,10 +190,10 @@ func TestBuildRequestForwardsToolControls(t *testing.T) {
 
 func TestSplitMultiToolCallsReordersToolResultsCorrectly(t *testing.T) {
 	// tool 回应顺序与 tool_calls 不一致时,按 tool_calls 顺序成对输出。
-	in := []Message{
-		{Role: "assistant", ToolCalls: []ToolCall{
-			{ID: "a", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
-			{ID: "b", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
+	in := []message{
+		{Role: "assistant", ToolCalls: []toolCall{
+			{ID: "a", Function: toolCallFunction{Name: "Read", Arguments: `{}`}},
+			{ID: "b", Function: toolCallFunction{Name: "Read", Arguments: `{}`}},
 		}},
 		{Role: "tool", ToolCallID: "b", Content: "rb"},
 		{Role: "tool", ToolCallID: "a", Content: "ra"},
@@ -213,10 +213,10 @@ func TestSplitMultiToolCallsReordersToolResultsCorrectly(t *testing.T) {
 // 该用例保证 TestBuildRequestSplitsMultiToolCallsOnlyForDeepseek 的断言真实有效:
 // 使用 buildRequest 语义(不走流式),验证拆分会真实出现在 deepseek 请求中。
 func TestSplitMultiToolCallsPreservesArgumentsText(t *testing.T) {
-	in := []Message{
-		{Role: "assistant", Content: "lead", ToolCalls: []ToolCall{
-			{ID: "a", Function: ToolCallFunction{Name: "Read", Arguments: `{"file_path":"x"}`}},
-			{ID: "b", Function: ToolCallFunction{Name: "Read", Arguments: `{"file_path":"y"}`}},
+	in := []message{
+		{Role: "assistant", Content: "lead", ToolCalls: []toolCall{
+			{ID: "a", Function: toolCallFunction{Name: "Read", Arguments: `{"file_path":"x"}`}},
+			{ID: "b", Function: toolCallFunction{Name: "Read", Arguments: `{"file_path":"y"}`}},
 		}},
 		{Role: "tool", ToolCallID: "a", Content: "r1"},
 		{Role: "tool", ToolCallID: "b", Content: "r2"},
@@ -230,7 +230,7 @@ func TestSplitMultiToolCallsPreservesArgumentsText(t *testing.T) {
 
 // 思考模式下,DeepSeek 要求 assistant 消息回传 reasoning_content;否则上游 400。
 // convertMessages 应把 Anthropic 风格 `thinking` 块与 OpenAI 顶层 reasoning_content
-// 都汇入 puter Message.ReasoningContent(仅 deepseek 服务开启回传)。
+// 都汇入 puter message.ReasoningContent(仅 deepseek 服务开启回传)。
 func TestConvertMessagesEchoesReasoningForDeepseek(t *testing.T) {
 	msgs := []prompt.Message{
 		{Role: "assistant", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
@@ -324,10 +324,10 @@ func TestConvertMessagesDropsDanglingAndDuplicateToolResults(t *testing.T) {
 // 拆分多 tool_call 后的每个合成 assistant 都必须携带 reasoning_content，
 // 否则 DeepSeek 会把后续分片视为缺少思考内容的新 assistant 轮次。
 func TestSplitMultiToolCallsPreservesReasoningOnEveryPart(t *testing.T) {
-	in := []Message{
-		{Role: "assistant", Content: "lead", ReasoningContent: "reasoning here", ToolCalls: []ToolCall{
-			{ID: "a", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
-			{ID: "b", Function: ToolCallFunction{Name: "Read", Arguments: `{}`}},
+	in := []message{
+		{Role: "assistant", Content: "lead", ReasoningContent: "reasoning here", ToolCalls: []toolCall{
+			{ID: "a", Function: toolCallFunction{Name: "Read", Arguments: `{}`}},
+			{ID: "b", Function: toolCallFunction{Name: "Read", Arguments: `{}`}},
 		}},
 		{Role: "tool", ToolCallID: "a", Content: "r1"},
 		{Role: "tool", ToolCallID: "b", Content: "r2"},
@@ -345,11 +345,11 @@ func TestSplitMultiToolCallsPreservesReasoningOnEveryPart(t *testing.T) {
 }
 
 func TestMergeAdjacentAssistantMessagesPreservesToolsAndRealReasoning(t *testing.T) {
-	in := []Message{
+	in := []message{
 		{Role: "user", Content: "start"},
 		{Role: "assistant", Content: "first", ReasoningContent: missingDeepSeekReasoningFallback},
-		{Role: "assistant", ReasoningContent: "real reasoning", ToolCalls: []ToolCall{{
-			ID: "call-1", Type: "function", Function: ToolCallFunction{Name: "grep", Arguments: `{}`},
+		{Role: "assistant", ReasoningContent: "real reasoning", ToolCalls: []toolCall{{
+			ID: "call-1", Type: "function", Function: toolCallFunction{Name: "grep", Arguments: `{}`},
 		}}},
 		{Role: "tool", ToolCallID: "call-1", Content: "done"},
 	}

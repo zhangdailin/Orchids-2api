@@ -114,6 +114,20 @@ func (c *Client) VerifyModel(ctx context.Context, modelID string) error {
 	}, 45*time.Second, true, nil, nil)
 }
 
+func ApplyMonthlyUsage(acc *store.Account, usage *MonthlyUsage) bool {
+	if acc == nil || usage == nil {
+		return false
+	}
+	limit := max(0, usage.AllowanceInfo.MonthUsageAllowance)
+	remaining := max(0, usage.AllowanceInfo.Remaining)
+	if limit > 0 && remaining > limit {
+		remaining = limit
+	}
+	acc.UsageCurrent = remaining
+	acc.UsageLimit = limit
+	return limit > 0 && remaining <= 0
+}
+
 func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
 	if c == nil {
 		return nil, fmt.Errorf("puter client is nil")
@@ -228,7 +242,7 @@ func (c *Client) doChatRequest(ctx context.Context, body []byte) (*http.Response
 	return nil, fmt.Errorf("puter API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
 }
 
-func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Request, error) {
+func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*request, error) {
 	modelID := strings.TrimSpace(req.Model)
 	if modelID == "" {
 		modelID = defaultModelID
@@ -260,12 +274,12 @@ func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*Req
 		// 多 tool_call 轮次会被打断配对;拆成单 tool_call 序列绕开该行为。
 		msgs = splitMultiToolCalls(msgs)
 	}
-	return &Request{
+	return &request{
 		Interface: defaultIface,
 		Service:   service,
 		TestMode:  testMode,
 		Method:    defaultMethod,
-		Args: RequestArgs{
+		Args: requestArgs{
 			Messages:          msgs,
 			Model:             modelID,
 			Stream:            true,
@@ -371,7 +385,7 @@ func serviceForModel(modelID string) (string, error) {
 	return "", fmt.Errorf("puter model %q has no configured service", modelID)
 }
 
-func formatPuterAPIError(apiErr *ErrorPayload, raw string) error {
+func formatPuterAPIError(apiErr *errorPayload, raw string) error {
 	message := strings.TrimSpace(raw)
 	if apiErr != nil {
 		parts := make([]string, 0, 4)

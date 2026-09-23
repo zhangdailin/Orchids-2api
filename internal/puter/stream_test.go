@@ -96,7 +96,7 @@ func TestPuterStreamErrorNormalizesLeadingStatus(t *testing.T) {
 		// 无前导状态码:保持原样,不带 status。
 		{chunk: `{"type":"error","error":{"type":"server_error","message":"boom"}}`,
 			wantSub: "boom"},
-		// chunk.Message 为空时退回整行。
+		// chunk.message 为空时退回整行。
 		{chunk: "", line: `{"type":"error","error":"raw line"}`,
 			wantSub: "raw line"},
 	}

@@ -55,10 +55,6 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 			profile = warpProfile
 		}
 	}
-	if breakdown.Total == 0 && channel == "puter" {
-		breakdown = estimateInputTokenBreakdown(extractUserText(req.Messages), req.Tools)
-		profile = "puter"
-	}
 	if breakdown.Total == 0 {
 		builtPrompt := strings.TrimSpace(extractUserText(req.Messages))
 		breakdown = estimateInputTokenBreakdown(builtPrompt, req.Tools)

@@ -697,29 +697,7 @@ func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Conf
 				if strings.TrimSpace(candidate.ID) == "" {
 					continue
 				}
-				startAccount := idx % len(accounts)
-				allDefinitiveRejects := true
-				for attempt := 0; attempt < len(accounts); attempt++ {
-					if err := ctx.Err(); err != nil {
-						allDefinitiveRejects = false
-						break
-					}
-					acc := accounts[(startAccount+attempt)%len(accounts)]
-					err := verifyPuterModelForRefresh(ctx, cfg, acc, candidate.ID)
-					if err == nil {
-						results[idx] = puterModelProbeAccepted
-						break
-					}
-					if isPuterInsufficientFundsError(err) {
-						results[idx] = results[idx].withInsufficientFunds()
-					}
-					if !isPuterModelDefinitiveReject(err) {
-						allDefinitiveRejects = false
-					}
-				}
-				if results[idx] != puterModelProbeAccepted && results[idx] != puterModelProbeQuotaLimited && allDefinitiveRejects {
-					results[idx] = puterModelProbeRejected
-				}
+				results[idx], _ = probePuterCandidate(ctx, cfg, accounts, candidate.ID, idx%len(accounts))
 			}
 		}()
 	}
@@ -753,29 +731,46 @@ func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, 
 		if strings.TrimSpace(candidate.ID) == "" {
 			continue
 		}
-		ok := false
-		for attempt := 0; attempt < len(accounts); attempt++ {
-			if err := ctx.Err(); err != nil {
-				break
-			}
-			acc := accounts[(accountIndex+attempt)%len(accounts)]
-			err := verifyPuterModelForRefresh(ctx, cfg, acc, candidate.ID)
-			if err == nil {
-				ok = true
-				accountIndex = (accountIndex + attempt + 1) % len(accounts)
-				break
-			}
-			if isPuterInsufficientFundsError(err) {
-				sawInsufficientFunds = true
-			}
+		result, next := probePuterCandidate(ctx, cfg, accounts, candidate.ID, accountIndex)
+		accountIndex = next
+		if result == puterModelProbeQuotaLimited {
+			sawInsufficientFunds = true
 		}
-		if ok {
+		if result == puterModelProbeAccepted {
 			candidate.SortOrder = len(verified)
 			candidate.Verified = true
 			verified = append(verified, candidate)
 		}
 	}
 	return puterModelVerificationSummary{Verified: verified, SawInsufficientFunds: sawInsufficientFunds}
+}
+
+func probePuterCandidate(ctx context.Context, cfg *config.Config, accounts []*store.Account, modelID string, startAccount int) (puterModelProbeResult, int) {
+	if len(accounts) == 0 || strings.TrimSpace(modelID) == "" {
+		return 0, startAccount
+	}
+	result := puterModelProbeResult(0)
+	allDefinitiveRejects := true
+	for attempt := 0; attempt < len(accounts); attempt++ {
+		if ctx.Err() != nil {
+			return result, startAccount
+		}
+		index := (startAccount + attempt) % len(accounts)
+		err := verifyPuterModelForRefresh(ctx, cfg, accounts[index], modelID)
+		if err == nil {
+			return puterModelProbeAccepted, (index + 1) % len(accounts)
+		}
+		if isPuterInsufficientFundsError(err) {
+			result = result.withInsufficientFunds()
+		}
+		if !isPuterModelDefinitiveReject(err) {
+			allDefinitiveRejects = false
+		}
+	}
+	if result != puterModelProbeQuotaLimited && allDefinitiveRejects {
+		result = puterModelProbeRejected
+	}
+	return result, startAccount
 }
 
 type puterModelProbeResult uint8

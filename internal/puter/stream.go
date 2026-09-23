@@ -61,7 +61,7 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 			continue
 		}
 
-		var chunk StreamChunk
+		var chunk streamChunk
 		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
 			return result, fmt.Errorf("puter stream protocol error: invalid JSON event preview=%q", boundedPuterPreview(line))
 		}

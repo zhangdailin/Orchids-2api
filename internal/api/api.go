@@ -1158,7 +1158,7 @@ func accountSessionFingerprint(acc *store.Account) string {
 		creds := cline.ResolveCredentials(acc)
 		return util.Fingerprint(util.FirstNonEmpty(creds.RefreshToken, creds.AccessToken))
 	case "puter":
-		return util.Fingerprint(util.FirstNonEmpty(acc.Token, acc.SessionCookie, acc.ClientCookie))
+		return util.Fingerprint(puter.ResolveAuthToken(acc))
 	default:
 		return ""
 	}
@@ -1379,25 +1379,6 @@ func buildQuotaResponseFieldsWithUsage(acc *store.Account, observedTokens int64,
 
 	projectQuotaFields(fields, acc, limit, current, observedTokens, usageObserved)
 	return fields
-}
-
-func applyPuterMonthlyUsage(acc *store.Account, usage *puter.MonthlyUsage) {
-	if acc == nil || usage == nil {
-		return
-	}
-	limit := usage.AllowanceInfo.MonthUsageAllowance
-	remaining := usage.AllowanceInfo.Remaining
-	if limit < 0 {
-		limit = 0
-	}
-	if remaining < 0 {
-		remaining = 0
-	}
-	if limit > 0 && remaining > limit {
-		remaining = limit
-	}
-	acc.UsageCurrent = remaining
-	acc.UsageLimit = limit
 }
 
 func (a *API) refreshAccountState(ctx context.Context, acc *store.Account) (string, int, error) {

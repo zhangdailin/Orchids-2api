@@ -20,12 +20,12 @@ const missingDeepSeekReasoningFallback = "\u200b"
 // system 消息，其余消息按角色/schema 映射。echoReasoning 仅在目标服务开启思考模式
 // 且要求回传 reasoning_content（deepseek）时为 true，此时保留 assistant 消息的推理
 // 内容；其余服务行为不变（与旧版一致）。
-func convertMessages(messages []prompt.Message, system []prompt.SystemItem, echoReasoning bool) []Message {
-	out := make([]Message, 0, len(messages)+len(system))
+func convertMessages(messages []prompt.Message, system []prompt.SystemItem, echoReasoning bool) []message {
+	out := make([]message, 0, len(messages)+len(system))
 	pendingToolCalls := make(map[string]bool)
 	for _, item := range system {
 		if text := strings.TrimSpace(item.Text); text != "" {
-			out = append(out, Message{Role: "system", Content: item.Text})
+			out = append(out, message{Role: "system", Content: item.Text})
 		}
 	}
 	for _, msg := range messages {
@@ -35,7 +35,7 @@ func convertMessages(messages []prompt.Message, system []prompt.SystemItem, echo
 		}
 		if msg.Content.IsString() {
 			if text := msg.Content.GetText(); strings.TrimSpace(text) != "" {
-				m := Message{Role: role, Content: text}
+				m := message{Role: role, Content: text}
 				if echoReasoning && role == "assistant" {
 					m.ReasoningContent = strings.TrimSpace(msg.ReasoningContent)
 					if m.ReasoningContent == "" {
@@ -58,18 +58,18 @@ func convertMessages(messages []prompt.Message, system []prompt.SystemItem, echo
 			out = append(out, convertUserBlocks(msg.Content.GetBlocks(), pendingToolCalls)...)
 		default:
 			if text := joinTextBlocks(msg.Content.GetBlocks()); text != "" {
-				out = append(out, Message{Role: role, Content: text})
+				out = append(out, message{Role: role, Content: text})
 			}
 		}
 	}
 	return out
 }
 
-// convertAssistantMessage 把 assistant 消息的文本/tool_use 块映射到 puter Message。
+// convertAssistantMessage 把 assistant 消息的文本/tool_use 块映射到 puter message。
 // echoReasoning 时，OpenAI 风格 `reasoning_content` 顶层字段与 Anthropic 风格
-// `thinking` 块都会汇入 Message.ReasoningContent，保证 DeepSeek 思考模式能回传推理内容。
-func convertAssistantMessage(msg prompt.Message, echoReasoning bool) (Message, bool) {
-	message := Message{Role: "assistant"}
+// `thinking` 块都会汇入 message.ReasoningContent，保证 DeepSeek 思考模式能回传推理内容。
+func convertAssistantMessage(msg prompt.Message, echoReasoning bool) (message, bool) {
+	message := message{Role: "assistant"}
 	if echoReasoning {
 		message.ReasoningContent = strings.TrimSpace(msg.ReasoningContent)
 	}
@@ -93,10 +93,10 @@ func convertAssistantMessage(msg prompt.Message, echoReasoning bool) (Message, b
 			if id == "" {
 				id = newToolCallID()
 			}
-			message.ToolCalls = append(message.ToolCalls, ToolCall{
+			message.ToolCalls = append(message.ToolCalls, toolCall{
 				ID:   id,
 				Type: "function",
-				Function: ToolCallFunction{
+				Function: toolCallFunction{
 					Name:      name,
 					Arguments: util.CompactToolInput(block.Input),
 				},
@@ -110,14 +110,14 @@ func convertAssistantMessage(msg prompt.Message, echoReasoning bool) (Message, b
 	return message, message.Content != "" || len(message.ToolCalls) > 0 || message.ReasoningContent != ""
 }
 
-func convertUserBlocks(blocks []prompt.ContentBlock, pendingToolCalls map[string]bool) []Message {
-	out := make([]Message, 0, len(blocks))
+func convertUserBlocks(blocks []prompt.ContentBlock, pendingToolCalls map[string]bool) []message {
+	out := make([]message, 0, len(blocks))
 	var text []string
 	flushText := func() {
 		if len(text) == 0 {
 			return
 		}
-		out = append(out, Message{Role: "user", Content: strings.Join(text, "\n")})
+		out = append(out, message{Role: "user", Content: strings.Join(text, "\n")})
 		text = text[:0]
 	}
 	for _, block := range blocks {
@@ -136,7 +136,7 @@ func convertUserBlocks(blocks []prompt.ContentBlock, pendingToolCalls map[string
 				continue
 			}
 			delete(pendingToolCalls, toolID)
-			out = append(out, Message{
+			out = append(out, message{
 				Role:       "tool",
 				ToolCallID: toolID,
 				Content:    stringifyToolResult(block.Content),
@@ -216,11 +216,11 @@ func normalizeToolDefinitions(tools []interface{}) []interface{} {
 	return out
 }
 
-func mergeAdjacentAssistantMessages(messages []Message) []Message {
+func mergeAdjacentAssistantMessages(messages []message) []message {
 	if len(messages) < 2 {
 		return messages
 	}
-	out := make([]Message, 0, len(messages))
+	out := make([]message, 0, len(messages))
 	for _, message := range messages {
 		if message.Role != "assistant" || len(out) == 0 || out[len(out)-1].Role != "assistant" {
 			out = append(out, message)
@@ -270,8 +270,8 @@ func joinAssistantReplayReasoning(left, right string) string {
 // 要求 assistant(tool_calls) 后只能跟 tool 消息直到全部 tool_call_id 被回应,
 // 于是报 "insufficient tool messages following tool_calls message"。
 // 拆成单 tool_call 序列后,每个 assistant 的回应在注入前就已完整。
-func splitMultiToolCalls(messages []Message) []Message {
-	out := make([]Message, 0, len(messages))
+func splitMultiToolCalls(messages []message) []message {
+	out := make([]message, 0, len(messages))
 	for i := 0; i < len(messages); i++ {
 		m := messages[i]
 		if m.Role != "assistant" || len(m.ToolCalls) < 2 {
@@ -279,12 +279,12 @@ func splitMultiToolCalls(messages []Message) []Message {
 			continue
 		}
 		j := i + 1
-		results := make([]Message, 0, len(m.ToolCalls))
+		results := make([]message, 0, len(m.ToolCalls))
 		for j < len(messages) && messages[j].Role == "tool" {
 			results = append(results, messages[j])
 			j++
 		}
-		byID := make(map[string]Message, len(m.ToolCalls))
+		byID := make(map[string]message, len(m.ToolCalls))
 		for _, r := range results {
 			byID[r.ToolCallID] = r
 		}
@@ -294,7 +294,7 @@ func splitMultiToolCalls(messages []Message) []Message {
 			continue
 		}
 		for k, tc := range m.ToolCalls {
-			part := Message{Role: "assistant", ReasoningContent: m.ReasoningContent, ToolCalls: []ToolCall{tc}}
+			part := message{Role: "assistant", ReasoningContent: m.ReasoningContent, ToolCalls: []toolCall{tc}}
 			if k == 0 {
 				part.Content = m.Content
 			}

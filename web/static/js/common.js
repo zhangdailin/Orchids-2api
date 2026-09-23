@@ -173,17 +173,8 @@ function isSidebarAccountAbnormal(acc) {
   }
 
   const type = normalizeSidebarAccountType(acc);
-  if (type === "warp") {
-    if (!hasSidebarAccountCredential(acc)) return true;
-  } else if (type === "grok") {
-    if (!hasSidebarAccountCredential(acc)) return true;
-  } else if (type === "puter") {
-    if (!hasSidebarAccountCredential(acc)) return true;
-  } else if (type === "workbuddy") {
-    if (!hasSidebarAccountCredential(acc)) return true;
-  } else if (type === "qoder") {
-    if (!hasSidebarAccountCredential(acc)) return true;
-  } else if (type === "cline") {
+  const credentialChannels = new Set(["warp", "grok", "puter", "workbuddy", "qoder", "cline"]);
+  if (credentialChannels.has(type)) {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {
     return true;

@@ -79,8 +79,7 @@ func (a *API) HandlePuterWebLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Puter login succeeded but the usage API could not be verified; account was not saved", http.StatusBadGateway)
 		return
 	}
-	applyPuterMonthlyUsage(acc, usage)
-	if acc.UsageLimit > 0 && acc.UsageCurrent <= 0 {
+	if puter.ApplyMonthlyUsage(acc, usage) {
 		acc.StatusCode = store.AccountStatusPuterQuotaExhausted
 	}
 	existing, err := a.findDuplicateAccountByCredential(ctx, acc, 0)

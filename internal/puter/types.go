@@ -6,17 +6,17 @@ import (
 	"github.com/goccy/go-json"
 )
 
-type Request struct {
+type request struct {
 	Interface string      `json:"interface"`
 	Service   string      `json:"service"`
 	TestMode  bool        `json:"test_mode"`
 	Method    string      `json:"method"`
-	Args      RequestArgs `json:"args"`
+	Args      requestArgs `json:"args"`
 	AuthToken string      `json:"auth_token"`
 }
 
-type RequestArgs struct {
-	Messages          []Message     `json:"messages"`
+type requestArgs struct {
+	Messages          []message     `json:"messages"`
 	Model             string        `json:"model"`
 	Stream            bool          `json:"stream"`
 	Tools             []interface{} `json:"tools,omitempty"`
@@ -32,26 +32,26 @@ type RequestArgs struct {
 	EnableThinking *bool `json:"enable_thinking,omitempty"`
 }
 
-type Message struct {
+type message struct {
 	Role             string     `json:"role"`
 	Content          string     `json:"content"`
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
-	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
-type ToolCall struct {
+type toolCall struct {
 	ID       string           `json:"id"`
 	Type     string           `json:"type"`
-	Function ToolCallFunction `json:"function"`
+	Function toolCallFunction `json:"function"`
 }
 
-type ToolCallFunction struct {
+type toolCallFunction struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 }
 
-type StreamChunk struct {
+type streamChunk struct {
 	Type      string                 `json:"type"`
 	Text      string                 `json:"text,omitempty"`
 	Reasoning string                 `json:"reasoning,omitempty"`
@@ -60,7 +60,7 @@ type StreamChunk struct {
 	Input     json.RawMessage        `json:"input,omitempty"`
 	Usage     map[string]interface{} `json:"usage,omitempty"`
 	Message   string                 `json:"message,omitempty"`
-	Error     ErrorField             `json:"error,omitempty"`
+	Error     errorField             `json:"error,omitempty"`
 }
 
 type MonthlyUsage struct {
@@ -72,19 +72,19 @@ type UsageAllowanceInfo struct {
 	MonthUsageAllowance float64 `json:"monthUsageAllowance"`
 }
 
-type ErrorPayload struct {
+type errorPayload struct {
 	Iface   string `json:"iface"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Status  int    `json:"status"`
 }
 
-type ErrorField struct {
-	Payload *ErrorPayload
+type errorField struct {
+	Payload *errorPayload
 	Message string
 }
 
-func (e *ErrorField) UnmarshalJSON(data []byte) error {
+func (e *errorField) UnmarshalJSON(data []byte) error {
 	e.Payload = nil
 	e.Message = ""
 
@@ -99,7 +99,7 @@ func (e *ErrorField) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	var payload ErrorPayload
+	var payload errorPayload
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
@@ -107,16 +107,16 @@ func (e *ErrorField) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (e ErrorField) Present() bool {
+func (e errorField) Present() bool {
 	return e.Payload != nil || strings.TrimSpace(e.Message) != ""
 }
 
-func (e ErrorField) AsPayload() *ErrorPayload {
+func (e errorField) AsPayload() *errorPayload {
 	if e.Payload != nil {
 		return e.Payload
 	}
 	if strings.TrimSpace(e.Message) == "" {
 		return nil
 	}
-	return &ErrorPayload{Message: strings.TrimSpace(e.Message)}
+	return &errorPayload{Message: strings.TrimSpace(e.Message)}
 }
