@@ -298,8 +298,7 @@ var (
 				local row = cjson.decode(raw)
 				local row_channel = string.lower(tostring(row.channel or ""))
 				row_channel = string.gsub(string.gsub(row_channel, "_", "-"), " ", "-")
-				local row_provider = string.lower(tostring(row.provider or ""))
-				if row_channel == channel and row.model_id and (provider_scope == "" or row_provider == provider_scope) then existing[tostring(row.model_id)] = {id=id,row=row} end
+				if row_channel == channel and row.model_id then existing[tostring(row.model_id)] = {id=id,row=row} end
 			end
 		end
 		for _, row in ipairs(incoming) do
@@ -342,7 +341,8 @@ var (
 		end
 		if prune then
 			for model_id, current in pairs(existing) do
-				if not wanted[model_id] then
+				local current_provider = string.lower(tostring(current.row.provider or ""))
+				if not wanted[model_id] and (provider_scope == "" or current_provider == provider_scope) then
 					local origin = string.lower(tostring(current.row.origin or ""))
 					if (provider_scope ~= "" and prune) or origin == "discovery" then
 						redis.call("DEL", row_prefix .. current.id)
