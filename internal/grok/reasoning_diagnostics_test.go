@@ -4,6 +4,12 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/alicebob/miniredis/v2"
+
+	"orchids-api/internal/audit"
+	"orchids-api/internal/loadbalancer"
+	"orchids-api/internal/store"
 )
 
 func TestBuildChatSummaryBoundary(t *testing.T) {
@@ -92,6 +98,64 @@ func TestChatAlwaysRequestsEncryptedReasoning(t *testing.T) {
 				t.Fatalf("build=%v effort=%q include=%v", build, effort, payload["include"])
 			}
 		}
+	}
+}
+
+func TestAuditChatOutcomePersistsAccountTokens(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "grok_usage_test:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	acc := &store.Account{AccountType: "grok", GrokProvider: ProviderBuild, Enabled: true}
+	if err := s.CreateAccount(context.Background(), acc); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{lb: loadbalancer.NewWithCacheTTL(s, time.Minute), auditLogger: audit.NewNopLogger()}
+	h.auditChatOutcome(context.Background(), acc, &ChatCompletionsRequest{Model: "grok-4.7"}, chatOutcome{
+		Finish:      "stop",
+		Usage:       map[string]interface{}{"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
+		UsageSource: audit.UsageSourceUpstream,
+	})
+	got, err := s.GetAccount(context.Background(), acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TokensToday != 150 || got.UsageTotal != 150 {
+		t.Fatalf("tokens_today=%v usage_total=%v want 150/150", got.TokensToday, got.UsageTotal)
+	}
+	if got.RequestCount != 0 {
+		t.Fatalf("request_count=%d: token persistence must not double-count the quota touch", got.RequestCount)
+	}
+}
+
+func TestAuditChatOutcomeAttributesLinkedConsoleTokensToVisibleParent(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "grok_linked_usage_test:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	parent := &store.Account{AccountType: "grok", GrokProvider: ProviderWeb, CredentialType: "sso", Enabled: true}
+	if err := s.CreateAccount(context.Background(), parent); err != nil {
+		t.Fatal(err)
+	}
+	child := &store.Account{AccountType: "grok", GrokProvider: ProviderConsole, CredentialType: "sso", GrokSSOParentID: parent.ID, Enabled: true}
+	if err := s.CreateAccount(context.Background(), child); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{lb: loadbalancer.NewWithCacheTTL(s, time.Minute), auditLogger: audit.NewNopLogger()}
+	h.auditChatOutcome(context.Background(), child, &ChatCompletionsRequest{Model: "grok-4.7"}, chatOutcome{
+		Finish: "stop", Usage: map[string]interface{}{"total_tokens": 75}, UsageSource: audit.UsageSourceUpstream,
+	})
+	visible, _ := s.GetAccount(context.Background(), parent.ID)
+	runtime, _ := s.GetAccount(context.Background(), child.ID)
+	if visible.UsageTotal != 75 || visible.TokensToday != 75 {
+		t.Fatalf("visible parent totals=%v/%v want 75/75", visible.UsageTotal, visible.TokensToday)
+	}
+	if runtime.UsageTotal != 0 || runtime.TokensToday != 0 {
+		t.Fatalf("hidden runtime child totals=%v/%v want 0/0", runtime.UsageTotal, runtime.TokensToday)
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"orchids-api/internal/store"
 )
 
 type chatSourceOperationKey struct{}
@@ -47,6 +49,7 @@ type ChatCompletionsRequest struct {
 	ReasoningReplay   bool                     `json:"-"`
 	startedAt         time.Time
 	sourceOperation   string
+	account           *store.Account
 }
 
 type ChatMessage struct {

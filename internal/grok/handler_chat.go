@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"orchids-api/internal/audit"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/logutil"
 	"orchids-api/internal/middleware"
@@ -455,6 +456,7 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	defer sess.Close()
+	req.account = sess.acc
 
 	buildPayload := func(token string) (map[string]interface{}, error) {
 		fileAttachments := []string(nil)
@@ -1100,6 +1102,11 @@ func (h *Handler) streamChat(w http.ResponseWriter, req *ChatCompletionsRequest,
 	lastMessage := ""
 	sentAny := false
 	var finalUsage map[string]interface{}
+	defer func() {
+		if len(finalUsage) > 0 {
+			h.auditChatOutcome(context.Background(), req.account, req, chatOutcome{Finish: "stop", Usage: finalUsage, UsageSource: audit.UsageSourceEstimated})
+		}
+	}()
 	enableMediaExtraction := hasAttachments || spec.IsVideo
 	// Image URL stream handling: prefer full image variants over -part-0 previews.
 	seenFull := map[string]bool(nil)
@@ -1646,6 +1653,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 	if strings.TrimSpace(reasoningContent) != "" {
 		message["reasoning_content"] = reasoningContent
 	}
+	usage := addReasoningUsage(buildChatUsagePayload(req, finalContent, toolCalls), reasoningContent)
 	resp := map[string]interface{}{
 		"id":                 id,
 		"object":             "chat.completion",
@@ -1660,7 +1668,7 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 				"finish_reason": "stop",
 			},
 		},
-		"usage": addReasoningUsage(buildChatUsagePayload(req, finalContent, toolCalls), reasoningContent),
+		"usage": usage,
 	}
 	if len(toolCalls) > 0 {
 		choice := resp["choices"].([]map[string]interface{})[0]
@@ -1672,4 +1680,5 @@ func (h *Handler) collectChat(w http.ResponseWriter, req *ChatCompletionsRequest
 		choice["finish_reason"] = "tool_calls"
 	}
 	writeJSON(w, resp)
+	h.auditChatOutcome(context.Background(), req.account, req, chatOutcome{Finish: "stop", Usage: usage, UsageSource: audit.UsageSourceEstimated})
 }

@@ -228,6 +228,19 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 		event.PricingVersion = pricing.Version
 	}
 	logger.Log(ctx, event)
+	// Grok owns its native request handlers, so it bypasses the generic handler's
+	// account-usage accumulator. Persist the same usage attached to the audit
+	// event here; otherwise request_count advances through syncGrokQuota while
+	// tokens_today and usage_total remain permanently zero.
+	if acc != nil && acc.ID != 0 && event.TotalTokens > 0 && h != nil && h.lb != nil && h.lb.Store != nil {
+		accountID := acc.ID
+		if IsLinkedConsoleSSOCompanion(acc) {
+			accountID = acc.GrokSSOParentID
+		}
+		if err := h.lb.Store.IncrementAccountStats(ctx, accountID, float64(event.TotalTokens), 0); err != nil {
+			slog.Warn("grok token usage persistence failed", "account_id", accountID, "runtime_account_id", acc.ID, "tokens", event.TotalTokens, "error", err)
+		}
+	}
 }
 
 // SetConnTracker lets the Grok selectors share the deployment-wide tracker
