@@ -18,6 +18,7 @@ import (
 	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
+	"orchids-api/internal/workbuddy"
 )
 
 func preserveLatestAccountStatus(ctx context.Context, s *store.Store, acc *store.Account) {
@@ -410,6 +411,47 @@ func refreshQoderQuota(ctx context.Context, cfg *config.Config, s *store.Store, 
 	}
 }
 
+func workBuddyCatalogRefreshDue(acc *store.Account, now time.Time) bool {
+	if acc == nil {
+		return false
+	}
+	if len(acc.WorkBuddyModelIDs) == 0 || acc.WorkBuddyModelsSyncedAt.IsZero() {
+		return true
+	}
+	return now.Sub(acc.WorkBuddyModelsSyncedAt) >= providerHealthRefreshInterval
+}
+
+// refreshWorkBuddyCatalog keeps the account-scoped CLI whitelist current without
+// replacing a usable last-known-good snapshot when the control plane is down.
+func refreshWorkBuddyCatalog(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) {
+	if acc == nil || s == nil || !workBuddyCatalogRefreshDue(acc, time.Now()) {
+		return
+	}
+	if !refreshqueue.WithLease(acc.ID, func() {
+		client := workbuddy.NewFromAccount(acc, cfg)
+		defer client.Close()
+		client.SetAccountStore(s)
+		catalogCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		models, err := client.FetchModels(catalogCtx)
+		cancel()
+		if err != nil {
+			slog.Warn("Auto refresh workbuddy catalog failed; keeping the last snapshot", "account_id", acc.ID, "error", err)
+			return
+		}
+		ids := workbuddy.CatalogSnapshot(models)
+		if len(ids) == 0 {
+			return
+		}
+		acc.WorkBuddyModelIDs = ids
+		acc.WorkBuddyModelsSyncedAt = time.Now()
+		if err := s.UpdateAccount(ctx, acc); err != nil {
+			slog.Warn("Auto refresh workbuddy catalog: update account failed", "account_id", acc.ID, "error", err)
+		}
+	}) {
+		slog.Debug("Auto refresh workbuddy catalog: account already refreshing", "account_id", acc.ID)
+	}
+}
+
 // clineCatalogRefreshDue reports whether the account's catalog snapshot should
 // be re-read. The snapshot is an observation, and the free feed changes without
 // notice, so it is refreshed on the same cadence as the other providers.
@@ -417,10 +459,10 @@ func clineCatalogRefreshDue(acc *store.Account, now time.Time) bool {
 	if acc == nil {
 		return false
 	}
-	if len(acc.ClineModelIDs) == 0 {
+	if len(acc.ClineModelIDs) == 0 || acc.ClineModelsSyncedAt.IsZero() {
 		return true
 	}
-	return now.Sub(acc.UpdatedAt) >= providerHealthRefreshInterval
+	return now.Sub(acc.ClineModelsSyncedAt) >= providerHealthRefreshInterval
 }
 
 // refreshClineCatalog re-reads the account's model feed.
@@ -448,6 +490,7 @@ func refreshClineCatalog(ctx context.Context, cfg *config.Config, s *store.Store
 			return
 		}
 		acc.ClineModelIDs = ids
+		acc.ClineModelsSyncedAt = time.Now()
 		if err := s.UpdateAccount(ctx, acc); err != nil {
 			slog.Warn("Auto refresh cline catalog: update account failed", "account_id", acc.ID, "error", err)
 		}
@@ -667,6 +710,10 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 			if strings.EqualFold(acc.AccountType, "qoder") {
 				refreshQoderCatalog(refreshCtx, cfg, s, acc)
 				refreshQoderQuota(refreshCtx, cfg, s, acc)
+				continue
+			}
+			if strings.EqualFold(acc.AccountType, "workbuddy") {
+				refreshWorkBuddyCatalog(refreshCtx, cfg, s, acc)
 				continue
 			}
 			if strings.EqualFold(acc.AccountType, "cline") {

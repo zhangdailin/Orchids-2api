@@ -2438,6 +2438,11 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		if strings.EqualFold(existing.AccountType, "warp") && (!acc.Enabled || !isWarpAccount) {
+			if err := warp.RemoveAccountModelChoices(r.Context(), a.store, existing.ID); err != nil {
+				slog.Warn("Failed to remove inactive Warp model choices", "account_id", existing.ID, "error", err)
+			}
+		}
 		if err := a.syncGrokSSOProviderView(r.Context(), &acc); err != nil {
 			slog.Error("Failed to synchronize linked Grok Console SSO account", "account_id", acc.ID, "error", err)
 			if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
@@ -2462,6 +2467,11 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		if err := a.store.DeleteAccount(r.Context(), id); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if strings.EqualFold(account.AccountType, "warp") {
+			if err := warp.RemoveAccountModelChoices(r.Context(), a.store, id); err != nil {
+				slog.Warn("Failed to remove deleted Warp model choices", "account_id", id, "error", err)
+			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 

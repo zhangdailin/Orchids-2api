@@ -278,6 +278,81 @@ var (
 		redis.call("SET", KEYS[2], 0)
 		return 1
 	`)
+	listModelsScript = redis.NewScript(`
+		local ids = redis.call("SMEMBERS", KEYS[1])
+		local rows = {}
+		for _, id in ipairs(ids) do
+			local value = redis.call("GET", ARGV[1] .. id)
+			if value then table.insert(rows, value) end
+		end
+		return rows
+	`)
+	reconcileDiscoveredModelsScript = redis.NewScript(`
+		local row_prefix, channel = ARGV[1], ARGV[2]
+		local prune, incoming = ARGV[3] == "1", cjson.decode(ARGV[4])
+		local wanted, existing = {}, {}
+		local result = {added = {}, updated = {}, deleted = {}, protected = {}}
+		for _, id in ipairs(redis.call("SMEMBERS", KEYS[1])) do
+			local raw = redis.call("GET", row_prefix .. id)
+			if raw then
+				local row = cjson.decode(raw)
+				local row_channel = string.lower(tostring(row.channel or ""))
+				row_channel = string.gsub(string.gsub(row_channel, "_", "-"), " ", "-")
+				if row_channel == channel and row.model_id then existing[tostring(row.model_id)] = {id=id,row=row} end
+			end
+		end
+		for _, row in ipairs(incoming) do
+			local current_incoming = row
+			local model_id = tostring(row.model_id)
+			wanted[model_id] = true
+			local current = existing[model_id]
+			if current then
+				local origin = string.lower(tostring(current.row.origin or ""))
+				if origin == "discovery" then
+					row.id, row.created_at = current.id, current.row.created_at or row.created_at
+				else
+					-- Manual/config/legacy rows are never replaced or pruned. A matching
+					-- observation may only promote verification and fill metadata that
+					-- the operator never supplied.
+					row = current.row
+					row.verified = true
+					if (not row.name or tostring(row.name) == "" or tostring(row.name) == model_id) and current_incoming.name then row.name = current_incoming.name end
+					if (not row.provider or tostring(row.provider) == "") and current_incoming.provider then row.provider = current_incoming.provider end
+					if (not row.upstream_model or tostring(row.upstream_model) == "") and current_incoming.upstream_model then row.upstream_model = current_incoming.upstream_model end
+					if current_incoming.billing_tier ~= nil then row.billing_tier = current_incoming.billing_tier end
+					if current_incoming.billing_source ~= nil then row.billing_source = current_incoming.billing_source end
+					table.insert(result.protected, model_id)
+				end
+				redis.call("SET", row_prefix .. current.id, cjson.encode(row))
+				redis.call("HSET", KEYS[4], channel .. "|" .. model_id, current.id)
+				table.insert(result.updated, model_id)
+			else
+				local id = tostring(redis.call("INCR", KEYS[2]))
+				row.id = id
+				redis.call("SET", row_prefix .. id, cjson.encode(row))
+				redis.call("SADD", KEYS[1], id)
+				redis.call("HSETNX", KEYS[3], model_id, id)
+				redis.call("HSET", KEYS[4], channel .. "|" .. model_id, id)
+				table.insert(result.added, model_id)
+			end
+		end
+		if prune then
+			for model_id, current in pairs(existing) do
+				if not wanted[model_id] then
+					local origin = string.lower(tostring(current.row.origin or ""))
+					if origin == "discovery" then
+						redis.call("DEL", row_prefix .. current.id)
+						redis.call("SREM", KEYS[1], current.id)
+						if redis.call("HGET", KEYS[3], model_id) == current.id then redis.call("HDEL", KEYS[3], model_id) end
+						local index_key = channel .. "|" .. model_id
+						if redis.call("HGET", KEYS[4], index_key) == current.id then redis.call("HDEL", KEYS[4], index_key) end
+						table.insert(result.deleted, model_id)
+					elseif origin == "" or origin == "manual" then table.insert(result.protected, model_id) end
+				end
+			end
+		end
+		return cjson.encode(result)
+	`)
 )
 
 type apiKeyRecord struct {
@@ -715,6 +790,9 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		}
 		if len(acc.ClineModelIDs) > 0 {
 			updated.ClineModelIDs = append([]string(nil), acc.ClineModelIDs...)
+		}
+		if !acc.ClineModelsSyncedAt.IsZero() && (existing.ClineModelsSyncedAt.IsZero() || !acc.ClineModelsSyncedAt.Before(existing.ClineModelsSyncedAt)) {
+			updated.ClineModelsSyncedAt = acc.ClineModelsSyncedAt
 		}
 		*existing = updated
 		return nil
@@ -2211,52 +2289,97 @@ func (s *redisStore) ListModels(ctx context.Context) ([]*Model, error) {
 	if s == nil || s.client == nil {
 		return nil, fmt.Errorf("redis store not configured")
 	}
-	ids, err := s.client.SMembers(ctx, s.modelsIDsKey()).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	if len(ids) == 0 {
-		return []*Model{}, nil
-	}
-
-	// Sort numeric IDs if possible, else string sort
-	sort.Slice(ids, func(i, j int) bool {
-		id1, err1 := strconv.Atoi(ids[i])
-		id2, err2 := strconv.Atoi(ids[j])
-		if err1 == nil && err2 == nil {
-			return id1 < id2
-		}
-		return ids[i] < ids[j]
-	})
-
-	keys := make([]string, 0, len(ids))
-	for _, id := range ids {
-		keys = append(keys, s.modelsKey(id))
-	}
-
-	values, err := s.client.MGet(ctx, keys...).Result()
+	values, err := listModelsScript.Run(ctx, s.client, []string{s.modelsIDsKey()}, s.prefix+"models:id:").StringSlice()
 	if err != nil {
 		return nil, err
 	}
 
 	models := make([]*Model, 0, len(values))
 	for _, value := range values {
-		if value == nil {
-			continue
-		}
-		strVal, ok := value.(string)
-		if !ok || strVal == "" {
+		if value == "" {
 			continue
 		}
 		var m Model
-		if err := json.Unmarshal([]byte(strVal), &m); err != nil {
+		if err := json.Unmarshal([]byte(value), &m); err != nil {
 			continue
 		}
 		models = append(models, &m)
 	}
-
+	sort.Slice(models, func(i, j int) bool {
+		id1, err1 := strconv.Atoi(models[i].ID)
+		id2, err2 := strconv.Atoi(models[j].ID)
+		if err1 == nil && err2 == nil {
+			return id1 < id2
+		}
+		return models[i].ID < models[j].ID
+	})
 	return models, nil
+}
+
+func (s *redisStore) ReconcileDiscoveredModels(ctx context.Context, channel string, models []*Model, options ModelReconcileOptions) (*ModelReconcileResult, error) {
+	if s == nil || s.client == nil {
+		return nil, fmt.Errorf("redis store not configured")
+	}
+	channelKey := normalizeModelChannelKey(channel)
+	if channelKey == "" {
+		return nil, fmt.Errorf("model channel is required")
+	}
+	now := time.Now().UTC()
+	rows := make([]*Model, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for _, input := range models {
+		if input == nil {
+			return nil, fmt.Errorf("discovered model is nil")
+		}
+		modelID := strings.TrimSpace(input.ModelID)
+		if modelID == "" {
+			return nil, fmt.Errorf("discovered model id is required")
+		}
+		if _, exists := seen[modelID]; exists {
+			return nil, fmt.Errorf("duplicate discovered model id %q", modelID)
+		}
+		seen[modelID] = struct{}{}
+		row := *input
+		row.ID = ""
+		row.Channel = strings.TrimSpace(channel)
+		row.ModelID = modelID
+		row.Origin = "discovery"
+		if row.CreatedAt.IsZero() {
+			row.CreatedAt = now
+		}
+		row.NormalizeRoute()
+		rows = append(rows, &row)
+	}
+	payload, err := json.Marshal(rows)
+	if err != nil {
+		return nil, err
+	}
+	prune := "0"
+	if options.Prune {
+		prune = "1"
+	}
+	raw, err := reconcileDiscoveredModelsScript.Run(ctx, s.client, []string{
+		s.modelsIDsKey(), s.modelsNextIDKey(), s.modelsModelIDMapKey(), s.modelsChannelModelIDMapKey(),
+	}, s.prefix+"models:id:", channelKey, prune, payload).Text()
+	if err != nil {
+		return nil, err
+	}
+	var applied struct {
+		Added     []string `json:"added"`
+		Updated   []string `json:"updated"`
+		Deleted   []string `json:"deleted"`
+		Protected []string `json:"protected"`
+	}
+	if err := json.Unmarshal([]byte(raw), &applied); err != nil {
+		return nil, fmt.Errorf("decode model reconciliation result: %w", err)
+	}
+	for _, ids := range [][]string{applied.Added, applied.Updated, applied.Deleted, applied.Protected} {
+		sort.Strings(ids)
+	}
+	return &ModelReconcileResult{
+		Added: len(applied.Added), Updated: len(applied.Updated), Deleted: len(applied.Deleted), Protected: len(applied.Protected),
+		AddedModelIDs: applied.Added, UpdatedModelIDs: applied.Updated, DeletedModelIDs: applied.Deleted, ProtectedIDs: applied.Protected,
+	}, nil
 }
 
 // Helpers

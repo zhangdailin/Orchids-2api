@@ -550,7 +550,7 @@ func (h *Handler) resolveWarpRequestFeatures(ctx context.Context, acc *store.Acc
 	}
 	return warpRequestFeatures{
 		Config:        warp.EffectiveAccountFeatureConfig(acc, choices, requestedModel),
-		ContextWindow: warp.ModelContextWindowLimitFor(choices, requestedModel),
+		ContextWindow: warp.ModelContextWindowLimitForAccount(choices, acc.ID, requestedModel),
 	}
 }
 

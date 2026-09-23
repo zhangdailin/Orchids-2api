@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -184,6 +185,15 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		apperrors.New("api_error", "Failed to fetch models: "+err.Error(), http.StatusInternalServerError).WriteResponse(w)
 		return
 	}
+	sort.SliceStable(allModels, func(i, j int) bool {
+		if allModels[i] == nil || allModels[j] == nil {
+			return allModels[j] == nil
+		}
+		if allModels[i].SortOrder != allModels[j].SortOrder {
+			return allModels[i].SortOrder < allModels[j].SortOrder
+		}
+		return strings.ToLower(allModels[i].ModelID) < strings.ToLower(allModels[j].ModelID)
+	})
 	var warpVisible map[string]struct{}
 	if filterChannel == "" || strings.EqualFold(filterChannel, "warp") {
 		warpVisible = h.visibleWarpModelSet(ctx)

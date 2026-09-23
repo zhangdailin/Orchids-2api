@@ -241,7 +241,8 @@ type Account struct {
 	// ClineModelIDs is the last successful account-scoped catalog snapshot. An
 	// empty snapshot means "not synced yet", not that the account supports every
 	// model.
-	ClineModelIDs []string `json:"cline_model_ids,omitempty"`
+	ClineModelIDs       []string  `json:"cline_model_ids,omitempty"`
+	ClineModelsSyncedAt time.Time `json:"cline_models_synced_at,omitempty"`
 }
 
 // QoderQuotaSnapshot is one Qoder credit/plan observation.
@@ -650,6 +651,7 @@ type modelStore interface {
 	ListModels(ctx context.Context) ([]*Model, error)
 	GetModelByModelID(ctx context.Context, modelID string) (*Model, error)
 	GetModelByChannelAndModelID(ctx context.Context, channel, modelID string) (*Model, error)
+	ReconcileDiscoveredModels(ctx context.Context, channel string, models []*Model, options ModelReconcileOptions) (*ModelReconcileResult, error)
 }
 
 type responseStore interface {
@@ -1351,6 +1353,13 @@ func (s *Store) GetModelByChannelAndModelID(ctx context.Context, channel, modelI
 		return s.models.GetModelByChannelAndModelID(ctx, channel, modelID)
 	}
 	return nil, fmt.Errorf("models store not configured")
+}
+
+func (s *Store) ReconcileDiscoveredModels(ctx context.Context, channel string, models []*Model, options ModelReconcileOptions) (*ModelReconcileResult, error) {
+	if s == nil || s.models == nil {
+		return nil, fmt.Errorf("models store not configured")
+	}
+	return s.models.ReconcileDiscoveredModels(ctx, channel, models, options)
 }
 
 func (s *Store) ListModels(ctx context.Context) ([]*Model, error) {

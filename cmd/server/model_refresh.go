@@ -51,20 +51,56 @@ type modelRefreshRequest struct {
 }
 
 type modelRefreshResult struct {
-	Channel         string   `json:"channel"`
-	Source          string   `json:"source"`
-	Concurrency     int      `json:"concurrency"`
-	Discovered      int      `json:"discovered"`
-	Verified        int      `json:"verified"`
-	Added           int      `json:"added"`
-	Updated         int      `json:"updated"`
-	Deleted         int      `json:"deleted"`
-	Offline         int      `json:"offline"`
-	Skipped         bool     `json:"skipped,omitempty"`
-	DefaultModelID  string   `json:"default_model_id,omitempty"`
-	AddedModelIDs   []string `json:"added_model_ids,omitempty"`
-	DeletedModelIDs []string `json:"deleted_model_ids,omitempty"`
-	OfflineModelIDs []string `json:"offline_model_ids,omitempty"`
+	Channel           string   `json:"channel"`
+	Source            string   `json:"source"`
+	Outcome           string   `json:"outcome,omitempty"`
+	Concurrency       int      `json:"concurrency"`
+	AccountsTotal     int      `json:"accounts_total,omitempty"`
+	AccountsSuccess   int      `json:"accounts_succeeded,omitempty"`
+	AccountsFailed    int      `json:"accounts_failed,omitempty"`
+	Partial           bool     `json:"partial,omitempty"`
+	KeptLastKnownGood bool     `json:"kept_last_known_good,omitempty"`
+	Discovered        int      `json:"discovered"`
+	Verified          int      `json:"verified"`
+	Added             int      `json:"added"`
+	Updated           int      `json:"updated"`
+	Deleted           int      `json:"deleted"`
+	Offline           int      `json:"offline"`
+	Skipped           bool     `json:"skipped,omitempty"`
+	DefaultModelID    string   `json:"default_model_id,omitempty"`
+	AddedModelIDs     []string `json:"added_model_ids,omitempty"`
+	DeletedModelIDs   []string `json:"deleted_model_ids,omitempty"`
+	OfflineModelIDs   []string `json:"offline_model_ids,omitempty"`
+}
+
+// accountModelDiscoveryAttempt is the account-level evidence retained until
+// aggregation completes. It records successful observations and failures without
+// forcing the public refresh API to expose account identities.
+type accountModelDiscoveryAttempt struct {
+	AccountID         int64
+	Candidates        []discoveredModel
+	Err               error
+	UsedLastKnownGood bool
+}
+
+// accountModelDiscoveryReport carries the union plus enough attempt metadata to
+// decide whether it is authoritative. A partial union may add/update observed
+// rows, but must never prune rows absent from a failed account's view.
+type accountModelDiscoveryReport struct {
+	Candidates []discoveredModel
+	Source     string
+	Attempts   []accountModelDiscoveryAttempt
+}
+
+func (r accountModelDiscoveryReport) counts() (succeeded, failed int) {
+	for _, attempt := range r.Attempts {
+		if attempt.Err != nil || len(attempt.Candidates) == 0 {
+			failed++
+			continue
+		}
+		succeeded++
+	}
+	return succeeded, failed
 }
 
 type discoveredModel struct {
@@ -174,6 +210,23 @@ func (c *modelRefreshCoordinator) tryAcquire(channel string) (func(), bool) {
 	}, true
 }
 
+func acquireDistributedModelRefresh(ctx context.Context, s *store.Store, channel string) (func(), bool) {
+	if s == nil || s.RedisClient() == nil {
+		return func() {}, true
+	}
+	key := s.RedisPrefix() + "lease:model_refresh:" + strings.ToLower(strings.TrimSpace(channel))
+	token := fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UTC().Unix())
+	acquired, err := s.RedisClient().SetNX(ctx, key, token, 30*time.Minute).Result()
+	if err != nil || !acquired {
+		return nil, false
+	}
+	return func() {
+		// Delete only our own lease; an expired lease may already belong to a newer run.
+		const releaseScript = `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end return 0`
+		_, _ = s.RedisClient().Eval(context.Background(), releaseScript, []string{key}, token).Result()
+	}, true
+}
+
 func makeCoordinatedModelRefreshHandler(configSnapshot func() *config.Config, s *store.Store, coordinator *modelRefreshCoordinator) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -203,6 +256,12 @@ func makeCoordinatedModelRefreshHandler(configSnapshot func() *config.Config, s 
 			return
 		}
 		defer release()
+		distributedRelease, distributedAcquired := acquireDistributedModelRefresh(r.Context(), s, channel)
+		if !distributedAcquired {
+			http.Error(w, "model refresh already running for this channel", http.StatusConflict)
+			return
+		}
+		defer distributedRelease()
 		cfg := configSnapshot()
 		result, err := runModelRefresh(r.Context(), cfg, s, channel, concurrency)
 		if err != nil {
@@ -244,17 +303,30 @@ func syncModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *
 	}
 
 	concurrency = normalizeModelRefreshConcurrency(concurrency)
-	candidates, source, err := discoverModelsForChannelConcurrent(ctx, cfg, s, channel, concurrency)
+	report, err := discoverModelsForChannelReport(ctx, cfg, s, channel, concurrency)
 	if err != nil {
 		return nil, err
 	}
-	if len(candidates) == 0 {
+	if len(report.Candidates) == 0 {
 		return nil, fmt.Errorf("%s has no discoverable models", channel)
 	}
 
-	result, err := applyModelRefresh(ctx, s, channel, source, candidates)
+	succeeded, failed := report.counts()
+	allowPrune := failed == 0
+	result, err := applyModelRefreshWithPrune(ctx, s, channel, report.Source, report.Candidates, allowPrune)
 	if result != nil {
 		result.Concurrency = concurrency
+		result.AccountsTotal = len(report.Attempts)
+		result.AccountsSuccess = succeeded
+		result.AccountsFailed = failed
+		result.Partial = succeeded > 0 && failed > 0
+		result.KeptLastKnownGood = result.Partial
+		switch {
+		case result.Partial:
+			result.Outcome = "partial"
+		case succeeded > 0:
+			result.Outcome = "success"
+		}
 	}
 	return result, err
 }
@@ -338,22 +410,30 @@ func runIndexedModelRefreshWorkers(total, concurrency int, work func(index int))
 }
 
 func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) ([]discoveredModel, string, error) {
+	report, err := discoverModelsForChannelReport(ctx, cfg, s, channel, concurrency)
+	return report.Candidates, report.Source, err
+}
+
+func discoverModelsForChannelReport(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (accountModelDiscoveryReport, error) {
+	switch strings.ToLower(channel) {
+	case "workbuddy", "qoder", "cline":
+		return discoverAccountCatalogModels(ctx, cfg, s, channel, concurrency)
+	}
+
+	var candidates []discoveredModel
+	var source string
+	var err error
 	switch strings.ToLower(channel) {
 	case "warp":
-		return discoverWarpModelsConcurrent(ctx, cfg, s, concurrency)
+		candidates, source, err = discoverWarpModelsConcurrent(ctx, cfg, s, concurrency)
 	case "puter":
-		return discoverPuterModelsConcurrent(ctx, cfg, s, concurrency)
-	case "workbuddy":
-		return discoverWorkBuddyModels(ctx, cfg, s)
-	case "qoder":
-		return discoverQoderModels(ctx, cfg, s)
-	case "cline":
-		return discoverClineModels(ctx, cfg, s)
+		candidates, source, err = discoverPuterModelsConcurrent(ctx, cfg, s, concurrency)
 	case "grok":
-		return discoverGrokModelsConcurrent(ctx, cfg, s, concurrency)
+		candidates, source, err = discoverGrokModelsConcurrent(ctx, cfg, s, concurrency)
 	default:
-		return nil, "", fmt.Errorf("unsupported channel: %s", channel)
+		err = fmt.Errorf("unsupported channel: %s", channel)
 	}
+	return accountModelDiscoveryReport{Candidates: candidates, Source: source}, err
 }
 
 // discoverWorkBuddyModels reads the account-scoped WorkBuddy model catalog.
@@ -361,36 +441,8 @@ func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config,
 // read is itself proof that the credential works; no completion probe is sent
 // (the upstream bills per token, unlike Puter's free test_mode).
 func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	source := "workbuddy_cli_models"
-	accounts, err := enabledAccountsByType(ctx, s, "workbuddy")
-	if err != nil {
-		return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", err)
-	}
-	if len(accounts) == 0 {
-		return nil, "", &noActiveAccountsError{Channel: "WorkBuddy"}
-	}
-
-	var lastErr error
-	for _, acc := range accounts {
-		client := workbuddy.NewFromAccount(acc, refreshModelRequestConfig(cfg, "workbuddy"))
-		models, fetchErr := client.FetchModels(ctx)
-		client.Close()
-		if fetchErr != nil {
-			lastErr = fetchErr
-			continue
-		}
-		candidates := workBuddyCatalogToDiscovered(models)
-		if len(candidates) == 0 {
-			lastErr = fmt.Errorf("workbuddy account #%d returned an empty cli catalog", acc.ID)
-			continue
-		}
-		persistWorkBuddyCatalogSnapshot(ctx, s, acc, models)
-		return candidates, source, nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("workbuddy model discovery failed")
-	}
-	return nil, "", fmt.Errorf("workbuddy model discovery failed: %w", lastErr)
+	report, err := discoverAccountCatalogModels(ctx, cfg, s, "WorkBuddy", defaultModelRefreshConcurrency)
+	return report.Candidates, report.Source, err
 }
 
 // discoverQoderModels publishes the Qoder channel catalog read from the signed
@@ -401,38 +453,8 @@ func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.S
 // observation of what the account may run, so the refresh now reports the read
 // failure instead of restating a compiled-in default as discovered state.
 func discoverQoderModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	source := "qoder_upstream_models"
-	accounts, err := enabledAccountsByType(ctx, s, "qoder")
-	if err != nil {
-		return nil, "", fmt.Errorf("qoder model discovery failed: %w", err)
-	}
-	if len(accounts) == 0 {
-		return nil, "", &noActiveAccountsError{Channel: "Qoder"}
-	}
-
-	var lastErr error
-	for _, acc := range accounts {
-		// The catalog read is the only thing that may publish Qoder rows, and it
-		// never sends a chat request.
-		client := qoder.NewFromAccount(acc, refreshModelRequestConfig(cfg, "qoder"))
-		catalog, fetchErr := client.FetchUpstreamModels(ctx)
-		client.Close()
-		if fetchErr != nil {
-			lastErr = fetchErr
-			continue
-		}
-		candidates := qoderCatalogToDiscovered(catalog)
-		if len(candidates) == 0 {
-			lastErr = fmt.Errorf("qoder account #%d returned an empty upstream catalog", acc.ID)
-			continue
-		}
-		persistQoderCatalogSnapshot(ctx, s, acc, catalog)
-		return candidates, source, nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("qoder model discovery failed")
-	}
-	return nil, "", fmt.Errorf("qoder model discovery failed: %w", lastErr)
+	report, err := discoverAccountCatalogModels(ctx, cfg, s, "Qoder", defaultModelRefreshConcurrency)
+	return report.Candidates, report.Source, err
 }
 
 // qoderCatalogToDiscovered maps the account catalog onto the channel's public
@@ -496,39 +518,175 @@ func persistQoderCatalogSnapshot(ctx context.Context, s *store.Store, acc *store
 // the account may run, so the refresh reports the read failure instead of
 // restating a default as discovered state.
 func discoverClineModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	source := "cline_recommended_models"
-	accounts, err := enabledAccountsByType(ctx, s, "cline")
+	report, err := discoverAccountCatalogModels(ctx, cfg, s, "Cline", defaultModelRefreshConcurrency)
+	return report.Candidates, report.Source, err
+}
+
+func discoverAccountCatalogModels(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (accountModelDiscoveryReport, error) {
+	channel = normalizeAdminModelChannel(channel)
+	accountType := strings.ToLower(channel)
+	source := map[string]string{
+		"workbuddy": "workbuddy_cli_models",
+		"qoder":     "qoder_upstream_models",
+		"cline":     "cline_recommended_models",
+	}[accountType]
+	if source == "" {
+		return accountModelDiscoveryReport{}, fmt.Errorf("unsupported account catalog channel: %s", channel)
+	}
+	accounts, err := enabledAccountsByType(ctx, s, accountType)
 	if err != nil {
-		return nil, "", fmt.Errorf("cline model discovery failed: %w", err)
+		return accountModelDiscoveryReport{}, fmt.Errorf("%s model discovery failed: %w", accountType, err)
 	}
 	if len(accounts) == 0 {
-		return nil, "", &noActiveAccountsError{Channel: "Cline"}
+		return accountModelDiscoveryReport{}, &noActiveAccountsError{Channel: channel}
 	}
 
-	var lastErr error
-	for _, acc := range accounts {
-		// The catalog read is the only thing that may publish Cline rows, and it
-		// never sends a chat request.
-		client := cline.NewFromAccount(acc, refreshModelRequestConfig(cfg, "cline"))
-		client.SetAccountStore(s)
-		models, fetchErr := client.FetchUpstreamModels(ctx)
-		client.Close()
-		if fetchErr != nil {
-			lastErr = fetchErr
+	report := accountModelDiscoveryReport{Source: source, Attempts: make([]accountModelDiscoveryAttempt, len(accounts))}
+	runIndexedModelRefreshWorkers(len(accounts), concurrency, func(index int) {
+		acc := accounts[index]
+		attempt := accountModelDiscoveryAttempt{AccountID: acc.ID}
+		switch accountType {
+		case "workbuddy":
+			client := workbuddy.NewFromAccount(acc, refreshModelRequestConfig(cfg, accountType))
+			models, fetchErr := client.FetchModels(ctx)
+			client.Close()
+			attempt.Err = fetchErr
+			attempt.Candidates = workBuddyCatalogToDiscovered(models)
+			if fetchErr == nil && len(attempt.Candidates) > 0 {
+				persistWorkBuddyCatalogSnapshot(ctx, s, acc, models)
+			}
+		case "qoder":
+			client := qoder.NewFromAccount(acc, refreshModelRequestConfig(cfg, accountType))
+			catalog, fetchErr := client.FetchUpstreamModels(ctx)
+			client.Close()
+			attempt.Err = fetchErr
+			attempt.Candidates = qoderCatalogToDiscovered(catalog)
+			if fetchErr == nil && len(attempt.Candidates) > 0 {
+				persistQoderCatalogSnapshot(ctx, s, acc, catalog)
+			}
+		case "cline":
+			client := cline.NewFromAccount(acc, refreshModelRequestConfig(cfg, accountType))
+			client.SetAccountStore(s)
+			models, fetchErr := client.FetchUpstreamModels(ctx)
+			client.Close()
+			attempt.Err = fetchErr
+			attempt.Candidates = clineCatalogToDiscovered(models)
+			if fetchErr == nil && len(attempt.Candidates) > 0 {
+				persistClineCatalogSnapshot(ctx, s, acc, models)
+			}
+		}
+		if attempt.Err == nil && len(attempt.Candidates) == 0 {
+			attempt.Err = fmt.Errorf("%s account #%d returned an empty upstream catalog", accountType, acc.ID)
+		}
+		if attempt.Err != nil {
+			attempt.Candidates = accountCatalogSnapshotToDiscovered(accountType, acc)
+			attempt.UsedLastKnownGood = len(attempt.Candidates) > 0
+		}
+		report.Attempts[index] = attempt
+	})
+
+	report.Candidates = unionAccountCatalogAttempts(report.Attempts)
+	succeeded, _ := report.counts()
+	if succeeded == 0 {
+		var causes []error
+		for _, attempt := range report.Attempts {
+			if attempt.Err != nil {
+				causes = append(causes, attempt.Err)
+			}
+		}
+		return accountModelDiscoveryReport{}, fmt.Errorf("%s model discovery failed: %w", accountType, errors.Join(causes...))
+	}
+	return report, nil
+}
+
+type storedAccountCatalogRow struct {
+	ID          string   `json:"id"`
+	Key         string   `json:"key"`
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name"`
+	Provider    string   `json:"provider"`
+	PriceFactor *float64 `json:"price_factor"`
+}
+
+func accountCatalogSnapshotToDiscovered(channel string, acc *store.Account) []discoveredModel {
+	if acc == nil {
+		return nil
+	}
+	var rows []string
+	switch channel {
+	case "workbuddy":
+		rows = acc.WorkBuddyModelIDs
+	case "qoder":
+		rows = acc.QoderModelIDs
+	case "cline":
+		rows = acc.ClineModelIDs
+	}
+	out := make([]discoveredModel, 0, len(rows))
+	for i, raw := range rows {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
 			continue
 		}
-		candidates := clineCatalogToDiscovered(models)
-		if len(candidates) == 0 {
-			lastErr = fmt.Errorf("cline account #%d returned an empty upstream catalog", acc.ID)
+		row := storedAccountCatalogRow{ID: trimmed}
+		if strings.HasPrefix(trimmed, "{") && json.Unmarshal([]byte(trimmed), &row) != nil {
 			continue
 		}
-		persistClineCatalogSnapshot(ctx, s, acc, models)
-		return candidates, source, nil
+		id := strings.TrimSpace(row.ID)
+		if channel == "qoder" {
+			id = util.FirstNonEmpty(strings.TrimSpace(row.Name), strings.TrimSpace(row.DisplayName), strings.TrimSpace(row.Key), id)
+			id = strings.ToLower(id)
+		}
+		if id == "" {
+			continue
+		}
+		candidate := discoveredModel{
+			ID: id, Name: util.FirstNonEmpty(strings.TrimSpace(row.Name), strings.TrimSpace(row.DisplayName), id),
+			SortOrder: i, Verified: true,
+		}
+		if channel == "cline" {
+			candidate.Provider = strings.TrimSpace(row.Provider)
+			candidate.UpstreamModel = id
+		}
+		if channel == "qoder" && row.PriceFactor != nil {
+			candidate.BillingTier = "metered"
+			candidate.BillingSource = "qoder_price_factor"
+			if *row.PriceFactor == 0 {
+				candidate.BillingTier = "free"
+			}
+		}
+		out = append(out, candidate)
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("cline model discovery failed")
+	return out
+}
+
+func unionAccountCatalogAttempts(attempts []accountModelDiscoveryAttempt) []discoveredModel {
+	out := make([]discoveredModel, 0)
+	seen := make(map[string]int)
+	for _, attempt := range attempts {
+		for _, candidate := range attempt.Candidates {
+			key := strings.ToLower(strings.TrimSpace(candidate.ID))
+			if key == "" {
+				continue
+			}
+			if index, ok := seen[key]; ok {
+				existing := &out[index]
+				if existing.Name == "" {
+					existing.Name = candidate.Name
+				}
+				if existing.Provider == "" {
+					existing.Provider = candidate.Provider
+				}
+				if existing.UpstreamModel == "" {
+					existing.UpstreamModel = candidate.UpstreamModel
+				}
+				continue
+			}
+			candidate.SortOrder = len(out)
+			seen[key] = len(out)
+			out = append(out, candidate)
+		}
 	}
-	return nil, "", fmt.Errorf("cline model discovery failed: %w", lastErr)
+	return out
 }
 
 // clineCatalogToDiscovered maps the observed feed onto the channel's public
@@ -572,6 +730,7 @@ func persistClineCatalogSnapshot(ctx context.Context, s *store.Store, acc *store
 		return
 	}
 	acc.ClineModelIDs = ids
+	acc.ClineModelsSyncedAt = time.Now()
 	if err := s.UpdateAccount(ctx, acc); err != nil {
 		slog.Warn("failed to persist cline model snapshot", "account_id", acc.ID, "error", err)
 	}
@@ -1142,6 +1301,10 @@ func enabledAccountsByType(ctx context.Context, s *store.Store, accountType stri
 }
 
 func applyModelRefresh(ctx context.Context, s *store.Store, channel string, source string, candidates []discoveredModel) (*modelRefreshResult, error) {
+	return applyModelRefreshWithPrune(ctx, s, channel, source, candidates, true)
+}
+
+func applyModelRefreshWithPrune(ctx context.Context, s *store.Store, channel string, source string, candidates []discoveredModel, allowPrune bool) (*modelRefreshResult, error) {
 	// The single gate that keeps locally compiled-in or cached catalogs out of
 	// model management. Discovery is expected to fail instead of returning a
 	// non-upstream source; this refuses the write if it ever does.
@@ -1179,121 +1342,34 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 	defaultModelID := chooseRefreshedDefaultModel(channel, existingByID, candidates)
 	result.DefaultModelID = defaultModelID
 
+	records := make([]*store.Model, 0, len(candidates))
 	for _, model := range candidates {
-		existing := existingByID[model.ID]
-		if existing != nil {
-			// A refresh that observed this model is what marks it verified.
-			// Creation alone was not enough: a row that predates the observation
-			// kept Verified=false forever, and an unverified Grok row is not
-			// visible, so the channel's own default model disappeared from
-			// /v1/models. Name, status, ordering and default are operator-owned
-			// and stay as they are.
-			//
-			// Route metadata is different: it is observed, not chosen, so a row
-			// published before the feed named a provider only gets it filled in
-			// when the field is still empty. An operator who set one by hand
-			// keeps theirs.
-			//
-			// The display name follows the same rule, with one allowance: a row
-			// whose name is still a copy of the identifier was never given one
-			// by a human, so it adopts the name the feed published. A row that
-			// was renamed keeps its name.
-			updated := *existing
-			if model.Verified && !updated.Verified {
-				updated.Verified = true
-			}
-			if strings.TrimSpace(model.Name) != "" &&
-				(strings.TrimSpace(updated.Name) == "" || strings.EqualFold(strings.TrimSpace(updated.Name), updated.ModelID)) {
-				updated.Name = strings.TrimSpace(model.Name)
-			}
-			if updated.Provider == "" && model.Provider != "" {
-				updated.Provider = model.Provider
-			}
-			if updated.UpstreamModel == "" && model.UpstreamModel != "" {
-				updated.UpstreamModel = model.UpstreamModel
-			}
-			// Charging metadata is an upstream fact that may change between
-			// refreshes (for example a temporary free Qoder model), so unlike
-			// operator-owned display fields it is replaced on every observation.
-			updated.BillingTier = strings.ToLower(strings.TrimSpace(model.BillingTier))
-			updated.BillingSource = strings.ToLower(strings.TrimSpace(model.BillingSource))
-			if updated.Verified != existing.Verified ||
-				updated.Name != existing.Name ||
-				updated.Provider != existing.Provider ||
-				updated.UpstreamModel != existing.UpstreamModel ||
-				updated.BillingTier != existing.BillingTier ||
-				updated.BillingSource != existing.BillingSource {
-				if err := s.UpdateModel(ctx, &updated); err != nil {
-					return nil, err
-				}
-				result.Updated++
-			}
-			continue
-		}
 		record := &store.Model{
-			Channel:   channel,
-			ModelID:   model.ID,
-			Name:      util.FirstNonEmpty(model.Name, model.ID),
-			Status:    store.ModelStatusAvailable,
-			Verified:  model.Verified,
-			IsDefault: model.ID == defaultModelID,
-			SortOrder: model.SortOrder,
-			// Whatever the catalog read observed. A feed that names neither
-			// leaves both empty, and the row then carries no route metadata —
-			// the same state a manually added row is in.
-			Provider:      model.Provider,
-			UpstreamModel: model.UpstreamModel,
-			BillingTier:   strings.ToLower(strings.TrimSpace(model.BillingTier)),
-			BillingSource: strings.ToLower(strings.TrimSpace(model.BillingSource)),
+			Channel: channel, ModelID: model.ID, Name: util.FirstNonEmpty(model.Name, model.ID),
+			Status: store.ModelStatusAvailable, Verified: model.Verified, IsDefault: model.ID == defaultModelID,
+			SortOrder: model.SortOrder, Provider: model.Provider, UpstreamModel: model.UpstreamModel,
+			BillingTier: strings.ToLower(strings.TrimSpace(model.BillingTier)), BillingSource: strings.ToLower(strings.TrimSpace(model.BillingSource)),
+			Origin: "discovery",
 		}
 		if strings.EqualFold(strings.TrimSpace(channel), "grok") {
 			store.ApplyGrokRouteDefaults(record)
-			record.Origin = "discovery"
-			record.Provider = grok.ProviderBuild
-			record.UpstreamModel = model.ID
+			record.Provider, record.UpstreamModel = grok.ProviderBuild, model.ID
 			if strings.Contains(strings.ToLower(model.ID), "video") {
 				record.Capabilities = []string{store.CapabilityVideo}
 			} else {
 				record.Capabilities = []string{store.CapabilityChat, store.CapabilityMessages, store.CapabilityResponses}
 			}
-			record.NormalizeRoute()
 		}
-		if err := s.CreateModel(ctx, record); err != nil {
-			return nil, err
-		}
-		result.Added++
-		result.AddedModelIDs = append(result.AddedModelIDs, model.ID)
+		records = append(records, record)
 	}
-	if shouldForceWarpDefault(channel, defaultModelID) {
-		if existing := existingByID[defaultModelID]; existing != nil && !existing.IsDefault {
-			updated := *existing
-			updated.IsDefault = true
-			if err := s.UpdateModel(ctx, &updated); err != nil {
-				return nil, err
-			}
-			result.Updated++
-		}
+	applied, err := s.ReconcileDiscoveredModels(ctx, channel, records, store.ModelReconcileOptions{
+		Prune: allowPrune && shouldDeleteMissingModelsOnRefresh(channel, source),
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	if shouldDeleteMissingModelsOnRefresh(channel, source) {
-		for modelID, existing := range existingByID {
-			if _, ok := fetchedSet[modelID]; ok {
-				continue
-			}
-			if existing == nil || existing.ID == "" {
-				continue
-			}
-			if err := s.DeleteModel(ctx, existing.ID); err != nil {
-				return nil, err
-			}
-			result.Deleted++
-			result.DeletedModelIDs = append(result.DeletedModelIDs, modelID)
-		}
-	}
-
-	sort.Strings(result.AddedModelIDs)
-	sort.Strings(result.DeletedModelIDs)
-	sort.Strings(result.OfflineModelIDs)
+	result.Added, result.Updated, result.Deleted = applied.Added, applied.Updated, applied.Deleted
+	result.AddedModelIDs, result.DeletedModelIDs = applied.AddedModelIDs, applied.DeletedModelIDs
 	return result, nil
 }
 
@@ -1311,7 +1387,10 @@ func applyModelRefresh(ctx context.Context, s *store.Store, channel string, sour
 //     Build source is excluded here.
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 	source = strings.TrimSpace(source)
-	if source == "grok_build_models" {
+	if source == "grok_build_models" || source == "puter_public_models_test_mode" || source == "workbuddy_cli_models" {
+		// Grok is a provider subset; Puter probes may be inconclusive because of
+		// quota/transport; WorkBuddy can return a degraded whitelist fallback.
+		// Absence from any of these is not authoritative deletion evidence.
 		return false
 	}
 	return isUpstreamCatalogSource(source)

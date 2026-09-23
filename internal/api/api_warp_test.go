@@ -11,6 +11,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/store"
+	"orchids-api/internal/warp"
 )
 
 func TestNormalizeWarpTokenInput_UsesExplicitRefreshTokenOnly(t *testing.T) {
@@ -94,6 +95,51 @@ func TestWarpCredentialReplacementAndTypeConversionDisabled(t *testing.T) {
 	stored, err := s.GetAccount(context.Background(), acc.ID)
 	if err != nil || stored.RefreshToken != "private-session" || stored.AccountType != "warp" {
 		t.Fatal("rejected update changed the existing login session")
+	}
+}
+
+func TestWarpDisableAndDeleteRemoveModelChoiceCache(t *testing.T) {
+	a, s, cleanup := newTestAPI(t)
+	defer cleanup()
+	ctx := context.Background()
+	first := &store.Account{AccountType: "warp", RefreshToken: "one", Enabled: true}
+	second := &store.Account{AccountType: "warp", RefreshToken: "two", Enabled: true}
+	for _, acc := range []*store.Account{first, second} {
+		if err := s.CreateAccount(ctx, acc); err != nil {
+			t.Fatal(err)
+		}
+		if err := warp.UpsertAccountModelDiscoveries(ctx, s, warp.AccountModelDiscovery{AccountID: acc.ID, Choices: []warp.ModelChoice{{ID: "model-" + acc.RefreshToken, ContextWindow: warp.ModelContextWindow{Max: 1000}}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	disable := httptest.NewRecorder()
+	a.HandleAccountByID(disable, httptest.NewRequest(http.MethodPut, "/api/accounts/"+strconv.FormatInt(first.ID, 10), strings.NewReader(`{"account_type":"warp","enabled":false}`)))
+	if disable.Code != http.StatusOK {
+		t.Fatalf("disable status=%d body=%s", disable.Code, disable.Body.String())
+	}
+	choices, err := warp.LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := choices.Accounts[strconv.FormatInt(first.ID, 10)]; ok {
+		t.Fatalf("disabled account cache retained: %v", choices.Accounts)
+	}
+	if _, ok := choices.Accounts[strconv.FormatInt(second.ID, 10)]; !ok {
+		t.Fatalf("other account LKG removed: %v", choices.Accounts)
+	}
+
+	remove := httptest.NewRecorder()
+	a.HandleAccountByID(remove, httptest.NewRequest(http.MethodDelete, "/api/accounts/"+strconv.FormatInt(second.ID, 10), nil))
+	if remove.Code != http.StatusNoContent {
+		t.Fatalf("delete status=%d body=%s", remove.Code, remove.Body.String())
+	}
+	choices, err = warp.LoadAccountModelChoices(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if choices != nil {
+		t.Fatalf("deleted final account cache retained: %+v", choices)
 	}
 }
 

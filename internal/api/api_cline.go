@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
@@ -72,6 +73,7 @@ func PreserveClineCredentialsOnEdit(acc, existing *store.Account) {
 	}
 	if len(acc.ClineModelIDs) == 0 {
 		acc.ClineModelIDs = append([]string(nil), existing.ClineModelIDs...)
+		acc.ClineModelsSyncedAt = existing.ClineModelsSyncedAt
 	}
 }
 
@@ -136,6 +138,7 @@ func verifyClineAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 			"account_id", acc.ID, "error", catalogErr)
 	} else if ids := cline.CatalogSnapshot(models); len(ids) > 0 {
 		acc.ClineModelIDs = ids
+		acc.ClineModelsSyncedAt = time.Now()
 	}
 
 	// The tier is decoration on top of a verdict the refresh call is about to

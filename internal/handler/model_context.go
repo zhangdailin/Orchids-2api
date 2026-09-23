@@ -63,24 +63,27 @@ func (w *modelContextWindows) lookup(channel string, modelIDs ...string) (int, i
 // model choice) is still filled from the same pass.
 func (h *Handler) observedModelContextWindows(ctx context.Context) *modelContextWindows {
 	w := &modelContextWindows{input: map[string]int{}, output: map[string]int{}}
+	accounts, err := h.enabledAccountsForContextWindows(ctx)
+	if err != nil {
+		return w
+	}
 
-	// Warp: the window is published with every model choice and is a property of
-	// the model, so the shared discovery cache is the whole source.
+	// Warp: aggregate only snapshots belonging to currently enabled Warp
+	// accounts. Disabled/deleted accounts must not keep stale context visible.
 	if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
+		activeWarpIDs := make(map[int64]struct{})
+		for _, acc := range accounts {
+			if acc != nil && strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
+				activeWarpIDs[acc.ID] = struct{}{}
+			}
+		}
 		if choices, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store); err == nil && choices != nil {
-			for modelID, window := range choices.ContextWindows {
+			for modelID, window := range warp.ContextWindowsForAccountIDs(choices, activeWarpIDs) {
 				if window.Max > 0 {
 					w.input[contextKey("warp", modelID)] = int(window.Max)
 				}
 			}
 		}
-	}
-
-	accounts, err := h.enabledAccountsForContextWindows(ctx)
-	if err != nil {
-		// A store hiccup must not turn the model list into a failure. Whatever
-		// was collected above is still true; the rest simply stays unreported.
-		return w
 	}
 	for _, acc := range accounts {
 		if acc == nil {

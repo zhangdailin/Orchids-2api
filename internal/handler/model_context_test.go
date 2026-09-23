@@ -132,6 +132,39 @@ func TestPublicModelsPublishWarpContextWindow(t *testing.T) {
 	}
 }
 
+func TestPublicModelsIgnoreDisabledWarpContextSnapshot(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() {
+		_ = s.Close()
+		mini.Close()
+	}()
+	ctx := context.Background()
+	active := createEnabledTestAccount(t, s, "warp-active", "warp")
+	disabled := createEnabledTestAccount(t, s, "warp-disabled", "warp")
+	disabled.Enabled = false
+	if err := s.UpdateAccount(ctx, disabled); err != nil {
+		t.Fatal(err)
+	}
+	if err := warp.UpsertAccountModelDiscoveries(ctx, s,
+		warp.AccountModelDiscovery{AccountID: active.ID, Choices: []warp.ModelChoice{{ID: "active-model", ContextWindow: warp.ModelContextWindow{Max: 200000}}}},
+		warp.AccountModelDiscovery{AccountID: disabled.ID, Choices: []warp.ModelChoice{{ID: "disabled-model", ContextWindow: warp.ModelContextWindow{Max: 900000}}}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	publishModel(t, s,
+		&store.Model{Channel: "warp", ModelID: "active-model"},
+		&store.Model{Channel: "warp", ModelID: "disabled-model"},
+	)
+
+	entries := fetchPublicModels(t, h, "/warp/v1/models")
+	if got := entries["active-model"].ContextLength; got != 200000 {
+		t.Fatalf("active context_length=%d want 200000", got)
+	}
+	if _, visible := entries["disabled-model"]; visible {
+		t.Fatalf("disabled account model remained visible: %+v", entries["disabled-model"])
+	}
+}
+
 // WorkBuddy is the channel whose long sessions were measured past 400k tokens.
 // Its catalog carries maxInputTokens/maxOutputTokens and both must survive the
 // account snapshot.

@@ -24,6 +24,10 @@ type AccountModelChoices struct {
 	// stored once and reused. Dropping it here was what left the request builder
 	// with nothing to state and made a 1M-token model look like a zero-window one.
 	ContextWindows map[string]ModelContextWindow `json:"context_windows,omitempty"`
+	// AccountContextWindows retains window provenance so replacing or removing
+	// one account's snapshot can also remove its stale context metadata without
+	// disturbing another account's last-known-good observation.
+	AccountContextWindows map[string]map[string]ModelContextWindow `json:"account_context_windows,omitempty"`
 }
 
 type AccountFeatureConfig struct {
@@ -63,6 +67,7 @@ func UpsertAccountModelDiscoveries(ctx context.Context, s *store.Store, discover
 	if existing.FeatureConfigs == nil {
 		existing.FeatureConfigs = make(map[string]AccountFeatureConfig)
 	}
+	ensureAccountContextWindows(existing)
 	changed := false
 	for _, discovery := range discoveries {
 		if discovery.AccountID == 0 || len(discovery.Choices) == 0 {
@@ -82,17 +87,85 @@ func UpsertAccountModelDiscoveries(ctx context.Context, s *store.Store, discover
 		existing.Accounts[key] = models
 		if source := strings.TrimSpace(discovery.Source); source != "" {
 			existing.Sources[key] = source
+		} else {
+			delete(existing.Sources, key)
 		}
 		if cfg := normalizeAccountFeatureConfig(discovery.FeatureConfig); !cfg.IsEmpty() {
 			existing.FeatureConfigs[key] = cfg
+		} else {
+			delete(existing.FeatureConfigs, key)
 		}
-		existing.ContextWindows = MergeContextWindows(existing.ContextWindows, ContextWindowsFromChoices(discovery.Choices))
+		windows := ContextWindowsFromChoices(discovery.Choices)
+		if len(windows) > 0 {
+			existing.AccountContextWindows[key] = windows
+		} else {
+			delete(existing.AccountContextWindows, key)
+		}
 		changed = true
 	}
 	if !changed {
 		return nil
 	}
+	rebuildContextWindows(existing)
 	return SaveAccountModelChoices(ctx, s, existing)
+}
+
+func RemoveAccountModelChoices(ctx context.Context, s *store.Store, accountID int64) error {
+	if s == nil || accountID == 0 {
+		return nil
+	}
+	existing, err := LoadAccountModelChoices(ctx, s)
+	if err != nil || existing == nil {
+		return err
+	}
+	key := strconv.FormatInt(accountID, 10)
+	if _, ok := existing.Accounts[key]; !ok {
+		return nil
+	}
+	ensureAccountContextWindows(existing)
+	delete(existing.Accounts, key)
+	delete(existing.Sources, key)
+	delete(existing.FeatureConfigs, key)
+	delete(existing.AccountContextWindows, key)
+	rebuildContextWindows(existing)
+	return SaveAccountModelChoices(ctx, s, existing)
+}
+
+// ensureAccountContextWindows upgrades caches written before context windows
+// carried account provenance. It associates an observed model with every cached
+// account advertising it, allowing all subsequent writes to have replacement
+// semantics.
+func ensureAccountContextWindows(choices *AccountModelChoices) {
+	if choices == nil || choices.AccountContextWindows != nil {
+		return
+	}
+	choices.AccountContextWindows = make(map[string]map[string]ModelContextWindow)
+	for accountID, models := range choices.Accounts {
+		windows := make(map[string]ModelContextWindow)
+		for _, modelID := range models {
+			modelID = normalizeModelID(modelID)
+			if window, ok := choices.ContextWindows[modelID]; ok && window.Max > 0 {
+				windows[modelID] = window
+			}
+		}
+		if len(windows) > 0 {
+			choices.AccountContextWindows[accountID] = windows
+		}
+	}
+}
+
+func rebuildContextWindows(choices *AccountModelChoices) {
+	if choices == nil {
+		return
+	}
+	choices.ContextWindows = nil
+	for accountID, windows := range choices.AccountContextWindows {
+		if _, active := choices.Accounts[accountID]; !active {
+			delete(choices.AccountContextWindows, accountID)
+			continue
+		}
+		choices.ContextWindows = MergeContextWindows(choices.ContextWindows, windows)
+	}
 }
 
 func LoadAccountModelChoices(ctx context.Context, s *store.Store) (*AccountModelChoices, error) {
@@ -141,6 +214,9 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 			normalized.ContextWindows[key] = window
 		}
 	}
+	if len(choices.AccountContextWindows) > 0 {
+		normalized.AccountContextWindows = make(map[string]map[string]ModelContextWindow, len(choices.AccountContextWindows))
+	}
 	for accountID, models := range choices.Accounts {
 		key := strings.TrimSpace(accountID)
 		if key == "" {
@@ -159,6 +235,18 @@ func SaveAccountModelChoices(ctx context.Context, s *store.Store, choices *Accou
 		if normalized.FeatureConfigs != nil {
 			if cfg := normalizeAccountFeatureConfig(choices.FeatureConfigs[key]); !cfg.IsEmpty() {
 				normalized.FeatureConfigs[key] = cfg
+			}
+		}
+		if normalized.AccountContextWindows != nil {
+			windows := make(map[string]ModelContextWindow)
+			for modelID, window := range choices.AccountContextWindows[key] {
+				modelKey := normalizeModelID(modelID)
+				if modelKey != "" && window.Max > 0 {
+					windows[modelKey] = window
+				}
+			}
+			if len(windows) > 0 {
+				normalized.AccountContextWindows[key] = windows
 			}
 		}
 	}
@@ -315,6 +403,27 @@ func MergeContextWindows(dst map[string]ModelContextWindow, fresh map[string]Mod
 		dst[key] = window
 	}
 	return dst
+}
+
+func ContextWindowsForAccountIDs(choices *AccountModelChoices, accountIDs map[int64]struct{}) map[string]ModelContextWindow {
+	if choices == nil || len(accountIDs) == 0 {
+		return nil
+	}
+	ensureAccountContextWindows(choices)
+	var out map[string]ModelContextWindow
+	for accountID := range accountIDs {
+		out = MergeContextWindows(out, choices.AccountContextWindows[strconv.FormatInt(accountID, 10)])
+	}
+	return out
+}
+
+func ModelContextWindowLimitForAccount(choices *AccountModelChoices, accountID int64, modelID string) uint32 {
+	if choices == nil || accountID == 0 {
+		return ModelContextWindowLimitFor(choices, modelID)
+	}
+	ensureAccountContextWindows(choices)
+	accountChoices := &AccountModelChoices{ContextWindows: choices.AccountContextWindows[strconv.FormatInt(accountID, 10)]}
+	return ModelContextWindowLimitFor(accountChoices, modelID)
 }
 
 // ModelContextWindowLimitFor resolves the input-token window to state on an

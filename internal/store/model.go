@@ -76,6 +76,26 @@ func (s ModelStatus) MarshalJSON() ([]byte, error) {
 	return json.Marshal(string(s))
 }
 
+// ModelReconcileOptions controls one channel-scoped discovery publication.
+// Prune removes discovery-owned rows absent from the supplied snapshot. Rows
+// whose Origin is "manual" (including legacy rows with an empty origin) are
+// never overwritten or pruned.
+type ModelReconcileOptions struct {
+	Prune bool
+}
+
+// ModelReconcileResult describes the atomic changes made by a reconciliation.
+type ModelReconcileResult struct {
+	Added           int      `json:"added"`
+	Updated         int      `json:"updated"`
+	Deleted         int      `json:"deleted"`
+	Protected       int      `json:"protected"`
+	AddedModelIDs   []string `json:"added_model_ids,omitempty"`
+	UpdatedModelIDs []string `json:"updated_model_ids,omitempty"`
+	DeletedModelIDs []string `json:"deleted_model_ids,omitempty"`
+	ProtectedIDs    []string `json:"protected_model_ids,omitempty"`
+}
+
 type Model struct {
 	ID            string      `json:"id"`
 	Channel       string      `json:"channel"`  // e.g., "warp", "grok"

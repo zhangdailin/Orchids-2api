@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/goccy/go-json"
@@ -580,8 +581,8 @@ func TestApplyModelRefresh_DeletesMissingWarpGraphQLModels(t *testing.T) {
 	ctx := context.Background()
 	clearModelsForChannel(t, ctx, s, "Warp")
 	for _, record := range []*store.Model{
-		{Channel: "Warp", ModelID: "claude-4-5-opus", Name: "Old Opus", Status: store.ModelStatusAvailable, Verified: true, IsDefault: true, SortOrder: 0},
-		{Channel: "Warp", ModelID: "auto-open", Name: "Auto Open", Status: store.ModelStatusAvailable, Verified: true, SortOrder: 1},
+		{Channel: "Warp", ModelID: "claude-4-5-opus", Name: "Old Opus", Status: store.ModelStatusAvailable, Verified: true, IsDefault: true, SortOrder: 0, Origin: "discovery"},
+		{Channel: "Warp", ModelID: "auto-open", Name: "Auto Open", Status: store.ModelStatusAvailable, Verified: true, SortOrder: 1, Origin: "discovery"},
 	} {
 		if err := s.CreateModel(ctx, record); err != nil {
 			t.Fatalf("CreateModel() error = %v", err)
@@ -690,8 +691,8 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 	if result.Deleted != 0 {
 		t.Fatalf("Deleted=%d want 0", result.Deleted)
 	}
-	if result.Updated != 0 {
-		t.Fatalf("Updated=%d want 0", result.Updated)
+	if result.Updated != 1 {
+		t.Fatalf("Updated=%d want 1 (verification promotion)", result.Updated)
 	}
 
 	model, err := s.GetModelByChannelAndModelID(ctx, "Warp", "claude-4-5-sonnet")
@@ -704,14 +705,196 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 	if model.Status != store.ModelStatusOffline {
 		t.Fatalf("Status=%q want %q", model.Status, store.ModelStatusOffline)
 	}
-	if model.Verified {
-		t.Fatal("Verified=true want false")
+	if !model.Verified {
+		t.Fatal("Verified=false want true after upstream observation")
 	}
 	if model.Name != "Old Name" {
 		t.Fatalf("Name=%q want %q", model.Name, "Old Name")
 	}
 	if model.SortOrder != 999 {
 		t.Fatalf("SortOrder=%d want 999", model.SortOrder)
+	}
+}
+
+func TestSyncAccountCatalogAggregatesAllAccountsAndProtectsPartialPrune(t *testing.T) {
+	channels := []struct {
+		name        string
+		accountType string
+		path        string
+		bodyA       string
+		bodyB       string
+		models      []string
+		account     func(baseURL string) (*store.Account, *config.Config)
+	}{
+		{
+			name: "WorkBuddy", accountType: "workbuddy", path: "/v3/config",
+			bodyA:  `{"code":0,"data":{"models":[{"id":"wb-a","name":"WB A"}],"agents":[{"name":"cli","models":["wb-a"]}]}}`,
+			bodyB:  `{"code":0,"data":{"models":[{"id":"wb-b","name":"WB B"}],"agents":[{"name":"cli","models":["wb-b"]}]}}`,
+			models: []string{"wb-a", "wb-b"},
+			account: func(baseURL string) (*store.Account, *config.Config) {
+				return &store.Account{AccountType: "workbuddy", Name: "wb", Enabled: true, Weight: 1, WorkBuddyAccessToken: "access", WorkBuddyRefreshToken: "refresh", WorkBuddyUID: "uid", WorkBuddyExpiresAt: time.Now().Add(time.Hour)}, &config.Config{WorkBuddyBaseURL: baseURL}
+			},
+		},
+		{
+			name: "Qoder", accountType: "qoder", path: "/algo/api/v2/model/list",
+			bodyA:  `{"chat":[{"key":"qa","display_name":"Qoder-A","enable":true}]}`,
+			bodyB:  `{"chat":[{"key":"qb","display_name":"Qoder-B","enable":true}]}`,
+			models: []string{"qoder-a", "qoder-b"},
+			account: func(baseURL string) (*store.Account, *config.Config) {
+				return qoderTestAccount("11111111-2222-4333-8444-555555555555"), &config.Config{QoderInferenceURL: baseURL}
+			},
+		},
+		{
+			name: "Cline", accountType: "cline", path: "/ai/cline/recommended-models",
+			bodyA:  `{"free":[{"id":"cline/a","name":"Cline A"}]}`,
+			bodyB:  `{"free":[{"id":"cline/b","name":"Cline B"}]}`,
+			models: []string{"cline/a", "cline/b"},
+			account: func(baseURL string) (*store.Account, *config.Config) {
+				return &store.Account{AccountType: "cline", Name: "cline", Enabled: true, Weight: 1, ClineAccessToken: "access", ClineRefreshToken: "refresh", ClineExpiresAt: time.Now().Add(time.Hour)}, &config.Config{ClineAPIBaseURL: baseURL}
+			},
+		},
+	}
+
+	for _, tc := range channels {
+		t.Run(tc.name, func(t *testing.T) {
+			s, cleanup := setupModelRefreshStore(t)
+			defer cleanup()
+			ctx := context.Background()
+			clearModelsForChannel(t, ctx, s, tc.name)
+
+			var mu sync.Mutex
+			bodies := []string{tc.bodyA, tc.bodyB}
+			partialPhase := false
+			started := make(chan struct{}, 2)
+			release := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.path {
+					http.NotFound(w, r)
+					return
+				}
+				mu.Lock()
+				if partialPhase {
+					mu.Unlock()
+					failedAccount := false
+					switch tc.accountType {
+					case "workbuddy", "cline":
+						failedAccount = strings.Contains(r.Header.Get("Authorization"), "access-2")
+					case "qoder":
+						failedAccount = r.Header.Get("Cosy-MachineId") == "22222222-3333-4444-8555-666666666666"
+					}
+					if failedAccount {
+						http.Error(w, "temporary account failure", http.StatusBadGateway)
+						return
+					}
+					_, _ = w.Write([]byte(tc.bodyA))
+					return
+				}
+				mu.Unlock()
+				started <- struct{}{}
+				<-release
+				mu.Lock()
+				body := bodies[0]
+				bodies = bodies[1:]
+				mu.Unlock()
+				_, _ = w.Write([]byte(body))
+			}))
+			defer server.Close()
+
+			first, cfg := tc.account(server.URL)
+			second, _ := tc.account(server.URL)
+			second.Name += "-2"
+			switch tc.accountType {
+			case "workbuddy":
+				second.WorkBuddyAccessToken = "access-2"
+			case "cline":
+				second.ClineAccessToken = "access-2"
+			case "qoder":
+				second.QoderMachineID = "22222222-3333-4444-8555-666666666666"
+			}
+			for _, acc := range []*store.Account{first, second} {
+				if err := s.CreateAccount(ctx, acc); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			done := make(chan struct{})
+			var result *modelRefreshResult
+			var refreshErr error
+			go func() {
+				result, refreshErr = syncModelsForChannelConcurrent(ctx, cfg, s, tc.name, 2)
+				close(done)
+			}()
+			<-started
+			select {
+			case <-started:
+				close(release)
+			case <-time.After(time.Second):
+				t.Fatal("second account did not start concurrently")
+			}
+			<-done
+			if refreshErr != nil {
+				t.Fatalf("refresh error = %v", refreshErr)
+			}
+			if result.AccountsTotal != 2 || result.AccountsSuccess != 2 || result.AccountsFailed != 0 || result.Partial {
+				t.Fatalf("result metadata = %+v", result)
+			}
+			for _, modelID := range tc.models {
+				if _, err := s.GetModelByChannelAndModelID(ctx, tc.name, modelID); err != nil {
+					t.Fatalf("union missed %s: %v", modelID, err)
+				}
+			}
+			for _, id := range []int64{first.ID, second.ID} {
+				stored, err := s.GetAccount(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (tc.accountType == "workbuddy" && len(stored.WorkBuddyModelIDs) == 0) ||
+					(tc.accountType == "qoder" && len(stored.QoderModelIDs) == 0) ||
+					(tc.accountType == "cline" && len(stored.ClineModelIDs) == 0) {
+					t.Fatalf("account %d snapshot was not persisted", id)
+				}
+			}
+
+			// A later single-account failure is partial. The failed account's LKG
+			// participates in the safe union and partial mode cannot prune it.
+			mu.Lock()
+			partialPhase = true
+			mu.Unlock()
+			result, err := syncModelsForChannelConcurrent(ctx, cfg, s, tc.name, 1)
+			if err != nil {
+				t.Fatalf("partial refresh error = %v", err)
+			}
+			if !result.Partial || result.AccountsSuccess != 1 || result.AccountsFailed != 1 || !result.KeptLastKnownGood || result.Deleted != 0 {
+				t.Fatalf("partial metadata = %+v", result)
+			}
+			for _, modelID := range tc.models {
+				if _, getErr := s.GetModelByChannelAndModelID(ctx, tc.name, modelID); getErr != nil {
+					t.Fatalf("partial refresh pruned %s: %v", modelID, getErr)
+				}
+			}
+		})
+	}
+}
+
+func TestApplyModelRefreshPartialNeverPrunes(t *testing.T) {
+	s, cleanup := setupModelRefreshStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	clearModelsForChannel(t, ctx, s, "Cline")
+	for _, id := range []string{"fresh", "failed-account-lkg"} {
+		if err := s.CreateModel(ctx, &store.Model{Channel: "Cline", ModelID: id, Name: id, Status: store.ModelStatusAvailable, Verified: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := applyModelRefreshWithPrune(ctx, s, "Cline", "cline_recommended_models", []discoveredModel{{ID: "fresh", Name: "fresh", Verified: true}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Deleted != 0 {
+		t.Fatalf("Deleted=%d want 0", result.Deleted)
+	}
+	if _, err := s.GetModelByChannelAndModelID(ctx, "Cline", "failed-account-lkg"); err != nil {
+		t.Fatalf("partial refresh pruned LKG: %v", err)
 	}
 }
 
@@ -759,15 +942,24 @@ func TestShouldDeleteMissingModelsOnRefresh_NeverPrunesOnTheBuildTextCatalog(t *
 	if shouldDeleteMissingModelsOnRefresh("Grok", "grok_build_models") {
 		t.Fatal("a Build text-catalog read must not prune the channel catalog")
 	}
-	// The channels whose source is the whole catalog for that channel still prune.
+	// Only complete authoritative account catalogs prune automatically. Puter
+	// probes and WorkBuddy's degraded whitelist fallback cannot prove absence.
 	for _, tc := range []struct{ channel, source string }{
 		{"Warp", "warp_graphql_feature_model_choice_agent_mode"},
-		{"Puter", "puter_public_models_test_mode"},
-		{"WorkBuddy", "workbuddy_cli_models"},
 		{"Qoder", "qoder_upstream_models"},
+		{"Cline", "cline_recommended_models"},
 	} {
 		if !shouldDeleteMissingModelsOnRefresh(tc.channel, tc.source) {
 			t.Fatalf("%s/%s must be allowed to prune", tc.channel, tc.source)
+		}
+	}
+	for _, tc := range []struct{ channel, source string }{
+		{"Grok", "grok_build_models"},
+		{"Puter", "puter_public_models_test_mode"},
+		{"WorkBuddy", "workbuddy_cli_models"},
+	} {
+		if shouldDeleteMissingModelsOnRefresh(tc.channel, tc.source) {
+			t.Fatalf("%s/%s must retain LKG rather than prune", tc.channel, tc.source)
 		}
 	}
 	// A non-upstream source never prunes.

@@ -193,6 +193,9 @@ func TestHandleClineLogin_PollPersistsOAuthAccount(t *testing.T) {
 	if len(stored.ClineModelIDs) != 1 || !strings.Contains(stored.ClineModelIDs[0], "x-ai/grok-4.1-fast") {
 		t.Errorf("model ids = %v, want the recommended-models feed", stored.ClineModelIDs)
 	}
+	if stored.ClineModelsSyncedAt.IsZero() {
+		t.Error("model sync timestamp is zero after successful login catalog read")
+	}
 	if stored.Token != "" || stored.RefreshToken != "" || stored.ClientCookie != "" {
 		t.Errorf("stored account wrote a generic credential slot: %+v", stored)
 	}

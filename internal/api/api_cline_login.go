@@ -224,8 +224,9 @@ func (a *API) buildClineAccountFromCredentialsWithFactory(ctx context.Context, l
 	if models, catalogErr := client.FetchUpstreamModels(ctx); catalogErr != nil {
 		slog.Warn("Cline upstream catalog read failed at login; leaving the snapshot empty",
 			"login_id", loginID, "error", catalogErr)
-	} else {
-		acc.ClineModelIDs = cline.CatalogSnapshot(models)
+	} else if ids := cline.CatalogSnapshot(models); len(ids) > 0 {
+		acc.ClineModelIDs = ids
+		acc.ClineModelsSyncedAt = time.Now()
 	}
 
 	// The tier is read at login so a freshly added account is labelled on its
