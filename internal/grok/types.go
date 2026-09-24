@@ -686,6 +686,15 @@ func validateWebToolDefinitions(tools []ToolDef) error {
 		return fmt.Errorf("tools must contain at most %d items on Web", maxToolDefinitions)
 	}
 	for i, tool := range tools {
+		if tool.Function == nil {
+			// A hosted tool (web_search / x_search) has no function object.
+			// Web emulates tools in the prompt, so it cannot run one
+			// server-side; the search it would have asked for is the same
+			// upstream search the Web plane already enables per request.
+			// Skipping keeps the turn valid — indexing the missing declaration
+			// used to panic the whole request.
+			continue
+		}
 		if !grokToolNamePattern.MatchString(strings.TrimSpace(tool.Function["name"].(string))) {
 			return fmt.Errorf("tools.%d.function.name must match [A-Za-z0-9_-]{1,64} on Web", i)
 		}

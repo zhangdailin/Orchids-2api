@@ -482,6 +482,13 @@ func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsReques
 		messages = append([]ChatMessage{{Role: "system", Content: instructions}}, messages...)
 	}
 	reasoningEffort := responsesReasoningEffort(req.Reasoning)
+	// Hosted tools (web_search / x_search) are the server-side searches the
+	// caller switched on. They have no function object, so they travel in
+	// ResponsesTools — the same slot the Anthropic bridge uses for its server
+	// tools — and the native planes forward them to the upstream. Keeping only
+	// the function declarations meant an explicit search request arrived as a
+	// plain text turn, and the model then answered that it had no web access.
+	tools, hostedTools := responsesToolsToChatTools(req.Tools)
 	out := ChatCompletionsRequest{
 		sourceOperation:   "responses",
 		Model:             model,
@@ -491,7 +498,8 @@ func chatRequestFromResponses(req ResponsesCreateRequest) (ChatCompletionsReques
 		ReasoningEffort:   reasoningEffort,
 		Temperature:       req.Temperature,
 		TopP:              req.TopP,
-		Tools:             responsesToolsToChatTools(req.Tools),
+		Tools:             tools,
+		ResponsesTools:    hostedTools,
 		ToolChoice:        responsesToolChoiceToChat(req.ToolChoice),
 		ParallelToolCalls: req.ParallelToolCalls,
 		MaxTokens:         req.MaxOutputTokens,
@@ -693,15 +701,33 @@ func responsesPartURL(part map[string]interface{}, keys, nestedKeys []string) st
 	return ""
 }
 
-func responsesToolsToChatTools(tools []map[string]interface{}) []ToolDef {
-	out := make([]ToolDef, 0, len(tools))
+// responsesToolsToChatTools splits a Responses tool list into the function
+// declarations the Chat layer emulates and the hosted (server-side) tools it
+// forwards untouched. A hosted tool has no `function` object, so it has no
+// ToolDef representation: dropping it was how web_search and x_search silently
+// disappeared between the Responses endpoint and the upstream.
+func responsesToolsToChatTools(tools []map[string]interface{}) ([]ToolDef, []map[string]interface{}) {
+	functions := make([]ToolDef, 0, len(tools))
+	var hosted []map[string]interface{}
+	seenHosted := map[string]struct{}{}
 	for _, tool := range tools {
-		if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(tool["type"])), "function") {
+		declaredType := strings.TrimSpace(fmt.Sprint(tool["type"]))
+		if !strings.EqualFold(declaredType, "function") {
+			if normalized, native := nativeToolTypes[strings.ToLower(declaredType)]; native {
+				// The hosted list is forwarded verbatim, so it carries the same
+				// uniqueness contract the function list is validated for: a
+				// duplicate would reach the upstream as two identical searches.
+				if _, duplicate := seenHosted[normalized]; duplicate {
+					continue
+				}
+				seenHosted[normalized] = struct{}{}
+				hosted = append(hosted, cloneStringInterfaceMap(tool))
+			}
 			continue
 		}
 		if fn, _ := tool["function"].(map[string]interface{}); fn != nil {
 			if strings.TrimSpace(fmt.Sprint(fn["name"])) != "" {
-				out = append(out, ToolDef{Type: "function", Function: fn})
+				functions = append(functions, ToolDef{Type: "function", Function: fn})
 			}
 			continue
 		}
@@ -709,13 +735,13 @@ func responsesToolsToChatTools(tools []map[string]interface{}) []ToolDef {
 		if name == "" {
 			continue
 		}
-		out = append(out, ToolDef{Type: "function", Function: map[string]interface{}{
+		functions = append(functions, ToolDef{Type: "function", Function: map[string]interface{}{
 			"name":        name,
 			"description": strings.TrimSpace(fmt.Sprint(tool["description"])),
 			"parameters":  firstNonNil(tool["parameters"], map[string]interface{}{}),
 		}})
 	}
-	return out
+	return functions, hosted
 }
 
 func responsesToolChoiceToChat(choice interface{}) interface{} {
