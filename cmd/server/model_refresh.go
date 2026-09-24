@@ -73,6 +73,11 @@ type modelRefreshResult struct {
 	AddedModelIDs     []string `json:"added_model_ids,omitempty"`
 	DeletedModelIDs   []string `json:"deleted_model_ids,omitempty"`
 	OfflineModelIDs   []string `json:"offline_model_ids,omitempty"`
+	// ProviderRoutes names the route rows this refresh published from the
+	// gateway's own route table (the Grok Web/Console planes) rather than from an
+	// upstream catalog read. They are counted in Added, and listed here so the
+	// two mechanisms stay distinguishable in the admin report.
+	ProviderRoutes []string `json:"provider_routes,omitempty"`
 }
 
 // accountModelDiscoveryAttempt is the account-level evidence retained until
@@ -305,8 +310,38 @@ func syncModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *
 	}
 
 	concurrency = normalizeModelRefreshConcurrency(concurrency)
+	// The Web and Console route tables are the gateway's own contract rather than
+	// an upstream observation, so they are published before the catalog read and
+	// independently of its outcome: a deployment whose Grok accounts all sit on
+	// those planes has no Build catalog to read, and the routes are what makes
+	// those accounts reachable at all.
+	var providerRoutes []string
+	if strings.EqualFold(channel, "grok") {
+		routes, routeErr := ensureGrokProviderRouteModels(ctx, s)
+		if routeErr != nil {
+			slog.Warn("Could not publish Grok provider routes", "channel", channel, "error", routeErr)
+		} else {
+			providerRoutes = routes
+		}
+	}
+
 	report, err := discoverModelsForChannelReport(ctx, cfg, s, channel, concurrency)
 	if err != nil {
+		if len(providerRoutes) > 0 && isNoActiveAccounts(err) {
+			// Nothing was read because no account on this channel can be read; the
+			// routes that were just published are still the refresh's result, and
+			// reporting "skipped" without them would hide the only change made.
+			return &modelRefreshResult{
+				Channel:        channel,
+				Source:         grokProviderRouteSource,
+				Outcome:        "routes_only",
+				Concurrency:    concurrency,
+				Discovered:     len(providerRoutes),
+				Added:          len(providerRoutes),
+				AddedModelIDs:  append([]string(nil), providerRoutes...),
+				ProviderRoutes: append([]string(nil), providerRoutes...),
+			}, nil
+		}
 		return nil, err
 	}
 	if len(report.Candidates) == 0 {
@@ -317,6 +352,13 @@ func syncModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *
 	allowPrune := failed == 0
 	result, err := applyModelRefreshWithPrune(ctx, s, channel, report.Source, report.Candidates, allowPrune)
 	if result != nil {
+		if len(providerRoutes) > 0 {
+			// One refresh created both kinds of row, so the created total must
+			// include both; the identifiers stay listed apart from the observed ones.
+			result.Added += len(providerRoutes)
+			result.AddedModelIDs = append(result.AddedModelIDs, providerRoutes...)
+			result.ProviderRoutes = append([]string(nil), providerRoutes...)
+		}
 		result.Concurrency = concurrency
 		result.AccountsTotal = len(report.Attempts)
 		result.AccountsSuccess = succeeded

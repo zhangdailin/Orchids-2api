@@ -323,6 +323,21 @@ Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/model
 - 「联网工具」里的 Web 搜索 / X 搜索以 Responses 的 `tools`（`web_search` / `x_search`）下发。Console（Build 之外的 `console.x.ai` 通道）由上游服务端执行搜索；Web/AppChat 通道的 `disableSearch` 恒为 `false`，上游默认就会搜索。
 - 这些请求按 `grok` 通道写入日志中心，和 `/v1` 推理一样有一条请求记录。日志中心的「诊断采集」按钮（`PUT /api/journal/diagnostics/settings`，写入 `debug_enabled`）打开后，请求行才会带「含诊断」，可展开请求体、上游尝试与响应；诊断内容保留 24 小时、最多 512 个请求。
 
+### Grok 模型行：三种来源
+
+`/api/models`、`/api/grok/models` 和工具页下拉里的 Grok 行由两个权威分别产生，缺一个就会出现「账号在线但没人用」：
+
+| 平面 | 来源 | 说明 |
+| --- | --- | --- |
+| Build（OAuth CLI） | **上游观测** | `discoverGrokModelsReport` 读账号自己的能力目录，发布的就是该账号真实报出的模型；上游撤回后随下一次刷新消失。 |
+| Web / AppChat（SSO） | **网关路由表** | 没有任何账号目录可读，路由由编译内的兼容表声明。某平面存在**至少一个启用账号**时，刷新会补齐该平面缺失的行（`grok-chat-fast/auto/expert/heavy` 等）。 |
+| Console（SSO 伴生） | **网关路由表** | 同上，补齐 `console/grok-*` 会话行（`console/grok-4.20-0309-reasoning`、`console/grok-4.5` 等）。 |
+
+- 路由行只**创建**不覆盖：已存在的行（无论状态、来源，还是手工改过的名称/映射）不会被刷新改写。要隐藏一个路由行，把它的状态设为 `offline`，删除会在下次刷新时重新出现。
+- 路由行的 `sort_order` 从 1000 起，排在观测行之后：工具页默认聊天模型取列表第一条，新增平面不会悄悄改变默认模型。
+- 需要 Web / Console 账号才会发布对应平面；没有该平面账号的部署不会凭空多出这些模型。
+- 健康检查的覆盖范围仍不完整：后台 SSO 刷新只探测 Web 源（身份 + 额度），Web 源关联的 Console 伴生账号目前**没有**自动校验路径，Console 路由是否可用只能从请求结果（日志中心的上游尝试）看出来。
+
 ## 许可证
 
 本仓库遵循仓库内现有许可策略。
