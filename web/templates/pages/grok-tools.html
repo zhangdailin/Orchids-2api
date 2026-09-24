@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260918-phonefix1">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260924-tools-restore2">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260924-tools-restore3">
 </head>
 
 <body>
@@ -338,10 +338,12 @@
                 <div class="settings-block ratio-block">
                   <label class="field-label" for="videoRatio">画面比例</label>
                   <select id="videoRatio" class="form-input">
-                    <option value="3:2">3:2 横构图</option>
-                    <option value="2:3">2:3 竖构图</option>
                     <option value="16:9">16:9 宽屏</option>
                     <option value="9:16">9:16 竖屏</option>
+                    <option value="3:2">3:2 横构图</option>
+                    <option value="2:3">2:3 竖构图</option>
+                    <option value="4:3">4:3 标准横屏</option>
+                    <option value="3:4">3:4 标准竖屏</option>
                     <option value="1:1">1:1 方形</option>
                   </select>
                 </div>
@@ -744,9 +746,9 @@
 
   <script src="{{.AdminPath}}/js/common.js?v=20260917-clean1"></script>
   <script src="{{.AdminPath}}/js/provider-registry.js?v=20260924-backend-registry1"></script>
-  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260924-tools-restore2"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260924-tools-restore2"></script>
-  <script src="{{.AdminPath}}/js/grok-media-tools.js?v=20260924-tools-restore2"></script>
+  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260924-tools-restore3"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260924-tools-restore3"></script>
+  <script src="{{.AdminPath}}/js/grok-media-tools.js?v=20260924-tools-restore3"></script>
 </body>
 
 </html>
