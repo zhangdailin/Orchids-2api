@@ -93,6 +93,39 @@ func TestValidateWebToolDefinitions_ToleratesHostedTools(t *testing.T) {
 	}
 }
 
+func TestNormalizeBuildResponsesPayloadCompletesWebSearchRoute(t *testing.T) {
+	payload := map[string]interface{}{
+		"model": "grok-4.7",
+		"input": "search",
+		"tools": []interface{}{map[string]interface{}{"type": "web_search"}},
+	}
+	if err := normalizeBuildResponsesPayload(payload); err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string]int{}
+	for _, tool := range interfaceMaps(payload["tools"]) {
+		declared[parseLooseStringAny(tool["type"])]++
+	}
+	if declared["web_search"] != 1 || declared["x_search"] != 1 {
+		t.Fatalf("Build hosted-search route = %#v", payload["tools"])
+	}
+}
+
+func TestNormalizeBuildResponsesPayloadPreservesExplicitXSearch(t *testing.T) {
+	payload := map[string]interface{}{
+		"model": "grok-4.7",
+		"input": "search X",
+		"tools": []interface{}{map[string]interface{}{"type": "x_search"}},
+	}
+	if err := normalizeBuildResponsesPayload(payload); err != nil {
+		t.Fatal(err)
+	}
+	tools := interfaceMaps(payload["tools"])
+	if len(tools) != 1 || parseLooseStringAny(tools[0]["type"]) != "x_search" {
+		t.Fatalf("explicit x_search changed: %#v", payload["tools"])
+	}
+}
+
 // Two identical hosted declarations would reach the upstream as two identical
 // searches; the function list is validated for exactly that, and the hosted
 // list must not be the way around it.

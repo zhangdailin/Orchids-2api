@@ -487,6 +487,15 @@ func applyBuildResponseDefaults(payload map[string]interface{}) {
 	payload["include"] = append(includes, reasoningInclude)
 }
 
+func hasBuildHostedTool(tools []map[string]interface{}, kind string) bool {
+	for _, tool := range tools {
+		if strings.EqualFold(strings.TrimSpace(parseLooseStringAny(tool["type"])), kind) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 	state := newBuildToolNormalizationState()
 	if err := normalizeBuildInputHistory(payload, state); err != nil {
@@ -549,6 +558,16 @@ func normalizeBuildResponsesPayload(payload map[string]interface{}) error {
 		delete(payload, "tools")
 		delete(payload, "tool_choice")
 		return nil
+	}
+	// Build's cache-capable hosted-search route expects x_search to accompany a
+	// web_search declaration. The official Build adapter adds this internal
+	// routing tool after compatibility normalization; forwarding web_search alone
+	// makes the model begin the search and then terminate with upstream_rejection.
+	// Keep an explicit x_search unchanged and never add web_search when only X was
+	// requested, so this does not broaden a caller's search permission.
+	if hasBuildHostedTool(normalized, "web_search") && !hasBuildHostedTool(normalized, "x_search") {
+		normalized = append(normalized, map[string]interface{}{"type": "x_search"})
+		state.addWarning("x_search_cache_route_added")
 	}
 	payload["tools"] = normalized
 	normalizeBuildToolChoice(payload, state)
