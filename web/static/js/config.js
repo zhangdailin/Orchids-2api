@@ -292,41 +292,59 @@ function handleTokenCacheTTLCustomInput() {
 
 // Load configuration from API. Returns true only when the server values were
 // applied: a failed load must not become the baseline the save bar diffs against.
+function setConfigControlValue(id, value) {
+  const field = document.getElementById(id);
+  if (field) field.value = value == null ? "" : String(value);
+}
+
+function applyConfigurationPayload(cfg) {
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
+    throw new Error("配置接口返回格式无效");
+  }
+  setConfigControlValue("cfg_admin_pass", cfg.admin_password || cfg.admin_pass || "");
+  setConfigControlValue("cfg_anonymous_allow_ips", Array.isArray(cfg.anonymous_allow_ips) ? cfg.anonymous_allow_ips.join("\n") : "");
+  setConfigControlValue("cfg_proxy_url", cfg.proxy_url || "");
+  setConfigControlValue("cfg_proxy_bypass", normalizeProxyBypass(cfg.proxy_bypass).join("\n"));
+
+  const cacheTokenCount = document.getElementById("cfg_enable_token_cache");
+  if (cacheTokenCount) cacheTokenCount.checked = normalizeFlagValue(cfg.enable_token_cache);
+  const estimateTokenCache = document.getElementById("cfg_cache_token_count");
+  if (estimateTokenCache) estimateTokenCache.checked = normalizeFlagValue(cfg.cache_token_count);
+
+  syncTokenCacheTTLControls(cfg.token_cache_ttl || 300);
+  setConfigControlValue("cfg_token_cache_strategy", cfg.token_cache_strategy || "1");
+}
+
 async function loadConfiguration() {
   try {
-    const res = await fetch("/api/config/list");
-    if (res.status === 401) {
+    const res = await fetch("/api/config/list", { credentials: "same-origin", cache: "no-store" });
+    if (res.status === 401 || res.status === 403) {
       window.location.href = "./login.html";
       return false;
+    }
+    const contentType = res.headers?.get?.("content-type") || "";
+    if (!res.ok) {
+      const detail = (await res.text()).trim();
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    if (!contentType.toLowerCase().includes("application/json")) {
+      throw new Error("配置接口未返回 JSON，登录状态可能已失效");
     }
     const payload = await res.json();
     if (payload && typeof payload.code !== "undefined" && payload.code !== 0) {
       throw new Error(payload.message || payload.msg || "加载配置失败");
     }
-    const cfg = payload && payload.data ? payload.data : payload;
-
-    document.getElementById("cfg_admin_pass").value = cfg.admin_password || cfg.admin_pass || "";
-    const allowField = document.getElementById("cfg_anonymous_allow_ips");
-    if (allowField) {
-      allowField.value = Array.isArray(cfg.anonymous_allow_ips) ? cfg.anonymous_allow_ips.join("\n") : "";
-    }
-    document.getElementById("cfg_proxy_url").value = cfg.proxy_url || "";
-    const proxyBypass = normalizeProxyBypass(cfg.proxy_bypass);
-    document.getElementById("cfg_proxy_bypass").value = proxyBypass.join("\n");
-
-    const cacheTokenCount = document.getElementById("cfg_enable_token_cache");
-    cacheTokenCount.checked = normalizeFlagValue(cfg.enable_token_cache);
-    const estimateTokenCache = document.getElementById("cfg_cache_token_count");
-    if (estimateTokenCache) estimateTokenCache.checked = normalizeFlagValue(cfg.cache_token_count);
-
-    syncTokenCacheTTLControls(cfg.token_cache_ttl || 300);
-    document.getElementById("cfg_token_cache_strategy").value = cfg.token_cache_strategy || "1";
-
+    applyConfigurationPayload(payload && payload.data ? payload.data : payload);
+    setConfigSaveError("");
     return true;
   } catch (err) {
-    // Without a baseline the save bar reports that nothing was loaded.
+    // Without a baseline the save bar reports that nothing was loaded. Preserve
+    // the actual cause in the page and toast instead of collapsing every HTTP,
+    // JSON and DOM compatibility error into the same opaque message.
     renderConfigDirtyState();
-    showToast("加载配置失败", "error");
+    const reason = err?.message || String(err || "未知错误");
+    setConfigSaveError("加载失败：" + reason);
+    showToast("配置加载失败：" + reason, "error");
     return false;
   }
 }

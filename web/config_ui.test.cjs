@@ -8,20 +8,20 @@ const vm=require('node:vm');
 // Load config.js in a DOM stand-in. Only the pure helpers matter here: the
 // anonymous-allowlist parser and the USD <-> tick conversion decide what the
 // admin plane sends to the server.
-function loadConfig(){
+function loadConfig(fetchImpl){
  const nodes=new Map();
- const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false});return nodes.get(id)};
+ const node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',checked:false,style:{},textContent:'',classList:{add(){},remove(){},toggle(){}}});return nodes.get(id)};
  const context=vm.createContext({
   console,Date,Math,Number,String,Array,Object,JSON,isNaN,parseInt,parseFloat,
-  setTimeout(){},setInterval(){},fetch(){return Promise.resolve({ok:true,json:()=>({})})},
-  window:{matchMedia:()=>({matches:false}),addEventListener(){}},
+  setTimeout(){},setInterval(){},fetch:fetchImpl||(()=>Promise.resolve({ok:true,headers:{get:()=>"application/json"},json:()=>({})})),
+  window:{matchMedia:()=>({matches:false}),addEventListener(){},location:{href:''}},
   document:{readyState:'loading',addEventListener(){},getElementById:node,createElement:()=>({}),querySelectorAll:()=>[]},
-  encodeData:v=>String(v),
+  encodeData:v=>String(v),showToast(){},
  });
  // config.js declares its helpers at top level, so the harness only appends an
  // export for the pure functions it wants to assert on.
  let src=fs.readFileSync(path.join(__dirname,'static/js/config.js'),'utf8');
- src+='\nglobalThis.probe={parseAnonymousAllowIPs,ticksToUSD,usdToTicks,formatUSD,periodSuffix};\n';
+ src+='\nglobalThis.probe={parseAnonymousAllowIPs,ticksToUSD,usdToTicks,formatUSD,periodSuffix,applyConfigurationPayload,loadConfiguration};\n';
  vm.runInContext(src,context);
  return {api:context.probe,node};
 }
@@ -58,4 +58,34 @@ test('a billing policy line reads in dollars and names the period',()=>{
  assert.equal(api.periodSuffix({billing_period_days:30}),' · 30 天账期');
  assert.equal(api.periodSuffix({billing_period_days:0}),'');
  assert.equal(api.periodSuffix({}),'');
+});
+
+
+test('configuration payload tolerates a missing optional control',()=>{
+ const {api,node}=loadConfig();
+ // The page can be served from a stale cached template while config.js is fresh.
+ // Optional controls must not turn a valid API response into "配置加载失败".
+ const original=node('cfg_cache_token_count');
+ original.checked=false;
+ api.applyConfigurationPayload({admin_password:'secret',anonymous_allow_ips:['203.0.113.1'],proxy_bypass:null,enable_token_cache:true,token_cache_ttl:300,token_cache_strategy:'1'});
+ assert.equal(node('cfg_admin_pass').value,'secret');
+ assert.equal(node('cfg_anonymous_allow_ips').value,'203.0.113.1');
+ assert.equal(node('cfg_enable_token_cache').checked,true);
+});
+
+test('configuration loader applies a valid JSON response',async()=>{
+ const {api,node}=loadConfig(()=>Promise.resolve({
+  ok:true,status:200,headers:{get:()=> 'application/json; charset=utf-8'},
+  json:()=>Promise.resolve({code:0,data:{admin_password:'loaded',token_cache_ttl:300,token_cache_strategy:'1'}}),
+ }));
+ assert.equal(await api.loadConfiguration(),true);
+ assert.equal(node('cfg_admin_pass').value,'loaded');
+});
+
+test('configuration loader rejects bad HTTP and non-JSON responses before applying them',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'static/js/config.js'),'utf8');
+ assert.match(source,/if \(!res\.ok\)/);
+ assert.match(source,/includes\("application\/json"\)/);
+ assert.match(source,/credentials: "same-origin"/);
+ assert.match(source,/setConfigSaveError\("加载失败：" \+ reason\)/);
 });
