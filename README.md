@@ -317,6 +317,12 @@ Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/model
 
 模型与推理接口默认要求管理端创建的 API Key。管理端可为每个 Key 设置允许模型、每分钟请求数和到期时间；旧 Key 默认不限制这些策略。仅在已有可信上游网关负责认证时，才设置 `inference_auth_enabled=false`。
 
+### Grok 工具页：对话、联网与诊断
+
+- 工具页的推理走管理端命名空间 `/api/grok/tools/v1/*`，只认管理端会话：不消耗 Client Key 的额度、模型白名单与并发。
+- 「联网工具」里的 Web 搜索 / X 搜索以 Responses 的 `tools`（`web_search` / `x_search`）下发。Console（Build 之外的 `console.x.ai` 通道）由上游服务端执行搜索；Web/AppChat 通道的 `disableSearch` 恒为 `false`，上游默认就会搜索。
+- 这些请求按 `grok` 通道写入日志中心，和 `/v1` 推理一样有一条请求记录。日志中心的「诊断采集」按钮（`PUT /api/journal/diagnostics/settings`，写入 `debug_enabled`）打开后，请求行才会带「含诊断」，可展开请求体、上游尝试与响应；诊断内容保留 24 小时、最多 512 个请求。
+
 ## 许可证
 
 本仓库遵循仓库内现有许可策略。
