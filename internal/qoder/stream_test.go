@@ -174,6 +174,15 @@ func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 	}
 }
 
+func TestConsumeStreamPreservesEnvelopeStatusForClassification(t *testing.T) {
+	t.Parallel()
+	body := "data: " + `{"statusCodeValue":400,"body":"{\"message\":\"invalid tool schema\"}"}` + "\n\n"
+	_, _, err := collectStream(t, body)
+	if err == nil || !strings.Contains(err.Error(), "status=400") {
+		t.Fatalf("error = %v, want explicit status=400", err)
+	}
+}
+
 func TestConsumeStreamClassifiesAgentLimitWithoutClaimingAccountQuota(t *testing.T) {
 	t.Parallel()
 	const resetMillis = int64(1790538433100)
@@ -250,21 +259,19 @@ func TestConsumeStreamClassifiesUnauthorizedEnvelope(t *testing.T) {
 	}
 }
 
-// TestConsumeStreamIgnoresMalformedFrames proves one bad frame does not discard
-// an otherwise good answer.
-func TestConsumeStreamIgnoresMalformedFrames(t *testing.T) {
+// TestConsumeStreamRejectsMalformedFrames proves corrupt stream data cannot be
+// silently omitted from an otherwise successful answer.
+func TestConsumeStreamRejectsMalformedFrames(t *testing.T) {
 	t.Parallel()
 
-	body := "data: not-json\n\n" +
-		envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"kept"},"finish_reason":"stop"}]}`) +
+	body := envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"before"}}]}`) +
+		"data: not-json\n\n" +
+		envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"after"},"finish_reason":"stop"}]}`) +
 		"event:finish\ndata: {}\n\n"
 
-	events, _, err := collectStream(t, body)
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
-	}
-	if len(events) != 1 || events[0].Event["delta"] != "kept" {
-		t.Fatalf("events = %+v, want the well-formed delta only", events)
+	_, _, err := collectStream(t, body)
+	if err == nil || !strings.Contains(err.Error(), "protocol error") {
+		t.Fatalf("consumeStream() error = %v, want protocol error", err)
 	}
 }
 

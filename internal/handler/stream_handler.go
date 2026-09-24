@@ -22,6 +22,7 @@ import (
 	"orchids-api/internal/debug"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/logutil"
+	"orchids-api/internal/middleware"
 	"orchids-api/internal/perf"
 	"orchids-api/internal/tiktoken"
 	"orchids-api/internal/toolname"
@@ -1786,8 +1787,10 @@ func (h *streamHandler) markWriteErrorLocked(event string, err error) {
 		return
 	}
 	h.hasReturn = true
+	h.requestFailed = true
 	h.returned.Store(true)
 	h.finalStopReason = "write_error"
+	middleware.MarkStreamFailure(h.w)
 	slog.Warn("SSE write failed", "event", event, "error", err)
 }
 
@@ -2353,7 +2356,9 @@ func (h *streamHandler) writeStreamError(category, message string) {
 		return
 	}
 	h.hasReturn = true
+	h.requestFailed = true
 	h.returned.Store(true)
+	middleware.MarkStreamFailure(h.w)
 
 	if h.responseFormat == adapter.FormatOpenAI {
 		data, err := marshalOpenAIErrorBytes(category, message)

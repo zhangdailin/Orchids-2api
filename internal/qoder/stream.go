@@ -320,10 +320,8 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 
 		var envelope streamEnvelope
 		if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
-			// A non-JSON data line is a protocol warning, not a transport
-			// failure; keep consuming so a single bad frame does not discard an
-			// otherwise good answer.
-			return true
+			streamErr = fmt.Errorf("qoder stream protocol error: invalid envelope: %w", err)
+			return false
 		}
 		if envelope.StatusCodeValue != 0 && envelope.StatusCodeValue != http.StatusOK {
 			var failure struct {
@@ -358,7 +356,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			case envelope.StatusCodeValue == http.StatusUnauthorized || envelope.StatusCodeValue == http.StatusForbidden:
 				streamErr = fmt.Errorf("%w: %s", errUpstreamUnauthorized, detail)
 			default:
-				streamErr = fmt.Errorf("qoder upstream error: %s", detail)
+				streamErr = fmt.Errorf("qoder upstream error: status=%d, %s", envelope.StatusCodeValue, detail)
 			}
 			return false
 		}
@@ -372,7 +370,8 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(envelope.Body), &chunk); err != nil {
-			return true
+			streamErr = fmt.Errorf("qoder stream protocol error: invalid body: %w", err)
+			return false
 		}
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
 			if stringOfCode(chunk.Error.Code) == busyCode {

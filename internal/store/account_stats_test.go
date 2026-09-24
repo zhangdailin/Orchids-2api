@@ -104,6 +104,68 @@ func TestIncrementAccountStats_ZeroUsageStillCountsRequest(t *testing.T) {
 	}
 }
 
+func TestUpdateAccount_DoesNotOverwriteAtomicUsageCounters(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	ctx := context.Background()
+	acc := &Account{AccountType: "qoder", Enabled: true}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	stale, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if err := s.IncrementAccountStats(ctx, acc.ID, 100, 1); err != nil {
+		t.Fatalf("IncrementAccountStats() error = %v", err)
+	}
+	stale.StatusCode = "429"
+	if err := s.UpdateAccount(ctx, stale); err != nil {
+		t.Fatalf("UpdateAccount() error = %v", err)
+	}
+	got, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if got.UsageTotal != 100 || got.TokensToday != 100 || got.TokensDate == "" {
+		t.Fatalf("atomic counters overwritten by stale update: total=%v today=%v date=%q", got.UsageTotal, got.TokensToday, got.TokensDate)
+	}
+}
+
+func TestIncrementAccountStats_WorkBuddyKeepsRemoteRemainingCredits(t *testing.T) {
+	t.Parallel()
+
+	mini := miniredis.RunT(t)
+	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "test:"})
+	if err != nil {
+		t.Fatalf("store.New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	ctx := context.Background()
+	acc := &Account{AccountType: "workbuddy", Enabled: true, UsageCurrent: 0, UsageLimit: 1000}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount() error = %v", err)
+	}
+	if err := s.IncrementAccountStats(ctx, acc.ID, 500, 1); err != nil {
+		t.Fatalf("IncrementAccountStats() error = %v", err)
+	}
+	got, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatalf("GetAccount() error = %v", err)
+	}
+	if got.UsageCurrent != 0 || got.UsageTotal != 500 || got.TokensToday != 500 {
+		t.Fatalf("workbuddy counters = current %v total %v today %v, want 0/500/500", got.UsageCurrent, got.UsageTotal, got.TokensToday)
+	}
+}
+
 func TestUpdateAccount_PersistsWarpQuotaBreakdown(t *testing.T) {
 	t.Parallel()
 

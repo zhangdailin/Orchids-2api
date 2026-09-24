@@ -2,17 +2,34 @@ package middleware
 
 import (
 	"context"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
+
 	"orchids-api/internal/audit"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/opsagg"
-	"strings"
-	"testing"
 )
+
+func TestDiagnosticWriterBoundsBufferedResponse(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writer := &diagnosticWriter{TracedResponseWriter: NewTracedResponseWriter(recorder)}
+	payload := strings.Repeat("x", maxDiagnosticResponseBytes*3)
+	if n, err := writer.Write([]byte(payload)); err != nil || n != len(payload) {
+		t.Fatalf("Write() = %d, %v; want %d, nil", n, err, len(payload))
+	}
+	if recorder.Body.Len() != len(payload) {
+		t.Fatalf("client response bytes = %d, want %d", recorder.Body.Len(), len(payload))
+	}
+	if writer.body.Len() != maxDiagnosticResponseBytes {
+		t.Fatalf("diagnostic buffer bytes = %d, want cap %d", writer.body.Len(), maxDiagnosticResponseBytes)
+	}
+}
 
 func TestDiagnosticsStreamingAndExactlyOneOutcome(t *testing.T) {
 	old := detailedOutcomeRecorder

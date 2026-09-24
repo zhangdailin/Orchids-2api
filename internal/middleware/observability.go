@@ -160,10 +160,17 @@ type diagnosticWriter struct {
 	body    bytes.Buffer
 }
 
+const maxDiagnosticResponseBytes = 64 << 10
+
 func (w *diagnosticWriter) Write(p []byte) (int, error) {
 	n, err := w.TracedResponseWriter.Write(p)
-	if n > 0 {
-		_, _ = w.body.Write(p[:n])
+	if n > 0 && w.body.Len() < maxDiagnosticResponseBytes {
+		captured := n
+		remaining := maxDiagnosticResponseBytes - w.body.Len()
+		if captured > remaining {
+			captured = remaining
+		}
+		_, _ = w.body.Write(p[:captured])
 	}
 	return n, err
 }

@@ -867,9 +867,11 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	allowedToolNames := []string(nil)
 	allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
 	sh.setAllowedToolNames(allowedToolNames)
+	if preSelectWarpRequest || preSelectQoderRequest {
+		sh.setSurfaceToolRejects(true)
+	}
 	if preSelectWarpRequest {
 		sh.setStrictToolAllowlist(true)
-		sh.setSurfaceToolRejects(true)
 	}
 	if len(req.Tools) > 0 {
 		sh.setClientTools(req.Tools)
@@ -1326,9 +1328,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 
 	}
 
-	// Sync state and update stats using helpers
+	// Sync state and update stats using helpers. A failed request with no
+	// provider-reported usage must not turn the local input estimate into spend;
+	// still count the request itself for operational history.
 	h.syncWarpState(currentAccount, apiClient)
-	h.updateAccountStats(currentAccount, sh.inputTokens, sh.outputTokens)
+	statsInput, statsOutput := sh.inputTokens, sh.outputTokens
+	if sh.requestFailed && !sh.useUpstreamUsage {
+		statsInput, statsOutput = 0, 0
+	}
+	h.updateAccountStats(currentAccount, statsInput, statsOutput)
 
 	// Audit log
 	if h.auditLogger != nil {
@@ -1341,7 +1349,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		status := "success"
-		if sh.finalStopReason == "" && !sh.hasReturn {
+		if sh.requestFailed || (sh.finalStopReason == "" && !sh.hasReturn) {
 			status = "error"
 		}
 		usageSource := audit.UsageSourceEstimated

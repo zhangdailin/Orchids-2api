@@ -194,7 +194,7 @@ var (
 		if acc.account_type ~= nil then
 			acc_type = string.lower(tostring(acc.account_type))
 		end
-		if acc_type ~= "warp" and acc_type ~= "puter" and acc_type ~= "grok" and acc_type ~= "qoder" then
+		if acc_type ~= "warp" and acc_type ~= "puter" and acc_type ~= "grok" and acc_type ~= "qoder" and acc_type ~= "workbuddy" then
 			acc.usage_current = (acc.usage_current or 0) + usage
 		end
 		acc.usage_total = (acc.usage_total or 0) + usage
@@ -608,13 +608,12 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		updated.Token = acc.Token
 		updated.Subscription = acc.Subscription
 		updated.UsageCurrent = acc.UsageCurrent
-		updated.UsageTotal = acc.UsageTotal
+		// UsageTotal and the daily token fields are gateway-owned atomic counters.
+		// Copying them from an Account snapshot races IncrementAccountStats: a
+		// status/quota update loaded before an increment would write the old values
+		// back afterward and silently lose usage. Only the increment script mutates
+		// these fields after account creation.
 		updated.UsageLimit = acc.UsageLimit
-		// The daily counters travel with a partial update so an admin edit does
-		// not erase what the gateway counted; the date is what lets the next
-		// request decide whether today's figure is still today's.
-		updated.TokensToday = acc.TokensToday
-		updated.TokensDate = acc.TokensDate
 		updated.WarpMonthlyLimit = acc.WarpMonthlyLimit
 		updated.WarpMonthlyRemaining = acc.WarpMonthlyRemaining
 		updated.WarpBonusRemaining = acc.WarpBonusRemaining
