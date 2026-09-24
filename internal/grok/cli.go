@@ -265,8 +265,9 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 	// Without these the upstream sees an anonymous caller, which is both a
 	// weaker identity and the reason session affinity behaved differently than
 	// through grok2api.
-	headers.Set("x-authenticateresponse", "true")
+	headers.Set("x-authenticateresponse", "authenticate-response")
 	headers.Set("x-grok-agent-id", buildClientIdentifier(c))
+	headers.Set("x-grok-model-override", strings.TrimSpace(fmt.Sprint(payload["model"])))
 	if version := strings.TrimSpace(c.clientVersion()); version != "" {
 		headers.Set("x-grok-client-version", version)
 	}
