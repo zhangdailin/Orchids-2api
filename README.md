@@ -7,7 +7,7 @@
 ## 当前状态
 
 - `internal/handler` 统一处理 `warp` / `puter` / `workbuddy` / `qoder` / `cline` 的 `/v1/messages` 与 `/v1/chat/completions`
-- `internal/grok` 独立处理 `grok` 的 Messages、Responses、Chat、图片、视频和本地媒体接口
+- `internal/grok` 仅通过 Build OAuth CLI 上游处理 `grok` 的 Messages、Responses 与 Chat
 - 模型管理支持按通道刷新：`/api/models/refresh`
 - Puter 非流式 Claude Messages 已覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归
 - WorkBuddy 通道对接国际版 `www.workbuddy.ai`，账号级模型目录从 `GET /v3/config` 同步，refreshToken 自动轮换并回写
@@ -23,7 +23,7 @@
 - 管理后台与管理 API
 - Redis 持久化存储
 - Prometheus 指标与可选 `pprof`
-- Grok 图片生成、编辑和本地媒体缓存
+- Grok Build OAuth 设备登录、模型发现、账单/限速状态与 stored Responses
 - 推理 API Key 默认鉴权、模型白名单/RPM/到期策略与 Redis 账号凭据 AES-GCM 加密
 
 ## 支持通道
@@ -35,7 +35,7 @@
 | `workbuddy` | `/workbuddy/v1/messages`、`/workbuddy/v1/chat/completions` |
 | `qoder` | `/qoder/v1/messages`、`/qoder/v1/chat/completions` |
 | `cline` | `/cline/v1/messages`、`/cline/v1/chat/completions` |
-| `grok` | `/grok/v1/messages`、`/grok/v1/responses`、`/grok/v1/chat/completions`、图片、视频与文件接口 |
+| `grok` | `/grok/v1/messages`、`/grok/v1/responses`、`/grok/v1/chat/completions`（仅 Build OAuth CLI） |
 
 统一模型查询入口：
 
@@ -186,7 +186,7 @@ go list -m -u all                                # 可升级清单，仅信息�
 - `warp`：账号 GraphQL 发现结果，失败时退回内置种子
 - `puter`：Puter 公开模型列表 + 账号 test_mode 保守验证
 - `workbuddy`：账号级 `GET /v3/config` 的 `cli` agent 白名单（鉴权成功即视为验证通过，不额外消耗额度）
-- `grok`：内置支持列表 + 现存模型 + 账号 console 探测
+- `grok`：Build OAuth 账号的 `GET /v1/models` 上游发现结果
 
 ## WorkBuddy 当前对齐点
 
@@ -254,50 +254,28 @@ WB_LIVE=1 WB_AUTH_FILE=/path/to/auths/workbuddy-<uid>.json go test ./internal/wo
 
 Build stored Responses 会按客户端 API Key 隔离，并固定回创建该 Response 的 OAuth 账号；归属记录默认保留 720 小时。详见 [docs/api-reference.md](docs/api-reference.md#13-openai-responses-风格)。
 
-### Grok 图片与文件
+## Grok Build OAuth CLI
 
-- `POST /grok/v1/images/generations`
-- `POST /grok/v1/images/edits`
-- `GET /grok/v1/files/{image|video}/{name}`
+Grok 只使用 `cli-chat-proxy.grok.com/v1` Build 上游。账号必须通过管理端设备授权创建，服务端保存并自动刷新 OAuth access/refresh token；不接受 Cookie 或手填 token。
 
-### Grok 视频与语音
+设备登录：
 
-- `POST /grok/v1/videos/generations`（Console 标准生成）
-- `POST /grok/v1/videos/edits`、`POST /grok/v1/videos/extensions`
-- `POST /grok/v1/videos`（保留的 Web app-chat 旧版生成入口）
-- `GET /grok/v1/videos/{video_id}` 与 `/content`
-- `POST /grok/v1/media/inputs`，以及 `GET` / `DELETE /grok/v1/media/inputs/{file_id}`
-- `POST /grok/v1/tts`、`GET /grok/v1/tts/voices`
-- `POST /grok/v1/stt`，以及 `GET /grok/v1/stt` WebSocket
-- `GET /grok/v1/realtime` WebSocket
-- `POST /grok/v1/audio/speech`、`POST /grok/v1/audio/tasks`
-- `POST /grok/v1/audio/transcriptions`（`json`、`verbose_json`、`text`）
+- `POST /api/grok/device-auth`：创建事务，返回 `verification_uri`、`verification_uri_complete`、`user_code` 与过期时间
+- `GET /api/grok/device-auth/{id}`：轮询，完成后返回新建或更新的账号 ID
+- `DELETE /api/grok/device-auth/{id}`：取消事务
 
-以上接口同时提供 `/v1/*` 别名。标准视频和语音接口使用 Grok Console SSO + DPoP；`grok_console_base_url` 可覆盖默认的 `https://console.x.ai/v1`。标准视频任务按调用方 API Key 隔离，任务元数据以一小时 TTL 写入 Redis；已提交到 Console 并取得上游 `request_id` 的任务会在服务重启后使用原账号继续轮询和下载。多实例通过 30 秒 Redis 原子租约和心跳保证同一任务只有一个 worker，租约过期后可由其他实例接管。`media_dir` 可挂载共享文件系统；多副本模式要求 Redis、每实例唯一的 `deployment_instance_id`、共同的 `deployment_cluster_id` 和 `shared_media=true`，启动时会校验集群标记及共享目录读写。媒体输入接口接受 20 MiB 以内的图片或视频 multipart `file`，返回保留 24 小时且按 API Key 隔离的 `file_id`；标准视频的 `image`、`reference_images` 和 `video` 均可使用。支持 `grok-imagine-video`，生成还支持 `grok-imagine-video-1.5`；编辑和延长目前遵循上游限制，仅支持基础模型。托管 Grok 出口池暂不支持语音 WebSocket 拨号，启用时会安全拒绝该类连接；静态 HTTP/SOCKS 代理不受影响。
+以上端点要求管理会话并遵循同源保护。模型由 Build 账号的 `GET /v1/models` 实际发现。
 
-OpenAI 转录兼容层会拒绝 Console STT 无法无损表示的 `prompt`、非零 `temperature` 和 `timestamp_granularities`，并且不实现语义不同的 `/audio/translations`。
+### Build 配置（config.json / Redis）
 
-## Grok 上游模式
+- `grok_cli_base_url`
+- `grok_cli_user_agent` / `grok_cli_client_version` / `grok_cli_client_identifier`
+- `grok_cli_oauth_client_id` / `grok_cli_oauth_device_url` / `grok_cli_oauth_token_url`
+- `grok_cli_model_ids`（可选的 CLI 模型路由补充）
+- `grok_build_timeout_seconds` / `grok_build_stream_idle_seconds` / `grok_build_rps`
+- `response_store_ttl_hours`（stored Response 账号归属记录 TTL，默认 720 小时）
 
-Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/models.go` 的 `ModelSpec` 路由：
-
-| 模式 | 上游 | 账号凭据 | 典型模型 |
-|---|---|---|---|
-| app-chat（Web） | `grok.com/rest/app-chat/...` | SSO Cookie（`client_cookie`） | 当前 imagine 图片、编辑和视频模型 |
-| console | `console.x.ai/v1/*` + DPoP | Console SSO Cookie | Responses、标准视频、TTS、STT、Realtime；只有显式加入兼容表的模型才会公开 |
-| cli（Build） | `cli-chat-proxy.grok.com/v1` + Bearer | OAuth token（`credential_type="oauth"` + access/refresh token） | 当前 `grok-4.5`、`grok-4.6` |
-
-### 新增配置（config.json / Redis）
-
-- `grok_cli_base_url` / `grok_cli_user_agent` / `grok_cli_client_version` / `grok_cli_client_identifier`
-- `grok_console_base_url`（默认 `https://console.x.ai/v1`，用于 Console Responses、标准视频、TTS、STT 与 Realtime）
-- `grok_cli_oauth_client_id` / `grok_cli_oauth_token_url`（默认官方 client/token 端点）
-- `grok_cli_model_ids`（为未显式标注上游的兼容模型指定 CLI 路由；当前 4.5/4.6 已显式标注）
-- `response_store_ttl_hours`（Build stored Response 归属记录 TTL，默认 720 小时）
-- `grok_egress_enabled`（默认 false；开启后走代理池 + FlareSolverr + clearance 缓存）
-- `grok_egress_nodes`（代理池节点列表）、`grok_flaresolverr_url`、`grok_clearance_mode`（`manual`/`flaresolverr`）、`grok_clearance_refresh_interval`
-
-注意：这些字段带 json tag 且不会被 `ApplyHardcoded` 覆盖；通过管理端 `/api/config` 保存后不会被抹掉。
+这些字段可由配置文件或管理端持久化。通用 `proxy_http` / `proxy_https`、prompt/token 缓存和渠道配置仍适用于 Build 请求。
 
 ## 管理端
 
@@ -311,32 +289,19 @@ Grok 代码保留三种上游传输；当前公开模型按 `internal/grok/model
 管理接口认证方式：
 
 - `session_token` cookie
-- `Authorization: Bearer <admin_token>`
-- `X-Admin-Token: <admin_token>`
 - Basic Auth，密码等于 `admin_pass`
 
 模型与推理接口默认要求管理端创建的 API Key。管理端可为每个 Key 设置允许模型、每分钟请求数和到期时间；旧 Key 默认不限制这些策略。仅在已有可信上游网关负责认证时，才设置 `inference_auth_enabled=false`。
 
-### Grok 工具页：对话、联网与诊断
+### Grok 工具页：Build 对话与联网工具
 
-- 工具页的推理走管理端命名空间 `/api/grok/tools/v1/*`，只认管理端会话：不消耗 Client Key 的额度、模型白名单与并发。
-- 「联网工具」里的 Web 搜索 / X 搜索以 Responses 的 `tools`（`web_search` / `x_search`）下发。Console（Build 之外的 `console.x.ai` 通道）由上游服务端执行搜索；Web/AppChat 通道的 `disableSearch` 恒为 `false`，上游默认就会搜索。
-- 这些请求按 `grok` 通道写入日志中心，和 `/v1` 推理一样有一条请求记录。日志中心的「诊断采集」按钮（`PUT /api/journal/diagnostics/settings`，写入 `debug_enabled`）打开后，请求行才会带「含诊断」，可展开请求体、上游尝试与响应；诊断内容保留 24 小时、最多 512 个请求。
+- 工具页只暴露 `GET /api/grok/tools/v1/models` 和 `POST /api/grok/tools/v1/responses`，使用管理会话认证，不消耗 Client Key 的额度、模型白名单与并发。
+- 可在 Responses `tools` 中按需选择 `{"type":"web_search"}` 或 `{"type":"x_search"}`；网关保留这些 hosted tool 声明，由 Build 上游决定当前账号/模型是否支持并执行。
+- 请求按 `grok` 通道写入日志中心；启用诊断后可查看请求、上游尝试与响应。
 
-### Grok 模型行：三种来源
+### Grok 模型来源
 
-`/api/models`、`/api/grok/models` 和工具页下拉里的 Grok 行由两个权威分别产生，缺一个就会出现「账号在线但没人用」：
-
-| 平面 | 来源 | 说明 |
-| --- | --- | --- |
-| Build（OAuth CLI） | **上游观测** | `discoverGrokModelsReport` 读账号自己的能力目录，发布的就是该账号真实报出的模型；上游撤回后随下一次刷新消失。 |
-| Web / AppChat（SSO） | **网关路由表** | 没有任何账号目录可读，路由由编译内的兼容表声明。某平面存在**至少一个启用账号**时，刷新会补齐该平面缺失的行（`grok-chat-fast/auto/expert/heavy` 等）。 |
-| Console（SSO 伴生） | **网关路由表** | 同上，补齐 `console/grok-*` 会话行（`console/grok-4.20-0309-reasoning`、`console/grok-4.5` 等）。 |
-
-- 路由行只**创建**不覆盖：已存在的行（无论状态、来源，还是手工改过的名称/映射）不会被刷新改写。要隐藏一个路由行，把它的状态设为 `offline`，删除会在下次刷新时重新出现。
-- 路由行的 `sort_order` 从 1000 起，排在观测行之后：工具页默认聊天模型取列表第一条，新增平面不会悄悄改变默认模型。
-- 需要 Web / Console 账号才会发布对应平面；没有该平面账号的部署不会凭空多出这些模型。
-- 健康检查的覆盖范围仍不完整：后台 SSO 刷新只探测 Web 源（身份 + 额度），Web 源关联的 Console 伴生账号目前**没有**自动校验路径，Console 路由是否可用只能从请求结果（日志中心的上游尝试）看出来。
+`/api/models`、`/api/grok/models`、`/grok/v1/models` 与工具页模型下拉均来自 Build OAuth 账号的上游能力目录。刷新读取账号自己的 `GET /v1/models`，返回 `source=grok_build_models`；上游新增或撤回会在下次成功刷新时同步。没有启用的 Build OAuth 账号时不会发布 Grok 模型。
 
 ## 许可证
 

@@ -11,10 +11,8 @@ package pricing
 import (
 	"bytes"
 	"encoding/json"
-	"math"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
@@ -291,19 +289,6 @@ func scanReservationJSON(body []byte) (model string, inputTokens, outputTokens i
 	return model, max(256, tokens+128), outputTokens, true
 }
 
-// EstimateTTSCost prices unary TTS from the exact Unicode character count that
-// was accepted by the upstream request ($15 per 1M characters).
-func EstimateTTSCost(text string) (Result, bool) {
-	characters := utf8.RuneCountInString(text)
-	if characters <= 0 {
-		return Result{}, false
-	}
-	return Result{
-		Model:          "grok-voice-tts",
-		CostInUSDTicks: int64(characters) * officialTTSCharacterTicks,
-	}, true
-}
-
 // ── Media pricing (images, videos) ────────────────────────────────────────────
 //
 // Ported from grok2api's EstimateOfficialImageCost / EstimateOfficialImageEditCost
@@ -328,173 +313,6 @@ func officialImage20OutputTicks(resolution, quality string) (int64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// EstimateImageCost prices a text-to-image request from the produced count.
-func EstimateImageCost(model, resolution, quality string, count int) (Result, bool) {
-	if count <= 0 {
-		return Result{}, false
-	}
-	model = normalizePricingModel(model)
-	quality = strings.ToLower(strings.TrimSpace(quality))
-	switch model {
-	case "grok-imagine-image":
-		if quality != "" {
-			return Result{}, false
-		}
-		return Result{Model: "grok-imagine-image", CostInUSDTicks: int64(count) * 200_000_000}, true
-	case "grok-imagine-image-2.0":
-		resolution = strings.ToLower(strings.TrimSpace(resolution))
-		if resolution == "" {
-			resolution = "1k"
-		}
-		if quality == "" {
-			quality = "medium"
-		}
-		outputTicks, ok := officialImage20OutputTicks(resolution, quality)
-		if !ok {
-			return Result{}, false
-		}
-		return Result{
-			Model:          "grok-imagine-image-2.0-" + quality + "-" + resolution,
-			CostInUSDTicks: int64(count) * outputTicks,
-		}, true
-	case "grok-imagine-image-quality":
-		if quality != "" {
-			return Result{}, false
-		}
-		resolution = strings.ToLower(strings.TrimSpace(resolution))
-		if resolution == "" {
-			resolution = "1k"
-		}
-		var ticksPerImage int64
-		switch resolution {
-		case "1k":
-			ticksPerImage = 500_000_000
-		case "2k":
-			ticksPerImage = 700_000_000
-		default:
-			return Result{}, false
-		}
-		return Result{
-			Model:          "grok-imagine-image-quality-" + resolution,
-			CostInUSDTicks: int64(count) * ticksPerImage,
-		}, true
-	default:
-		return Result{}, false
-	}
-}
-
-// EstimateImageEditCost prices an edit: every output image plus every input image
-// the model had to process.
-func EstimateImageEditCost(model, resolution, quality string, outputCount, inputCount int) (Result, bool) {
-	model = normalizePricingModel(model)
-	if outputCount <= 0 || inputCount <= 0 {
-		return Result{}, false
-	}
-	resolution = strings.ToLower(strings.TrimSpace(resolution))
-	quality = strings.ToLower(strings.TrimSpace(quality))
-	if resolution == "" {
-		resolution = "1k"
-	}
-	pricingModel := ""
-	inputTicks := officialImageEditInputTicks
-	var outputTicks int64
-	switch model {
-	case "grok-imagine-image-edit":
-		if quality != "" {
-			return Result{}, false
-		}
-		pricingModel = "grok-imagine-image-edit-" + resolution
-	case "grok-imagine-image-2.0":
-		if quality == "" {
-			quality = "medium"
-		}
-		ticks, ok := officialImage20OutputTicks(resolution, quality)
-		if !ok {
-			return Result{}, false
-		}
-		outputTicks = ticks
-		pricingModel = "grok-imagine-image-2.0-edit-" + quality + "-" + resolution
-	case "grok-imagine-image-quality":
-		if quality != "" {
-			return Result{}, false
-		}
-		switch resolution {
-		case "1k":
-			outputTicks = 500_000_000
-		case "2k":
-			outputTicks = 700_000_000
-		default:
-			return Result{}, false
-		}
-		pricingModel = "grok-imagine-image-quality-" + resolution
-	case "grok-imagine-image":
-		if quality != "" {
-			return Result{}, false
-		}
-		inputTicks = officialLiteImageInputTicks
-		outputTicks = 200_000_000
-		pricingModel = "grok-imagine-image"
-	default:
-		return Result{}, false
-	}
-	if outputTicks == 0 {
-		switch resolution {
-		case "1k":
-			outputTicks = 500_000_000
-		case "2k":
-			outputTicks = 700_000_000
-		default:
-			return Result{}, false
-		}
-	}
-	return Result{
-		Model:          pricingModel,
-		CostInUSDTicks: int64(outputCount)*outputTicks + int64(inputCount)*inputTicks,
-	}, true
-}
-
-// EstimateVideoCost prices a generated video from its duration and resolution,
-// plus the reference images the model consumed.
-func EstimateVideoCost(model, resolution string, seconds, inputImages int) (Result, bool) {
-	if seconds <= 0 || inputImages < 0 {
-		return Result{}, false
-	}
-	baseModel := normalizePricingModel(model)
-	if baseModel != "grok-imagine-video" && baseModel != "grok-imagine-video-1.5" {
-		return Result{}, false
-	}
-	resolution = strings.ToLower(strings.TrimSpace(resolution))
-	var ticksPerSecond, ticksPerInputImage int64
-	switch baseModel {
-	case "grok-imagine-video":
-		ticksPerInputImage = officialLiteImageInputTicks
-		switch resolution {
-		case "480p":
-			ticksPerSecond = 500_000_000
-		case "720p":
-			ticksPerSecond = 700_000_000
-		default:
-			return Result{}, false
-		}
-	case "grok-imagine-video-1.5":
-		ticksPerInputImage = officialImageEditInputTicks
-		switch resolution {
-		case "480p":
-			ticksPerSecond = 800_000_000
-		case "720p":
-			ticksPerSecond = 1_400_000_000
-		case "1080p":
-			ticksPerSecond = 2_500_000_000
-		default:
-			return Result{}, false
-		}
-	}
-	return Result{
-		Model:          baseModel + "-" + resolution,
-		CostInUSDTicks: int64(seconds)*ticksPerSecond + int64(inputImages)*ticksPerInputImage,
-	}, true
 }
 
 // ── Cost reconstruction (PricingBreakdown) ────────────────────────────────────
@@ -585,38 +403,6 @@ func ReconstructBreakdown(model string, q Quantities) (Breakdown, bool) {
 	normalized := normalizePricingModel(model)
 	breakdown := Breakdown{Model: normalized}
 
-	// Media models first: their pricing model carries the tier suffix.
-	if strings.HasPrefix(normalized, "grok-imagine-image") {
-		return reconstructImageBreakdown(normalized, q)
-	}
-	if strings.HasPrefix(normalized, "grok-imagine-video") {
-		// The stored name carries the resolution suffix (…-1.5-1080p), which the
-		// reconstruction reads back out.
-		return reconstructVideoBreakdown(normalized, q)
-	}
-	if normalized == "grok-voice-tts" {
-		if q.Characters <= 0 {
-			return Breakdown{}, false
-		}
-		breakdown.add(ComponentOutput, UnitSecond, q.Characters, officialTTSCharacterTicks)
-		return breakdown, breakdown.CostInUSDTicks > 0
-	}
-	if strings.HasPrefix(normalized, "grok-stt-") {
-		if q.StreamingSeconds <= 0 {
-			return Breakdown{}, false
-		}
-		hourly := int64(1_000_000_000)
-		if normalized == "grok-stt-streaming" {
-			hourly = 2_000_000_000
-		}
-		cost := int64(math.Ceil(q.StreamingSeconds * float64(hourly) / 3600))
-		if cost < 1 {
-			cost = 1
-		}
-		breakdown.addExact(ComponentOutputSecond, UnitSecond, int64(math.Ceil(q.StreamingSeconds)), hourly/3600, cost)
-		return breakdown, breakdown.CostInUSDTicks > 0
-	}
-
 	price, ok := resolveOfficialTokenPrice(normalized)
 	if !ok {
 		return Breakdown{}, false
@@ -634,107 +420,5 @@ func ReconstructBreakdown(model string, q Quantities) (Breakdown, bool) {
 	breakdown.add(ComponentUncachedInput, UnitToken, uncached, inputPrice)
 	breakdown.add(ComponentCachedInput, UnitToken, cached, cachedPrice)
 	breakdown.add(ComponentOutput, UnitToken, max(int64(0), q.OutputTokens), outputPrice)
-	return breakdown, breakdown.CostInUSDTicks > 0
-}
-
-func reconstructImageBreakdown(model string, q Quantities) (Breakdown, bool) {
-	breakdown := Breakdown{Model: model}
-	outputs := max(int64(0), q.OutputImages)
-	inputs := max(int64(0), q.InputImages)
-	switch {
-	case model == "grok-imagine-image":
-		breakdown.add(ComponentOutputImage, UnitImage, outputs, 200_000_000)
-		breakdown.add(ComponentInputImage, UnitImage, inputs, officialLiteImageInputTicks)
-	case strings.HasPrefix(model, "grok-imagine-image-2.0"):
-		// The stored pricing model is "…-2.0-<quality>-<resolution>" (or with
-		// "-edit" in the middle); recover both parts from the suffix.
-		quality, resolution := "medium", "1k"
-		rest := strings.TrimPrefix(model, "grok-imagine-image-2.0")
-		rest = strings.TrimPrefix(rest, "-edit")
-		rest = strings.TrimPrefix(rest, "-")
-		if parts := strings.Split(rest, "-"); len(parts) == 2 {
-			quality, resolution = parts[0], parts[1]
-		}
-		outputTicks, ok := officialImage20OutputTicks(resolution, quality)
-		if !ok {
-			return Breakdown{}, false
-		}
-		edit := strings.Contains(model, "-edit")
-		breakdown.add(ComponentOutputImage, UnitImage, outputs, outputTicks)
-		if edit {
-			breakdown.add(ComponentInputImage, UnitImage, max(int64(1), inputs), officialImageEditInputTicks)
-		}
-	case strings.HasPrefix(model, "grok-imagine-image-quality"):
-		resolution := "1k"
-		if strings.HasSuffix(model, "-2k") {
-			resolution = "2k"
-		}
-		outputTicks := int64(500_000_000)
-		if resolution == "2k" {
-			outputTicks = 700_000_000
-		}
-		breakdown.add(ComponentOutputImage, UnitImage, outputs, outputTicks)
-		if strings.Contains(model, "edit") {
-			breakdown.add(ComponentInputImage, UnitImage, max(int64(1), inputs), officialImageEditInputTicks)
-		}
-	case strings.Contains(model, "edit"):
-		resolution := "1k"
-		if strings.HasSuffix(model, "-2k") {
-			resolution = "2k"
-		}
-		outputTicks := int64(500_000_000)
-		if resolution == "2k" {
-			outputTicks = 700_000_000
-		}
-		breakdown.add(ComponentOutputImage, UnitImage, outputs, outputTicks)
-		breakdown.add(ComponentInputImage, UnitImage, max(int64(1), inputs), officialImageEditInputTicks)
-	default:
-		return Breakdown{}, false
-	}
-	return breakdown, breakdown.CostInUSDTicks > 0
-}
-
-func reconstructVideoBreakdown(model string, q Quantities) (Breakdown, bool) {
-	if q.OutputSeconds <= 0 {
-		return Breakdown{}, false
-	}
-	base := "grok-imagine-video"
-	if strings.Contains(model, "1.5") {
-		base = "grok-imagine-video-1.5"
-	}
-	resolution := "720p"
-	switch {
-	case strings.Contains(model, "480p"):
-		resolution = "480p"
-	case strings.Contains(model, "1080p"):
-		resolution = "1080p"
-	}
-	var ticksPerSecond, ticksPerInputImage int64
-	if base == "grok-imagine-video-1.5" {
-		ticksPerInputImage = officialImageEditInputTicks
-		switch resolution {
-		case "480p":
-			ticksPerSecond = 800_000_000
-		case "720p":
-			ticksPerSecond = 1_400_000_000
-		case "1080p":
-			ticksPerSecond = 2_500_000_000
-		default:
-			return Breakdown{}, false
-		}
-	} else {
-		ticksPerInputImage = officialLiteImageInputTicks
-		switch resolution {
-		case "480p":
-			ticksPerSecond = 500_000_000
-		case "720p":
-			ticksPerSecond = 700_000_000
-		default:
-			return Breakdown{}, false
-		}
-	}
-	breakdown := Breakdown{Model: base + "-" + resolution}
-	breakdown.add(ComponentOutputSecond, UnitSecond, q.OutputSeconds, ticksPerSecond)
-	breakdown.add(ComponentInputImage, UnitImage, q.InputImages, ticksPerInputImage)
 	return breakdown, breakdown.CostInUSDTicks > 0
 }

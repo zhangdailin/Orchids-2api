@@ -120,7 +120,6 @@ func TestApplyFreeQuotaExhaustionIgnoresEverythingElse(t *testing.T) {
 	}{
 		{"ordinary 429", buildAcc(), `{"error":{"code":"rate_limit_exceeded"}}`},
 		{"paid spending limit", buildAcc(), `{"error":{"code":"personal-team-blocked:spending-limit"}}`},
-		{"web account", &store.Account{ID: 1, AccountType: "grok", GrokProvider: ProviderWeb}, `{"error":{"code":"subscription:free-usage-exhausted"}}`},
 		{"empty body", buildAcc(), ``},
 	}
 	for _, tc := range cases {
@@ -160,74 +159,6 @@ func TestInferFreeProfileDoesNotClaimPaidAccountsAsFree(t *testing.T) {
 	}
 }
 
-func TestApplyWebQuotaInfoPreservesMissingActiveWindow(t *testing.T) {
-	reset := time.Now().Add(time.Hour).UTC()
-	acc := &store.Account{AccountType: "grok", GrokWebQuota: store.GrokWebQuotaSnapshot{
-		Auto: store.GrokQuotaWindow{Limit: 20, Remaining: 9, HasLimit: true, HasRemaining: true, ResetAt: reset},
-		Fast: store.GrokQuotaWindow{Limit: 30, Remaining: 17, HasLimit: true, HasRemaining: true, ResetAt: reset},
-	}}
-	ApplyWebQuotaInfo(acc, map[string]*RateLimitInfo{
-		"auto": {Limit: 20, Remaining: 8, HasLimit: true, HasRemaining: true, ResetAt: reset},
-	})
-	if acc.GrokWebQuota.Auto.Remaining != 8 {
-		t.Fatalf("auto remaining=%v want 8", acc.GrokWebQuota.Auto.Remaining)
-	}
-	if acc.GrokWebQuota.Fast.Remaining != 17 || !acc.GrokWebQuota.Fast.ResetAt.Equal(reset) {
-		t.Fatalf("active missing fast window was lost: %+v", acc.GrokWebQuota.Fast)
-	}
-}
-
-func TestApplyWebQuotaInfoClearsMissingExpiredWindow(t *testing.T) {
-	acc := &store.Account{AccountType: "grok", GrokWebQuota: store.GrokWebQuotaSnapshot{
-		Fast: store.GrokQuotaWindow{Limit: 30, Remaining: 0, HasLimit: true, HasRemaining: true, ResetAt: time.Now().Add(-time.Minute)},
-	}}
-	ApplyWebQuotaInfo(acc, map[string]*RateLimitInfo{
-		"auto": {Limit: 20, Remaining: 8, HasLimit: true, HasRemaining: true, ResetAt: time.Now().Add(time.Hour)},
-	})
-	if acc.GrokWebQuota.Fast.HasLimit || acc.GrokWebQuota.Fast.HasRemaining || acc.GrokWebQuota.Fast.Remaining != 0 || !acc.GrokWebQuota.Fast.ResetAt.IsZero() {
-		t.Fatalf("expired missing fast window was preserved: %+v", acc.GrokWebQuota.Fast)
-	}
-}
-
-// A Web account's subscription has to come from the mode a limit belongs to:
-// the same tier is published as different numbers per mode (auto 150 vs fast
-// 400), so a single mixed-mode number cannot classify an account.
-func TestApplyWebQuotaInfoClassifiesByModeNotByMixedLimit(t *testing.T) {
-	cases := []struct {
-		name      string
-		autoLimit int64
-		fastLimit int64
-		want      string
-	}{
-		{name: "auto heavy with fast basic stays basic", autoLimit: 150, fastLimit: 30, want: "basic"},
-		{name: "fast heavy with auto basic stays basic", autoLimit: 7, fastLimit: 400, want: "basic"},
-		{name: "both heavy", autoLimit: 150, fastLimit: 400, want: "heavy"},
-		{name: "auto super with fast basic", autoLimit: 50, fastLimit: 30, want: "basic"},
-		{name: "both super", autoLimit: 50, fastLimit: 140, want: "super"},
-		{name: "auto basic only", autoLimit: 20, want: "basic"},
-		{name: "fast basic only", fastLimit: 30, want: "basic"},
-		{name: "unknown shapes leave the tier alone", autoLimit: 99, fastLimit: 98, want: ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			windows := map[string]*RateLimitInfo{}
-			if tc.autoLimit > 0 {
-				windows["auto"] = &RateLimitInfo{Limit: tc.autoLimit, HasLimit: true, Remaining: 1, HasRemaining: true}
-			}
-			if tc.fastLimit > 0 {
-				windows["fast"] = &RateLimitInfo{Limit: tc.fastLimit, HasLimit: true, Remaining: 1, HasRemaining: true}
-			}
-			acc := &store.Account{AccountType: "grok"}
-			ApplyWebQuotaInfo(acc, windows)
-			if acc.Subscription != tc.want {
-				t.Fatalf("subscription=%q want %q", acc.Subscription, tc.want)
-			}
-		})
-	}
-}
-
-// inference from a window whose mode is unknown must not invent a paid tier for
-// an arbitrary large number, and must leave the lite tier to explicit config.
 func TestInferSubscriptionFromRateLimitInfoRequiresKnownShapes(t *testing.T) {
 	cases := map[int64]string{
 		7: "basic", 20: "basic", 8: "basic", 30: "basic",
@@ -245,17 +176,3 @@ func TestInferSubscriptionFromRateLimitInfoRequiresKnownShapes(t *testing.T) {
 }
 
 // The unused heavy mode still identifies the top tier when the upstream sends it.
-func TestInferSubscriptionFromWebQuotaHeavyMode(t *testing.T) {
-	got := inferSubscriptionFromWebQuota(map[string]*RateLimitInfo{
-		"heavy": {Limit: 12, HasLimit: true},
-	})
-	if got != "heavy" {
-		t.Fatalf("subscription=%q want heavy", got)
-	}
-	if got := inferSubscriptionFromWebQuota(map[string]*RateLimitInfo{
-		"heavy": {Limit: 12, HasLimit: true},
-		"fast":  {Limit: 30, HasLimit: true},
-	}); got != "basic" {
-		t.Fatalf("subscription=%q want basic (lowest tier wins)", got)
-	}
-}

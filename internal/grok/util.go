@@ -303,36 +303,6 @@ func firstNonEmpty(values ...string) string {
 	return util.FirstNonEmpty(values...)
 }
 
-// NormalizeSSOToken extracts the raw SSO token from a cookie-like string.
-func NormalizeSSOToken(raw string) string {
-	token := strings.TrimSpace(raw)
-	if token == "" {
-		return ""
-	}
-
-	// Cookie-style input: scan pairs and prefer exact "sso" key.
-	if strings.Contains(token, ";") {
-		parts := strings.Split(token, ";")
-		for _, part := range parts {
-			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
-			if len(kv) != 2 {
-				continue
-			}
-			if strings.EqualFold(strings.TrimSpace(kv[0]), "sso") {
-				return strings.TrimSpace(kv[1])
-			}
-		}
-		return strings.TrimSpace(token)
-	}
-
-	// Plain "sso=<token>" input.
-	lower := strings.ToLower(strings.TrimSpace(token))
-	if strings.HasPrefix(lower, "sso=") {
-		return strings.TrimSpace(token[len("sso="):])
-	}
-	return strings.TrimSpace(token)
-}
-
 func isDigit(c byte) bool {
 	return c >= '0' && c <= '9'
 }

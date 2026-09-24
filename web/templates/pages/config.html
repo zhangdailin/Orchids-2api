@@ -18,7 +18,7 @@
     <section class="header-section" id="configHeader">
       <div>
         <h1>配置管理</h1>
-        <p>按分组管理后台凭据、上游指纹、缓存策略与代理网络；改动后底部保存栏会显示未保存数量。</p>
+        <p>按分组管理后台凭据、缓存策略与代理网络；改动后底部保存栏会显示未保存数量。</p>
       </div>
     </section>
 
@@ -35,7 +35,6 @@
           <div class="config-nav-head">配置分组</div>
           <a class="config-nav-link active" href="#groupOverview" data-nav-group="groupOverview">概览</a>
           <a class="config-nav-link" href="#groupAuth" data-nav-group="groupAuth">认证与密钥</a>
-          <a class="config-nav-link" href="#groupUpstream" data-nav-group="groupUpstream">上游与指纹</a>
           <a class="config-nav-link" href="#groupCache" data-nav-group="groupCache">缓存</a>
           <a class="config-nav-link" href="#groupProxy" data-nav-group="groupProxy">代理</a>
         </nav>
@@ -48,7 +47,7 @@
               <span class="mini-badge">只读</span>
             </div>
             <p class="settings-card-note">
-              这一页把配置拆成认证与密钥、上游与指纹、缓存、代理四组；密钥类字段带「密钥」标记。
+              这一页把配置拆成认证与密钥、缓存、代理三组；密钥类字段带「密钥」标记。
               改动任意字段后，底部保存栏显示未保存数量，保存成功才成为新的对比基准。
             </p>
             <div class="settings-card-body">
@@ -118,62 +117,6 @@
                 </div>
               </div>
 
-            </div>
-          </section>
-
-
-          <section class="settings-card" id="groupUpstream">
-            <div class="settings-card-head">
-              <h2 class="settings-card-title">上游与指纹</h2>
-              <span class="mini-badge">Grok Headers</span>
-            </div>
-            <p class="settings-card-note">来自真实浏览器会话的请求头。指纹失效时上游会返回风控页面，需要重新抓包替换。</p>
-            <div class="settings-card-body">
-              <div class="form-row">
-                <div class="form-row-label">
-                  <label class="form-label" for="cfg_grok_statsig_signer_url">statsig 签名服务</label>
-                  <span class="helper-text">留空表示使用 grok2api 默认签名服务（<code>https://grok.wodf.de/sign</code>）；填 <code>-</code> 或一个空格表示关闭签名；填写地址则用它。签名服务会收到账号首页的校验元数据。</span>
-                </div>
-                <div class="form-row-control">
-                  <input type="text" id="cfg_grok_statsig_signer_url" class="form-input" placeholder="留空 = 默认签名服务">
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-row-label">
-                  <label class="form-label" for="cfg_grok_statsig_id">x-statsig-id</label>
-                  <span class="helper-text">浏览器抓包得到的 x-statsig-id，用于通过上游指纹校验；签名不可用时回落到它。</span>
-                </div>
-                <div class="form-row-control">
-                  <input type="text" id="cfg_grok_statsig_id" class="form-input" placeholder="浏览器抓包得到的 x-statsig-id">
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-row-label">
-                  <label class="form-label" for="cfg_grok_cf_clearance">cf_clearance <span class="secret-badge">密钥</span></label>
-                  <span class="helper-text">Cloudflare 验证通过后下发的 Cookie，等同于会话凭据。</span>
-                </div>
-                <div class="form-row-control">
-                  <div class="input-wrapper secret-shell">
-                    <input type="password" id="cfg_grok_cf_clearance" class="form-input secret-field" placeholder="Cloudflare cf_clearance">
-                    <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_grok_cf_clearance')">••</button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-row-label">
-                  <label class="form-label" for="cfg_grok_cf_bm">__cf_bm <span class="secret-badge">密钥</span></label>
-                  <span class="helper-text">与 cf_clearance 同批次获取，两者需要来自同一次浏览器会话。</span>
-                </div>
-                <div class="form-row-control">
-                  <div class="input-wrapper secret-shell">
-                    <input type="password" id="cfg_grok_cf_bm" class="form-input secret-field" placeholder="Cloudflare __cf_bm">
-                    <button type="button" class="btn-icon password-toggle" onclick="togglePassword('cfg_grok_cf_bm')">••</button>
-                  </div>
-                </div>
-              </div>
             </div>
           </section>
 

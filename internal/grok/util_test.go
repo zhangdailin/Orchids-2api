@@ -11,24 +11,6 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestNormalizeSSOToken(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{in: "abc", want: "abc"},
-		{in: "sso=abc123", want: "abc123"},
-		{in: "foo=1; sso=abc123; bar=2", want: "abc123"},
-		{in: "notsso=abc123", want: "notsso=abc123"},
-	}
-	for _, tt := range tests {
-		got := NormalizeSSOToken(tt.in)
-		if got != tt.want {
-			t.Fatalf("NormalizeSSOToken(%q)=%q want=%q", tt.in, got, tt.want)
-		}
-	}
-}
-
 func TestParseDataURI(t *testing.T) {
 	name, content, mime, err := parseDataURI("data:image/png;base64,QUJD")
 	if err != nil {
@@ -90,15 +72,6 @@ func TestValidateChatMessages_AcceptsCaseInsensitiveRoleAndType(t *testing.T) {
 
 	if err := validateChatMessages(messages); err != nil {
 		t.Fatalf("validateChatMessages() error = %v", err)
-	}
-}
-
-func TestResolveAspectRatio(t *testing.T) {
-	if got := resolveAspectRatio("1024x1024"); got != "1:1" {
-		t.Fatalf("resolveAspectRatio(1024x1024)=%q want=1:1", got)
-	}
-	if got := resolveAspectRatio("unknown"); got != "2:3" {
-		t.Fatalf("resolveAspectRatio(unknown)=%q want=2:3", got)
 	}
 }
 
@@ -227,23 +200,6 @@ func TestApplyQuotaInfo_InfersLiteSubscription(t *testing.T) {
 	}
 	if acc.UsageLimit != 70 || acc.UsageCurrent != 63 {
 		t.Fatalf("unexpected quota: limit=%v current=%v", acc.UsageLimit, acc.UsageCurrent)
-	}
-}
-
-func TestApplyWebQuotaInfoPersistsModeWindows(t *testing.T) {
-	acc := &store.Account{AccountType: "grok"}
-	changed := ApplyWebQuotaInfo(acc, map[string]*RateLimitInfo{
-		"auto": {Limit: 30, HasLimit: true, Remaining: 18, HasRemaining: true},
-		"fast": {Limit: 7, HasLimit: true, Remaining: 4, HasRemaining: true},
-	})
-	if !changed {
-		t.Fatal("ApplyWebQuotaInfo changed=false")
-	}
-	if !acc.GrokWebQuota.Auto.HasLimit || acc.GrokWebQuota.Auto.Remaining != 18 || acc.GrokWebQuota.Fast.Remaining != 4 {
-		t.Fatalf("snapshot=%+v", acc.GrokWebQuota)
-	}
-	if acc.UsageCurrent != 18 || acc.UsageLimit != 30 {
-		t.Fatalf("legacy aggregate current=%v limit=%v", acc.UsageCurrent, acc.UsageLimit)
 	}
 }
 
@@ -435,100 +391,6 @@ func TestParseRateLimitReset_RFC3339(t *testing.T) {
 	want, _ := time.Parse(time.RFC3339, raw)
 	if !got.Equal(want) {
 		t.Fatalf("parseRateLimitReset(%q)=%v want=%v", raw, got, want)
-	}
-}
-
-func TestStripToolAndRenderMarkup_ExtractsToolCardText(t *testing.T) {
-	in := strings.Join([]string{
-		`<xai:tool_usage_card><xai:tool_name>web_search</xai:tool_name><xai:tool_args>{"query":"特朗普头像"}</xai:tool_args></xai:tool_usage_card>`,
-		`<grok:render card_id="x">ignore</grok:render>`,
-		`结论`,
-	}, "\n")
-	out := stripToolAndRenderMarkup(in)
-	if !strings.Contains(out, "[WebSearch] 特朗普头像") {
-		t.Fatalf("tool card text missing, got=%q", out)
-	}
-	if strings.Contains(strings.ToLower(out), "grok:render") {
-		t.Fatalf("render tag should be removed, got=%q", out)
-	}
-	if !strings.Contains(out, "结论") {
-		t.Fatalf("final content missing, got=%q", out)
-	}
-}
-
-func TestExtractToolUsageCardText_PrefixesRolloutID(t *testing.T) {
-	raw := `<rolloutId>abc123</rolloutId><xai:tool_usage_card><xai:tool_name>web_search</xai:tool_name><xai:tool_args>{"query":"hello"}</xai:tool_args></xai:tool_usage_card>`
-	got := extractToolUsageCardText(raw)
-	if got != "[abc123][WebSearch] hello" {
-		t.Fatalf("extractToolUsageCardText()=%q want=%q", got, "[abc123][WebSearch] hello")
-	}
-}
-
-func BenchmarkExtractToolUsageCardText(b *testing.B) {
-	raw := `<xai:tool_usage_card><xai:tool_name>web_search</xai:tool_name><xai:tool_args>{"query":"特朗普头像","q":"特朗普头像"}</xai:tool_args></xai:tool_usage_card>`
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = extractToolUsageCardText(raw)
-	}
-}
-
-func BenchmarkStripToolAndRenderMarkup(b *testing.B) {
-	in := strings.Join([]string{
-		`<xai:tool_usage_card><xai:tool_name>web_search</xai:tool_name><xai:tool_args>{"query":"特朗普头像"}</xai:tool_args></xai:tool_usage_card>`,
-		`<xai:tool_usage_card><xai:tool_name>chatroom_send</xai:tool_name><xai:tool_args><![CDATA[{"message":"分析结果"}]]></xai:tool_args></xai:tool_usage_card>`,
-		`<grok:render card_id="x">ignore</grok:render>`,
-		`结论`,
-	}, "\n")
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = stripToolAndRenderMarkup(in)
-	}
-}
-
-func BenchmarkParseRateLimitPayload_Nested(b *testing.B) {
-	payload := map[string]interface{}{
-		"quota": map[string]interface{}{
-			"kind": "daily",
-		},
-		"limits": map[string]interface{}{
-			"maxQueries":       140,
-			"remainingQueries": 23,
-			"resetAt":          "2026-03-05T19:00:00Z",
-		},
-		"meta": []interface{}{
-			map[string]interface{}{"k": "v"},
-			map[string]interface{}{"unused": 1},
-		},
-	}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_ = parseRateLimitPayload(payload)
-	}
-}
-
-func BenchmarkParseUpstreamLines(b *testing.B) {
-	raw := strings.Join([]string{
-		`{"result":{"response":{"token":"hello","progress":10}}}`,
-		`{"result":{"response":{"token":"world","progress":90}}}`,
-		`{"result":{"other":1}}`,
-		`{"other":2}`,
-	}, "")
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		if err := parseUpstreamLines(strings.NewReader(raw), func(line map[string]interface{}) error {
-			_, _ = line["token"].(string)
-			return nil
-		}); err != nil {
-			b.Fatalf("parseUpstreamLines error: %v", err)
-		}
-	}
-}
-
-func BenchmarkParseRateLimitValue_CompoundHeader(b *testing.B) {
-	raw := "100;w=3600"
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		_, _ = parseRateLimitValue(raw)
 	}
 }
 

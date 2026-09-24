@@ -75,7 +75,7 @@ func RateLimitFromResponse(status int, header http.Header, body []byte) *RateLim
 
 // noteTeamRateLimit records a structured 429 into the team cooldown registry
 // and returns the parsed metadata (nil when the body is not a rate-limit
-// response). Shared by the app-chat, console/DPoP, and CLI request paths.
+// response). Shared by Build request paths.
 func noteTeamRateLimit(status int, header http.Header, body []byte) *RateLimitMetadata {
 	if meta := RateLimitFromResponse(status, header, body); meta != nil {
 		teamCooldown.Note(meta.Scope, meta.TeamID, meta.Model, meta.RetryAfter)

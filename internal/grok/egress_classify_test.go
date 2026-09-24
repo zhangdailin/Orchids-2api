@@ -26,24 +26,6 @@ func TestIsDefinitiveAccountBlockBody(t *testing.T) {
 	}
 }
 
-func TestIsDPoPProofRequiredBody(t *testing.T) {
-	cases := []struct {
-		body string
-		want bool
-	}{
-		{`{"error":{"code":"unauthorized_dpop_required"}}`, true},
-		{`{"code":"dpop_proof_required"}`, true},
-		{`unauthorized_dpop_required`, true},
-		{`{"code":"blocked-user"}`, false},
-		{`{"error":"ok"}`, false},
-	}
-	for _, c := range cases {
-		if got := IsDPoPProofRequiredBody([]byte(c.body)); got != c.want {
-			t.Errorf("body %q: got %v want %v", c.body, got, c.want)
-		}
-	}
-}
-
 func TestIsCloudflareChallengeBody(t *testing.T) {
 	cases := []struct {
 		body string
@@ -93,8 +75,6 @@ func TestClassifyUpstreamResponse(t *testing.T) {
 		{name: "plain 403", status: 403, body: "forbidden", want: UpstreamErrorGenericForbidden},
 		{name: "cf body 403", status: 403, body: "<html>Just a moment...</html>", want: UpstreamErrorCloudflareChallenge},
 		{name: "cf header 403", status: 403, header: map[string]string{"CF-Mitigated": "challenge"}, body: "", want: UpstreamErrorCloudflareChallenge},
-		{name: "dpop body 403", status: 403, body: `{"code":"unauthorized_dpop_required"}`, want: UpstreamErrorDPoPChallenge},
-		{name: "dpop www-authenticate", status: 401, header: map[string]string{"WWW-Authenticate": `DPoP error="invalid_dpop_proof"`}, want: UpstreamErrorDPoPChallenge},
 		{name: "plain 200", status: 200, body: "", want: UpstreamErrorUnknown},
 	}
 	for _, c := range cases {

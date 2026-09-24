@@ -202,7 +202,6 @@ func TestFreeProfileInferenceRequiresASignal(t *testing.T) {
 		{"unknown plan", buildAccount("unknown", store.GrokBillingSnapshot{}), false, ""},
 		{"paid plan", buildAccount("supergrok", store.GrokBillingSnapshot{SyncedAt: time.Now()}), false, ""},
 		{"paid plan with a window", buildAccount("supergrok", store.GrokBillingSnapshot{SyncedAt: time.Now(), Weekly: store.GrokQuotaWindow{HasUsage: true}}), false, ""},
-		{"web account", &store.Account{AccountType: "grok", GrokProvider: grokProviderWeb, Subscription: "free"}, false, ""},
 	}
 	for _, tc := range cases {
 		verdict := grok.InferFreeProfile(tc.acc)
@@ -317,34 +316,5 @@ func TestBuildQuotaConfirmedFreeWindowReplacesTheEstimate(t *testing.T) {
 	}
 	if got := fieldFloat(t, staleFields, "quota_limit"); got != float64(grok.EstimatedFreeBuildTokenLimit) {
 		t.Fatalf("expired window: quota_limit=%v, want the estimate", got)
-	}
-}
-
-// TestWebQuotaKeepsItsProvenance makes sure the new fields do not become Build-only:
-// the UI labels every channel's number with where it came from.
-func TestWebQuotaKeepsItsProvenance(t *testing.T) {
-	t.Parallel()
-
-	acc := &store.Account{
-		AccountType:  "grok",
-		GrokProvider: grokProviderWeb,
-		GrokWebQuota: store.GrokWebQuotaSnapshot{
-			Auto:     store.GrokQuotaWindow{Limit: 30, Remaining: 12, HasLimit: true, HasRemaining: true},
-			SyncedAt: time.Now(),
-		},
-	}
-
-	fields := buildQuotaResponseFields(acc)
-	if got := fieldString(t, fields, "quota_source"); got != "upstreamBilling" {
-		t.Fatalf("quota_source=%q want upstreamBilling", got)
-	}
-	if got := fieldString(t, fields, "quota_confidence"); got != "confirmed" {
-		t.Fatalf("quota_confidence=%q want confirmed", got)
-	}
-	if !fieldBool(t, fields, "quota_limit_known") {
-		t.Fatal("a Web window upstream reported has a known limit")
-	}
-	if got := fieldFloat(t, fields, "quota_remaining"); got != 12 {
-		t.Fatalf("quota_remaining=%v want 12", got)
 	}
 }

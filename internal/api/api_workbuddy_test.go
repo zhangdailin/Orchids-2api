@@ -700,15 +700,7 @@ func TestHandleAccounts_GrokRowCarriesSnapshotTimestamp(t *testing.T) {
 		GrokModels:         []string{"grok-4.6"},
 		GrokModelsSyncedAt: syncedAt,
 	}
-	sso := &store.Account{
-		AccountType:    "grok",
-		CredentialType: "sso",
-		GrokProvider:   "web",
-		ClientCookie:   "sso=web-token",
-		Enabled:        true,
-		GrokWebQuota:   store.GrokWebQuotaSnapshot{SyncedAt: syncedAt},
-	}
-	for _, acc := range []*store.Account{oauth, sso} {
+	for _, acc := range []*store.Account{oauth} {
 		if err := s.CreateAccount(ctx, acc); err != nil {
 			t.Fatalf("CreateAccount() error = %v", err)
 		}
@@ -724,8 +716,8 @@ func TestHandleAccounts_GrokRowCarriesSnapshotTimestamp(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2", len(rows))
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
 	}
 	for _, row := range rows {
 		credential := row["credential_type"]

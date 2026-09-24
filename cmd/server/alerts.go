@@ -114,7 +114,7 @@ func alertChannels(accounts []*store.Account) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, 8)
 	for _, acc := range accounts {
-		if acc == nil || acc.GrokSSOParentID != 0 {
+		if acc == nil {
 			continue
 		}
 		name := strings.ToLower(strings.TrimSpace(acc.AccountType))
@@ -129,7 +129,7 @@ func alertChannels(accounts []*store.Account) []string {
 
 func alertPoolCounts(accounts []*store.Account, channel string, now time.Time) (enabled, available, needingLogin, modelCooldowns int) {
 	for _, acc := range accounts {
-		if acc == nil || acc.GrokSSOParentID != 0 {
+		if acc == nil {
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), channel) || !acc.Enabled {

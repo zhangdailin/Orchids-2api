@@ -20,36 +20,6 @@ func newQuotaTestStore(t *testing.T) *Store {
 	return s
 }
 
-func TestConsumeGrokQuotaAtomicallyDecrementsObservedWindows(t *testing.T) {
-	t.Parallel()
-	s := newQuotaTestStore(t)
-	ctx := context.Background()
-	acc := &Account{AccountType: "grok", Enabled: true, GrokProvider: "web", UsageCurrent: 2,
-		GrokWebQuota: GrokWebQuotaSnapshot{SyncedAt: time.Now(), Auto: GrokQuotaWindow{HasRemaining: true, Remaining: 2}, Fast: GrokQuotaWindow{HasRemaining: true, Remaining: 1}}}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatal(err)
-	}
-
-	var wg sync.WaitGroup
-	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := s.ConsumeGrokQuota(ctx, acc.ID, "web", 1); err != nil {
-				t.Errorf("consume: %v", err)
-			}
-		}()
-	}
-	wg.Wait()
-	got, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.UsageCurrent != 0 || got.GrokWebQuota.Auto.Remaining != 0 || got.GrokWebQuota.Fast.Remaining != 1 {
-		t.Fatalf("quota must clamp at zero: legacy=%v web=%+v", got.UsageCurrent, got.GrokWebQuota)
-	}
-}
-
 func TestClaimGrokPaidQuotaProbeIsBoundedAndAtomic(t *testing.T) {
 	t.Parallel()
 	s := newQuotaTestStore(t)

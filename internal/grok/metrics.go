@@ -36,7 +36,7 @@ var (
 		Namespace: "grok",
 		Subsystem: "upstream",
 		Name:      "challenges_total",
-		Help:      "Upstream challenges classified by kind (cloudflare|dpop).",
+		Help:      "Upstream challenges classified by kind (cloudflare).",
 	}, []string{"kind"})
 
 	grokEgressAcquireErrors = promauto.NewCounter(prometheus.CounterOpts{

@@ -51,52 +51,13 @@ stored Response 归属记录按客户端 API Key 隔离。连续请求和资源�
 
 未配置共享 response store 时，桥接回退到进程内存储，`store=true`、`previous_response_id` 与资源查询在本进程内继续可用；多副本部署必须配置 Redis，因为进程内记录仅对写入它的副本可见。回退时会输出一条 WARN 日志。
 
-桥接会把 `include`、`text`（含 `text.format`）与 `response_format` 原样透传给 Chat 层；两者同时出现时以 Responses 规范的 `text.format` 为准。不支持 Responses 的模型（图片、视频、TTS、STT、Realtime 等 `MediaAPIOnly` 模型）以 Responses 错误信封返回 400，错误信息为 `model <id> does not support responses; use the model's dedicated endpoint instead`；`/v1/models` 的 `capabilities` 字段已排除 `responses`，客户端可提前判断。
+桥接会把 `include`、`text`（含 `text.format`）与 `response_format` 原样透传给 Chat 层；两者同时出现时以 Responses 规范的 `text.format` 为准。Grok 只发布 Build 能力目录中的文本模型。
 
 Build 原生 `context_management`、压缩输入和推理密文保留转发；`/responses/compact` 不可用时直接返回上游错误，不再调用模型生成本地摘要。中转层不按模型白名单降级 `reasoning.effort`，也不补写未指定的 `temperature` / `top_p`；具体值是否支持由上游决定。会话缓存键仍按租户隔离。
 
 中转层不再执行请求去重，`Idempotency-Key` 也不会触发中转层拦截；相同内容或相同键的并发、连续请求均正常转发。工具参数相同、文本重复、连续重复输出不再被自动抑制或中断。上游如自行实施去重，其行为不由本网关控制。切换工作目录会重建上游会话，但保留客户端完整消息历史。
 
-### 1.4 Grok 图片与文件
-
-| 路径 | 方法 | 说明 |
-|---|---|---|
-| `/grok/v1/images/generations` | POST | 图片生成 |
-| `/grok/v1/images/edits` | POST | 图片编辑 |
-| `/v1/images/generations` | POST | Grok 图片生成别名 |
-| `/v1/images/edits` | POST | Grok 图片编辑别名 |
-| `/grok/v1/files/{image\|video}/{name}` | GET | 本地缓存媒体文件 |
-| `/v1/files/{image\|video}/{name}` | GET | Grok 文件别名 |
-
-### 1.5 Grok 视频与语音
-
-| 路径 | 方法 | 说明 |
-|---|---|---|
-| `/grok/v1/videos`、`/v1/videos` | POST | Web app-chat 旧版异步视频生成入口 |
-| `/grok/v1/videos/generations`、`/v1/videos/generations` | POST | Console DPoP 标准异步视频生成；基础模型与 1.5 |
-| `/grok/v1/videos/edits`、`/v1/videos/edits` | POST | Console DPoP 视频编辑；当前仅基础模型 |
-| `/grok/v1/videos/extensions`、`/v1/videos/extensions` | POST | Console DPoP 视频延长；当前仅基础模型 |
-| `/grok/v1/videos/{video_id}`、`/v1/videos/{video_id}` | GET | 查询视频任务；按创建任务的 API Key 隔离 |
-| `/grok/v1/videos/{video_id}/content`、`/v1/videos/{video_id}/content` | GET | 读取视频内容 |
-| `/grok/v1/media/inputs`、`/v1/media/inputs` | POST | 上传临时图片或视频；multipart 字段 `file`，单文件最大 20 MiB |
-| `/grok/v1/media/inputs/{file_id}`、`/v1/media/inputs/{file_id}` | GET / DELETE | 查询或删除调用方拥有的临时媒体输入 |
-| `/grok/v1/tts`、`/v1/tts` | POST | Console 原生 TTS；支持流式音频响应 |
-| `/grok/v1/tts/voices`、`/v1/tts/voices` | GET | 查询可用 Voice；路径后追加 `{voice_id}` 可查询单项 |
-| `/grok/v1/stt`、`/v1/stt` | POST / WebSocket | Console 原生 HTTP 或流式 STT |
-| `/grok/v1/realtime`、`/v1/realtime` | WebSocket | Console Realtime 语音双向代理 |
-| `/grok/v1/audio/speech`、`/v1/audio/speech` | POST | OpenAI speech 请求转换到 Console TTS |
-| `/grok/v1/audio/tasks`、`/v1/audio/tasks` | POST | `audio/speech` 兼容别名 |
-| `/grok/v1/audio/transcriptions`、`/v1/audio/transcriptions` | POST | OpenAI 音频转录兼容；支持 `json`、`verbose_json`、`text` |
-
-标准视频、TTS、STT 和 Realtime 只使用显式的 Grok Console SSO 账号，并通过 DPoP 请求上游。标准视频创建返回 `{"request_id":"video_..."}`，随后通过统一查询和内容端点读取结果。视频任务元数据按 API Key 所有者写入 Redis，TTL 为一小时；标准 Console 任务一旦取得上游 `request_id`，服务重启后会固定回原账号继续轮询和下载。每个运行任务持有可续期的 30 秒 Redis 原子租约，其他实例不会重复轮询或写结果；持有者失联后，租约过期即可由其他实例接管。`media_dir` 支持挂载共享文件系统，多副本启动时会验证 Redis、稳定实例 ID、集群标记和共享目录读写，因此完成视频和临时 `file_id` 可由任一副本读取。若进程在取得上游 ID 前中断，任务会明确变为 `video_resume_unavailable`，不会永久停留在 pending；旧 Web 分段视频任务不进行不安全重放。生成支持 `duration`（1–15）、`aspect_ratio`、`resolution`、`image`、`reference_images` 和 `reference_audios`；编辑要求 `prompt` 与 `video`；延长额外支持 2–10 秒的 `duration`。
-
-媒体输入上传返回 `file_id`、类型、MIME、字节数和过期时间。ID 使用 192-bit 随机值，元数据在 Redis 中保留 24 小时并按 API Key 所有者隔离；支持 jpeg、png、webp、gif、mp4、webm 和 quicktime。`image`、`reference_images` 与 `video` 的结构化输入可在 `url` 和 `file_id` 中二选一；一次标准视频请求解析的本地媒体总量不得超过 32 MiB。
-
-静态 HTTP/SOCKS 代理可用于语音 WebSocket；若启用托管 Grok 出口池，WebSocket 会在出口管理器支持租约式拨号前安全拒绝，避免绕过出口策略。
-
-`audio/transcriptions` 会明确拒绝无法无损转换到 Console STT 的 `prompt`、非零 `temperature` 和 `timestamp_granularities`，也不提供 `/audio/translations`。
-
-### 1.6 模型、健康与指标
+### 1.4 模型、健康与指标
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -132,6 +93,10 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/api/qoder/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
 | `/api/cline/login` | POST | 发起 Cline 官方 WorkOS 设备授权登录（返回 `id` 与官方 `verification_uri_complete`） |
 | `/api/cline/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
+| `/api/grok/device-auth` | POST | 发起 Grok Build OAuth 设备授权 |
+| `/api/grok/device-auth/{id}` | GET/DELETE | 查询授权状态 / 取消授权 |
+| `/api/grok/tools/v1/models` | GET | 工具页可用 Build 模型（管理会话认证） |
+| `/api/grok/tools/v1/responses` | POST | 工具页 Build Responses 对话（管理会话认证） |
 | `/api/keys` | GET/POST | API Key 列表 / 创建 |
 | `/api/keys/{id}` | PATCH/DELETE | 更新 API Key 状态或访问策略 / 删除 |
 | `/api/models` | GET/POST | 模型列表 / 创建模型 |
@@ -173,51 +138,14 @@ Grok Build（OAuth）账号的上游常常不下发套餐名与数值额度，�
 
 估算只用于展示，不参与调度判定；`quota_observed=false` 表示窗口内没有实测用量，前端显示「未统计」而不是把它当成 0。
 
-### 2.2 `/api/v1/admin/*` 和 `/v1/admin/*`
-
-这些路径是 Grok 管理能力的兼容别名，两个前缀都可用。
+### 2.2 Grok Build 工具页
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/config` | GET/POST | 管理配置 |
-| `/verify` | GET | Grok 管理验证 |
-| `/storage` | GET | Grok 存储信息 |
-| `/tokens` | GET/POST | Grok token 池 |
-| `/tokens/refresh` | POST | 同步刷新 token |
-| `/tokens/refresh/async` | POST | 异步刷新 token |
-| `/tokens/nsfw/enable` | POST | 同步启用 NSFW |
-| `/tokens/nsfw/enable/async` | POST | 异步启用 NSFW |
-| `/batch/{task}` | GET/POST | 批任务流与取消 |
-| `/cache` | GET | 缓存摘要 |
-| `/cache/list` | GET | 缓存列表 |
-| `/cache/clear` | POST | 清空缓存 |
-| `/cache/item/delete` | POST | 删除单项缓存 |
-| `/cache/online/clear` | POST | 远端缓存清理 |
-| `/cache/online/clear/async` | POST | 远端缓存异步清理 |
-| `/cache/online/load/async` | POST | 远端缓存异步加载 |
-| `/voice/token` | GET | 语音 token |
-| `/imagine/start` | POST | imagine 开始 |
-| `/imagine/stop` | POST | imagine 停止 |
-| `/imagine/sse` | GET | imagine SSE |
-| `/imagine/ws` | GET | imagine WebSocket |
-| `/video/start` | POST | 视频任务开始 |
-| `/video/stop` | POST | 视频任务停止 |
-| `/video/sse` | GET | 视频 SSE |
+| `/api/grok/tools/v1/models` | GET | 返回工具页可选择的 Build 模型 |
+| `/api/grok/tools/v1/responses` | POST | 发起 Build Responses 请求 |
 
-### 2.3 `/api/v1/public/*` 和 `/v1/public/*`
-
-| 路径 | 方法 | 说明 |
-|---|---|---|
-| `/verify` | GET | 公共验证接口 |
-| `/voice/token` | GET | 公共语音 token |
-| `/imagine/config` | GET | imagine 配置 |
-| `/imagine/start` | POST | imagine 开始 |
-| `/imagine/stop` | POST | imagine 停止 |
-| `/imagine/sse` | GET | imagine SSE |
-| `/imagine/ws` | GET | imagine WebSocket |
-| `/video/start` | POST | 视频任务开始 |
-| `/video/stop` | POST | 视频任务停止 |
-| `/video/sse` | GET | 视频 SSE |
+这两个端点只接受管理会话认证。Responses 请求可以携带 `{"tools":[{"type":"web_search"}]}` 或 `{"tools":[{"type":"x_search"}]}`；网关保留 hosted tool 声明，是否可用由 Build 上游账号和模型决定。
 
 ## 3. 认证方式
 
@@ -226,15 +154,13 @@ Grok Build（OAuth）账号的上游常常不下发套餐名与数值额度，�
 满足以下任一条件即可：
 
 1. `session_token` cookie
-2. `Authorization: Bearer <admin_token>`
-3. `X-Admin-Token: <admin_token>`
-4. Basic Auth，密码等于 `admin_pass`
+2. Basic Auth，密码等于 `admin_pass`
 
 ### 3.2 模型与推理接口
 
 - 默认要求 `Authorization: Bearer <API Key>`；Anthropic Messages 客户端也可发送 `x-api-key: <API Key>`
 - API Key 通过管理端 `/api/keys` 创建、禁用、设置访问策略和删除
-- 模型列表、Messages、Chat、Responses、图片、视频和语音任务均执行该校验
+- 模型列表、Messages、Chat 与 Responses 均执行该校验
 - 只有在可信上游网关已经完成认证时，才应设置 `inference_auth_enabled=false`
 
 API Key 创建和更新支持以下策略字段：
@@ -248,7 +174,7 @@ API Key 创建和更新支持以下策略字段：
 ```json
 {
   "name": "production-client",
-  "allowed_models": ["grok-4.6", "grok-imagine-image"],
+  "allowed_models": ["grok-4.6"],
   "rpm_limit": 60,
   "expires_at": "2026-12-31T16:00:00Z"
 }
@@ -256,9 +182,9 @@ API Key 创建和更新支持以下策略字段：
 
 RPM 在 Redis 中原子计数，并覆盖所有受 API Key 保护的模型与推理请求；超限返回 `429` 和 `Retry-After: 60`。模型列表会按白名单过滤，白名单外的推理请求返回 `403 model_not_allowed`。已有 Key 缺少这些字段时保持不限模型、不限 RPM、永不过期。
 
-### 3.3 公共工具接口
+### 3.3 其他公共工具接口
 
-- `/api/v1/public/*` 与 `/v1/public/*` 会按当前 `public_key` / `public_enabled` 逻辑鉴权
+其他通道的公共工具接口按各自 `public_key` / `public_enabled` 逻辑鉴权；Grok Build 不提供额外公共工具接口。
 
 ## 4. 请求语义说明
 
@@ -398,7 +324,27 @@ curl -s http://127.0.0.1:3002/grok/v1/chat/completions \
   }'
 ```
 
-## 6. WorkBuddy 官方浏览器登录
+## 6. Grok Build OAuth 设备登录
+
+Grok 账号只能通过官方 Build 设备授权添加；`POST /api/accounts` 不接受 Grok Cookie 或手填 access token。
+
+```bash
+# 1) 创建事务（同源请求，需管理会话）
+curl -s -X POST http://127.0.0.1:3002/api/grok/device-auth \
+  -H 'Origin: http://127.0.0.1:3002'
+# → {"id":"<login-id>","status":"pending","user_code":"...","verification_uri":"...","verification_uri_complete":"...","expires_at":"..."}
+
+# 2) 打开 verification_uri_complete 授权，然后轮询
+curl -s http://127.0.0.1:3002/api/grok/device-auth/<login-id>
+# → {"status":"pending"} → {"status":"complete","account_id":12}
+
+# 取消（可选）
+curl -s -X DELETE http://127.0.0.1:3002/api/grok/device-auth/<login-id>
+```
+
+服务端持有 device code，轮询官方 token 端点，保存 access/refresh token 和过期时间，并在后续自动刷新。成功账号用于 Build Chat Completions、Responses、Messages、模型发现及账单/限速同步。
+
+## 7. WorkBuddy 官方浏览器登录
 
 管理页面「添加账号 → WorkBuddy 平台 → 使用 WorkBuddy 官方网页登录」等价于下面这组请求；
 服务端不读取密码，只申请一个上游登录事务并轮询换取 token。
@@ -461,7 +407,7 @@ Qoder 通道**只支持 OAuth 设备授权登录**，不提供 PAT（个人访�
 管理页面「添加账号 → Qoder 平台 → 使用 Qoder 官方网页登录」等价于下面这组请求。
 
 ```bash
-# 1) 申请设备授权事务（同源请求，需管理会话 Cookie 或 X-Admin-Token）
+# 1) 申请设备授权事务（同源请求，需管理会话 Cookie）
 curl -s http://127.0.0.1:3002/api/qoder/login \
   -H 'Content-Type: application/json' \
   -H 'Origin: http://127.0.0.1:3002' \
@@ -547,7 +493,7 @@ Cline 通道**只支持 OAuth 设备授权登录**，不提供手填凭证入口
 管理页面「添加账号 → Cline 平台 → 使用 Cline 官方网页登录」等价于下面这组请求。
 
 ```bash
-# 1) 申请设备授权事务（同源请求，需管理会话 Cookie 或 X-Admin-Token）
+# 1) 申请设备授权事务（同源请求，需管理会话 Cookie）
 curl -s http://127.0.0.1:3002/api/cline/login   -H 'Content-Type: application/json'   -H 'Origin: http://127.0.0.1:3002'   -d '{"enabled":true}'
 # → {"id":"<login-id>","status":"pending","user_code":"ABCD-EFGH","verification_uri":"https://auth.cline.bot/device",
 #    "verification_uri_complete":"https://auth.cline.bot/device?code=ABCD-EFGH","expires_at":"..."}

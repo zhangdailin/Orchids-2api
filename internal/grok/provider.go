@@ -11,7 +11,7 @@ import (
 )
 
 // ProviderBuild is the only Grok plane this gateway serves: the Build (OAuth
-// CLI) upstream. The grok.com website and console.x.ai planes were retired.
+// CLI) upstream. The legacy website and developer-console planes were retired.
 const ProviderBuild = "build"
 
 const modelSnapshotTTL = 6 * time.Hour
@@ -61,20 +61,6 @@ const (
 	buildGrok46Model   = "grok-4.6"
 	buildComposerModel = "grok-composer-2.5-fast"
 )
-
-// buildAccountIsSuper mirrors grok2api's IsBuildSuper: a Build account is Super
-// when its billing profile is paid or its own plan name says so. A Free account
-// (or one with no verdict yet) is not, which is what gates the video 1.5 entry.
-func buildAccountIsSuper(acc *store.Account) bool {
-	if acc == nil || ProviderForAccount(acc) != ProviderBuild {
-		return false
-	}
-	if BuildPlanIsPaid(acc.Subscription) {
-		return true
-	}
-	billing := acc.GrokBilling
-	return billing.Monthly.HasLimit || billing.Monthly.HasUsage || billing.Weekly.HasLimit || billing.Weekly.HasUsage
-}
 
 func CLIModelsNeedSync(acc *store.Account, now time.Time) bool {
 	if ProviderForAccount(acc) != ProviderBuild || len(acc.GrokModels) == 0 || acc.GrokModelsSyncedAt.IsZero() {

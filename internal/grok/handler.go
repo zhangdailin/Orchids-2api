@@ -367,7 +367,7 @@ func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) 
 		return h.applyPersistedRoute(ctx, spec), true
 	}
 	id := normalizeModelID(modelID)
-	if id == "" || IsDeprecatedModelID(id) || isKnownGrokMediaModelID(id) || h == nil || h.lb == nil || h.lb.Store == nil {
+	if id == "" || IsDeprecatedModelID(id) || h == nil || h.lb == nil || h.lb.Store == nil {
 		return ModelSpec{}, false
 	}
 	accounts, err := h.lb.Store.GetEnabledAccounts(ctx)
@@ -380,7 +380,8 @@ func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) 
 		}
 		for _, candidate := range acc.GrokModels {
 			if strings.EqualFold(strings.TrimSpace(candidate), id) {
-				return ModelSpec{ID: id, Name: id, UpstreamModel: strings.TrimSpace(candidate), Tier: grokTierSuper, Upstream: UpstreamCLI}, true
+				spec := ModelSpec{ID: id, Name: id, UpstreamModel: strings.TrimSpace(candidate), Tier: grokTierSuper, Upstream: UpstreamCLI}
+				return h.applyPersistedRoute(ctx, spec), true
 			}
 		}
 	}
@@ -409,15 +410,6 @@ func (h *Handler) applyPersistedRoute(ctx context.Context, spec ModelSpec) Model
 		spec.UpstreamModel = upstream
 	}
 	return spec
-}
-
-func isKnownGrokMediaModelID(modelID string) bool {
-	switch normalizeModelID(modelID) {
-	case "grok-imagine-image-lite", "grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality", "grok-imagine-image-pro", "grok-imagine-image-edit", "grok-imagine-video", "grok-imagine-video-1.5", "grok-voice-latest", "grok-voice-think-fast-2.0", "grok-voice-think-fast-1.0", "grok-stt":
-		return true
-	default:
-		return false
-	}
 }
 
 func (h *Handler) ensureResolvedModelEnabled(ctx context.Context, modelID string, spec ModelSpec) error {
@@ -493,7 +485,7 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	if status := parseUpstreamStatus(err); status >= 400 && status < 500 && status != 401 && status != 402 && status != 403 && status != 429 {
 		return
 	}
-	// Cloudflare / DPoP challenges are egress problems, not account problems.
+	// Cloudflare challenges are egress problems, not account problems.
 	// Do not cool or disable the account; the egress layer must re-solve.
 	if isEgressChallengeError(err) {
 		return
@@ -683,22 +675,21 @@ func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
 	return !strings.Contains(strings.ToLower(err.Error()), "fetch url status=")
 }
 
-// isEgressChallengeError reports whether an error is a Cloudflare interstitial
-// or DPoP proof challenge. These are egress/clearance problems, not account
+// isEgressChallengeError reports whether an error is a Cloudflare interstitial. These are egress/clearance problems, not account
 // problems: switching accounts (or cooling the account) is wrong.
 func isEgressChallengeError(err error) bool {
 	if err == nil {
 		return false
 	}
 	kind := ClassifyUpstreamError(err)
-	return kind == UpstreamErrorCloudflareChallenge || kind == UpstreamErrorDPoPChallenge
+	return kind == UpstreamErrorCloudflareChallenge
 }
 
 func shouldSwitchGrokAccount(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Cloudflare / DPoP challenges should not drain the account pool: switching
+	// Cloudflare challenges should not drain the account pool: switching
 	// to another account hits the same wall. Leave to the egress layer instead.
 	if isEgressChallengeError(err) {
 		return false

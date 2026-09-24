@@ -10,9 +10,9 @@ import (
 // 403/429 classification helpers, ported from grok2api account_block.go plus
 // Cloudflare challenge detection. The unified entry point ClassifyUpstreamResponse
 // is response-aware (status + headers + body) so header-only signals such as
-// CF-Mitigated and WWW-Authenticate are not lost. Precedence:
+// CF-Mitigated are not lost. Precedence:
 //
-//	DPoP challenge > Cloudflare challenge > explicit account block > 429 > generic forbidden
+//	Cloudflare challenge > explicit account block > 429 > generic forbidden
 //
 // A generic 403 is deliberately NOT treated as an account block; only explicit
 // "blocked-user"/"user is blocked" language marks the account.
@@ -24,7 +24,6 @@ const (
 	UpstreamErrorUnknown UpstreamErrorKind = iota
 	UpstreamErrorAccountBlock
 	UpstreamErrorCloudflareChallenge
-	UpstreamErrorDPoPChallenge
 	UpstreamErrorGenericForbidden
 	UpstreamErrorRateLimited
 )
@@ -35,8 +34,6 @@ func (k UpstreamErrorKind) String() string {
 		return "account_block"
 	case UpstreamErrorCloudflareChallenge:
 		return "cloudflare_challenge"
-	case UpstreamErrorDPoPChallenge:
-		return "dpop_challenge"
 	case UpstreamErrorGenericForbidden:
 		return "generic_forbidden"
 	case UpstreamErrorRateLimited:
@@ -55,15 +52,9 @@ func ClassifyUpstreamResponse(status int, header http.Header, body []byte) Upstr
 		if hasCloudflareChallengeHeader(header) {
 			return UpstreamErrorCloudflareChallenge
 		}
-		if hasDPoPChallengeHeader(header) {
-			return UpstreamErrorDPoPChallenge
-		}
 	}
 	switch status {
 	case http.StatusForbidden:
-		if IsDPoPProofRequiredBody(body) {
-			return UpstreamErrorDPoPChallenge
-		}
 		if IsCloudflareChallengeBody(body) {
 			return UpstreamErrorCloudflareChallenge
 		}
@@ -72,9 +63,6 @@ func ClassifyUpstreamResponse(status int, header http.Header, body []byte) Upstr
 		}
 		return UpstreamErrorGenericForbidden
 	case http.StatusUnauthorized:
-		if IsDPoPProofRequiredBody(body) {
-			return UpstreamErrorDPoPChallenge
-		}
 	}
 	return UpstreamErrorUnknown
 }
@@ -107,24 +95,6 @@ func hasCloudflareChallengeHeader(header http.Header) bool {
 	return false
 }
 
-// hasDPoPChallengeHeader detects a WWW-Authenticate DPoP challenge. Header keys
-// are matched case-insensitively so both canonical and raw keys are recognized.
-func hasDPoPChallengeHeader(header http.Header) bool {
-	for name, values := range header {
-		if !strings.EqualFold(strings.TrimSpace(name), "www-authenticate") {
-			continue
-		}
-		for _, value := range values {
-			lower := strings.ToLower(value)
-			if strings.Contains(lower, "dpop") &&
-				(strings.Contains(lower, "challenge") || strings.Contains(lower, "nonce") || strings.Contains(lower, "proof")) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // IsDefinitiveAccountBlockBody accepts only explicit error code or message
 // signals that a Grok account is blocked/suspended.
 func IsDefinitiveAccountBlockBody(body []byte) bool {
@@ -140,37 +110,6 @@ func IsDefinitiveAccountBlockBody(body []byte) bool {
 func IsDefinitiveAccountBlockText(value string) bool {
 	value = strings.ToLower(value)
 	return strings.Contains(value, "blocked-user") || strings.Contains(value, "user is blocked")
-}
-
-// IsDPoPProofRequiredBody reports the Console protocol-level DPoP challenge. It
-// must not be attributed to an account credential or physical egress node.
-func IsDPoPProofRequiredBody(body []byte) bool {
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return IsDPoPProofRequiredText(string(body))
-	}
-	return IsDPoPProofRequiredText(strings.Join(collectJSONStrings(payload), " "))
-}
-
-// IsDPoPProofRequiredText normalizes separators and matches the DPoP challenge
-// vocabulary used by console.x.ai and the CLI proxy.
-func IsDPoPProofRequiredText(value string) bool {
-	normalized := strings.NewReplacer("-", "_", ":", "_", ".", "_", " ", "_").Replace(strings.ToLower(strings.TrimSpace(value)))
-	for _, marker := range []string{
-		"unauthorized_dpop_required",
-		"dpop_proof_required",
-		"dpop_proof_required_error",
-		"invalid_dpop_proof",
-		"dpop_token_required",
-		"invalid_dpop_nonce",
-		"use_dpop_nonce",
-		"nonce_missing",
-	} {
-		if strings.Contains(normalized, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 // IsCloudflareChallengeBody detects a Cloudflare interstitial/challenge page.

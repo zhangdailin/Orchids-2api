@@ -8,8 +8,6 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
-
-	"orchids-api/internal/config"
 )
 
 func TestValidateRemoteFetchURL(t *testing.T) {
@@ -86,89 +84,3 @@ func TestFetchRemoteAsDataURIFollowsPublicTarget(t *testing.T) {
 		t.Fatalf("loopback fetch error = %v, want errRemoteFetchBlocked", err)
 	}
 }
-
-func TestSanitizeBaseHost(t *testing.T) {
-	valid := map[string]string{
-		"api.example.com":      "api.example.com",
-		"api.example.com:8443": "api.example.com:8443",
-		"127.0.0.1:8080":       "127.0.0.1:8080",
-		"localhost":            "localhost",
-	}
-	for in, want := range valid {
-		if got := sanitizeBaseHost(in); got != want {
-			t.Fatalf("sanitizeBaseHost(%q) = %q, want %q", in, got, want)
-		}
-	}
-	for _, in := range []string{
-		"evil.example/path", "evil.example?x=1", "user@evil.example",
-		"bad_host", "evil.example#frag", "",
-	} {
-		if got := sanitizeBaseHost(in); got != "" {
-			t.Fatalf("sanitizeBaseHost(%q) = %q, want empty", in, got)
-		}
-	}
-}
-
-func TestDetectPublicBaseURLSanitizesForwardedHost(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "http://gateway.local/v1/chat/completions", nil)
-	req.Host = "gateway.local"
-	req.Header.Set("X-Forwarded-Host", "evil.example/steal")
-	req.Header.Set("X-Forwarded-Proto", "https")
-	if got := detectPublicBaseURL(req); got != "https://gateway.local" {
-		t.Fatalf("detectPublicBaseURL() = %q, want https://gateway.local", got)
-	}
-	req.Header.Set("X-Forwarded-Host", "cdn.example:8443")
-	if got := detectPublicBaseURL(req); got != "https://cdn.example:8443" {
-		t.Fatalf("detectPublicBaseURL() = %q, want https://cdn.example:8443", got)
-	}
-	req.Header.Set("X-Forwarded-Proto", "javascript")
-	if got := detectPublicBaseURL(req); !strings.HasPrefix(got, "http") || strings.HasPrefix(got, "javascript") {
-		t.Fatalf("detectPublicBaseURL() = %q, want http scheme fallback", got)
-	}
-}
-
-// Session credentials are bound to the API origin; CDN hosts must stay anonymous.
-func TestAssetDownloadSkipsCredentialsForCDNHosts(t *testing.T) {
-	c := New(nil)
-	for _, host := range []string{
-		"https://vidgen.x.ai/abc.mp4",
-		"https://imagine-public.x.ai/a.png",
-		"https://imgen.x.ai/a.png",
-		"https://eu.vidgen.x.ai/abc.mp4",
-	} {
-		headers := c.assetDownloadHeaders("sso=token", host)
-		if headers.Get("Cookie") != "" {
-			t.Fatalf("assetDownloadHeaders(%s) leaked Cookie=%q", host, headers.Get("Cookie"))
-		}
-	}
-	headers := c.assetDownloadHeaders("sso=token", "https://grok.com/users/x/generated/y/image.png")
-	if headers.Get("Cookie") == "" {
-		t.Fatalf("grok.com asset download lost its session cookie")
-	}
-}
-
-func TestImagineNSFWAllowedRequiresOperatorConsent(t *testing.T) {
-	enabled, disabled := true, false
-	requested := true
-	cases := []struct {
-		name string
-		cfg  *config.Config
-		req  *bool
-		want bool
-	}{
-		{"server off, client asks", &config.Config{ImageNSFW: &disabled}, &requested, false},
-		{"server on, client asks", &config.Config{ImageNSFW: &enabled}, &requested, true},
-		{"server on, client silent", &config.Config{ImageNSFW: &enabled}, nil, false},
-		{"server on, client declines", &config.Config{ImageNSFW: &enabled}, &disabled, false},
-		{"no config", nil, &requested, false},
-	}
-	for _, tc := range cases {
-		h := &Handler{cfg: tc.cfg}
-		if got := h.imagineNSFWAllowed(tc.req); got != tc.want {
-			t.Fatalf("%s: imagineNSFWAllowed() = %v, want %v", tc.name, got, tc.want)
-		}
-	}
-}
-
-// The egress-node log redaction helper lives in package egress and is covered
-// by egress/redact_test.go.

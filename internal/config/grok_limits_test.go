@@ -1,14 +1,15 @@
 package config
 
 import (
-	"github.com/goccy/go-json"
 	"testing"
 	"time"
+
+	"github.com/goccy/go-json"
 )
 
-func TestGrokLimitsSurviveConfigRoundTrip(t *testing.T) {
+func TestGrokBuildLimitsSurviveConfigRoundTrip(t *testing.T) {
 	var cfg Config
-	if err := json.Unmarshal([]byte(`{"max_retries":2,"retry_delay":50,"account_switch_count":4,"request_timeout":1800,"concurrency_timeout":2400,"retry_429_interval":90,"grok_web_rps":3,"grok_console_rps":0.5,"grok_build_rps":10,"grok_web_timeout_seconds":900,"grok_console_timeout_seconds":1200,"grok_build_timeout_seconds":1800,"grok_stream_idle_seconds":300,"warp_stream_idle_seconds":420,"puter_stream_idle_seconds":180}`), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(`{"max_retries":2,"retry_delay":50,"account_switch_count":4,"request_timeout":1800,"concurrency_timeout":2400,"retry_429_interval":90,"grok_build_rps":10,"grok_build_timeout_seconds":1800,"grok_stream_idle_seconds":300,"warp_stream_idle_seconds":420,"puter_stream_idle_seconds":180}`), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	ApplyHardcoded(&cfg)
@@ -24,14 +25,8 @@ func TestGrokLimitsSurviveConfigRoundTrip(t *testing.T) {
 	if restored.MaxRetries != 2 || restored.RetryDelay != 50 || restored.AccountSwitchCount != 4 || restored.RequestTimeout != 1800 || restored.ConcurrencyTimeout != 2400 || restored.Retry429Interval != 90 {
 		t.Fatal("runtime settings were overwritten")
 	}
-	for _, test := range []struct {
-		provider string
-		rps      float64
-		seconds  int
-	}{{"web", 3, 900}, {"console", 0.5, 1200}, {"build", 10, 1800}} {
-		if restored.GrokRequestsPerSecond(test.provider) != test.rps || restored.GrokRequestTimeout(test.provider) != time.Duration(test.seconds)*time.Second {
-			t.Fatal(test)
-		}
+	if restored.GrokRequestsPerSecond("build") != 10 || restored.GrokRequestTimeout("build") != 1800*time.Second {
+		t.Fatal("Build limits lost")
 	}
 	if restored.GrokStreamIdleTimeoutFor("build") != 300*time.Second {
 		t.Fatal("idle setting lost")
@@ -41,14 +36,14 @@ func TestGrokLimitsSurviveConfigRoundTrip(t *testing.T) {
 	}
 }
 
-func TestGrokLimitsDefaultsAndBounds(t *testing.T) {
+func TestGrokBuildLimitsDefaultsAndBounds(t *testing.T) {
 	var cfg *Config
-	if cfg.GrokRequestsPerSecond("console") != 0 || cfg.GrokRequestTimeout("build") != 600*time.Second {
+	if cfg.GrokRequestsPerSecond("build") != 0 || cfg.GrokRequestTimeout("build") != 600*time.Second {
 		t.Fatal("unexpected defaults")
 	}
-	cfg = &Config{RequestTimeout: 999999, GrokWebTimeout: 999999, GrokConsoleRPS: 999999, GrokBuildRPS: -1, GrokStreamIdleSeconds: 999999, WarpStreamIdleSeconds: 999999, PuterStreamIdleSeconds: 999999}
+	cfg = &Config{RequestTimeout: 999999, GrokBuildTimeout: 999999, GrokBuildRPS: 999999, GrokStreamIdleSeconds: 999999, WarpStreamIdleSeconds: 999999, PuterStreamIdleSeconds: 999999}
 	ApplyHardcoded(cfg)
-	if cfg.RequestTimeout != 86400 || cfg.GrokRequestTimeout("web") != 24*time.Hour || cfg.GrokStreamIdleTimeoutFor("build") != 10*time.Minute || cfg.GrokRequestsPerSecond("console") != 1000 || cfg.GrokRequestsPerSecond("build") != 0 {
+	if cfg.RequestTimeout != 86400 || cfg.GrokRequestTimeout("build") != 24*time.Hour || cfg.GrokStreamIdleTimeoutFor("build") != 10*time.Minute || cfg.GrokRequestsPerSecond("build") != 1000 {
 		t.Fatal("invalid bounds")
 	}
 	if cfg.WarpStreamIdleTimeout() != time.Hour || cfg.PuterStreamIdleTimeout() != time.Hour {
@@ -56,17 +51,17 @@ func TestGrokLimitsDefaultsAndBounds(t *testing.T) {
 	}
 }
 
-func TestGrokChannelIdleDefaultsOverridesAndLegacyFallback(t *testing.T) {
+func TestGrokBuildIdleDefaultsOverridesAndLegacyFallback(t *testing.T) {
 	var cfg *Config
-	if cfg.GrokStreamIdleTimeoutFor("web") != 90*time.Second || cfg.GrokStreamIdleTimeoutFor("console") != 2*time.Minute || cfg.GrokStreamIdleTimeoutFor("build") != 2*time.Minute {
-		t.Fatal("unexpected channel defaults")
+	if cfg.GrokStreamIdleTimeoutFor("build") != 2*time.Minute {
+		t.Fatal("unexpected Build default")
 	}
-	cfg = &Config{GrokStreamIdleSeconds: 45, GrokWebStreamIdleSeconds: 35, GrokBuildStreamIdleSeconds: 9999}
-	if cfg.GrokStreamIdleTimeoutFor("web") != 35*time.Second || cfg.GrokStreamIdleTimeoutFor("console") != 45*time.Second || cfg.GrokStreamIdleTimeoutFor("build") != 10*time.Minute {
-		t.Fatal("channel override or legacy fallback broken")
+	cfg = &Config{GrokStreamIdleSeconds: 45, GrokBuildStreamIdleSeconds: 9999}
+	if cfg.GrokStreamIdleTimeoutFor("build") != 10*time.Minute {
+		t.Fatal("Build override broken")
 	}
-	cfg.GrokWebStreamIdleSeconds = 1
-	if cfg.GrokStreamIdleTimeoutFor("web") != 30*time.Second {
+	cfg.GrokBuildStreamIdleSeconds = 1
+	if cfg.GrokStreamIdleTimeoutFor("build") != 30*time.Second {
 		t.Fatal("minimum idle bound broken")
 	}
 }

@@ -18,7 +18,7 @@ type Node struct {
 	URL     string   // proxy address as configured; empty = direct
 	Proxy   *url.URL // parsed proxy URL; nil = direct
 	Weight  int      // weight for weighted round-robin; <=0 = 1
-	Scope   string   // "app_chat"|"console"|"cli"|"all"
+	Scope   string   // "cli"|"all"
 	Proxied bool
 }
 
@@ -95,7 +95,7 @@ func nodesFromConfig(cfg *config.Config) []Node {
 			// The configured URL usually carries proxy credentials, so it must
 			// not reach the log stream verbatim. The validation error itself
 			// only names the offending scheme/host, never the userinfo.
-			slog.Warn("egress node skipped: invalid proxy URL", "node", strings.TrimSpace(n.Name), "url", sanitizeFlareSolverrMessage(n.URL), "error", err)
+			slog.Warn("egress node skipped: invalid proxy URL", "node", strings.TrimSpace(n.Name), "error", err)
 			continue
 		}
 		out = append(out, Node{
@@ -119,20 +119,13 @@ func nodeMatchesScope(node Node, scope string) bool {
 	return nodeScope == scope
 }
 
-// Lease is a pinned egress path for one request: a node, its proxy URL, the
-// browser User-Agent and Cloudflare cookies bound to that node/fingerprint, and
-// the clearance key/version so a confirmed challenge can invalidate exactly the
-// clearance this request used.
+// Lease is a pinned egress path for one Build request.
 type Lease struct {
-	NodeID           string
-	ProxyURL         string
-	UserAgent        string
-	CFCookies        string
-	clearanceKey     string
-	clearanceVersion uint64
-	client           *http.Client
-	manager          *Manager
-	release          func()
+	NodeID   string
+	ProxyURL string
+	client   *http.Client
+	manager  *Manager
+	release  func()
 }
 
 // Do issues the request through the lease's client (proxy + UA + cookies are
@@ -142,16 +135,6 @@ func (l *Lease) Do(req *http.Request) (*http.Response, error) {
 		return nil, errNoClient
 	}
 	return l.client.Do(req)
-}
-
-// InvalidateClearance marks exactly the clearance binding this lease used as
-// stale. Concurrent re-solves bump the clearance version, so a stale
-// invalidation can never delete a newer clearance.
-func (l *Lease) InvalidateClearance() {
-	if l == nil || l.manager == nil || l.clearanceKey == "" {
-		return
-	}
-	l.manager.invalidateClearanceKey(l.clearanceKey, l.clearanceVersion)
 }
 
 // Release returns the lease's underlying client to the pool.

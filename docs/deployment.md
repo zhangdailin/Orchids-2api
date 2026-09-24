@@ -1,6 +1,6 @@
 # 部署指南
 
-本文档以当前代码实现为准，适用于 `warp`、`puter`、`grok` 三类通道。
+本文档以当前代码实现为准，适用于 `warp`、`puter`、`workbuddy`、`qoder`、`cline` 和仅使用 Build OAuth CLI 的 `grok` 通道。
 
 ## 1. 前置条件
 
@@ -93,7 +93,9 @@ Get-NetTCPConnection -LocalPort 3002 -ErrorAction SilentlyContinue
 
 模型同步验证：
 
-- 登录管理端后调用 `POST /api/models/refresh`
+- Grok 先在管理端通过 `/api/grok/device-auth*` 完成 Build OAuth 登录
+- 登录后调用 `POST /api/models/refresh`（请求体 `{"channel":"grok"}`），确认返回 `source=grok_build_models`
+- `GET /grok/v1/models` 只应出现 Build 上游实际发现的模型
 - 当前刷新是“按来源同步”：新增即写入、来源消失即删除；Puter 还会执行账号 `test_mode` 逐模型验证
 
 建议回归：
@@ -122,7 +124,7 @@ Windows 日志通常取决于你的启动方式；若前台启动，直接查看
 重点关注：
 
 - `model not found`
-- `no available grok token`
+- `no available grok oauth account`
 - `Bad Gateway`
 - `stream parse error`
 

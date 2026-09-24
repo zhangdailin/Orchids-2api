@@ -80,39 +80,6 @@ func TestBuildStoredResponseLifecycleAndOwnerIsolation(t *testing.T) {
 	}
 }
 
-func TestCompatibilityStoredResponseResourceAndHistoryExpansion(t *testing.T) {
-	h, s, mini := setupValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
-	body := []byte(`{"id":"resp_web","object":"response","status":"completed","model":"grok-chat-fast","output":[{"type":"reasoning","encrypted_content":"cipher","summary":[]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}]}`)
-	if err := s.SaveStoredResponse(context.Background(), &store.StoredResponse{
-		ResponseID: "resp_web", OwnerHash: "anonymous", Model: "grok-chat-fast", Provider: ProviderWeb,
-		PromptCacheKey: "cache-key", ContentType: "application/json", Body: body,
-	}, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-
-	wrapper := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return false }, nil, h.HandleResponseResource)
-	get := httptest.NewRecorder()
-	wrapper(get, httptest.NewRequest(http.MethodGet, "/v1/responses/resp_web", nil))
-	if get.Code != http.StatusOK || get.Body.String() != string(body) {
-		t.Fatalf("GET status=%d body=%s", get.Code, get.Body.String())
-	}
-	expanded, err := expandStoredResponseInput(body, "continue")
-	if err != nil {
-		t.Fatal(err)
-	}
-	items := expanded.([]interface{})
-	if len(items) != 3 || items[2].(map[string]interface{})["role"] != "user" {
-		t.Fatalf("expanded input=%#v", items)
-	}
-
-	deleted := httptest.NewRecorder()
-	wrapper(deleted, httptest.NewRequest(http.MethodDelete, "/v1/responses/resp_web", nil))
-	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`) {
-		t.Fatalf("DELETE status=%d body=%s", deleted.Code, deleted.Body.String())
-	}
-}
-
 func TestBuildPreviousResponsePinsCreatingAccount(t *testing.T) {
 	var authHeaders []string
 	responseNumber := 0

@@ -156,7 +156,7 @@ func TestValidateResponsesCompatibility_AcceptsRepresentableMetadataAndTruncatio
 func TestChatRequestFromResponses_PreservesMaxOutputTokens(t *testing.T) {
 	maxOutputTokens := 128
 	chat, err := chatRequestFromResponses(ResponsesCreateRequest{
-		Model: "grok-chat-fast", Input: "hello", MaxOutputTokens: &maxOutputTokens,
+		Model: "grok-4.6", Input: "hello", MaxOutputTokens: &maxOutputTokens,
 	})
 	if err != nil {
 		t.Fatalf("chatRequestFromResponses() error = %v", err)

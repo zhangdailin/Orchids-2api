@@ -10,59 +10,6 @@ import (
 	"orchids-api/internal/store"
 )
 
-// ApplyWebQuotaInfo persists the independent Web SSO auto/fast windows and
-// keeps the legacy aggregate Usage* fields useful to the existing admin UI.
-// A partial response is valid: one upstream mode can be temporarily absent.
-func ApplyWebQuotaInfo(acc *store.Account, windows map[string]*RateLimitInfo) bool {
-	if acc == nil || len(windows) == 0 {
-		return false
-	}
-	now := time.Now().UTC()
-	// A mode may be absent from a partial upstream response. Preserve its last
-	// still-active observation instead of replacing it with a zero-value window;
-	// once its reset passes, absence is allowed to clear it.
-	snapshot := acc.GrokWebQuota
-	if snapshot.Auto.ResetAt.IsZero() || !now.Before(snapshot.Auto.ResetAt) {
-		snapshot.Auto = store.GrokQuotaWindow{}
-	}
-	if snapshot.Fast.ResetAt.IsZero() || !now.Before(snapshot.Fast.ResetAt) {
-		snapshot.Fast = store.GrokQuotaWindow{}
-	}
-	snapshot.SyncedAt = now
-	snapshot.Source = "grok_web_rate_limits"
-	if info := windows["auto"]; info != nil {
-		snapshot.Auto = quotaWindowFromRateLimitInfo(info)
-	}
-	if info := windows["fast"]; info != nil {
-		snapshot.Fast = quotaWindowFromRateLimitInfo(info)
-	}
-	changed := acc.GrokWebQuota != snapshot
-	acc.GrokWebQuota = snapshot
-
-	// Prefer auto, then fast, for compatibility fields used by older clients.
-	var preferred *RateLimitInfo
-	if windows["auto"] != nil {
-		preferred = windows["auto"]
-	} else {
-		preferred = windows["fast"]
-	}
-	if preferred != nil {
-		// The aggregate projection carries a limit from ONE mode, so it must not
-		// decide the subscription: the same tier shows up as a different number in
-		// each mode (auto 150 vs fast 400), and classifying from a single
-		// mixed-mode number promotes basic accounts into paid pools. Gate the
-		// single-window inference off here and classify from both windows below.
-		if applyQuotaInfo(acc, preferred, false) {
-			changed = true
-		}
-	}
-	if sub := inferSubscriptionFromWebQuota(windows); sub != "" && acc.Subscription != sub {
-		acc.Subscription = sub
-		changed = true
-	}
-	return changed
-}
-
 func quotaWindowFromRateLimitInfo(info *RateLimitInfo) store.GrokQuotaWindow {
 	if info == nil {
 		return store.GrokQuotaWindow{}
@@ -116,7 +63,7 @@ func InferQuotaLimit(acc *store.Account) float64 {
 // window whose mode is not known (the Console/Build header paths). It must never
 // see a Web auto/fast projection: those windows describe the same tiers with
 // different numbers, so a mixed-mode number would pick the wrong pool. Web
-// snapshots go through inferSubscriptionFromWebQuota instead.
+// snapshots are Build-only.
 func inferSubscriptionFromRateLimitInfo(info *RateLimitInfo) string {
 	if info == nil || !info.HasLimit {
 		return ""
@@ -137,49 +84,9 @@ func inferSubscriptionFromRateLimitInfo(info *RateLimitInfo) string {
 	}
 }
 
-// webQuotaTierShapes maps each Web quota mode's window size onto the subscription
-// tier the upstream uses for it. The tiers repeat across modes with different
-// numbers, which is why the mode has to travel with the limit.
-var webQuotaTierShapes = map[string]map[int64]string{
-	"auto": {7: "basic", 20: "basic", 50: "super", 150: "heavy"},
-	"fast": {30: "basic", 140: "super", 400: "heavy"},
-}
-
 // subscriptionRank orders the pools from least to most privileged. Lite is an
 // explicit local tier (set by the admin API), never inferred from a window.
 var subscriptionRank = map[string]int{"basic": 0, "lite": 1, "super": 2, "heavy": 3}
-
-// inferSubscriptionFromWebQuota classifies a Web account from its independent
-// auto/fast windows, taking the LOWEST tier any window reports.
-//
-// A snapshot can carry contradictory windows (auto 150 while fast 30). Choosing
-// the lower tier keeps a basic account out of the paid pools; the reverse
-// mistake costs a wasted paid credential and an upstream refusal.
-func inferSubscriptionFromWebQuota(windows map[string]*RateLimitInfo) string {
-	detected := ""
-	// Fixed order so the result does not depend on Go's map iteration.
-	for _, mode := range []string{"auto", "fast", "heavy"} {
-		info := windows[mode]
-		if info == nil || !info.HasLimit || info.Limit <= 0 {
-			continue
-		}
-		candidate := ""
-		if mode == "heavy" {
-			// The heavy mode exposes a single paid window without tier shapes:
-			// any positive limit means the account is on the top tier.
-			candidate = "heavy"
-		} else if tier, ok := webQuotaTierShapes[mode][info.Limit]; ok {
-			candidate = tier
-		}
-		if candidate == "" {
-			continue
-		}
-		if detected == "" || subscriptionRank[candidate] < subscriptionRank[detected] {
-			detected = candidate
-		}
-	}
-	return detected
-}
 
 func ApplyQuotaInfo(acc *store.Account, info *RateLimitInfo) bool {
 	return applyQuotaInfo(acc, info, true)

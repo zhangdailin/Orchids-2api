@@ -167,15 +167,6 @@ func TestJournalRowCarriesItsPricingBreakdown(t *testing.T) {
 		t.Fatalf("components total %d but the row says %d", total, breakdown.CostInUSDTicks)
 	}
 
-	// A media row takes its quantities from the metadata the settle path wrote.
-	media, ok := pricingBreakdownForJournal(audit.Event{
-		Action: "grok_media_request", Model: "grok-imagine-image", PricingModel: "grok-imagine-image",
-		CostInUSDTicks: 400_000_000, Metadata: map[string]interface{}{"images": 2},
-	})
-	if !ok || media.CostInUSDTicks != 400_000_000 {
-		t.Fatalf("media breakdown=%+v ok=%v", media, ok)
-	}
-
 	// An unpriced row stays without one rather than fabricating components.
 	if _, ok := pricingBreakdownForJournal(audit.Event{Action: "grok_request", Model: "future-model"}); ok {
 		t.Fatal("an unpriced row grew a breakdown")

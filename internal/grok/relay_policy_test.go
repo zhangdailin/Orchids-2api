@@ -187,33 +187,6 @@ func TestRelayNativeResponsesRecoversOpaqueReasoning(t *testing.T) {
 	}
 }
 
-func TestRelayImageRetriesPreservePrompt(t *testing.T) {
-	calls := 0
-	// Signing off: this test counts the image-generation attempts, and a signer
-	// page read would be counted with them.
-	disabled := ""
-	h := &Handler{client: &Client{cfg: &config.Config{GrokStatsigSignerURL: &disabled}, httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		calls++
-		var payload map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
-		}
-		// Drawing is the website's image mode trigger, not a semantic rewrite.
-		if payload["message"] != "Drawing: 美女图片" {
-			t.Fatalf("prompt was rewritten: %v", payload["message"])
-		}
-		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}\n"))}, nil
-	})}}}
-	spec, _ := ResolveModel("grok-imagine-image-lite")
-	_, err := h.collectAppChatImageURLs(context.Background(), &chatAccountSession{token: "test-token"}, spec, ImagesGenerationsRequest{Model: spec.ID, Prompt: "美女图片", N: 1}, false)
-	if err == nil || calls != 4 {
-		t.Fatalf("expected unchanged prompt through bounded attempts: calls=%d err=%v", calls, err)
-	}
-}
-
-// Sampling stays client-owned. Effort is normalized to the levels the selected
-// model actually accepts: grok-4.5 has no xhigh wire contract, so both xhigh and
-// the client-only max alias land on high, while unknown values pass through.
 func TestRelayChatSamplingAndEffortAreClientOwned(t *testing.T) {
 	for _, tc := range []struct{ effort, want string }{
 		{"max", "high"},
@@ -318,25 +291,5 @@ func TestRelayRepeatedDeltaThresholdsMatchGrok2API(t *testing.T) {
 	converted, outcome := parityRun(t, repeating)
 	if outcome.Err == nil {
 		t.Fatalf("converted stream accepted a doom loop: %s", converted)
-	}
-}
-
-func TestRelayCollectedWebTextIsNotCollapsed(t *testing.T) {
-	text := strings.Repeat("This intentional repeated sentence must remain. ", 4)
-	frame, _ := json.Marshal(map[string]interface{}{"result": map[string]interface{}{"response": map[string]interface{}{"modelResponse": map[string]interface{}{"message": text}}}})
-	w := httptest.NewRecorder()
-	(&Handler{}).collectChat(w, &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "repeat"}}}, "grok-4.20-0309", ModelSpec{ID: "grok-4.20-0309"}, "", "", false, nil, nil, strings.NewReader(string(frame)), nil)
-	var response struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		t.Fatal(err)
-	}
-	if len(response.Choices) != 1 || strings.TrimSpace(response.Choices[0].Message.Content) != strings.TrimSpace(text) {
-		t.Fatalf("repeated collected text changed: %s", w.Body.String())
 	}
 }

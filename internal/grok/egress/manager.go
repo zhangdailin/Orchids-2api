@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -49,7 +48,7 @@ const (
 	OutcomeSuccess FeedbackOutcome = iota
 	OutcomeTransportError
 	OutcomeServerError
-	OutcomeChallenge // persistent Cloudflare/DPoP challenge (node cannot serve)
+	OutcomeChallenge // persistent Cloudflare challenge (node cannot serve)
 	OutcomeRateLimited
 	OutcomeAccountBlock
 	OutcomeForbidden
@@ -68,24 +67,6 @@ type Manager struct {
 	lastPersist time.Time
 	usedCount   map[string]int
 	sticky      map[string]string // scope|affinity -> node name
-	clearances  map[string]clearanceState
-	lastLease   map[string]leaseKeyInfo // scope|affinity -> last fingerprint/version
-	version     uint64                  // clearance generation counter
-	solver      clearanceSolver
-}
-
-type clearanceState struct {
-	cookies     string
-	userAgent   string
-	refreshedAt time.Time
-	invalid     bool
-	version     uint64
-}
-
-type leaseKeyInfo struct {
-	fingerprint string
-	version     uint64
-	nodeID      string
 }
 
 var errNoClient = errors.New("egress client not initialized")
@@ -99,18 +80,15 @@ func NewManager(cfg *config.Config) *Manager {
 		return nil
 	}
 	manager := &Manager{
-		cfg:        cfg,
-		nodes:      nodesFromConfig(cfg),
-		health:     make(map[string]float64),
-		unhealthy:  make(map[string]time.Time),
-		failures:   make(map[string]int),
-		lastError:  make(map[string]string),
-		lastProbe:  make(map[string]time.Time),
-		usedCount:  make(map[string]int),
-		sticky:     make(map[string]string),
-		clearances: make(map[string]clearanceState),
-		lastLease:  make(map[string]leaseKeyInfo),
-		solver:     flaresolverrSolver{},
+		cfg:       cfg,
+		nodes:     nodesFromConfig(cfg),
+		health:    make(map[string]float64),
+		unhealthy: make(map[string]time.Time),
+		failures:  make(map[string]int),
+		lastError: make(map[string]string),
+		lastProbe: make(map[string]time.Time),
+		usedCount: make(map[string]int),
+		sticky:    make(map[string]string),
 	}
 	manager.restoreHealth()
 	return manager
@@ -143,18 +121,6 @@ func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, 
 		return nil, errNoHealthyNode
 	}
 	fingerprint := m.fingerprint(*node, affinity)
-	var ua, cookies string
-	var version uint64
-	var err error
-	if usesBrowserClearance(scope) {
-		ua, cookies, version, err = m.resolveFingerprint(ctx, *node, fingerprint)
-		if err != nil {
-			return nil, err
-		}
-	}
-	m.mu.Lock()
-	m.lastLease[scope+"|"+affinity] = leaseKeyInfo{fingerprint: fingerprint, version: version, nodeID: node.Name}
-	m.mu.Unlock()
 
 	// Isolate connection pools by node, proxy URL, and clearance binding. The
 	// proxy component is hashed so credentials never appear in cache keys or
@@ -162,17 +128,13 @@ func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, 
 	poolKey := "egress:" + node.Name + "|proxy=" + shortHash(node.URL) + "|" + fingerprint
 	// The ClientHello follows the UA this exit will send, so the TLS fingerprint
 	// and the advertised Chrome version cannot contradict each other.
-	client := util.GetSharedBrowserHTTPClientForUserAgent(poolKey, m.cfg.GrokRequestTimeout(strings.ToLower(strings.TrimSpace(scope))), 0, proxyFuncForNode(*node), ua)
+	client := util.GetSharedBrowserHTTPClientForUserAgent(poolKey, m.cfg.GrokRequestTimeout(strings.ToLower(strings.TrimSpace(scope))), 0, proxyFuncForNode(*node), "")
 
 	lease := &Lease{
-		NodeID:           node.Name,
-		ProxyURL:         node.URL,
-		UserAgent:        ua,
-		CFCookies:        cookies,
-		clearanceKey:     fingerprint,
-		clearanceVersion: version,
-		client:           client,
-		manager:          m,
+		NodeID:   node.Name,
+		ProxyURL: node.URL,
+		client:   client,
+		manager:  m,
 	}
 	return lease, nil
 }
@@ -256,12 +218,9 @@ func (m *Manager) degradedLocked(name string, now time.Time) bool {
 }
 
 func (m *Manager) fingerprint(node Node, affinity string) string {
-	cfg := m.clearanceConfig()
 	binding := strings.Join([]string{
 		strings.ToLower(strings.TrimSpace(node.Name)),
 		strings.TrimSpace(node.URL),
-		strings.TrimRight(strings.TrimSpace(cfg.FlareSolverrURL), "/"),
-		strings.TrimRight(strings.TrimSpace(cfg.TargetURL), "/"),
 		strings.ToLower(strings.TrimSpace(affinity)),
 	}, "\x00")
 	return shortHash(binding)
@@ -270,115 +229,6 @@ func (m *Manager) fingerprint(node Node, affinity string) string {
 func shortHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:16])
-}
-
-func usesBrowserClearance(scope string) bool {
-	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "cli", "build", "console_asset":
-		return false
-	default:
-		return true
-	}
-}
-
-// resolveFingerprint returns a stable (ua, cookies, version) pair for a
-// fingerprint, solving/refreshing clearance when needed. A failed solve with no
-// reusable cached clearance fails closed (error) so the caller never proceeds
-// with empty cookies pretending to be valid.
-func (m *Manager) resolveFingerprint(ctx context.Context, node Node, fingerprint string) (string, string, uint64, error) {
-	m.mu.Lock()
-	state, ok := m.clearances[fingerprint]
-	m.mu.Unlock()
-
-	if ok && !state.invalid && state.cookies != "" && time.Since(state.refreshedAt) < m.refreshInterval() {
-		return state.userAgent, state.cookies, state.version, nil
-	}
-
-	cfg := m.clearanceConfig()
-	ua := state.userAgent
-	if ua == "" {
-		ua = pickUserAgent(fingerprint)
-	}
-	cookies := state.cookies
-
-	if cfg.Mode == "flaresolverr" && m.solver != nil {
-		solved, err := m.solver.Solve(ctx, cfg, node.URL)
-		if err != nil {
-			// Reuse a stale-but-not-invalidated clearance rather than failing the
-			// request outright, but never write a "fresh" success cache entry.
-			if ok && !state.invalid && state.cookies != "" {
-				slog.Warn("egress clearance solve failed; reusing stale clearance", "node", node.Name, "error", err)
-				recordClearanceSolve(false)
-				return state.userAgent, state.cookies, state.version, nil
-			}
-			recordClearanceSolve(false)
-			return "", "", 0, fmt.Errorf("%w: solve for node %q: %w", errClearanceUnavailable, node.Name, err)
-		}
-		if solved.UserAgent != "" {
-			ua = solved.UserAgent
-		}
-		if strings.TrimSpace(solved.Cookies) == "" {
-			// Empty cookies after a "successful" solve is not a valid clearance.
-			if ok && !state.invalid && state.cookies != "" {
-				slog.Warn("egress clearance solve returned no cookies; reusing stale clearance", "node", node.Name)
-				recordClearanceSolve(false)
-				return state.userAgent, state.cookies, state.version, nil
-			}
-			recordClearanceSolve(false)
-			return "", "", 0, fmt.Errorf("%w: solve returned empty cookies for node %q", errClearanceUnavailable, node.Name)
-		}
-		cookies = solved.Cookies
-		recordClearanceSolve(true)
-	} else if cfg.Mode != "flaresolverr" && cookies == "" {
-		// Manual mode: pull from static config when present. Empty is acceptable
-		// here — the operator explicitly chose manual without clearance.
-		cookies = m.manualClearance()
-	}
-
-	m.mu.Lock()
-	m.version++
-	state = clearanceState{
-		cookies:     cookies,
-		userAgent:   ua,
-		refreshedAt: time.Now(),
-		version:     m.version,
-	}
-	m.clearances[fingerprint] = state
-	m.mu.Unlock()
-	return ua, cookies, state.version, nil
-}
-
-func (m *Manager) manualClearance() string {
-	if m == nil || m.cfg == nil {
-		return ""
-	}
-	parts := make([]string, 0, 2)
-	if v := strings.TrimSpace(m.cfg.GrokConfigCFClearance); v != "" {
-		parts = append(parts, "cf_clearance="+v)
-	}
-	if v := strings.TrimSpace(m.cfg.GrokConfigCFBM); v != "" {
-		parts = append(parts, "__cf_bm="+v)
-	}
-	return strings.Join(parts, "; ")
-}
-
-func (m *Manager) clearanceConfig() ClearanceConfig {
-	if m == nil || m.cfg == nil {
-		return ClearanceConfig{Mode: "manual", TargetURL: "https://grok.com"}
-	}
-	return ClearanceConfig{
-		Mode:            m.cfg.GrokClearanceModeOrDefault(),
-		FlareSolverrURL: strings.TrimSpace(m.cfg.GrokFlareSolverrURL),
-		TargetURL:       "https://grok.com",
-		Timeout:         time.Minute,
-	}
-}
-
-func (m *Manager) refreshInterval() time.Duration {
-	if m == nil || m.cfg == nil {
-		return 10 * time.Minute
-	}
-	return time.Duration(m.cfg.GrokClearanceRefreshIntervalOrDefault()) * time.Second
 }
 
 // FeedbackOutcome updates a node's health score from a classified outcome.
@@ -442,22 +292,6 @@ func outcomeReason(outcome FeedbackOutcome) string {
 	}
 }
 
-// InvalidateAffinityClearance invalidates the clearance used by the last lease
-// for a scope+affinity. Used by request paths that do not hold the lease
-// directly (e.g. CLI) after classifying a Cloudflare challenge.
-func (m *Manager) InvalidateAffinityClearance(scope, affinity string) {
-	if m == nil {
-		return
-	}
-	m.mu.RLock()
-	info, ok := m.lastLease[scope+"|"+affinity]
-	m.mu.RUnlock()
-	if !ok || info.fingerprint == "" {
-		return
-	}
-	m.invalidateClearanceKey(info.fingerprint, info.version)
-}
-
 // FeedbackAffinityOutcome applies a node-health outcome to the node most
 // recently leased for a scope+affinity. Used by request paths that do not hold
 // the lease directly (e.g. CLI) to record a persistent challenge after retry.
@@ -465,34 +299,13 @@ func (m *Manager) FeedbackAffinityOutcome(scope, affinity string, outcome Feedba
 	if m == nil {
 		return
 	}
+	key := "scope:" + strings.ToLower(strings.TrimSpace(scope)) + ":" + affinity
 	m.mu.RLock()
-	info, ok := m.lastLease[scope+"|"+affinity]
+	nodeID := m.sticky[key]
 	m.mu.RUnlock()
-	if !ok || info.nodeID == "" {
-		return
+	if nodeID != "" {
+		m.FeedbackOutcome(nodeID, outcome)
 	}
-	m.FeedbackOutcome(info.nodeID, outcome)
-}
-
-// invalidateClearanceKey marks a fingerprint's clearance stale. When version is
-// non-zero it only applies to that exact generation, so a concurrent re-solve
-// that bumped the version is never invalidated by a stale call.
-func (m *Manager) invalidateClearanceKey(key string, version uint64) {
-	if m == nil || key == "" {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	state, ok := m.clearances[key]
-	if !ok {
-		return
-	}
-	if version != 0 && state.version != version {
-		return
-	}
-	state.invalid = true
-	m.clearances[key] = state
-	recordClearanceInvalidation()
 }
 
 // nodeCooldownFor returns the cooldown for a node that has failed n times in a
@@ -574,11 +387,7 @@ func (m *Manager) probeRecovery(ctx context.Context, scope string) bool {
 // real request would, so a broken exit is detected rather than a healthy direct
 // connection.
 func (m *Manager) probeNode(ctx context.Context, node Node) error {
-	cfg := m.clearanceConfig()
-	target := strings.TrimSpace(cfg.TargetURL)
-	if target == "" {
-		target = "https://grok.com/"
-	}
+	target := "https://cli-chat-proxy.grok.com/"
 	probeCtx, cancel := context.WithTimeout(ctx, nodeProbeTimeout)
 	defer cancel()
 	client := util.GetSharedBrowserHTTPClientWithHeaderTimeout(
@@ -590,7 +399,7 @@ func (m *Manager) probeNode(ctx context.Context, node Node) error {
 	}
 	// A stable browser UA keeps the probe consistent with real traffic on this
 	// exit, so a UA-based block is detected too.
-	req.Header.Set("User-Agent", pickUserAgent(node.Name))
+	req.Header.Set("User-Agent", "orchids-2api-build-egress-probe")
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

@@ -74,11 +74,6 @@ func TestAdminGrokToolsRoutesUseSessionWithoutClientKey(t *testing.T) {
 	paths := []string{
 		"/api/grok/tools/v1/models/grok-live",
 		"/api/grok/tools/v1/responses", "/api/grok/tools/v1/responses/compact", "/api/grok/tools/v1/responses/resp_1",
-		"/api/grok/tools/v1/images/generations", "/api/grok/tools/v1/images/edits",
-		"/api/grok/tools/v1/videos", "/api/grok/tools/v1/videos/generations", "/api/grok/tools/v1/videos/edits",
-		"/api/grok/tools/v1/videos/extensions", "/api/grok/tools/v1/videos/video_1", "/api/grok/tools/v1/videos/video_1/content",
-		"/api/grok/tools/v1/files/image/test.jpg", "/api/grok/tools/v1/tts", "/api/grok/tools/v1/tts/voices",
-		"/api/grok/tools/v1/audio/speech", "/api/grok/tools/v1/audio/transcriptions", "/api/grok/tools/v1/realtime",
 	}
 	for _, path := range paths {
 		rec := httptest.NewRecorder()
@@ -88,27 +83,6 @@ func TestAdminGrokToolsRoutesUseSessionWithoutClientKey(t *testing.T) {
 		}
 	}
 
-	// An authenticated operator must reach the real handler without ever being
-	// asked for a client API key. The request may still fail for provider
-	// reasons, but it must not fail as an anonymous-key denial.
-	authed := httptest.NewRequest(http.MethodPost, "/api/grok/tools/v1/images/generations", strings.NewReader(`{"prompt":"a cat","model":"grok-imagine"}`))
-	authed.Header.Set("Content-Type", "application/json")
-	authed.Header.Set("X-Admin-Token", cfg.AdminToken)
-	authedRec := httptest.NewRecorder()
-	mux.ServeHTTP(authedRec, authed)
-	if authedRec.Code == http.StatusUnauthorized {
-		t.Fatalf("session-authenticated tools call was denied: status=%d body=%s", authedRec.Code, authedRec.Body.String())
-	}
-	if strings.Contains(authedRec.Body.String(), "Missing API key") {
-		t.Fatalf("tools namespace still applied client-key auth: %s", authedRec.Body.String())
-	}
-
-	// The management namespace must not have opened the public inference plane.
-	keyless := httptest.NewRecorder()
-	mux.ServeHTTP(keyless, httptest.NewRequest(http.MethodPost, "/grok/v1/images/generations", strings.NewReader(`{"prompt":"a cat"}`)))
-	if keyless.Code != http.StatusUnauthorized {
-		t.Fatalf("public images route leaked without a key: status=%d body=%s", keyless.Code, keyless.Body.String())
-	}
 }
 
 func containsAll(value string, parts ...string) bool {

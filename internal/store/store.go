@@ -95,10 +95,7 @@ type Account struct {
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 
-	// CredentialType marks the Grok account credential mode. Empty or "sso"
-	// keeps the legacy SSO-cookie behavior; "oauth" selects the Build CLI OAuth
-	// flow (cli-chat-proxy.grok.com + Bearer). Zero value must preserve legacy
-	// SSO semantics for old Redis records.
+	// CredentialType is "oauth" for Grok Build CLI accounts.
 	CredentialType    string    `json:"credential_type,omitempty"`
 	OAuthAccessToken  string    `json:"oauth_access_token,omitempty"`
 	OAuthRefreshToken string    `json:"oauth_refresh_token,omitempty"`
@@ -112,10 +109,6 @@ type Account struct {
 	// and failure semantics; they must not be treated as interchangeable.
 	// Legacy accounts are normalized on read/write from CredentialType.
 	GrokProvider string `json:"grok_provider,omitempty"`
-	// GrokSSOParentID links an internal Console SSO runtime child to its visible
-	// Web SSO source. The child inherits credential/source scheduling settings
-	// but keeps independent model cache, quota, health and request state.
-	GrokSSOParentID int64 `json:"grok_sso_parent_id,omitempty"`
 	// GrokModels is the last successful account-specific upstream /v1/models
 	// capability snapshot. An empty snapshot means not synced yet, not that the
 	// account supports every model.
@@ -127,10 +120,6 @@ type Account struct {
 	// are short-lived throttling windows rather than subscription allowance.
 	GrokBilling    GrokBillingSnapshot   `json:"grok_billing,omitempty"`
 	GrokRateLimits GrokRateLimitSnapshot `json:"grok_rate_limits,omitempty"`
-	// GrokWebQuota stores the Web SSO quota windows returned by the upstream
-	// auto/fast modes. It is intentionally separate from Build billing and
-	// passive request/token rate-limit headers.
-	GrokWebQuota GrokWebQuotaSnapshot `json:"grok_web_quota,omitempty"`
 	// GrokFreeQuota stores the Free window the upstream itself reported when it
 	// refused a request for having spent the included free usage. Confirmed numbers
 	// take precedence over an estimated Free window.
@@ -365,16 +354,6 @@ type GrokRateLimitSnapshot struct {
 	ObservedAt time.Time       `json:"observed_at,omitempty"`
 }
 
-// GrokWebQuotaSnapshot is the authoritative Web SSO quota snapshot. Either
-// mode may be unavailable for a given account, so each window carries its own
-// presence markers and the snapshot can represent a partial response.
-type GrokWebQuotaSnapshot struct {
-	Auto     GrokQuotaWindow `json:"auto,omitempty"`
-	Fast     GrokQuotaWindow `json:"fast,omitempty"`
-	SyncedAt time.Time       `json:"synced_at,omitempty"`
-	Source   string          `json:"source,omitempty"`
-}
-
 // GrokFreeQuotaSnapshot is the Free allowance window the upstream CONFIRMED by
 // refusing a request ("subscription:free-usage-exhausted ... tokens (actual/limit):
 // N/M"). It is the one place a Free limit becomes a fact rather than an estimate, so
@@ -509,49 +488,6 @@ type StoredSessionAffinity struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
-// StoredVideoJob is the durable, owner-scoped state required to retrieve an
-// asynchronous video result after the serving process restarts. Media bytes
-// remain in the configured local cache; this record only stores metadata.
-type StoredVideoJob struct {
-	ID                string    `json:"id"`
-	OwnerHash         string    `json:"owner_hash"`
-	AccountID         int64     `json:"account_id,omitempty"`
-	Provider          string    `json:"provider,omitempty"`
-	Model             string    `json:"model"`
-	Prompt            string    `json:"prompt,omitempty"`
-	Seconds           int       `json:"seconds,omitempty"`
-	Size              string    `json:"size,omitempty"`
-	Quality           string    `json:"quality,omitempty"`
-	Status            string    `json:"status"`
-	Progress          int       `json:"progress"`
-	VideoURL          string    `json:"video_url,omitempty"`
-	ContentPath       string    `json:"content_path,omitempty"`
-	UpstreamRequestID string    `json:"upstream_request_id,omitempty"`
-	BuildFallback     bool      `json:"build_fallback,omitempty"`
-	RemixedFromID     string    `json:"remixed_from_id,omitempty"`
-	Operation         string    `json:"operation,omitempty"`
-	StandardAPI       bool      `json:"standard_api,omitempty"`
-	ErrorCode         string    `json:"error_code,omitempty"`
-	ErrorMessage      string    `json:"error_message,omitempty"`
-	CreatedAt         int64     `json:"created_at"`
-	CompletedAt       int64     `json:"completed_at,omitempty"`
-	ExpiresAt         time.Time `json:"expires_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-}
-
-// StoredMediaInput points at an immutable temporary image or video accepted
-// for later use through a standard API file_id.
-type StoredMediaInput struct {
-	ID          string    `json:"id"`
-	OwnerHash   string    `json:"owner_hash"`
-	Kind        string    `json:"kind"`
-	MIMEType    string    `json:"mime_type"`
-	ContentPath string    `json:"content_path"`
-	SizeBytes   int64     `json:"size_bytes"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-}
-
 type Store struct {
 	accounts  accountStore
 	settings  settingsStore
@@ -559,8 +495,6 @@ type Store struct {
 	models    modelStore
 	responses responseStore
 	reasoning reasoningReplayStore
-	videoJobs videoJobStore
-	media     mediaInputStore
 }
 
 type Options struct {
@@ -672,22 +606,6 @@ type reasoningReplayStore interface {
 	GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error)
 }
 
-type videoJobStore interface {
-	SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error
-	GetStoredVideoJob(ctx context.Context, id, ownerHash string) (*StoredVideoJob, error)
-	ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, error)
-	DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error
-	AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error)
-	RefreshVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error)
-	ReleaseVideoJobLease(ctx context.Context, id, ownerHash, holder string) (bool, error)
-}
-
-type mediaInputStore interface {
-	SaveStoredMediaInput(ctx context.Context, input *StoredMediaInput, ttl time.Duration) error
-	GetStoredMediaInput(ctx context.Context, id, ownerHash string) (*StoredMediaInput, error)
-	DeleteStoredMediaInput(ctx context.Context, id, ownerHash string) error
-}
-
 // SetChangeEmitter wires account-change notifications. Passing nil disables
 // them, which keeps a store used only by tests silent.
 func (s *Store) SetChangeEmitter(emitter ChangeEmitter) {
@@ -711,8 +629,6 @@ func New(opts Options) (*Store, error) {
 	store.models = redisStore
 	store.responses = redisStore
 	store.reasoning = redisStore
-	store.videoJobs = redisStore
-	store.media = redisStore
 	if err := redisStore.migrateLegacyAccountCredentials(context.Background()); err != nil {
 		_ = redisStore.Close()
 		return nil, fmt.Errorf("failed to migrate account credentials: %w", err)
@@ -823,42 +739,9 @@ func applyGrokRouteDefaults(model *Model) {
 	}
 	id := strings.ToLower(strings.TrimSpace(model.ModelID))
 	model.Origin = "catalog"
-	model.UpstreamModel = strings.TrimPrefix(strings.TrimPrefix(id, "console/"), "build/")
-	if id == "grok-imagine-video" {
-		model.UpstreamModel = "imagine-video-gen"
-	}
-	switch {
-	case strings.HasPrefix(id, "console/"), strings.HasPrefix(id, "grok-voice"), id == "grok-stt", id == "grok-imagine-video-1.5":
-		model.Provider = "console"
-	case strings.HasPrefix(id, "build/"), id == "grok-composer-2.5-fast", id == "grok-4.5", id == "grok-4.6":
-		model.Provider = "build"
-	default:
-		model.Provider = "web"
-	}
-	switch {
-	case strings.Contains(id, "voice"):
-		model.Capabilities = []string{CapabilityRealtime, CapabilityTTS}
-	case id == "grok-stt":
-		model.Capabilities = []string{CapabilitySTT}
-	case strings.Contains(id, "video"):
-		model.Capabilities = []string{CapabilityVideo}
-		if model.Provider == "web" {
-			model.Capabilities = append(model.Capabilities, CapabilityChat)
-		}
-	case strings.Contains(id, "image-edit"):
-		model.Capabilities = []string{CapabilityImageEdit}
-		if model.Provider == "web" {
-			model.Capabilities = append(model.Capabilities, CapabilityChat)
-		}
-	case strings.Contains(id, "image"):
-		model.Capabilities = []string{CapabilityImage, CapabilityImageEdit}
-		if model.Provider == "web" {
-			model.Capabilities = append(model.Capabilities, CapabilityChat)
-		}
-	default:
-		model.Capabilities = []string{CapabilityChat, CapabilityMessages, CapabilityResponses}
-	}
-	model.NormalizeRoute()
+	model.Provider = "build"
+	model.UpstreamModel = strings.TrimPrefix(id, "build/")
+	model.Capabilities = []string{CapabilityChat, CapabilityMessages, CapabilityResponses}
 }
 
 // ApplyGrokRouteDefaults initializes route metadata for catalog/discovery
@@ -1222,76 +1105,6 @@ func (s *Store) GetSessionAffinity(ctx context.Context, provider, model, session
 		return nil, fmt.Errorf("session affinity store not configured")
 	}
 	return s.reasoning.GetSessionAffinity(ctx, provider, model, sessionKey)
-}
-
-func (s *Store) SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error {
-	if s == nil || s.videoJobs == nil {
-		return fmt.Errorf("video job store not configured")
-	}
-	return s.videoJobs.SaveStoredVideoJob(ctx, job, ttl)
-}
-
-func (s *Store) GetStoredVideoJob(ctx context.Context, id, ownerHash string) (*StoredVideoJob, error) {
-	if s == nil || s.videoJobs == nil {
-		return nil, fmt.Errorf("video job store not configured")
-	}
-	return s.videoJobs.GetStoredVideoJob(ctx, id, ownerHash)
-}
-
-func (s *Store) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, error) {
-	if s == nil || s.videoJobs == nil {
-		return nil, fmt.Errorf("video job store not configured")
-	}
-	return s.videoJobs.ListStoredVideoJobs(ctx)
-}
-
-func (s *Store) DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error {
-	if s == nil || s.videoJobs == nil {
-		return fmt.Errorf("video job store not configured")
-	}
-	return s.videoJobs.DeleteStoredVideoJob(ctx, id, ownerHash)
-}
-
-func (s *Store) AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error) {
-	if s == nil || s.videoJobs == nil {
-		return false, fmt.Errorf("video job store not configured")
-	}
-	return s.videoJobs.AcquireVideoJobLease(ctx, id, ownerHash, holder, ttl)
-}
-
-func (s *Store) RefreshVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error) {
-	if s == nil || s.videoJobs == nil {
-		return false, fmt.Errorf("video job store not configured")
-	}
-	return s.videoJobs.RefreshVideoJobLease(ctx, id, ownerHash, holder, ttl)
-}
-
-func (s *Store) ReleaseVideoJobLease(ctx context.Context, id, ownerHash, holder string) (bool, error) {
-	if s == nil || s.videoJobs == nil {
-		return false, fmt.Errorf("video job store not configured")
-	}
-	return s.videoJobs.ReleaseVideoJobLease(ctx, id, ownerHash, holder)
-}
-
-func (s *Store) SaveStoredMediaInput(ctx context.Context, input *StoredMediaInput, ttl time.Duration) error {
-	if s == nil || s.media == nil {
-		return fmt.Errorf("media input store not configured")
-	}
-	return s.media.SaveStoredMediaInput(ctx, input, ttl)
-}
-
-func (s *Store) GetStoredMediaInput(ctx context.Context, id, ownerHash string) (*StoredMediaInput, error) {
-	if s == nil || s.media == nil {
-		return nil, fmt.Errorf("media input store not configured")
-	}
-	return s.media.GetStoredMediaInput(ctx, id, ownerHash)
-}
-
-func (s *Store) DeleteStoredMediaInput(ctx context.Context, id, ownerHash string) error {
-	if s == nil || s.media == nil {
-		return fmt.Errorf("media input store not configured")
-	}
-	return s.media.DeleteStoredMediaInput(ctx, id, ownerHash)
 }
 
 // Model wrappers

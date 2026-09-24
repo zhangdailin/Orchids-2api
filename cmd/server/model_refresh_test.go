@@ -433,12 +433,6 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	}
 }
 
-func TestCanonicalGrokRefreshModelIDKeepsBuildVideoProvider(t *testing.T) {
-	if got := canonicalGrokRefreshModelID("grok-imagine-video-1.5"); got != "build/grok-imagine-video-1.5" {
-		t.Fatalf("canonicalGrokRefreshModelID()=%q", got)
-	}
-}
-
 func TestDiscoverGrokModelsWithoutUpstreamCatalogPublishesNothing(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()

@@ -172,50 +172,9 @@ func projectWorkBuddyQuota(fields map[string]interface{}, acc *store.Account, li
 	}
 }
 func projectGrokQuota(fields map[string]interface{}, acc *store.Account, limit, current float64, observedTokens int64, usageObserved bool) {
-	if grok.ProviderForAccount(acc) == grok.ProviderBuild {
-		buildGrokBuildQuotaFields(fields, acc, observedTokens, usageObserved)
-		return
-	}
-	web := acc.GrokWebQuota
-	preferredMode := ""
-	preferred := web.Auto
-	if !preferred.HasLimit && !preferred.HasRemaining {
-		preferredMode = "fast"
-		preferred = web.Fast
-	} else {
-		preferredMode = "auto"
-	}
-	if preferred.HasLimit || preferred.HasRemaining {
-		limit = preferred.Limit
-		remaining := preferred.Remaining
-		used := limit - remaining
-		if used < 0 {
-			used = 0
-		}
-		fields["quota_limit"] = limit
-		fields["quota_used"] = used
-		fields["quota_remaining"] = remaining
-		fields["quota_mode"] = "web_" + preferredMode
-		fields["quota_unit"] = "requests"
-		fields["quota_supported"] = true
-		fields["quota_reset_at"] = preferred.ResetAt
-		fields["quota_windows"] = map[string]interface{}{"auto": web.Auto, "fast": web.Fast}
-		applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-			"Grok Web 上游返回的 auto/fast 额度窗口", true, false)
-	} else {
-		// No successful Web quota snapshot is different from zero credits.
-		// Keep the account active while telling the UI that the value is
-		// currently unavailable instead of inventing a default allowance.
-		fields["quota_limit"] = 0.0
-		fields["quota_used"] = 0.0
-		fields["quota_remaining"] = 0.0
-		fields["quota_mode"] = "unavailable"
-		fields["quota_unit"] = "requests"
-		fields["quota_supported"] = false
-		applyQuotaProvenance(fields, "unknown", "upstreamBilling", "",
-			"尚未同步到 Grok Web 额度窗口", false, false)
-	}
+	buildGrokBuildQuotaFields(fields, acc, observedTokens, usageObserved)
 }
+
 func projectWarpQuota(fields map[string]interface{}, acc *store.Account, limit, current float64, observedTokens int64, usageObserved bool) {
 	baseLimit := limit
 	if acc.WarpMonthlyLimit > 0 {

@@ -140,29 +140,6 @@ test('the trend charts are width-constrained instead of sized by their aspect ra
   assert.match(body, /aspect-ratio:/, '.ops-chart still sizes its height from the ratio');
 });
 
-test('the capability strip wraps instead of running past its banner', () => {
-  const blocks = [];
-  const opener = /@media[^{]*max-width:\s*(\d+)px[^{]*\{/g;
-  let m;
-  while ((m = opener.exec(grokCss)) !== null) {
-    let depth = 1;
-    let i = opener.lastIndex;
-    while (i < grokCss.length && depth > 0) {
-      if (grokCss[i] === '{') depth++;
-      else if (grokCss[i] === '}') depth--;
-      i++;
-    }
-    blocks.push({ width: Number(m[1]), body: grokCss.slice(opener.lastIndex, i - 1) });
-  }
-  const phone = blocks.filter((b) => b.width <= 760);
-  assert.ok(phone.length > 0, 'grok-tools.css has a phone breakpoint');
-  assert.ok(
-    phone.some((b) => /\.capability-badges\s*\{[^}]*flex-wrap:\s*wrap/.test(b.body)),
-    'the badges are five fixed ~68px chips (356px of nowrap flex) and the banner is ' +
-      '336px at 360px, so .capability-badges must wrap inside a phone breakpoint',
-  );
-});
-
 test('the phone card layouts are driven by the labels the rows actually carry', () => {
   // ops.js stamps a class and a header label on every value cell; ops.css turns the
   // row into a card and prints that label with ::before. This asserts the two halves

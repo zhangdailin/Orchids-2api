@@ -15,7 +15,6 @@ func TestShouldSwitchGrokAccount(t *testing.T) {
 		{name: "generic 403", err: errors.New("grok upstream status=403 body=forbidden"), want: false},
 		{name: "blocked-user 403", err: errors.New("grok upstream status=403 body={\"code\":\"blocked-user\"}"), want: true},
 		{name: "cloudflare 403", err: errors.New("grok upstream status=403 body=<html>Just a moment... verifying you are human</html>"), want: false},
-		{name: "dpop 403", err: errors.New("grok upstream status=403 body={\"code\":\"unauthorized_dpop_required\"}"), want: false},
 		{name: "account 429", err: errors.New("grok upstream status=429 body=rate limit exceeded"), want: true},
 		{name: "401", err: errors.New("grok upstream status=401 body=unauthorized"), want: true},
 		{name: "shared 429", err: errors.New("grok upstream status=429 body=too many requests"), want: true},
@@ -25,29 +24,6 @@ func TestShouldSwitchGrokAccount(t *testing.T) {
 		{name: "connection reset", err: errors.New("read: connection reset by peer"), want: true},
 		{name: "client canceled", err: errors.New("context canceled"), want: false},
 		{name: "other", err: errors.New("grok upstream status=404 body=model not found"), want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldSwitchGrokAccount(tt.err); got != tt.want {
-				t.Fatalf("shouldSwitchGrokAccount(%v)=%v want=%v", tt.err, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestShouldSwitchGrokAccount_ConsoleScenarios(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "nil", err: nil, want: false},
-		{name: "team rate limit", err: errors.New("grok upstream status=429 body=too many requests for team"), want: true},
-		{name: "resource exhausted", err: errors.New("grok upstream status=429 body={\"code\":\"resource-exhausted\",\"error\":\"Too many requests for team\"}"), want: true},
-		{name: "account rate limit", err: errors.New("grok upstream status=429 body=rate limit exceeded"), want: true},
-		{name: "generic 403", err: errors.New("grok upstream status=403 body=forbidden"), want: false},
-		{name: "blocked-user 403", err: errors.New("grok upstream status=403 body={\"code\":\"blocked-user\"}"), want: true},
-		{name: "timeout", err: errors.New("context deadline exceeded"), want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -89,7 +65,6 @@ func TestMarkAllGrokAccountStatuses(t *testing.T) {
 		{name: "blocked-user 403", err: errors.New("grok upstream status=403 body={\"code\":\"blocked-user\"}"), wantMark: true, wantSwitch: true},
 		{name: "anti bot 403", err: errors.New("grok upstream status=403 body=Request rejected by anti-bot rules"), wantMark: false, wantSwitch: false},
 		{name: "cloudflare 403", err: errors.New("grok upstream status=403 body=<html>cf-mitigated: challenge</html>"), wantMark: false, wantSwitch: false},
-		{name: "dpop 403", err: errors.New("grok upstream status=403 body={\"code\":\"unauthorized_dpop_required\"}"), wantMark: false, wantSwitch: false},
 		{name: "401", err: errors.New("grok upstream status=401 body=unauthorized"), wantMark: true, wantSwitch: true},
 		{name: "shared synthetic cooldown", err: errors.New("grok upstream status=429 body=too_many_requests team build:team:abc model grok-4 cooling down; retry-after=30s"), wantMark: false, wantSwitch: true},
 		{name: "structured team 429", err: errors.New("grok upstream status=429 body=Requests per Minute (actual / limit): 31 / 30 for team 123e4567-e89b-12d3-a456-426614174000 model grok-4.20"), wantMark: false, wantSwitch: true},

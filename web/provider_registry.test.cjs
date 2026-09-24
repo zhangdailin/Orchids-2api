@@ -42,7 +42,7 @@ test('accounts and models consume the backend-fed provider registry', () => {
 });
 
 test('all provider pages load the registry before page code', () => {
-  for (const [name, script] of [['accounts', 'accounts.js'], ['models', 'models.js'], ['grok-tools', 'grok-tools.min.js']]) {
+  for (const [name, script] of [['accounts', 'accounts.js'], ['models', 'models.js'], ['grok-tools', 'grok-tools.js']]) {
     const html = fs.readFileSync(path.join(root, `templates/pages/${name}.html`), 'utf8');
     assert.ok(html.indexOf('provider-registry.js') >= 0, `${name} missing registry`);
     assert.ok(html.indexOf('provider-registry.js') < html.indexOf(script), `${name} loads registry too late`);

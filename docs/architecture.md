@@ -24,7 +24,7 @@ Orchids-2api/
 │   ├── config/                  # 配置加载与默认值
 │   ├── debug/                   # 调试日志
 │   ├── errors/                  # 错误分类
-│   ├── grok/                    # Grok chat/images/files/admin
+│   ├── grok/                    # Grok Build OAuth/Chat/Responses/Messages
 │   ├── handler/                 # Warp/Puter/WorkBuddy 主处理器
 │   ├── loadbalancer/            # 账号选择与状态管理
 │   ├── middleware/              # trace/log/session/concurrency
@@ -51,10 +51,10 @@ Orchids-2api/
 
 - `/*/v1/messages`
 - `/*/v1/chat/completions`
-- `/*/v1/models`
+- `/*/v1/responses` 与 stored Response 子资源
+- `/api/grok/device-auth*`
+- `/api/grok/tools/v1/{models,responses}`
 - `/api/*`
-- `/api/v1/admin/*` / `/v1/admin/*`
-- `/api/v1/public/*` / `/v1/public/*`
 
 ### 3.2 `internal/handler`
 
@@ -70,10 +70,11 @@ Orchids-2api/
 
 负责 `grok`：
 
-- Chat Completions
-- 图片生成与编辑
-- 本地媒体缓存文件
-- Grok 管理接口与公共 imagine/video/voice 能力
+- Chat Completions、Responses 与 Claude Messages 转换
+- Build OAuth access/refresh token 自动续期
+- stored Responses 及其账号固定绑定
+- Build 模型发现、账单与限速状态同步
+- `web_search` / `x_search` hosted tool 声明透传
 
 ### 3.4 `internal/loadbalancer`
 
@@ -121,10 +122,12 @@ HTTP Request
   -> middleware chain
   -> grok.Handler
   -> validate request/model
-  -> select grok account
-  -> call upstream
-  -> normalize stream / image / file result
-  -> write OpenAI-compatible response
+  -> select Build OAuth account
+  -> refresh OAuth token when needed
+  -> call cli-chat-proxy.grok.com/v1
+  -> normalize Messages / Chat / Responses stream
+  -> persist stored-response ownership and usage state
+  -> write compatible response
 ```
 
 ## 5. 模型管理流
@@ -135,7 +138,7 @@ HTTP Request
 
 - `warp`：账号 GraphQL 发现结果，失败时回退内置种子
 - `puter`：Puter 官方模型目录与本地当前代策略的交集，再经账号 `test_mode` 验证
-- `grok`：内置支持表 + 现存模型 + 公共文档探测
+- `grok`：Build OAuth 账号读取上游 `GET /v1/models`，返回 `source=grok_build_models`
 - `workbuddy`：已启用账号的 CLI 模型目录，同时保存账号级模型快照
 - `qoder`：模型目录来自有符号上游读取（`GET /algo/api/v2/model/list`），账号快照按 JSON 保存整行；对外模型 ID 为小写显示名，内部 key 由该通道的 resolver 映射
 
@@ -165,8 +168,6 @@ Puter 走 `internal/puter`，特点是：
 ### 7.2 本地目录
 
 - `debug-logs/`：调试日志
-- `data/tmp/image`：Grok 图片缓存
-- `data/tmp/video`：Grok 视频缓存
 
 ## 7.3 Qoder 当前实现要点
 

@@ -7,7 +7,7 @@ import (
 
 // Prometheus metrics for the egress layer. Labels are deliberately low
 // cardinality: scope (app_chat/console/cli) and outcome. They never carry proxy
-// URLs, proxy credentials, cookies, OAuth/DPoP tokens, User-Agents, affinities
+// URLs, proxy credentials, cookies, OAuth tokens, User-Agents, affinities
 // or account identifiers.
 
 var (

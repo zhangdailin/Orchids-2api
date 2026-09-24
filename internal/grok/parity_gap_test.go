@@ -15,29 +15,6 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestResolveModel_WebAndConsoleConversationCatalogs(t *testing.T) {
-	cases := []struct {
-		id       string
-		upstream UpstreamKind
-		model    string
-	}{
-		{"grok-chat-fast", UpstreamAppChat, "grok-chat-fast"},
-		{"Web/grok-chat-heavy", UpstreamAppChat, "grok-chat-heavy"},
-		{"Console/grok-4.20-0309-reasoning", UpstreamConsole, "grok-4.20-0309-reasoning"},
-		{"console/grok-build-0.1", UpstreamConsole, "grok-build-0.1"},
-	}
-	for _, tc := range cases {
-		spec, ok := ResolveModel(tc.id)
-		if !ok || spec.Upstream != tc.upstream {
-			t.Fatalf("ResolveModel(%q) = %#v,%v", tc.id, spec, ok)
-		}
-		actual := firstNonEmpty(spec.ConsoleModel, spec.UpstreamModel)
-		if actual != tc.model {
-			t.Fatalf("ResolveModel(%q) upstream=%q want %q", tc.id, actual, tc.model)
-		}
-	}
-}
-
 func TestResolveConversationModelUsesAccountBuildCatalog(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
@@ -73,7 +50,7 @@ func TestResponsesStreamTranslationIsIncremental(t *testing.T) {
 	recorder := newObservedStreamWriter("response.output_text.delta")
 	done := make(chan struct{})
 	go func() {
-		writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-chat-fast"}, reader)
+		writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, reader)
 		close(done)
 	}()
 
@@ -96,7 +73,7 @@ func TestResponsesStreamAggregatesFragmentedToolArguments(t *testing.T) {
 		"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
 		"data: [DONE]\n\n"
 	recorder := httptest.NewRecorder()
-	writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-chat-fast"}, strings.NewReader(raw))
+	writeResponsesStreamFromChatReaderRequest(recorder, ResponsesCreateRequest{Model: "grok-4.6"}, strings.NewReader(raw))
 	body := recorder.Body.String()
 	if count := strings.Count(body, "event: response.output_item.added"); count != 1 {
 		t.Fatalf("function item added count=%d body=%s", count, body)
@@ -246,18 +223,5 @@ func TestPrepareGrokSessionSeparatesTenantsAndSoftReplay(t *testing.T) {
 	otherModel := prepareGrokSession(reqA, "grok-4.5", "", []ChatMessage{{Role: "user", Content: "hello"}})
 	if otherModel.Key == a.Key {
 		t.Fatal("session identity must be model-isolated")
-	}
-}
-
-func TestAffinityMapUsesProviderBoundary(t *testing.T) {
-	h := &Handler{affinity: map[string]sessionAffinityEntry{}, replay: map[string]reasoningReplayEntry{}}
-	session := grokSessionContext{Key: "key", Model: "grok", Replay: true}
-	ctx := withGrokSession(context.Background(), session)
-	h.bindAffinity(ctx, ProviderBuild, 10)
-	if got := h.affinityAccount(ctx, ProviderBuild); got != 10 {
-		t.Fatalf("build affinity=%d", got)
-	}
-	if got := h.affinityAccount(ctx, ProviderConsole); got != 0 {
-		t.Fatalf("provider affinity leaked: %d", got)
 	}
 }

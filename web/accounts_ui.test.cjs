@@ -155,7 +155,7 @@ test('every channel owns its credential copy: switching type never leaves anothe
   node('accountId').value = '';
   // Open Grok first: its copy is the one that used to survive into Warp.
   context.applyTokenLabels('grok');
-  assert.equal(node('tokenLabel').textContent, 'SSO Token');
+  assert.equal(node('tokenLabel').textContent, 'Grok Build OAuth');
   assert.match(node('tokenHint').textContent, /Grok/);
 
   context.applyTokenLabels('warp');
@@ -173,7 +173,7 @@ test('every channel owns its credential copy: switching type never leaves anothe
   assert.equal(node('tokenHint').textContent.includes('Puter'), false);
 
   context.applyTokenLabels('grok');
-  assert.equal(node('tokenLabel').textContent, 'SSO Token');
+  assert.equal(node('tokenLabel').textContent, 'Grok Build OAuth');
   assert.equal(node('tokenHint').textContent.includes('WorkBuddy'), false);
 });
 
@@ -185,7 +185,7 @@ test('openModal after a tab click renders that tab form, not the previously open
   context.renderPlatformTabs();
 
   const expectations = {
-    grok: { label: 'SSO Token', hint: /Grok/, sso: false, warpLogin: true },
+    grok: { label: 'Grok Build OAuth', hint: /Grok/, sso: true, warpLogin: true },
     puter: { label: 'Auth Token', hint: /Puter/, sso: false, warpLogin: true },
     warp: { label: 'Warp 登录会话', hint: /Warp/, sso: true, warpLogin: false },
     workbuddy: { label: 'WorkBuddy 凭证', hint: /官方登录/, sso: true, warpLogin: true },
@@ -206,68 +206,10 @@ test('openModal after a tab click renders that tab form, not the previously open
   }
 });
 
-test('editing a Grok account keeps its credential UI while another tab is active', () => {
-  const { context, node } = loadUI();
-  vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
-  node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
-  node('enabled').checked = true;
-  context.renderPlatformTabs();
-  // The operator is looking at another channel while editing a Grok account.
-  context.filterByPlatform('puter');
-
-  const oauthAccount = {
-    id: 12,
-    account_type: 'grok',
-    credential_type: 'oauth',
-    grok_provider: 'build',
-    oauth_access_token: 'access',
-    enabled: true,
-    weight: 1,
-  };
-  context.openModal(oauthAccount);
-  assert.equal(node('accountType').value, 'grok', 'the edited account owns the modal type');
-  assert.equal(node('credentialModeGroup').hidden, false, 'Grok credential mode must be shown');
-  assert.equal(node('grokDeviceLoginGroup').hidden, false, 'the OAuth mode must offer device login');
-
-  const ssoAccount = { ...oauthAccount, id: 13, credential_type: 'sso', client_cookie: 'sso=x' };
-  context.openModal(ssoAccount);
-  assert.equal(node('accountType').value, 'grok');
-  assert.equal(node('ssoCredentialGroup').hidden, false, 'SSO mode must offer the cookie input');
-  assert.equal(node('grokDeviceLoginGroup').hidden, true);
-});
-
-test('Grok credential modes expose only their own inputs', () => {
-  const { context, node } = loadUI();
-
-  // SSO Cookie mode: paste the cookie, keep the internal Console picker hidden.
-  node('credentialType').value = 'sso';
-  context.applyTokenLabels('grok');
-  assert.equal(node('ssoCredentialGroup').hidden, false, 'SSO cookie input must be available');
-  assert.equal(node('clientCookie').required, true);
-  assert.equal(node('grokProviderGroup').hidden, true, 'the Console product entry must not be exposed');
-  assert.equal(node('grokDeviceLoginGroup').hidden, true);
-  assert.equal(node('oauthCredentialGroup').hidden, true);
-  assert.equal(node('oauthRefreshGroup').hidden, true);
-  assert.equal(node('oauthExpiresGroup').hidden, true);
-
-  // Build CLI OAuth mode: official device login only, no manual token fields.
-  node('credentialType').value = 'oauth';
-  node('accountId').value = '';
-  context.applyTokenLabels('grok');
-  assert.equal(node('grokDeviceLoginGroup').hidden, false, 'device login must be offered');
-  assert.equal(node('ssoCredentialGroup').hidden, true);
-  assert.equal(node('oauthCredentialGroup').hidden, true, 'OAuth Access Token input must be gone');
-  assert.equal(node('oauthRefreshGroup').hidden, true, 'OAuth Refresh Token input must be gone');
-  assert.equal(node('oauthExpiresGroup').hidden, true, 'expiry input must be gone');
-  assert.equal(node('grokProviderGroup').hidden, true);
-  assert.equal(node('clientCookie').required, false);
-});
-
 test('Grok Build CLI OAuth cannot be created from the form', async () => {
   const { context, node } = loadUI();
   node('accountType').value = 'grok';
   node('accountId').value = '';
-  node('credentialType').value = 'oauth';
   const notices = [];
   context.showToast = (message) => notices.push(message);
   context.fetch = () => { throw new Error('manual OAuth creation must not send a request'); };
@@ -278,11 +220,10 @@ test('Grok Build CLI OAuth cannot be created from the form', async () => {
 
 test('Warp exposes only official login and preserves settings editing', () => {
   const { context, node } = loadUI();
-  node('credentialType').value = 'oauth';
   context.applyTokenLabels('grok');
   node('clientCookie').value = 'old-input';
   context.applyTokenLabels('warp');
-  for (const id of ['ssoCredentialGroup', 'oauthCredentialGroup', 'oauthRefreshGroup', 'oauthExpiresGroup', 'grokDeviceLoginGroup', 'grokProviderGroup']) {
+  for (const id of ['ssoCredentialGroup', 'oauthCredentialGroup', 'oauthRefreshGroup', 'oauthExpiresGroup', 'grokDeviceLoginGroup', 'oauthCredentialGroup']) {
     assert.equal(node(id).hidden, true, id);
   }
   assert.equal(node('warpDeviceLoginGroup').hidden, false);
@@ -336,49 +277,11 @@ test('loading accounts never starts upstream account checks', async () => {
   context.renderAccounts = () => {};
   context.updateStats = () => {};
   context.fetch = async () => ({ status: 200, json: async () => [
-    { id: 3, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', enabled: true },
+    { id: 3, account_type: 'grok', credential_type: 'oauth', grok_provider: 'build', enabled: true },
   ] });
 
   await context.loadAccounts();
   assert.equal('autoSyncStaleAccounts' in context, false, 'obsolete auto-sync machinery must stay removed');
-});
-
-test('linked Console rows are filtered and SSO saves target the Web source', async () => {
-  const { context, node } = loadUI();
-  node('accountModal').classList = { add() {}, remove() {} };
-  node('accountModal').style = {};
-  context.stopWarpDeviceLogin = () => {};
-  context.resetWarpDeviceLoginStatus = () => {};
-  context.stopGrokDeviceLogin = () => {};
-  context.resetGrokDeviceLoginStatus = () => {};
-  context.clearAccountImportStatus = () => {};
-  context.sortAccounts = () => {};
-  context.renderPlatformTabs = () => {};
-  context.renderAccounts = () => {};
-  context.updateStats = () => {};
-  context.fetch = async () => ({ status: 200, json: async () => [
-    { id: 42, account_type: 'grok', credential_type: 'sso', grok_provider: 'console', grok_sso_parent_id: 7, client_cookie: 'sso=internal', enabled: true },
-    { id: 7, account_type: 'grok', credential_type: 'sso', grok_provider: 'web', client_cookie: 'sso=visible', enabled: true, weight: 2 },
-  ] });
-  await context.loadAccounts();
-  assert.equal(vm.runInContext('accounts.length', context), 1);
-  assert.equal(vm.runInContext('accounts[0].id', context), 7);
-
-  const account = vm.runInContext('accounts[0]', context);
-  context.openModal(account);
-  assert.equal(node('grokProvider').value, 'web');
-  assert.match(node('grokProviderHint').textContent, /内部维护 Console/);
-
-  let sent;
-  context.fetch = async (url, options) => { sent = { url, options }; return { ok: true }; };
-  context.closeModal = () => {};
-  context.loadAccounts = () => {};
-  context.showToast = () => {};
-  await context.saveAccount({ preventDefault() {} });
-
-  assert.equal(sent.url, '/api/accounts/7');
-  assert.equal(sent.options.method, 'PUT');
-  assert.equal(JSON.parse(sent.options.body).grok_provider, 'web');
 });
 
 test('Warp settings save succeeds without submitting credentials', async () => {
@@ -630,7 +533,7 @@ test('every platform tab maps to its own provider login surface', () => {
     puter: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: false, ssoCredentialGroup: false },
     workbuddy: { warpDeviceLoginGroup: true, workbuddyLoginGroup: false, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
     qoder: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: false, puterWebLoginGroup: true, ssoCredentialGroup: true },
-    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: false },
+    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
   };
   for (const [platform, expected] of Object.entries(expectations)) {
     node('accountId').value = '';
@@ -903,14 +806,7 @@ test('Grok identity shows the email together with the login method', () => {
     email: 'oauth@example.com',
     name: 'grok-device-login',
     has_credential: true,
-  }), 'oauth@example.com · OAuth');
-  assert.equal(context.accountIdentityPrimary({
-    account_type: 'grok',
-    credential_type: 'sso',
-    email: 'sso@example.com',
-    name: 'manual-sso',
-    has_credential: true,
-  }), 'sso@example.com · SSO');
+  }), 'oauth@example.com · Build OAuth');
 });
 
 test('the Qoder quota tooltip carries the plan, the reset and the upgrade link', () => {

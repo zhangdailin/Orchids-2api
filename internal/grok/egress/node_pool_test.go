@@ -2,7 +2,6 @@ package egress
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -77,64 +76,6 @@ func TestManagerAcquireDirectNode(t *testing.T) {
 		t.Fatalf("acquire failed: %v", err)
 	}
 	defer lease.Release()
-	if lease.UserAgent == "" {
-		t.Fatal("expected a user agent")
-	}
-}
-
-func TestManagerBuildLeaseHasNoBrowserIdentity(t *testing.T) {
-	cfg := &config.Config{
-		GrokEgressEnabled: true,
-		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
-	}
-	m := NewManager(cfg)
-	lease, err := m.Acquire(context.Background(), "cli", "acct-build")
-	if err != nil {
-		t.Fatalf("acquire failed: %v", err)
-	}
-	defer lease.Release()
-	if lease.UserAgent != "" || lease.CFCookies != "" {
-		t.Fatalf("Build lease leaked browser identity: ua=%q cookies=%q", lease.UserAgent, lease.CFCookies)
-	}
-}
-
-func TestManagerFingerprintIncludesProxyAndSolver(t *testing.T) {
-	cfg := &config.Config{GrokEgressEnabled: true, GrokFlareSolverrURL: "http://solver-a:8191"}
-	m := NewManager(cfg)
-	a := m.fingerprint(Node{Name: "same", URL: "http://proxy-a:8080"}, "acct")
-	b := m.fingerprint(Node{Name: "same", URL: "http://proxy-b:8080"}, "acct")
-	if a == b {
-		t.Fatal("proxy URL change must change clearance fingerprint")
-	}
-	cfg.GrokFlareSolverrURL = "http://solver-b:8191"
-	c := m.fingerprint(Node{Name: "same", URL: "http://proxy-a:8080"}, "acct")
-	if a == c {
-		t.Fatal("solver URL change must change clearance fingerprint")
-	}
-	if strings.Contains(a, "proxy-a") || strings.Contains(a, "solver-a") {
-		t.Fatalf("fingerprint must not expose configuration: %q", a)
-	}
-}
-
-func TestManagerAcquireStableFingerprint(t *testing.T) {
-	cfg := &config.Config{
-		GrokEgressEnabled: true,
-		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
-	}
-	m := NewManager(cfg)
-	lease1, err := m.Acquire(context.Background(), "console", "acct-2")
-	if err != nil {
-		t.Fatalf("acquire1 failed: %v", err)
-	}
-	lease1.Release()
-	lease2, err := m.Acquire(context.Background(), "console", "acct-2")
-	if err != nil {
-		t.Fatalf("acquire2 failed: %v", err)
-	}
-	defer lease2.Release()
-	if lease1.UserAgent != lease2.UserAgent {
-		t.Fatalf("same affinity should map to same UA: %q vs %q", lease1.UserAgent, lease2.UserAgent)
-	}
 }
 
 func TestManagerUnhealthyNodeSkipped(t *testing.T) {
@@ -216,70 +157,6 @@ func TestParseProxyURL(t *testing.T) {
 		if _, err := parseProxyURL(raw); err == nil {
 			t.Fatalf("expected %q to be rejected", raw)
 		}
-	}
-}
-
-func TestClearanceInvalidateVersionPrecision(t *testing.T) {
-	cfg := &config.Config{
-		GrokEgressEnabled: true,
-		GrokEgressNodes:   []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
-	}
-	m := NewManager(cfg)
-	ctx := context.Background()
-
-	lease1, err := m.Acquire(ctx, "app_chat", "acct")
-	if err != nil {
-		t.Fatalf("acquire1 failed: %v", err)
-	}
-	lease1.InvalidateClearance()
-	lease1.Release()
-
-	// Re-acquire re-solves clearance and bumps the version.
-	lease2, err := m.Acquire(ctx, "app_chat", "acct")
-	if err != nil {
-		t.Fatalf("acquire2 failed: %v", err)
-	}
-	defer lease2.Release()
-	if lease2.clearanceVersion == lease1.clearanceVersion {
-		t.Fatal("expected a new clearance version after invalidation")
-	}
-
-	// A stale invalidation (old version) must not invalidate the new clearance.
-	m.invalidateClearanceKey(lease2.clearanceKey, lease1.clearanceVersion)
-	m.mu.RLock()
-	state, ok := m.clearances[lease2.clearanceKey]
-	m.mu.RUnlock()
-	if !ok || state.invalid {
-		t.Fatal("stale invalidation must not invalidate a newer clearance")
-	}
-}
-
-type failingSolver struct{}
-
-func (failingSolver) Solve(context.Context, ClearanceConfig, string) (clearanceSolution, error) {
-	return clearanceSolution{}, errors.New("solver unavailable")
-}
-
-func TestAcquireFailsClosedOnSolverFailure(t *testing.T) {
-	cfg := &config.Config{
-		GrokEgressEnabled:          true,
-		GrokEgressNodes:            []config.EgressNodeConfig{{Name: "direct", Scope: "all"}},
-		GrokClearanceMode:          "flaresolverr",
-		GrokFlareSolverrURL:        "http://127.0.0.1:8191",
-		GrokClearanceRefreshInterv: 600,
-	}
-	m := NewManager(cfg)
-	if m == nil {
-		t.Fatal("expected manager")
-	}
-	m.solver = failingSolver{}
-	lease, err := m.Acquire(context.Background(), "app_chat", "acct")
-	if err == nil {
-		lease.Release()
-		t.Fatal("expected fail-closed acquire error when clearance solve fails")
-	}
-	if lease != nil {
-		t.Fatal("expected nil lease on failure")
 	}
 }
 

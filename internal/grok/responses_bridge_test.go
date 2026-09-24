@@ -16,8 +16,8 @@ import (
 	"orchids-api/internal/store"
 )
 
-// responsesBridgeFixture builds a handler whose Web upstream answers with the
-// supplied status, plus a verified model record so the console's own catalog gate
+// responsesBridgeFixture builds a handler whose Build upstream answers with the
+// supplied status, plus a verified model record so the Build catalog gate
 // lets the request through (exactly as a real model refresh leaves it).
 func responsesBridgeFixture(t *testing.T, upstreamStatus int, upstreamBody, model string) *Handler {
 	t.Helper()
@@ -38,8 +38,8 @@ func responsesBridgeFixture(t *testing.T, upstreamStatus int, upstreamBody, mode
 
 	ctx := context.Background()
 	if err := s.CreateAccount(ctx, &store.Account{
-		AccountType:  "grok",
-		ClientCookie: "sso=web-token",
+		AccountType:    "grok",
+		CredentialType: "oauth", OAuthAccessToken: "build-token",
 		Enabled:      true,
 		Subscription: "super",
 		Weight:       1,
@@ -53,7 +53,7 @@ func responsesBridgeFixture(t *testing.T, upstreamStatus int, upstreamBody, mode
 		Name:          model,
 		Status:        store.ModelStatusAvailable,
 		Verified:      true,
-		Provider:      ProviderWeb,
+		Provider:      ProviderBuild,
 		UpstreamModel: model,
 		Origin:        "discovery",
 		Capabilities:  []string{store.CapabilityChat, store.CapabilityMessages, store.CapabilityResponses},
@@ -73,9 +73,9 @@ func responsesBridgeFixture(t *testing.T, upstreamStatus int, upstreamBody, mode
 // 500 with no explanation.
 func TestHandleResponses_RelaysUpstreamFailureStatus(t *testing.T) {
 	h := responsesBridgeFixture(t, http.StatusUnauthorized,
-		`{"error":{"message":"Grok upstream says the SSO token is invalid"}}`, "grok-chat-auto")
+		`{"error":{"message":"Grok upstream says the SSO token is invalid"}}`, "grok-4.6")
 
-	body := `{"model":"grok-chat-auto","input":"hello","stream":false}`
+	body := `{"model":"grok-4.6","input":"hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -98,16 +98,16 @@ func TestHandleResponses_RelaysUpstreamFailureStatus(t *testing.T) {
 // TestHandleResponses_ForbiddenModelIsNotServerError keeps a model-permission
 // problem a 4xx for the Responses endpoint as well, matching chat completions.
 func TestHandleResponses_ForbiddenModelIsNotServerError(t *testing.T) {
-	h := responsesBridgeFixture(t, http.StatusOK, `{}`, "grok-chat-auto")
+	h := responsesBridgeFixture(t, http.StatusOK, `{}`, "grok-4.6")
 
-	body := `{"model":"grok-chat-auto","input":"hello","stream":false}`
+	body := `{"model":"grok-4.6","input":"hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	// A key restricted to another model must be refused with 403, never 500.
 	rec := httptest.NewRecorder()
 
 	wrapped := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
-		return &middleware.APIKeyPrincipal{ID: 1, AllowedModels: []string{"grok-chat-heavy"}}, nil
+		return &middleware.APIKeyPrincipal{ID: 1, AllowedModels: []string{"grok-4.5"}}, nil
 	}, h.HandleResponses)
 	req.Header.Set("Authorization", "Bearer test-key")
 	wrapped(rec, req)

@@ -213,15 +213,6 @@ var (
 		redis.call("SET", key, cjson.encode(acc))
 		return "OK"
 	`)
-	refreshVideoJobLeaseScript = redis.NewScript(`
-		if redis.call("GET", KEYS[1]) ~= ARGV[1] then return 0 end
-		redis.call("PEXPIRE", KEYS[1], ARGV[2])
-		return 1
-	`)
-	releaseVideoJobLeaseScript = redis.NewScript(`
-		if redis.call("GET", KEYS[1]) ~= ARGV[1] then return 0 end
-		return redis.call("DEL", KEYS[1])
-	`)
 	// reserveApiKeyBillingScript implements the whole reservation decision in one
 	// atomic step: expired holds are pruned, the live holds are summed with the
 	// settled counter, and the new hold is only inserted when the key's limit
@@ -686,11 +677,6 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		} else {
 			updated.GrokProvider = acc.GrokProvider
 		}
-		if acc.GrokSSOParentID == 0 {
-			updated.GrokSSOParentID = existing.GrokSSOParentID
-		} else {
-			updated.GrokSSOParentID = acc.GrokSSOParentID
-		}
 		// Account updates are often partial (for example request counters and
 		// credential rotation). Provider snapshots are refreshed independently, so
 		// never erase a successfully observed catalog/billing window with a zero
@@ -709,9 +695,6 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		}
 		if !acc.GrokRateLimits.ObservedAt.IsZero() {
 			updated.GrokRateLimits = acc.GrokRateLimits
-		}
-		if !acc.GrokWebQuota.SyncedAt.IsZero() {
-			updated.GrokWebQuota = acc.GrokWebQuota
 		}
 		if !acc.GrokFreeQuota.ConfirmedAt.IsZero() {
 			updated.GrokFreeQuota = acc.GrokFreeQuota
@@ -1089,28 +1072,12 @@ func (s *redisStore) ConsumeGrokQuota(ctx context.Context, id int64, provider st
 	err := s.updateAccountAtomic(ctx, id, func(acc *Account) error {
 		consumed = false // updateAccountAtomic may retry after a WATCH conflict.
 		now := time.Now().UTC()
-		switch strings.ToLower(strings.TrimSpace(provider)) {
-		case "build":
-			consumed = decrementQuotaWindow(&acc.GrokRateLimits.Requests, amount)
-			if consumed {
-				acc.GrokRateLimits.ObservedAt = now
-			}
-		default:
-			// Match the compatibility projection: auto is the preferred request
-			// window, with fast used only when auto is absent. Without request-mode
-			// metadata, decrementing both would double-charge one successful call.
-			if acc.GrokWebQuota.Auto.HasRemaining {
-				consumed = decrementQuotaWindow(&acc.GrokWebQuota.Auto, amount)
-			} else {
-				consumed = decrementQuotaWindow(&acc.GrokWebQuota.Fast, amount)
-			}
-			if acc.UsageCurrent > 0 {
-				acc.UsageCurrent = max(0, acc.UsageCurrent-amount)
-				consumed = true
-			}
-			if consumed && !acc.GrokWebQuota.SyncedAt.IsZero() {
-				acc.GrokWebQuota.SyncedAt = now
-			}
+		if !strings.EqualFold(strings.TrimSpace(provider), "build") {
+			return nil
+		}
+		consumed = decrementQuotaWindow(&acc.GrokRateLimits.Requests, amount)
+		if consumed {
+			acc.GrokRateLimits.ObservedAt = now
 		}
 		return nil
 	})
@@ -1718,25 +1685,6 @@ func (s *redisStore) storedResponseKey(responseID, ownerHash string) string {
 	return s.prefix + "responses:ownership:" + hex.EncodeToString(digest[:])
 }
 
-func (s *redisStore) storedVideoJobKey(id, ownerHash string) string {
-	digest := sha256.Sum256([]byte(strings.TrimSpace(ownerHash) + "\x00" + strings.TrimSpace(id)))
-	return s.prefix + "videos:jobs:" + hex.EncodeToString(digest[:])
-}
-
-func (s *redisStore) storedVideoJobsIndexKey() string {
-	return s.prefix + "videos:jobs:index"
-}
-
-func (s *redisStore) storedVideoJobLeaseKey(id, ownerHash string) string {
-	digest := sha256.Sum256([]byte(strings.TrimSpace(ownerHash) + "\x00" + strings.TrimSpace(id)))
-	return s.prefix + "videos:leases:" + hex.EncodeToString(digest[:])
-}
-
-func (s *redisStore) storedMediaInputKey(id, ownerHash string) string {
-	digest := sha256.Sum256([]byte(strings.TrimSpace(ownerHash) + "\x00" + strings.TrimSpace(id)))
-	return s.prefix + "media:inputs:" + hex.EncodeToString(digest[:])
-}
-
 func (s *redisStore) SaveStoredResponse(ctx context.Context, response *StoredResponse, ttl time.Duration) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
@@ -1944,207 +1892,12 @@ func (s *redisStore) GetSessionAffinity(ctx context.Context, provider, model, se
 	return &affinity, nil
 }
 
-func (s *redisStore) SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error {
-	if s == nil || s.client == nil {
-		return fmt.Errorf("redis store not configured")
-	}
-	if job == nil || strings.TrimSpace(job.ID) == "" || strings.TrimSpace(job.OwnerHash) == "" {
-		return fmt.Errorf("video job id and owner are required")
-	}
-	if ttl <= 0 {
-		return fmt.Errorf("video job ttl must be positive")
-	}
-	now := time.Now().UTC()
-	stored := *job
-	stored.ID = strings.TrimSpace(stored.ID)
-	stored.OwnerHash = strings.TrimSpace(stored.OwnerHash)
-	stored.UpdatedAt = now
-	stored.ExpiresAt = now.Add(ttl)
-	data, err := json.Marshal(&stored)
-	if err != nil {
-		return err
-	}
-	key := s.storedVideoJobKey(stored.ID, stored.OwnerHash)
-	pipe := s.client.TxPipeline()
-	pipe.Set(ctx, key, data, ttl)
-	pipe.ZAdd(ctx, s.storedVideoJobsIndexKey(), redis.Z{Score: float64(stored.ExpiresAt.Unix()), Member: key})
-	_, err = pipe.Exec(ctx)
-	return err
-}
-
-func (s *redisStore) GetStoredVideoJob(ctx context.Context, id, ownerHash string) (*StoredVideoJob, error) {
-	if s == nil || s.client == nil {
-		return nil, fmt.Errorf("redis store not configured")
-	}
-	value, err := s.client.Get(ctx, s.storedVideoJobKey(id, ownerHash)).Bytes()
-	if err == redis.Nil {
-		return nil, ErrNoRows
-	}
-	if err != nil {
-		return nil, err
-	}
-	var job StoredVideoJob
-	if err := json.Unmarshal(value, &job); err != nil {
-		return nil, err
-	}
-	if !job.ExpiresAt.IsZero() && !time.Now().UTC().Before(job.ExpiresAt) {
-		key := s.storedVideoJobKey(id, ownerHash)
-		pipe := s.client.TxPipeline()
-		pipe.Del(ctx, key)
-		pipe.ZRem(ctx, s.storedVideoJobsIndexKey(), key)
-		_, _ = pipe.Exec(ctx)
-		return nil, ErrNoRows
-	}
-	return &job, nil
-}
-
-func (s *redisStore) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, error) {
-	if s == nil || s.client == nil {
-		return nil, fmt.Errorf("redis store not configured")
-	}
-	now := time.Now().UTC()
-	indexKey := s.storedVideoJobsIndexKey()
-	if err := s.client.ZRemRangeByScore(ctx, indexKey, "-inf", strconv.FormatInt(now.Unix(), 10)).Err(); err != nil {
-		return nil, err
-	}
-	keys, err := s.client.ZRangeByScore(ctx, indexKey, &redis.ZRangeBy{Min: strconv.FormatInt(now.Unix()+1, 10), Max: "+inf"}).Result()
-	if err != nil || len(keys) == 0 {
-		return nil, err
-	}
-	// Page each MGET so no single variadic command grows without bound. The
-	// method still returns every live job (its existing contract).
-	jobs := make([]*StoredVideoJob, 0, len(keys))
-	stale := make([]interface{}, 0)
-	const mgetBatch = 256
-	for start := 0; start < len(keys); start += mgetBatch {
-		end := min(start+mgetBatch, len(keys))
-		values, err := s.client.MGet(ctx, keys[start:end]...).Result()
-		if err != nil {
-			return nil, err
-		}
-		for index, value := range values {
-			text, ok := value.(string)
-			if !ok || strings.TrimSpace(text) == "" {
-				stale = append(stale, keys[start+index])
-				continue
-			}
-			var job StoredVideoJob
-			if json.Unmarshal([]byte(text), &job) != nil || (!job.ExpiresAt.IsZero() && !now.Before(job.ExpiresAt)) {
-				stale = append(stale, keys[start+index])
-				continue
-			}
-			jobs = append(jobs, &job)
-		}
-	}
-	if len(stale) > 0 {
-		_ = s.client.ZRem(ctx, indexKey, stale...).Err()
-	}
-	return jobs, nil
-}
-
-func (s *redisStore) DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error {
-	if s == nil || s.client == nil {
-		return fmt.Errorf("redis store not configured")
-	}
-	id, ownerHash = strings.TrimSpace(id), strings.TrimSpace(ownerHash)
-	if id == "" || ownerHash == "" {
-		return fmt.Errorf("video job id and owner are required")
-	}
-	key := s.storedVideoJobKey(id, ownerHash)
-	pipe := s.client.TxPipeline()
-	pipe.Del(ctx, key)
-	pipe.ZRem(ctx, s.storedVideoJobsIndexKey(), key)
-	_, err := pipe.Exec(ctx)
-	return err
-}
-
 func validateVideoJobLeaseArgs(id, ownerHash, holder string, ttl time.Duration) error {
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerHash) == "" || strings.TrimSpace(holder) == "" {
 		return fmt.Errorf("video job id, owner, and lease holder are required")
 	}
 	if ttl <= 0 {
 		return fmt.Errorf("video job lease ttl must be positive")
-	}
-	return nil
-}
-
-func (s *redisStore) AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error) {
-	if s == nil || s.client == nil {
-		return false, fmt.Errorf("redis store not configured")
-	}
-	if err := validateVideoJobLeaseArgs(id, ownerHash, holder, ttl); err != nil {
-		return false, err
-	}
-	return s.client.SetNX(ctx, s.storedVideoJobLeaseKey(id, ownerHash), strings.TrimSpace(holder), ttl).Result()
-}
-
-func (s *redisStore) RefreshVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error) {
-	if s == nil || s.client == nil {
-		return false, fmt.Errorf("redis store not configured")
-	}
-	if err := validateVideoJobLeaseArgs(id, ownerHash, holder, ttl); err != nil {
-		return false, err
-	}
-	value, err := refreshVideoJobLeaseScript.Run(ctx, s.client, []string{s.storedVideoJobLeaseKey(id, ownerHash)}, strings.TrimSpace(holder), ttl.Milliseconds()).Int64()
-	return value == 1, err
-}
-
-func (s *redisStore) ReleaseVideoJobLease(ctx context.Context, id, ownerHash, holder string) (bool, error) {
-	if s == nil || s.client == nil {
-		return false, fmt.Errorf("redis store not configured")
-	}
-	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerHash) == "" || strings.TrimSpace(holder) == "" {
-		return false, fmt.Errorf("video job id, owner, and lease holder are required")
-	}
-	value, err := releaseVideoJobLeaseScript.Run(ctx, s.client, []string{s.storedVideoJobLeaseKey(id, ownerHash)}, strings.TrimSpace(holder)).Int64()
-	return value == 1, err
-}
-
-func (s *redisStore) SaveStoredMediaInput(ctx context.Context, input *StoredMediaInput, ttl time.Duration) error {
-	if s == nil || s.client == nil {
-		return fmt.Errorf("redis store not configured")
-	}
-	if input == nil || strings.TrimSpace(input.ID) == "" || strings.TrimSpace(input.OwnerHash) == "" {
-		return fmt.Errorf("media input id and owner are required")
-	}
-	if ttl <= 0 {
-		return fmt.Errorf("media input ttl must be positive")
-	}
-	now := time.Now().UTC()
-	stored := *input
-	stored.ID = strings.TrimSpace(stored.ID)
-	stored.OwnerHash = strings.TrimSpace(stored.OwnerHash)
-	if stored.CreatedAt.IsZero() {
-		stored.CreatedAt = now
-	}
-	stored.ExpiresAt = now.Add(ttl)
-	data, err := json.Marshal(&stored)
-	if err != nil {
-		return err
-	}
-	return s.client.Set(ctx, s.storedMediaInputKey(stored.ID, stored.OwnerHash), data, ttl).Err()
-}
-
-func (s *redisStore) GetStoredMediaInput(ctx context.Context, id, ownerHash string) (*StoredMediaInput, error) {
-	if s == nil || s.client == nil {
-		return nil, fmt.Errorf("redis store not configured")
-	}
-	key := s.storedMediaInputKey(id, ownerHash)
-	return getExpiringRedisJSON[StoredMediaInput](ctx, s, key, func(input *StoredMediaInput) time.Time {
-		return input.ExpiresAt
-	})
-}
-
-func (s *redisStore) DeleteStoredMediaInput(ctx context.Context, id, ownerHash string) error {
-	if s == nil || s.client == nil {
-		return fmt.Errorf("redis store not configured")
-	}
-	deleted, err := s.client.Del(ctx, s.storedMediaInputKey(id, ownerHash)).Result()
-	if err != nil {
-		return err
-	}
-	if deleted == 0 {
-		return ErrNoRows
 	}
 	return nil
 }

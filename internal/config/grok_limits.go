@@ -17,15 +17,7 @@ func (c *Config) GrokRequestsPerSecond(provider string) float64 {
 	if c == nil {
 		return 0
 	}
-	var value float64
-	switch provider {
-	case "web":
-		value = c.GrokWebRPS
-	case "console":
-		value = c.GrokConsoleRPS
-	case "build":
-		value = c.GrokBuildRPS
-	}
+	value := c.GrokBuildRPS
 	if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
 		return 0
 	}
@@ -38,14 +30,7 @@ func (c *Config) GrokRequestTimeout(provider string) time.Duration {
 	value, fallback := 0, 600
 	if c != nil {
 		fallback = boundedDefault(c.RequestTimeout, 600, 86400)
-		switch provider {
-		case "web", "app_chat":
-			value = c.GrokWebTimeout
-		case "console":
-			value = c.GrokConsoleTimeout
-		case "build", "cli":
-			value = c.GrokBuildTimeout
-		}
+		value = c.GrokBuildTimeout
 	}
 	return time.Duration(boundedDefault(value, fallback, 86400)) * time.Second
 }
@@ -54,24 +39,10 @@ func (c *Config) GrokRequestTimeout(provider string) time.Duration {
 // legacy grok_stream_idle_seconds value remains an all-channel fallback.
 func (c *Config) GrokStreamIdleTimeoutFor(provider string) time.Duration {
 	value, fallback := 0, 120
-	if provider == "web" || provider == "app_chat" {
-		fallback = 90
-	}
 	if c != nil {
 		value = c.GrokStreamIdleSeconds
-		switch provider {
-		case "web", "app_chat":
-			if c.GrokWebStreamIdleSeconds > 0 {
-				value = c.GrokWebStreamIdleSeconds
-			}
-		case "console":
-			if c.GrokConsoleStreamIdleSeconds > 0 {
-				value = c.GrokConsoleStreamIdleSeconds
-			}
-		case "build", "cli":
-			if c.GrokBuildStreamIdleSeconds > 0 {
-				value = c.GrokBuildStreamIdleSeconds
-			}
+		if c.GrokBuildStreamIdleSeconds > 0 {
+			value = c.GrokBuildStreamIdleSeconds
 		}
 	}
 	seconds := boundedDefault(value, fallback, 600)

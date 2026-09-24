@@ -130,35 +130,6 @@ func TestAuditChatOutcomePersistsAccountTokens(t *testing.T) {
 	}
 }
 
-func TestAuditChatOutcomeAttributesLinkedConsoleTokensToVisibleParent(t *testing.T) {
-	mini := miniredis.RunT(t)
-	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "grok_linked_usage_test:"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	parent := &store.Account{AccountType: "grok", GrokProvider: ProviderWeb, CredentialType: "sso", Enabled: true}
-	if err := s.CreateAccount(context.Background(), parent); err != nil {
-		t.Fatal(err)
-	}
-	child := &store.Account{AccountType: "grok", GrokProvider: ProviderConsole, CredentialType: "sso", GrokSSOParentID: parent.ID, Enabled: true}
-	if err := s.CreateAccount(context.Background(), child); err != nil {
-		t.Fatal(err)
-	}
-	h := &Handler{lb: loadbalancer.NewWithCacheTTL(s, time.Minute), auditLogger: audit.NewNopLogger()}
-	h.auditChatOutcome(context.Background(), child, &ChatCompletionsRequest{Model: "grok-4.7"}, chatOutcome{
-		Finish: "stop", Usage: map[string]interface{}{"total_tokens": 75}, UsageSource: audit.UsageSourceUpstream,
-	})
-	visible, _ := s.GetAccount(context.Background(), parent.ID)
-	runtime, _ := s.GetAccount(context.Background(), child.ID)
-	if visible.UsageTotal != 75 || visible.TokensToday != 75 {
-		t.Fatalf("visible parent totals=%v/%v want 75/75", visible.UsageTotal, visible.TokensToday)
-	}
-	if runtime.UsageTotal != 0 || runtime.TokensToday != 0 {
-		t.Fatalf("hidden runtime child totals=%v/%v want 0/0", runtime.UsageTotal, runtime.TokensToday)
-	}
-}
-
 func TestReasoningDiagnosticsReachAttemptAndOutcome(t *testing.T) {
 	for _, effort := range []string{"", "low", "xhigh", "private-secret"} {
 		r := map[string]interface{}{"summary": "concise"}

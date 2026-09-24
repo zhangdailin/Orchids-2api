@@ -105,36 +105,6 @@ function capabilityContext(response) {
   return context;
 }
 
-test('Grok capability fallback reads aggregate availability including internal Console capacity', async () => {
-  let requested = '';
-  const context = capabilityContext({
-    ok: true,
-    status: 200,
-    json: async () => ({ counts: { build: 1, web: 0, console: 2 } }),
-  });
-  const originalFetch = context.fetch;
-  context.fetch = async (url) => { requested = url; return originalFetch(url); };
-  await context.loadGrokCapabilities();
-  assert.equal(requested, '/api/grok/availability');
-  assert.deepEqual(JSON.parse(JSON.stringify(context.result.counts)), { build: 1, web: 0, console: 2 });
-  assert.equal(context.result.loaded, true);
-  assert.equal(context.result.failed, false);
-  assert.equal(context.hasGrokCapability('chat'), true);
-  assert.equal(context.hasGrokCapability('video'), true);
-});
-
-test('Grok capability fallback fails open for invalid and failed availability responses', async () => {
-  for (const response of [
-    { ok: true, status: 200, json: async () => ({ counts: { build: 1, web: -1, console: 0 } }) },
-    { ok: false, status: 503, json: async () => ({}) },
-  ]) {
-    const context = capabilityContext(response);
-    await context.loadGrokCapabilities();
-    assert.equal(context.result.loaded, true);
-    assert.equal(context.result.failed, true);
-    assert.equal(context.hasGrokCapability('video'), true);
-  }
-});
 function streamContext(session, body, statuses) {
   const request = source.slice(source.indexOf('  async function requestChatCompletion('), source.indexOf('  async function retryAssistantMessage('));
   const ctx = vm.createContext({ session, AbortController, TextDecoder, fetch:async()=>new Response(body), chatState:{modelsLoaded:true,model:'test-model'},
@@ -211,26 +181,6 @@ test('trailing DONE without a blank line still completes', async () => {
   assert.equal(statuses[statuses.length-1][1],'ok');
 });
 
-test('video operations use their matching API and preserve native request fields', async () => {
-  const fn = source.slice(source.indexOf('  async function createVideoTask('),source.indexOf('  async function stopVideoTask('));
-  for (const action of ['generate','edit','extend']) {
-    let sent;
-    const values = {videoAction:action,videoRatio:'16:9',videoReferenceURL:'',videoReferenceVoice:'',videoSourceURL:'https://example.com/source.mp4'};
-    const ctx = vm.createContext({chatState:{routes:[{id:'grok-imagine-video',provider:'console'}]},
-      toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:headers=>headers,videoRouteActions:()=>new Set(['generate','edit','extend']),
-      stagedVideoInput:async(_id,url)=>({url}), videoState:{referenceFileID:'',sourceFileID:''},
-      document:{getElementById:id=>({value:values[id]})},handleUnauthorized:()=>false,
-      fetch:async(path,options)=>{sent={path,body:JSON.parse(options.body)};return {ok:true,json:async()=>({request_id:'video_1'})};},
-    });
-    vm.runInContext(fn,ctx);
-    assert.equal(await ctx.createVideoTask({model:'grok-imagine-video',prompt:'test',seconds:6,resolution_name:'720p',input_references:[]}), 'video_1');
-    assert.equal(sent.path, '/grok/v1/videos/'+({generate:'generations',edit:'edits',extend:'extensions'})[action]);
-    if(action==='generate') assert.equal(sent.body.aspect_ratio,'16:9');
-    else {assert.equal(sent.body.video.url,values.videoSourceURL);assert.equal(sent.body.resolution,undefined);}
-    assert.equal(sent.body.duration,action==='edit'?undefined:6);
-  }
-});
-
 function element() {
   return { children: [], dataset: {}, listeners: {}, innerHTML: '',
     appendChild(child) { this.children.push(child); },
@@ -290,17 +240,6 @@ function buildPayloadContext(chatState, session) {
   return context.result;
 }
 
-test('Grok responses payload pins the fixed-reasoning console model to summary only', () => {
-  const route = { id: 'grok-4.20-0309-reasoning', provider: 'console', upstream_model: 'grok-4.20-0309-reasoning' };
-  const result = buildPayloadContext(
-    { model: route.id, routes: [route] },
-    { reasoningEffort: 'high', messages: [{ role: 'user', content: 'hello' }] },
-  );
-  // The model owns its reasoning level, so no effort is sent; the summary is.
-  assert.equal(result.reasoning.effort, undefined);
-  assert.equal(result.reasoning.summary, 'auto');
-});
-
 test('Grok responses payload never asks for a summary when reasoning is disabled', () => {
   const result = buildPayloadContext(
     { model: 'grok-4.5' },
@@ -308,29 +247,6 @@ test('Grok responses payload never asks for a summary when reasoning is disabled
   );
   assert.deepEqual(JSON.parse(JSON.stringify(result.reasoning)), { effort: 'none' });
 });
-
-test('Grok responses payload only sends sampling where the backend accepts it', () => {
-  const route = { id: 'console/grok-4.5', provider: 'console', upstream_model: 'grok-4.5' };
-  const consoleResult = buildPayloadContext(
-    { model: route.id, routes: [route] },
-    { messages: [{ role: 'user', content: 'hi' }] },
-  );
-  assert.equal(consoleResult.temperature, 0.8);
-  assert.equal(consoleResult.top_p, 0.95);
-  // Build forwards unknown fields upstream verbatim, so sampling stays off.
-  const buildResult = buildPayloadContext({ model: 'grok-4.6' }, { messages: [{ role: 'user', content: 'hi' }] });
-  assert.equal(buildResult.temperature, undefined);
-  assert.equal(buildResult.top_p, undefined);
-});
-
-test('JSZip is loaded only when the image batch download is used', () => {
-  const template = fs.readFileSync(path.join(__dirname, 'templates/pages/grok-tools.html'), 'utf8');
-  const imagine = fs.readFileSync(path.join(__dirname, 'static/js/grok-imagine.js'), 'utf8');
-  assert.doesNotMatch(template, /<script[^>]+jszip/i, 'JSZip must not block the initial page load');
-  assert.match(imagine, /function loadJSZip\(\)/, 'the image downloader has no lazy JSZip loader');
-  assert.match(imagine, /await loadJSZip\(\)/, 'batch download does not await the lazy JSZip loader');
-});
-
 
 test('chat persistence is scoped, debounced, and evicts oldest sessions to limits', () => {
   const start = source.indexOf('  const chatSessionLimit = 50;');
@@ -425,19 +341,6 @@ test('Grok model metadata rebuilds reasoning choices and disables unsupported ba
   assert.equal(session.webSearch, false);
 });
 
-test('Grok model UI retains Console fixed reasoning behavior', () => {
-  const sync = source.slice(source.indexOf('  function syncChatModelUI()'), source.indexOf('  function renderChatModelDropdown()'));
-  const session = { reasoningEffort: 'high' };
-  const effort = element(); effort.value = ''; effort.replaceChildren = function(...children) { this.children = children; };
-  const document = { getElementById: id => id === 'grokReasoningEffort' ? effort : null, createElement: () => ({}) };
-  const route = { id: 'grok-4.20-0309-reasoning', provider: 'console', upstream_model: 'grok-4.20-0309-reasoning' };
-  const context = vm.createContext({ document, chatState: { model: route.id, routes: [route] }, activeChatSession: () => session });
-  vm.runInContext(`${sync}\nsyncChatModelUI();`, context);
-  assert.equal(effort.disabled, true);
-  assert.equal(effort.value, '');
-  assert.equal(session.reasoningEffort, '');
-});
-
 test('Grok payload omits Web search when route explicitly rejects backend search', () => {
   const route = { id: 'grok-4.6', supports_backend_search: false };
   const result = buildPayloadContext({ model: route.id, routes: [route] }, { webSearch: true, xSearch: true, messages: [{ role: 'user', content: 'hi' }] });
@@ -445,17 +348,8 @@ test('Grok payload omits Web search when route explicitly rejects backend search
 });
 
 
-test('client media staging uses bearer inference routes and parses plain file objects', () => {
-  assert.match(source, /clientMode \? "\/v1\/media\/inputs" : "\/api\/admin\/v1\/media\/inputs\/upload"/);
-  assert.match(source, /clientMode \? "\/v1\/media\/inputs\/import" : "\/api\/admin\/v1\/media\/inputs\/import"/);
-  assert.match(source, /headers: toolAuthHeaders\(\)/);
-  assert.match(source, /toolAuthHeaders\(\{ "Content-Type": "application\/json" \}\)/);
-  assert.match(source, /const data = clientMode \? payload : \(payload\?\.data \|\| \{\}\)/);
-  assert.match(source, /data\.file_id \|\| data\.fileId/);
-});
-
 test('client key auth helpers scope history without persisting the secret', () => {
-  const helper = source.slice(source.indexOf('  const toolAuthState'), source.indexOf('  const cacheOnlineState'));
+  const helper = source.slice(source.indexOf('  const toolAuthState'), source.indexOf('  const chatState'));
   const context = vm.createContext({});
   vm.runInContext(helper, context);
   vm.runInContext('toolAuthState.mode="client"; toolAuthState.apiKey="sk-secret";', context);

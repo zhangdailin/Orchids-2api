@@ -9,48 +9,6 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestIsLinkedConsoleSSOCompanion(t *testing.T) {
-	tests := []struct {
-		name string
-		acc  *store.Account
-		want bool
-	}{
-		{"linked console", &store.Account{AccountType: "grok", GrokProvider: ProviderConsole, GrokSSOParentID: 7}, true},
-		{"linked console without cookie", &store.Account{AccountType: "grok", GrokProvider: ProviderConsole, GrokSSOParentID: 7}, true},
-		{"web source", &store.Account{AccountType: "grok", GrokProvider: ProviderWeb}, false},
-		{"standalone console", &store.Account{AccountType: "grok", GrokProvider: ProviderConsole}, false},
-		{"build oauth", &store.Account{AccountType: "grok", CredentialType: "oauth", GrokSSOParentID: 7}, false},
-		{"non grok", &store.Account{AccountType: "warp", GrokProvider: ProviderConsole, GrokSSOParentID: 7}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsLinkedConsoleSSOCompanion(tt.acc); got != tt.want {
-				t.Fatalf("IsLinkedConsoleSSOCompanion()=%t want %t", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestProviderForAccountSeparatesLegacyAndExplicitProviders(t *testing.T) {
-	tests := []struct {
-		name string
-		acc  *store.Account
-		want string
-	}{
-		{"legacy oauth", &store.Account{AccountType: "grok", CredentialType: "oauth"}, ProviderBuild},
-		{"legacy sso", &store.Account{AccountType: "grok", CredentialType: "sso"}, ProviderWeb},
-		{"explicit console", &store.Account{AccountType: "grok", GrokProvider: ProviderConsole}, ProviderConsole},
-		{"non grok", &store.Account{AccountType: "warp"}, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ProviderForAccount(tt.acc); got != tt.want {
-				t.Fatalf("ProviderForAccount()=%q want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestBuildCapabilitySnapshotAndRateLimitsDoNotBecomeBilling(t *testing.T) {
 	acc := &store.Account{
 		AccountType:    "grok",
@@ -126,22 +84,3 @@ func TestApplyCLIModelsRestoresGrok2APICatalogCompletion(t *testing.T) {
 
 // The only capability grok2api gates on tier is the video 1.5 entry: a Super
 // account gains it, anything below loses it even if the catalog listed it.
-func TestApplyCLIModelsTierGatesOnlyTheVideoEntry(t *testing.T) {
-	super := &store.Account{AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, Subscription: "super"}
-	ApplyCLIModels(super, []string{"grok-4.6"}, time.Now())
-	if !AccountSupportsModel(super, "grok-imagine-video-1.5") {
-		t.Fatalf("a super account lost the tier-gated video entry: %#v", super.GrokModels)
-	}
-
-	for _, subscription := range []string{"free", "basic", ""} {
-		acc := &store.Account{AccountType: "grok", CredentialType: "oauth", GrokProvider: ProviderBuild, Subscription: subscription}
-		ApplyCLIModels(acc, []string{"grok-4.6", "grok-imagine-video-1.5"}, time.Now())
-		if AccountSupportsModel(acc, "grok-imagine-video-1.5") {
-			t.Fatalf("subscription %q kept a tier-gated model: %#v", subscription, acc.GrokModels)
-		}
-		// The other two derivations are not tier-gated.
-		if !AccountSupportsModel(acc, "grok-4.5") || !AccountSupportsModel(acc, "grok-composer-2.5-fast") {
-			t.Fatalf("subscription %q lost a non-tier derivation: %#v", subscription, acc.GrokModels)
-		}
-	}
-}

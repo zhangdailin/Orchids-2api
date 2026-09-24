@@ -144,21 +144,6 @@ func BenchmarkEstimateTextReservationFromBody(b *testing.B) {
 	}
 }
 
-func TestEstimateTTSCost(t *testing.T) {
-	t.Parallel()
-
-	got, ok := EstimateTTSCost("héllo")
-	if !ok || got.Model != "grok-voice-tts" || got.CostInUSDTicks != 5*150_000 {
-		t.Fatalf("EstimateTTSCost = %#v, %v", got, ok)
-	}
-	if _, ok := EstimateTTSCost(""); ok {
-		t.Fatal("empty text must not be priced")
-	}
-	if _, ok := EstimateTTSCost("   "); !ok {
-		t.Fatal("whitespace is still billable characters")
-	}
-}
-
 func TestConstantsAreStable(t *testing.T) {
 	t.Parallel()
 
@@ -167,76 +152,6 @@ func TestConstantsAreStable(t *testing.T) {
 	}
 	if Version != "official-"+AsOf || Source == "" {
 		t.Fatalf("version %q / source %q", Version, Source)
-	}
-}
-
-func TestMediaPricingMatchesGrok2API(t *testing.T) {
-	cases := []struct {
-		name  string
-		got   int64
-		want  int64
-		ok    bool
-		label string
-	}{
-		{"image plain", 0, 200_000_000, true, "grok-imagine-image"},
-		{"image quality 1k", 0, 500_000_000, true, "grok-imagine-image-quality/1k"},
-		{"image quality 2k", 0, 700_000_000, true, "grok-imagine-image-quality/2k"},
-		{"image 2.0 low 1k", 0, 400_000_000, true, "grok-imagine-image-2.0/low/1k"},
-		{"image 2.0 medium 2k", 0, 800_000_000, true, "grok-imagine-image-2.0/medium/2k"},
-		{"image 2.0 low 2k equals medium 1k", 0, 600_000_000, true, "grok-imagine-image-2.0/low/2k"},
-	}
-	for _, tc := range cases {
-		var (
-			result Result
-			ok     bool
-		)
-		switch tc.label {
-		case "grok-imagine-image":
-			result, ok = EstimateImageCost("grok-imagine-image", "", "", 1)
-		case "grok-imagine-image-quality/1k":
-			result, ok = EstimateImageCost("grok-imagine-image-quality", "1k", "", 1)
-		case "grok-imagine-image-quality/2k":
-			result, ok = EstimateImageCost("grok-imagine-image-quality", "2k", "", 1)
-		case "grok-imagine-image-2.0/low/1k":
-			result, ok = EstimateImageCost("grok-imagine-image-2.0", "1k", "low", 1)
-		case "grok-imagine-image-2.0/medium/2k":
-			result, ok = EstimateImageCost("grok-imagine-image-2.0", "2k", "medium", 1)
-		case "grok-imagine-image-2.0/low/2k":
-			result, ok = EstimateImageCost("grok-imagine-image-2.0", "2k", "low", 1)
-		}
-		if ok != tc.ok || result.CostInUSDTicks != tc.want {
-			t.Fatalf("%s: cost=%d ok=%v want=%d", tc.name, result.CostInUSDTicks, ok, tc.want)
-		}
-	}
-	// An unknown quality for a model that has no quality dimension is unpriced.
-	if _, ok := EstimateImageCost("grok-imagine-image", "", "high", 1); ok {
-		t.Fatal("an unsupported quality was priced")
-	}
-	// An edit pays for its outputs plus every input image it had to process.
-	result, ok := EstimateImageEditCost("grok-imagine-image-edit", "2k", "", 2, 3)
-	if !ok {
-		t.Fatal("image edit was not priced")
-	}
-	if want := int64(2)*700_000_000 + int64(3)*100_000_000; result.CostInUSDTicks != want {
-		t.Fatalf("edit cost=%d want=%d", result.CostInUSDTicks, want)
-	}
-	if result.Model != "grok-imagine-image-edit-2k" {
-		t.Fatalf("edit pricing model=%q", result.Model)
-	}
-	// Video: duration times the resolution rate, plus reference images.
-	video, ok := EstimateVideoCost("grok-imagine-video-1.5", "1080p", 6, 1)
-	if !ok {
-		t.Fatal("video was not priced")
-	}
-	if want := int64(6)*2_500_000_000 + 100_000_000; video.CostInUSDTicks != want {
-		t.Fatalf("video cost=%d want=%d", video.CostInUSDTicks, want)
-	}
-	if _, ok := EstimateVideoCost("grok-imagine-video", "1080p", 6, 0); ok {
-		t.Fatal("1080p is not a rate for the base video model")
-	}
-	// The prefix-stripping normaliser applies here too.
-	if _, ok := EstimateVideoCost("console/grok-imagine-video", "720p", 6, 0); !ok {
-		t.Fatal("a provider-qualified video model was not priced")
 	}
 }
 
@@ -269,43 +184,4 @@ func TestReconstructBreakdownExplainsAStoredCost(t *testing.T) {
 		}
 	}
 
-	// Images: output images plus the input images an edit processed.
-	images, ok := ReconstructBreakdown("grok-imagine-image-2.0-medium-2k", Quantities{OutputImages: 2})
-	if !ok {
-		t.Fatal("image row was not reconstructed")
-	}
-	if want := int64(2) * 800_000_000; images.CostInUSDTicks != want {
-		t.Fatalf("image breakdown=%d want=%d", images.CostInUSDTicks, want)
-	}
-	edit, ok := ReconstructBreakdown("grok-imagine-image-edit-2k", Quantities{OutputImages: 1, InputImages: 2})
-	if !ok {
-		t.Fatal("edit row was not reconstructed")
-	}
-	if want := int64(700_000_000) + int64(2)*100_000_000; edit.CostInUSDTicks != want {
-		t.Fatalf("edit breakdown=%d want=%d", edit.CostInUSDTicks, want)
-	}
-
-	// Video: seconds times the resolution rate plus reference images.
-	video, ok := ReconstructBreakdown("grok-imagine-video-1.5-1080p", Quantities{OutputSeconds: 6, InputImages: 1})
-	if !ok {
-		t.Fatal("video row was not reconstructed")
-	}
-	if want := int64(6)*2_500_000_000 + 100_000_000; video.CostInUSDTicks != want {
-		t.Fatalf("video breakdown=%d want=%d", video.CostInUSDTicks, want)
-	}
-
-	// Voice: characters for TTS, seconds for STT.
-	tts, ok := ReconstructBreakdown("grok-voice-tts", Quantities{Characters: 1000})
-	if !ok || tts.CostInUSDTicks != 1000*officialTTSCharacterTicks {
-		t.Fatalf("tts breakdown=%d ok=%v", tts.CostInUSDTicks, ok)
-	}
-	stt, ok := ReconstructBreakdown("grok-stt-streaming", Quantities{StreamingSeconds: 3600})
-	if !ok || stt.CostInUSDTicks != 2_000_000_000 {
-		t.Fatalf("stt breakdown=%d ok=%v", stt.CostInUSDTicks, ok)
-	}
-
-	// An unpriced model stays unpriced rather than inventing components.
-	if _, ok := ReconstructBreakdown("future-model", Quantities{InputTokens: 10}); ok {
-		t.Fatal("an unpriced model was reconstructed")
-	}
 }

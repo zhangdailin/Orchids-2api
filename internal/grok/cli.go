@@ -25,7 +25,7 @@ import (
 
 // Build CLI (cli-chat-proxy.grok.com) upstream. It speaks the standard OpenAI
 // Responses protocol authenticated with a Bearer OAuth access token, unlike the
-// app-chat website protocol (SSO cookie) or console.x.ai (SSO + DPoP).
+// retired website or developer-console protocols.
 
 const (
 	defaultCLIBaseURL = "https://cli-chat-proxy.grok.com/v1"
@@ -191,14 +191,11 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 			recordUpstreamChallenge("cloudflare")
 			if c.egress != nil && c.egress.Enabled() && !challengeRetried {
 				challengeRetried = true
-				c.egress.InvalidateAffinityClearance("cli", cliEgressAffinity(acc))
 				continue
 			}
 			if c.egress != nil && c.egress.Enabled() {
 				c.egress.FeedbackAffinityOutcome("cli", cliEgressAffinity(acc), egress.OutcomeChallenge)
 			}
-		} else if kind == UpstreamErrorDPoPChallenge {
-			recordUpstreamChallenge("dpop")
 		} else if kind == UpstreamErrorGenericForbidden {
 			recordGenericForbidden()
 		}
@@ -256,10 +253,6 @@ func (c *CLIClient) doResponsesOnceAt(ctx context.Context, acc *store.Account, p
 	}
 	path = "/" + strings.TrimLeft(strings.TrimSpace(path), "/")
 	headers := http.Header{"Content-Type": {"application/json"}}
-	if strings.HasPrefix(path, "/videos/") {
-		model, _ := payload["model"].(string)
-		headers.Set("x-grok-model-override", firstNonEmpty(strings.TrimSpace(model), "grok-imagine-video-1.5"))
-	}
 	if session, _ := payload["prompt_cache_key"].(string); strings.TrimSpace(session) != "" {
 		// The Build gateway expects session identity as a UUID. A raw sha256 hex
 		// string is not one: the upstream then treats the session as unstable and
@@ -373,9 +366,6 @@ func (c *CLIClient) doResponseResource(ctx context.Context, acc *store.Account, 
 		endpoint += "?" + rawQuery
 	}
 	headers := http.Header{}
-	if strings.HasPrefix(path, "/videos/") {
-		headers.Set("x-grok-model-override", "grok-imagine-video-1.5")
-	}
 	for attempt := 0; ; attempt++ {
 		resp, err := c.request(ctx, acc, method, endpoint, nil, headers)
 		if err != nil {
@@ -421,7 +411,6 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 		if kind == UpstreamErrorCloudflareChallenge && c.egress != nil && c.egress.Enabled() && !challengeRetried {
 			challengeRetried = true
 			recordUpstreamChallenge("cloudflare")
-			c.egress.InvalidateAffinityClearance("cli", cliEgressAffinity(acc))
 			continue
 		}
 		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw)

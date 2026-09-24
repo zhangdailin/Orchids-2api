@@ -114,7 +114,7 @@ func (b *leaseResponseBody) Close() error {
 // this request); rate limits and account issues do not.
 func egressOutcomeForKind(kind UpstreamErrorKind) egress.FeedbackOutcome {
 	switch kind {
-	case UpstreamErrorCloudflareChallenge, UpstreamErrorDPoPChallenge:
+	case UpstreamErrorCloudflareChallenge:
 		return egress.OutcomeChallenge
 	case UpstreamErrorRateLimited:
 		return egress.OutcomeRateLimited

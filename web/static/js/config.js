@@ -31,18 +31,6 @@ function togglePassword(fieldId) {
 // server returned on load. Only the fields the save payload actually reads are
 // counted; the TTL preset select and its custom box mirror the effective TTL and
 // are rebuilt from it instead of being tracked separately.
-// normalizeStatsigSignerField maps the control's three states onto the stored
-// value: empty keeps the default (null), "-" disables signing, anything else is
-// the endpoint to use.
-function normalizeStatsigSignerField() {
-  const field = document.getElementById("cfg_grok_statsig_signer_url");
-  if (!field) return null;
-  const raw = field.value.trim();
-  if (raw === "") return null;
-  if (raw === "-") return "";
-  return raw;
-}
-
 // parseAnonymousAllowIPs turns the textarea into a list of trimmed, non-empty
 // entries. An empty box means "nobody", which is the reference behaviour.
 function parseAnonymousAllowIPs() {
@@ -57,10 +45,6 @@ function parseAnonymousAllowIPs() {
 const CONFIG_TRACKED_FIELDS = [
   "cfg_admin_pass",
   "cfg_anonymous_allow_ips",
-  "cfg_grok_statsig_id",
-  "cfg_grok_statsig_signer_url",
-  "cfg_grok_cf_clearance",
-  "cfg_grok_cf_bm",
   "cfg_proxy_url",
   "cfg_proxy_bypass",
   "cfg_token_cache_ttl",
@@ -322,21 +306,10 @@ async function loadConfiguration() {
     const cfg = payload && payload.data ? payload.data : payload;
 
     document.getElementById("cfg_admin_pass").value = cfg.admin_password || cfg.admin_pass || "";
-    document.getElementById("cfg_grok_statsig_id").value = cfg.grok_statsig_id || "";
     const allowField = document.getElementById("cfg_anonymous_allow_ips");
     if (allowField) {
       allowField.value = Array.isArray(cfg.anonymous_allow_ips) ? cfg.anonymous_allow_ips.join("\n") : "";
     }
-    // Three states: unset (null) keeps grok2api's default signer, "-"/"" turns
-    // signing off, anything else is that endpoint.
-    const signerField = document.getElementById("cfg_grok_statsig_signer_url");
-    if (signerField) {
-      signerField.value = cfg.grok_statsig_signer_url === null || cfg.grok_statsig_signer_url === undefined
-        ? ""
-        : (cfg.grok_statsig_signer_url === "" ? "-" : cfg.grok_statsig_signer_url);
-    }
-    document.getElementById("cfg_grok_cf_clearance").value = cfg.grok_cf_clearance || "";
-    document.getElementById("cfg_grok_cf_bm").value = cfg.grok_cf_bm || "";
     document.getElementById("cfg_proxy_url").value = cfg.proxy_url || "";
     const proxyBypass = normalizeProxyBypass(cfg.proxy_bypass);
     document.getElementById("cfg_proxy_bypass").value = proxyBypass.join("\n");
@@ -364,10 +337,6 @@ async function saveConfiguration() {
   const proxyBypassRaw = document.getElementById("cfg_proxy_bypass").value;
   const data = {
     admin_password: document.getElementById("cfg_admin_pass").value,
-    grok_statsig_id: document.getElementById("cfg_grok_statsig_id").value.trim(),
-    grok_statsig_signer_url: normalizeStatsigSignerField(),
-    grok_cf_clearance: document.getElementById("cfg_grok_cf_clearance").value.trim(),
-    grok_cf_bm: document.getElementById("cfg_grok_cf_bm").value.trim(),
     anonymous_allow_ips: parseAnonymousAllowIPs(),
     proxy_url: document.getElementById("cfg_proxy_url").value.trim(),
     proxy_bypass: parseProxyBypass(proxyBypassRaw),

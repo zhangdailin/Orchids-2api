@@ -10,7 +10,6 @@ import (
 	"github.com/alicebob/miniredis/v2"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
 )
 
@@ -30,17 +29,14 @@ func TestRenderIndexShipsNoCompetingSidebarCount(t *testing.T) {
 		mini.Close()
 	}()
 
-	source := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=web", Enabled: true}
-	companion := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: 1, ClientCookie: "sso=web", Enabled: true}
-	disabled := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, ClientCookie: "sso=standalone", Enabled: false}
-	for _, acc := range []*store.Account{source, companion, disabled} {
+	accounts := []*store.Account{
+		{AccountType: "grok", CredentialType: "oauth", GrokProvider: "build", Enabled: true},
+		{AccountType: "grok", CredentialType: "oauth", GrokProvider: "build", Enabled: false},
+	}
+	for _, acc := range accounts {
 		if err := s.CreateAccount(context.Background(), acc); err != nil {
 			t.Fatalf("CreateAccount() error = %v", err)
 		}
-	}
-	companion.GrokSSOParentID = source.ID
-	if err := s.UpdateAccount(context.Background(), companion); err != nil {
-		t.Fatalf("UpdateAccount(companion) error = %v", err)
 	}
 
 	renderer, err := NewRenderer()
@@ -58,9 +54,9 @@ func TestRenderIndexShipsNoCompetingSidebarCount(t *testing.T) {
 			t.Errorf("%s must ship the client-owned placeholder, not a server count:\n%s", element, body)
 		}
 	}
-	// A server-side count would have printed the disabled row as 1 and the linked
-	// companion as part of the total; neither number may appear.
-	if strings.Contains(body, `id="footerTotal">3</span>`) || strings.Contains(body, `id="footerAbnormal">1</span>`) {
+	// A server-side count would have printed the two rows and one disabled row;
+	// neither number may appear.
+	if strings.Contains(body, `id="footerTotal">2</span>`) || strings.Contains(body, `id="footerAbnormal">1</span>`) {
 		t.Fatalf("renderer still publishes a competing account count: %s", body)
 	}
 }

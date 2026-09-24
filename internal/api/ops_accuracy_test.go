@@ -13,15 +13,15 @@ func TestPoolCountsLoginIndependentOfCooldown(t *testing.T) {
 		{ID: 2, AccountType: "grok", Enabled: true, StatusCode: "401", LastAttempt: now.Add(-time.Hour), VerifiedAt: now.Add(-time.Hour)},
 		{ID: 3, AccountType: "grok", Enabled: true},
 		{ID: 4, AccountType: "grok", Enabled: false, StatusCode: "401"},
-		{ID: 5, AccountType: "grok", Enabled: true, StatusCode: "401", GrokSSOParentID: 1},
+		{ID: 5, AccountType: "grok", Enabled: true, StatusCode: "401"},
 	}
 	enabled, available, login, cooldowns := poolCounts(accounts, "grok", now)
-	if enabled != 3 || available != 2 || login != 2 || cooldowns != 1 {
+	if enabled != 4 || available != 2 || login != 3 || cooldowns != 1 {
 		t.Fatalf("enabled=%d available=%d login=%d cooldowns=%d", enabled, available, login, cooldowns)
 	}
 	accounts[0].StatusCode = ""
 	_, _, login, _ = poolCounts(accounts, "grok", now)
-	if login != 1 {
+	if login != 2 {
 		t.Fatalf("recovered login count=%d", login)
 	}
 }

@@ -12,19 +12,6 @@
         <input type="hidden" id="accountType" value="" />
         <input class="form-input" id="accountTypeDisplay" value="加载渠道…" readonly />
       </div>
-      <div class="form-group" id="credentialModeGroup" hidden>
-        <label class="form-label">凭据模式</label>
-        <select class="form-input" id="credentialType" onchange="applyCredentialModeUI(document.getElementById('accountType').value)">
-          <option value="sso">SSO Cookie</option>
-          <option value="oauth">Build CLI OAuth（官方登录）</option>
-        </select>
-        <small class="helper-text">SSO Cookie 直接粘贴；Build CLI OAuth 只能通过 xAI 官方设备登录获取（access/refresh token 由服务端保存且不回显），因此凭证模式选 OAuth 后点下方按钮授权即可，无需手填 token。</small>
-      </div>
-      <div class="form-group" id="grokProviderGroup" hidden>
-        <label class="form-label">SSO 产品入口</label>
-        <input class="form-input" id="grokProvider" value="web" readonly />
-        <small class="helper-text" id="grokProviderHint">保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。</small>
-      </div>
        <div class="form-group" id="ssoCredentialGroup">
          <label class="form-label" id="tokenLabel">__session</label>
          <textarea class="form-input account-token-input" id="clientCookie" rows="8" wrap="off" spellcheck="false" required placeholder="每行一个 __session"></textarea>

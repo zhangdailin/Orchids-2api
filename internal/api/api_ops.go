@@ -656,11 +656,6 @@ func poolCounts(accounts []*store.Account, channel string, now time.Time) (enabl
 		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), channel) {
 			continue
 		}
-		// Linked Console companions are internal plumbing; the visible source owns
-		// the channel's health.
-		if acc.GrokSSOParentID != 0 {
-			continue
-		}
 		if !acc.Enabled {
 			continue
 		}
@@ -745,7 +740,7 @@ func (a *API) opsChannels(ctx context.Context, r *http.Request, since, until tim
 	if a.store != nil {
 		if accounts, err := a.store.ListAccounts(ctx); err == nil {
 			for _, acc := range accounts {
-				if acc == nil || acc.GrokSSOParentID != 0 {
+				if acc == nil {
 					continue
 				}
 				name := strings.ToLower(strings.TrimSpace(acc.AccountType))

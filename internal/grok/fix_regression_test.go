@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"orchids-api/internal/store"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -180,20 +178,6 @@ func TestIsModelScopedRefusal(t *testing.T) {
 	}
 }
 
-func TestConsoleFreeQuotaExhaustedError(t *testing.T) {
-	if !isConsoleFreeQuotaExhaustedError(errors.New(`grok upstream status=429 body={"code":"resource-exhausted","error":"Free usage quota exceeded. Purchase credits"}`)) {
-		t.Fatal("Console Free quota refusal not detected")
-	}
-	for _, raw := range []string{
-		`grok upstream status=429 body={"code":"resource-exhausted","error":"Too many requests for team"}`,
-		`grok upstream status=403 body=Free usage quota exceeded`,
-	} {
-		if isConsoleFreeQuotaExhaustedError(errors.New(raw)) {
-			t.Fatalf("non-Console-quota response misclassified: %s", raw)
-		}
-	}
-}
-
 func TestModelScopedFreeQuotaRefusal(t *testing.T) {
 	if !modelScopedFreeQuotaRefusal([]byte("You've used all the included free usage for model grok-4.6.")) {
 		t.Fatal("model-scoped free usage refusal not detected")
@@ -352,57 +336,6 @@ func TestAnthropicMessageIDReshapesChatCompletionsID(t *testing.T) {
 	}
 }
 
-func TestConsoleModelSemanticsPerModel(t *testing.T) {
-	// grok-4.3 / grok-4.5: configurable effort, medium when the caller sends none.
-	payload := map[string]interface{}{}
-	normalizeConsoleReasoningEffort(payload, "console/grok-4.3")
-	if got := payload["max_output_tokens"]; got != 1000000 {
-		t.Fatalf("max_output_tokens = %v, want 1000000", got)
-	}
-	if reasoning, ok := payload["reasoning"].(map[string]interface{}); !ok || reasoning["effort"] != "medium" {
-		t.Fatalf("reasoning = %v, want effort=medium", payload["reasoning"])
-	}
-
-	// Fixed-reasoning model: the effort must be dropped, the object kept.
-	payload = map[string]interface{}{"reasoning": map[string]interface{}{"effort": "high", "summary": "concise"}}
-	normalizeConsoleReasoningEffort(payload, "grok-4.20-0309-reasoning")
-	reasoning, _ := payload["reasoning"].(map[string]interface{})
-	if _, exists := reasoning["effort"]; exists {
-		t.Fatalf("a fixed-reasoning model must not receive effort: %v", reasoning)
-	}
-	if reasoning["summary"] != "concise" {
-		t.Fatalf("other reasoning controls must survive: %v", reasoning)
-	}
-
-	// Non-reasoning model: the whole object goes.
-	payload = map[string]interface{}{"reasoning": map[string]interface{}{"effort": "low"}}
-	normalizeConsoleReasoningEffort(payload, "grok-build-0.1")
-	if _, exists := payload["reasoning"]; exists {
-		t.Fatalf("a non-reasoning model must not receive reasoning: %v", payload)
-	}
-	if got := payload["max_output_tokens"]; got != 256000 {
-		t.Fatalf("grok-build-0.1 max_output_tokens = %v, want 256000", got)
-	}
-
-	// An explicit effort is preserved.
-	payload = map[string]interface{}{"reasoning": map[string]interface{}{"effort": "xhigh"}}
-	normalizeConsoleReasoningEffort(payload, "grok-4.5")
-	reasoning, _ = payload["reasoning"].(map[string]interface{})
-	if reasoning["effort"] != "xhigh" {
-		t.Fatalf("explicit effort = %v, want xhigh", reasoning["effort"])
-	}
-
-	// An unknown model is left alone rather than guessed at.
-	payload = map[string]interface{}{}
-	normalizeConsoleReasoningEffort(payload, "grok-unknown")
-	if _, exists := payload["reasoning"]; exists {
-		t.Fatalf("unknown model must not get an invented reasoning object: %v", payload)
-	}
-	if _, exists := payload["max_output_tokens"]; exists {
-		t.Fatalf("unknown model must not get an invented output limit: %v", payload)
-	}
-}
-
 func TestPrepareGrokSessionRecognizesAgentSessionHeaders(t *testing.T) {
 	base := []ChatMessage{{Role: "user", Content: "hello"}}
 	cases := map[string]string{
@@ -466,92 +399,6 @@ func TestAnthropicUpstreamErrorDoesNotLeakUpstreamBody(t *testing.T) {
 	}
 }
 
-func TestDetectMediaInputRejectsStillImageISOBrends(t *testing.T) {
-	// A HEIC photo shares the "ftyp" signature with an mp4; it must not be
-	// forwarded to the upstream as video/mp4.
-	heic := append([]byte{0, 0, 0, 0x20}, []byte("ftypheic")...)
-	heic = append(heic, make([]byte, 32)...)
-	if _, _, err := detectMediaInput(heic, ""); err == nil {
-		t.Fatal("a heic brand must not be accepted as a video input")
-	}
-	// A real mp4 brand is accepted.
-	mp4 := append([]byte{0, 0, 0, 0x20}, []byte("ftypisom")...)
-	mp4 = append(mp4, make([]byte, 32)...)
-	kind, mimeType, err := detectMediaInput(mp4, "")
-	if err != nil || kind != "video" || mimeType != "video/mp4" {
-		t.Fatalf("mp4 brand rejected: kind=%q mime=%q err=%v", kind, mimeType, err)
-	}
-	// An explicit video declaration still wins.
-	if kind, mimeType, err := detectMediaInput(heic, "video/quicktime"); err != nil || kind != "video" {
-		t.Fatalf("declared video rejected: kind=%q mime=%q err=%v", kind, mimeType, err)
-	}
-}
-
-func TestCachedFileETagIsStableAndWeak(t *testing.T) {
-	info := &fakeFileInfo{size: 42}
-	first := cachedFileETag(info)
-	if !strings.HasPrefix(first, `W/"`) || first != cachedFileETag(info) {
-		t.Fatalf("etag = %q, want a stable weak validator", first)
-	}
-	if cachedFileETag(nil) != "" {
-		t.Fatal("etag of a missing file must be empty")
-	}
-}
-
-type fakeFileInfo struct{ size int64 }
-
-func (f *fakeFileInfo) Name() string       { return "x" }
-func (f *fakeFileInfo) Size() int64        { return f.size }
-func (f *fakeFileInfo) Mode() os.FileMode  { return 0o644 }
-func (f *fakeFileInfo) ModTime() time.Time { return time.Unix(1700000000, 0) }
-func (f *fakeFileInfo) IsDir() bool        { return false }
-func (f *fakeFileInfo) Sys() interface{}   { return nil }
-
-func TestCopyVoiceResponseHeadersFiltersUpstreamHeaders(t *testing.T) {
-	source := http.Header{}
-	source.Set("Content-Type", "text/html; charset=utf-8")
-	source.Set("Content-Disposition", `attachment; filename="../../etc/passwd"`)
-	source.Set("X-Request-Id", "req-1")
-	source.Set("Retry-After", "30")
-	source.Set("Set-Cookie", "sso=secret")
-	destination := http.Header{}
-	copyVoiceResponseHeaders(destination, source)
-	if got := destination.Get("Content-Type"); got == "text/html; charset=utf-8" {
-		t.Fatalf("upstream content type replayed verbatim: %q", got)
-	}
-	// A path-traversal filename must be stripped down to the bare disposition.
-	if got := destination.Get("Content-Disposition"); strings.Contains(got, "..") || strings.Contains(got, "passwd") {
-		t.Fatalf("upstream filename replayed: %q", got)
-	}
-	if got := destination.Get("Set-Cookie"); got != "" {
-		t.Fatalf("upstream cookie forwarded: %q", got)
-	}
-	if got := destination.Get("Retry-After"); got != "30" {
-		t.Fatalf("Retry-After = %q, want 30", got)
-	}
-	if got := destination.Get("X-Content-Type-Options"); got != "nosniff" {
-		t.Fatalf("nosniff missing: %q", got)
-	}
-}
-
-func TestCopyVoiceResponseHeadersKeepsAllowedAudioTypes(t *testing.T) {
-	for _, allowed := range []string{"audio/mpeg", "application/json", "text/plain", "audio/wav"} {
-		source := http.Header{}
-		source.Set("Content-Type", allowed)
-		destination := http.Header{}
-		copyVoiceResponseHeaders(destination, source)
-		if got := destination.Get("Content-Type"); got != allowed {
-			t.Fatalf("%s: content type = %q, want it preserved", allowed, got)
-		}
-	}
-}
-
-func TestVideoContentURLIsReachable(t *testing.T) {
-	if got := videoContentURL("abc"); got != "/v1/videos/abc/content" {
-		t.Fatalf("videoContentURL() = %q, want /v1/videos/abc/content", got)
-	}
-}
-
 func TestIdleTimeoutIsClassifiedSeparately(t *testing.T) {
 	// The sentinel is exported so every plane can recognise the condition.
 	if !errors.Is(errGrokSemanticIdle, ErrGrokSemanticIdle) {
@@ -568,18 +415,6 @@ func TestIdleTimeoutIsClassifiedSeparately(t *testing.T) {
 	code, _ = classifySynthesizedFailure("stream_read_error", "stream read error", errors.New("boom"))
 	if code != "stream_read_error" {
 		t.Fatalf("code = %q, want stream_read_error", code)
-	}
-}
-
-func TestImageResponseEntriesDeclareMimeAndRevisedPrompt(t *testing.T) {
-	if got := imageMimeTypeForValue("b64_json", "aGVsbG8="); got != "image/png" {
-		t.Fatalf("default b64 mime = %q, want image/png", got)
-	}
-	if got := imageMimeTypeForValue("b64_json", "data:image/webp;base64,AAAA"); got != "image/webp" {
-		t.Fatalf("data-uri mime = %q, want image/webp", got)
-	}
-	if got := imageMimeTypeForValue("url", "https://cdn.example/a/b.JPEG"); got != "image/jpeg" {
-		t.Fatalf("url mime = %q, want image/jpeg", got)
 	}
 }
 
@@ -678,25 +513,6 @@ func TestBuildSessionUUIDIsStableAndValid(t *testing.T) {
 	}
 }
 
-func TestVideoRequestAcceptsGrok2APIAliases(t *testing.T) {
-	body := `{"model":"grok-imagine-video","prompt":"cat","duration":10,"aspect_ratio":"16:9","resolution":"720p","user":"u1"}`
-	req := httptest.NewRequest(http.MethodPost, "/grok/v1/videos", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	parsed, err := parseVideosRequest(req)
-	if err != nil {
-		t.Fatalf("parseVideosRequest() error = %v", err)
-	}
-	if parsed.Seconds != 10 || parsed.Size != "16:9" || parsed.ResolutionName != "720p" {
-		t.Fatalf("aliases not folded: %+v", parsed)
-	}
-	// A typo must be rejected rather than silently defaulted.
-	bad := httptest.NewRequest(http.MethodPost, "/grok/v1/videos", strings.NewReader(`{"model":"grok-imagine-video","prompt":"cat","duratoin":10}`))
-	bad.Header.Set("Content-Type", "application/json")
-	if _, err := parseVideosRequest(bad); err == nil {
-		t.Fatal("an unknown video field must be rejected")
-	}
-}
-
 func TestToolMessagesRequireCallID(t *testing.T) {
 	messages := []ChatMessage{
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call_1", Type: "function", Function: map[string]interface{}{"name": "read", "arguments": "{}"}}}},
@@ -724,39 +540,6 @@ func TestChatToolUseMustBeAnswered(t *testing.T) {
 	}
 }
 
-func TestWebFreeVideoDurationCap(t *testing.T) {
-	free := &store.Account{AccountType: "grok", GrokProvider: "web", Subscription: "free"}
-	if got := webFreeVideoDurationCap(free); got != webFreeVideoDurationLimit {
-		t.Fatalf("free web cap = %d, want %d", got, webFreeVideoDurationLimit)
-	}
-	paid := &store.Account{AccountType: "grok", GrokProvider: "web", Subscription: "super"}
-	if got := webFreeVideoDurationCap(paid); got != 0 {
-		t.Fatalf("paid web cap = %d, want 0 (no clamp)", got)
-	}
-	build := &store.Account{AccountType: "grok", GrokProvider: "build", CredentialType: "oauth", Subscription: "free"}
-	if got := webFreeVideoDurationCap(build); got != 0 {
-		t.Fatalf("build cap = %d, want 0 (the Web cap does not apply)", got)
-	}
-}
-
-func TestVideoPayloadHasReferences(t *testing.T) {
-	if videoPayloadHasReferences(map[string]interface{}{"model": "m"}) {
-		t.Fatal("a text-only payload has no references")
-	}
-	if !videoPayloadHasReferences(map[string]interface{}{"image": map[string]interface{}{"url": "u"}}) {
-		t.Fatal("an image object is a reference")
-	}
-	if !videoPayloadHasReferences(map[string]interface{}{"reference_images": []interface{}{"a"}}) {
-		t.Fatal("a non-empty reference list is a reference")
-	}
-	if videoPayloadHasReferences(map[string]interface{}{"reference_images": []interface{}{}}) {
-		t.Fatal("an empty reference list is not a reference")
-	}
-	if !videoPayloadHasReferences(map[string]interface{}{"video": "data:x"}) {
-		t.Fatal("a video input is a reference")
-	}
-}
-
 func TestResponseFailureClassifiesAntiBot(t *testing.T) {
 	code7 := map[string]interface{}{"type": "error", "error": map[string]interface{}{"code": float64(7), "message": "rejected"}}
 	err := responseFailure(code7)
@@ -772,36 +555,6 @@ func TestResponseFailureClassifiesAntiBot(t *testing.T) {
 	other := map[string]interface{}{"type": "error", "error": map[string]interface{}{"code": float64(3), "message": "bad request"}}
 	if err := responseFailure(other); errors.Is(err, errGrokWebAntiBot) {
 		t.Fatalf("an unrelated failure must not classify as anti-bot, got %v", err)
-	}
-}
-
-func TestAdminMediaInputJSONUsesManagementNames(t *testing.T) {
-	now := time.Now().UTC()
-	rendered := adminMediaInputJSON(&store.StoredMediaInput{
-		ID: "input_abc", Kind: "image", MIMEType: "image/png", SizeBytes: 12,
-		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
-	})
-	for _, key := range []string{"id", "fileId", "kind", "mimeType", "sizeBytes", "createdAt", "expiresAt"} {
-		if _, ok := rendered[key]; !ok {
-			t.Fatalf("management envelope is missing %q: %#v", key, rendered)
-		}
-	}
-	if rendered["fileId"] != rendered["id"] {
-		t.Fatalf("fileId and id must agree: %#v", rendered)
-	}
-	envelope := adminMediaError("not_found", "gone")
-	errObject, _ := envelope["error"].(map[string]interface{})
-	if errObject["code"] != "not_found" {
-		t.Fatalf("error envelope = %#v", envelope)
-	}
-}
-
-func TestMediaInputLookupFallsBackToAdminNamespace(t *testing.T) {
-	// The fallback only applies to the admin namespace and only on a miss for
-	// the caller's own namespace; those two rules are what keep tenant
-	// isolation intact.
-	if mediaInputAdminOwner != "admin" {
-		t.Fatalf("admin owner = %q, want admin", mediaInputAdminOwner)
 	}
 }
 
@@ -870,102 +623,26 @@ func TestQualityExpectsReasoning(t *testing.T) {
 	}
 }
 
-func TestNormalizeTTSVoicesShape(t *testing.T) {
-	raw := []byte(`{"voices":[{"id":"v1","name":"Aria","language":"en","internal":"drop"},{"voice_id":"v2"},{"name":"nameless"}],"other":true}`)
-	normalized := normalizeTTSVoices(raw)
-	var payload map[string]interface{}
-	if err := json.Unmarshal(normalized, &payload); err != nil {
-		t.Fatalf("normalized payload is not JSON: %v (%s)", err, normalized)
-	}
-	voices, _ := payload["voices"].([]interface{})
-	if len(voices) != 2 {
-		t.Fatalf("voices = %#v, want 2 entries (an entry without an id is dropped)", voices)
-	}
-	first, _ := voices[0].(map[string]interface{})
-	if first["voice_id"] != "v1" || first["name"] != "Aria" || first["language"] != "en" {
-		t.Fatalf("first voice = %#v", first)
-	}
-	if _, leaked := first["internal"]; leaked {
-		t.Fatalf("an unknown upstream field survived: %#v", first)
-	}
-	second, _ := voices[1].(map[string]interface{})
-	if second["voice_id"] != "v2" || second["name"] != "v2" {
-		t.Fatalf("second voice must fall back to its id as the name: %#v", second)
-	}
-	if language, present := second["language"]; !present || language != nil {
-		t.Fatalf("a missing language must be an explicit null, got %#v", second["language"])
-	}
-	// A payload that is not a voice list is passed through untouched.
-	other := []byte(`{"error":"nope"}`)
-	if string(normalizeTTSVoices(other)) != string(other) {
-		t.Fatal("a non-list payload must be passed through")
-	}
-}
-
-func TestVideoFailureKeepsStoredCode(t *testing.T) {
-	job := &videoJob{ID: "v1", Status: "failed", Error: map[string]interface{}{"code": "upstream_unavailable", "message": "no account"}}
-	rendered := job.toStandardMap()
-	errorObject, _ := rendered["error"].(map[string]interface{})
-	if errorObject["code"] != "upstream_unavailable" {
-		t.Fatalf("code = %v, want the stored code", errorObject["code"])
-	}
-}
-
-func TestImageEventSizeReportsRealPixels(t *testing.T) {
-	// A 1x2 PNG, encoded by hand so the assertion does not depend on any encoder.
-	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAYAAACZgbYnAAAAEklEQVR42mP8z8BQz0AEYBxVSF8FAJJ9Bf8AAAAASUVORK5CYII="
-	if got := imageEventSize("b64_json", png); got != "1x2" {
-		t.Fatalf("imageEventSize() = %q, want 1x2", got)
-	}
-	if got := imageEventSize("b64_json", "not-base64"); got != "auto" {
-		t.Fatalf("undecodable payload = %q, want auto", got)
-	}
-	if got := imageEventSize("url", "https://example.com/a.png"); got != "auto" {
-		t.Fatalf("url payload = %q, want auto (the bytes are not fetched here)", got)
-	}
-}
-
 func TestUnbindAffinityDropsTheSessionBinding(t *testing.T) {
 	h := &Handler{affinity: map[string]sessionAffinityEntry{}}
 	ctx := withGrokSession(context.Background(), grokSessionContext{Key: "session-1", Model: "grok-4.6"})
 	h.sessionMu.Lock()
-	key := affinityMapKey(grokSessionContext{Key: "session-1", Model: "grok-4.6"}, ProviderWeb)
+	key := affinityMapKey(grokSessionContext{Key: "session-1", Model: "grok-4.6"}, ProviderBuild)
 	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
 	h.sessionMu.Unlock()
 
-	h.unbindAffinity(ctx, ProviderWeb, 7)
+	h.unbindAffinity(ctx, ProviderBuild, 7)
 
-	if id := h.affinityAccount(ctx, ProviderWeb); id != 0 {
+	if id := h.affinityAccount(ctx, ProviderBuild); id != 0 {
 		t.Fatalf("affinityAccount() = %d, want 0 after an unbind", id)
 	}
 	// An unrelated account id must not clear the binding.
 	h.sessionMu.Lock()
 	h.affinity[key] = sessionAffinityEntry{AccountID: 7, ExpiresAt: time.Now().Add(time.Hour)}
 	h.sessionMu.Unlock()
-	h.unbindAffinity(ctx, ProviderWeb, 9)
-	if id := h.affinityAccount(ctx, ProviderWeb); id != 7 {
+	h.unbindAffinity(ctx, ProviderBuild, 9)
+	if id := h.affinityAccount(ctx, ProviderBuild); id != 7 {
 		t.Fatalf("affinityAccount() = %d, want the binding to survive a mismatch", id)
-	}
-}
-
-func TestRetryableVoiceErrorClassification(t *testing.T) {
-	retryable := []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusPaymentRequired,
-		http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusBadGateway}
-	for _, status := range retryable {
-		err := &consoleVoiceRequestError{status: status, code: "x", err: errors.New("boom")}
-		if !retryableVoiceError(err) {
-			t.Fatalf("status %d must be retryable on another account", status)
-		}
-	}
-	for _, status := range []int{http.StatusBadRequest, http.StatusNotFound, http.StatusUnsupportedMediaType} {
-		err := &consoleVoiceRequestError{status: status, code: "x", err: errors.New("boom")}
-		if retryableVoiceError(err) {
-			t.Fatalf("status %d is the caller's mistake and must not be retried", status)
-		}
-	}
-	// An untyped error is not a voice request failure and is not retried here.
-	if retryableVoiceError(errors.New("boom")) {
-		t.Fatal("an untyped error must not be treated as a retryable voice failure")
 	}
 }
 

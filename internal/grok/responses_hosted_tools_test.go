@@ -55,10 +55,10 @@ func TestChatRequestFromResponses_KeepsHostedSearchTools(t *testing.T) {
 	}
 }
 
-// The console plane runs the search server-side, so the tool has to appear in
-// the payload that is posted to console.x.ai — that is the only place the model
-// can learn that browsing was requested.
-func TestConsolePayloadForResponsesBridge_AdvertisesHostedSearchTools(t *testing.T) {
+// The Build plane runs hosted search server-side, so the tool has to appear in
+// the payload posted upstream — that is the only place the model can learn that
+// browsing was requested.
+func TestBuildPayloadForResponsesBridge_AdvertisesHostedSearchTools(t *testing.T) {
 	chat, err := chatRequestFromResponses(responsesSearchRequest())
 	if err != nil {
 		t.Fatalf("chatRequestFromResponses() error = %v", err)

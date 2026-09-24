@@ -30,11 +30,11 @@ async function loadAccounts() {
       return;
     }
     const loadedAccounts = await res.json();
-    accounts = (Array.isArray(loadedAccounts) ? loadedAccounts : []).filter((account) => !(
-      String(account?.account_type || "").trim().toLowerCase() === "grok" &&
-      String(account?.grok_provider || "").trim().toLowerCase() === "console" &&
-      Number(account?.grok_sso_parent_id || 0) > 0
-    ));
+    accounts = (Array.isArray(loadedAccounts) ? loadedAccounts : []).filter((account) => {
+      if (String(account?.account_type || "").trim().toLowerCase() !== "grok") return true;
+      return String(account?.credential_type || "").trim().toLowerCase() === "oauth" ||
+        String(account?.grok_provider || "").trim().toLowerCase() === "build";
+    });
     sortAccounts();
     renderPlatformTabs();
     renderAccounts();
@@ -512,7 +512,7 @@ function applyTokenLabels(type) {
     // flows, so the form has nothing to submit for a new account of any of
     // those types.
     const loginOnlyChannel =
-      normalized === "warp" || normalized === "workbuddy" || normalized === "qoder" || normalized === "cline";
+      normalized === "warp" || normalized === "workbuddy" || normalized === "qoder" || normalized === "cline" || normalized === "grok";
     saveButton.hidden = loginOnlyChannel && !accountId;
   }
   applyCredentialModeUI(normalized);
@@ -539,11 +539,11 @@ function applyTokenLabels(type) {
     input.placeholder = "";
     hint.textContent = "该渠道只支持官方设备授权登录";
   } else if (normalized === 'grok') {
-    label.textContent = "SSO Token";
-    input.placeholder = "每行一个 sso token（或包含 sso= 的 Cookie）";
-    hint.textContent = accountId
-      ? "凭证不回显；留空保留原凭证，填写则替换"
-      : "支持批量添加 Grok。每行一个 sso token 或 Cookie 片段";
+    input.value = "";
+    input.required = false;
+    label.textContent = "Grok Build OAuth";
+    input.placeholder = "";
+    hint.textContent = "Grok 仅支持 xAI 官方设备授权登录";
   } else if (normalized === 'puter') {
       label.textContent = "Auth Token";
       input.placeholder = "每行一个 Puter auth_token";
@@ -692,48 +692,25 @@ function stopWarpDeviceLogin(cancel = false) { warpDeviceLogin.stop(cancel); }
 function startWarpDeviceLogin() { return warpDeviceLogin.start(); }
 function pollWarpDeviceLogin() { return warpDeviceLogin.poll(); }
 
-// Grok credential mode: SSO cookie vs Build CLI OAuth.
-//
-// SSO is created by pasting the cookie; the internal Console companion is
-// plumbing the operator never chooses, so its picker is never exposed.
-// Build CLI OAuth is only ever obtained through the official xAI device login:
-// the access/refresh tokens are redacted server-side on read, so manual token
-// inputs would be unusable anyway.
+// Grok is Build OAuth-only. Other channels retain their existing generic
+// manual credential or official-login behavior.
 function applyCredentialModeUI(type) {
-  const modeGroup = document.getElementById("credentialModeGroup");
-  const modeSelect = document.getElementById("credentialType");
-  if (!modeGroup || !modeSelect) return;
-  const isGrok = String(type || "").trim().toLowerCase() === "grok";
-  modeGroup.hidden = !isGrok;
-  const mode = String(modeSelect?.value || "sso").trim().toLowerCase();
-  const isOAuth = isGrok && mode === "oauth";
-  // The credential textarea is hidden for the channels that only accept official
-  // login (Warp) and for the OAuth-only channels (WorkBuddy, Qoder).
   const normalizedType = String(type || "").trim().toLowerCase();
-  const oauthOnlyChannel =
-    normalizedType === "warp" || normalizedType === "workbuddy" || normalizedType === "qoder" || normalizedType === "cline";
-  const showToken = !oauthOnlyChannel && !isOAuth;
-  const providerGroup = document.getElementById("grokProviderGroup");
-  if (providerGroup) providerGroup.hidden = true;
-  document.getElementById("ssoCredentialGroup").hidden = !showToken;
-  // No manual OAuth credential inputs: the device login owns them.
-  const oauthCredentialGroup = document.getElementById("oauthCredentialGroup");
-  if (oauthCredentialGroup) oauthCredentialGroup.hidden = true;
-  const oauthRefreshGroup = document.getElementById("oauthRefreshGroup");
-  if (oauthRefreshGroup) oauthRefreshGroup.hidden = true;
-  const oauthExpiresGroup = document.getElementById("oauthExpiresGroup");
-  if (oauthExpiresGroup) oauthExpiresGroup.hidden = true;
+  const loginOnlyChannel = ["grok", "warp", "workbuddy", "qoder", "cline"].includes(normalizedType);
+  const credentialGroup = document.getElementById("ssoCredentialGroup");
+  if (credentialGroup) credentialGroup.hidden = loginOnlyChannel;
+  ["oauthCredentialGroup", "oauthRefreshGroup", "oauthExpiresGroup"].forEach((id) => {
+    const group = document.getElementById(id);
+    if (group) group.hidden = true;
+  });
   const grokDeviceLoginGroup = document.getElementById("grokDeviceLoginGroup");
-  // Kept in edit mode too: re-authorizing an account whose grant the upstream
-  // retired (the 未授权 case) must not require deleting and re-adding it.
-  if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = !isOAuth;
+  if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = normalizedType !== "grok";
   const clientCookie = document.getElementById("clientCookie");
-  if (clientCookie) clientCookie.required = showToken;
+  if (clientCookie) clientCookie.required = !loginOnlyChannel;
 }
 
 function currentCredentialMode() {
-  const modeSelect = document.getElementById("credentialType");
-  return String(modeSelect?.value || "sso").trim().toLowerCase();
+  return String(document.getElementById("accountType")?.value || "").trim().toLowerCase() === "grok" ? "oauth" : "";
 }
 
 function splitBatchCredentialInput(raw) {
@@ -756,11 +733,6 @@ function normalizeCredentialForType(type, credential) {
   const normalizedType = String(type || "").trim().toLowerCase();
   const raw = String(credential || "").trim();
   if (!raw) return "";
-
-  if (normalizedType === "grok") {
-    const ssoMatch = raw.match(/(?:^|[;\s])sso=([^;\s]+)/i);
-    return (ssoMatch ? ssoMatch[1] : raw).trim();
-  }
 
   return raw;
 }
@@ -1152,7 +1124,7 @@ function evaluateAccountStatus(acc) {
     // OAuth secrets are redacted by the account list API. credential_type is
     // the safe indicator that the server holds a Build OAuth credential.
     if (!hasSidebarAccountCredential(acc)) {
-      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 SSO Token' };
+      return { normal: false, text: '待登录', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Build OAuth 授权' };
     }
   } else if (type === 'puter') {
     if (!hasSidebarAccountCredential(acc)) {
@@ -1752,10 +1724,7 @@ function accountIdentityPrimary(acc) {
   const name = String(acc?.name || "").trim();
   const display = formatTokenDisplay(acc);
   const identity = email || name || (display && display !== "-" ? display : "未命名账号");
-  if (type === "grok") {
-    const mode = String(acc?.credential_type || "sso").trim().toLowerCase() === "oauth" ? "OAuth" : "SSO";
-    return `${identity} · ${mode}`;
-  }
+  if (type === "grok") return `${identity} · Build OAuth`;
   return identity;
 }
 
@@ -2060,9 +2029,6 @@ function openModal(account = null) {
   };
 
   const applyValues = () => {
-    const modeSelect = document.getElementById("credentialType");
-    const providerSelect = document.getElementById("grokProvider");
-    const providerHint = document.getElementById("grokProviderHint");
     // Every branch below sets the modal type via setAccountModalType; the
     // credential-mode UI must follow THAT type, never the ambient platform tab.
     // (Reading the tab here left a Grok edit without its device-login button when
@@ -2075,12 +2041,6 @@ function openModal(account = null) {
       setAccountModalType(modalType);
       document.getElementById("clientCookie").value = "";
       document.getElementById("enabled").checked = account.enabled;
-      const isOAuth = String(account.credential_type || "").trim().toLowerCase() === "oauth";
-      if (modeSelect) modeSelect.value = isOAuth ? "oauth" : "sso";
-      if (providerSelect) providerSelect.value = "web";
-      if (providerHint) {
-        providerHint.textContent = "保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。";
-      }
     } else {
       title.textContent = "添加账号";
       form.reset();
@@ -2091,9 +2051,6 @@ function openModal(account = null) {
       setAccountModalType(modalType);
       document.getElementById("enabled").checked = true;
       document.getElementById("clientCookie").value = "";
-      if (modeSelect) modeSelect.value = "sso";
-      if (providerSelect) providerSelect.value = "web";
-      if (providerHint) providerHint.textContent = "保存一个 Grok Web SSO 账号时，系统会在内部维护 Console 运行账号。登录凭据和调度设置由 Web 源账号同步，Console 的模型、额度和健康状态保持独立。";
     }
     // The switch above is assigned, not clicked: without this its paint would depend on
     // the stylesheet's :has() fallback, which browsers without :has() ignore.
@@ -2210,8 +2167,7 @@ async function saveAccount(e) {
     return;
   }
   const token = document.getElementById("clientCookie").value;
-  const mode = currentCredentialMode();
-  const isOAuth = type === "grok" && mode === "oauth";
+  const isOAuth = type === "grok";
   // Build CLI OAuth has no manual inputs: it is created and renewed by the
   // official device login, which saves the account server-side. Submitting the
   // mode without the login would only produce an account without credentials.
@@ -2230,8 +2186,8 @@ async function saveAccount(e) {
     enabled: document.getElementById("enabled").checked,
   };
   if (type === "grok") {
-    data.credential_type = isOAuth ? "oauth" : "";
-    data.grok_provider = isOAuth ? "build" : "web";
+    data.credential_type = "oauth";
+    data.grok_provider = "build";
   }
 
   // A WorkBuddy edit may legitimately keep the stored credential: the refresh
@@ -2372,10 +2328,6 @@ function formatTokenDisplay(acc) {
       return token.substring(0, 30) + '...';
     }
     return token;
-  }
-  if (type === 'grok' && getAccountToken(acc)) {
-    const sso = getAccountToken(acc);
-    return sso.length > 20 ? sso.substring(0, 8) + '...' + sso.substring(sso.length - 8) : sso;
   }
   if (type === 'puter' && getAccountToken(acc)) {
     const token = getAccountToken(acc);

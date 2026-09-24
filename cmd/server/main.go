@@ -156,9 +156,6 @@ func main() {
 	diagnosticStore := debug.NewDiagnosticStore(s.RedisClient(), s.RedisPrefix())
 	apiHandler.SetDiagnosticStore(diagnosticStore)
 	apiHandler.SetConnectionTracker(accountTracker)
-	if err := apiHandler.EnsureGrokSSOProviderViews(context.Background()); err != nil {
-		slog.Error("Failed to reconcile linked Grok SSO provider accounts", "error", err)
-	}
 	h := handler.NewWithLoadBalancer(cfg, lb)
 	defer h.Close()
 	grokHandler := grok.NewHandler(cfg, lb)

@@ -56,17 +56,10 @@ type Config struct {
 	// without a managed key. Empty (the default) requires a key from everyone, as
 	// grok2api does; an operator that cannot update a client yet lists its address
 	// here, and every other caller still needs a key.
-	AnonymousAllowIPs []string `json:"anonymous_allow_ips,omitempty"`
-	// GrokStatsigSignerURL selects statsig signing. Unset means grok2api's own
-	// default signer; an explicit empty string turns signing off; any other value
-	// is used as that endpoint.
-	GrokStatsigSignerURL  *string `json:"grok_statsig_signer_url,omitempty"`
-	GrokStatsigID         string  `json:"grok_statsig_id,omitempty"`
-	GrokConfigCFClearance string  `json:"grok_cf_clearance,omitempty"`
-	GrokConfigCFBM        string  `json:"grok_cf_bm,omitempty"`
-	GrokTemporary         *bool   `json:"grok_temporary,omitempty"`
-	GrokDisableMemory     *bool   `json:"grok_disable_memory,omitempty"`
-	GrokCustomInstruction string  `json:"grok_custom_instruction,omitempty"`
+	AnonymousAllowIPs     []string `json:"anonymous_allow_ips,omitempty"`
+	GrokTemporary         *bool    `json:"grok_temporary,omitempty"`
+	GrokDisableMemory     *bool    `json:"grok_disable_memory,omitempty"`
+	GrokCustomInstruction string   `json:"grok_custom_instruction,omitempty"`
 
 	// ── WorkBuddy international backend (www.workbuddy.ai) ──
 	// Overridable for self-hosted regional deployments and for tests that need a
@@ -113,7 +106,6 @@ type Config struct {
 	// NOT written into ApplyHardcoded, so they survive a persistConfig round trip.
 	GrokCLIBaseURL          string   `json:"grok_cli_base_url,omitempty"`
 	GrokCLIFallbackBaseURL  string   `json:"grok_cli_fallback_base_url,omitempty"`
-	GrokConsoleBaseURL      string   `json:"grok_console_base_url,omitempty"`
 	GrokCLIUserAgent        string   `json:"grok_cli_user_agent,omitempty"`
 	GrokCLIClientVersion    string   `json:"grok_cli_client_version,omitempty"`
 	GrokCLIClientIdentifier string   `json:"grok_cli_client_identifier,omitempty"`
@@ -121,28 +113,19 @@ type Config struct {
 	GrokCLIOAuthDeviceURL   string   `json:"grok_cli_oauth_device_url,omitempty"`
 	GrokCLIOAuthTokenURL    string   `json:"grok_cli_oauth_token_url,omitempty"`
 	GrokCLIModelIDs         []string `json:"grok_cli_model_ids,omitempty"`
-	GrokWebRPS              float64  `json:"grok_web_rps,omitempty"`
-	GrokConsoleRPS          float64  `json:"grok_console_rps,omitempty"`
 	GrokBuildRPS            float64  `json:"grok_build_rps,omitempty"`
-	GrokWebTimeout          int      `json:"grok_web_timeout_seconds,omitempty"`
-	GrokConsoleTimeout      int      `json:"grok_console_timeout_seconds,omitempty"`
 	GrokBuildTimeout        int      `json:"grok_build_timeout_seconds,omitempty"`
 	// GrokStreamIdleSeconds is the legacy all-channel fallback. The channel
 	// fields below take precedence when set, allowing Web/Console/Build to be
 	// tuned independently without invalidating existing config files.
-	GrokStreamIdleSeconds        int `json:"grok_stream_idle_seconds,omitempty"`
-	GrokWebStreamIdleSeconds     int `json:"grok_web_stream_idle_seconds,omitempty"`
-	GrokConsoleStreamIdleSeconds int `json:"grok_console_stream_idle_seconds,omitempty"`
-	GrokBuildStreamIdleSeconds   int `json:"grok_build_stream_idle_seconds,omitempty"`
-	WarpStreamIdleSeconds        int `json:"warp_stream_idle_seconds,omitempty"`
-	PuterStreamIdleSeconds       int `json:"puter_stream_idle_seconds,omitempty"`
+	GrokStreamIdleSeconds      int `json:"grok_stream_idle_seconds,omitempty"`
+	GrokBuildStreamIdleSeconds int `json:"grok_build_stream_idle_seconds,omitempty"`
+	WarpStreamIdleSeconds      int `json:"warp_stream_idle_seconds,omitempty"`
+	PuterStreamIdleSeconds     int `json:"puter_stream_idle_seconds,omitempty"`
 
-	// ── Grok egress (proxy pool + FlareSolverr + clearance) ──
-	GrokEgressEnabled          bool               `json:"grok_egress_enabled,omitempty"`
-	GrokEgressNodes            []EgressNodeConfig `json:"grok_egress_nodes,omitempty"`
-	GrokFlareSolverrURL        string             `json:"grok_flaresolverr_url,omitempty"`
-	GrokClearanceMode          string             `json:"grok_clearance_mode,omitempty"`             // "manual"|"flaresolverr"
-	GrokClearanceRefreshInterv int                `json:"grok_clearance_refresh_interval,omitempty"` // seconds
+	// ── Grok Build egress proxy pool ──
+	GrokEgressEnabled bool               `json:"grok_egress_enabled,omitempty"`
+	GrokEgressNodes   []EgressNodeConfig `json:"grok_egress_nodes,omitempty"`
 
 	// ── Upstream fidelity (defaults preserve client content verbatim) ──
 	// A relay gateway forwards client messages without rewriting content.
@@ -440,15 +423,6 @@ func (c *Config) GrokCLIFallbackBaseURLOrDefault() string {
 	return "https://api.x.ai/v1"
 }
 
-// GrokConsoleBaseURLOrDefault returns the Console v1 API base used by DPoP
-// authenticated text, media, and voice requests.
-func (c *Config) GrokConsoleBaseURLOrDefault() string {
-	if c != nil && strings.TrimSpace(c.GrokConsoleBaseURL) != "" {
-		return strings.TrimRight(strings.TrimSpace(c.GrokConsoleBaseURL), "/")
-	}
-	return "https://console.x.ai/v1"
-}
-
 // GrokCLIOAuthClientIDOrDefault returns the xAI OAuth client ID used for Build
 // token refresh, defaulting to the official CLI client.
 func (c *Config) GrokCLIOAuthClientIDOrDefault() string {
@@ -498,23 +472,6 @@ func (c *Config) GrokCLIClientIdentifierOrDefault() string {
 		return strings.TrimSpace(c.GrokCLIClientIdentifier)
 	}
 	return "grok-shell"
-}
-
-// GrokClearanceRefreshIntervalOrDefault returns the clearance auto-refresh
-// interval in seconds (default 600s).
-func (c *Config) GrokClearanceRefreshIntervalOrDefault() int {
-	if c != nil && c.GrokClearanceRefreshInterv > 0 {
-		return c.GrokClearanceRefreshInterv
-	}
-	return 600
-}
-
-// GrokClearanceModeOrDefault returns "manual" when FlareSolverr is not usable.
-func (c *Config) GrokClearanceModeOrDefault() string {
-	if c != nil && strings.TrimSpace(c.GrokClearanceMode) != "" {
-		return strings.TrimSpace(c.GrokClearanceMode)
-	}
-	return "manual"
 }
 
 // GrokModelIsCLI reports whether the given model ID is routed to the Build CLI

@@ -35,15 +35,27 @@ cp config.example.json config.json
 | `admin_user` | `admin` | 管理端用户名 |
 | `admin_pass` | 自动生成 | 管理端密码，建议显式设置 |
 | `admin_path` | `/admin` | 管理端路径 |
-| `admin_token` | 空 | 管理端静态 token |
 | `inference_auth_enabled` | `true` | 模型和推理接口是否要求管理 API Key |
 | `trusted_proxies` | `[]` | 允许提供转发头的反向代理 IP/CIDR；为空时忽略并剥离所有外部 `Forwarded`/`X-Forwarded-*`/`X-Real-IP` |
 | `credential_encryption_key_file` | `data/credential.key` | Redis 账号凭据 AES-GCM 主密钥文件；只持久化路径，不持久化密钥内容 |
 | `response_store_ttl_hours` | `720` | Build stored Response 账号归属记录的 Redis TTL（小时） |
-| `grok_console_base_url` | `https://console.x.ai/v1` | Grok Console Responses、标准视频、TTS、STT 和 Realtime 的 DPoP 上游基址 |
-| `grok_cli_fallback_base_url` | `https://api.x.ai/v1` | Build 视频主路由返回确认的 403 后使用的 XAI fallback 基址 |
 
-### 2.2 Redis
+### 2.2 Grok Build OAuth CLI
+
+| 字段 | 默认值 | 说明 |
+|---|---|---|
+| `grok_cli_base_url` | `https://cli-chat-proxy.grok.com/v1` | Build API 基址 |
+| `grok_cli_user_agent` | `grok-shell/1.0.40 (linux; x86_64)` | Build CLI User-Agent |
+| `grok_cli_client_version` | `1.0.40` | `x-grok-client-version` |
+| `grok_cli_client_identifier` | `grok-shell` | `x-grok-client-identifier` |
+| `grok_cli_oauth_client_id` | 官方公开 client id | OAuth 设备授权客户端 ID |
+| `grok_cli_oauth_device_url` | 官方设备授权端点 | 创建设备授权事务的 URL |
+| `grok_cli_oauth_token_url` | `https://auth.x.ai/oauth2/token` | 轮询及刷新 OAuth token 的 URL |
+| `grok_cli_model_ids` | `[]` | 可选 CLI 模型路由补充；模型展示仍以账号上游发现为准 |
+
+Grok 账号只能通过 `/api/grok/device-auth*` 创建，凭据为 OAuth access/refresh token。
+
+### 2.3 Redis
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -53,19 +65,17 @@ cp config.example.json config.json
 | `redis_db` | `0` | Redis DB |
 | `redis_prefix` | `orchids:` | Redis key 前缀 |
 
-### 2.3 媒体与多实例
+### 2.4 多实例
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `media_dir` | `data/tmp` | 图片、视频成品和临时媒体输入目录；修改后需要重启 |
 | `deployment_replicas` | `1` | 当前部署的服务副本数 |
-| `deployment_instance_id` | 空 | 多副本时必填，并且每个副本必须使用不同的稳定值 |
-| `deployment_cluster_id` | `orchids` | 同一 Redis 和共享媒体目录所属的集群标识 |
-| `shared_media` | `false` | 多副本时必须显式设为 `true`，表示 `media_dir` 已挂载为所有副本共享的可读写目录 |
+| `deployment_instance_id` | 空 | 多副本时每个副本使用不同的稳定值 |
+| `deployment_cluster_id` | `orchids` | 同一 Redis 所属的集群标识 |
 
-当 `deployment_replicas > 1` 时，启动检查要求使用 Redis、填写实例 ID 并确认共享媒体。服务会在媒体根目录创建 `.orchids-cluster` 标记，并执行临时文件写入与回读；目录属于其他集群、不可写或无法回读时会拒绝启动。所有副本应使用相同的 `deployment_cluster_id` 和媒体目录布局，但使用不同的 `deployment_instance_id`。
+多副本使用同一 Redis，以共享模型、账号、限流与 stored Response 归属记录。
 
-### 2.4 缓存
+### 2.5 缓存
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -76,7 +86,7 @@ cp config.example.json config.json
 | `token_cache_ttl` | `300` | token cache TTL（秒） |
 | `token_cache_strategy` | `1` | token cache 策略 |
 
-### 2.5 代理
+### 2.6 代理
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
@@ -86,7 +96,7 @@ cp config.example.json config.json
 | `proxy_pass` | 空 | 代理密码 |
 | `proxy_bypass` | 空数组 | 直连域名或网段 |
 
-`grok_egress_enabled=true` 时，HTTP、SOCKS5/SOCKS5H 节点同时用于普通请求和 Console Voice WebSocket；节点选择、UA、Cloudflare cookies 与连接租约保持同一绑定。公网反向代理必须把自身地址加入 `trusted_proxies`，不要填写任意客户端可达的地址段。
+通用 HTTP/HTTPS 代理可用于 Build 请求。公网反向代理必须把自身地址加入 `trusted_proxies`，不要填写任意客户端可达的地址段。
 
 ### 2.6 上游保真
 
@@ -120,22 +130,20 @@ cp config.example.json config.json
 | `cline_workos_token_url` | `https://api.workos.com/user_management/authenticate` | WorkOS 设备 token 轮询地址 |
 | `request_timeout` | `600` | 通用请求超时，秒，上限 86400 |
 | `concurrency_timeout` | 跟随 `request_timeout` | 入口请求执行超时，秒，上限 86400；不是单纯排队等待时间 |
-| `retry_429_interval` | `60` | 无精确 reset 信息时的 Web 429 重试间隔，秒，上限 3600 |
-| `grok_web_timeout_seconds` | 跟随 `request_timeout` | Web HTTP 总超时，含响应体读取，上限 86400 秒 |
-| `grok_console_timeout_seconds` | 跟随 `request_timeout` | Console HTTP 总超时，含响应体读取，上限 86400 秒 |
+| `retry_429_interval` | `60` | 无精确 reset 信息时的 429 重试间隔，秒，上限 3600 |
 | `grok_build_timeout_seconds` | 跟随 `request_timeout` | Build HTTP 总超时，含响应体读取，上限 86400 秒 |
-| `grok_stream_idle_seconds` | `120` | Build/Console SSE 有效输出空闲超时，上限 3600 秒；keepalive 不重置计时 |
+| `grok_build_stream_idle_seconds` | `120` | Build SSE 有效输出空闲超时，上限 3600 秒；keepalive 不重置计时 |
 | `warp_stream_idle_seconds` | `300` | Warp 响应体连续无字节空闲超时，上限 3600 秒；有持续输出的长任务不受影响 |
 | `puter_stream_idle_seconds` | `120` | Puter NDJSON 响应体连续无字节空闲超时，上限 3600 秒；非法或未知事件会按协议错误记录 |
-| `grok_web_rps` / `grok_console_rps` / `grok_build_rps` | `0` | 0 关闭主动限速；正数按账号/团队限速，范围 0.01–1000，每个桶 burst=1 |
+| `grok_build_rps` | `0` | 0 关闭主动限速；正数按 Build 账号/模型限速，范围 0.01–1000，burst=1 |
 
-限流状态按 provider、账号/已知团队、模型隔离；真实 429 冷却不随主动限速关闭。优先使用 `Retry-After`，再使用响应中的 reset 信息；信息缺失时只冷却受影响的账号/模型，不再全局停顿。配置 Redis 时，Grok 主动 pacing 和团队/模型冷却会跨副本共享；Redis 暂时不可用时退化到进程内 pacing。
+限流状态按 provider、账号与模型隔离；真实 429 冷却不随主动限速关闭。优先使用 `Retry-After`，再使用响应中的 reset 信息。配置 Redis 时，Build pacing 和冷却跨副本共享；Redis 暂时不可用时退化到进程内状态。
 
-总超时与空闲超时是不同边界。长回答需要同时满足入口 `concurrency_timeout` 和目标 provider HTTP 超时。中转层已删除思考质量门控、额外质量重试和缺失思考惩罚；历史 `grok_quality_*` / `grok_missing_thinking_cooldown_seconds` 配置不再生效。存储会话仍保留账号绑定。
+总超时与空闲超时是不同边界。长回答需要同时满足入口 `concurrency_timeout` 和 Build HTTP 超时。stored Responses 保留创建账号绑定。
 
 未显式设置账号 `max_concurrent` 时，所有 provider（WorkBuddy、Warp、Puter、Qoder、Grok）默认每账号 10 路；显式正数会覆盖默认值，未知账号类型不受限。单一账号的渠道因此不再因为只有 1 路而把并发请求判成过载。Redis 部署使用带过期与续租的分布式连接租约，进程异常退出后遗留计数会自动回收。
 
-Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress 固定 120 秒总超时或共享客户端 HTTP/1 固定 120 秒响应头上限影响；等待响应头仍受 HTTP 总超时约束。其他模型继续使用原有共享客户端策略。
+Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头仍受 HTTP 总超时约束。其他模型继续使用各自客户端策略。
 
 ### 3.2 仍然固定的默认值
 
@@ -147,13 +155,9 @@ Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress �
 | `context_max_tokens` | 不生效 | 旧兼容字段；不在中转层截断或自动压缩上下文 |
 | `context_summary_max_tokens` | 不生效 | 旧兼容字段；不生成中转层摘要 |
 | `context_keep_turns` | 不生效 | 旧兼容字段；不按轮数删除请求历史 |
-| `grok_api_base_url` | `https://grok.com` | Grok 基础地址 |
 | `warp_disable_tools` | `false` | Warp 工具默认开启 |
 | `stream` | `true` | Chat 默认流式 |
-| `image_nsfw` | `true` | 公共 imagine 默认 NSFW 开启 |
 | `public_enabled` | `true` | 公共页面默认开启 |
-| `image_final_min_bytes` | `100000` | imagine 最终图阈值 |
-| `image_medium_min_bytes` | `30000` | imagine 中间图阈值 |
 | `token_refresh_interval` | `1` | token 自动刷新间隔（分钟） |
 | `auto_refresh_token` | `true` | 自动刷新账号 token |
 | `load_balancer_cache_ttl` | `5` | 负载均衡缓存 TTL（秒） |
@@ -177,7 +181,7 @@ Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress �
 | Cline | 暂无可信来源，不输出（推荐模型目录只声明 id） |
 | WorkBuddy | 账号快照 `workbuddy_model_ids[]` 的 `max_input_tokens` / `max_output_tokens` |
 | Warp | 账号模型发现缓存的 `context_windows`（即上游 `contextWindow.max`） |
-| Grok | Codex catalog 的静态窗口表 |
+| Grok | Build OAuth `GET /v1/models` 能力目录 |
 | Puter | 暂无可信来源，不输出 |
 
 服务端从不按 token 裁剪请求历史：`puter` / `workbuddy` / `qoder` / `cline` 全量透传客户端 `messages`。
@@ -232,7 +236,7 @@ Grok 直连与托管 egress 均使用以上 provider 超时，不再受 egress �
 - `/health` 会报告 Warp 配置状态；`/ready/warp` 在 Firebase API key 缺失时返回 503，便于部署系统在接流量前发现登录能力不可用
 - 首次启动自动创建主密钥文件，并把已有账号明文凭据迁移为 `enc:v1:` 密文
 - 主密钥不会写入 Redis 或管理 API；必须和 Redis 数据共同备份，切勿在已有账号后更换或删除
-- `data/tmp`、`debug-logs` 等目录是运行期产物，不是配置项
+- `debug-logs` 等目录是运行期产物，不是配置项
 - 许多历史字段即使仍出现在旧配置里，也不会改变当前运行行为
 
 ## 7. 建议清理的历史字段
