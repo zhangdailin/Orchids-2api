@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -307,6 +308,41 @@ func TestHandleModelByID_WarpRejectsModelOutsideAccountPool(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestHandleModelsAggregatesVideoRouteActions(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() { _ = s.Close(); mini.Close() }()
+
+	publishModel(t, s,
+		&store.Model{Channel: "Grok", ModelID: "web/grok-imagine-video", Provider: "web", UpstreamModel: "imagine-video-gen", Capabilities: []string{store.CapabilityVideo}},
+		&store.Model{Channel: "Grok", ModelID: "console/grok-imagine-video", Provider: "console", UpstreamModel: "grok-imagine-video", Capabilities: []string{store.CapabilityVideo}},
+	)
+	rec := httptest.NewRecorder()
+	h.HandleModels(rec, httptest.NewRequest(http.MethodGet, "http://example.com/v1/models", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response PublicModelsListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	var video *PublicModelResponse
+	for i := range response.Data {
+		if response.Data[i].ID == "grok-imagine-video" {
+			video = &response.Data[i]
+			break
+		}
+	}
+	if video == nil {
+		t.Fatalf("video route missing: %+v", response.Data)
+	}
+	if got := strings.Join(video.VideoActions, ","); got != "generate,edit,extend" {
+		t.Fatalf("video_actions=%q", got)
+	}
+	if video.VideoConstraints == nil || video.VideoConstraints.Lengths["extend"] != (PublicVideoLengthRange{Min: 2, Max: 10}) {
+		t.Fatalf("video_constraints=%+v", video.VideoConstraints)
 	}
 }
 

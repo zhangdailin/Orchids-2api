@@ -582,6 +582,46 @@ func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request)
 	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{"data": adminMediaInputJSON(input)})
 }
 
+// HandleMediaInputImport downloads a remote input into the authenticated API
+// key's namespace. It deliberately uses the same SSRF-safe fetcher as the admin
+// endpoint, but returns the inference-plane file object rather than an admin
+// envelope.
+func (h *Handler) HandleMediaInputImport(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		writeResponsesAPIError(w, http.StatusServiceUnavailable, "service_unavailable", "media input store is not configured")
+		return
+	}
+	rawURL, ok := decodeMediaInputImportURL(w, r, false)
+	if !ok {
+		return
+	}
+	data, declared, err := adminMediaInputFetcher(r.Context(), rawURL)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAdminMediaTooLarge):
+			writeResponsesAPIError(w, http.StatusRequestEntityTooLarge, "media_too_large", errAdminMediaTooLarge.Error())
+		case errors.Is(err, errAdminMediaBlocked), errors.Is(err, errRemoteFetchBlocked):
+			writeResponsesAPIError(w, http.StatusBadRequest, "media_url_blocked", "media URL is not allowed")
+		default:
+			writeResponsesAPIError(w, http.StatusBadGateway, "media_fetch_failed", "failed to download media input")
+		}
+		return
+	}
+	input, err := h.saveMediaInput(r.Context(), data, declared, videoRequestOwner(r))
+	if err != nil {
+		status, code, message := adminMediaSaveError(err)
+		writeResponsesAPIError(w, status, strings.ToLower(code), message)
+		return
+	}
+	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{
+		"file_id": input.ID, "object": "file", "kind": input.Kind, "mime_type": input.MIMEType,
+		"bytes": input.SizeBytes, "created_at": input.CreatedAt.Unix(), "expires_at": input.ExpiresAt.Format(time.RFC3339),
+	})
+}
+
 // HandleAdminMediaInputImport downloads a remote input without using environment
 // proxies. DNS is resolved by the public-only dialer and each redirect is checked
 // again, preventing proxy bypass and DNS-rebinding access to internal services.
@@ -593,25 +633,8 @@ func (h *Handler) HandleAdminMediaInputImport(w http.ResponseWriter, r *http.Req
 		writeJSONStatus(w, http.StatusServiceUnavailable, adminMediaError("serviceUnavailable", "media input store is not configured"))
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminMediaImportURLBytes+1024)
-	var request struct {
-		URL string `json:"url"`
-	}
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&request); err != nil {
-		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidRequest", "invalid JSON request"))
-		return
-	}
-	rawURL := strings.TrimSpace(request.URL)
-	if rawURL == "" || len(rawURL) > maxAdminMediaImportURLBytes {
-		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMediaURL", "media URL is required and must not exceed 8192 bytes"))
-		return
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.User != nil || parsed.Hostname() == "" ||
-		(!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) ||
-		(parsed.Port() != "" && parsed.Port() != "80" && parsed.Port() != "443") {
-		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMediaURL", "only credential-free HTTP/HTTPS URLs on ports 80 or 443 are supported"))
+	rawURL, ok := decodeMediaInputImportURL(w, r, true)
+	if !ok {
 		return
 	}
 	data, declared, err := adminMediaInputFetcher(r.Context(), rawURL)
@@ -633,6 +656,42 @@ func (h *Handler) HandleAdminMediaInputImport(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{"data": adminMediaInputJSON(input)})
+}
+
+func decodeMediaInputImportURL(w http.ResponseWriter, r *http.Request, admin bool) (string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminMediaImportURLBytes+1024)
+	var request struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if admin {
+			writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidRequest", "invalid JSON request"))
+		} else {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request", "invalid JSON request")
+		}
+		return "", false
+	}
+	rawURL := strings.TrimSpace(request.URL)
+	if rawURL == "" || len(rawURL) > maxAdminMediaImportURLBytes {
+		if admin {
+			writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMediaURL", "media URL is required and must not exceed 8192 bytes"))
+		} else {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_media_url", "media URL is required and must not exceed 8192 bytes")
+		}
+		return "", false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.User != nil || parsed.Hostname() == "" ||
+		(!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) ||
+		(parsed.Port() != "" && parsed.Port() != "80" && parsed.Port() != "443") {
+		if admin {
+			writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMediaURL", "only credential-free HTTP/HTTPS URLs on ports 80 or 443 are supported"))
+		} else {
+			writeResponsesAPIError(w, http.StatusBadRequest, "invalid_media_url", "only credential-free HTTP/HTTPS URLs on ports 80 or 443 are supported")
+		}
+		return "", false
+	}
+	return rawURL, true
 }
 
 func fetchAdminMediaInput(ctx context.Context, rawURL string) ([]byte, string, error) {
@@ -671,6 +730,10 @@ func fetchAdminMediaInput(ctx context.Context, rawURL string) ([]byte, string, e
 }
 
 func (h *Handler) saveAdminMediaInput(ctx context.Context, data []byte, declaredMIME string) (*store.StoredMediaInput, error) {
+	return h.saveMediaInput(ctx, data, declaredMIME, mediaInputAdminOwner)
+}
+
+func (h *Handler) saveMediaInput(ctx context.Context, data []byte, declaredMIME, owner string) (*store.StoredMediaInput, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("invalid media: media input cannot be empty")
 	}
@@ -701,7 +764,7 @@ func (h *Handler) saveAdminMediaInput(ctx context.Context, data []byte, declared
 	contentPath := filepath.Join(cacheBaseDir, kind, name)
 	now := time.Now().UTC()
 	input := &store.StoredMediaInput{
-		ID: id, OwnerHash: mediaInputAdminOwner, Kind: kind, MIMEType: mimeType,
+		ID: id, OwnerHash: strings.TrimSpace(owner), Kind: kind, MIMEType: mimeType,
 		ContentPath: contentPath, SizeBytes: int64(len(data)), CreatedAt: now,
 	}
 	if err := h.lb.Store.SaveStoredMediaInput(ctx, input, mediaInputTTL); err != nil {
@@ -710,6 +773,33 @@ func (h *Handler) saveAdminMediaInput(ctx context.Context, data []byte, declared
 	}
 	reserved = false
 	return input, nil
+}
+
+func clientMediaSaveError(err error) (int, string, string) {
+	status, code, message := adminMediaSaveError(err)
+	switch code {
+	case "mediaTooLarge":
+		code = "media_too_large"
+	case "invalidMedia":
+		code = "invalid_media"
+	case "mediaStorageFull":
+		code = "media_storage_full"
+	case "serviceUnavailable":
+		code = "service_unavailable"
+	default:
+		code = "internal_error"
+	}
+	return status, code, message
+}
+
+func mediaInputJSON(input *store.StoredMediaInput) map[string]interface{} {
+	if input == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"file_id": input.ID, "object": "file", "kind": input.Kind, "mime_type": input.MIMEType,
+		"bytes": input.SizeBytes, "created_at": input.CreatedAt.Unix(), "expires_at": input.ExpiresAt.UTC().Format(time.RFC3339),
+	}
 }
 
 func adminMediaSaveError(err error) (int, string, string) {

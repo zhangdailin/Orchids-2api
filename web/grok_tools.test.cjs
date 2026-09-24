@@ -217,7 +217,7 @@ test('video operations use their matching API and preserve native request fields
     let sent;
     const values = {videoAction:action,videoRatio:'16:9',videoReferenceURL:'',videoReferenceVoice:'',videoSourceURL:'https://example.com/source.mp4'};
     const ctx = vm.createContext({chatState:{routes:[{id:'grok-imagine-video',provider:'console'}]},
-      toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:headers=>headers,
+      toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:headers=>headers,videoRouteActions:()=>new Set(['generate','edit','extend']),
       stagedVideoInput:async(_id,url)=>({url}), videoState:{referenceFileID:'',sourceFileID:''},
       document:{getElementById:id=>({value:values[id]})},handleUnauthorized:()=>false,
       fetch:async(path,options)=>{sent={path,body:JSON.parse(options.body)};return {ok:true,json:async()=>({request_id:'video_1'})};},
@@ -444,6 +444,16 @@ test('Grok payload omits Web search when route explicitly rejects backend search
   assert.deepEqual(JSON.parse(JSON.stringify(result.tools)), [{ type: 'x_search' }]);
 });
 
+
+test('client media staging uses bearer inference routes and parses plain file objects', () => {
+  assert.match(source, /clientMode \? "\/v1\/media\/inputs" : "\/api\/admin\/v1\/media\/inputs\/upload"/);
+  assert.match(source, /clientMode \? "\/v1\/media\/inputs\/import" : "\/api\/admin\/v1\/media\/inputs\/import"/);
+  assert.match(source, /headers: toolAuthHeaders\(\)/);
+  assert.match(source, /toolAuthHeaders\(\{ "Content-Type": "application\/json" \}\)/);
+  assert.match(source, /const data = clientMode \? payload : \(payload\?\.data \|\| \{\}\)/);
+  assert.match(source, /data\.file_id \|\| data\.fileId/);
+});
+
 test('client key auth helpers scope history without persisting the secret', () => {
   const helper = source.slice(source.indexOf('  const toolAuthState'), source.indexOf('  const cacheOnlineState'));
   const context = vm.createContext({});
@@ -453,4 +463,156 @@ test('client key auth helpers scope history without persisting the secret', () =
   assert.equal(context.toolHistoryScope().includes('sk-secret'), false);
   assert.equal(context.toolAuthHeaders({Accept:'x'}).Authorization, 'Bearer sk-secret');
   assert.equal(context.toolInferencePrefix(), '/v1');
+});
+
+test('chat branch helpers confirm trailing destructive changes and rotate cache keys', () => {
+  const start = source.indexOf('  function chatMessageIndex(');
+  const end = source.indexOf('  function startEditChatMessage(', start);
+  const confirms = [];
+  const session = { messages: [{role:'user'}, {role:'assistant'}, {role:'user'}], promptCacheKey: 'old', updatedAt: 0 };
+  let saves = 0; let sessionRenders = 0; let threadRenders = 0;
+  const context = vm.createContext({
+    window: { confirm: text => { confirms.push(text); return true; } },
+    createPromptCacheKey: () => 'new-cache', Date: { now: () => 42 },
+    saveChatSessions: () => { saves += 1; }, renderChatSessions: () => { sessionRenders += 1; }, rerenderChatThread: () => { threadRenders += 1; },
+    chatState: { sending: false }, activeChatSession: () => session,
+  });
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(context.confirmTrailingMessages('编辑这条消息', 0), true);
+  assert.equal(confirms.length, 0);
+  assert.equal(context.confirmTrailingMessages('编辑这条消息', 2), true);
+  assert.match(confirms[0], /后续 2 条消息/);
+  context.truncateChatBranch(session, 1);
+  assert.equal(session.messages.length, 1);
+  assert.equal(session.promptCacheKey, 'new-cache');
+  assert.equal(session.updatedAt, 42);
+  assert.deepEqual([saves, sessionRenders, threadRenders], [1, 1, 1]);
+});
+
+test('message delete confirms and truncates the selected branch', () => {
+  const start = source.indexOf('  function chatMessageIndex(');
+  const end = source.indexOf('  function startEditChatMessage(', start);
+  const session = { messages: [{role:'user'}, {role:'assistant'}, {role:'user'}], promptCacheKey: 'old' };
+  let prompt = ''; let saved = 0;
+  const context = vm.createContext({
+    window: { confirm: text => { prompt = text; return true; } }, chatState: { sending: false },
+    activeChatSession: () => session, createPromptCacheKey: () => 'rotated', Date,
+    saveChatSessions: () => { saved += 1; }, renderChatSessions() {}, rerenderChatThread() {},
+  });
+  vm.runInContext(source.slice(start, end), context);
+  const rows = [{}, {}, {}];
+  const log = { querySelectorAll: () => rows };
+  rows.forEach(row => { row.closest = () => log; });
+  context.deleteChatMessage(rows[1]);
+  assert.match(prompt, /后续 1 条消息/);
+  assert.equal(session.messages.length, 1);
+  assert.equal(session.promptCacheKey, 'rotated');
+  assert.equal(saved, 1);
+});
+
+test('clear-current-session confirms, preserves the session, and rotates its cache key', () => {
+  const start = source.indexOf('  function clearCurrentChatSession(');
+  const end = source.indexOf('  function newChatSession(', start);
+  const session = { id: 'keep-me', messages: [{role:'user'}, {role:'assistant'}], promptCacheKey: 'old' };
+  let prompt = ''; let status = '';
+  const context = vm.createContext({
+    window: { confirm: text => { prompt = text; return true; } }, chatState: { sending: false },
+    activeChatSession: () => session, createPromptCacheKey: () => 'rotated', Date,
+    saveChatSessions() {}, renderChatSessions() {}, rerenderChatThread() {}, updateChatStatus: text => { status = text; },
+  });
+  vm.runInContext(source.slice(start, end), context);
+  context.clearCurrentChatSession();
+  assert.match(prompt, /2 条消息/);
+  assert.equal(session.id, 'keep-me');
+  assert.equal(session.messages.length, 0);
+  assert.equal(session.promptCacheKey, 'rotated');
+  assert.match(status, /已清空/);
+});
+
+test('editing a user message truncates its branch, saves, rotates cache, and regenerates', async () => {
+  const start = source.indexOf('  function startEditChatMessage(');
+  const end = source.indexOf('  function startEditAssistantMessage(', start);
+  const messages = [
+    { role: 'user', content: 'old' }, { role: 'assistant', content: 'a' },
+    { role: 'user', content: 'later' }, { role: 'assistant', content: 'b' },
+  ];
+  const session = { messages, promptCacheKey: 'old-cache', updatedAt: 0 };
+  const elements = [];
+  const makeElement = tag => {
+    const el = { tag, value: '', className: '', children: [], listeners: {},
+      appendChild(child) { this.children.push(child); }, addEventListener(name, fn) { this.listeners[name] = fn; },
+      focus() {}, select() {}, click() { return this.listeners.click?.(); },
+    };
+    elements.push(el); return el;
+  };
+  const bubble = makeElement('div');
+  const actions = makeElement('div');
+  const row = { querySelector: selector => selector === '.message-bubble' ? bubble : actions };
+  let requested = 0; let saved = 0; let confirms = 0;
+  const context = vm.createContext({
+    chatState: { sending: false }, activeChatSession: () => session, chatMessageIndex: () => 0,
+    document: { createElement: makeElement }, showToast() {}, rerenderChatThread() {}, renderChatSessions() {},
+    confirmTrailingMessages: (_action, count) => { confirms = count; return true; },
+    createPromptCacheKey: () => 'new-cache', Date: { now: () => 99 }, saveChatSessions: () => { saved += 1; },
+    appendChatMessage: () => ({}), requestChatCompletion: async () => { requested += 1; },
+  });
+  vm.runInContext(source.slice(start, end), context);
+  context.startEditChatMessage(row, 'old');
+  const textarea = elements.find(el => el.tag === 'textarea');
+  textarea.value = 'edited';
+  const saveButton = elements.find(el => el.tag === 'button' && el.className === 'btn btn-primary');
+  await saveButton.listeners.click();
+  assert.equal(confirms, 3);
+  assert.deepEqual(JSON.parse(JSON.stringify(session.messages)), [{ role: 'user', content: 'edited' }]);
+  assert.equal(session.promptCacheKey, 'new-cache');
+  assert.equal(session.updatedAt, 99);
+  assert.equal(saved, 1);
+  assert.equal(requested, 1);
+});
+
+test('retrying a historical assistant confirms branch truncation before regenerating', async () => {
+  const start = source.indexOf('  async function retryAssistantMessage(');
+  const end = source.indexOf('  function rerenderChatThread(', start);
+  const original = [
+    { role: 'user', content: 'u1' }, { role: 'assistant', content: 'a1' },
+    { role: 'user', content: 'u2' }, { role: 'assistant', content: 'a2' },
+  ];
+  for (const accepted of [false, true]) {
+    const session = { messages: original.map(item => ({...item})), promptCacheKey: 'old' };
+    let trailing = -1; let requested = 0;
+    const context = vm.createContext({
+      chatState: { sending: false }, activeChatSession: () => session, chatMessageIndex: () => 1,
+      confirmTrailingMessages: (_action, count) => { trailing = count; return accepted; }, showToast() {},
+      createPromptCacheKey: () => 'new', Date, saveChatSessions() {}, renderChatSessions() {}, rerenderChatThread() {},
+      appendChatMessage: () => ({}), requestChatCompletion: async () => { requested += 1; },
+    });
+    vm.runInContext(source.slice(start, end), context);
+    await context.retryAssistantMessage({});
+    assert.equal(trailing, 2);
+    assert.equal(session.messages.length, accepted ? 1 : 4);
+    assert.equal(requested, accepted ? 1 : 0);
+    assert.equal(session.promptCacheKey, accepted ? 'new' : 'old');
+  }
+});
+
+test('assistant local edit clears reasoning and tools and message controls expose delete and clear', () => {
+  const assistantEdit = source.slice(source.indexOf('  function startEditAssistantMessage('), source.indexOf('  async function requestChatCompletion('));
+  assert.match(assistantEdit, /msg\.reasoning = "";/);
+  assert.match(assistantEdit, /msg\.tools = \[\];/);
+  assert.match(assistantEdit, /confirmTrailingMessages\("编辑这条回复", trailing\)/);
+  assert.match(assistantEdit, /session\.messages = messages\.slice\(0, rowIndex \+ 1\)/);
+  assert.match(source, /deleteBtn\.addEventListener\("click", \(\) => deleteChatMessage\(row\)\)/);
+  assert.match(source, /clearBtn\.addEventListener\("click", clearCurrentChatSession\)/);
+  const template = fs.readFileSync(path.join(__dirname, 'templates/pages/grok-tools.html'), 'utf8');
+  assert.match(template, /id="grokChatClearBtn"/);
+});
+
+test('a JSON 401 from a Grok handler is not mistaken for an expired console session', () => {
+  const handler = source.slice(source.indexOf('  function handleUnauthorized('), source.indexOf('  function currentGrokToolTab('));
+  // Only the session middleware answers plain text; handler denials are JSON.
+  assert.match(handler, /contentType\.includes\("text\/plain"\)/);
+  assert.doesNotMatch(handler, /url\.includes\("\/api\/"\)/);
+  assert.match(handler, /window\.location\.href = "\/admin\/login\.html\?next="/);
+  // Admin tool inference now lives on the session-authenticated namespace.
+  assert.match(source, /return toolAuthState\.mode === "client" \? "\/v1" : "\/api\/grok\/tools\/v1"/);
 });

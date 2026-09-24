@@ -345,6 +345,7 @@
 .function-actions,
 .composer-actions,
 .sidebar-actions,
+.chat-title-actions,
 .voice-actions,
 .preview-actions,
 .cache-batch-actions,
@@ -494,6 +495,19 @@
 .action-btn:hover {
   color: var(--text-main);
   background: var(--grok-muted-bg);
+}
+
+.action-btn-danger:hover,
+.chat-clear-btn:hover {
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.chat-clear-btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
 }
 
 .send-btn {
@@ -2213,7 +2227,12 @@
   color: var(--text-main);
   text-decoration: none;
   min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
 }
+.admin-media-card a { color: inherit; text-decoration: none; }
+.admin-media-select { display: flex; align-items: center; gap: var(--space-2); font-size: .8rem; }
 .admin-media-card img {
   width: 100%;
   aspect-ratio: 1;
@@ -2223,6 +2242,9 @@
   background: var(--bg-inset);
 }
 .admin-media-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+.media-card-actions .btn { padding: .35rem .55rem; font-size: .78rem; }
+.admin-video-preview { width: 220px; max-width: 30vw; border-radius: var(--radius-sm); background: #000; }
 .media-gallery-pager { justify-content: center; }
 
 /* ---- Voice surfaces (visualizer / audio-root are laid out above) ---------------------------------- */

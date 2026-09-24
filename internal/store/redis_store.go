@@ -2042,6 +2042,22 @@ func (s *redisStore) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob
 	return jobs, nil
 }
 
+func (s *redisStore) DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("redis store not configured")
+	}
+	id, ownerHash = strings.TrimSpace(id), strings.TrimSpace(ownerHash)
+	if id == "" || ownerHash == "" {
+		return fmt.Errorf("video job id and owner are required")
+	}
+	key := s.storedVideoJobKey(id, ownerHash)
+	pipe := s.client.TxPipeline()
+	pipe.Del(ctx, key)
+	pipe.ZRem(ctx, s.storedVideoJobsIndexKey(), key)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func validateVideoJobLeaseArgs(id, ownerHash, holder string, ttl time.Duration) error {
 	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerHash) == "" || strings.TrimSpace(holder) == "" {
 		return fmt.Errorf("video job id, owner, and lease holder are required")

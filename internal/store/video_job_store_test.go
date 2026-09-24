@@ -38,6 +38,16 @@ func TestStoredVideoJobLifecycleAndIsolation(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].ID != record.ID {
 		t.Fatalf("ListStoredVideoJobs() = %#v, %v", listed, err)
 	}
+	if err := s.DeleteStoredVideoJob(ctx, record.ID, record.OwnerHash); err != nil {
+		t.Fatalf("DeleteStoredVideoJob() error = %v", err)
+	}
+	if _, err := s.GetStoredVideoJob(ctx, record.ID, record.OwnerHash); !errors.Is(err, ErrNoRows) {
+		t.Fatalf("deleted lookup error = %v, want ErrNoRows", err)
+	}
+	listed, err = s.ListStoredVideoJobs(ctx)
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("deleted index entries = %#v, %v", listed, err)
+	}
 }
 
 func TestStoredVideoJobExpires(t *testing.T) {

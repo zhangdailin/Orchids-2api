@@ -62,6 +62,7 @@ type codexModelEntry struct {
 	SupportsParallelToolCalls         bool                  `json:"supports_parallel_tool_calls"`
 	SupportsImageDetailOriginal       bool                  `json:"supports_image_detail_original"`
 	ContextWindow                     int                   `json:"context_window"`
+	MaxOutputTokens                   int                   `json:"max_output_tokens,omitempty"`
 	MaxContextWindow                  int                   `json:"max_context_window"`
 	EffectiveContextWindowPercent     int                   `json:"effective_context_window_percent"`
 	AutoCompactTokenLimit             *int                  `json:"auto_compact_token_limit"`
@@ -76,12 +77,13 @@ type codexModelCatalog struct {
 }
 
 var codexReasoningDescriptions = map[string]string{
-	"none":   "No reasoning",
-	"low":    "Fast responses with lighter reasoning",
-	"medium": "Balances speed and reasoning depth for everyday tasks",
-	"high":   "Greater reasoning depth for complex problems",
-	"xhigh":  "Extra high reasoning depth for complex problems",
-	"max":    "Maximum reasoning depth for the hardest problems",
+	"none":    "No reasoning",
+	"minimal": "Fastest responses with minimal reasoning",
+	"low":     "Fast responses with lighter reasoning",
+	"medium":  "Balances speed and reasoning depth for everyday tasks",
+	"high":    "Greater reasoning depth for complex problems",
+	"xhigh":   "Extra high reasoning depth for complex problems",
+	"max":     "Maximum reasoning depth for the hardest problems",
 }
 
 type codexModelMetadata struct {
@@ -121,7 +123,7 @@ func codexReasoningLevelsFor(publicID string) []string {
 	return modelpolicy.SupportedReasoningEfforts(publicID)
 }
 
-// The default level prefers medium, then the first supported level.
+// The static fallback prefers medium, then the first supported level.
 func codexDefaultReasoningLevel(levels []string) string {
 	for _, level := range levels {
 		if level == "medium" {
@@ -132,6 +134,35 @@ func codexDefaultReasoningLevel(levels []string) string {
 		return levels[0]
 	}
 	return "none"
+}
+
+func codexObservedReasoning(item PublicModelResponse) ([]string, string, bool) {
+	if item.SupportsReasoningEffort == nil && len(item.ReasoningEfforts) == 0 && strings.TrimSpace(item.DefaultReasoningEffort) == "" {
+		return nil, "", false
+	}
+
+	seen := make(map[string]struct{}, len(item.ReasoningEfforts))
+	levels := make([]string, 0, len(item.ReasoningEfforts))
+	for _, raw := range item.ReasoningEfforts {
+		level := strings.ToLower(strings.TrimSpace(raw))
+		if _, known := codexReasoningDescriptions[level]; !known {
+			continue
+		}
+		if _, duplicate := seen[level]; duplicate {
+			continue
+		}
+		seen[level] = struct{}{}
+		levels = append(levels, level)
+	}
+
+	defaultLevel := strings.ToLower(strings.TrimSpace(item.DefaultReasoningEffort))
+	if _, supported := seen[defaultLevel]; !supported {
+		defaultLevel = ""
+	}
+	if defaultLevel == "" {
+		defaultLevel = codexDefaultReasoningLevel(levels)
+	}
+	return levels, defaultLevel, true
 }
 
 func codexReasoningLevelEntries(levels []string) []codexReasoningLevel {
@@ -268,12 +299,22 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 		contextWindow := metadata.contextWindow
 		if item.ContextLength > 0 {
 			contextWindow = item.ContextLength
+		} else if item.MaxInputTokens > 0 {
+			contextWindow = item.MaxInputTokens
 		}
-		levels := entry.levels
-		if len(levels) == 0 {
-			levels = codexReasoningLevelsFor(name)
-		} else {
-			sortEffortLevels(levels)
+		maxContextWindow := contextWindow
+		if item.MaxOutputTokens > 0 {
+			maxContextWindow += item.MaxOutputTokens
+		}
+		levels, defaultReasoningLevel, observedReasoning := codexObservedReasoning(item)
+		if !observedReasoning {
+			levels = entry.levels
+			if len(levels) == 0 {
+				levels = codexReasoningLevelsFor(name)
+			} else {
+				sortEffortLevels(levels)
+			}
+			defaultReasoningLevel = codexDefaultReasoningLevel(levels)
 		}
 		modalities := []string{"text"}
 		if metadata.imageInput {
@@ -302,7 +343,7 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 			Slug:                              name,
 			DisplayName:                       codexDisplayName(slug),
 			Description:                       metadata.description,
-			DefaultReasoningLevel:             codexDefaultReasoningLevel(levels),
+			DefaultReasoningLevel:             defaultReasoningLevel,
 			SupportedReasoningLevels:          codexReasoningLevelEntries(levels),
 			ShellType:                         "shell_command",
 			Visibility:                        codexVisibilityFor(item),
@@ -323,7 +364,8 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 			SupportsParallelToolCalls:         toolsSupported,
 			SupportsImageDetailOriginal:       false,
 			ContextWindow:                     contextWindow,
-			MaxContextWindow:                  contextWindow,
+			MaxOutputTokens:                   item.MaxOutputTokens,
+			MaxContextWindow:                  maxContextWindow,
 			EffectiveContextWindowPercent:     95,
 			ExperimentalSupportedTools:        []string{},
 			InputModalities:                   modalities,

@@ -676,6 +676,7 @@ type videoJobStore interface {
 	SaveStoredVideoJob(ctx context.Context, job *StoredVideoJob, ttl time.Duration) error
 	GetStoredVideoJob(ctx context.Context, id, ownerHash string) (*StoredVideoJob, error)
 	ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, error)
+	DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error
 	AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error)
 	RefreshVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error)
 	ReleaseVideoJobLease(ctx context.Context, id, ownerHash, holder string) (bool, error)
@@ -1242,6 +1243,13 @@ func (s *Store) ListStoredVideoJobs(ctx context.Context) ([]*StoredVideoJob, err
 		return nil, fmt.Errorf("video job store not configured")
 	}
 	return s.videoJobs.ListStoredVideoJobs(ctx)
+}
+
+func (s *Store) DeleteStoredVideoJob(ctx context.Context, id, ownerHash string) error {
+	if s == nil || s.videoJobs == nil {
+		return fmt.Errorf("video job store not configured")
+	}
+	return s.videoJobs.DeleteStoredVideoJob(ctx, id, ownerHash)
 }
 
 func (s *Store) AcquireVideoJobLease(ctx context.Context, id, ownerHash, holder string, ttl time.Duration) (bool, error) {

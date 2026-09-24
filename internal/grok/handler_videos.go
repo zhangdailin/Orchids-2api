@@ -767,7 +767,7 @@ func (h *Handler) HandleVideosContent(w http.ResponseWriter, r *http.Request) {
 
 func videoIDFromPath(path string) string {
 	path = strings.TrimSpace(path)
-	for _, prefix := range []string{"/grok/v1/videos/", "/v1/videos/"} {
+	for _, prefix := range []string{"/api/grok/tools/v1/videos/", "/grok/v1/videos/", "/v1/videos/"} {
 		if strings.HasPrefix(path, prefix) {
 			rest := strings.Trim(strings.TrimPrefix(path, prefix), "/")
 			rest = strings.TrimPrefix(rest, "generations/")

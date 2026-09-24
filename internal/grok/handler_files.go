@@ -24,6 +24,8 @@ func sanitizeCachedFilename(raw string) string {
 func parseFilesPath(rawPath string) (mediaType string, fileName string, ok bool) {
 	prefix := ""
 	switch {
+	case strings.HasPrefix(rawPath, "/api/grok/tools/v1/files/"):
+		prefix = "/api/grok/tools/v1/files/"
 	case strings.HasPrefix(rawPath, "/grok/v1/files/"):
 		prefix = "/grok/v1/files/"
 	case strings.HasPrefix(rawPath, "/v1/files/"):

@@ -82,7 +82,7 @@
       syncCustomVoice();
       if (!model || el('audioOperation').value !== 'tts') return;
       let payload, lastError;
-      const prefix = window.GrokToolRequest?.prefix?.() || '/grok/v1';
+      const prefix = window.GrokToolRequest?.prefix?.() || '/api/grok/tools/v1';
       for (const endpoint of [`${prefix}/tts/voices`, '/v1/tts/voices']) {
         try {
           const response = await fetch(`${endpoint}?model=${encodeURIComponent(model)}`, { headers: window.GrokToolRequest?.headers?.({ Accept: 'application/json' }) || { Accept: 'application/json' } });
@@ -207,7 +207,7 @@
           if (!file) throw new Error('请选择音频文件');
           body = new FormData(); body.set('model', model); body.set('file', file); body.set('response_format', 'verbose_json'); if (language) body.set('language', language);
         }
-        const prefix = window.GrokToolRequest?.prefix?.() || '/grok/v1';
+        const prefix = window.GrokToolRequest?.prefix?.() || '/api/grok/tools/v1';
         const requestHeaders = window.GrokToolRequest?.headers?.(headers || {}) || headers;
         const response = await fetch(`${prefix}/audio/${tts ? 'speech' : 'transcriptions'}`, { method: 'POST', headers: requestHeaders, body });
         if (!response.ok) throw new Error(await responseError(response));
@@ -229,55 +229,78 @@
     });
   }
 
-  const mediaHistoryState = { imagePage: 1, videoPage: 1, pageSize: 12 };
+  const mediaHistoryState = { imagePage: 1, videoPage: 1, imagePageSize: 12, videoPageSize: 12, selectedImages: new Set() };
 
   function escapeMediaHTML(value) {
     return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
   }
-
-  function mediaPages(total) { return Math.max(1, Math.ceil(Number(total || 0) / mediaHistoryState.pageSize)); }
-
-  async function mediaJSON(url) {
-    const response = await fetch(url, { credentials: 'same-origin' });
+  function mediaPages(total, size) { return Math.max(1, Math.ceil(Number(total || 0) / size)); }
+  function formatMediaBytes(value) { const bytes = Number(value || 0); return bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1048576).toFixed(1)} MB`; }
+  function debounceMedia(fn, wait = 300) { let timer; return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), wait); }; }
+  async function mediaJSON(url, options = {}) {
+    const response = await fetch(url, { credentials: 'same-origin', ...options });
     if (!response.ok) throw new Error(await response.text());
     return response.json();
   }
+  async function mediaPost(url, body) { return mediaJSON(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+
+  async function deleteAdminImages(names) {
+    if (!names.length || !window.confirm(`确认删除 ${names.length} 张图片？`)) return;
+    await mediaPost('/api/admin/v1/media/images/delete', { names }); names.forEach((name) => mediaHistoryState.selectedImages.delete(name)); await loadAdminImages();
+  }
+  async function deleteAdminVideo(id) { if (!window.confirm(`确认删除终态任务 ${id}？`)) return; await mediaPost('/api/admin/v1/media/videos/delete', { id }); await loadAdminVideos(); }
 
   async function loadAdminImages() {
     const host = document.getElementById('mediaImageGallery'); if (!host) return;
     const query = String(document.getElementById('mediaImageSearch')?.value || '').trim();
-    const params = new URLSearchParams({ page: String(mediaHistoryState.imagePage), page_size: String(mediaHistoryState.pageSize) }); if (query) params.set('search', query);
+    const sort = String(document.getElementById('mediaImageSort')?.value || 'updated:desc').split(':');
+    const params = new URLSearchParams({ page: String(mediaHistoryState.imagePage), page_size: String(mediaHistoryState.imagePageSize), sort: sort[0], order: sort[1] }); if (query) params.set('search', query);
     try {
       const [data, stats] = await Promise.all([mediaJSON(`/api/admin/v1/media/images?${params}`), mediaJSON('/api/admin/v1/media/images/stats')]);
       const items = Array.isArray(data.items) ? data.items : [];
-      host.innerHTML = items.length ? items.map((item) => `<a class="admin-media-card" href="${escapeMediaHTML(item.view_url || item.url)}" target="_blank" rel="noopener"><img src="${escapeMediaHTML(item.preview_url || item.view_url || item.url)}" loading="lazy" alt="${escapeMediaHTML(item.name)}"><span>${escapeMediaHTML(item.name)}</span></a>`).join('') : '<div class="table-empty-cell">暂无图片</div>';
-      const pages = mediaPages(data.total); mediaHistoryState.imagePage = Math.min(mediaHistoryState.imagePage, pages);
-      document.getElementById('mediaImagePage').textContent = `${mediaHistoryState.imagePage} / ${pages}`;
-      document.getElementById('mediaImagePrevBtn').disabled = mediaHistoryState.imagePage <= 1; document.getElementById('mediaImageNextBtn').disabled = mediaHistoryState.imagePage >= pages;
+      const pages = mediaPages(data.total, mediaHistoryState.imagePageSize);
+      // Deleting the last card on the last page leaves the requested page out of
+      // range: the server answers an empty list. Clamping only the label would
+      // show "2 / 2" above an empty grid, so fetch the surviving page instead.
+      if (items.length === 0 && data.total > 0 && mediaHistoryState.imagePage > pages) {
+        mediaHistoryState.imagePage = pages;
+        return loadAdminImages();
+      }
+      host.innerHTML = items.length ? items.map((item) => `<article class="admin-media-card"><label class="admin-media-select"><input type="checkbox" data-image-select="${escapeMediaHTML(item.name)}" ${mediaHistoryState.selectedImages.has(item.name) ? 'checked' : ''}> 选择</label><a href="${escapeMediaHTML(item.view_url)}" target="_blank" rel="noopener"><img src="${escapeMediaHTML(item.preview_url)}" loading="lazy" alt="${escapeMediaHTML(item.name)}"></a><strong title="${escapeMediaHTML(item.name)}">${escapeMediaHTML(item.name)}</strong><span class="meta-text">${formatMediaBytes(item.size_bytes)} · ${new Date(Number(item.updated_at)).toLocaleString()}</span><div class="media-card-actions"><a class="btn btn-outline" href="${escapeMediaHTML(item.view_url)}?download=1">下载</a><button class="btn btn-danger-outline" type="button" data-image-delete="${escapeMediaHTML(item.name)}">删除</button></div></article>`).join('') : '<div class="table-empty-cell">暂无图片</div>';
+      mediaHistoryState.imagePage = Math.min(mediaHistoryState.imagePage, pages);
+      document.getElementById('mediaImagePage').textContent = `${mediaHistoryState.imagePage} / ${pages}`; document.getElementById('mediaImagePrevBtn').disabled = mediaHistoryState.imagePage <= 1; document.getElementById('mediaImageNextBtn').disabled = mediaHistoryState.imagePage >= pages;
       document.getElementById('mediaImageStats').textContent = `${stats.count || 0} 张 · ${Number(stats.size_mb || 0).toFixed(2)} MB`;
     } catch (error) { host.innerHTML = `<div class="table-empty-cell">加载失败：${escapeMediaHTML(error.message)}</div>`; }
   }
 
   async function loadAdminVideos() {
     const body = document.getElementById('mediaVideoHistory'); if (!body) return;
-    const params = new URLSearchParams({ page: String(mediaHistoryState.videoPage), page_size: String(mediaHistoryState.pageSize) });
+    const sort = String(document.getElementById('mediaVideoSort')?.value || 'updated:desc').split(':');
+    const params = new URLSearchParams({ page: String(mediaHistoryState.videoPage), page_size: String(mediaHistoryState.videoPageSize), sort: sort[0], order: sort[1] });
     const search = String(document.getElementById('mediaVideoSearch')?.value || '').trim(), status = String(document.getElementById('mediaVideoStatus')?.value || '').trim(); if (search) params.set('search', search); if (status) params.set('status', status);
     try {
       const [data, stats] = await Promise.all([mediaJSON(`/api/admin/v1/media/videos?${params}`), mediaJSON('/api/admin/v1/media/videos/stats')]); const items = Array.isArray(data.items) ? data.items : [];
-      body.innerHTML = items.length ? items.map((item) => `<tr><td><code>${escapeMediaHTML(item.id)}</code></td><td><span class="tag">${escapeMediaHTML(item.status)}</span></td><td><strong>${escapeMediaHTML(item.model || '-')}</strong><br><span class="meta-text">${escapeMediaHTML(item.prompt || item.error_message || '-')}</span></td><td>${Number(item.progress || 0)}%</td><td>${item.created_at ? new Date(Number(item.created_at) * 1000).toLocaleString() : '-'}</td></tr>`).join('') : '<tr><td colspan="5" class="table-empty-cell">暂无视频任务</td></tr>';
-      const pages = mediaPages(data.total); mediaHistoryState.videoPage = Math.min(mediaHistoryState.videoPage, pages); document.getElementById('mediaVideoPage').textContent = `${mediaHistoryState.videoPage} / ${pages}`; document.getElementById('mediaVideoPrevBtn').disabled = mediaHistoryState.videoPage <= 1; document.getElementById('mediaVideoNextBtn').disabled = mediaHistoryState.videoPage >= pages;
+      const pages = mediaPages(data.total, mediaHistoryState.videoPageSize);
+      // Same clamp-and-refetch rule as the image gallery: an out-of-range page
+      // answers empty, which must not be rendered as "no tasks".
+      if (items.length === 0 && data.total > 0 && mediaHistoryState.videoPage > pages) {
+        mediaHistoryState.videoPage = pages;
+        return loadAdminVideos();
+      }
+      body.innerHTML = items.length ? items.map((item) => { const terminal = ['completed', 'failed', 'cancelled', 'canceled'].includes(String(item.status).toLowerCase()); const media = item.content_url ? `<video class="admin-video-preview" src="${escapeMediaHTML(item.content_url)}" preload="metadata" controls></video><div class="media-card-actions"><a class="btn btn-outline" target="_blank" rel="noopener" href="${escapeMediaHTML(item.content_url)}">打开</a><a class="btn btn-outline" href="${escapeMediaHTML(item.download_url)}">下载</a></div>` : '-'; return `<tr><td><code>${escapeMediaHTML(item.id)}</code><br><span class="meta-text">${escapeMediaHTML(item.provider || '-')} · account ${escapeMediaHTML(item.account_id || '-')}</span></td><td><span class="tag">${escapeMediaHTML(item.status)}</span></td><td><strong>${escapeMediaHTML(item.model || '-')}</strong><br><span class="meta-text">${escapeMediaHTML(item.prompt || item.error_message || '-')}</span><br><span class="meta-text">${escapeMediaHTML(item.size || '-')} · ${escapeMediaHTML(item.quality || '-')} · ${Number(item.seconds || 0)}s</span></td><td>${media}</td><td>${Number(item.progress || 0)}%<br><span class="meta-text">${item.created_at ? new Date(Number(item.created_at) * 1000).toLocaleString() : '-'}</span></td><td>${terminal ? `<button class="btn btn-danger-outline" type="button" data-video-delete="${escapeMediaHTML(item.id)}">删除</button>` : '-'}</td></tr>`; }).join('') : '<tr><td colspan="6" class="table-empty-cell">暂无视频任务</td></tr>';
+      mediaHistoryState.videoPage = Math.min(mediaHistoryState.videoPage, pages); document.getElementById('mediaVideoPage').textContent = `${mediaHistoryState.videoPage} / ${pages}`; document.getElementById('mediaVideoPrevBtn').disabled = mediaHistoryState.videoPage <= 1; document.getElementById('mediaVideoNextBtn').disabled = mediaHistoryState.videoPage >= pages;
       const statuses = stats.statuses || {}; document.getElementById('mediaVideoStats').textContent = `${stats.total || 0} 个任务` + Object.entries(statuses).map(([key, value]) => ` · ${key}: ${value}`).join('');
-    } catch (error) { body.innerHTML = `<tr><td colspan="5" class="table-empty-cell">加载失败：${escapeMediaHTML(error.message)}</td></tr>`; }
+    } catch (error) { body.innerHTML = `<tr><td colspan="6" class="table-empty-cell">加载失败：${escapeMediaHTML(error.message)}</td></tr>`; }
   }
 
   function initAdminMediaHistory() {
-    if (!document.getElementById('mediaImageGallery')) return;
-    document.getElementById('mediaImageRefreshBtn')?.addEventListener('click', () => { mediaHistoryState.imagePage = 1; loadAdminImages(); });
-    document.getElementById('mediaVideoRefreshBtn')?.addEventListener('click', () => { mediaHistoryState.videoPage = 1; loadAdminVideos(); });
-    document.getElementById('mediaVideoStatus')?.addEventListener('change', () => { mediaHistoryState.videoPage = 1; loadAdminVideos(); });
-    document.getElementById('mediaImagePrevBtn')?.addEventListener('click', () => { mediaHistoryState.imagePage--; loadAdminImages(); }); document.getElementById('mediaImageNextBtn')?.addEventListener('click', () => { mediaHistoryState.imagePage++; loadAdminImages(); });
-    document.getElementById('mediaVideoPrevBtn')?.addEventListener('click', () => { mediaHistoryState.videoPage--; loadAdminVideos(); }); document.getElementById('mediaVideoNextBtn')?.addEventListener('click', () => { mediaHistoryState.videoPage++; loadAdminVideos(); });
-    loadAdminImages(); loadAdminVideos();
+    const gallery = document.getElementById('mediaImageGallery'); if (!gallery) return;
+    document.getElementById('mediaImageRefreshBtn')?.addEventListener('click', () => { mediaHistoryState.imagePage = 1; loadAdminImages(); }); document.getElementById('mediaVideoRefreshBtn')?.addEventListener('click', () => { mediaHistoryState.videoPage = 1; loadAdminVideos(); });
+    document.getElementById('mediaImageSearch')?.addEventListener('input', debounceMedia(() => { mediaHistoryState.imagePage = 1; loadAdminImages(); })); document.getElementById('mediaVideoSearch')?.addEventListener('input', debounceMedia(() => { mediaHistoryState.videoPage = 1; loadAdminVideos(); }));
+    ['mediaVideoStatus', 'mediaVideoSort'].forEach((id) => document.getElementById(id)?.addEventListener('change', () => { mediaHistoryState.videoPage = 1; loadAdminVideos(); })); document.getElementById('mediaImageSort')?.addEventListener('change', () => { mediaHistoryState.imagePage = 1; loadAdminImages(); });
+    document.getElementById('mediaImagePageSize')?.addEventListener('change', (event) => { mediaHistoryState.imagePageSize = Number(event.target.value); mediaHistoryState.imagePage = 1; loadAdminImages(); }); document.getElementById('mediaVideoPageSize')?.addEventListener('change', (event) => { mediaHistoryState.videoPageSize = Number(event.target.value); mediaHistoryState.videoPage = 1; loadAdminVideos(); });
+    document.getElementById('mediaImageDeleteSelectedBtn')?.addEventListener('click', () => deleteAdminImages([...mediaHistoryState.selectedImages])); gallery.addEventListener('change', (event) => { const name = event.target?.dataset?.imageSelect; if (name) event.target.checked ? mediaHistoryState.selectedImages.add(name) : mediaHistoryState.selectedImages.delete(name); }); gallery.addEventListener('click', (event) => { const name = event.target?.dataset?.imageDelete; if (name) deleteAdminImages([name]); }); document.getElementById('mediaVideoHistory')?.addEventListener('click', (event) => { const id = event.target?.dataset?.videoDelete; if (id) deleteAdminVideo(id); });
+    document.getElementById('mediaImagePrevBtn')?.addEventListener('click', () => { mediaHistoryState.imagePage--; loadAdminImages(); }); document.getElementById('mediaImageNextBtn')?.addEventListener('click', () => { mediaHistoryState.imagePage++; loadAdminImages(); }); document.getElementById('mediaVideoPrevBtn')?.addEventListener('click', () => { mediaHistoryState.videoPage--; loadAdminVideos(); }); document.getElementById('mediaVideoNextBtn')?.addEventListener('click', () => { mediaHistoryState.videoPage++; loadAdminVideos(); }); loadAdminImages(); loadAdminVideos();
   }
 
   if (typeof window !== 'undefined') window.GrokMediaTools = { normalizeVoices, jsonAudioSource, formatSeconds, loadAdminImages, loadAdminVideos };

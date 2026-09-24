@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260918-phonefix1">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260924-grok-complete1">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260924-tools-restore2">
 </head>
 
 <body>
@@ -99,7 +99,10 @@
                 <p class="chat-subtitle">选择模型，直接开始一段 Grok 对话</p>
                 </div>
               </div>
-              <span id="grokChatStatus" class="status-text">就绪</span>
+              <div class="chat-title-actions">
+                <button id="grokChatClearBtn" class="btn btn-outline chat-clear-btn" type="button" title="清空当前会话">清空当前会话</button>
+                <span id="grokChatStatus" class="status-text">就绪</span>
+              </div>
             </div>
             <div id="grokChatLog" class="chat-thread">
               <div id="grokChatEmpty" class="chat-empty">输入一条消息开始对话。</div>
@@ -679,7 +682,7 @@
         <div class="grok-panel">
           <div class="media-gallery-heading">
             <div><h3>生成图片</h3><p>浏览本地生成结果；输入素材不会显示。</p></div>
-            <div class="media-gallery-controls"><input id="mediaImageSearch" class="form-input" type="search" placeholder="搜索文件名" /><button class="btn btn-outline" id="mediaImageRefreshBtn" type="button">刷新</button></div>
+            <div class="media-gallery-controls"><input id="mediaImageSearch" class="form-input" type="search" placeholder="搜索文件名" /><select id="mediaImageSort" class="form-input"><option value="updated:desc">最新</option><option value="updated:asc">最早</option><option value="name:asc">名称 A-Z</option><option value="size:desc">大小降序</option></select><select id="mediaImagePageSize" class="form-input"><option value="12">12 / 页</option><option value="24">24 / 页</option><option value="48">48 / 页</option></select><button class="btn btn-danger-outline" id="mediaImageDeleteSelectedBtn" type="button">删除选中</button><button class="btn btn-outline" id="mediaImageRefreshBtn" type="button">刷新</button></div>
           </div>
           <div id="mediaImageStats" class="meta-text">正在加载图片统计…</div>
           <div id="mediaImageGallery" class="admin-media-gallery"><div class="table-empty-cell">暂无图片</div></div>
@@ -689,10 +692,10 @@
         <div class="grok-panel">
           <div class="media-gallery-heading">
             <div><h3>视频任务历史</h3><p>来自持久化视频任务存储。</p></div>
-            <div class="media-gallery-controls"><input id="mediaVideoSearch" class="form-input" type="search" placeholder="搜索任务、Prompt 或模型" /><select id="mediaVideoStatus" class="form-input"><option value="">全部状态</option><option value="queued">queued</option><option value="in_progress">in_progress</option><option value="completed">completed</option><option value="failed">failed</option></select><button class="btn btn-outline" id="mediaVideoRefreshBtn" type="button">刷新</button></div>
+            <div class="media-gallery-controls"><input id="mediaVideoSearch" class="form-input" type="search" placeholder="搜索任务、Prompt 或模型" /><select id="mediaVideoStatus" class="form-input"><option value="">全部状态</option><option value="queued">queued</option><option value="in_progress">in_progress</option><option value="completed">completed</option><option value="failed">failed</option></select><select id="mediaVideoSort" class="form-input"><option value="updated:desc">最近更新</option><option value="updated:asc">最早更新</option><option value="created:desc">创建时间</option><option value="model:asc">模型</option><option value="status:asc">状态</option></select><select id="mediaVideoPageSize" class="form-input"><option value="12">12 / 页</option><option value="24">24 / 页</option><option value="48">48 / 页</option></select><button class="btn btn-outline" id="mediaVideoRefreshBtn" type="button">刷新</button></div>
           </div>
           <div id="mediaVideoStats" class="meta-text">正在加载任务统计…</div>
-          <div class="cache-list"><table><thead><tr><th>任务</th><th>状态</th><th>模型 / Prompt</th><th>进度</th><th>创建时间</th></tr></thead><tbody id="mediaVideoHistory"><tr><td colspan="5" class="table-empty-cell">暂无视频任务</td></tr></tbody></table></div>
+          <div class="cache-list"><table><thead><tr><th>任务</th><th>状态</th><th>模型 / Prompt / 元数据</th><th>预览 / 文件</th><th>进度 / 创建时间</th><th>操作</th></tr></thead><tbody id="mediaVideoHistory"><tr><td colspan="6" class="table-empty-cell">暂无视频任务</td></tr></tbody></table></div>
           <div class="media-gallery-pager"><button class="btn btn-outline" id="mediaVideoPrevBtn" type="button">上一页</button><span id="mediaVideoPage">1 / 1</span><button class="btn btn-outline" id="mediaVideoNextBtn" type="button">下一页</button></div>
         </div>
 
@@ -741,9 +744,9 @@
 
   <script src="{{.AdminPath}}/js/common.js?v=20260917-clean1"></script>
   <script src="{{.AdminPath}}/js/provider-registry.js?v=20260924-backend-registry1"></script>
-  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260924-grok-complete1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260924-grok-complete1"></script>
-  <script src="{{.AdminPath}}/js/grok-media-tools.js?v=20260924-grok-complete1"></script>
+  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260924-tools-restore2"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260924-tools-restore2"></script>
+  <script src="{{.AdminPath}}/js/grok-media-tools.js?v=20260924-tools-restore2"></script>
 </body>
 
 </html>

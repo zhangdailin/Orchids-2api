@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/goccy/go-json"
+	"orchids-api/internal/middleware"
 )
 
 func adminMediaTestHandler(t *testing.T) *Handler {
@@ -139,6 +140,63 @@ func TestAdminMediaInputImportBlocksPrivateURLBeforeFetch(t *testing.T) {
 func mustJSON(value string) []byte {
 	data, _ := json.Marshal(value)
 	return data
+}
+
+func TestClientMediaInputImportUsesKeyOwnerAndPlainEnvelope(t *testing.T) {
+	h := adminMediaTestHandler(t)
+	oldFetcher := adminMediaInputFetcher
+	t.Cleanup(func() { adminMediaInputFetcher = oldFetcher })
+	adminMediaInputFetcher = func(context.Context, string) ([]byte, string, error) {
+		return testPNG(t), "image/png", nil
+	}
+	validator := func(context.Context, string) (*middleware.APIKeyPrincipal, error) {
+		return &middleware.APIKeyPrincipal{ID: 73}, nil
+	}
+	wrapped := middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, validator, h.HandleMediaInputImport)
+	req := httptest.NewRequest(http.MethodPost, "/v1/media/inputs/import", strings.NewReader(`{"url":"https://example.com/input.png"}`))
+	req.Header.Set("Authorization", "Bearer client-key")
+	rec := httptest.NewRecorder()
+	wrapped(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		FileID string `json:"file_id"`
+		Kind   string `json:"kind"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !validMediaInputID(response.FileID) || response.Kind != "image" || strings.Contains(rec.Body.String(), `"data"`) {
+		t.Fatalf("unexpected response: %s", rec.Body.String())
+	}
+
+	ownerReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	ownerReq.Header.Set("Authorization", "Bearer client-key")
+	ownerRec := httptest.NewRecorder()
+	var owner string
+	middleware.APIKeyAuthWithRequest(func(*http.Request) bool { return true }, validator, func(_ http.ResponseWriter, r *http.Request) {
+		owner = videoRequestOwner(r)
+	})(ownerRec, ownerReq)
+	if _, _, err := h.resolveMediaInputDataURL(context.Background(), response.FileID, owner, "image"); err != nil {
+		t.Fatalf("owner cannot resolve imported file: %v", err)
+	}
+	if _, _, err := h.resolveMediaInputDataURL(context.Background(), response.FileID, "another-owner", "image"); err == nil {
+		t.Fatal("another owner unexpectedly resolved imported file")
+	}
+}
+
+func TestClientMediaInputImportBlocksPrivateURL(t *testing.T) {
+	h := adminMediaTestHandler(t)
+	oldFetcher := adminMediaInputFetcher
+	t.Cleanup(func() { adminMediaInputFetcher = oldFetcher })
+	adminMediaInputFetcher = fetchAdminMediaInput
+	req := httptest.NewRequest(http.MethodPost, "/v1/media/inputs/import", strings.NewReader(`{"url":"http://127.0.0.1/private"}`))
+	rec := httptest.NewRecorder()
+	h.HandleMediaInputImport(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "media_url_blocked") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestAdminCacheProtectsMediaInputFiles(t *testing.T) {

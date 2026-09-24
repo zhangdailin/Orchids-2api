@@ -70,6 +70,28 @@ test('cache media gallery uses authenticated admin history endpoints', () => {
   assert.match(source, /\/api\/admin\/v1\/media\/images\/stats/);
   assert.match(source, /\/api\/admin\/v1\/media\/videos\?/);
   assert.match(source, /\/api\/admin\/v1\/media\/videos\/stats/);
+  assert.match(source, /\/api\/admin\/v1\/media\/images\/delete/);
+  assert.match(source, /\/api\/admin\/v1\/media\/videos\/delete/);
+  assert.match(source, /download_url/);
+  assert.match(source, /debounceMedia/);
+  assert.match(template, /id="mediaImagePageSize"/);
+  assert.match(template, /id="mediaVideoPageSize"/);
+  assert.match(template, /id="mediaImageSort"/);
+  assert.match(template, /id="mediaVideoSort"/);
   assert.match(source, /credentials:\s*'same-origin'/);
   assert.match(styles, /\.admin-media-gallery\s*\{/);
+});
+
+test('an out-of-range gallery page refetches the surviving page instead of rendering empty', () => {
+  // Deleting the last card on the last page must not leave the pager saying
+  // "2 / 2" above an empty grid.
+  const imageLoader = source.slice(source.indexOf('async function loadAdminImages('), source.indexOf('async function loadAdminVideos('));
+  const videoLoader = source.slice(source.indexOf('async function loadAdminVideos('), source.indexOf('function initAdminMediaHistory('));
+  assert.match(imageLoader, /data\.total > 0 && mediaHistoryState\.imagePage > pages/);
+  assert.match(imageLoader, /return loadAdminImages\(\)/);
+  assert.match(videoLoader, /data\.total > 0 && mediaHistoryState\.videoPage > pages/);
+  assert.match(videoLoader, /return loadAdminVideos\(\)/);
+  // Both loaders must also honour the selectable page size.
+  assert.match(imageLoader, /page_size/);
+  assert.match(videoLoader, /page_size/);
 });

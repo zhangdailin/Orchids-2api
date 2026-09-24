@@ -214,6 +214,7 @@ func registerRoutes(
 	})))
 	registerWithPrefixes(mux, allPrefixes, "/files/", inferenceAuth(grokHandler.HandleFiles))
 	registerWithPrefixes(mux, allPrefixes, "/media/inputs", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputs)))
+	registerWithPrefixes(mux, allPrefixes, "/media/inputs/import", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputImport)))
 	registerWithPrefixes(mux, allPrefixes, "/media/inputs/", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputResource)))
 	// One-time, unguessable callback used by the xAI video fallback. The token
 	// is the authorization boundary, so this endpoint must not require a client key.
@@ -246,6 +247,53 @@ func registerRoutes(
 			return current.AdminPass, current.AdminToken
 		}, h)
 	}
+
+	// Grok tools inference is an authenticated management-plane projection of the
+	// native Grok handlers. It deliberately bypasses inferenceAuth: an operator's
+	// session is the authorization boundary, so client-key billing, model
+	// allowlists and key concurrency must not apply. Keep this prefix explicit so
+	// no generic /v1 surface is accidentally opened.
+	//
+	// Stateful resources (responses, video jobs, media inputs) are owned by the
+	// request fingerprint. Without a key the fingerprint is empty, and every
+	// keyless caller collapsed into the shared "anonymous" owner. Stamping a
+	// dedicated admin scope keeps the operator namespace separate from the
+	// keyless inference plane while remaining stable across admin browsers.
+	const adminToolsOwner = "admin-tools"
+	withAdminToolsOwner := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			next(w, r.WithContext(middleware.WithAPIKeyFingerprint(r.Context(), adminToolsOwner)))
+		}
+	}
+	toolPrefixes := []string{"/api/grok/tools/v1"}
+	toolRoute := func(path string, handler http.HandlerFunc) {
+		registerWithPrefixes(mux, toolPrefixes, path, sessionAuth(withAdminToolsOwner(handler)))
+	}
+	toolRoute("/models", limiter.Limit(h.HandleModels))
+	toolRoute("/models/", limiter.Limit(h.HandleModelByID))
+	toolRoute("/responses", limiter.Limit(grokHandler.HandleResponses))
+	toolRoute("/responses/compact", limiter.Limit(grokHandler.HandleResponsesCompact))
+	toolRoute("/responses/", limiter.Limit(grokHandler.HandleResponseResource))
+	toolRoute("/images/generations", limiter.Limit(grokHandler.HandleImagesGenerations))
+	toolRoute("/images/edits", limiter.Limit(grokHandler.HandleImagesEdits))
+	toolRoute("/videos", limiter.Limit(grokHandler.HandleVideosCreate))
+	toolRoute("/videos/generations", limiter.Limit(grokHandler.HandleConsoleVideosGenerate))
+	toolRoute("/videos/edits", limiter.Limit(grokHandler.HandleConsoleVideosEdit))
+	toolRoute("/videos/extensions", limiter.Limit(grokHandler.HandleConsoleVideosExtend))
+	toolRoute("/videos/", limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/content") {
+			grokHandler.HandleVideosContent(w, r)
+			return
+		}
+		grokHandler.HandleVideosRetrieve(w, r)
+	}))
+	toolRoute("/files/", limiter.Limit(grokHandler.HandleFiles))
+	toolRoute("/tts", limiter.Limit(grokHandler.HandleTTS))
+	toolRoute("/tts/voices", limiter.Limit(grokHandler.HandleTTSVoices))
+	toolRoute("/tts/voices/", limiter.Limit(grokHandler.HandleTTSVoices))
+	toolRoute("/audio/speech", limiter.Limit(grokHandler.HandleAudioSpeech))
+	toolRoute("/audio/transcriptions", limiter.Limit(grokHandler.HandleAudioTranscriptions))
+	toolRoute("/realtime", limiter.LimitLongLived(grokHandler.HandleRealtime))
 
 	// Admin routes under /api/* only (no dual prefix)
 	mux.HandleFunc("/api/providers", sessionAuth(channel.HandleRegistry))
@@ -337,8 +385,12 @@ func registerRoutes(
 		{"/cache/item/delete", grokHandler.HandleAdminCacheItemDelete},
 		{"/media/images", grokHandler.HandleAdminMediaImages},
 		{"/media/images/stats", grokHandler.HandleAdminMediaImageStats},
+		{"/media/images/delete", grokHandler.HandleAdminMediaImagesDelete},
+		{"/media/images/content/", grokHandler.HandleAdminMediaImageContent},
 		{"/media/videos", grokHandler.HandleAdminMediaVideos},
 		{"/media/videos/stats", grokHandler.HandleAdminMediaVideoStats},
+		{"/media/videos/delete", grokHandler.HandleAdminMediaVideoDelete},
+		{"/media/videos/content/", grokHandler.HandleAdminMediaVideoContent},
 		{"/media/inputs/upload", grokHandler.HandleAdminMediaInputs},
 		{"/media/inputs/import", grokHandler.HandleAdminMediaInputImport},
 		{"/cache/online/clear", grokHandler.HandleAdminCacheOnlineClear},

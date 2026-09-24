@@ -19,7 +19,7 @@ import (
 	"orchids-api/internal/template"
 )
 
-func TestAdminGrokModelsUsesSessionAuthenticatedPublicCatalog(t *testing.T) {
+func TestAdminGrokToolsRoutesUseSessionWithoutClientKey(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "grok_tools_route:"})
 	if err != nil {
@@ -40,21 +40,74 @@ func TestAdminGrokModelsUsesSessionAuthenticatedPublicCatalog(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, cfg, s, h, grok.NewHandler(cfg, lb), apiHandler, middleware.NewConcurrencyLimiter(4, 0, false), nil, renderer)
 
-	auth := httptest.NewRequest(http.MethodGet, "/api/grok/models", nil)
+	const modelsPath = "/api/grok/tools/v1/models"
+	unauth := httptest.NewRecorder()
+	mux.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, modelsPath, nil))
+	if unauth.Code != http.StatusUnauthorized {
+		t.Fatalf("unauth status=%d body=%s", unauth.Code, unauth.Body.String())
+	}
+
+	auth := httptest.NewRequest(http.MethodGet, modelsPath, nil)
 	auth.Header.Set("X-Admin-Token", cfg.AdminToken)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, auth)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("session-auth status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if body := rec.Body.String(); body == "" || !containsAll(body, "grok-live", "capabilities") {
 		t.Fatalf("body=%s", body)
 	}
+	if strings.Contains(rec.Body.String(), "Missing API key") {
+		t.Fatalf("admin tools route incorrectly used client inference auth: %s", rec.Body.String())
+	}
 
-	unauth := httptest.NewRecorder()
-	mux.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/api/grok/models", nil))
-	if unauth.Code == http.StatusOK {
-		t.Fatal("catalog allowed without admin session")
+	public := httptest.NewRecorder()
+	mux.ServeHTTP(public, httptest.NewRequest(http.MethodGet, "/grok/v1/models", nil))
+	if public.Code != http.StatusUnauthorized || !strings.Contains(public.Body.String(), "Missing API key") {
+		t.Fatalf("public Grok route must retain key auth: status=%d body=%s", public.Code, public.Body.String())
+	}
+
+	// Every requested tool endpoint must be protected by the admin session and
+	// must not fall through to an unprotected not-found handler. Handler behavior
+	// is tested rather than ServeMux pattern names because registerRoutes mounts
+	// its private mux behind the root dispatcher.
+	paths := []string{
+		"/api/grok/tools/v1/models/grok-live",
+		"/api/grok/tools/v1/responses", "/api/grok/tools/v1/responses/compact", "/api/grok/tools/v1/responses/resp_1",
+		"/api/grok/tools/v1/images/generations", "/api/grok/tools/v1/images/edits",
+		"/api/grok/tools/v1/videos", "/api/grok/tools/v1/videos/generations", "/api/grok/tools/v1/videos/edits",
+		"/api/grok/tools/v1/videos/extensions", "/api/grok/tools/v1/videos/video_1", "/api/grok/tools/v1/videos/video_1/content",
+		"/api/grok/tools/v1/files/image/test.jpg", "/api/grok/tools/v1/tts", "/api/grok/tools/v1/tts/voices",
+		"/api/grok/tools/v1/audio/speech", "/api/grok/tools/v1/audio/transcriptions", "/api/grok/tools/v1/realtime",
+	}
+	for _, path := range paths {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s unauthenticated status=%d, want 401", path, rec.Code)
+		}
+	}
+
+	// An authenticated operator must reach the real handler without ever being
+	// asked for a client API key. The request may still fail for provider
+	// reasons, but it must not fail as an anonymous-key denial.
+	authed := httptest.NewRequest(http.MethodPost, "/api/grok/tools/v1/images/generations", strings.NewReader(`{"prompt":"a cat","model":"grok-imagine"}`))
+	authed.Header.Set("Content-Type", "application/json")
+	authed.Header.Set("X-Admin-Token", cfg.AdminToken)
+	authedRec := httptest.NewRecorder()
+	mux.ServeHTTP(authedRec, authed)
+	if authedRec.Code == http.StatusUnauthorized {
+		t.Fatalf("session-authenticated tools call was denied: status=%d body=%s", authedRec.Code, authedRec.Body.String())
+	}
+	if strings.Contains(authedRec.Body.String(), "Missing API key") {
+		t.Fatalf("tools namespace still applied client-key auth: %s", authedRec.Body.String())
+	}
+
+	// The management namespace must not have opened the public inference plane.
+	keyless := httptest.NewRecorder()
+	mux.ServeHTTP(keyless, httptest.NewRequest(http.MethodPost, "/grok/v1/images/generations", strings.NewReader(`{"prompt":"a cat"}`)))
+	if keyless.Code != http.StatusUnauthorized {
+		t.Fatalf("public images route leaked without a key: status=%d body=%s", keyless.Code, keyless.Body.String())
 	}
 }
 

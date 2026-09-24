@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,11 @@ type PublicModelResponse struct {
 	UpstreamModel string   `json:"upstream_model,omitempty"`
 	BillingTier   string   `json:"billing_tier,omitempty"`
 	BillingSource string   `json:"billing_source,omitempty"`
+	// VideoActions and VideoConstraints make the route contract explicit for
+	// browser clients. In particular, edit/extend are Console operations rather
+	// than properties that can safely be inferred from a public model id.
+	VideoActions     []string                `json:"video_actions,omitempty"`
+	VideoConstraints *PublicVideoConstraints `json:"video_constraints,omitempty"`
 	// ContextLength is the model's real input-token window, as observed from the
 	// channel's own catalog. It is omitted when nothing was observed, because a
 	// client that reads a wrong number budgets against the wrong number: too low
@@ -52,6 +58,79 @@ type PublicModelResponse struct {
 type PublicModelsListResponse struct {
 	Object string                `json:"object"`
 	Data   []PublicModelResponse `json:"data"`
+}
+
+type PublicVideoLengthRange struct {
+	Min int `json:"min"`
+	Max int `json:"max"`
+}
+
+type PublicVideoConstraints struct {
+	Lengths                     map[string]PublicVideoLengthRange `json:"lengths,omitempty"`
+	Resolutions                 []string                          `json:"resolutions,omitempty"`
+	ReferenceImages             bool                              `json:"reference_images,omitempty"`
+	ReferenceAudio              bool                              `json:"reference_audio,omitempty"`
+	MaxResolutionWithReferences string                            `json:"max_resolution_with_references,omitempty"`
+}
+
+func applyPublicVideoRoute(entry *PublicModelResponse, route *store.Model) {
+	if entry == nil || route == nil {
+		return
+	}
+	hasVideo := false
+	for _, capability := range route.Capabilities {
+		if strings.EqualFold(strings.TrimSpace(capability), store.CapabilityVideo) {
+			hasVideo = true
+			break
+		}
+	}
+	if !hasVideo {
+		return
+	}
+	provider := strings.ToLower(strings.TrimSpace(route.Provider))
+	actions := []string{"generate"}
+	constraints := &PublicVideoConstraints{
+		Lengths:     map[string]PublicVideoLengthRange{"generate": {Min: 6, Max: 30}},
+		Resolutions: []string{"480p", "720p"},
+	}
+	if provider == "console" {
+		constraints.Lengths["generate"] = PublicVideoLengthRange{Min: 1, Max: 15}
+		constraints.ReferenceImages = true
+		constraints.ReferenceAudio = true
+		if modelpolicy.GrokModelSlug(route.ModelID) == "grok-imagine-video" {
+			actions = []string{"generate", "edit", "extend"}
+			constraints.Lengths["extend"] = PublicVideoLengthRange{Min: 2, Max: 10}
+		}
+	}
+	if modelpolicy.GrokModelSlug(route.ModelID) == "grok-imagine-video-1.5" && (provider == "console" || provider == "build") {
+		constraints.Resolutions = append(constraints.Resolutions, "1080p")
+		constraints.MaxResolutionWithReferences = "720p"
+	}
+	for _, action := range actions {
+		if !slices.Contains(entry.VideoActions, action) {
+			entry.VideoActions = append(entry.VideoActions, action)
+		}
+	}
+	if entry.VideoConstraints == nil {
+		entry.VideoConstraints = constraints
+		return
+	}
+	for action, length := range constraints.Lengths {
+		current, ok := entry.VideoConstraints.Lengths[action]
+		if !ok || length.Min < current.Min || length.Max > current.Max {
+			entry.VideoConstraints.Lengths[action] = length
+		}
+	}
+	for _, resolution := range constraints.Resolutions {
+		if !slices.Contains(entry.VideoConstraints.Resolutions, resolution) {
+			entry.VideoConstraints.Resolutions = append(entry.VideoConstraints.Resolutions, resolution)
+		}
+	}
+	entry.VideoConstraints.ReferenceImages = entry.VideoConstraints.ReferenceImages || constraints.ReferenceImages
+	entry.VideoConstraints.ReferenceAudio = entry.VideoConstraints.ReferenceAudio || constraints.ReferenceAudio
+	if constraints.MaxResolutionWithReferences != "" {
+		entry.VideoConstraints.MaxResolutionWithReferences = constraints.MaxResolutionWithReferences
+	}
 }
 
 // legacyModelCreated is the placeholder the API used before a route row carried
@@ -295,6 +374,15 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		// the same public model (the admin plane lists them grouped).
 		publicIDKey := publicModelIDKey(publicID)
 		if _, duplicate := seenPublicModelIDs[publicIDKey]; duplicate {
+			// Same public id may represent Web, Console and Build routes. Preserve
+			// the single OpenAI model row, but union route-specific video actions
+			// instead of silently taking whichever provider sorted first.
+			for i := range publicModels {
+				if publicModelIDKey(publicModels[i].ID) == publicIDKey {
+					applyPublicVideoRoute(&publicModels[i], m)
+					break
+				}
+			}
 			continue
 		}
 		seenPublicModelIDs[publicIDKey] = struct{}{}
@@ -305,6 +393,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.UpstreamModel = m.UpstreamModel
 		entry.BillingTier = m.BillingTier
 		entry.BillingSource = m.BillingSource
+		applyPublicVideoRoute(&entry, m)
 		// The window is looked up by the route's own id first: that is what the
 		// channel's catalog was keyed by when it was observed. The public alias is
 		// the fallback for a channel that publishes a different spelling.

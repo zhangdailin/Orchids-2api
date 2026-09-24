@@ -14,7 +14,7 @@
       ? { ...headers, Authorization: `Bearer ${toolAuthState.apiKey}` }
       : headers;
   }
-  function toolInferencePrefix() { return toolAuthState.mode === "client" ? "/v1" : "/grok/v1"; }
+  function toolInferencePrefix() { return toolAuthState.mode === "client" ? "/v1" : "/api/grok/tools/v1"; }
   function toolHistoryScope() {
     if (!toolAuthState.apiKey) return "admin";
     let hash = 2166136261;
@@ -58,6 +58,7 @@
     currentPreviewItem: null,
     previewCount: 0,
     pollTimer: null,
+    objectURLs: new Set(),
   };
 
   const voiceState = {
@@ -130,14 +131,14 @@
 
   function handleUnauthorized(res) {
     if (!res || res.status !== 401) return false;
-    // A 401 only means "the console session is gone" for the console's own API.
-    // This page also reads inference endpoints (/grok/v1/...) with the operator's
-    // admin cookie; on a deployment that enforces API-key auth those answer 401 by
-    // design, so redirecting on one logged the operator out of a page they were
-    // already using.
-    const url = String(res.url || "");
-    const consoleSessionExpired = url === "" || url.includes("/api/");
-    if (consoleSessionExpired) {
+    // Only the admin session middleware answers a bare plain-text 401. A JSON
+    // 401 comes from a Grok handler — for example every upstream account needing
+    // re-login, or a rejected client key — and is a tool failure, not an expired
+    // console session. Redirecting on that logged the operator out of a page
+    // that was still authenticated, which made the tools look unusable.
+    const contentType = String(res.headers?.get?.("Content-Type") || "").toLowerCase();
+    const sessionExpired = contentType.includes("text/plain");
+    if (sessionExpired) {
       window.location.href = "/admin/login.html?next=" + encodeURIComponent("/admin/?tab=grok-tools");
     }
     return true;
@@ -1375,17 +1376,59 @@
       actions.appendChild(retryBtn);
       actions.appendChild(editBtn);
     }
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "action-btn action-btn-danger";
+    deleteBtn.textContent = "删除";
+    deleteBtn.addEventListener("click", () => deleteChatMessage(row));
+    actions.appendChild(deleteBtn);
     row.appendChild(actions);
     log.appendChild(row);
     log.scrollTop = log.scrollHeight;
     return contentEl;
   }
 
-  function startEditChatMessage(row, content, attachment) {
+  function chatMessageIndex(row) {
+    if (!row) return -1;
+    const log = row.closest?.("#grokChatLog") || row.parentElement;
+    return Array.from(log?.querySelectorAll?.(".message-row") || []).indexOf(row);
+  }
+
+  function confirmTrailingMessages(action, trailingCount) {
+    if (trailingCount <= 0) return true;
+    return window.confirm(`${action}会同时删除后续 ${trailingCount} 条消息，是否继续？`);
+  }
+
+  function truncateChatBranch(session, keepCount) {
+    session.messages = (Array.isArray(session.messages) ? session.messages : []).slice(0, keepCount);
+    session.promptCacheKey = createPromptCacheKey();
+    session.updatedAt = Date.now();
+    saveChatSessions();
+    renderChatSessions();
+    rerenderChatThread();
+  }
+
+  function deleteChatMessage(row) {
+    if (chatState.sending) return;
     const session = activeChatSession();
     if (!row || !session) return;
     const messages = Array.isArray(session.messages) ? session.messages : [];
-    const targetIndex = Array.from(row.parentElement.querySelectorAll(".message-row")).indexOf(row);
+    const targetIndex = chatMessageIndex(row);
+    if (targetIndex < 0 || targetIndex >= messages.length) return;
+    const trailingCount = messages.length - targetIndex - 1;
+    const prompt = trailingCount > 0
+      ? `删除这条消息会同时删除后续 ${trailingCount} 条消息，是否继续？`
+      : "确认删除这条消息？";
+    if (!window.confirm(prompt)) return;
+    truncateChatBranch(session, targetIndex);
+  }
+
+  function startEditChatMessage(row, content, attachment) {
+    if (chatState.sending) return;
+    const session = activeChatSession();
+    if (!row || !session) return;
+    const messages = Array.isArray(session.messages) ? session.messages : [];
+    const targetIndex = chatMessageIndex(row);
     if (targetIndex < 0) return;
 
     const bubble = row.querySelector(".message-bubble");
@@ -1409,20 +1452,24 @@
     cancelBtn.textContent = "取消";
 
     const cancel = () => rerenderChatThread();
-    saveBtn.addEventListener("click", () => {
+    saveBtn.addEventListener("click", async () => {
       const next = String(textarea.value || "").trim();
       if (!next) {
         showToast("消息不能为空", "info");
         return;
       }
-      messages[targetIndex].content = next;
-      if (attachment) {
-        messages[targetIndex].attachment = attachment;
-      }
+      const trailingCount = messages.length - targetIndex - 1;
+      if (!confirmTrailingMessages("编辑这条消息", trailingCount)) return;
+      const edited = { ...messages[targetIndex], content: next };
+      if (attachment) edited.attachment = attachment;
+      session.messages = messages.slice(0, targetIndex).concat(edited);
+      session.promptCacheKey = createPromptCacheKey();
       session.updatedAt = Date.now();
       saveChatSessions();
       renderChatSessions();
       rerenderChatThread();
+      const contentEl = appendChatMessage("assistant", "");
+      await requestChatCompletion(session, contentEl);
     });
     cancelBtn.addEventListener("click", cancel);
     textarea.addEventListener("keydown", (event) => {
@@ -1444,11 +1491,11 @@
   }
 
   function startEditAssistantMessage(row) {
+    if (chatState.sending) return;
     const session = activeChatSession();
     if (!row || !session) return;
-    const rows = Array.from(document.querySelectorAll("#grokChatLog .message-row"));
-    const rowIndex = rows.indexOf(row);
     const messages = Array.isArray(session.messages) ? session.messages : [];
+    const rowIndex = chatMessageIndex(row);
     if (rowIndex < 0 || rowIndex >= messages.length) return;
     const msg = messages[rowIndex];
     if (!msg || msg.role !== "assistant") return;
@@ -1479,11 +1526,21 @@
         showToast("消息不能为空", "info");
         return;
       }
+      // Editing a historical answer changes the branch's premise, so the
+      // descendants that answered the old text must not survive it. Only the
+      // edited message itself is kept.
+      const trailing = messages.length - (rowIndex + 1);
+      if (!confirmTrailingMessages("编辑这条回复", trailing)) {
+        return;
+      }
       msg.content = next;
       msg.reasoning = "";
       msg.tools = [];
       session.promptCacheKey = createPromptCacheKey();
       session.updatedAt = Date.now();
+      if (trailing > 0) {
+        session.messages = messages.slice(0, rowIndex + 1);
+      }
       saveChatSessions();
       renderChatSessions();
       rerenderChatThread();
@@ -1774,9 +1831,8 @@
     if (chatState.sending) return;
     const session = activeChatSession();
     if (!row || !session) return;
-    const rows = Array.from(document.querySelectorAll("#grokChatLog .message-row"));
-    const rowIndex = rows.indexOf(row);
     const messages = Array.isArray(session.messages) ? session.messages : [];
+    const rowIndex = chatMessageIndex(row);
     if (rowIndex < 0 || rowIndex >= messages.length) return;
     if (messages[rowIndex]?.role !== "assistant") return;
 
@@ -1792,6 +1848,8 @@
       return;
     }
 
+    const trailingCount = messages.length - rowIndex - 1;
+    if (!confirmTrailingMessages("重试这条回复", trailingCount)) return;
     session.messages = messages.slice(0, lastUserIndex + 1);
     session.promptCacheKey = createPromptCacheKey();
     session.updatedAt = Date.now();
@@ -1936,7 +1994,13 @@
         routes = (Array.isArray(payload?.data) ? payload.data : [])
           .map((item) => typeof item === "string" ? { id: item } : item)
           .filter((item) => String(item?.id || "").trim())
-          .map((item) => ({ ...item, id: String(item.id).trim(), capabilities: ["chat"] }));
+          .map((item) => {
+            const route = { ...item, id: String(item.id).trim() };
+            // /v1/models is authoritative when it declares capabilities. Only
+            // old servers that omit the field get the compatibility chat route.
+            if (!Array.isArray(route.capabilities)) route.capabilities = ["chat"];
+            return route;
+          });
       } else {
         const catalogPromise = window.GrokModelCatalogPromise || (window.GrokModelCatalogPromise = fetch("/api/grok/models").then(async (res) => {
           if (handleUnauthorized(res)) throw new Error("登录已失效");
@@ -2012,6 +2076,11 @@
     if (chatState.sending) return;
     const idx = chatState.sessions.findIndex((item) => item && item.id === id);
     if (idx < 0) return;
+    const target = chatState.sessions[idx];
+    const count = Array.isArray(target?.messages) ? target.messages.length : 0;
+    // Deleting a conversation is irreversible in the local store, so it needs
+    // the same explicit confirmation as clearing one.
+    if (!window.confirm(count > 0 ? `确认删除该会话及其 ${count} 条消息？` : "确认删除该会话？")) return;
     chatState.sessions.splice(idx, 1);
     if (chatState.sessions.length === 0) {
       const session = createChatSession();
@@ -2064,6 +2133,20 @@
     renderChatSessions();
     rerenderChatThread();
     saveChatSessions();
+  }
+
+  function clearCurrentChatSession() {
+    if (chatState.sending) return;
+    const session = activeChatSession();
+    if (!session || !Array.isArray(session.messages) || session.messages.length === 0) return;
+    if (!window.confirm(`确认清空当前会话的 ${session.messages.length} 条消息？`)) return;
+    session.messages = [];
+    session.promptCacheKey = createPromptCacheKey();
+    session.updatedAt = Date.now();
+    saveChatSessions();
+    renderChatSessions();
+    rerenderChatThread();
+    updateChatStatus("当前会话已清空", "ok");
   }
 
   function newChatSession() {
@@ -2163,6 +2246,7 @@
 
   function bindChatEvents() {
     const newBtn = document.getElementById("grokChatNewBtn");
+    const clearBtn = document.getElementById("grokChatClearBtn");
     const sendBtn = document.getElementById("grokSendBtn");
     const input = document.getElementById("grokPromptInput");
     const modelChip = document.getElementById("grokModelChip");
@@ -2188,6 +2272,7 @@
         closeChatSidebar();
       }
     });
+    if (clearBtn) clearBtn.addEventListener("click", clearCurrentChatSession);
     if (sendBtn) {
       sendBtn.addEventListener("click", () => {
         if (chatState.sending && chatState.abortController) {
@@ -2898,6 +2983,17 @@
     }, 1000);
   }
 
+  function revokeVideoObjectURL(url) {
+    if (!url || !videoState.objectURLs.has(url)) return;
+    URL.revokeObjectURL(url);
+    videoState.objectURLs.delete(url);
+  }
+
+  function revokeVideoObjectURLs() {
+    for (const url of videoState.objectURLs) URL.revokeObjectURL(url);
+    videoState.objectURLs.clear();
+  }
+
   function resetVideoOutput(keepPreview) {
     const stage = document.getElementById("videoStage");
     const empty = document.getElementById("videoEmpty");
@@ -2906,6 +3002,7 @@
     setVideoProgress(0);
     setVideoIndeterminate(false);
     if (!keepPreview) {
+      revokeVideoObjectURLs();
       if (stage) {
         stage.innerHTML = "";
         stage.classList.add("hidden");
@@ -3038,45 +3135,66 @@
     }
   }
 
-  function renderVideoFromUrl(url) {
+  async function fetchVideoBlobURL(url) {
+    const response = await fetch(normalizeVideoURL(url), {
+      headers: window.GrokToolRequest?.headers?.({ Accept: "video/*" }) || toolAuthHeaders({ Accept: "video/*" }),
+    });
+    if (handleUnauthorized(response)) throw new Error("登录已失效");
+    if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+    const objectURL = URL.createObjectURL(await response.blob());
+    videoState.objectURLs.add(objectURL);
+    return objectURL;
+  }
+
+  async function renderVideoFromUrl(url) {
     const container = ensureVideoPreviewSlot();
     if (!container) return;
     const body = container.querySelector(".video-item-body");
     if (!body) return;
-    const safeUrl = normalizeVideoURL(url);
-    body.innerHTML = `
-      <video controls preload="metadata">
-        <source src="${safeUrl}" type="video/mp4">
-      </video>
-    `;
-    updateVideoItemLinks(container, safeUrl);
+    const sourceUrl = normalizeVideoURL(url);
+    const previousObjectURL = container.dataset.objectUrl || "";
+    const objectURL = await fetchVideoBlobURL(sourceUrl);
+    revokeVideoObjectURL(previousObjectURL);
+    container.dataset.objectUrl = objectURL;
+    const video = document.createElement("video");
+    video.controls = true;
+    video.preload = "metadata";
+    video.src = objectURL;
+    body.replaceChildren(video);
+    updateVideoItemLinks(container, sourceUrl);
   }
 
-  async function stageAdminMediaFile(file, expectedKind) {
+  async function stageMediaFile(file, expectedKind) {
     if (!file) throw new Error("请选择媒体文件");
+    const clientMode = toolAuthState.mode === "client";
     const form = new FormData();
     form.set("file", file);
-    const res = await fetch("/api/admin/v1/media/inputs/upload", { method: "POST", body: form });
-    if (handleUnauthorized(res)) throw new Error("登录已失效");
+    const res = await fetch(clientMode ? "/v1/media/inputs" : "/api/admin/v1/media/inputs/upload", {
+      method: "POST", headers: toolAuthHeaders(), body: form,
+    });
+    if (!clientMode && handleUnauthorized(res)) throw new Error("登录已失效");
     if (!res.ok) throw new Error(await res.text());
-    const data = (await res.json())?.data || {};
+    const payload = await res.json();
+    const data = clientMode ? payload : (payload?.data || {});
     if (expectedKind && data.kind !== expectedKind) throw new Error(`请选择${expectedKind === "image" ? "图片" : "视频"}文件`);
-    const fileID = String(data.fileId || data.file_id || data.id || "").trim();
+    const fileID = String(data.file_id || data.fileId || data.id || "").trim();
     if (!fileID) throw new Error("暂存响应缺少 file_id");
     return fileID;
   }
 
-  async function importAdminMediaURL(url, expectedKind) {
-    const res = await fetch("/api/admin/v1/media/inputs/import", {
+  async function importMediaURL(url, expectedKind) {
+    const clientMode = toolAuthState.mode === "client";
+    const res = await fetch(clientMode ? "/v1/media/inputs/import" : "/api/admin/v1/media/inputs/import", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: toolAuthHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ url }),
     });
-    if (handleUnauthorized(res)) throw new Error("登录已失效");
+    if (!clientMode && handleUnauthorized(res)) throw new Error("登录已失效");
     if (!res.ok) throw new Error(await res.text());
-    const data = (await res.json())?.data || {};
+    const payload = await res.json();
+    const data = clientMode ? payload : (payload?.data || {});
     if (expectedKind && data.kind !== expectedKind) throw new Error(`URL 必须指向${expectedKind === "image" ? "图片" : "视频"}`);
-    const fileID = String(data.fileId || data.file_id || data.id || "").trim();
+    const fileID = String(data.file_id || data.fileId || data.id || "").trim();
     if (!fileID) throw new Error("暂存响应缺少 file_id");
     return fileID;
   }
@@ -3085,30 +3203,53 @@
     if (fileID) return { file_id: fileID };
     const value = String(url || "").trim();
     if (!value) return null;
-    if (importURL && /^https?:\/\//i.test(value)) return { file_id: await importAdminMediaURL(value, expectedKind) };
+    if (importURL && /^https?:\/\//i.test(value)) return { file_id: await importMediaURL(value, expectedKind) };
     return { url: value };
   }
 
-  window.GrokMediaStaging = Object.freeze({ upload: stageAdminMediaFile, importURL: importAdminMediaURL });
+  window.GrokMediaStaging = Object.freeze({ upload: stageMediaFile, importURL: importMediaURL });
+
+  function videoRouteActions(route) {
+    const explicit = Array.isArray(route?.video_actions)
+      ? route.video_actions.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)
+      : [];
+    if (explicit.length) return new Set(explicit);
+    // Compatibility for older catalogs: use provider/upstream targets, never a
+    // public id alone (one public id may aggregate several provider routes).
+    const provider = String(route?.provider || "").toLowerCase();
+    const upstream = String(route?.upstream_model || "").toLowerCase();
+    return new Set(provider === "console" && upstream === "grok-imagine-video" ? ["generate", "edit", "extend"] : ["generate"]);
+  }
 
   function syncVideoRouteControls() {
     const route = chatState.routes?.find((item) => item.id === document.getElementById("videoModel")?.value);
+    const actions = videoRouteActions(route);
+    const constraints = route?.video_constraints || {};
     const consoleRoute = route?.provider === "console";
     const action = document.getElementById("videoAction");
     if (!action) return;
-    for (const option of action.options) option.disabled = option.value !== "generate" && (!consoleRoute || route?.id !== "grok-imagine-video");
-    if (action.selectedOptions[0]?.disabled) action.value = "generate";
+    for (const option of action.options) option.disabled = !actions.has(option.value);
+    if (action.selectedOptions[0]?.disabled) action.value = actions.has("generate") ? "generate" : [...actions][0] || "generate";
     const generate = action.value === "generate";
-    for (const id of ["videoReferenceURL", "videoReferenceVoice"]) document.getElementById(id).disabled = !consoleRoute || !generate;
+    const canReferenceImages = constraints.reference_images ?? consoleRoute;
+    const canReferenceAudio = constraints.reference_audio ?? consoleRoute;
+    document.getElementById("videoReferenceURL").disabled = !canReferenceImages || !generate;
+    document.getElementById("videoReferenceVoice").disabled = !canReferenceAudio || !generate;
     document.getElementById("videoSourceURL").disabled = generate;
     const resolution = document.getElementById("videoResolution");
     const references = document.getElementById("videoReferenceURL").value || videoState.referenceFileID || document.getElementById("videoReferenceVoice").value;
-    for (const option of resolution.options) option.disabled = option.value === "1080p" && (!consoleRoute || route?.id !== "grok-imagine-video-1.5" || !!references);
+    const resolutions = Array.isArray(constraints.resolutions) ? new Set(constraints.resolutions) : null;
+    for (const option of resolution.options) {
+      const unsupported = resolutions ? !resolutions.has(option.value) : option.value === "1080p" && !(consoleRoute && route?.upstream_model === "grok-imagine-video-1.5");
+      const blockedByReferences = !!references && option.value === "1080p" && constraints.max_resolution_with_references === "720p";
+      option.disabled = unsupported || blockedByReferences;
+    }
     if (resolution.selectedOptions[0]?.disabled) resolution.value = "720p";
     resolution.disabled = !generate;
     const length = document.getElementById("videoLength");
-    length.min = consoleRoute ? (action.value === "extend" ? 2 : 1) : 6;
-    length.max = consoleRoute ? (action.value === "extend" ? 10 : 15) : 30;
+    const range = constraints.lengths?.[action.value];
+    length.min = Number(range?.min ?? (consoleRoute ? (action.value === "extend" ? 2 : 1) : 6));
+    length.max = Number(range?.max ?? (consoleRoute ? (action.value === "extend" ? 10 : 15) : 30));
     length.disabled = action.value === "edit";
   }
 
@@ -3116,8 +3257,13 @@
     const route = chatState.routes?.find((item) => item.id === payload.model);
     const action = document.getElementById("videoAction")?.value || "generate";
     let path = `${toolInferencePrefix()}/videos`;
-    if (route?.provider === "console") {
-      path += action === "edit" ? "/edits" : action === "extend" ? "/extensions" : "/generations";
+    if (action !== "generate") {
+      if (!videoRouteActions(route).has(action)) throw new Error("所选模型不支持此操作");
+      path += action === "edit" ? "/edits" : "/extensions";
+    } else if (route?.provider === "console") {
+      path += "/generations";
+    }
+    if (route?.provider === "console" || action !== "generate") {
       const body = { model: payload.model, prompt: payload.prompt };
       if (action === "generate") {
         Object.assign(body, { duration: payload.seconds, resolution: payload.resolution_name, aspect_ratio: document.getElementById("videoRatio").value });
@@ -3134,7 +3280,7 @@
         if (action === "extend") body.duration = payload.seconds;
       }
       payload = body;
-    } else if (action !== "generate") throw new Error("所选模型不支持此操作");
+    }
     const res = await fetch(path, {
       method: "POST",
       headers: toolAuthHeaders({ "Content-Type": "application/json" }),
@@ -3193,7 +3339,11 @@
   }
 
   function videoContentURL(taskID) {
-    return normalizeVideoURL(`/grok/v1/videos/${encodeURIComponent(taskID)}/content`);
+    return normalizeVideoURL(`${toolInferencePrefix()}/videos/${encodeURIComponent(taskID)}/content`);
+  }
+
+  function videoJobURL(job, taskID) {
+    return job?.video?.url || job?.content_url || job?.video_url || videoContentURL(taskID);
   }
 
   function pollVideoTask(taskID) {
@@ -3206,12 +3356,13 @@
         const progress = Number(job.progress || 0);
         setVideoIndeterminate(false);
         setVideoProgress(progress);
-        if (job.status === "completed") {
-          renderVideoFromUrl(job.content_url || videoContentURL(taskID));
+        const status = String(job.status || "").toLowerCase();
+        if (status === "completed" || status === "done") {
+          await renderVideoFromUrl(videoJobURL(job, taskID));
           finishVideoRun(false);
           return;
         }
-        if (job.status === "failed") {
+        if (status === "failed") {
           const message = job.error?.message || "视频生成失败";
           setVideoStatus(String(message), "error");
           finishVideoRun(true);
@@ -3965,12 +4116,7 @@
         const url = item.dataset.url || target.dataset.url || "";
         if (!url) return;
         try {
-          const response = await fetch(url, { mode: "cors" });
-          if (!response.ok) {
-            throw new Error("download_failed");
-          }
-          const blob = await response.blob();
-          const blobUrl = URL.createObjectURL(blob);
+          const blobUrl = await fetchVideoBlobURL(url);
           const anchor = document.createElement("a");
           anchor.href = blobUrl;
           const index = item.dataset.index || "";
@@ -3978,7 +4124,7 @@
           document.body.appendChild(anchor);
           anchor.click();
           anchor.remove();
-          URL.revokeObjectURL(blobUrl);
+          revokeVideoObjectURL(blobUrl);
         } catch (err) {
           showToast(t("video.downloadFailed"), "error");
         }
@@ -3998,7 +4144,7 @@
         if (label) label.textContent = `${file.name} · 暂存中…`;
         button.disabled = true;
         try {
-          videoState[stateKey] = await stageAdminMediaFile(file, kind);
+          videoState[stateKey] = await stageMediaFile(file, kind);
           if (url) url.value = "";
           if (label) label.textContent = `${file.name} · 已暂存`;
           syncVideoRouteControls();
@@ -4283,6 +4429,7 @@
         window.GrokImagine.stop({ silent: true });
       }
         stopVideoElapsedTimer();
+      revokeVideoObjectURLs();
       if (videoState.taskID) {
         try {
           const payload = JSON.stringify({ task_ids: [videoState.taskID] });

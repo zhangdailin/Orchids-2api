@@ -55,6 +55,37 @@ func TestCodexCatalogExposesContextWindowAndModalities(t *testing.T) {
 	}
 }
 
+func TestCodexCatalogUsesObservedGrokProfile(t *testing.T) {
+	supportsReasoning := true
+	observed := textModel("grok-4.7")
+	observed.ReasoningEfforts = []string{"low", "high", "xhigh"}
+	observed.DefaultReasoningEffort = "high"
+	observed.SupportsReasoningEffort = &supportsReasoning
+	observed.ContextLength = 500000
+	observed.MaxInputTokens = 500000
+	observed.MaxOutputTokens = 1000000
+
+	entry := codexEntryFor(t, newCodexModelCatalog([]PublicModelResponse{observed}), "grok-4.7")
+	levels := make([]string, 0, len(entry.SupportedReasoningLevels))
+	for _, level := range entry.SupportedReasoningLevels {
+		levels = append(levels, level.Effort)
+	}
+	if strings.Join(levels, ",") != "low,high,xhigh" {
+		t.Fatalf("observed reasoning levels = %v, want low,high,xhigh", levels)
+	}
+	if entry.DefaultReasoningLevel != "high" {
+		t.Fatalf("observed default reasoning level = %q, want high", entry.DefaultReasoningLevel)
+	}
+	if entry.ContextWindow != 500000 || entry.MaxContextWindow != 1500000 {
+		t.Fatalf("observed windows = context %d max %d, want 500000 and 1500000", entry.ContextWindow, entry.MaxContextWindow)
+	}
+	// The declared output budget travels with the catalog so a client can plan
+	// its own completion against the same number the gateway advertises.
+	if entry.MaxOutputTokens != 1000000 {
+		t.Fatalf("observed max output tokens = %d, want 1000000", entry.MaxOutputTokens)
+	}
+}
+
 func TestCodexCatalogReasoningLevels(t *testing.T) {
 	consoleFixed := textModel("console/grok-4.20-0309-reasoning")
 	consoleFixed.Provider = "console"

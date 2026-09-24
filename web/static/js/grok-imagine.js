@@ -118,8 +118,11 @@
   }
 
   function imageSrc(raw) {
-    const value = String(raw || "");
+    let value = String(raw || "");
     if (!value) return "";
+    if (inferencePrefix() === "/api/grok/tools/v1") {
+      value = value.replace(/^\/(?:grok\/)?v1\/files\//i, `${inferencePrefix()}/files/`);
+    }
     if (/^(https?:|data:|\/)/i.test(value)) return value;
     return `data:${inferMime(value)};base64,${value}`;
   }
@@ -127,7 +130,7 @@
   function inferenceHeaders(headers = {}) {
     return window.GrokToolRequest?.headers?.(headers) || headers;
   }
-  function inferencePrefix() { return window.GrokToolRequest?.prefix?.() || "/grok/v1"; }
+  function inferencePrefix() { return window.GrokToolRequest?.prefix?.() || "/api/grok/tools/v1"; }
   function imageOperation() { return readToggle("#imagineOperationToggle", "imagineOperation", "generate") === "edit" ? "edit" : "generate"; }
 
   function editURLInputs() {
