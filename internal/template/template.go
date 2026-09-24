@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"orchids-api/internal/config"
-	"orchids-api/internal/grok"
 	"orchids-api/internal/store"
 	"orchids-api/web"
 )
@@ -61,31 +60,18 @@ func parseTemplates() (*template.Template, error) {
 func (r *Renderer) RenderIndex(w http.ResponseWriter, req *http.Request, cfg *config.Config, s *store.Store) error {
 	activeTab := getActiveTab(req)
 
-	stats := &Stats{}
-
-	if s != nil {
-		ctx := req.Context()
-		accounts, err := s.ListAccounts(ctx)
-		if err == nil {
-			for _, acc := range accounts {
-				if acc == nil || grok.IsLinkedConsoleSSOCompanion(acc) {
-					continue
-				}
-				stats.TotalAccounts++
-				if acc.Enabled {
-					stats.NormalAccounts++
-				} else {
-					stats.AbnormalAccounts++
-				}
-			}
-		}
-	}
+	// The sidebar account counters deliberately ship no server-side number. The
+	// page used to count !Enabled here, the accounts page counted its own verdict
+	// in accounts.js, and every other page counted common.js's verdict — three
+	// rules writing one element, so the same sidebar read differently per tab.
+	// common.js refreshSidebarAccountStats (and accounts.js on its own page) now
+	// own the number from the /api/accounts payload, which is the single place
+	// that knows credentials, status codes and quota state.
 
 	data := &PageData{
 		Title:     "API 管理面板",
 		AdminPath: cfg.AdminPath,
 		ActiveTab: activeTab,
-		Stats:     stats,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

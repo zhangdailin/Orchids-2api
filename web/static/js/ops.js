@@ -567,7 +567,11 @@
     meter(sla, slaRate, slaRate >= 0.95 ? '' : slaRate >= 0.8 ? 'is-warn' : 'is-error');
     rowList(sla, [
       { label: '成功数', value: fmtInt(slaSuccess) },
-      { label: '异常数', value: fmtInt(totals.failed || 0) },
+      // This row counts failed REQUESTS in the selected window, not accounts.
+      // It used to read 异常数, the same word the sidebar uses for the account
+      // counter, so an operator comparing the two saw 11 against 5 and could not
+      // tell that they were never the same metric.
+      { label: '失败请求数', value: fmtInt(totals.failed || 0) },
       { label: '业务限制', value: fmtInt(limited) + '（限流 ' + fmtInt(totals.rate_limited || 0) + ' / 额度 ' + fmtInt(totals.quota_exhausted || 0) + ' / 网关拒绝 ' + fmtInt(totals.rejected || 0) + '）' },
     ]);
     container.appendChild(sla);

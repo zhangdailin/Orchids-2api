@@ -1090,3 +1090,57 @@ test('Grok OAuth API payloads render the Free tier and quota provenance', () => 
   // A paid plan is never relabelled.
   assert.equal(strip(context.buildSubscriptionMarkup({ ...free, subscription: 'XPremium' })), 'X Premium');
 });
+
+test('账号管理 and 运维总览 count the same 异常 accounts from one predicate', () => {
+  const { context } = loadUI();
+
+  const rows = [
+    // A drained allowance on every channel is a business limit, not a fault.
+    { id: 1, account_type: 'puter', enabled: true, has_credential: true, status_code: 'puter_quota_exhausted', quota_supported: true, quota_limit: 1000, quota_remaining: 0, quota_confidence: 'confirmed' },
+    { id: 2, account_type: 'workbuddy', enabled: true, has_credential: true, status_code: 'workbuddy_quota_exhausted', quota_supported: true, quota_limit: 350, quota_remaining: 0, quota_confidence: 'confirmed' },
+    { id: 3, account_type: 'grok', enabled: true, has_credential: true, status_code: '', quota_supported: true, quota_limit: 500000, quota_remaining: 0, quota_confidence: 'confirmed' },
+    // An INFERRED window that reads zero is still drained: this row used to be
+    // 异常 on 账号管理 and 正常 everywhere else.
+    { id: 4, account_type: 'grok', enabled: true, has_credential: true, status_code: '', quota_supported: true, quota_limit: 500000, quota_remaining: 0, quota_confidence: 'estimated' },
+    { id: 5, account_type: 'warp', enabled: true, has_credential: true, status_code: '', quota_supported: true, quota_limit: 1500, quota_remaining: 0, quota_confidence: 'confirmed' },
+    // Genuine faults must still be counted.
+    { id: 6, account_type: 'grok', enabled: false, has_credential: true, status_code: '' },
+    { id: 7, account_type: 'qoder', enabled: true, has_credential: true, status_code: '401' },
+    { id: 8, account_type: 'cline', enabled: true, has_credential: false, status_code: '' },
+    // A healthy account with an untouched window stays normal.
+    { id: 9, account_type: 'grok', enabled: true, has_credential: true, status_code: '', quota_supported: true, quota_limit: 500000, quota_remaining: 471863, quota_confidence: 'estimated' },
+  ];
+
+  // common.js owns the number on every page except 账号管理 …
+  const sidebar = context.computeSidebarAccountStats(rows);
+  assert.equal(sidebar.abnormal, 3, 'disabled, 401 and missing-credential rows are the only faults');
+  assert.equal(sidebar.total, 9);
+
+  // … and 账号管理 must land on the same number now that updateStats() defers to
+  // the shared predicate instead of computing its own verdict.
+  assert.equal(rows.filter(context.isSidebarAccountAbnormal).length, sidebar.abnormal);
+
+  const source = fs.readFileSync(path.join(__dirname, 'static/js/accounts.js'), 'utf8');
+  assert.match(source, /const abnormal = accounts\.filter\(isSidebarAccountAbnormal\)\.length;/);
+
+  // The row badge agrees: a drained allowance is an orange business limit, not a
+  // red fault, and the 清空异常 button therefore leaves those rows alone.
+  for (const row of rows.filter((candidate) => candidate.quota_remaining === 0 && candidate.enabled)) {
+    const verdict = context.evaluateAccountStatus(row);
+    assert.equal(verdict.normal, true, `account ${row.id} badge`);
+    assert.equal(verdict.text, '额度不足', `account ${row.id} badge text`);
+    assert.equal(verdict.quotaOnly, true, `account ${row.id} quotaOnly`);
+  }
+  assert.equal(context.isAccountAbnormal(rows[3]), false);
+
+  // The provider-registry allowlist must not decide this. It used to choose which
+  // channels were asked for a credential at all, so an unloaded registry (script
+  // order, cached bundle) reclassified every channel without session columns.
+  const registry = context.window.OrchidsProviderRegistry;
+  context.window.OrchidsProviderRegistry = undefined;
+  try {
+    assert.equal(rows.filter(context.isSidebarAccountAbnormal).length, sidebar.abnormal, 'verdict must not depend on a loaded registry');
+  } finally {
+    context.window.OrchidsProviderRegistry = registry;
+  }
+});

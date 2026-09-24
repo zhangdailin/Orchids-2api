@@ -14,7 +14,12 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestRenderIndexCountsOnlyVisibleAccounts(t *testing.T) {
+// TestRenderIndexShipsNoCompetingSidebarCount pins the fix for the sidebar that
+// read 5 on 账号管理 and 11 on 运维总览. Three rules used to write #footerAbnormal
+// (this renderer counted !Enabled, accounts.js counted its own verdict,
+// common.js counted a third). The renderer must now ship no number at all, so
+// common.js's single predicate over /api/accounts is the only source.
+func TestRenderIndexShipsNoCompetingSidebarCount(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{RedisAddr: mini.Addr(), RedisPrefix: "template_test:"})
 	if err != nil {
@@ -25,17 +30,17 @@ func TestRenderIndexCountsOnlyVisibleAccounts(t *testing.T) {
 		mini.Close()
 	}()
 
-	web := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=web", Enabled: true}
-	console := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: 1, ClientCookie: "sso=web", Enabled: true}
-	standaloneConsole := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, ClientCookie: "sso=standalone", Enabled: false}
-	for _, acc := range []*store.Account{web, console, standaloneConsole} {
+	source := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=web", Enabled: true}
+	companion := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: 1, ClientCookie: "sso=web", Enabled: true}
+	disabled := &store.Account{AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, ClientCookie: "sso=standalone", Enabled: false}
+	for _, acc := range []*store.Account{source, companion, disabled} {
 		if err := s.CreateAccount(context.Background(), acc); err != nil {
 			t.Fatalf("CreateAccount() error = %v", err)
 		}
 	}
-	console.GrokSSOParentID = web.ID
-	if err := s.UpdateAccount(context.Background(), console); err != nil {
-		t.Fatalf("UpdateAccount(console) error = %v", err)
+	companion.GrokSSOParentID = source.ID
+	if err := s.UpdateAccount(context.Background(), companion); err != nil {
+		t.Fatalf("UpdateAccount(companion) error = %v", err)
 	}
 
 	renderer, err := NewRenderer()
@@ -48,8 +53,15 @@ func TestRenderIndexCountsOnlyVisibleAccounts(t *testing.T) {
 		t.Fatalf("RenderIndex() error = %v", err)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, `id="footerTotal">2</span>`) || !strings.Contains(body, `id="footerNormal">1</span>`) || !strings.Contains(body, `id="footerAbnormal">1</span>`) {
-		t.Fatalf("dashboard counts included linked Console child: %s", body)
+	for _, element := range []string{`id="footerTotal"`, `id="footerNormal"`, `id="footerAbnormal"`} {
+		if !strings.Contains(body, element+`>—</span>`) {
+			t.Errorf("%s must ship the client-owned placeholder, not a server count:\n%s", element, body)
+		}
+	}
+	// A server-side count would have printed the disabled row as 1 and the linked
+	// companion as part of the total; neither number may appear.
+	if strings.Contains(body, `id="footerTotal">3</span>`) || strings.Contains(body, `id="footerAbnormal">1</span>`) {
+		t.Fatalf("renderer still publishes a competing account count: %s", body)
 	}
 }
 func TestRendererParsesAndRendersEmbeddedTemplates(t *testing.T) {

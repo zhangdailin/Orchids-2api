@@ -88,18 +88,23 @@
     </li>
   </ul>
   <div class="sidebar-footer">
+    <!-- The three counters are filled by common.js refreshSidebarAccountStats from
+         /api/accounts, which is the one place that knows credential, status and
+         quota state. Rendering a server-side number here made the same sidebar
+         read differently per tab (账号管理 vs 运维总览); "—" is the honest
+         pre-fetch value instead of a second, disagreeing rule. -->
     <div class="sidebar-footer-stats">
       <div class="footer-stat-item">
         <span class="footer-stat-label">总账号</span>
-        <span class="footer-stat-value" id="footerTotal">{{.Stats.TotalAccounts}}</span>
+        <span class="footer-stat-value" id="footerTotal">—</span>
       </div>
       <div class="footer-stat-item">
         <span class="footer-stat-label">正常</span>
-        <span class="footer-stat-value normal" id="footerNormal">{{.Stats.NormalAccounts}}</span>
+        <span class="footer-stat-value normal" id="footerNormal">—</span>
       </div>
       <div class="footer-stat-item">
         <span class="footer-stat-label">异常</span>
-        <span class="footer-stat-value abnormal" id="footerAbnormal">{{.Stats.AbnormalAccounts}}</span>
+        <span class="footer-stat-value abnormal" id="footerAbnormal">—</span>
       </div>
     </div>
     <button class="btn btn-outline sidebar-logout" type="button" data-logout>

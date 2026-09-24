@@ -1181,19 +1181,22 @@ function evaluateAccountStatus(acc) {
   }
 
   const quota = getQuotaStats(acc);
-  if (quota && quota.limit > 0 && quota.remaining <= 0) {
-    if (normalizeAccountType(acc) === 'puter' || normalizeAccountType(acc) === 'warp') {
-      const providerName = accountTypeLabel(normalizeAccountType(acc));
-      return {
-        normal: true,
-        text: '额度不足',
-        color: '#f59e0b',
-        bg: 'rgba(245, 158, 11, 0.16)',
-        tip: providerName + ' 额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + quota.limit.toLocaleString() + ')',
-        quotaOnly: true,
-      };
-    }
-    return { normal: false, text: '配额已满', color: '#fb7185', bg: 'rgba(251, 113, 133, 0.16)', tip: '配额已用尽 (剩余 0 / ' + quota.limit.toLocaleString() + ')' };
+  // A drained allowance is the same business limit on every channel: the
+  // credential is intact, the row stays selectable, and the scheduler resumes it
+  // when the window resets. Only puter and warp used to get this badge, so an
+  // exhausted Grok window showed a red 配额已满 fault and disagreed with the
+  // sidebar counter.
+  if (isQuotaExhaustedQuota(acc, quota)) {
+    const providerName = accountTypeLabel(normalizeAccountType(acc));
+    const limitText = quota && quota.limit > 0 ? quota.limit.toLocaleString() : '未知';
+    return {
+      normal: true,
+      text: '额度不足',
+      color: '#f59e0b',
+      bg: 'rgba(245, 158, 11, 0.16)',
+      tip: providerName + ' 额度已用尽或余额不足，调度器会暂时跳过该账号 (剩余 0 / ' + limitText + ')',
+      quotaOnly: true,
+    };
   }
 
   return { normal: true, text: '正常', color: '#34d399', bg: 'rgba(52, 211, 153, 0.16)', tip: '状态正常' };
@@ -1990,7 +1993,11 @@ function updatePageSize(size) {
 // Update statistics
 function updateStats() {
   const total = accounts.length;
-  const abnormal = accounts.filter(isAccountAbnormal).length;
+  // The sidebar and this page's 状态异常 stat must be the same number on every
+  // page. isSidebarAccountAbnormal (common.js) is the single predicate; the
+  // page-local isAccountAbnormal used to compute its own verdict, so the same
+  // sidebar read differently on 账号管理 and on 运维总览.
+  const abnormal = accounts.filter(isSidebarAccountAbnormal).length;
   const normal = Math.max(0, total - abnormal);
 
   document.getElementById("totalAccounts").textContent = total;

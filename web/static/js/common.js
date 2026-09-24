@@ -142,23 +142,37 @@ function getSidebarQuotaStats(acc) {
 function isQuotaOnlyStatus(acc) {
   if (!acc) return false;
   const type = normalizeSidebarAccountType(acc);
-  if (type !== "puter" && type !== "warp" && type !== "workbuddy" && type !== "qoder") return false;
   const quota = getSidebarQuotaStats(acc);
   const statusCode = normalizeSidebarStatusCode(acc.status_code);
+  // An exhausted allowance is a business limit on every channel, not a fault:
+  // the credential is intact and the scheduler resumes the account when the
+  // window resets. The old channel allowlist here meant a Grok window that ran
+  // out was reported as 异常 on one page and as 额度不足 on another.
+  if (isQuotaExhaustedQuota(acc, quota)) return true;
   if (statusCode === "402") return true;
   if (type === "qoder") {
-    // Qoder's window share is reported directly, and the gateway's exhausted
-    // verdict is authoritative. The limit may legitimately be 0 while credits
-    // remain, so the verdict must not be gated on limit > 0.
+    // Qoder reports the window share directly and the gateway's exhausted verdict
+    // is authoritative. The limit may legitimately be 0 while credits remain, so
+    // the verdict must not be gated on limit > 0.
     return Boolean(acc.quota_exhausted === true || (quota && quota.remaining <= 0 && acc.quota_supported === true));
   }
-  if (type === "puter") {
-    return Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
+  if (type === "warp") {
+    // Warp's own exhausted window arrives as 429 with a drained allowance.
+    return statusCode === "429" && Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
   }
-  if (type === "workbuddy") {
-    return Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
-  }
-  return statusCode === "429" && Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
+  return false;
+}
+
+// isQuotaExhaustedQuota answers the one question the sidebar and the account
+// table must agree on: has this account's allowance run out? It deliberately
+// ignores quota_confidence, because an inferred window that reads zero is still
+// a drained window, and calling it 异常 made the same account look healthy on
+// the operations pages and broken on the accounts page.
+function isQuotaExhaustedQuota(acc, quota) {
+  if (!acc) return false;
+  const stats = quota === undefined ? getSidebarQuotaStats(acc) : quota;
+  if (acc.quota_exhausted === true && acc.quota_supported === true) return true;
+  return Boolean(stats && stats.limit > 0 && stats.remaining <= 0);
 }
 
 function isSidebarAccountAbnormal(acc) {
@@ -172,18 +186,21 @@ function isSidebarAccountAbnormal(acc) {
     return true;
   }
 
+  // has_credential is published by the server for every account, so it is the
+  // authoritative answer. The provider-registry allowlist below is only the
+  // fallback for an older server: it used to decide which channels were asked
+  // for a credential at all, and an empty registry (script order, cached bundle)
+  // silently reclassified every channel that stores no session columns.
+  if (typeof acc.has_credential === "boolean") {
+    if (!acc.has_credential) return true;
+    return false;
+  }
+
   const type = normalizeSidebarAccountType(acc);
   const credentialChannels = new Set(window.OrchidsProviderRegistry?.keys || []);
   if (credentialChannels.has(type)) {
     if (!hasSidebarAccountCredential(acc)) return true;
   } else if (!acc.session_id && !acc.session_cookie) {
-    return true;
-  }
-
-  const quota = getSidebarQuotaStats(acc);
-  // An exhausted ESTIMATE is not an account fault: the window is inferred, so it must
-  // not turn the sidebar's 正常/异常 counter into a verdict about the credential.
-  if (quota && quota.limit > 0 && quota.remaining <= 0 && !quota.estimated && !isQuotaOnlyStatus(acc)) {
     return true;
   }
 
