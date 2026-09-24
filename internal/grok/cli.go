@@ -326,7 +326,10 @@ func buildTraceparent(requestID string) string {
 
 // buildClientIdentifier is the agent identity the official Build client sends.
 func buildClientIdentifier(c *CLIClient) string {
-	return "grok-shell"
+	if c != nil {
+		return buildSessionUUID("agent:" + c.clientIdentifier())
+	}
+	return buildSessionUUID("agent:grok-shell")
 }
 
 // doFallbackRequest sends a request to the direct xAI API with the same
