@@ -359,7 +359,7 @@ func registerRoutes(
 	// Media gallery routes use the requested canonical admin prefix while the
 	// existing admin surface retains its established aliases.
 	for _, rt := range adminRoutes {
-		if strings.HasPrefix(rt.path, "/media/images") || strings.HasPrefix(rt.path, "/media/videos") {
+		if strings.HasPrefix(rt.path, "/media/images") || strings.HasPrefix(rt.path, "/media/videos") || strings.HasPrefix(rt.path, "/media/inputs") {
 			mux.HandleFunc("/api/admin/v1"+rt.path, sessionAuth(rt.handler))
 		}
 	}
