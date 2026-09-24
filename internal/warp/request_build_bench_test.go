@@ -34,7 +34,6 @@ func benchmarkWarpConversation(turns, blockChars int) upstream.UpstreamRequest {
 	}
 	return upstream.UpstreamRequest{
 		Model:         "claude-4-5-sonnet",
-		Workdir:       "/repo",
 		ChatSessionID: "warp_conv_1",
 		Messages:      msgs,
 	}

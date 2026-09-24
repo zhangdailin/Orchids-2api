@@ -47,11 +47,14 @@ func TestRelayRepeatedRequestsAlwaysReachUpstream(t *testing.T) {
 	}
 }
 
-func TestRelayWorkdirChangePreservesHistory(t *testing.T) {
+// TestRelayForwardsCallerHistoryVerbatim guards the passthrough contract for the
+// OpenAI-shaped channels. It used to be framed as "a workdir change preserves
+// history"; the workdir concept is gone, but the invariant it protected — the
+// relay never trims or rewrites what the caller sent — still has to hold.
+func TestRelayForwardsCallerHistoryVerbatim(t *testing.T) {
 	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
 	client := &relayRecordingClient{}
 	h.client = client
-	ctx := context.Background()
 	messages := []prompt.Message{
 		{Role: "user", Content: prompt.MessageContent{Text: strings.Repeat("Earlier context must survive. ", 100)}},
 		{Role: "assistant", Content: prompt.MessageContent{Text: "Earlier response"}},
@@ -59,11 +62,6 @@ func TestRelayWorkdirChangePreservesHistory(t *testing.T) {
 	}
 	body, _ := json.Marshal(ClaudeRequest{Model: "claude-3-5-sonnet", ConversationID: "relay-history", Messages: messages})
 	r := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", bytes.NewReader(body))
-	r.Header.Set("X-Workdir", "D:/new-project")
-	var parsed ClaudeRequest
-	_ = json.Unmarshal(body, &parsed)
-	key := conversationKeyForRequest(r, parsed)
-	h.sessionStore.SetWorkdir(ctx, key, "D:/old-project")
 	w := httptest.NewRecorder()
 	h.HandleMessages(w, r)
 	if w.Code != 200 || len(client.requests) != 1 {
@@ -102,7 +100,7 @@ func TestRelayIdempotencyKeyIsCallerScoped(t *testing.T) {
 func TestRelayRepeatedTextIsNotFiltered(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 		rec := httptest.NewRecorder()
-		h := newStreamHandler(&config.Config{}, rec, debug.New(false, false), false, streaming, adapter.FormatAnthropic, "")
+		h := newStreamHandler(&config.Config{}, rec, debug.New(false, false), false, streaming, adapter.FormatAnthropic)
 		text := "Hi! How can I help you today?"
 		h.handleMessage(upstream.SSEMessage{Type: "model.text-start", Event: map[string]interface{}{}})
 		for i := 0; i < 3; i++ {
@@ -124,7 +122,7 @@ func TestRelayRepeatedToolCallsHaveIndependentIDs(t *testing.T) {
 	for _, format := range []adapter.ResponseFormat{adapter.FormatAnthropic, adapter.FormatOpenAI} {
 		for _, streaming := range []bool{false, true} {
 			rec := httptest.NewRecorder()
-			h := newStreamHandler(&config.Config{}, rec, debug.New(false, false), false, streaming, format, "")
+			h := newStreamHandler(&config.Config{}, rec, debug.New(false, false), false, streaming, format)
 			for _, id := range []string{"call_one", "call_two"} {
 				h.handleMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{"toolCallId": id, "toolName": "Write", "input": `{"file_path":"repeat.txt","content":"same content"}`}})
 			}

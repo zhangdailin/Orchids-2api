@@ -49,74 +49,6 @@ func extractCommandFromPolicy(text string) string {
 	return ""
 }
 
-func isCurrentWorkdirRequest(req ClaudeRequest) bool {
-	if lastUserIsToolResultFollowup(req.Messages) {
-		return false
-	}
-	text := strings.TrimSpace(stripSystemRemindersForMode(extractUserText(req.Messages)))
-	if text == "" {
-		return false
-	}
-	lower := strings.ToLower(text)
-	normalized := normalizeTopicText(text)
-
-	switch {
-	case strings.EqualFold(strings.TrimSpace(text), "pwd"):
-		return true
-	case strings.Contains(lower, "current working directory"):
-		return true
-	case strings.Contains(lower, "what directory am i in"):
-		return true
-	case strings.Contains(lower, "workspace path"):
-		return true
-	case strings.Contains(lower, "project path"):
-		return true
-	case strings.Contains(lower, "where is the workspace"):
-		return true
-	}
-
-	switch normalized {
-	case "当前运行的目录", "当前工作目录", "当前路径", "当前项目路径", "项目目录地址", "pwd":
-		return true
-	}
-
-	if strings.Contains(text, "当前运行的目录") || strings.Contains(text, "当前工作目录") {
-		return true
-	}
-	if strings.Contains(text, "workspace") &&
-		(strings.Contains(lower, "path") || strings.Contains(lower, "directory") || strings.Contains(lower, "where") ||
-			strings.Contains(text, "路径") || strings.Contains(text, "目录") || strings.Contains(text, "在哪") || strings.Contains(text, "哪里")) {
-		return true
-	}
-	if strings.Contains(text, "工作区") &&
-		(strings.Contains(text, "路径") || strings.Contains(text, "目录") || strings.Contains(text, "在哪") || strings.Contains(text, "哪里")) {
-		return true
-	}
-	if strings.Contains(text, "当前路径") || strings.Contains(text, "项目路径") {
-		return true
-	}
-	if strings.Contains(text, "当前目录") &&
-		(strings.Contains(text, "路径") || strings.Contains(text, "地址") || strings.Contains(text, "在哪") ||
-			strings.Contains(text, "哪里") || strings.Contains(text, "是什么") || strings.Contains(text, "是啥")) {
-		return true
-	}
-	if strings.Contains(text, "项目目录") &&
-		(strings.Contains(text, "路径") || strings.Contains(text, "地址") || strings.Contains(text, "在哪") ||
-			strings.Contains(text, "哪里") || strings.Contains(text, "是什么") || strings.Contains(text, "是啥")) {
-		return true
-	}
-
-	return false
-}
-
-func buildCurrentWorkdirAnswer(workdir string) string {
-	workdir = strings.TrimSpace(workdir)
-	if workdir == "" {
-		return "当前工作目录未在本次请求中提供，暂时无法确定。"
-	}
-	return "当前运行的目录是 `" + workdir + "`"
-}
-
 func writeLocalTextResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, text string, startTime time.Time, logger *debug.Logger) {
 	inputTokens := tiktoken.EstimateTextTokens(extractUserText(req.Messages))
 	outputTokens := tiktoken.EstimateTextTokens(text)
@@ -328,10 +260,6 @@ func writeLocalTextResponse(w http.ResponseWriter, req ClaudeRequest, responseFo
 	if logger != nil {
 		logger.LogSummary(inputTokens, outputTokens, time.Since(startTime), "end_turn")
 	}
-}
-
-func writeCurrentWorkdirResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, workdir string, startTime time.Time, logger *debug.Logger) {
-	writeLocalTextResponse(w, req, responseFormat, buildCurrentWorkdirAnswer(workdir), startTime, logger)
 }
 
 func writeCommandPrefixResponse(w http.ResponseWriter, req ClaudeRequest, responseFormat adapter.ResponseFormat, prefix string, startTime time.Time, logger *debug.Logger) {

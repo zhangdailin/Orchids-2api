@@ -61,7 +61,7 @@ func SetStatelessHistoryMaxChars(limit int) {
 func buildRequestBytes(req upstream.UpstreamRequest) (string, []byte, error) {
 	query := buildWarpUserQuery(req.Prompt, req.Messages, req.System, req.ChatSessionID)
 	tools := convertTools(req.Tools)
-	input, inputCount := buildRequestInput(query, req.Messages, req.Workdir, req.WarpToolContexts, tools)
+	input, inputCount := buildRequestInput(query, req.Messages, req.WarpToolContexts, tools)
 	if strings.TrimSpace(query) == "" && inputCount == 0 {
 		return "", nil, fmt.Errorf("empty warp prompt")
 	}
@@ -325,7 +325,7 @@ type warpToolUseInfo struct {
 	input string
 }
 
-func buildRequestInput(query string, messages []prompt.Message, workdir string, toolContexts map[string]upstream.WarpToolContext, tools []toolDef) (*warpapi.Request_Input, int) {
+func buildRequestInput(query string, messages []prompt.Message, toolContexts map[string]upstream.WarpToolContext, tools []toolDef) (*warpapi.Request_Input, int) {
 	resultBlocks := latestWarpToolResultBlocks(messages)
 	toolUses := indexWarpToolUses(messages)
 	inputs := make([]*warpapi.Request_Input_UserInputs_UserInput, 0, len(resultBlocks)+1)
@@ -345,7 +345,7 @@ func buildRequestInput(query string, messages []prompt.Message, workdir string, 
 		inputs = append(inputs, buildWarpUserQueryInput(query))
 	}
 	return warpapi.Request_Input_builder{
-		Context: buildInputContext(workdir),
+		Context: buildInputContext(),
 		UserInputs: warpapi.Request_Input_UserInputs_builder{
 			Inputs: inputs,
 		}.Build(),
@@ -602,11 +602,13 @@ func jsonStringField(raw string, keys ...string) string {
 	return ""
 }
 
-func buildInputContext(workdir string) *warpapi.InputContext {
-	pwd := strings.TrimSpace(workdir)
+// buildInputContext publishes the execution environment Warp expects. The
+// gateway no longer forwards a working directory: Pwd stays empty exactly as it
+// did whenever a caller sent no workdir, so the wire shape is unchanged.
+func buildInputContext() *warpapi.InputContext {
 	return warpapi.InputContext_builder{
 		Directory: warpapi.InputContext_Directory_builder{
-			Pwd:  stringPtr(pwd),
+			Pwd:  stringPtr(""),
 			Home: stringPtr(""),
 		}.Build(),
 		OperatingSystem: warpapi.InputContext_OperatingSystem_builder{

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -259,56 +258,6 @@ func (h *Handler) resolveEffortModelVariant(ctx context.Context, modelID, effort
 		}
 	}
 	return modelID
-}
-
-// resolveWorkdir determines the working directory from headers, system prompt, or session.
-// 返回当前 workdir、上一轮 workdir、以及是否发生变更。
-func (h *Handler) resolveWorkdir(r *http.Request, req ClaudeRequest, conversationKey string) (string, string, bool) {
-	prevWorkdir := ""
-	if conversationKey != "" {
-		prevWorkdir, _ = h.sessionStore.GetWorkdir(r.Context(), conversationKey)
-	}
-
-	// Prefer explicit workdir from request payload/header/system.
-	dynamicWorkdir, source := extractWorkdirFromRequest(r, req)
-
-	// Only recover from session when we have a stable explicit conversation key.
-	hasExplicitSession := req.ConversationID != "" ||
-		headerValue(r, "X-Conversation-Id", "X-Session-Id", "X-Thread-Id", "X-Chat-Id") != "" ||
-		(req.Metadata != nil && metadataString(req.Metadata,
-			"conversation_id", "conversationId",
-			"session_id", "sessionId",
-			"thread_id", "threadId",
-			"chat_id", "chatId",
-		) != "")
-
-	if dynamicWorkdir == "" && hasExplicitSession && prevWorkdir != "" {
-		dynamicWorkdir = prevWorkdir
-		source = "session"
-		slog.Debug("Recovered workdir from session", "workdir", dynamicWorkdir, "session", conversationKey)
-	}
-
-	// Persist for future turns in this session
-	if dynamicWorkdir != "" && conversationKey != "" {
-		h.sessionStore.SetWorkdir(r.Context(), conversationKey, dynamicWorkdir)
-		h.sessionStore.Touch(r.Context(), conversationKey)
-	}
-
-	if dynamicWorkdir != "" {
-		slog.Debug("Using dynamic workdir", "workdir", dynamicWorkdir, "source", source)
-	}
-	rawPrev := strings.TrimSpace(prevWorkdir)
-	rawNext := strings.TrimSpace(dynamicWorkdir)
-	normalizedPrev := ""
-	normalizedNext := ""
-	if rawPrev != "" {
-		normalizedPrev = filepath.Clean(rawPrev)
-	}
-	if rawNext != "" {
-		normalizedNext = filepath.Clean(rawNext)
-	}
-	changed := normalizedPrev != "" && normalizedNext != "" && normalizedPrev != normalizedNext
-	return dynamicWorkdir, prevWorkdir, changed
 }
 
 type accountSelectionOptions struct {

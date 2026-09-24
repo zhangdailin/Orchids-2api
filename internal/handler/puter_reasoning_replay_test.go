@@ -60,7 +60,7 @@ func TestPuterReasoningReplayRestoresDroppedThinkingByToolCallID(t *testing.T) {
 
 func TestBuildOpenAINonStreamResponseIncludesReasoningContent(t *testing.T) {
 	sh := newStreamHandler(
-		&config.Config{}, httptest.NewRecorder(), nil, false, false, adapter.FormatOpenAI, "",
+		&config.Config{}, httptest.NewRecorder(), nil, false, false, adapter.FormatOpenAI,
 	)
 	defer sh.release()
 

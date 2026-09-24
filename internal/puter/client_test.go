@@ -74,8 +74,7 @@ func TestSendRequestWithPayloadEmitsNativeStreamEvents(t *testing.T) {
 func TestBuildRequestUsesNativeToolsAndToolHistory(t *testing.T) {
 	client := NewFromAccount(&store.Account{AccountType: "puter", ClientCookie: "puter-token"}, nil)
 	req := upstream.UpstreamRequest{
-		Model:   "claude-opus-5",
-		Workdir: `C:\Code\Orchids-2api`,
+		Model: "claude-opus-5",
 		Tools: []interface{}{map[string]interface{}{
 			"name": "Read", "description": "Read a file",
 			"input_schema": map[string]interface{}{"type": "object", "properties": map[string]interface{}{"file_path": map[string]interface{}{"type": "string"}}},
@@ -155,7 +154,6 @@ func TestBuildRequestPreservesContentVerbatimByDefault(t *testing.T) {
 	client := NewFromAccount(&store.Account{ClientCookie: "puter-token"}, nil)
 	req := upstream.UpstreamRequest{
 		Model:   "claude-opus-5",
-		Workdir: `C:\Code\Orchids-2api`,
 		NoTools: false,
 		System: []prompt.SystemItem{
 			{Type: "text", Text: "x-anthropic-billing-header: cc_version=2.1.85.351; cc_entrypoint=cli; cch=5e896;"},

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -171,7 +169,7 @@ func TestMarshalSSEPayloads_ManualJSONEscapes(t *testing.T) {
 
 func TestInjectNoAvailableAccountError_RateLimitAnswers429(t *testing.T) {
 	rec := httptest.NewRecorder()
-	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic)
 
 	sh.InjectNoAvailableAccountError(
 		`upstream API error: status=429, body={"code":"rate-limited","message":"You have hit the rate limit."}`,
@@ -202,7 +200,7 @@ func TestInjectNoAvailableAccountError_RateLimitAnswers429(t *testing.T) {
 // spent-allowance message no longer names Warp whatever channel actually ran out.
 func TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral(t *testing.T) {
 	rec := httptest.NewRecorder()
-	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic)
 
 	sh.InjectNoAvailableAccountError(
 		`workbuddy API error: status=429, message={"error":{"data":{"code":14018,"msg":"Credits exhausted. Please visit the link below to purchase add-on packs"}}}`,
@@ -229,7 +227,7 @@ func TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral(t *testi
 // event, and the stream ends there rather than with a normal stop.
 func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic)
 
 	sh.InjectNoAvailableAccountError(
 		`upstream API error: status=429, body={"code":"rate-limited"}`,
@@ -257,7 +255,7 @@ func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T)
 // a client reading to the end is not left waiting for a chunk that never comes.
 func TestStreamError_OpenAIFormatEndsTheStream(t *testing.T) {
 	rec := httptest.NewRecorder()
-	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatOpenAI, "")
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatOpenAI)
 
 	sh.InjectNoAvailableAccountError(`upstream API error: status=429`, errors.New("no enabled accounts available"))
 
@@ -377,7 +375,7 @@ func TestSanitizeToolInput_FieldMapping(t *testing.T) {
 }
 
 func TestNormalizeUpstreamToolCall_ListDirUsesTopLevelBash(t *testing.T) {
-	name, input := normalizeUpstreamToolCall("LS", `{"path":"/tmp/project"}`, "/Users/dailin/Documents/GitHub/TEST")
+	name, input := normalizeUpstreamToolCall("LS", `{"path":"/tmp/project"}`)
 	if name != "Bash" {
 		t.Fatalf("expected Bash, got %q", name)
 	}
@@ -393,23 +391,8 @@ func TestNormalizeUpstreamToolCall_ListDirUsesTopLevelBash(t *testing.T) {
 	}
 }
 
-func TestNormalizeUpstreamToolCall_ListDirPlaceholderPathFallsBackToWorkdir(t *testing.T) {
-	workdir := "/Users/dailin/Documents/GitHub/TEST"
-	name, input := normalizeUpstreamToolCall("LS", `{"path":"/home/user/app"}`, workdir)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("expected json input, got %v", err)
-	}
-	if payload["command"] != `ls -1A -- "`+workdir+`"` {
-		t.Fatalf("expected workdir fallback command, got %s", payload["command"])
-	}
-}
-
 func TestNormalizeUpstreamToolCall_GlobPreservesGlob(t *testing.T) {
-	name, input := normalizeUpstreamToolCall("Glob", `{"path":"/tmp/project"}`, "/Users/dailin/Documents/GitHub/TEST")
+	name, input := normalizeUpstreamToolCall("Glob", `{"path":"/tmp/project"}`)
 	if name != "Glob" {
 		t.Fatalf("expected Glob, got %q", name)
 	}
@@ -418,246 +401,8 @@ func TestNormalizeUpstreamToolCall_GlobPreservesGlob(t *testing.T) {
 	}
 }
 
-func TestNormalizeUpstreamToolCall_RebasesForeignReadPathToWorkdir(t *testing.T) {
-	workdir := t.TempDir()
-	target := filepath.Join(workdir, "dashboard_data.json")
-	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-
-	name, input := normalizeUpstreamToolCall("Read", `{"file_path":"/Users/junchaoli/monitor_trump/dashboard_data.json"}`, workdir)
-	if name != "Read" {
-		t.Fatalf("expected Read, got %q", name)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if payload["file_path"] != target {
-		t.Fatalf("expected foreign path to rebase to %q, got %q", target, payload["file_path"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RebasesForeignGlobPathToWorkdir(t *testing.T) {
-	workdir := t.TempDir()
-	targetDir := filepath.Join(workdir, "web-ui")
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		t.Fatalf("mkdir target: %v", err)
-	}
-
-	name, input := normalizeUpstreamToolCall("Glob", `{"path":"/Users/dailin/dev/caption-cloud/web-ui","pattern":"*"}`, workdir)
-	if name != "Glob" {
-		t.Fatalf("expected Glob, got %q", name)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if payload["path"] != targetDir {
-		t.Fatalf("expected foreign glob path to rebase to %q, got %q", targetDir, payload["path"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RebasesSandboxGlobRootToWorkdir(t *testing.T) {
-	workdir := t.TempDir()
-
-	name, input := normalizeUpstreamToolCall("Glob", `{"path":"/tmp/cc-agent/sb1-svtcktbo/project","pattern":"**/*.{tsx,ts,jsx,js}"}`, workdir)
-	if name != "Glob" {
-		t.Fatalf("expected Glob, got %q", name)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if payload["path"] != workdir {
-		t.Fatalf("expected sandbox glob root to rebase to %q, got %q", workdir, payload["path"])
-	}
-	if strings.Contains(payload["path"], "/tmp/cc-agent/") {
-		t.Fatalf("expected placeholder glob path removed, got %q", payload["path"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RebasesForeignWritePathToWorkdirWhenFileMissing(t *testing.T) {
-	workdir := t.TempDir()
-
-	name, input := normalizeUpstreamToolCall("Write", `{"file_path":"/tmp/cc-agent/sb1-fxjxbmvk/project/calculator.py","content":"print('ok')"}`, workdir)
-	if name != "Write" {
-		t.Fatalf("expected Write, got %q", name)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	want := filepath.Join(workdir, "calculator.py")
-	if payload["file_path"] != want {
-		t.Fatalf("expected foreign write path to rebase to %q, got %q", want, payload["file_path"])
-	}
-	if payload["content"] != "print('ok')" {
-		t.Fatalf("expected content preserved, got %q", payload["content"])
-	}
-	if strings.Contains(payload["file_path"], "/tmp/cc-agent/") {
-		t.Fatalf("expected placeholder write path removed, got %q", payload["file_path"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RebasesForeignNestedWritePathWhenLocalParentExists(t *testing.T) {
-	workdir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(workdir, "src"), 0o755); err != nil {
-		t.Fatalf("mkdir src: %v", err)
-	}
-
-	name, input := normalizeUpstreamToolCall("Write", `{"file_path":"/tmp/cc-agent/sb1-fxjxbmvk/project/src/calculator.py","content":"print('ok')"}`, workdir)
-	if name != "Write" {
-		t.Fatalf("expected Write, got %q", name)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	want := filepath.Join(workdir, "src", "calculator.py")
-	if payload["file_path"] != want {
-		t.Fatalf("expected nested foreign write path to rebase to %q, got %q", want, payload["file_path"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_DoesNotRebaseSandboxMetadataReadPath(t *testing.T) {
-	workdir := t.TempDir()
-	name, input := normalizeUpstreamToolCall("Read", `{"file_path":"/tmp/cc-agent/sb1-demo/.claude/.claude.json"}`, workdir)
-	if name != "Read" {
-		t.Fatalf("expected Read, got %q", name)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if payload["file_path"] != "/tmp/cc-agent/sb1-demo/.claude/.claude.json" {
-		t.Fatalf("expected sandbox metadata path preserved for suppression, got %q", payload["file_path"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_ForeignAbsoluteReadStaysReadWhenWorkdirUnknown(t *testing.T) {
-	name, input := normalizeUpstreamToolCall("Read", `{"file_path":"/Users/jianxinwei/workspace/cursor-monitor/README.md"}`, "/home/dailin")
-	if name != "Read" {
-		t.Fatalf("expected Read, got %q", name)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if payload["file_path"] != "/Users/jianxinwei/workspace/cursor-monitor/README.md" {
-		t.Fatalf("expected original file_path to remain explicit, got %q", payload["file_path"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RewritesForeignBashReadCandidatesToWorkdir(t *testing.T) {
-	workdir := t.TempDir()
-	target := filepath.Join(workdir, "dashboard_data.json")
-	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-
-	name, input := normalizeUpstreamToolCall("Bash", `{"command":"if [ -f \"jinyaozhang/Projects/truth_social_scraper/dashboard_data.json\" ]; then sed -n '1,240p' < \"jinyaozhang/Projects/truth_social_scraper/dashboard_data.json\"; exit 0; fi; if [ -f \"dashboard_data.json\" ]; then sed -n '1,240p' < \"dashboard_data.json\"; exit 0; fi"}`, workdir)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	normalizedCommand := strings.ToLower(strings.ReplaceAll(payload["command"], `\`, `/`))
-	normalizedTarget := strings.ToLower(strings.ReplaceAll(target, `\`, `/`))
-	for strings.Contains(normalizedCommand, "//") {
-		normalizedCommand = strings.ReplaceAll(normalizedCommand, "//", "/")
-	}
-	if !strings.Contains(normalizedCommand, normalizedTarget) {
-		t.Fatalf("expected bash read candidate to rebase to %q, got %s", target, payload["command"])
-	}
-	if strings.Contains(input, "jinyaozhang/Projects/truth_social_scraper") {
-		t.Fatalf("expected foreign path to be removed from localized bash command, got %s", input)
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RewritesForeignRelativeReadTailToWorkdir(t *testing.T) {
-	workdir := t.TempDir()
-	target := filepath.Join(workdir, "test_caption_cloud.py")
-	if err := os.WriteFile(target, []byte("print('ok')"), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-
-	name, input := normalizeUpstreamToolCall("Bash", `{"command":"if [ -f \"jianxinwei/workspace/monitor_trump/test_caption_cloud.py\" ]; then sed -n '1,240p' < \"jianxinwei/workspace/monitor_trump/test_caption_cloud.py\"; exit 0; fi"}`, workdir)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	normalizedCommand := strings.ToLower(strings.ReplaceAll(payload["command"], `\`, `/`))
-	normalizedTarget := strings.ToLower(strings.ReplaceAll(target, `\`, `/`))
-	for strings.Contains(normalizedCommand, "//") {
-		normalizedCommand = strings.ReplaceAll(normalizedCommand, "//", "/")
-	}
-	if !strings.Contains(normalizedCommand, normalizedTarget) {
-		t.Fatalf("expected relative foreign path to rebase to %q, got %s", target, payload["command"])
-	}
-	if strings.Contains(input, "jianxinwei/workspace/monitor_trump") {
-		t.Fatalf("expected foreign path to be removed from localized bash command, got %s", input)
-	}
-}
-
-func TestNormalizeUpstreamToolCall_LocalizesForeignBashReadCandidatesToFindInWorkdir(t *testing.T) {
-	workdir := t.TempDir()
-	nested := filepath.Join(workdir, "src", "dashboard_data.json")
-	if err := os.MkdirAll(filepath.Dir(nested), 0o755); err != nil {
-		t.Fatalf("mkdir nested: %v", err)
-	}
-	if err := os.WriteFile(nested, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write nested: %v", err)
-	}
-
-	name, input := normalizeUpstreamToolCall("Bash", `{"command":"if [ -f \"jinyaozhang/Projects/truth_social_scraper/dashboard_data.json\" ]; then sed -n '1,240p' < \"jinyaozhang/Projects/truth_social_scraper/dashboard_data.json\"; exit 0; fi; if [ -f \"truth_social_scraper/dashboard_data.json\" ]; then sed -n '1,240p' < \"truth_social_scraper/dashboard_data.json\"; exit 0; fi"}`, workdir)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("unmarshal input: %v", err)
-	}
-	if !strings.Contains(payload["command"], "find . -type f -name \"dashboard_data.json\"") {
-		t.Fatalf("expected localized find-based lookup, got %s", input)
-	}
-	if strings.Contains(input, "jinyaozhang/Projects/truth_social_scraper") {
-		t.Fatalf("expected foreign path to be removed, got %s", input)
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RewritesProjectRootProbeCommandToRelativeList(t *testing.T) {
-	workdir := `d:\Code\Orchids-2api`
-	name, input := normalizeUpstreamToolCall("Bash", `{"command":"ls /mnt/d/Code/Orchids-2api 2>/dev/null || ls ~/Orchids-2api 2>/dev/null || echo \"cannot access windows path\"","description":"Try to access Windows project path"}`, workdir)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("expected json input, got %v", err)
-	}
-	if payload["command"] != `ls -1A -- "."` {
-		t.Fatalf("expected relative root list command, got %s", payload["command"])
-	}
-	if payload["description"] != "List project root directory entries" {
-		t.Fatalf("expected localized description, got %s", payload["description"])
-	}
-	if strings.Contains(input, "/mnt/d/Code/Orchids-2api") || strings.Contains(input, "~/Orchids-2api") {
-		t.Fatalf("expected foreign probe paths removed, got %s", input)
-	}
-}
-
 func TestRewriteToolCallToClient_PrunesNestedUnknownTodoFields(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic, "")
+	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
 	defer h.release()
 	h.setClientTools([]interface{}{map[string]interface{}{
 		"name": "TodoWrite",
@@ -694,7 +439,7 @@ func TestRewriteToolCallToClient_PrunesNestedUnknownTodoFields(t *testing.T) {
 }
 
 func TestRewriteToolCallToClient_AddsRequiredDescriptionToNativeWarpBashCall(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic, "")
+	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
 	defer h.release()
 	h.setClientTools([]interface{}{map[string]interface{}{
 		"name": "Bash",
@@ -726,7 +471,7 @@ func TestRewriteToolCallToClient_AddsRequiredDescriptionToNativeWarpBashCall(t *
 }
 
 func TestStreamHandler_NativeWarpBashCallSatisfiesClientSchema(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic, "")
+	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
 	defer h.release()
 	h.setClientTools([]interface{}{map[string]interface{}{
 		"name": "Bash",
@@ -759,7 +504,7 @@ func TestStreamHandler_NativeWarpBashCallSatisfiesClientSchema(t *testing.T) {
 }
 
 func TestStreamHandler_WarpToolCallDoesNotRewriteCommand(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic, `D:\Code\Orchids-2api`)
+	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
 	defer h.release()
 	h.setClientTools([]interface{}{map[string]interface{}{
 		"name": "Bash",
@@ -789,7 +534,7 @@ func TestStreamHandler_WarpToolCallDoesNotRewriteCommand(t *testing.T) {
 }
 
 func TestStreamHandler_RejectsWarpCallMissingUnsupportedClientRequirement(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic, "")
+	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
 	defer h.release()
 	h.setSurfaceToolRejects(true)
 	h.setClientTools([]interface{}{map[string]interface{}{
@@ -830,63 +575,6 @@ func TestRewriteToolCallToClient_DoesNotAddUndeclaredBashDescription(t *testing.
 	}
 }
 
-func TestNormalizeUpstreamToolCall_RewritesForeignGitProjectPathToLocalGitCommand(t *testing.T) {
-	workdir := `d:\Code\Orchids-2api`
-	name, input := normalizeUpstreamToolCall("Bash", `{"command":"git -C /tmp/cc-agent/sb1-fxjxbmvk/project status --short 2>&1 || git status --short 2>&1","description":"Check git status in project directory"}`, workdir)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("expected json input, got %v", err)
-	}
-	if payload["command"] != `git status --short 2>&1 || git status --short 2>&1` {
-		t.Fatalf("expected localized git command, got %s", payload["command"])
-	}
-	if strings.Contains(payload["command"], "/tmp/cc-agent/") {
-		t.Fatalf("expected placeholder git path removed, got %s", payload["command"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RewritesSandboxBashRootListToDot(t *testing.T) {
-	workdir := `d:\Code\Orchids-2api`
-	name, input := normalizeUpstreamToolCall("Bash", `{"command":"ls -la /tmp/cc-agent/sb1-svtcktbo/project","description":"List project root"}`, workdir)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("expected json input, got %v", err)
-	}
-	if payload["command"] != `ls -la .` {
-		t.Fatalf("expected sandbox root list to localize to dot, got %s", payload["command"])
-	}
-	if strings.Contains(payload["command"], "/tmp/cc-agent/") {
-		t.Fatalf("expected placeholder bash path removed, got %s", payload["command"])
-	}
-}
-
-func TestNormalizeUpstreamToolCall_RewritesSandboxFindProjectToDot(t *testing.T) {
-	workdir := `d:\Code\Orchids-2api`
-	name, input := normalizeUpstreamToolCall("Bash", `{"command":"find /tmp/cc-agent/sb1-svtcktbo/project -type f -name \"*.tsx\" -o -name \"*.ts\" -o -name \"*.jsx\" -o -name \"*.js\" | head -30"}`, workdir)
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("expected json input, got %v", err)
-	}
-	if !strings.Contains(payload["command"], `find . -type f`) {
-		t.Fatalf("expected sandbox find command localized to project root, got %s", payload["command"])
-	}
-	if strings.Contains(payload["command"], "/tmp/cc-agent/") {
-		t.Fatalf("expected placeholder find path removed, got %s", payload["command"])
-	}
-}
-
 func TestHasRequiredToolInput_Validations(t *testing.T) {
 	if ok := validToolCallInput("write", `{}`); ok {
 		t.Fatalf("write should require path+content")
@@ -907,7 +595,7 @@ func TestStreamHandler_TextFlow_AnthropicSSE(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	// seed a message_start so the stream resembles real output
@@ -935,7 +623,7 @@ func TestStreamHandler_ToolInput_EndEmitsToolUse(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-start", "id": "t1", "toolName": "bash"}})
@@ -956,8 +644,7 @@ func TestStreamHandler_ListDirToolInput_EndEmitsBashTopLevelList(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	workdir := "/Users/dailin/Documents/GitHub/TEST"
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, workdir)
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "tool-input-start", "id": "t1", "toolName": "LS"}})
@@ -968,8 +655,10 @@ func TestStreamHandler_ListDirToolInput_EndEmitsBashTopLevelList(t *testing.T) {
 	if !strings.Contains(out, `"name":"Bash"`) {
 		t.Fatalf("expected LS to emit Bash tool_use, got: %s", out)
 	}
-	if !strings.Contains(out, `ls -1A -- \\\"`+workdir+`\\\"`) {
-		t.Fatalf("expected workdir top-level ls command, got: %s", out)
+	// The upstream path was a placeholder and there is no workdir to substitute
+	// any more, so the client is asked to list its own current directory.
+	if !strings.Contains(out, `ls -1A -- \\\".\\\"`) {
+		t.Fatalf("expected a relative top-level ls command, got: %s", out)
 	}
 }
 
@@ -978,7 +667,7 @@ func TestStreamHandler_OpenAI_SendsDONEOnStop(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatOpenAI, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatOpenAI)
 	defer sh.release()
 
 	sh.finishResponse("end_turn")
@@ -1028,7 +717,7 @@ func TestStreamHandler_TokensUsed_OverridesEstimation(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.setUsageTokens(10, -1)
@@ -1046,7 +735,7 @@ func TestStreamHandler_FinalOutputTokens_MatchChunkedText(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.handleMessage(upstream.SSEMessage{Type: "model", Event: map[string]any{"type": "text-start"}})
@@ -1066,7 +755,7 @@ func TestStreamHandler_KeepAlive_NoPanic(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	// should not write once hasReturn set
@@ -1089,7 +778,7 @@ func TestStreamHandler_CoalescesNonTextFlushes(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.writeSSEBytes("message_start", []byte(`{"type":"message_start"}`))
@@ -1127,7 +816,7 @@ func TestStreamHandler_FinishResponse_SuppressesGenericEmptyFallbackWhenRequeste
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.finishResponse("end_turn")
@@ -1146,7 +835,7 @@ func TestStreamHandler_NoToolsGateSuppressesValidToolCall(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.setDisallowToolCalls(true)
@@ -1175,7 +864,7 @@ func TestStreamHandler_NoToolsWriteReturnsContentAsText(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.setAllowedToolNames(nil)
@@ -1209,7 +898,7 @@ func TestStreamHandler_EmptyAllowedToolSetRejectsAllTools(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.setAllowedToolNames(nil)
@@ -1239,7 +928,7 @@ func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.setEmptyOutputFallback("File operation completed successfully.")
@@ -1265,7 +954,7 @@ func TestStreamHandler_ModelConfigRefreshCallback(t *testing.T) {
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic)
 	defer sh.release()
 	called := 0
 	sh.onModelConfigRefresh = func() { called++ }
@@ -1300,7 +989,7 @@ func TestStreamHandler_ReasoningCountsAsUpstreamOutputWhenSuppressed(t *testing.
 	rec := newFlushRecorder()
 	logger := debug.New(false, false)
 	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, true, true, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(cfg, rec, logger, true, true, adapter.FormatAnthropic)
 	defer sh.release()
 
 	sh.handleMessage(upstream.SSEMessage{
@@ -1324,7 +1013,7 @@ func TestStreamHandler_ReasoningCountsAsUpstreamOutputWhenSuppressed(t *testing.
 // indistinguishable from an answer.
 func TestReportRequestFailure_ClientRejectionAnswers400(t *testing.T) {
 	rec := httptest.NewRecorder()
-	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic, "")
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic)
 
 	sh.reportRequestFailure("probe", "client", "The upstream rejected the request parameters or model. Check the request and model selection.")
 

@@ -31,7 +31,6 @@ type UpstreamRequest struct {
 	// WorkBuddy uses RequestID to aggregate one turn and TraceID for diagnostics.
 	TraceID              string
 	ChatSessionID        string
-	Workdir              string // Dynamic local workdir override
 	WarpCliAgentModel    string
 	WarpComputerUseModel string
 	// WarpContextWindowLimit is the base model's input-token window as the

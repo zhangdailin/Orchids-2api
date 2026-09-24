@@ -521,23 +521,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if targetChannel == "" && validatedModel != nil {
 		targetChannel = strings.TrimSpace(validatedModel.Channel)
 	}
-	effectiveWorkdir, prevWorkdir, workdirChanged := h.resolveWorkdir(r, req, conversationKey)
-	if workdirChanged {
-		slog.Info("工作目录变化，保留完整请求历史并新建上游会话", "prev", prevWorkdir, "next", effectiveWorkdir, "session", conversationKey)
-		// 工作目录变化时清除上游会话ID，强制开启新对话
-		if conversationKey != "" {
-			h.sessionStore.DeleteSession(r.Context(), conversationKey)
-		}
-	}
-	if isCurrentWorkdirRequest(req) {
-		logger.LogEarlyExit("current_workdir", map[string]interface{}{
-			"mode":    "local",
-			"workdir": effectiveWorkdir,
-			"path":    r.URL.Path,
-		})
-		writeCurrentWorkdirResponse(w, req, responseFormat, effectiveWorkdir, startTime, logger)
-		return
-	}
+	// The gateway no longer models a working directory at all. It used to extract
+	// one from headers/system/messages, remember it per conversation, drop the
+	// upstream session whenever it changed, answer "当前工作目录" locally without
+	// calling upstream, and rebase foreign tool paths onto it. Every one of those
+	// behaviours is gone: the request that reached upstream is now the request the
+	// caller wrote.
 	if isSuggestionMode(req.Messages) {
 		suggestion := buildLocalSuggestion(req.Messages)
 		if verboseDiagnostics {
@@ -873,7 +862,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sh := newStreamHandler(
-		cfg, w, logger, noThinking, isStream, responseFormat, effectiveWorkdir,
+		cfg, w, logger, noThinking, isStream, responseFormat,
 	)
 	allowedToolNames := []string(nil)
 	allowedToolNames = validationAllowedToolNames(effectiveTools, req.Tools, false)
@@ -1021,7 +1010,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		warpFeatureConfig := warpFeatures.Config
 		upstreamReq := upstream.UpstreamRequest{
 			Prompt:                 builtPrompt,
-			Workdir:                effectiveWorkdir,
 			Model:                  mappedModel,
 			Messages:               payloadMessages,
 			System:                 payloadSystem,

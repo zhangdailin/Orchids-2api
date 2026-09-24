@@ -24,8 +24,6 @@ type WarpToolBinding struct {
 
 // SessionStore abstracts request session state and Warp tool continuations.
 type SessionStore interface {
-	GetWorkdir(ctx context.Context, key string) (string, bool)
-	SetWorkdir(ctx context.Context, key, workdir string)
 	GetConvID(ctx context.Context, key string) (string, bool)
 	SetConvID(ctx context.Context, key, convID string)
 	GetAccountID(ctx context.Context, key string) (int64, bool)
@@ -71,21 +69,6 @@ func (s *RedisSessionStore) toolKey(conversationKey, toolCallID string) string {
 	conversationKey = warpToolBindingNamespace(conversationKey)
 	sum := sha256.Sum256([]byte(conversationKey + "\x00" + toolCallID))
 	return s.toolRoot + hex.EncodeToString(sum[:])
-}
-
-func (s *RedisSessionStore) GetWorkdir(ctx context.Context, key string) (string, bool) {
-	val, err := s.client.HGet(ctx, s.key(key), "workdir").Result()
-	if err != nil {
-		return "", false
-	}
-	return val, true
-}
-
-func (s *RedisSessionStore) SetWorkdir(ctx context.Context, key, workdir string) {
-	pipe := s.client.Pipeline()
-	pipe.HSet(ctx, s.key(key), "workdir", workdir)
-	pipe.Expire(ctx, s.key(key), s.ttl)
-	pipe.Exec(ctx)
 }
 
 func (s *RedisSessionStore) GetConvID(ctx context.Context, key string) (string, bool) {
@@ -171,7 +154,6 @@ func (s *RedisSessionStore) Cleanup(_ context.Context) {
 // --- Memory Implementation ---
 
 type memorySession struct {
-	workdir     string
 	convID      string
 	accountID   int64
 	taskContext string
@@ -222,24 +204,6 @@ func (s *MemorySessionStore) getOrCreate(key string) *memorySession {
 		s.sessions[key] = sess
 	}
 	return sess
-}
-
-func (s *MemorySessionStore) GetWorkdir(_ context.Context, key string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	sess, ok := s.sessions[key]
-	if !ok || sess.workdir == "" {
-		return "", false
-	}
-	return sess.workdir, true
-}
-
-func (s *MemorySessionStore) SetWorkdir(_ context.Context, key, workdir string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess := s.getOrCreate(key)
-	sess.workdir = workdir
-	sess.lastAccess = time.Now()
 }
 
 func (s *MemorySessionStore) GetConvID(_ context.Context, key string) (string, bool) {

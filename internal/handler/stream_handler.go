@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -203,7 +201,6 @@ func (h *streamHandler) flushSSEBytesLockedWithHint(event string, dataLen int, i
 type streamHandler struct {
 	// Configuration
 	config              *config.Config
-	workdir             string
 	isStream            bool
 	suppressThinking    bool
 	useUpstreamUsage    bool
@@ -292,7 +289,6 @@ func newStreamHandler(
 	suppressThinking bool,
 	isStream bool,
 	responseFormat adapter.ResponseFormat,
-	workdir string,
 ) *streamHandler {
 	var flusher http.Flusher
 	if isStream {
@@ -303,7 +299,6 @@ func newStreamHandler(
 
 	h := &streamHandler{
 		config:           cfg,
-		workdir:          workdir,
 		w:                w,
 		flusher:          flusher,
 		isStream:         isStream,
@@ -1133,22 +1128,19 @@ func sanitizeToolInput(name, input string) string {
 	return string(normalized)
 }
 
-func normalizeUpstreamToolCall(name, input, workdir string) (string, string) {
+// normalizeUpstreamToolCall maps an upstream tool name onto the client's
+// vocabulary and sanitizes its input. It no longer rebases foreign absolute
+// paths: that needed a request workdir, and the gateway no longer models one.
+func normalizeUpstreamToolCall(name, input string) (string, string) {
 	rawName := strings.TrimSpace(name)
 	if rawName == "" {
 		return rawName, input
 	}
-	if bashInput, ok := rewriteDirectoryListToolInput(rawName, input, workdir); ok {
+	if bashInput, ok := rewriteDirectoryListToolInput(rawName, input); ok {
 		return "Bash", bashInput
 	}
 	normalizedName := normalizeUpstreamToolName(rawName)
-	sanitized := sanitizeToolInput(normalizedName, input)
-	sanitized = rewriteForeignBashReadCommandInput(normalizedName, sanitized, workdir)
-	sanitized = rewriteBashProjectRootProbeCommandInput(normalizedName, sanitized, workdir)
-	sanitized = rewriteBashGitProjectPathCommandInput(normalizedName, sanitized, workdir)
-	sanitized = rewriteForeignBashSandboxPathInput(normalizedName, sanitized, workdir)
-	sanitized = rewriteForeignAbsoluteToolPathInput(normalizedName, sanitized, workdir)
-	return normalizedName, sanitized
+	return normalizedName, sanitizeToolInput(normalizedName, input)
 }
 
 func normalizeUpstreamToolName(name string) string {
@@ -1159,16 +1151,16 @@ func normalizeUpstreamToolName(name string) string {
 	return mapped
 }
 
-func rewriteDirectoryListToolInput(name, input, workdir string) (string, bool) {
+// rewriteDirectoryListToolInput turns an LS-shaped upstream call into the Bash
+// equivalent the client can actually run. The workdir fallback is gone: an
+// unspecified path now means the client's own current directory.
+func rewriteDirectoryListToolInput(name, input string) (string, bool) {
 	if !isDirectoryListToolName(name) {
 		return "", false
 	}
 	path := extractDirectoryListPath(input)
-	if isPlaceholderDirectoryListPath(path) && strings.TrimSpace(workdir) != "" {
-		path = strings.TrimSpace(workdir)
-	}
-	if strings.TrimSpace(path) == "" {
-		path = strings.TrimSpace(workdir)
+	if isPlaceholderDirectoryListPath(path) {
+		path = ""
 	}
 	if strings.TrimSpace(path) == "" {
 		path = "."
@@ -1212,589 +1204,6 @@ func extractDirectoryListPath(input string) string {
 	return ""
 }
 
-func rewriteForeignAbsoluteToolPathInput(name, input, workdir string) string {
-	workdir = strings.TrimSpace(workdir)
-	if workdir == "" {
-		return input
-	}
-	nameKey := strings.ToLower(strings.TrimSpace(name))
-	switch nameKey {
-	case "read", "edit", "write", "glob", "grep":
-	default:
-		return input
-	}
-
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return input
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return input
-	}
-
-	changed := false
-	for _, key := range []string{"file_path", "path", "directory", "dir"} {
-		raw, ok := payload[key]
-		if !ok {
-			continue
-		}
-		path, ok := raw.(string)
-		if !ok {
-			continue
-		}
-		rewritten := rebaseAbsolutePathToWorkdir(path, workdir)
-		if rewritten == path && nameKey == "write" {
-			rewritten = rebaseAbsoluteWritePathToWorkdir(path, workdir)
-		}
-		if rewritten != path {
-			payload[key] = rewritten
-			changed = true
-		}
-	}
-	if !changed {
-		return input
-	}
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return input
-	}
-	return string(normalized)
-}
-
-func rewriteBashProjectRootProbeCommandInput(name, input, workdir string) string {
-	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
-		return input
-	}
-	workdir = strings.TrimSpace(workdir)
-	if workdir == "" {
-		return input
-	}
-
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return input
-	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return input
-	}
-
-	command, _ := payload["command"].(string)
-	command = strings.TrimSpace(command)
-	if !looksLikeProjectRootProbeCommand(command, workdir) {
-		return input
-	}
-
-	payload["command"] = `ls -1A -- "."`
-	payload["description"] = "List project root directory entries"
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return input
-	}
-	return string(normalized)
-}
-
-func rewriteBashGitProjectPathCommandInput(name, input, workdir string) string {
-	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
-		return input
-	}
-	workdir = strings.TrimSpace(workdir)
-	if workdir == "" {
-		return input
-	}
-
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return input
-	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return input
-	}
-
-	command, _ := payload["command"].(string)
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return input
-	}
-
-	rewritten, changed := rewriteForeignGitCCommand(command, workdir)
-	if !changed {
-		return input
-	}
-	payload["command"] = rewritten
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return input
-	}
-	return string(normalized)
-}
-
-func looksLikeProjectRootProbeCommand(command, workdir string) bool {
-	command = strings.TrimSpace(command)
-	workdir = strings.TrimSpace(workdir)
-	if command == "" || workdir == "" {
-		return false
-	}
-	lower := strings.ToLower(command)
-	if !strings.Contains(lower, "ls") {
-		return false
-	}
-	if strings.Contains(lower, "sed -n '1,240p'") {
-		return false
-	}
-
-	projectBase := strings.ToLower(filepath.Base(filepath.Clean(workdir)))
-	markers := 0
-	for _, marker := range []string{
-		"/mnt/",
-		"/tmp/cc-agent/",
-		"~/",
-		"cannot access windows path",
-		"2>/dev/null",
-	} {
-		if strings.Contains(lower, marker) {
-			markers++
-		}
-	}
-	if projectBase != "" && projectBase != "." && projectBase != string(filepath.Separator) && strings.Contains(lower, projectBase) {
-		markers++
-	}
-	if windowsDrivePathRegex.MatchString(command) {
-		markers++
-	}
-	return markers >= 2
-}
-
-func rewriteForeignGitCCommand(command, workdir string) (string, bool) {
-	matches := gitCPathRegex.FindAllStringSubmatchIndex(command, -1)
-	if len(matches) == 0 {
-		return "", false
-	}
-
-	var sb strings.Builder
-	last := 0
-	changed := false
-	for _, match := range matches {
-		if len(match) < 4 {
-			continue
-		}
-		token := command[match[2]:match[3]]
-		pathValue := strings.Trim(strings.TrimSpace(token), "\"'")
-		if !looksLikeForeignGitProjectPath(pathValue, workdir) {
-			continue
-		}
-		sb.WriteString(command[last:match[0]])
-		sb.WriteString("git ")
-		last = match[1]
-		changed = true
-	}
-	if !changed {
-		return "", false
-	}
-	sb.WriteString(command[last:])
-	return strings.TrimSpace(sb.String()), true
-}
-
-func looksLikeForeignGitProjectPath(pathValue, workdir string) bool {
-	pathValue = strings.TrimSpace(pathValue)
-	workdir = strings.TrimSpace(workdir)
-	if pathValue == "" || workdir == "" {
-		return false
-	}
-	if sameOrWithinPath(pathValue, workdir) {
-		return false
-	}
-	lower := strings.ToLower(pathValue)
-	if strings.Contains(lower, "/tmp/cc-agent/") || strings.Contains(lower, "/mnt/") || strings.Contains(lower, "~/") {
-		return true
-	}
-	return windowsDrivePathRegex.MatchString(pathValue)
-}
-
-func rewriteForeignBashReadCommandInput(name, input, workdir string) string {
-	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
-		return input
-	}
-	workdir = strings.TrimSpace(workdir)
-	if workdir == "" {
-		return input
-	}
-
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return input
-	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return input
-	}
-
-	command, _ := payload["command"].(string)
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return input
-	}
-	if localized, ok := rewriteBashReadCandidatesToLocalSearch(command, workdir); ok {
-		payload["command"] = localized
-		normalized, err := json.Marshal(payload)
-		if err != nil {
-			return input
-		}
-		return string(normalized)
-	}
-
-	changed := false
-	rewrittenCommand := quotedPathRegex.ReplaceAllStringFunc(command, func(match string) string {
-		if len(match) < 2 {
-			return match
-		}
-		pathValue := match[1 : len(match)-1]
-		rewritten := rebaseCandidatePathToWorkdir(pathValue, workdir)
-		if rewritten == pathValue {
-			return match
-		}
-		changed = true
-		return strconv.Quote(rewritten)
-	})
-	if !changed {
-		return input
-	}
-	payload["command"] = rewrittenCommand
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return input
-	}
-	return string(normalized)
-}
-
-func rewriteForeignBashSandboxPathInput(name, input, workdir string) string {
-	if !strings.EqualFold(strings.TrimSpace(name), "bash") {
-		return input
-	}
-	workdir = strings.TrimSpace(workdir)
-	if workdir == "" {
-		return input
-	}
-
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" || !strings.Contains(trimmed, "/tmp/cc-agent/") {
-		return input
-	}
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return input
-	}
-
-	command, _ := payload["command"].(string)
-	command = strings.TrimSpace(command)
-	if command == "" || !strings.Contains(command, "/tmp/cc-agent/") {
-		return input
-	}
-
-	rewritten, changed := rewriteForeignSandboxPathsInShellCommand(command, workdir)
-	if !changed {
-		return input
-	}
-	payload["command"] = rewritten
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return input
-	}
-	return string(normalized)
-}
-
-func rewriteBashReadCandidatesToLocalSearch(command, workdir string) (string, bool) {
-	command = strings.TrimSpace(command)
-	workdir = strings.TrimSpace(workdir)
-	if command == "" || workdir == "" {
-		return "", false
-	}
-	if !strings.Contains(command, "[ -f ") || !strings.Contains(command, "sed -n '1,240p'") {
-		return "", false
-	}
-
-	matches := quotedPathRegex.FindAllStringSubmatch(command, -1)
-	if len(matches) == 0 {
-		return "", false
-	}
-
-	var basenames []string
-	var exactCandidates []string
-	seenBase := map[string]struct{}{}
-	seenExact := map[string]struct{}{}
-	needsLocalization := false
-
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		pathValue := strings.TrimSpace(match[1])
-		if pathValue == "" {
-			continue
-		}
-		base := filepath.Base(pathValue)
-		if base == "" || base == "." || base == string(filepath.Separator) {
-			continue
-		}
-
-		if isToolAbsolutePath(pathValue) || containsPathSeparator(pathValue) {
-			if !sameOrWithinPath(pathValue, workdir) {
-				needsLocalization = true
-			}
-		}
-
-		rewritten := rebaseCandidatePathToWorkdir(pathValue, workdir)
-		if rewritten != pathValue {
-			needsLocalization = true
-		}
-		if strings.TrimSpace(rewritten) != "" && pathExists(rewritten) && sameOrWithinPath(rewritten, workdir) {
-			if _, ok := seenExact[rewritten]; !ok {
-				seenExact[rewritten] = struct{}{}
-				exactCandidates = append(exactCandidates, rewritten)
-			}
-		}
-		if _, ok := seenBase[base]; !ok {
-			seenBase[base] = struct{}{}
-			basenames = append(basenames, base)
-		}
-	}
-
-	if !needsLocalization || len(basenames) == 0 {
-		return "", false
-	}
-
-	var parts []string
-	for _, candidate := range exactCandidates {
-		quoted := strconv.Quote(candidate)
-		parts = append(parts, "if [ -f "+quoted+" ]; then sed -n '1,240p' < "+quoted+"; exit 0; fi")
-	}
-	for _, base := range basenames {
-		quotedBase := strconv.Quote(base)
-		parts = append(parts, "found=$(find . -type f -name "+quotedBase+" | head -n 1)")
-		parts = append(parts, "if [ -n \"$found\" ]; then sed -n '1,240p' < \"$found\"; exit 0; fi")
-	}
-	parts = append(parts, "echo 'File does not exist.'; exit 1")
-	return strings.Join(parts, "; "), true
-}
-
-func rebaseCandidatePathToWorkdir(pathValue, workdir string) string {
-	pathValue = strings.TrimSpace(pathValue)
-	workdir = strings.TrimSpace(workdir)
-	if pathValue == "" || workdir == "" {
-		return pathValue
-	}
-	if rewritten, ok := rebaseSandboxPathToWorkdir(pathValue, workdir); ok {
-		return rewritten
-	}
-	if isToolAbsolutePath(pathValue) {
-		return rebaseAbsolutePathToWorkdir(pathValue, workdir)
-	}
-
-	cleanWorkdir := filepath.Clean(workdir)
-	projectBase := filepath.Base(cleanWorkdir)
-	parts := splitPathSegments(pathValue)
-	if len(parts) == 0 {
-		return pathValue
-	}
-
-	for i, part := range parts {
-		if !strings.EqualFold(strings.TrimSpace(part), projectBase) {
-			continue
-		}
-		if i+1 >= len(parts) {
-			break
-		}
-		candidate := filepath.Join(cleanWorkdir, filepath.Join(parts[i+1:]...))
-		if pathExists(candidate) {
-			return candidate
-		}
-	}
-
-	maxKeep := 4
-	if len(parts) < maxKeep {
-		maxKeep = len(parts)
-	}
-	for keep := maxKeep; keep >= 1; keep-- {
-		candidate := filepath.Join(cleanWorkdir, filepath.Join(parts[len(parts)-keep:]...))
-		if pathExists(candidate) {
-			return candidate
-		}
-	}
-
-	base := filepath.Base(pathValue)
-	if base == "." || base == string(filepath.Separator) || base == "" {
-		return pathValue
-	}
-	candidate := filepath.Join(cleanWorkdir, base)
-	if pathExists(candidate) {
-		return candidate
-	}
-	return pathValue
-}
-
-func rebaseAbsolutePathToWorkdir(pathValue, workdir string) string {
-	pathValue = strings.TrimSpace(pathValue)
-	workdir = strings.TrimSpace(workdir)
-	if pathValue == "" || workdir == "" {
-		return pathValue
-	}
-	if rewritten, ok := rebaseSandboxPathToWorkdir(pathValue, workdir); ok {
-		return rewritten
-	}
-	if isPlaceholderDirectoryListPath(pathValue) {
-		return workdir
-	}
-	if !isToolAbsolutePath(pathValue) {
-		return pathValue
-	}
-
-	cleanWorkdir := filepath.Clean(workdir)
-	cleanPath := filepath.Clean(pathValue)
-	if sameOrWithinPath(cleanPath, cleanWorkdir) {
-		return pathValue
-	}
-
-	parts := splitPathSegments(cleanPath)
-	maxKeep := 4
-	if len(parts) < maxKeep {
-		maxKeep = len(parts)
-	}
-	for keep := maxKeep; keep >= 1; keep-- {
-		tail := filepath.Join(parts[len(parts)-keep:]...)
-		candidate := filepath.Join(cleanWorkdir, tail)
-		if pathExists(candidate) {
-			return candidate
-		}
-	}
-
-	base := filepath.Base(cleanPath)
-	if base == "." || base == string(filepath.Separator) || base == "" {
-		return pathValue
-	}
-	candidate := filepath.Join(cleanWorkdir, base)
-	if pathExists(candidate) {
-		return candidate
-	}
-	return pathValue
-}
-
-func rebaseAbsoluteWritePathToWorkdir(pathValue, workdir string) string {
-	pathValue = strings.TrimSpace(pathValue)
-	workdir = strings.TrimSpace(workdir)
-	if pathValue == "" || workdir == "" || !isToolAbsolutePath(pathValue) {
-		return pathValue
-	}
-	if rewritten, ok := rebaseSandboxPathToWorkdir(pathValue, workdir); ok {
-		return rewritten
-	}
-
-	cleanWorkdir := filepath.Clean(workdir)
-	cleanPath := filepath.Clean(pathValue)
-	if sameOrWithinPath(cleanPath, cleanWorkdir) {
-		return pathValue
-	}
-
-	parts := splitPathSegments(cleanPath)
-	if len(parts) == 0 {
-		return pathValue
-	}
-
-	projectBase := strings.TrimSpace(filepath.Base(cleanWorkdir))
-	if candidate := rebaseWritePathAfterSegment(parts, cleanWorkdir, projectBase); candidate != "" {
-		return candidate
-	}
-	if candidate := rebaseWritePathAfterSegment(parts, cleanWorkdir, "project"); candidate != "" {
-		return candidate
-	}
-
-	base := filepath.Base(cleanPath)
-	if base == "." || base == string(filepath.Separator) || base == "" {
-		return pathValue
-	}
-	return filepath.Join(cleanWorkdir, base)
-}
-
-func rebaseWritePathAfterSegment(parts []string, workdir, segment string) string {
-	segment = strings.TrimSpace(segment)
-	if segment == "" || len(parts) == 0 {
-		return ""
-	}
-	for i, part := range parts {
-		if !strings.EqualFold(strings.TrimSpace(part), segment) {
-			continue
-		}
-		if i+1 >= len(parts) {
-			return ""
-		}
-		tail := filepath.Join(parts[i+1:]...)
-		candidate := filepath.Join(workdir, tail)
-		parent := filepath.Dir(candidate)
-		if pathExists(parent) || pathExists(candidate) {
-			return candidate
-		}
-		return ""
-	}
-	return ""
-}
-
-func sameOrWithinPath(pathValue, root string) bool {
-	pathValue = filepath.Clean(pathValue)
-	root = filepath.Clean(root)
-	if pathValue == root {
-		return true
-	}
-	rel, err := filepath.Rel(root, pathValue)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func splitPathSegments(pathValue string) []string {
-	pathValue = filepath.Clean(pathValue)
-	parts := strings.FieldsFunc(pathValue, func(r rune) bool {
-		return r == '/' || r == '\\'
-	})
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		out = append(out, part)
-	}
-	return out
-}
-
-func isToolAbsolutePath(pathValue string) bool {
-	trimmed := strings.TrimSpace(pathValue)
-	if trimmed == "" {
-		return false
-	}
-	if filepath.IsAbs(trimmed) {
-		return true
-	}
-	return strings.HasPrefix(trimmed, "/") || windowsDrivePathRegex.MatchString(trimmed)
-}
-
-func containsPathSeparator(pathValue string) bool {
-	return strings.Contains(pathValue, "/") || strings.Contains(pathValue, "\\")
-}
-
-func pathExists(pathValue string) bool {
-	if strings.TrimSpace(pathValue) == "" {
-		return false
-	}
-	_, err := os.Stat(pathValue)
-	return err == nil
-}
-
 func isPlaceholderDirectoryListPath(path string) bool {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
@@ -1809,37 +1218,6 @@ func isPlaceholderDirectoryListPath(path string) bool {
 	default:
 		return false
 	}
-}
-
-func rebaseSandboxPathToWorkdir(pathValue, workdir string) (string, bool) {
-	pathValue = strings.TrimSpace(strings.ReplaceAll(pathValue, "\\", "/"))
-	workdir = strings.TrimSpace(workdir)
-	if pathValue == "" || workdir == "" {
-		return "", false
-	}
-	if !strings.HasPrefix(strings.ToLower(pathValue), "/tmp/cc-agent/") {
-		return "", false
-	}
-
-	parts := strings.Split(strings.Trim(pathValue, "/"), "/")
-	if len(parts) < 3 {
-		return "", false
-	}
-	if !strings.EqualFold(parts[0], "tmp") || !strings.EqualFold(parts[1], "cc-agent") {
-		return "", false
-	}
-
-	tail := parts[3:]
-	if len(tail) == 0 || !strings.EqualFold(strings.TrimSpace(tail[0]), "project") {
-		return "", false
-	}
-	tail = tail[1:]
-	if len(tail) == 0 {
-		return filepath.Clean(workdir), true
-	}
-
-	joined := filepath.Join(append([]string{workdir}, tail...)...)
-	return filepath.Clean(joined), true
 }
 
 func hasNonProjectSandboxToolPath(name, input string) bool {
@@ -1873,88 +1251,6 @@ func isNonProjectSandboxPath(pathValue string) bool {
 		return true
 	}
 	return !strings.EqualFold(strings.TrimSpace(parts[3]), "project")
-}
-
-func rewriteForeignSandboxPathsInShellCommand(command, workdir string) (string, bool) {
-	if strings.TrimSpace(command) == "" || strings.TrimSpace(workdir) == "" || !strings.Contains(command, "/tmp/cc-agent/") {
-		return command, false
-	}
-
-	changed := false
-	rewritten := quotedPathRegex.ReplaceAllStringFunc(command, func(match string) string {
-		if len(match) < 2 {
-			return match
-		}
-		pathValue := match[1 : len(match)-1]
-		relative, ok := relativeShellPathForSandboxPath(pathValue, workdir)
-		if !ok {
-			return match
-		}
-		changed = true
-		return strconv.Quote(relative)
-	})
-
-	matches := tmpAgentPathRegex.FindAllStringSubmatchIndex(rewritten, -1)
-	if len(matches) == 0 {
-		return rewritten, changed
-	}
-
-	var sb strings.Builder
-	last := 0
-	for _, match := range matches {
-		if len(match) < 6 {
-			continue
-		}
-		pathStart, pathEnd := match[4], match[5]
-		sb.WriteString(rewritten[last:pathStart])
-		pathValue := rewritten[pathStart:pathEnd]
-		relative, ok := relativeShellPathForSandboxPath(pathValue, workdir)
-		if ok {
-			sb.WriteString(quoteShellPathIfNeeded(relative))
-			changed = true
-		} else {
-			sb.WriteString(pathValue)
-		}
-		last = pathEnd
-	}
-	sb.WriteString(rewritten[last:])
-	if !changed {
-		return command, false
-	}
-	return sb.String(), true
-}
-
-func relativeShellPathForSandboxPath(pathValue, workdir string) (string, bool) {
-	localPath, ok := rebaseSandboxPathToWorkdir(pathValue, workdir)
-	if !ok {
-		return "", false
-	}
-
-	cleanWorkdir := filepath.Clean(workdir)
-	cleanLocalPath := filepath.Clean(localPath)
-	if sameOrWithinPath(cleanLocalPath, cleanWorkdir) {
-		rel, err := filepath.Rel(cleanWorkdir, cleanLocalPath)
-		if err == nil {
-			rel = filepath.ToSlash(strings.TrimSpace(rel))
-			switch rel {
-			case "", ".":
-				return ".", true
-			default:
-				if !strings.HasPrefix(rel, ".") {
-					rel = "./" + rel
-				}
-				return rel, true
-			}
-		}
-	}
-	return ".", true
-}
-
-func quoteShellPathIfNeeded(pathValue string) string {
-	if strings.ContainsAny(pathValue, " \t()") {
-		return strconv.Quote(pathValue)
-	}
-	return pathValue
 }
 
 func (h *streamHandler) emitToolCallNonStream(call toolCall) {
@@ -2801,7 +2097,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			inputStr = strings.TrimSpace(buf.String())
 			perf.ReleaseStringBuilder(buf)
 		}
-		name, inputStr = normalizeUpstreamToolCall(name, inputStr, h.workdir)
+		name, inputStr = normalizeUpstreamToolCall(name, inputStr)
 		name, inputStr = h.rewriteToolCallToClient(name, inputStr)
 		delete(h.toolInputBuffers, toolID)
 		delete(h.toolInputHadDelta, toolID)
@@ -2834,7 +2130,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		inputStr, _ := msg.Event["input"].(string)
 		upstreamType, _ := msg.Event["warpToolType"].(string)
 		if strings.TrimSpace(upstreamType) == "" {
-			toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr, h.workdir)
+			toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr)
 			toolName, inputStr = h.rewriteToolCallToClient(toolName, inputStr)
 		} else {
 			// Warp tool payloads have already been decoded from their typed

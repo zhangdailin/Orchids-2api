@@ -389,7 +389,10 @@ func TestWarpBindingInput_DoesNotPersistMCPPayloads(t *testing.T) {
 	}
 }
 
-func TestPuterCurrentWorkdirAfterToolTurn_ReturnsLocalResponse(t *testing.T) {
+// A workdir question that follows a tool result is a normal turn now. It used
+// to be intercepted and answered locally, and the tool-result guard that skipped
+// the intercept for followups is gone with the intercept itself.
+func TestPuterCurrentWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
@@ -423,12 +426,11 @@ func TestPuterCurrentWorkdirAfterToolTurn_ReturnsLocalResponse(t *testing.T) {
 		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	calls := client.snapshotCalls()
-	if len(calls) != 0 {
-		t.Fatalf("expected 0 upstream calls for local workdir response, got %d", len(calls))
+	if calls := client.snapshotCalls(); len(calls) != 1 {
+		t.Fatalf("upstream calls = %d, want 1: the question must be answered upstream", len(calls))
 	}
-	if out := rec.Body.String(); !strings.Contains(out, `C:\\Users\\zhangdailin\\Desktop\\新建文件夹`) {
-		t.Fatalf("expected local response to include exact workdir, got: %s", out)
+	if out := rec.Body.String(); strings.Contains(out, "当前工作目录未在本次请求中提供") {
+		t.Fatalf("gateway still answered the workdir question locally: %s", out)
 	}
 }
 

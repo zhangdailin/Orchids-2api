@@ -21,7 +21,6 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	}
 	req := upstream.UpstreamRequest{
 		Model:           "claude-4-5-sonnet",
-		Workdir:         "/repo",
 		ChatSessionID:   "warp_conv_1",
 		WarpTaskContext: taskContext,
 		Messages: []prompt.Message{
@@ -105,8 +104,10 @@ func TestBuildRequestBytes_UsesOfficialProtoRequest(t *testing.T) {
 	if got := decoded.GetSettings().GetModelConfig().GetCoding(); got != "" {
 		t.Fatalf("coding model=%q want empty", got)
 	}
-	if got := decoded.GetInput().GetContext().GetDirectory().GetPwd(); got != "/repo" {
-		t.Fatalf("pwd=%q want /repo", got)
+	// The gateway no longer plumbs a working directory, so the published pwd is
+	// empty exactly as it was for every caller that sent none.
+	if got := decoded.GetInput().GetContext().GetDirectory().GetPwd(); got != "" {
+		t.Fatalf("pwd=%q want empty", got)
 	}
 }
 

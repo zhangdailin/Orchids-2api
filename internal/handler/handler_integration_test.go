@@ -43,70 +43,53 @@ func (p *panicUpstream) SendRequestWithPayload(ctx context.Context, req upstream
 	panic("unexpected upstream request")
 }
 
-func TestHandleMessages_CurrentWorkdir_LocalAnthropicJSON(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
-	h := NewWithLoadBalancer(cfg, nil)
-	h.client = &panicUpstream{}
+// A question about the working directory used to be answered by the gateway
+// itself, before the upstream was contacted at all, even when the caller had
+// supplied no workdir. The message the operator saw was therefore the gateway's
+// canned "not provided" line rather than the agent's own answer. The gateway no
+// longer models a workdir, so the request must reach upstream verbatim.
+func TestHandleMessages_WorkdirQuestionReachesUpstream(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		path     string
+		question string
+	}{
+		{name: "anthropic", path: "/puter/v1/messages", question: "当前运行的目录"},
+		{name: "openai", path: "/puter/v1/chat/completions", question: "workspace path"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
+			h := NewWithLoadBalancer(cfg, nil)
+			client := &relayRecordingClient{}
+			h.client = client
 
-	body, _ := json.Marshal(map[string]any{
-		"model":    "claude-3-5-sonnet",
-		"messages": []map[string]any{{"role": "user", "content": "当前运行的目录"}},
-		"system":   []any{},
-		"stream":   false,
-	})
+			body, _ := json.Marshal(map[string]any{
+				"model":    "claude-3-5-sonnet",
+				"messages": []map[string]any{{"role": "user", "content": tc.question}},
+				"system":   []any{},
+				"stream":   false,
+			})
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
-	req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹`)
-	h.HandleMessages(rec, req)
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "http://x"+tc.path, bytes.NewReader(body))
+			// A workdir header is now inert: it must not change what is answered.
+			req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹`)
+			h.HandleMessages(rec, req)
 
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
-		t.Fatalf("expected json content type, got %q", rec.Header().Get("Content-Type"))
-	}
-	out := rec.Body.String()
-	if !strings.Contains(out, `"type":"message"`) {
-		t.Fatalf("expected anthropic message payload, got: %s", out)
-	}
-	if !strings.Contains(out, `C:\\Users\\zhangdailin\\Desktop\\新建文件夹`) {
-		t.Fatalf("expected exact workdir in response, got: %s", out)
-	}
-}
-
-func TestHandleMessages_CurrentWorkdir_LocalOpenAIStream(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
-	h := NewWithLoadBalancer(cfg, nil)
-	h.client = &panicUpstream{}
-
-	body, _ := json.Marshal(map[string]any{
-		"model":    "claude-opus-4-6",
-		"messages": []map[string]any{{"role": "user", "content": "workspace path"}},
-		"system":   []any{},
-		"stream":   true,
-	})
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/chat/completions", bytes.NewReader(body))
-	req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹 (2)`)
-	h.HandleMessages(rec, req)
-
-	if rec.Code != 200 {
-		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Header().Get("Content-Type"), "text/event-stream") {
-		t.Fatalf("expected sse content type, got %q", rec.Header().Get("Content-Type"))
-	}
-	out := rec.Body.String()
-	if !strings.Contains(out, "chat.completion.chunk") {
-		t.Fatalf("expected openai stream chunk, got: %s", out)
-	}
-	if !strings.Contains(out, `C:\\Users\\zhangdailin\\Desktop\\新建文件夹 (2)`) {
-		t.Fatalf("expected exact workdir in stream response, got: %s", out)
-	}
-	if !strings.Contains(out, "[DONE]") {
-		t.Fatalf("expected done marker, got: %s", out)
+			if rec.Code != 200 {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if len(client.requests) != 1 {
+				t.Fatalf("upstream calls = %d, want 1: the question must not be short-circuited locally", len(client.requests))
+			}
+			out := rec.Body.String()
+			if strings.Contains(out, "当前工作目录未在本次请求中提供") {
+				t.Fatalf("gateway still answered the workdir question locally: %s", out)
+			}
+			if !strings.Contains(out, "upstream answer") {
+				t.Fatalf("expected the upstream answer to be relayed, got: %s", out)
+			}
+		})
 	}
 }
 

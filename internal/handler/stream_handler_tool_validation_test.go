@@ -53,7 +53,6 @@ func TestToolCallSameIDInvalidThenValid_UsesValidOne(t *testing.T) {
 		false,
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -105,7 +104,6 @@ func TestWriteToolCallDifferentIDsSameInput_Preserved(t *testing.T) {
 		false,
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -155,7 +153,6 @@ func TestWriteToolCallDifferentIDsSameWorkdirTarget_Preserved(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		workdir,
 	)
 	defer h.release()
 
@@ -199,7 +196,6 @@ func TestReadToolCallDifferentIDsSameInput_BothAccepted(t *testing.T) {
 		false,
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -241,7 +237,6 @@ func TestWriteToolCallDifferentIDsDifferentContent_BothAccepted(t *testing.T) {
 		false,
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -282,7 +277,6 @@ func TestToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 	h.setAllowedToolNames([]string{"Read", "Bash"})
@@ -321,7 +315,6 @@ func TestWriteToolCallNotDeclaredInCurrentRequest_IsSuppressed(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 	h.setAllowedToolNames([]string{"Read", "Glob", "Grep"})
@@ -360,7 +353,6 @@ func TestSandboxMetadataReadToolCall_IsSuppressed(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		`D:\Code\Orchids-2api`,
 	)
 	defer h.release()
 	h.setAllowedToolNames([]string{"Read", "Bash"})
@@ -399,7 +391,6 @@ func TestTodoWriteToolCall_IsSuppressedWhenNotDeclared(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 	h.setAllowedToolNames([]string{"Read", "Write", "Edit", "Bash", "Glob", "Grep"})
@@ -438,7 +429,6 @@ func TestTaskToolCall_IsAcceptedWhenClientDeclaredAgent(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -483,7 +473,6 @@ func TestCustomMCPWebSearchToolCall_MapsToDeclaredWebSearch(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -526,7 +515,6 @@ func TestCustomMCPFetchToolCall_MapsToDeclaredWebFetch(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -566,7 +554,6 @@ func TestWebFetchToolCall_RewritesToDeclaredClientToolName(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -609,7 +596,6 @@ func TestTaskToolCall_IsAcceptedWhenDelegatedToolsStayWithinAllowedSet(t *testin
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -652,7 +638,6 @@ func TestTaskToolCall_IsRejectedWhenDelegatedToolsExceedAllowedSet(t *testing.T)
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -689,7 +674,6 @@ func TestSkillToolCall_IsAcceptedWhenClientDeclaredSkill(t *testing.T) {
 		false,
 		false,
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -732,7 +716,6 @@ func TestBashToolCallDifferentIDsSameCommand_Preserved(t *testing.T) {
 		false,
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -777,7 +760,6 @@ func TestBashToolCallDifferentIDsDifferentCommands_BothAccepted(t *testing.T) {
 		false,
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
@@ -818,7 +800,6 @@ func TestToolCallMissingID_IsSuppressed(t *testing.T) {
 		false,
 		false, // non-stream mode for easier assertions
 		adapter.FormatAnthropic,
-		"",
 	)
 	defer h.release()
 
