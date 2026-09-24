@@ -385,7 +385,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		}
 	}
 	h.syncGrokQuota(sess.acc, resp.Header)
-	provider := "web"
+	provider := ProviderBuild
 	if sess.acc != nil {
 		provider = ProviderForAccount(sess.acc)
 	}
@@ -584,7 +584,7 @@ func (h *Handler) retryWithAccountSwitchLimit(ctx context.Context, sess *chatAcc
 		}
 		started := time.Now()
 		resp, err := doRequest()
-		provider := "web"
+		provider := ProviderBuild
 		if sess.acc != nil {
 			provider = ProviderForAccount(sess.acc)
 		}

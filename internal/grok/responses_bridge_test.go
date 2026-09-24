@@ -61,7 +61,7 @@ func responsesBridgeFixture(t *testing.T, upstreamStatus int, upstreamBody, mode
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	return NewHandler(&config.Config{GrokAPIBaseURL: upstream.URL}, loadbalancer.NewWithCacheTTL(s, 0))
+	return NewHandler(&config.Config{GrokCLIBaseURL: upstream.URL}, loadbalancer.NewWithCacheTTL(s, 0))
 }
 
 // TestHandleResponses_PreservesInboundAuthHeaders guards the internal
@@ -73,7 +73,7 @@ func responsesBridgeFixture(t *testing.T, upstreamStatus int, upstreamBody, mode
 // 500 with no explanation.
 func TestHandleResponses_RelaysUpstreamFailureStatus(t *testing.T) {
 	h := responsesBridgeFixture(t, http.StatusUnauthorized,
-		`{"error":{"message":"Grok upstream says the SSO token is invalid"}}`, "grok-4.6")
+		`{"error":{"message":"Grok Build upstream says the OAuth token is invalid"}}`, "grok-4.6")
 
 	body := `{"model":"grok-4.6","input":"hello","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))

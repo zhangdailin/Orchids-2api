@@ -320,8 +320,7 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 		if metadata.imageInput {
 			modalities = append(modalities, "image")
 		}
-		// Agent tools require the Build Responses route. Web and Console models may
-		// expose a generic responses compatibility capability but not Codex tools.
+		// Agent tools require the Build Responses route.
 		toolsSupported := codexAgentToolsSupported(item)
 		var applyPatchToolType *string
 		if toolsSupported {
@@ -329,14 +328,10 @@ func newCodexModelCatalog(items []PublicModelResponse) codexModelCatalog {
 			applyPatchToolType = &value
 		}
 		reasoningSupported := false
-		if strings.EqualFold(strings.TrimSpace(item.Provider), "console") && slug == "grok-4.20-0309-reasoning" {
-			reasoningSupported = true
-		} else {
-			for _, level := range levels {
-				if level != "none" {
-					reasoningSupported = true
-					break
-				}
+		for _, level := range levels {
+			if level != "none" {
+				reasoningSupported = true
+				break
 			}
 		}
 		models = append(models, codexModelEntry{

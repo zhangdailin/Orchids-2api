@@ -663,23 +663,13 @@ func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
 		if model == nil || !strings.EqualFold(strings.TrimSpace(model.Channel), "grok") {
 			continue
 		}
-		// Older catalog defaults used the public video ID as the Web model name.
-		// Repair only that exact mapping, preserving custom/provider routes.
-		if model.ModelID == "grok-imagine-video" && model.Provider == "web" && model.UpstreamModel == "grok-imagine-video" {
-			updated := *model
-			updated.UpstreamModel = "imagine-video-gen"
-			if err := s.UpdateModel(ctx, &updated); err != nil {
-				slog.Warn("failed to repair Grok video route", "model_id", model.ModelID, "error", err)
-			}
-			continue
-		}
 		if model.Provider != "" && model.UpstreamModel != "" && len(model.Capabilities) > 0 {
 			continue
 		}
 		updated := *model
 		applyGrokRouteDefaults(&updated)
 		if err := s.UpdateModel(ctx, &updated); err != nil {
-			slog.Warn("failed to backfill Grok route metadata", "model_id", model.ModelID, "error", err)
+			slog.Warn("failed to backfill Grok Build route metadata", "model_id", model.ModelID, "error", err)
 		}
 	}
 }

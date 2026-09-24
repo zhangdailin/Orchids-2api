@@ -10,15 +10,15 @@ import (
 	"orchids-api/internal/store"
 )
 
-func grokSSO() *store.Account {
-	return &store.Account{ID: 1, AccountType: "grok", CredentialType: "sso", GrokProvider: "web", ClientCookie: "sso=t"}
+func grokBuildAccount() *store.Account {
+	return &store.Account{ID: 1, AccountType: "grok", CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "token"}
 }
 
-// TestClassify_RefusedCredentialNeedsLogin pins the verdict for a cookie the
+// TestClassify_RefusedCredentialNeedsLogin pins the verdict for a OAuth credential the
 // upstream refused: the account is held, the operator is told to re-login, and
 // the reason is persisted together with the status.
 func TestClassify_RefusedCredentialNeedsLogin(t *testing.T) {
-	acc := grokSSO()
+	acc := grokBuildAccount()
 	v := Classify(acc, errors.New("401: grok session unauthenticated"), "grok-4.6")
 
 	if v.Scope != ScopeCredential {
@@ -42,7 +42,7 @@ func TestClassify_RefusedCredentialNeedsLogin(t *testing.T) {
 // TestClassify_ModelScopedFailureKeepsAccount covers the P0 rule: a complaint
 // about one model must not take the whole account out of the pool.
 func TestClassify_ModelScopedFailureKeepsAccount(t *testing.T) {
-	acc := grokSSO()
+	acc := grokBuildAccount()
 	for _, message := range []string{
 		"workbuddy API error: status=200, code=6004, message=usage exceeds frequency limit",
 		"qoder agent limit reached; resets at 2026-09-27T19:47:13Z",
@@ -72,7 +72,7 @@ func TestClassify_ModelScopedFailureKeepsAccount(t *testing.T) {
 // TestClassify_RateLimitIsAccountScopedWithShortCooldown keeps throttling a
 // temporary, account-wide condition.
 func TestClassify_RateLimitIsAccountScopedWithShortCooldown(t *testing.T) {
-	v := Classify(grokSSO(), errors.New("429: too many requests"), "grok-4.6")
+	v := Classify(grokBuildAccount(), errors.New("429: too many requests"), "grok-4.6")
 	if v.Scope != ScopeAccount || v.Status != "429" {
 		t.Fatalf("verdict = %+v, want account-scoped 429", v)
 	}
@@ -87,7 +87,7 @@ func TestClassify_RateLimitIsAccountScopedWithShortCooldown(t *testing.T) {
 // TestClassify_SuccessStampsVerdict keeps "never checked" distinguishable from
 // "checked and healthy": the success verdict must stamp VerifiedAt.
 func TestClassify_SuccessStampsVerdict(t *testing.T) {
-	acc := grokSSO()
+	acc := grokBuildAccount()
 	verdict := Classify(acc, nil, "grok-4.6")
 	if verdict.Status != "" || (verdict.Scope != ScopeNone && verdict.Scope != ScopeModel) {
 		t.Fatalf("success verdict is not healthy: %+v", verdict)
@@ -104,7 +104,7 @@ func TestClassify_SuccessStampsVerdict(t *testing.T) {
 // TestApply_KeepsStatusAndReasonTogether is the invariant the account table
 // depends on: a reason never outlives its status.
 func TestApply_KeepsStatusAndReasonTogether(t *testing.T) {
-	acc := grokSSO()
+	acc := grokBuildAccount()
 	acc.StatusCode = "429"
 	acc.StatusMessage = "old reason"
 	acc.LastAttempt = time.Now().Add(-time.Hour)
@@ -128,7 +128,7 @@ func TestApply_KeepsStatusAndReasonTogether(t *testing.T) {
 
 // TestAccountLifecycle pins hold/expiry behaviour shared by pool and scheduler.
 func TestAccountLifecycle(t *testing.T) {
-	rejected := grokSSO()
+	rejected := grokBuildAccount()
 	Classify(rejected, errors.New("401: grok session unauthenticated"), "").Apply(rejected)
 	now := rejected.VerifiedAt
 	if !AccountHeld(rejected, now) {
@@ -147,12 +147,12 @@ func TestAccountLifecycle(t *testing.T) {
 		t.Fatal("reauthRequired must remain held until a successful re-authentication")
 	}
 
-	healthy := grokSSO()
+	healthy := grokBuildAccount()
 	Success(now).Apply(healthy)
 	if AccountHeld(healthy, now) {
 		t.Fatal("a healthy account must never be held")
 	}
-	if !NeedsFirstVerdict(grokSSO()) {
+	if !NeedsFirstVerdict(grokBuildAccount()) {
 		t.Fatal("an account with no verdict needs one")
 	}
 	if NeedsFirstVerdict(healthy) {
@@ -290,7 +290,7 @@ func TestClassify_WorkBuddyPaymentRefusalEnablesFreeOnlyMode(t *testing.T) {
 
 // TestCredentialMessageIsProviderAware keeps the operator instruction concrete.
 func TestCredentialMessageIsProviderAware(t *testing.T) {
-	grokVerdict := Classify(grokSSO(), errors.New("401: unauthenticated"), "")
+	grokVerdict := Classify(grokBuildAccount(), errors.New("401: unauthenticated"), "")
 	if !strings.Contains(grokVerdict.Message, "重新登录") {
 		t.Fatalf("grok reason = %q", grokVerdict.Message)
 	}

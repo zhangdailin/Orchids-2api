@@ -634,7 +634,7 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 		return nil
 	}
 
-	// The grok.com website (SSO cookie) plane was retired: only Build OAuth
+	// The website cookie plane was retired: only Build OAuth
 	// credentials can be verified now.
 	return fmt.Errorf("only Grok Build OAuth accounts are supported")
 }

@@ -188,7 +188,7 @@ func TestResolveModel_ParsesSupportedEffortSuffixes(t *testing.T) {
 	}
 }
 
-func TestResolveModel_RemovesGrok43BetaAppChat(t *testing.T) {
+func TestResolveModel_RemovesGrok43BetaWebsite(t *testing.T) {
 	if _, ok := ResolveModel("grok-4.3-beta"); ok {
 		t.Fatal("ResolveModel(grok-4.3-beta) = true, want removed")
 	}

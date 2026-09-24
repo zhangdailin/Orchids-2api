@@ -614,7 +614,7 @@ func (c *CLIClient) doCLIRequest(ctx context.Context, acc *store.Account, req *h
 		return nil, fmt.Errorf("grok cli egress unavailable: %w", err)
 	}
 	// Build is a CLI identity. Its egress lease intentionally carries no
-	// browser UA or grok.com clearance, so never overwrite/leak either here.
+	// browser identity or clearance state, so never attach either here.
 	resp, err := lease.Do(req)
 	if err != nil {
 		c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeTransportError)

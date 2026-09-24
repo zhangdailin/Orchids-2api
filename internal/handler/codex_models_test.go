@@ -87,12 +87,9 @@ func TestCodexCatalogUsesObservedGrokProfile(t *testing.T) {
 }
 
 func TestCodexCatalogReasoningLevels(t *testing.T) {
-	consoleFixed := textModel("console/grok-4.20-0309-reasoning")
-	consoleFixed.Provider = "console"
 	catalog := newCodexModelCatalog([]PublicModelResponse{
 		textModel("grok-4.6"),
 		textModel("grok-4.5"),
-		consoleFixed,
 	})
 
 	entry := codexEntryFor(t, catalog, "grok-4.6")
@@ -105,17 +102,6 @@ func TestCodexCatalogReasoningLevels(t *testing.T) {
 	// Grok 4.5 tops out at high.
 	if levels := codexEntryFor(t, catalog, "grok-4.5").SupportedReasoningLevels; len(levels) != 3 || levels[2].Effort != "high" {
 		t.Fatalf("grok-4.5 levels=%v", levels)
-	}
-	// The Console reasoning variant is fixed: it reasons but rejects the parameter.
-	fixed := codexEntryFor(t, catalog, "console/grok-4.20-0309-reasoning")
-	if len(fixed.SupportedReasoningLevels) != 0 || fixed.DefaultReasoningLevel != "none" {
-		t.Fatalf("console fixed reasoning levels=%v default=%q", fixed.SupportedReasoningLevels, fixed.DefaultReasoningLevel)
-	}
-	if fixed.ContextWindow != 2000000 {
-		t.Fatalf("console reasoning context=%d", fixed.ContextWindow)
-	}
-	if !fixed.SupportsReasoningSummaries || !fixed.SupportsReasoningSummaryParameter {
-		t.Fatalf("fixed reasoning model must advertise summaries: %+v", fixed)
 	}
 }
 
@@ -139,24 +125,6 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 	}
 	if entry := codexEntryFor(t, catalog, "grok-imagine-image"); entry.ApplyPatchToolType != nil {
 		t.Fatalf("media model advertised apply_patch")
-	}
-}
-
-func TestCodexCatalogAgentToolsRequireBuildResponsesProvider(t *testing.T) {
-	build := textModel("build-model")
-	web := textModel("web-model")
-	web.Provider = "web"
-	console := textModel("console-model")
-	console.Provider = "console"
-	catalog := newCodexModelCatalog([]PublicModelResponse{build, web, console})
-	if entry := codexEntryFor(t, catalog, "build-model"); entry.ApplyPatchToolType == nil || !entry.SupportsParallelToolCalls {
-		t.Fatalf("build tools not advertised: %+v", entry)
-	}
-	for _, slug := range []string{"web-model", "console-model"} {
-		entry := codexEntryFor(t, catalog, slug)
-		if entry.ApplyPatchToolType != nil || entry.SupportsParallelToolCalls {
-			t.Fatalf("%s incorrectly advertised Build agent tools: %+v", slug, entry)
-		}
 	}
 }
 

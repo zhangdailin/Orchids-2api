@@ -50,8 +50,6 @@ type Config struct {
 	DebugLogSSE      bool   `json:"-"`
 	SuppressThinking bool   `json:"-"`
 	UpstreamMode     string `json:"-"`
-	GrokAPIBaseURL   string `json:"-"`
-	GrokUserAgent    string `json:"-"`
 	// AnonymousAllowIPs names the sources that may call the inference routes
 	// without a managed key. Empty (the default) requires a key from everyone, as
 	// grok2api does; an operator that cannot update a client yet lists its address
@@ -116,8 +114,7 @@ type Config struct {
 	GrokBuildRPS            float64  `json:"grok_build_rps,omitempty"`
 	GrokBuildTimeout        int      `json:"grok_build_timeout_seconds,omitempty"`
 	// GrokStreamIdleSeconds is the legacy all-channel fallback. The channel
-	// fields below take precedence when set, allowing Web/Console/Build to be
-	// tuned independently without invalidating existing config files.
+	// Build-specific field below takes precedence when set.
 	GrokStreamIdleSeconds      int `json:"grok_stream_idle_seconds,omitempty"`
 	GrokBuildStreamIdleSeconds int `json:"grok_build_stream_idle_seconds,omitempty"`
 	WarpStreamIdleSeconds      int `json:"warp_stream_idle_seconds,omitempty"`
@@ -342,8 +339,6 @@ func ApplyHardcoded(cfg *Config) {
 	// answers true (grok2api has no switch on /v1). Hardcoding it here would
 	// rewrite the operator's stored value on every file/Redis/API round trip.
 	cfg.UpstreamMode = "ws"
-	cfg.GrokAPIBaseURL = "https://grok.com"
-	cfg.GrokUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 	vTrue := true
 	cfg.Stream = &vTrue
 	cfg.ImageNSFW = &vTrue

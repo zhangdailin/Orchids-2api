@@ -1578,7 +1578,7 @@
     });
   }
 
-  function preferredAppChatModel(models) {
+  function preferredBuildModel(models) {
     const list = Array.isArray(models) ? models : [];
     return list[0] || "";
   }
@@ -1625,7 +1625,7 @@
       if (models.length === 0) throw new Error("模型目录为空");
       chatState.models = models;
       if (!models.includes(chatState.model)) {
-        chatState.model = preferredAppChatModel(models);
+        chatState.model = preferredBuildModel(models);
       }
     } catch (err) {
       chatState.modelsLoaded = false;
@@ -2021,7 +2021,7 @@
     loadChatSessions();
     const uiState = loadGrokToolsUIState();
     if (!chatState.models.includes(chatState.model)) {
-      chatState.model = preferredAppChatModel(chatState.models);
+      chatState.model = preferredBuildModel(chatState.models);
     }
     const systemInput = document.getElementById("grokSystemInput");
     if (systemInput && typeof uiState.chatSystemPrompt === "string") {

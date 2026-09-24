@@ -22,14 +22,14 @@ func TestUpdateAccount_VerifiedAtIsMonotonicPerCredential(t *testing.T) {
 	ctx := context.Background()
 
 	acc := &Account{
-		Name:           "grok-sso",
-		AccountType:    "grok",
-		CredentialType: "sso",
-		GrokProvider:   "web",
-		ClientCookie:   "sso=token",
-		Enabled:        true,
-		Weight:         1,
-		VerifiedAt:     time.Now().Add(-time.Minute),
+		Name:             "grok-build",
+		AccountType:      "grok",
+		CredentialType:   "oauth",
+		GrokProvider:     "build",
+		OAuthAccessToken: "access-token",
+		Enabled:          true,
+		Weight:           1,
+		VerifiedAt:       time.Now().Add(-time.Minute),
 	}
 	if err := s.CreateAccount(ctx, acc); err != nil {
 		t.Fatalf("CreateAccount() error = %v", err)
@@ -44,7 +44,7 @@ func TestUpdateAccount_VerifiedAtIsMonotonicPerCredential(t *testing.T) {
 	}
 	partial.VerifiedAt = time.Time{}
 	partial.StatusCode = "401"
-	partial.StatusMessage = "upstream rejected the cookie"
+	partial.StatusMessage = "upstream rejected the OAuth credential"
 	if err := s.UpdateAccount(ctx, partial); err != nil {
 		t.Fatalf("UpdateAccount(partial) error = %v", err)
 	}
@@ -60,7 +60,7 @@ func TestUpdateAccount_VerifiedAtIsMonotonicPerCredential(t *testing.T) {
 	}
 
 	// Replacing the credential drops it so the new credential is verified.
-	afterPartial.ClientCookie = "sso=replacement"
+	afterPartial.OAuthAccessToken = "replacement-token"
 	afterPartial.ClearVerifiedAt = true
 	if err := s.UpdateAccount(ctx, afterPartial); err != nil {
 		t.Fatalf("UpdateAccount(replacement) error = %v", err)

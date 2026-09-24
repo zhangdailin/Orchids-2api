@@ -57,7 +57,7 @@ func TestResolveModel_CurrentBuildMappings(t *testing.T) {
 	}
 }
 
-func TestResolveModel_LegacyAppChatModelsDeprecated(t *testing.T) {
+func TestResolveModel_LegacyWebsiteModelsDeprecated(t *testing.T) {
 	for _, id := range []string{
 		"grok-4.20-0309",
 		"grok-4.20-0309-non-reasoning-super",
