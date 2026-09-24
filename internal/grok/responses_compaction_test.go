@@ -310,7 +310,7 @@ func TestDegenerateGatewayCompactionSummary(t *testing.T) {
 		t.Fatal("a short summary must count as degenerate")
 	}
 	// Tags and blank padding must not be able to fake length.
-	if !isDegenerateGatewayCompactionSummary("<summary>"+strings.Repeat("\n", 600)+"short</summary>") {
+	if !isDegenerateGatewayCompactionSummary("<summary>" + strings.Repeat("\n", 600) + "short</summary>") {
 		t.Fatal("padding counted towards the summary length")
 	}
 	if isDegenerateGatewayCompactionSummary(compactionTestSummary) {

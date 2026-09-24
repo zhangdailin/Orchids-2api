@@ -360,13 +360,8 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 }
 
 func providerForModelSpec(spec ModelSpec) string {
-	if spec.Upstream == UpstreamConsole || strings.TrimSpace(spec.ConsoleModel) != "" {
-		return ProviderConsole
-	}
-	if spec.Upstream == UpstreamCLI {
-		return ProviderBuild
-	}
-	return ProviderWeb
+	// Only the Build plane remains, so every served spec belongs to it.
+	return ProviderBuild
 }
 
 func expandStoredResponseInput(responseBody []byte, current interface{}) (interface{}, error) {

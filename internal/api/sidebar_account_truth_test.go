@@ -23,14 +23,14 @@ func TestHandleAccountsListIsTheSingleSidebarTruth(t *testing.T) {
 	ctx := context.Background()
 
 	source := &store.Account{
-		AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb,
+		AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb,
 		ClientCookie: "sso=visible-source", Enabled: true,
 	}
 	if err := s.CreateAccount(ctx, source); err != nil {
 		t.Fatalf("CreateAccount(source) error = %v", err)
 	}
 	companion := &store.Account{
-		AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole,
+		AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole,
 		GrokSSOParentID: source.ID, ClientCookie: "sso=visible-source", Enabled: true,
 	}
 	if err := s.CreateAccount(ctx, companion); err != nil {

@@ -843,10 +843,10 @@ func (h *Handler) auditGatewayCompaction(ctx context.Context, accountID int64, m
 		Kind: audit.KindRequest, RequestID: middleware.GetRequestID(ctx), Action: "grok_compaction",
 		APIKeyID: middleware.APIKeyID(ctx), AccountID: accountID, Model: modelID,
 		Channel: "grok", Provider: ProviderBuild, Status: "success",
-		InputTokens: int(nonNegativeJSONInteger(usage["input_tokens"])),
+		InputTokens:  int(nonNegativeJSONInteger(usage["input_tokens"])),
 		OutputTokens: int(nonNegativeJSONInteger(usage["output_tokens"])),
-		TotalTokens: int(nonNegativeJSONInteger(usage["total_tokens"])),
-		UsageSource: audit.UsageSourceUpstream,
+		TotalTokens:  int(nonNegativeJSONInteger(usage["total_tokens"])),
+		UsageSource:  audit.UsageSourceUpstream,
 	})
 }
 

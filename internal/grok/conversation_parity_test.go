@@ -211,7 +211,9 @@ func TestParityToolsAreVisibleBeforeStreamCompletes(t *testing.T) {
 	defer writer.Close()
 	w := &parityNoticeWriter{ResponseRecorder: httptest.NewRecorder(), notice: make(chan struct{})}
 	done := make(chan chatOutcome, 1)
-	go func() { done <- (&Handler{}).streamConsoleChatHolding(w, &ChatCompletionsRequest{Model: "grok-4.6"}, reader, nil) }()
+	go func() {
+		done <- (&Handler{}).streamConsoleChatHolding(w, &ChatCompletionsRequest{Model: "grok-4.6"}, reader, nil)
+	}()
 	_, _ = io.WriteString(writer, parityItem("response.output_item.added", "fc_a", "call_a", "Read", ""))
 	select {
 	case <-w.notice:

@@ -33,7 +33,6 @@ type Handler struct {
 	runtimeMu     sync.RWMutex
 	cfg           *config.Config
 	lb            *loadbalancer.LoadBalancer
-	client        *Client
 	cliClient     *CLIClient
 	connTracker   loadbalancer.ConnTracker
 	modelCacheMu  sync.RWMutex
@@ -89,7 +88,6 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		base:        handler.NewBaseHandler(lb),
 		cfg:         cfg,
 		lb:          lb,
-		client:      New(cfg),
 		cliClient:   cliClient,
 		connTracker: loadbalancer.NewMemoryConnTracker(),
 		modelCache:  make(map[string]time.Time),
@@ -99,7 +97,6 @@ func NewHandler(cfg *config.Config, lb *loadbalancer.LoadBalancer) *Handler {
 		instanceID:  instanceID,
 		auditLogger: audit.NewNopLogger(),
 	}
-	h.recoverStoredConsoleVideoJobs(context.Background())
 	return h
 }
 
@@ -110,14 +107,12 @@ func (h *Handler) SetConfig(cfg *config.Config) {
 	if h == nil || cfg == nil {
 		return
 	}
-	client := New(cfg)
 	cliClient := NewCLIClient(cfg)
 	if h.lb != nil {
 		cliClient.SetAccountStore(h.lb.Store)
 	}
 	h.runtimeMu.Lock()
 	h.cfg = cfg
-	h.client = client
 	h.cliClient = cliClient
 	h.runtimeMu.Unlock()
 }
@@ -130,16 +125,6 @@ func (h *Handler) configSnapshot() *config.Config {
 	cfg := h.cfg
 	h.runtimeMu.RUnlock()
 	return cfg
-}
-
-func (h *Handler) webClient() *Client {
-	if h == nil {
-		return nil
-	}
-	h.runtimeMu.RLock()
-	client := h.client
-	h.runtimeMu.RUnlock()
-	return client
 }
 
 func (h *Handler) buildClient() *CLIClient {
@@ -234,9 +219,6 @@ func (h *Handler) auditChatOutcome(ctx context.Context, acc *store.Account, req 
 	// tokens_today and usage_total remain permanently zero.
 	if acc != nil && acc.ID != 0 && event.TotalTokens > 0 && h != nil && h.lb != nil && h.lb.Store != nil {
 		accountID := acc.ID
-		if IsLinkedConsoleSSOCompanion(acc) {
-			accountID = acc.GrokSSOParentID
-		}
 		if err := h.lb.Store.IncrementAccountStats(ctx, accountID, float64(event.TotalTokens), 0); err != nil {
 			slog.Warn("grok token usage persistence failed", "account_id", accountID, "runtime_account_id", acc.ID, "tokens", event.TotalTokens, "error", err)
 		}
@@ -261,10 +243,6 @@ func (h *Handler) connTrackerSnapshot() loadbalancer.ConnTracker {
 	tracker := h.connTracker
 	h.runtimeMu.RUnlock()
 	return tracker
-}
-
-func (h *Handler) currentClient() *Client {
-	return h.webClient()
 }
 
 func (h *Handler) isModelValidationCached(modelID string) bool {
@@ -298,48 +276,6 @@ func (h *Handler) cacheValidatedModel(modelID string) {
 	}
 	h.modelCache[modelID] = time.Now().Add(grokModelValidationCacheTTL)
 	h.modelCacheMu.Unlock()
-}
-
-// isGrokWebAccount selects only Grok Web SSO sessions. Build OAuth and
-// Console SSO sessions are deliberately separate products and must never be
-// sent to the legacy web transport.
-func isGrokWebAccount(acc *store.Account) bool {
-	return acc != nil && ProviderForAccount(acc) == ProviderWeb &&
-		!strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
-}
-
-// isGrokConsoleAccount selects only Console SSO sessions for console.x.ai.
-func isGrokConsoleAccount(acc *store.Account) bool {
-	return acc != nil && ProviderForAccount(acc) == ProviderConsole &&
-		!strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth")
-}
-
-// grokSSOTokenRaw returns the raw SSO credential for an account, preferring the
-// client cookie and falling back to the refresh token (no normalization).
-func grokSSOTokenRaw(acc *store.Account) string {
-	if acc == nil {
-		return ""
-	}
-	raw := strings.TrimSpace(acc.ClientCookie)
-	if raw == "" {
-		raw = strings.TrimSpace(acc.RefreshToken)
-	}
-	return raw
-}
-
-func (h *Handler) selectAccount(ctx context.Context) (*store.Account, string, error) {
-	if h.lb == nil {
-		return nil, "", fmt.Errorf("load balancer not configured")
-	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, nil, "grok", h.connTrackerSnapshot(), isGrokWebAccount)
-	if err != nil {
-		return nil, "", err
-	}
-	raw := grokSSOTokenRaw(acc)
-	if NormalizeSSOToken(raw) == "" {
-		return nil, "", fmt.Errorf("grok account token is empty")
-	}
-	return acc, raw, nil
 }
 
 func (h *Handler) ensureModelEnabled(ctx context.Context, modelID string) error {
@@ -464,21 +400,13 @@ func (h *Handler) applyPersistedRoute(ctx context.Context, spec ModelSpec) Model
 	}
 	upstream := strings.TrimSpace(model.UpstreamModel)
 	if upstream == "" {
-		upstream = firstNonEmpty(spec.ConsoleModel, spec.UpstreamModel)
+		upstream = spec.UpstreamModel
 	}
-	switch strings.ToLower(strings.TrimSpace(model.Provider)) {
-	case ProviderWeb:
-		spec.Upstream = UpstreamAppChat
-		spec.UpstreamModel = upstream
-		spec.ConsoleModel = ""
-	case ProviderConsole:
-		spec.Upstream = UpstreamConsole
-		spec.UpstreamModel = upstream
-		spec.ConsoleModel = upstream
-	case ProviderBuild:
+	// Build is the only Grok plane this gateway serves, so a stored route row can
+	// only refine the upstream model name.
+	if strings.EqualFold(strings.TrimSpace(model.Provider), ProviderBuild) && upstream != "" {
 		spec.Upstream = UpstreamCLI
 		spec.UpstreamModel = upstream
-		spec.ConsoleModel = ""
 	}
 	return spec
 }
@@ -570,21 +498,6 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	if isEgressChallengeError(err) {
 		return
 	}
-	// Console returns HTTP 429 for a fully spent Free chat allowance. This is not
-	// an RPS/RPM throttle: the response explicitly says the usage quota is gone.
-	// Persist it as quota exhaustion and hold the hidden Console runtime account
-	// for the same conservative 24-hour recovery window used by grok2api's
-	// /usage reconciliation. Otherwise the row stays "healthy" and gets selected
-	// every few minutes, producing an endless sequence of identical upstream 429s.
-	if acc != nil && ProviderForAccount(acc) == ProviderConsole && isConsoleFreeQuotaExhaustedError(err) {
-		acc.StatusMessage = strings.TrimSpace(err.Error())
-		acc.QuotaResetAt = time.Now().Add(accountpolicy.CooldownPayment)
-		h.unbindAffinity(ctx, ProviderConsole, acc.ID)
-		if h.lb != nil {
-			h.lb.MarkAccountStatus(ctx, acc, "402")
-		}
-		return
-	}
 	// Team-level resource-exhausted 429: the rate limit is on the token/session,
 	// not the account. Set a cooldown so the RPM window can reset. Without this,
 	// unmarked sibling accounts sharing the same token immediately hit the same
@@ -666,15 +579,6 @@ func isModelScopedRefusal(err error) bool {
 	return false
 }
 
-func isConsoleFreeQuotaExhaustedError(err error) bool {
-	if err == nil || parseUpstreamStatus(err) != http.StatusTooManyRequests {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	return strings.Contains(lower, "free usage quota exceeded") ||
-		strings.Contains(lower, "free usage exhausted")
-}
-
 func isResourceExhaustedError(err error) bool {
 	if err == nil {
 		return false
@@ -683,25 +587,6 @@ func isResourceExhaustedError(err error) bool {
 	return strings.Contains(lower, "resource-exhausted") ||
 		strings.Contains(lower, "resource_exhausted") ||
 		strings.Contains(lower, "too many requests for team")
-}
-
-func (h *Handler) openChatAccountSessionForModel(ctx context.Context, spec ModelSpec) (*chatAccountSession, error) {
-	return h.openChatAccountSessionForModelExcluding(ctx, nil, spec)
-}
-
-func (h *Handler) openChatAccountSessionForModelExcluding(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
-	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, spec.PoolCandidates(), func(acc *store.Account) bool {
-		return h.routeAllowsAccount(ctx, spec.ID, acc.ID)
-	})
-}
-
-func (h *Handler) openChatAccountSessionForImagineLite(ctx context.Context, excludeIDs []int64, spec ModelSpec) (*chatAccountSession, error) {
-	spec.Tier = grokTierLite
-	// Basic is the minimum tier for the lite image model, so a basic credential
-	// is a valid fallback rather than an excluded pool.
-	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, spec.PoolCandidates(), func(acc *store.Account) bool {
-		return h.routeAllowsAccount(ctx, spec.ID, acc.ID)
-	})
 }
 
 func (h *Handler) routeAllowsAccount(ctx context.Context, modelID string, accountID int64) bool {
@@ -713,10 +598,6 @@ func (h *Handler) routeAllowsAccount(ctx context.Context, modelID string, accoun
 		return true
 	}
 	return model.AllowsAccount(accountID)
-}
-
-func (h *Handler) openChatAccountSessionExcludingWithPools(ctx context.Context, excludeIDs []int64, poolCandidates []string) (*chatAccountSession, error) {
-	return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, excludeIDs, poolCandidates, nil)
 }
 
 // modelScopeKey carries the model a request is for, so account selection can
@@ -767,86 +648,6 @@ func accountUsableForModel(ctx context.Context, acc *store.Account) bool {
 	return store.ModelCooldownRemaining(acc, model, time.Now()) == 0
 }
 
-func (h *Handler) openChatAccountSessionExcludingWithPoolsAndFilter(ctx context.Context, excludeIDs []int64, poolCandidates []string, extraFilter func(*store.Account) bool) (*chatAccountSession, error) {
-	if h.lb == nil {
-		return nil, fmt.Errorf("load balancer not configured")
-	}
-	var (
-		acc     *store.Account
-		err     error
-		lastErr error
-	)
-	// App-chat/media only accepts Web SSO cookie accounts. OAuth Build and
-	// Console SSO are selected by their own provider-specific selectors.
-	ssoFilter := func(acc *store.Account) bool {
-		if !isGrokWebAccount(acc) {
-			return false
-		}
-		if !accountUsableForModel(ctx, acc) {
-			return false
-		}
-		return extraFilter == nil || extraFilter(acc)
-	}
-	if pinnedID := h.affinityAccount(ctx, ProviderWeb); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) && h.lb.Store != nil {
-		if pinned, getErr := h.lb.Store.GetAccount(ctx, pinnedID); getErr == nil && pinned != nil && accountAffinityUsable(pinned) && h.accountCapacityAvailable(pinned) && ssoFilter(pinned) {
-			raw := grokSSOTokenRaw(pinned)
-			if NormalizeSSOToken(raw) != "" {
-				if release, reserved := h.reserveAccount(pinned); reserved {
-					return &chatAccountSession{acc: pinned, token: raw, poolCandidates: normalizeGrokPoolCandidates(poolCandidates), release: release}, nil
-				}
-			}
-		}
-	}
-	candidates := normalizeGrokPoolCandidates(poolCandidates)
-	if len(candidates) == 0 {
-		acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), ssoFilter)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		for _, pool := range candidates {
-			wantPool := pool
-			acc, err = h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), func(acc *store.Account) bool {
-				return strings.EqualFold(grokAccountPool(acc), wantPool) && ssoFilter(acc)
-			})
-			if err == nil && acc != nil {
-				break
-			}
-			if err != nil {
-				if lastErr == nil || (!carriesPoolReason(lastErr) && carriesPoolReason(err)) {
-					// Keep the error that says why the pool is empty. A bare "no
-					// enabled accounts available" carries no reason, so a later pool
-					// that reports one (cooling down, rate limited, allowance spent,
-					// busy) must replace it — otherwise the failure reaches the client
-					// as a 503 that explains nothing.
-					lastErr = err
-				}
-			}
-		}
-		if acc == nil {
-			if lastErr != nil {
-				return nil, lastErr
-			}
-			return nil, fmt.Errorf("no enabled grok accounts available for requested pools: %s", strings.Join(candidates, ","))
-		}
-	}
-	raw := grokSSOTokenRaw(acc)
-	if NormalizeSSOToken(raw) == "" {
-		return nil, fmt.Errorf("grok account token is empty")
-	}
-	h.bindAffinity(ctx, ProviderWeb, acc.ID)
-	release, reserved := h.reserveAccount(acc)
-	if !reserved {
-		return h.openChatAccountSessionExcludingWithPoolsAndFilter(ctx, append(excludeIDs, acc.ID), poolCandidates, extraFilter)
-	}
-	return &chatAccountSession{
-		acc:            acc,
-		token:          raw,
-		poolCandidates: candidates,
-		release:        release,
-	}, nil
-}
-
 func (s *chatAccountSession) Close() {
 	if s == nil || s.release == nil {
 		return
@@ -855,44 +656,11 @@ func (s *chatAccountSession) Close() {
 	s.release = nil
 }
 
-// doSingleAccountRequest calls the Grok API once on a single account without retry switching.
-func (h *Handler) doSingleAccountRequest(
-	ctx context.Context,
-	sess *chatAccountSession,
-	payload map[string]interface{},
-	shouldMarkStatus grokAccountStatusPolicy,
-	callAPI func(*Client, context.Context, string, map[string]interface{}) (*http.Response, error),
-) (*http.Response, error) {
-	if sess == nil || strings.TrimSpace(sess.token) == "" {
-		return nil, fmt.Errorf("empty chat session")
-	}
-	client := h.currentClient()
-	if client == nil {
-		return nil, fmt.Errorf("grok client not configured")
-	}
-	requestCtx := withRateLimitAccount(ctx, sess.acc)
-	resp, err := callAPI(client, requestCtx, sess.token, payload)
-	if err != nil {
-		if shouldMarkStatus == nil || shouldMarkStatus(err) {
-			h.markAccountStatus(ctx, sess.acc, err)
-		}
-		return nil, err
-	}
-	return resp, nil
-}
-
 type grokAccountStatusPolicy func(error) bool
 
 func markAllGrokAccountStatuses(err error) bool {
 	if err == nil {
 		return false
-	}
-	// A Console Free allowance refusal is account quota exhaustion, not a shared
-	// Team+Model throttle, even though xAI uses the resource-exhausted code for
-	// both. It must reach markAccountStatus so the dead Console row leaves the
-	// pool instead of being selected forever while its Web parent looks healthy.
-	if isConsoleFreeQuotaExhaustedError(err) {
-		return true
 	}
 	// Egress challenges and shared team rate limits are not account failures.
 	if isEgressChallengeError(err) {
@@ -913,55 +681,6 @@ func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
 		return false
 	}
 	return !strings.Contains(strings.ToLower(err.Error()), "fetch url status=")
-}
-
-// doChatWithAutoSwitchRebuild calls doChat with automatic account switching and payload rebuild on failure.
-func (h *Handler) doChatWithAutoSwitchRebuild(
-	ctx context.Context,
-	sess *chatAccountSession,
-	payload *map[string]interface{},
-	rebuild func(token string) (map[string]interface{}, error),
-) (*http.Response, error) {
-	return h.doAutoSwitchRequest(ctx, sess, payload, rebuild, (*Client).doChat)
-}
-
-// doAutoSwitchRequest calls the Grok API with automatic account switching on
-// failure, rebuilding the request payload for the new account when rebuild is set.
-func (h *Handler) doAutoSwitchRequest(
-	ctx context.Context,
-	sess *chatAccountSession,
-	payload *map[string]interface{},
-	rebuild func(token string) (map[string]interface{}, error),
-	callAPI func(*Client, context.Context, string, map[string]interface{}) (*http.Response, error),
-) (*http.Response, error) {
-	if sess == nil || strings.TrimSpace(sess.token) == "" {
-		return nil, fmt.Errorf("empty chat session")
-	}
-	if payload == nil {
-		return nil, fmt.Errorf("empty payload")
-	}
-	client := h.currentClient()
-	if client == nil {
-		return nil, fmt.Errorf("grok client not configured")
-	}
-	return h.retryWithAccountSwitch(ctx, sess, 100*time.Millisecond,
-		func() (*http.Response, error) {
-			return callAPI(client, withRateLimitAccount(ctx, sess.acc), sess.token, *payload)
-		},
-		func(used []int64) (*chatAccountSession, error) {
-			return h.openChatAccountSessionExcludingWithPools(ctx, used, sess.poolCandidates)
-		},
-		func() error {
-			if rebuild == nil {
-				return nil
-			}
-			newPayload, rbErr := rebuild(sess.token)
-			if rbErr != nil {
-				return rbErr
-			}
-			*payload = newPayload
-			return nil
-		})
 }
 
 // isEgressChallengeError reports whether an error is a Cloudflare interstitial

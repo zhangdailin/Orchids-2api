@@ -96,7 +96,7 @@ func rateLimitIdentity(ctx context.Context, token string) string {
 	if identity, _ := ctx.Value(rateLimitAccountContextKey{}).(string); identity != "" {
 		return identity
 	}
-	return "token:" + dpopCacheKey(token)
+	return "token:" + credentialAffinity(token)
 }
 
 // waitScopedRateLimit rejects an active team/account+model cooldown immediately,

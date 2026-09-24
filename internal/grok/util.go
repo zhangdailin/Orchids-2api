@@ -297,24 +297,6 @@ func parseGrokJSONText(raw string) interface{} {
 	return parsed
 }
 
-func normalizeGrokAssetURL(raw string) string {
-	s := strings.TrimSpace(raw)
-	if s == "" || s == "<nil>" {
-		return ""
-	}
-	lower := strings.ToLower(s)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
-		return s
-	}
-	if strings.HasPrefix(s, "/") {
-		return defaultAssetsBaseURL + s
-	}
-	if strings.HasPrefix(lower, "users/") || strings.HasPrefix(lower, "generated/") || strings.Contains(lower, "/generated/") || strings.Contains(lower, "/image/") {
-		return defaultAssetsBaseURL + "/" + strings.TrimLeft(s, "/")
-	}
-	return s
-}
-
 // firstNonEmpty delegates to the shared implementation in internal/util so the
 // package keeps its short local name without duplicating the logic.
 func firstNonEmpty(values ...string) string {

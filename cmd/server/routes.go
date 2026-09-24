@@ -199,42 +199,7 @@ func registerRoutes(
 	// context against the wrong number. On the unified prefix the channel is the
 	// model's, not the path's.
 	mux.HandleFunc("/v1/messages/count_tokens", inferenceAuth(limiter.Limit(grok.ModelDispatcher(h.HandleCountTokens, h.HandleCountTokens, isNativeResponsesModel))))
-	registerWithPrefixes(mux, allPrefixes, "/images/generations", inferenceAuth(limiter.Limit(grokHandler.HandleImagesGenerations)))
-	registerWithPrefixes(mux, allPrefixes, "/images/edits", inferenceAuth(limiter.Limit(grokHandler.HandleImagesEdits)))
-	registerWithPrefixes(mux, allPrefixes, "/videos", inferenceAuth(limiter.Limit(grokHandler.HandleVideosCreate)))
-	registerWithPrefixes(mux, allPrefixes, "/videos/generations", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosGenerate)))
-	registerWithPrefixes(mux, allPrefixes, "/videos/edits", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosEdit)))
-	registerWithPrefixes(mux, allPrefixes, "/videos/extensions", inferenceAuth(limiter.Limit(grokHandler.HandleConsoleVideosExtend)))
-	registerWithPrefixes(mux, allPrefixes, "/videos/", inferenceAuth(limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/content") {
-			grokHandler.HandleVideosContent(w, r)
-			return
-		}
-		grokHandler.HandleVideosRetrieve(w, r)
-	})))
 	registerWithPrefixes(mux, allPrefixes, "/files/", inferenceAuth(grokHandler.HandleFiles))
-	registerWithPrefixes(mux, allPrefixes, "/media/inputs", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputs)))
-	registerWithPrefixes(mux, allPrefixes, "/media/inputs/import", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputImport)))
-	registerWithPrefixes(mux, allPrefixes, "/media/inputs/", inferenceAuth(limiter.Limit(grokHandler.HandleMediaInputResource)))
-	// One-time, unguessable callback used by the xAI video fallback. The token
-	// is the authorization boundary, so this endpoint must not require a client key.
-	mux.HandleFunc("/media/uploads/", grokHandler.HandleVideoUpload)
-	registerWithPrefixes(mux, allPrefixes, "/tts", inferenceAuth(limiter.Limit(grokHandler.HandleTTS)))
-	registerWithPrefixes(mux, allPrefixes, "/tts/voices", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
-	registerWithPrefixes(mux, allPrefixes, "/tts/voices/", inferenceAuth(limiter.Limit(grokHandler.HandleTTSVoices)))
-	sttHTTP := limiter.Limit(grokHandler.HandleSTT)
-	sttWebSocket := limiter.LimitLongLived(grokHandler.HandleSTT)
-	registerWithPrefixes(mux, allPrefixes, "/stt", inferenceAuth(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			sttWebSocket(w, r)
-			return
-		}
-		sttHTTP(w, r)
-	}))
-	registerWithPrefixes(mux, allPrefixes, "/audio/speech", inferenceAuth(limiter.Limit(grokHandler.HandleAudioSpeech)))
-	registerWithPrefixes(mux, allPrefixes, "/audio/tasks", inferenceAuth(limiter.Limit(grokHandler.HandleAudioSpeech)))
-	registerWithPrefixes(mux, allPrefixes, "/audio/transcriptions", inferenceAuth(limiter.Limit(grokHandler.HandleAudioTranscriptions)))
-	registerWithPrefixes(mux, allPrefixes, "/realtime", inferenceAuth(limiter.LimitLongLived(grokHandler.HandleRealtime)))
 
 	// --- Public auth/login (no prefix duplication) ---
 	mux.HandleFunc("/api/login", apiHandler.HandleLogin)
@@ -274,26 +239,7 @@ func registerRoutes(
 	toolRoute("/responses", limiter.Limit(grokHandler.HandleResponses))
 	toolRoute("/responses/compact", limiter.Limit(grokHandler.HandleResponsesCompact))
 	toolRoute("/responses/", limiter.Limit(grokHandler.HandleResponseResource))
-	toolRoute("/images/generations", limiter.Limit(grokHandler.HandleImagesGenerations))
-	toolRoute("/images/edits", limiter.Limit(grokHandler.HandleImagesEdits))
-	toolRoute("/videos", limiter.Limit(grokHandler.HandleVideosCreate))
-	toolRoute("/videos/generations", limiter.Limit(grokHandler.HandleConsoleVideosGenerate))
-	toolRoute("/videos/edits", limiter.Limit(grokHandler.HandleConsoleVideosEdit))
-	toolRoute("/videos/extensions", limiter.Limit(grokHandler.HandleConsoleVideosExtend))
-	toolRoute("/videos/", limiter.Limit(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(strings.TrimRight(r.URL.Path, "/"), "/content") {
-			grokHandler.HandleVideosContent(w, r)
-			return
-		}
-		grokHandler.HandleVideosRetrieve(w, r)
-	}))
 	toolRoute("/files/", limiter.Limit(grokHandler.HandleFiles))
-	toolRoute("/tts", limiter.Limit(grokHandler.HandleTTS))
-	toolRoute("/tts/voices", limiter.Limit(grokHandler.HandleTTSVoices))
-	toolRoute("/tts/voices/", limiter.Limit(grokHandler.HandleTTSVoices))
-	toolRoute("/audio/speech", limiter.Limit(grokHandler.HandleAudioSpeech))
-	toolRoute("/audio/transcriptions", limiter.Limit(grokHandler.HandleAudioTranscriptions))
-	toolRoute("/realtime", limiter.LimitLongLived(grokHandler.HandleRealtime))
 
 	// Admin routes under /api/* only (no dual prefix)
 	mux.HandleFunc("/api/providers", sessionAuth(channel.HandleRegistry))
@@ -302,8 +248,6 @@ func registerRoutes(
 	mux.HandleFunc("/api/grok/availability", sessionAuth(apiHandler.HandleGrokAvailability))
 	// Management-plane media inputs: the same store as the inference-plane
 	// endpoint, with the envelope grok2api's admin API uses.
-	mux.HandleFunc("/api/media/inputs", sessionAuth(grokHandler.HandleAdminMediaInputs))
-	mux.HandleFunc("/api/media/inputs/", sessionAuth(grokHandler.HandleAdminMediaInputResource))
 	mux.HandleFunc("/api/puter/web-login", sessionAuth(apiHandler.HandlePuterWebLogin))
 	mux.HandleFunc("/api/workbuddy/login", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/workbuddy/login/", sessionAuth(apiHandler.HandleWorkBuddyLogin))
@@ -373,79 +317,9 @@ func registerRoutes(
 		{"/config", apiHandler.HandleConfig},
 		{"/verify", grokHandler.HandleAdminVerify},
 		{"/storage", grokHandler.HandleAdminStorage},
-		{"/tokens", grokHandler.HandleAdminTokens},
-		{"/tokens/refresh", grokHandler.HandleAdminTokensRefresh},
-		{"/tokens/refresh/async", grokHandler.HandleAdminTokensRefreshAsync},
-		{"/tokens/nsfw/enable", grokHandler.HandleAdminNSFWEnable},
-		{"/tokens/nsfw/enable/async", grokHandler.HandleAdminNSFWEnableAsync},
-		{"/batch/", grokHandler.HandleAdminBatchTask},
-		{"/cache", grokHandler.HandleAdminCache},
-		{"/cache/list", grokHandler.HandleAdminCacheList},
-		{"/cache/clear", grokHandler.HandleAdminCacheClear},
-		{"/cache/item/delete", grokHandler.HandleAdminCacheItemDelete},
-		{"/media/images", grokHandler.HandleAdminMediaImages},
-		{"/media/images/stats", grokHandler.HandleAdminMediaImageStats},
-		{"/media/images/delete", grokHandler.HandleAdminMediaImagesDelete},
-		{"/media/images/content/", grokHandler.HandleAdminMediaImageContent},
-		{"/media/videos", grokHandler.HandleAdminMediaVideos},
-		{"/media/videos/stats", grokHandler.HandleAdminMediaVideoStats},
-		{"/media/videos/delete", grokHandler.HandleAdminMediaVideoDelete},
-		{"/media/videos/content/", grokHandler.HandleAdminMediaVideoContent},
-		{"/media/inputs/upload", grokHandler.HandleAdminMediaInputs},
-		{"/media/inputs/import", grokHandler.HandleAdminMediaInputImport},
-		{"/cache/online/clear", grokHandler.HandleAdminCacheOnlineClear},
-		{"/cache/online/clear/async", grokHandler.HandleAdminCacheOnlineClearAsync},
-		{"/cache/online/load/async", grokHandler.HandleAdminCacheOnlineLoadAsync},
-		{"/voice/token", grokHandler.HandleAdminVoiceToken},
-		{"/imagine/start", grokHandler.HandleAdminImagineStart},
-		{"/imagine/stop", grokHandler.HandleAdminImagineStop},
-		{"/imagine/sse", grokHandler.HandleAdminImagineSSE},
-		{"/imagine/ws", grokHandler.HandleAdminImagineWS},
-		{"/video/start", grokHandler.HandlePublicVideoStart},
-		{"/video/stop", grokHandler.HandlePublicVideoStop},
-		{"/video/sse", grokHandler.HandlePublicVideoSSE},
 	}
 	for _, rt := range adminRoutes {
 		registerWithPrefixes(mux, adminPrefixes, rt.path, sessionAuth(rt.handler))
-	}
-	// Media gallery routes use the requested canonical admin prefix while the
-	// existing admin surface retains its established aliases.
-	for _, rt := range adminRoutes {
-		if strings.HasPrefix(rt.path, "/media/images") || strings.HasPrefix(rt.path, "/media/videos") || strings.HasPrefix(rt.path, "/media/inputs") {
-			mux.HandleFunc("/api/admin/v1"+rt.path, sessionAuth(rt.handler))
-		}
-	}
-
-	// --- Public API routes (dual prefix) ---
-	publicAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			middleware.PublicKeyAuth(currentConfig().PublicAPIKey(), next)(w, r)
-		}
-	}
-	publicImagineStreamAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			middleware.PublicImagineStreamAuth(currentConfig().PublicAPIKey(), next)(w, r)
-		}
-	}
-
-	publicPrefixes := []string{"/api/v1/public", "/v1/public"}
-	publicAPIRoutes := []struct {
-		path    string
-		handler http.HandlerFunc
-	}{
-		{"/verify", publicAuth(grokHandler.HandlePublicVerify)},
-		{"/voice/token", publicAuth(grokHandler.HandleAdminVoiceToken)},
-		{"/imagine/config", grokHandler.HandlePublicImagineConfig},
-		{"/imagine/start", publicAuth(grokHandler.HandleAdminImagineStart)},
-		{"/imagine/stop", publicAuth(grokHandler.HandleAdminImagineStop)},
-		{"/imagine/sse", publicImagineStreamAuth(grokHandler.HandleAdminImagineSSE)},
-		{"/imagine/ws", publicImagineStreamAuth(grokHandler.HandleAdminImagineWS)},
-		{"/video/start", publicAuth(grokHandler.HandlePublicVideoStart)},
-		{"/video/stop", publicAuth(grokHandler.HandlePublicVideoStop)},
-		{"/video/sse", grokHandler.HandlePublicVideoSSE},
-	}
-	for _, rt := range publicAPIRoutes {
-		registerWithPrefixes(mux, publicPrefixes, rt.path, rt.handler)
 	}
 
 	// --- Static assets ---

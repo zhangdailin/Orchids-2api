@@ -2,7 +2,6 @@ package grok
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,14 +15,6 @@ import (
 	"orchids-api/internal/debug"
 	"orchids-api/internal/util"
 )
-
-func (h *Handler) consoleURL(path string) string {
-	base := "https://console.x.ai/v1"
-	if h != nil && h.configSnapshot() != nil {
-		base = h.configSnapshot().GrokConsoleBaseURLOrDefault()
-	}
-	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
-}
 
 func chatMessageContentText(content interface{}) string {
 	switch v := content.(type) {
@@ -53,14 +44,6 @@ func chatMessageContentText(content interface{}) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
-}
-
-func (c *Client) consoleHeaders(token string) http.Header {
-	h := c.headers(token)
-	h.Set("Origin", "https://console.x.ai")
-	h.Set("Referer", "https://console.x.ai/")
-	h.Set("Accept", "*/*")
-	return h
 }
 
 func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
@@ -133,18 +116,6 @@ func consoleToolChoiceFromOpenAI(choice interface{}) interface{} {
 	default:
 		return v
 	}
-}
-
-func (h *Handler) doConsole(ctx context.Context, token string, payload map[string]interface{}) (*http.Response, error) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	return h.webClient().doConsoleDPoPRequest(ctx, token, http.MethodPost, h.consoleURL("responses"), body)
-}
-
-func requiresConsoleResponses(spec ModelSpec) bool {
-	return strings.TrimSpace(spec.ConsoleModel) != ""
 }
 
 func consoleExtractText(v interface{}) string {
@@ -401,18 +372,6 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		if markAllGrokAccountStatuses(err) {
 			h.markAccountStatus(ctx, sess.acc, err)
 		}
-		// A stream-level anti-bot rejection means the session behind this
-		// request is no longer trusted: cool the account briefly so the next
-		// attempt re-solves clearance instead of replaying the refused session.
-		if errors.Is(err, errGrokWebAntiBot) {
-			// The signed statsig id was just rejected: drop it so the next attempt
-			// asks the signer for a fresh one instead of replaying a value the
-			// upstream is refusing (grok2api's Invalidate).
-			if client := h.webClient(); client != nil {
-				client.invalidateStatsig(http.MethodPost, url)
-			}
-			h.markAccountStatus(ctx, sess.acc, fmt.Errorf("grok upstream status=429 body=anti-bot rejected session"))
-		}
 		writeGrokUpstreamError(w, err)
 		return nil, false
 	}
@@ -484,57 +443,48 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 }
 
 func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, req *ChatCompletionsRequest, spec ModelSpec, sess *chatAccountSession, logger *debug.Logger, build bool) {
-	if h == nil || sess == nil || sess.acc == nil || (build && h.buildClient() == nil) || (!build && h.webClient() == nil) {
+	if h == nil || sess == nil || sess.acc == nil || h.buildClient() == nil {
 		writeGrokError(w, http.StatusServiceUnavailable, "grok upstream client or account not configured")
 		return
 	}
 	if req.startedAt.IsZero() {
 		req.startedAt = time.Now()
 	}
-	payload, err := h.responsesPayloadFromChat(spec, req, build)
+	payload, err := h.responsesPayloadFromChat(spec, req, true)
 	if err != nil {
 		writeGrokUpstreamError(w, err)
 		return
 	}
-	provider, endpoint, model := ProviderConsole, h.consoleURL("responses"), req.Model
+	provider, endpoint, model := ProviderBuild, h.cliBaseURL()+"/responses", spec.UpstreamModel
 	ctx = withReasoningDiagnostics(ctx, payload)
-	if build {
-		provider, endpoint, model = ProviderBuild, h.cliBaseURL()+"/responses", spec.UpstreamModel
-		if warnings := takeBuildCompatibilityWarnings(payload); warnings != "" {
-			w.Header().Set("X-Grok2API-Compatibility-Warnings", warnings)
-		}
+	if warnings := takeBuildCompatibilityWarnings(payload); warnings != "" {
+		w.Header().Set("X-Grok2API-Compatibility-Warnings", warnings)
 	}
 	openNext := func(excluded []int64) (*chatAccountSession, error) {
-		if build {
-			return h.openCLIAccountSession(ctx, excluded, model)
-		}
-		return h.openConsoleAccountSession(ctx, excluded, model)
+		return h.openCLIAccountSession(ctx, excluded, model)
 	}
 	request := func() (*http.Response, error) {
-		if build {
-			attemptStarted := time.Now()
-			resp, requestErr := h.buildClient().doResponsesAt(ctx, sess.acc, "/responses", payload)
-			if requestErr == nil || !req.ReasoningReplay || !isReasoningReplayDecodeError(requestErr) || preservesClientCompaction(payload, requestErr) {
-				return resp, requestErr
-			}
-			h.auditAttempt(ctx, sess.acc, ProviderBuild, 1, attemptStarted, requestErr, "reasoning_replay_recovery")
-			h.clearReasoningReplay(ctx, req.Model, req.PromptCacheKey)
-			recoveryAttempt := 1
-			lastRecoveryStage := ""
-			retryResp, retryErr := recoverChatReasoning(payload, requestErr, func(stage string) (*http.Response, error) {
-				recoveryAttempt++
-				lastRecoveryStage = stage
-				started := time.Now()
-				response, failure := h.buildClient().doResponsesAt(ctx, sess.acc, "/responses", payload)
-				h.auditAttempt(ctx, sess.acc, ProviderBuild, recoveryAttempt, started, failure, stage)
-				return response, failure
-			})
-			if retryErr == nil && retryResp != nil {
-				retryResp.Header.Set("X-Grok2API-Reasoning-Recovery", lastRecoveryStage)
-			}
-			return retryResp, retryErr
+		attemptStarted := time.Now()
+		resp, requestErr := h.buildClient().doResponsesAt(ctx, sess.acc, "/responses", payload)
+		if requestErr == nil || !req.ReasoningReplay || !isReasoningReplayDecodeError(requestErr) || preservesClientCompaction(payload, requestErr) {
+			return resp, requestErr
 		}
-		return h.doConsole(withRateLimitAccount(ctx, sess.acc), sess.token, payload)
+		h.auditAttempt(ctx, sess.acc, ProviderBuild, 1, attemptStarted, requestErr, "reasoning_replay_recovery")
+		h.clearReasoningReplay(ctx, req.Model, req.PromptCacheKey)
+		recoveryAttempt := 1
+		lastRecoveryStage := ""
+		retryResp, retryErr := recoverChatReasoning(payload, requestErr, func(stage string) (*http.Response, error) {
+			recoveryAttempt++
+			lastRecoveryStage = stage
+			started := time.Now()
+			response, failure := h.buildClient().doResponsesAt(ctx, sess.acc, "/responses", payload)
+			h.auditAttempt(ctx, sess.acc, ProviderBuild, recoveryAttempt, started, failure, stage)
+			return response, failure
+		})
+		if retryErr == nil && retryResp != nil {
+			retryResp.Header.Set("X-Grok2API-Reasoning-Recovery", lastRecoveryStage)
+		}
+		return retryResp, retryErr
 	}
 	// Quality hold: a withheld turn never reached the client, so the request can
 	// be retried on another account. The budget is separate from (and smaller
@@ -552,17 +502,14 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		// inner transport attempt to one account so the two bounded policies do not
 		// multiply into as many as 6×100 full upstream generations.
 		resp, err := h.retryWithAccountSwitchLimit(ctx, sess, 1500*time.Millisecond, request, openNext, nil, 1)
-		if build && err == nil && resp != nil {
+		if err == nil && resp != nil {
 			tools := append(append([]map[string]interface{}(nil), req.ResponsesTools...), consoleToolsFromOpenAI(req.Tools)...)
 			if aliases := collectBuildToolAliases(map[string]interface{}{"tools": tools}); len(aliases) > 0 {
 				resp.Body = rewriteBuildToolAliasResponse(resp.Body, resp.Header.Get("Content-Type"), aliases)
 			}
 		}
 		body, withheld := h.finishUpstreamChat(ctx, w, req, sess, logger, provider, endpoint, func() http.Header {
-			if build {
-				return h.cliHeaders(sess.acc, sess.token)
-			}
-			return h.webClient().consoleHeaders(sess.token)
+			return h.cliHeaders(sess.acc, sess.token)
 		}, payload, resp, err)
 		if !withheld {
 			return

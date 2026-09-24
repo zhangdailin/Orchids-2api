@@ -634,47 +634,9 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 		return nil
 	}
 
-	credential := strings.TrimSpace(util.FirstNonEmpty(acc.ClientCookie, acc.RefreshToken, acc.Token))
-	if grok.NormalizeSSOToken(credential) == "" {
-		return fmt.Errorf("missing sso token")
-	}
-	acc.ClientCookie = credential
-
-	client := grok.New(cfg)
-	result := grok.ProbeWebAccount(ctx, client, credential, grok.WebRefreshOptions{
-		IdentityTimeout: 15 * time.Second,
-		QuotaTimeout:    25 * time.Second,
-		RetryDelay:      grokSSOAuthRetryDelay,
-	})
-	if result.AuthRejected {
-		err := result.IdentityErr
-		if err == nil {
-			err = result.QuotaErr
-		}
-		return fmt.Errorf("%s: %w", classifyGrokAuthStatus(err), err)
-	}
-	grok.ApplyWebRefresh(acc, result)
-	if result.IdentityErr != nil {
-		slog.Warn("Grok SSO identity sync unavailable; continuing with quota sync", "account_id", acc.ID, "error", result.IdentityErr)
-	}
-	if result.QuotaErr != nil {
-		slog.Warn("Grok SSO quota unavailable; account remains authenticated", "account_id", acc.ID, "error", result.QuotaErr)
-	}
-	return nil
-}
-
-// Configurable in tests; the shared helper owns the context-aware retry.
-var grokSSOAuthRetryDelay = 800 * time.Millisecond
-
-// classifyGrokAuthStatus maps a definitive SSO authentication failure to "401".
-func classifyGrokAuthStatus(err error) string {
-	if err == nil {
-		return ""
-	}
-	if status := apperrors.ClassifyAccountStatus(err.Error()); status != "" {
-		return status
-	}
-	return "401"
+	// The grok.com website (SSO cookie) plane was retired: only Build OAuth
+	// credentials can be verified now.
+	return fmt.Errorf("only Grok Build OAuth accounts are supported")
 }
 
 func normalizeWarpTokenInput(acc *store.Account) {
@@ -745,12 +707,12 @@ func normalizeGrokTokenInput(acc *store.Account) {
 	// type so legacy imports do not appear as an unclassified account.
 	acc.CredentialType = "sso"
 	switch strings.ToLower(strings.TrimSpace(acc.GrokProvider)) {
-	case grok.ProviderWeb, grok.ProviderConsole:
+	case grokProviderWeb, grokProviderConsole:
 		acc.GrokProvider = strings.ToLower(strings.TrimSpace(acc.GrokProvider))
 	default:
 		// Do not retain arbitrary provider labels: routing must have a single
 		// explicit product boundary for every SSO credential.
-		acc.GrokProvider = grok.ProviderWeb
+		acc.GrokProvider = grokProviderWeb
 	}
 	raw := strings.TrimSpace(acc.ClientCookie)
 	if raw == "" {
@@ -1650,7 +1612,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
 			if !grokAccountIsOAuth(&acc) {
-				acc.GrokProvider = grok.ProviderWeb
+				acc.GrokProvider = grokProviderWeb
 			}
 			acc.NSFWEnabled = true
 			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {
@@ -2283,7 +2245,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		if !validateAccountType(w, acc.AccountType) {
 			return
 		}
-		if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
+		if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grokProviderWeb {
 			hasChild, err := a.hasLinkedGrokConsoleCompanion(r.Context(), existing.ID)
 			if err != nil {
 				http.Error(w, "failed to inspect linked Grok Console account", http.StatusInternalServerError)
@@ -2305,7 +2267,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			normalizeWarpTokenInput(&acc)
 		} else if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
-			if grokAccountIsOAuth(&acc) && isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
+			if grokAccountIsOAuth(&acc) && isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grokProviderWeb {
 				hasChild, err := a.hasLinkedGrokConsoleCompanion(r.Context(), existing.ID)
 				if err != nil {
 					http.Error(w, "failed to inspect linked Grok Console account", http.StatusInternalServerError)
@@ -2318,7 +2280,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			}
 			if !grokAccountIsOAuth(&acc) {
 				// Editing an SSO source keeps it on its Web provider.
-				acc.GrokProvider = grok.ProviderWeb
+				acc.GrokProvider = grokProviderWeb
 			}
 			// Admin UI redacts OAuth secrets on read; empty inbound fields mean
 			// "keep existing", not "clear credentials".
@@ -2443,7 +2405,7 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := a.syncGrokSSOProviderView(r.Context(), &acc); err != nil {
 			slog.Error("Failed to synchronize linked Grok Console SSO account", "account_id", acc.ID, "error", err)
-			if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grok.ProviderWeb {
+			if isGrokSSOAccount(existing) && existing.GrokSSOParentID == 0 && grok.ProviderForAccount(existing) == grokProviderWeb {
 				if rollbackErr := a.store.UpdateAccount(r.Context(), existing); rollbackErr != nil {
 					slog.Error("Failed to restore Grok Web SSO source after synchronization error", "account_id", existing.ID, "error", rollbackErr)
 				}
@@ -2486,8 +2448,8 @@ func (a *API) HandleGrokAvailability(w http.ResponseWriter, r *http.Request) {
 
 	counts := map[string]int{
 		grok.ProviderBuild:   0,
-		grok.ProviderWeb:     0,
-		grok.ProviderConsole: 0,
+		grokProviderWeb:     0,
+		grokProviderConsole: 0,
 	}
 	accounts, err := a.store.ListAccounts(r.Context())
 	if err != nil {
@@ -2685,7 +2647,7 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 			if !grokAccountIsOAuth(&acc) {
 				// Imports own one visible Web source; reconciliation creates or
 				// restores its linked Console account.
-				acc.GrokProvider = grok.ProviderWeb
+				acc.GrokProvider = grokProviderWeb
 				acc.GrokSSOParentID = 0
 			}
 			if grokAccountIsOAuth(&acc) && !grokAccountHasOAuthCredentials(&acc) {
@@ -3408,23 +3370,6 @@ func allowanceStillSpent(acc *store.Account) bool {
 	return acc.UsageLimit > 0 && acc.UsageCurrent <= 0
 }
 
-// validateStatsigConfig checks the one configuration value that decides whether
-// account metadata leaves this host, so an invalid endpoint cannot be stored.
-func validateStatsigConfig(cfg *config.Config) error {
-	if cfg == nil || cfg.GrokStatsigSignerURL == nil {
-		return nil
-	}
-	endpoint := strings.TrimSpace(*cfg.GrokStatsigSignerURL)
-	if endpoint == "" {
-		// Explicitly disabled.
-		return nil
-	}
-	if err := grok.ValidateStatsigSignerURL(endpoint); err != nil {
-		return fmt.Errorf("grok_statsig_signer_url: %w", err)
-	}
-	return nil
-}
-
 func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config) error {
 	if newCfg == nil {
 		return fmt.Errorf("config is nil")
@@ -3435,12 +3380,6 @@ func (a *API) persistConfig(ctx context.Context, current, newCfg *config.Config)
 
 	storedCfg := newCfg.Clone()
 	config.ApplyHardcoded(storedCfg)
-	// A signing endpoint is called with the account's own page metadata, so a
-	// misconfigured one is refused where it is typed rather than dropped
-	// silently at request time (grok2api validates it during config load too).
-	if err := validateStatsigConfig(storedCfg); err != nil {
-		return err
-	}
 	if _, err := middleware.NewAnonymousAllowlist(storedCfg.AnonymousAllowIPs); err != nil {
 		return fmt.Errorf("anonymous_allow_ips: %w", err)
 	}

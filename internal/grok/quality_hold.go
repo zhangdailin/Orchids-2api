@@ -720,7 +720,7 @@ func (h *Handler) shouldHoldQualityTurn(req *ChatCompletionsRequest, provider st
 	if !policy.Enabled {
 		return false
 	}
-	if provider != ProviderBuild && provider != ProviderConsole {
+	if provider != ProviderBuild {
 		return false
 	}
 	return qualityExpectsReasoning(req, req.ReasoningReplay)

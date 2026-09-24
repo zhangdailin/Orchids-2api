@@ -109,9 +109,6 @@ func TestTeamCooldownNoteKeepsLongest(t *testing.T) {
 	}
 }
 
-
-
-
 func TestTeamCooldownConcurrentNote(t *testing.T) {
 	registry := newTeamCooldownRegistry()
 	var wg sync.WaitGroup

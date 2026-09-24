@@ -202,7 +202,7 @@ func TestFreeProfileInferenceRequiresASignal(t *testing.T) {
 		{"unknown plan", buildAccount("unknown", store.GrokBillingSnapshot{}), false, ""},
 		{"paid plan", buildAccount("supergrok", store.GrokBillingSnapshot{SyncedAt: time.Now()}), false, ""},
 		{"paid plan with a window", buildAccount("supergrok", store.GrokBillingSnapshot{SyncedAt: time.Now(), Weekly: store.GrokQuotaWindow{HasUsage: true}}), false, ""},
-		{"web account", &store.Account{AccountType: "grok", GrokProvider: grok.ProviderWeb, Subscription: "free"}, false, ""},
+		{"web account", &store.Account{AccountType: "grok", GrokProvider: grokProviderWeb, Subscription: "free"}, false, ""},
 	}
 	for _, tc := range cases {
 		verdict := grok.InferFreeProfile(tc.acc)
@@ -327,7 +327,7 @@ func TestWebQuotaKeepsItsProvenance(t *testing.T) {
 
 	acc := &store.Account{
 		AccountType:  "grok",
-		GrokProvider: grok.ProviderWeb,
+		GrokProvider: grokProviderWeb,
 		GrokWebQuota: store.GrokWebQuotaSnapshot{
 			Auto:     store.GrokQuotaWindow{Limit: 30, Remaining: 12, HasLimit: true, HasRemaining: true},
 			SyncedAt: time.Now(),

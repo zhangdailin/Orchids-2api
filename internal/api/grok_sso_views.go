@@ -43,7 +43,7 @@ func (a *API) EnsureGrokSSOProviderViews(ctx context.Context) error {
 				continue
 			}
 			seen[acc.ID] = struct{}{}
-			if grok.ProviderForAccount(acc) == grok.ProviderWeb && acc.GrokSSOParentID == 0 {
+			if grok.ProviderForAccount(acc) == grokProviderWeb && acc.GrokSSOParentID == 0 {
 				sourceIDs[acc.ID] = struct{}{}
 			}
 		}
@@ -88,7 +88,7 @@ func (a *API) ensureGrokSSOProviderGroup(ctx context.Context, group []*store.Acc
 	// could make an unrelated Console runtime account disappear from routing.
 	var sources []*store.Account
 	for _, acc := range group {
-		if grok.ProviderForAccount(acc) != grok.ProviderWeb {
+		if grok.ProviderForAccount(acc) != grokProviderWeb {
 			continue
 		}
 		if acc.GrokSSOParentID != 0 {
@@ -109,7 +109,7 @@ func (a *API) ensureGrokSSOProviderGroup(ctx context.Context, group []*store.Acc
 	// Console account belongs only to its current live source; it is never an
 	// adoption candidate for a different source.
 	for _, acc := range group {
-		if grok.ProviderForAccount(acc) != grok.ProviderConsole || acc.GrokSSOParentID == 0 {
+		if grok.ProviderForAccount(acc) != grokProviderConsole || acc.GrokSSOParentID == 0 {
 			continue
 		}
 		if source == nil || acc.GrokSSOParentID != source.ID {
@@ -120,7 +120,7 @@ func (a *API) ensureGrokSSOProviderGroup(ctx context.Context, group []*store.Acc
 	if source == nil {
 		// Preserve a legacy Console record's provider runtime state and add a
 		// linked Web source instead of reclassifying the Console record.
-		source = newGrokSSOProviderView(group[0], grok.ProviderWeb, 0)
+		source = newGrokSSOProviderView(group[0], grokProviderWeb, 0)
 		if err := a.store.CreateAccount(ctx, source); err != nil {
 			return fmt.Errorf("create Grok Web SSO source: %w", err)
 		}
@@ -129,7 +129,7 @@ func (a *API) ensureGrokSSOProviderGroup(ctx context.Context, group []*store.Acc
 	var linkedConsoles []*store.Account
 	var unlinkedConsoles []*store.Account
 	for _, acc := range group {
-		if grok.ProviderForAccount(acc) != grok.ProviderConsole {
+		if grok.ProviderForAccount(acc) != grokProviderConsole {
 			continue
 		}
 		switch acc.GrokSSOParentID {
@@ -159,7 +159,7 @@ func (a *API) ensureGrokSSOProviderGroup(ctx context.Context, group []*store.Acc
 		}
 		console = &linked
 	} else {
-		console = newGrokSSOProviderView(source, grok.ProviderConsole, source.ID)
+		console = newGrokSSOProviderView(source, grokProviderConsole, source.ID)
 		if err := a.store.CreateAccount(ctx, console); err != nil {
 			return fmt.Errorf("create linked Grok Console SSO account: %w", err)
 		}
@@ -182,7 +182,7 @@ func newGrokSSOProviderView(source *store.Account, provider string, parentID int
 		name = strings.TrimSpace(source.Name)
 	}
 	label := "Web"
-	if provider == grok.ProviderConsole {
+	if provider == grokProviderConsole {
 		label = "Console"
 	}
 	view := &store.Account{
@@ -262,7 +262,7 @@ func (a *API) syncGrokSSOProviderView(ctx context.Context, source *store.Account
 	if err != nil {
 		return err
 	}
-	if found || !isGrokSSOAccount(source) || source.GrokSSOParentID != 0 || grok.ProviderForAccount(source) != grok.ProviderWeb {
+	if found || !isGrokSSOAccount(source) || source.GrokSSOParentID != 0 || grok.ProviderForAccount(source) != grokProviderWeb {
 		return nil
 	}
 	return a.EnsureGrokSSOProviderViews(ctx)

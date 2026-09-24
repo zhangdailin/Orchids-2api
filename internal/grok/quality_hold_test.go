@@ -523,7 +523,7 @@ func TestServeNativeChatDoesNotReplayHostedToolTurn(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"model": "grok-4.5", "stream": true, "reasoning_effort": "high",
-		"messages": []map[string]interface{}{{"role": "user", "content": "search the web"}},
+		"messages":          []map[string]interface{}{{"role": "user", "content": "search the web"}},
 		"x_responses_tools": []map[string]interface{}{{"type": "web_search"}},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/grok/v1/chat/completions", strings.NewReader(string(body)))

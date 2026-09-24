@@ -9,7 +9,6 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -125,10 +124,6 @@ func main() {
 			slog.Debug("Config loaded from Redis")
 		}
 	}
-	if err := grok.ConfigureMediaStorage(cfg); err != nil {
-		slog.Error("Failed to initialize media storage", "error", err)
-		os.Exit(1)
-	}
 	// The Warp request builder renders a whole transcript when no server-issued
 	// conversation id is available. That ceiling is a transport bound, so it is
 	// installed once here rather than being a compiled-in constant that decides
@@ -176,7 +171,6 @@ func main() {
 		os.Exit(1)
 	}
 	grokHandler.SetCompactionCipher(compactionCipher)
-	logStatsigConfiguration(cfg)
 	logAnonymousAllowlist(cfg)
 	apiHandler.SetConfigChangeHook(func(next *config.Config) {
 		configureRuntimeLogging(next)
@@ -346,9 +340,6 @@ func main() {
 	logWorkBuddyReachability(cfg)
 	logQoderReachability(cfg)
 	logClineReachability(cfg)
-	// Cached media inputs outlive their Redis records; without this sweep the
-	// files accumulate on disk forever.
-	startMediaInputSweeper(ctx, s, grok.CacheBaseDir())
 
 	// Graceful shutdown
 	idleConnsClosed := make(chan struct{})
@@ -453,30 +444,6 @@ func logClineReachability(cfg *config.Config) {
 		}
 		slog.Info("Cline API reachable", "endpoint", cline.DefaultAPIBase)
 	}()
-}
-
-// logStatsigConfiguration states which signing endpoint the Web plane will use.
-// The value decides whether account page metadata leaves this host, so an
-// operator should not have to infer it from behaviour.
-func logStatsigConfiguration(cfg *config.Config) {
-	if cfg == nil {
-		return
-	}
-	switch {
-	case cfg.GrokStatsigSignerURL == nil:
-		slog.Info("Statsig signing enabled with the default endpoint",
-			"endpoint", grok.DefaultStatsigSignerURL, "source", "default")
-	case strings.TrimSpace(*cfg.GrokStatsigSignerURL) == "":
-		slog.Warn("Statsig signing is disabled: no x-statsig-id will be sent; a manual value is used when configured")
-	default:
-		endpoint := strings.TrimSpace(*cfg.GrokStatsigSignerURL)
-		if err := grok.ValidateStatsigSignerURL(endpoint); err != nil {
-			slog.Error("Configured statsig signer URL is not usable; signing will be skipped",
-				"endpoint", endpoint, "error", err)
-			return
-		}
-		slog.Info("Statsig signing enabled", "endpoint", endpoint, "source", "config")
-	}
 }
 
 // logAnonymousAllowlist states which sources may call the inference routes

@@ -127,49 +127,6 @@ func (h *Handler) openCLIAccountSession(ctx context.Context, excludeIDs []int64,
 	}, nil
 }
 
-// openConsoleAccountSession selects a Console SSO account. Console sessions
-// cannot be substituted with Web SSO cookies even when both belong to the
-// same person, because their endpoints and quotas are independent.
-func (h *Handler) openConsoleAccountSession(ctx context.Context, excludeIDs []int64, modelIDs ...string) (*chatAccountSession, error) {
-	if h == nil || h.lb == nil {
-		return nil, fmt.Errorf("load balancer not configured")
-	}
-	modelID := ""
-	if len(modelIDs) > 0 {
-		modelID = strings.TrimSpace(modelIDs[0])
-	}
-	ctx = WithRequestModel(ctx, modelID)
-	allowed := func(acc *store.Account) bool {
-		// Console sessions are throttled per model like Build; apply the same
-		// model-scoped cooldown filter so a hot model does not retire the account.
-		return isGrokConsoleAccount(acc) && (modelID == "" || h.routeAllowsAccount(ctx, modelID, acc.ID)) && accountUsableForModel(ctx, acc)
-	}
-	if pinnedID := h.affinityAccount(ctx, ProviderConsole); pinnedID != 0 && !containsAccountID(excludeIDs, pinnedID) && h.lb.Store != nil {
-		if pinned, err := h.lb.Store.GetAccount(ctx, pinnedID); err == nil && pinned != nil && pinned.Enabled && allowed(pinned) && accountAffinityUsable(pinned) && h.accountCapacityAvailable(pinned) {
-			token := grokSSOTokenRaw(pinned)
-			if NormalizeSSOToken(token) != "" {
-				if release, reserved := h.reserveAccount(pinned); reserved {
-					return &chatAccountSession{acc: pinned, token: token, release: release}, nil
-				}
-			}
-		}
-	}
-	acc, err := h.lb.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, excludeIDs, "grok", h.connTrackerSnapshot(), allowed)
-	if err != nil {
-		return nil, err
-	}
-	token := grokSSOTokenRaw(acc)
-	if NormalizeSSOToken(token) == "" {
-		return nil, fmt.Errorf("grok console account token is empty")
-	}
-	h.bindAffinity(ctx, ProviderConsole, acc.ID)
-	release, reserved := h.reserveAccount(acc)
-	if !reserved {
-		return h.openConsoleAccountSession(ctx, append(excludeIDs, acc.ID), modelIDs...)
-	}
-	return &chatAccountSession{acc: acc, token: token, release: release}, nil
-}
-
 func containsAccountID(values []int64, id int64) bool {
 	for _, value := range values {
 		if value == id {

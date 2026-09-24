@@ -31,8 +31,6 @@ type ChatCompletionsRequest struct {
 	ResponsesTools      []map[string]interface{} `json:"x_responses_tools,omitempty"`
 	ResponsesInput      []interface{}            `json:"x_responses_input,omitempty"`
 	Include             []string                 `json:"include,omitempty"`
-	VideoConfig         *VideoConfig             `json:"video_config,omitempty"`
-	ImageConfig         *ImageConfig             `json:"image_config,omitempty"`
 	Tools               []ToolDef                `json:"tools,omitempty"`
 	ToolChoice          interface{}              `json:"tool_choice,omitempty"`
 	// WebSearchOptions is the OpenAI-style switch for the hosted search tool.
@@ -90,88 +88,6 @@ type ToolCall struct {
 	ID       string                 `json:"id,omitempty"`
 	Type     string                 `json:"type,omitempty"`
 	Function map[string]interface{} `json:"function,omitempty"`
-}
-
-type VideoConfig struct {
-	AspectRatio    string `json:"aspect_ratio"`
-	VideoLength    int    `json:"video_length"`
-	ResolutionName string `json:"resolution_name"`
-	Preset         string `json:"preset"`
-	Size           string `json:"size,omitempty"`
-}
-
-type VideosRequest struct {
-	Model           string `json:"model"`
-	Prompt          string `json:"prompt"`
-	Seconds         int    `json:"seconds"`
-	Size            string `json:"size"`
-	ResolutionName  string `json:"resolution_name"`
-	Preset          string `json:"preset"`
-	InputReferences []string
-	// grok2api-compatible aliases. The same options are spelled differently by
-	// the two public surfaces, and dropping the alias silently fell back to the
-	// defaults (8 seconds, 16:9) while reporting success.
-	Duration        json.RawMessage `json:"duration,omitempty"`
-	AspectRatio     string          `json:"aspect_ratio,omitempty"`
-	Resolution      string          `json:"resolution,omitempty"`
-	User            string          `json:"user,omitempty"`
-	Image           string          `json:"image,omitempty"`
-	ReferenceImages []string        `json:"reference_images,omitempty"`
-	ReferenceAudios []string        `json:"reference_audios,omitempty"`
-	Video           string          `json:"video,omitempty"`
-}
-
-type videoJob struct {
-	ID                string
-	Model             string
-	Prompt            string
-	Seconds           int
-	Size              string
-	Quality           string
-	CreatedAt         int64
-	Status            string
-	Progress          int
-	CompletedAt       int64
-	Error             map[string]interface{}
-	VideoURL          string
-	ContentPath       string
-	RemixedFromID     string
-	InputReferences   []string
-	Operation         string
-	StandardAPI       bool
-	OwnerHash         string
-	AccountID         int64
-	Provider          string
-	UpstreamRequestID string
-	PublicBaseURL     string
-	BuildFallback     bool
-}
-
-type ImageConfig struct {
-	N              int    `json:"n"`
-	Size           string `json:"size"`
-	ResponseFormat string `json:"response_format"`
-	// grok2api's image_config also carries the ratio and the resolution tier.
-	// Without them a caller could not ask for either, and a request that got its
-	// options through the top-level fields behaved differently depending on which
-	// surface it used.
-	AspectRatio string `json:"aspect_ratio,omitempty"`
-	Resolution  string `json:"resolution,omitempty"`
-}
-
-type ImagesGenerationsRequest struct {
-	Model          string          `json:"model"`
-	Prompt         string          `json:"prompt"`
-	N              int             `json:"n"`
-	PartialImages  *int            `json:"partial_images,omitempty"`
-	Size           string          `json:"size"`
-	AspectRatio    string          `json:"aspect_ratio"`
-	Resolution     string          `json:"resolution"`
-	Quality        string          `json:"quality"`
-	Stream         bool            `json:"stream"`
-	NSFW           *bool           `json:"nsfw,omitempty"`
-	ResponseFormat string          `json:"response_format"`
-	StorageOptions json.RawMessage `json:"storage_options,omitempty"`
 }
 
 func parseLooseBoolAnyForField(value interface{}, field string) (bool, error) {
@@ -283,85 +199,6 @@ func parseLooseStringAny(value interface{}) string {
 	}
 }
 
-func parseVideoInputReferences(value interface{}) []string {
-	var out []string
-	var walk func(interface{})
-	walk = func(v interface{}) {
-		switch x := v.(type) {
-		case nil:
-			return
-		case string:
-			if s := strings.TrimSpace(x); s != "" {
-				out = append(out, s)
-			}
-		case []interface{}:
-			for _, item := range x {
-				walk(item)
-			}
-		case map[string]interface{}:
-			for _, key := range []string{"image_url", "url", "data"} {
-				if s := parseLooseStringAny(x[key]); s != "" {
-					out = append(out, s)
-					return
-				}
-			}
-		}
-	}
-	walk(value)
-	return uniqueStrings(out)
-}
-
-func (v *VideoConfig) UnmarshalJSON(data []byte) error {
-	type rawVideoConfig struct {
-		AspectRatio    interface{} `json:"aspect_ratio"`
-		VideoLength    interface{} `json:"video_length"`
-		Seconds        interface{} `json:"seconds"`
-		ResolutionName interface{} `json:"resolution_name"`
-		Preset         interface{} `json:"preset"`
-		Size           interface{} `json:"size"`
-	}
-	var raw rawVideoConfig
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	videoLength, err := parseLooseIntAny(raw.VideoLength)
-	if err != nil {
-		return err
-	}
-	if videoLength == 0 {
-		videoLength, err = parseLooseIntAny(raw.Seconds)
-		if err != nil {
-			return err
-		}
-	}
-	v.AspectRatio = parseLooseStringAny(raw.AspectRatio)
-	v.VideoLength = videoLength
-	v.ResolutionName = parseLooseStringAny(raw.ResolutionName)
-	v.Preset = parseLooseStringAny(raw.Preset)
-	v.Size = parseLooseStringAny(raw.Size)
-	return nil
-}
-
-func (c *ImageConfig) UnmarshalJSON(data []byte) error {
-	type rawImageConfig struct {
-		N              interface{} `json:"n"`
-		Size           interface{} `json:"size"`
-		ResponseFormat interface{} `json:"response_format"`
-	}
-	var raw rawImageConfig
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	n, err := parseLooseIntAny(raw.N)
-	if err != nil {
-		return err
-	}
-	c.N = n
-	c.Size = parseLooseStringAny(raw.Size)
-	c.ResponseFormat = parseLooseStringAny(raw.ResponseFormat)
-	return nil
-}
-
 func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	type rawChatRequest struct {
 		Model               string                   `json:"model"`
@@ -380,8 +217,6 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 		ResponseText        map[string]interface{}   `json:"text,omitempty"`
 		ResponsesTools      []map[string]interface{} `json:"x_responses_tools,omitempty"`
 		Include             []string                 `json:"include,omitempty"`
-		VideoConfig         *VideoConfig             `json:"video_config,omitempty"`
-		ImageConfig         *ImageConfig             `json:"image_config,omitempty"`
 		Tools               []ToolDef                `json:"tools,omitempty"`
 		ToolChoice          interface{}              `json:"tool_choice,omitempty"`
 		ParallelToolCalls   interface{}              `json:"parallel_tool_calls,omitempty"`
@@ -453,8 +288,6 @@ func (r *ChatCompletionsRequest) UnmarshalJSON(data []byte) error {
 	r.ResponseText = raw.ResponseText
 	r.ResponsesTools = append([]map[string]interface{}(nil), raw.ResponsesTools...)
 	r.Include = append([]string(nil), raw.Include...)
-	r.VideoConfig = raw.VideoConfig
-	r.ImageConfig = raw.ImageConfig
 	r.Tools = raw.Tools
 	r.ToolChoice = raw.ToolChoice
 	if _, ok := rawMap["parallel_tool_calls"]; ok {
@@ -490,124 +323,6 @@ func parseStringList(value interface{}, field string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("%s must be a string or array of strings", field)
 	}
-}
-
-func (r *ImagesGenerationsRequest) UnmarshalJSON(data []byte) error {
-	type rawImagesGenerationsRequest struct {
-		Model          interface{}     `json:"model"`
-		Prompt         interface{}     `json:"prompt"`
-		N              interface{}     `json:"n"`
-		PartialImages  interface{}     `json:"partial_images"`
-		Size           interface{}     `json:"size"`
-		AspectRatio    interface{}     `json:"aspect_ratio"`
-		Resolution     interface{}     `json:"resolution"`
-		Quality        interface{}     `json:"quality"`
-		Stream         interface{}     `json:"stream"`
-		NSFW           interface{}     `json:"nsfw"`
-		ResponseFormat interface{}     `json:"response_format"`
-		StorageOptions json.RawMessage `json:"storage_options"`
-	}
-	var raw rawImagesGenerationsRequest
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	n, err := parseLooseIntAny(raw.N)
-	if err != nil {
-		return err
-	}
-	if raw.N == nil {
-		// An omitted (or null) n defaults to 1, matching OpenAI and grok2api.
-		// Only an explicit out-of-range value is an error, and every caller
-		// downstream relies on n >= 1.
-		n = 1
-	}
-	var partialImages *int
-	if raw.PartialImages != nil {
-		value, err := parseLooseIntAny(raw.PartialImages)
-		if err != nil {
-			return err
-		}
-		partialImages = &value
-	}
-	stream, err := parseLooseBoolAny(raw.Stream)
-	if err != nil {
-		return err
-	}
-	var nsfw *bool
-	if raw.NSFW != nil {
-		nsfwVal, err := parseLooseBoolAnyForField(raw.NSFW, "nsfw")
-		if err != nil {
-			return err
-		}
-		nsfw = &nsfwVal
-	}
-	r.Model = parseLooseStringAny(raw.Model)
-	r.Prompt = parseLooseStringAny(raw.Prompt)
-	r.N = n
-	r.PartialImages = partialImages
-	r.Size = parseLooseStringAny(raw.Size)
-	r.AspectRatio = parseLooseStringAny(raw.AspectRatio)
-	r.Resolution = parseLooseStringAny(raw.Resolution)
-	r.Quality = parseLooseStringAny(raw.Quality)
-	r.Stream = stream
-	r.NSFW = nsfw
-	r.ResponseFormat = parseLooseStringAny(raw.ResponseFormat)
-	r.StorageOptions = append(r.StorageOptions[:0], raw.StorageOptions...)
-	return nil
-}
-
-func (r *VideosRequest) UnmarshalJSON(data []byte) error {
-	type rawVideosRequest struct {
-		Model           interface{} `json:"model"`
-		Prompt          interface{} `json:"prompt"`
-		Seconds         interface{} `json:"seconds"`
-		Duration        interface{} `json:"duration"`
-		VideoLength     interface{} `json:"video_length"`
-		Size            interface{} `json:"size"`
-		AspectRatio     interface{} `json:"aspect_ratio"`
-		ResolutionName  interface{} `json:"resolution_name"`
-		Resolution      interface{} `json:"resolution"`
-		Preset          interface{} `json:"preset"`
-		InputReference  interface{} `json:"input_reference"`
-		InputReferences interface{} `json:"input_references"`
-	}
-	var raw rawVideosRequest
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	seconds, err := parseLooseIntAny(raw.Seconds)
-	if err != nil {
-		return err
-	}
-	if seconds == 0 {
-		seconds, err = parseLooseIntAny(raw.Duration)
-		if err != nil {
-			return err
-		}
-	}
-	if seconds == 0 {
-		seconds, err = parseLooseIntAny(raw.VideoLength)
-		if err != nil {
-			return err
-		}
-	}
-	r.Model = parseLooseStringAny(raw.Model)
-	r.Prompt = parseLooseStringAny(raw.Prompt)
-	r.Seconds = seconds
-	r.Size = parseLooseStringAny(raw.Size)
-	if r.Size == "" {
-		r.Size = parseLooseStringAny(raw.AspectRatio)
-	}
-	r.ResolutionName = parseLooseStringAny(raw.ResolutionName)
-	if r.ResolutionName == "" {
-		r.ResolutionName = parseLooseStringAny(raw.Resolution)
-	}
-	r.Preset = parseLooseStringAny(raw.Preset)
-	r.InputReferences = parseVideoInputReferences(raw.InputReferences)
-	if len(r.InputReferences) == 0 {
-		r.InputReferences = parseVideoInputReferences(raw.InputReference)
-	}
-	return nil
 }
 
 type RateLimitInfo struct {
@@ -746,84 +461,9 @@ func (r *ChatCompletionsRequest) Validate() error {
 			return fmt.Errorf("tool_choice must be auto, required, none, or a specific function object")
 		}
 	}
-	if r.ImageConfig != nil {
-		r.ImageConfig.Normalize()
-		if r.ImageConfig.N < 1 || r.ImageConfig.N > 10 {
-			return fmt.Errorf("image_config.n must be between 1 and 10")
-		}
-		modelID := normalizeModelID(r.Model)
-		if modelID == "grok-imagine-image-lite" && r.ImageConfig.N > 4 {
-			return fmt.Errorf("image_config.n must be between 1 and 4 for grok-imagine-image-lite")
-		}
-		if modelID == "grok-imagine-image-edit" && r.ImageConfig.N > 2 {
-			return fmt.Errorf("image_config.n must be between 1 and 2 for image edit")
-		}
-		if r.ImageConfig.ResponseFormat != "" {
-			switch normalizeImageResponseFormat(r.ImageConfig.ResponseFormat) {
-			case "b64_json", "url":
-				// ok
-			default:
-				return fmt.Errorf("image_config.response_format must be one of b64_json, base64, url")
-			}
-			r.ImageConfig.ResponseFormat = normalizeImageResponseFormat(r.ImageConfig.ResponseFormat)
-		}
-		size, err := normalizeImageSize(r.ImageConfig.Size)
-		if modelID == "grok-imagine-image-edit" {
-			size, err = normalizeImageEditSize(r.ImageConfig.Size)
-		}
-		if err != nil {
-			return err
-		}
-		r.ImageConfig.Size = size
-		if r.Stream && r.ImageConfig.N > 2 {
-			return fmt.Errorf("streaming is only supported when image_config.n=1 or n=2")
-		}
-	}
 	return nil
 }
 
-func (r *ImagesGenerationsRequest) Normalize() {
-	// No model default: grok2api rejects a request that names none, and silently
-	// choosing one spent image quota on a request the caller never described.
-	if r.N <= 0 {
-		r.N = 1
-	}
-	if strings.TrimSpace(r.ResponseFormat) == "" {
-		r.ResponseFormat = "url"
-	}
-}
-
-func (c *ImageConfig) Normalize() {
-	if c == nil {
-		return
-	}
-	if c.N <= 0 {
-		c.N = 1
-	}
-	if strings.TrimSpace(c.Size) == "" {
-		c.Size = "1024x1024"
-	}
-	if strings.TrimSpace(c.ResponseFormat) == "" {
-		c.ResponseFormat = "url"
-	}
-	c.ResponseFormat = normalizeImageResponseFormat(c.ResponseFormat)
-}
-
-func (v *VideoConfig) Normalize() {
-	if v == nil {
-		return
-	}
-	if v.VideoLength == 0 {
-		v.VideoLength = 6
-	}
-	if strings.TrimSpace(v.Preset) == "" {
-		v.Preset = "custom"
-	}
-}
-
-// toolChoiceNameSet collects every tool name a tool_choice may refer to: the
-// function tools plus the hosted tools (whose name is their type, e.g.
-// web_search) that otherwise live only in ResponsesTools.
 func (r *ChatCompletionsRequest) toolChoiceNameSet() map[string]struct{} {
 	if r == nil {
 		return nil

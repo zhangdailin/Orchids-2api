@@ -41,9 +41,9 @@ func TestGrokSSOSourceCreatesLinkedConsoleAccount(t *testing.T) {
 	var web, console *store.Account
 	for _, acc := range accounts {
 		switch grok.ProviderForAccount(acc) {
-		case grok.ProviderWeb:
+		case grokProviderWeb:
 			web = acc
-		case grok.ProviderConsole:
+		case grokProviderConsole:
 			console = acc
 		}
 	}
@@ -67,7 +67,7 @@ func TestGrokSSOSourceCreatesLinkedConsoleAccount(t *testing.T) {
 	if err := json.Unmarshal(getRec.Body.Bytes(), &visible); err != nil {
 		t.Fatalf("decode visible accounts: %v", err)
 	}
-	if len(visible) != 1 || visible[0]["grok_provider"] != grok.ProviderWeb {
+	if len(visible) != 1 || visible[0]["grok_provider"] != grokProviderWeb {
 		t.Fatalf("visible accounts=%#v want one Web source", visible)
 	}
 }
@@ -80,7 +80,7 @@ func TestGrokSSOSourceCreationRepairsExistingMissingConsoleCompanion(t *testing.
 		Name:           "existing-web",
 		AccountType:    "grok",
 		CredentialType: "sso",
-		GrokProvider:   grok.ProviderWeb,
+		GrokProvider:   grokProviderWeb,
 		ClientCookie:   "sso=repairable",
 		Enabled:        true,
 		Weight:         1,
@@ -107,7 +107,7 @@ func TestGrokSSOSourceCreationRepairsExistingMissingConsoleCompanion(t *testing.
 	}
 	var console *store.Account
 	for _, acc := range accounts {
-		if grok.ProviderForAccount(acc) == grok.ProviderConsole {
+		if grok.ProviderForAccount(acc) == grokProviderConsole {
 			console = acc
 			break
 		}
@@ -125,7 +125,7 @@ func TestGrokSSOSourceCredentialUpdatePreservesConsoleRuntimeState(t *testing.T)
 		Name:           "web",
 		AccountType:    "grok",
 		CredentialType: "sso",
-		GrokProvider:   grok.ProviderWeb,
+		GrokProvider:   grokProviderWeb,
 		ClientCookie:   "sso=old-sso",
 		Enabled:        true,
 		Weight:         1,
@@ -139,7 +139,7 @@ func TestGrokSSOSourceCredentialUpdatePreservesConsoleRuntimeState(t *testing.T)
 		Name:            "console",
 		AccountType:     "grok",
 		CredentialType:  "sso",
-		GrokProvider:    grok.ProviderConsole,
+		GrokProvider:    grokProviderConsole,
 		GrokSSOParentID: web.ID,
 		ClientCookie:    web.ClientCookie,
 		Enabled:         false,
@@ -182,7 +182,7 @@ func TestLinkedGrokConsoleAccountIsInternalToManagementAPI(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 2}
+	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 2}
 	if err := s.CreateAccount(context.Background(), web); err != nil {
 		t.Fatalf("CreateAccount(web) error = %v", err)
 	}
@@ -190,7 +190,7 @@ func TestLinkedGrokConsoleAccountIsInternalToManagementAPI(t *testing.T) {
 		Name:               "console",
 		AccountType:        "grok",
 		CredentialType:     "sso",
-		GrokProvider:       grok.ProviderConsole,
+		GrokProvider:       grokProviderConsole,
 		GrokSSOParentID:    web.ID,
 		ClientCookie:       web.ClientCookie,
 		Enabled:            true,
@@ -249,11 +249,11 @@ func TestDeletingWebSourceDeletesLinkedConsoleAccount(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 1}
+	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 1}
 	if err := s.CreateAccount(context.Background(), web); err != nil {
 		t.Fatalf("CreateAccount(web) error = %v", err)
 	}
-	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true, Weight: 1}
+	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true, Weight: 1}
 	if err := s.CreateAccount(context.Background(), console); err != nil {
 		t.Fatalf("CreateAccount(console) error = %v", err)
 	}
@@ -285,10 +285,10 @@ func TestGrokAvailabilityCountsEnabledProvidersWithoutAccountDetails(t *testing.
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=web", Enabled: true}
-	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: 1, ClientCookie: "sso=web", Enabled: true}
+	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=web", Enabled: true}
+	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: 1, ClientCookie: "sso=web", Enabled: true}
 	build := &store.Account{Name: "build", AccountType: "grok", CredentialType: "oauth", GrokProvider: grok.ProviderBuild, OAuthAccessToken: "access", OAuthRefreshToken: "refresh", Enabled: true}
-	disabledConsole := &store.Account{Name: "disabled-console", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, ClientCookie: "sso=other", Enabled: false}
+	disabledConsole := &store.Account{Name: "disabled-console", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, ClientCookie: "sso=other", Enabled: false}
 	for _, acc := range []*store.Account{web, console, build, disabledConsole} {
 		if err := s.CreateAccount(context.Background(), acc); err != nil {
 			t.Fatalf("CreateAccount(%s) error = %v", acc.Name, err)
@@ -318,7 +318,7 @@ func TestGrokAvailabilityCountsEnabledProvidersWithoutAccountDetails(t *testing.
 			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 				t.Fatalf("decode availability: %v", err)
 			}
-			if response.Counts[grok.ProviderBuild] != 1 || response.Counts[grok.ProviderWeb] != 1 || response.Counts[grok.ProviderConsole] != 1 || len(response.Counts) != 3 {
+			if response.Counts[grok.ProviderBuild] != 1 || response.Counts[grokProviderWeb] != 1 || response.Counts[grokProviderConsole] != 1 || len(response.Counts) != 3 {
 				t.Fatalf("availability counts=%#v want one enabled provider each", response.Counts)
 			}
 			if strings.Contains(rec.Body.String(), `"name"`) || strings.Contains(rec.Body.String(), `"id"`) || strings.Contains(rec.Body.String(), "grok_sso_parent_id") {
@@ -332,15 +332,15 @@ func TestGrokSSOExportAndImportKeepConsoleCompanionInternal(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=exported", Enabled: true}
+	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=exported", Enabled: true}
 	if err := s.CreateAccount(context.Background(), web); err != nil {
 		t.Fatalf("CreateAccount(web) error = %v", err)
 	}
-	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true}
+	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true}
 	if err := s.CreateAccount(context.Background(), console); err != nil {
 		t.Fatalf("CreateAccount(console) error = %v", err)
 	}
-	malformed := &store.Account{Name: "malformed", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: web.ID, Enabled: true}
+	malformed := &store.Account{Name: "malformed", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: web.ID, Enabled: true}
 	if err := s.CreateAccount(context.Background(), malformed); err != nil {
 		t.Fatalf("CreateAccount(malformed) error = %v", err)
 	}
@@ -360,7 +360,7 @@ func TestGrokSSOExportAndImportKeepConsoleCompanionInternal(t *testing.T) {
 	if err := json.Unmarshal(exportRec.Body.Bytes(), &exported); err != nil {
 		t.Fatalf("decode export: %v", err)
 	}
-	if len(exported.Accounts) != 1 || exported.Accounts[0].GrokProvider != grok.ProviderWeb || exported.Accounts[0].GrokSSOParentID != 0 {
+	if len(exported.Accounts) != 1 || exported.Accounts[0].GrokProvider != grokProviderWeb || exported.Accounts[0].GrokSSOParentID != 0 {
 		t.Fatalf("exported accounts=%#v want visible Web source only", exported.Accounts)
 	}
 
@@ -400,9 +400,9 @@ func TestGrokSSOImportCreatesLinkedConsoleAccount(t *testing.T) {
 	var web, console *store.Account
 	for _, acc := range accounts {
 		switch grok.ProviderForAccount(acc) {
-		case grok.ProviderWeb:
+		case grokProviderWeb:
 			web = acc
-		case grok.ProviderConsole:
+		case grokProviderConsole:
 			console = acc
 		}
 	}
@@ -415,7 +415,7 @@ func TestGrokSSOImportSkipsExistingSourceAfterRepair(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	web := &store.Account{Name: "legacy-web", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=import-retry", Enabled: true}
+	web := &store.Account{Name: "legacy-web", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=import-retry", Enabled: true}
 	if err := s.CreateAccount(context.Background(), web); err != nil {
 		t.Fatalf("CreateAccount(web) error = %v", err)
 	}
@@ -443,7 +443,7 @@ func TestGrokSSOImportSkipsExistingSourceAfterRepair(t *testing.T) {
 		t.Fatalf("stored account count=%d want repaired pair", len(accounts))
 	}
 	for _, acc := range accounts {
-		if grok.ProviderForAccount(acc) == grok.ProviderConsole && acc.GrokSSOParentID != web.ID {
+		if grok.ProviderForAccount(acc) == grokProviderConsole && acc.GrokSSOParentID != web.ID {
 			t.Fatalf("Console companion=%#v want parent %d", acc, web.ID)
 		}
 	}
@@ -453,11 +453,11 @@ func TestGrokSSOSourceCannotTransitionWithLinkedConsoleCompanion(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 2}
+	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 2}
 	if err := s.CreateAccount(context.Background(), web); err != nil {
 		t.Fatalf("CreateAccount(web) error = %v", err)
 	}
-	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true, Weight: web.Weight, StatusCode: "429", UsageCurrent: 7, GrokModels: []string{"console/grok-4.20"}}
+	console := &store.Account{Name: "console", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true, Weight: web.Weight, StatusCode: "429", UsageCurrent: 7, GrokModels: []string{"console/grok-4.20"}}
 	if err := s.CreateAccount(context.Background(), console); err != nil {
 		t.Fatalf("CreateAccount(console) error = %v", err)
 	}
@@ -488,7 +488,7 @@ func TestGrokSSOSourceCannotTransitionWithLinkedConsoleCompanion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAccount(console) error = %v", err)
 	}
-	if unchangedWeb.AccountType != "grok" || grok.ProviderForAccount(unchangedWeb) != grok.ProviderWeb || unchangedWeb.ClientCookie != web.ClientCookie ||
+	if unchangedWeb.AccountType != "grok" || grok.ProviderForAccount(unchangedWeb) != grokProviderWeb || unchangedWeb.ClientCookie != web.ClientCookie ||
 		unchangedConsole.GrokSSOParentID != web.ID || unchangedConsole.StatusCode != "429" || unchangedConsole.UsageCurrent != 7 || len(unchangedConsole.GrokModels) != 1 {
 		t.Fatalf("rejected transition changed linked pair: web=%#v console=%#v", unchangedWeb, unchangedConsole)
 	}
@@ -513,11 +513,11 @@ func TestEnsureGrokSSOProviderViewsRepairsMalformedLinkedConsoleCompanion(t *tes
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 3}
+	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 3}
 	if err := s.CreateAccount(context.Background(), web); err != nil {
 		t.Fatalf("CreateAccount(web) error = %v", err)
 	}
-	brokenChild := &store.Account{Name: "broken-console", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: web.ID, ClientCookie: "", Enabled: false, Weight: 9, StatusCode: "429", UsageCurrent: 7, GrokModels: []string{"console/grok-4.20"}}
+	brokenChild := &store.Account{Name: "broken-console", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: web.ID, ClientCookie: "", Enabled: false, Weight: 9, StatusCode: "429", UsageCurrent: 7, GrokModels: []string{"console/grok-4.20"}}
 	if err := s.CreateAccount(context.Background(), brokenChild); err != nil {
 		t.Fatalf("CreateAccount(broken child) error = %v", err)
 	}
@@ -542,13 +542,13 @@ func TestEnsureGrokSSOProviderViewsDeterministicallyRemovesRedundantConsoles(t *
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 3, MaxConcurrent: 4, NSFWEnabled: false}
+	web := &store.Account{Name: "web", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=shared", Enabled: true, Weight: 3, MaxConcurrent: 4, NSFWEnabled: false}
 	if err := s.CreateAccount(context.Background(), web); err != nil {
 		t.Fatalf("CreateAccount(web) error = %v", err)
 	}
-	canonical := &store.Account{Name: "canonical", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: false, Weight: 8, StatusCode: "429", UsageCurrent: 6, RequestCount: 9, GrokModels: []string{"console/grok-4.20"}}
-	unlinked := &store.Account{Name: "redundant-unlinked", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, ClientCookie: web.ClientCookie, Enabled: true}
-	duplicate := &store.Account{Name: "redundant-linked", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true}
+	canonical := &store.Account{Name: "canonical", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: false, Weight: 8, StatusCode: "429", UsageCurrent: 6, RequestCount: 9, GrokModels: []string{"console/grok-4.20"}}
+	unlinked := &store.Account{Name: "redundant-unlinked", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, ClientCookie: web.ClientCookie, Enabled: true}
+	duplicate := &store.Account{Name: "redundant-linked", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: web.ID, ClientCookie: web.ClientCookie, Enabled: true}
 	for _, acc := range []*store.Account{canonical, unlinked, duplicate} {
 		if err := s.CreateAccount(context.Background(), acc); err != nil {
 			t.Fatalf("CreateAccount(%s) error = %v", acc.Name, err)
@@ -592,8 +592,8 @@ func TestEnsureGrokSSOProviderViewsRejectsConflictingSourceOwnership(t *testing.
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 
-	webOne := &store.Account{Name: "web-one", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=shared", Enabled: true}
-	webTwo := &store.Account{Name: "web-two", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=shared", Enabled: true}
+	webOne := &store.Account{Name: "web-one", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=shared", Enabled: true}
+	webTwo := &store.Account{Name: "web-two", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=shared", Enabled: true}
 	for _, acc := range []*store.Account{webOne, webTwo} {
 		if err := s.CreateAccount(context.Background(), acc); err != nil {
 			t.Fatalf("CreateAccount(%s) error = %v", acc.Name, err)
@@ -608,11 +608,11 @@ func TestEnsureGrokSSOProviderViewsRejectsConflictingSourceOwnership(t *testing.
 	if err := s.DeleteAccount(context.Background(), webTwo.ID); err != nil {
 		t.Fatalf("DeleteAccount(web-two) error = %v", err)
 	}
-	foreignSource := &store.Account{Name: "foreign", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderWeb, ClientCookie: "sso=other", Enabled: true}
+	foreignSource := &store.Account{Name: "foreign", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderWeb, ClientCookie: "sso=other", Enabled: true}
 	if err := s.CreateAccount(context.Background(), foreignSource); err != nil {
 		t.Fatalf("CreateAccount(foreign) error = %v", err)
 	}
-	foreignChild := &store.Account{Name: "foreign-child", AccountType: "grok", CredentialType: "sso", GrokProvider: grok.ProviderConsole, GrokSSOParentID: foreignSource.ID, ClientCookie: webOne.ClientCookie, Enabled: true, StatusCode: "401"}
+	foreignChild := &store.Account{Name: "foreign-child", AccountType: "grok", CredentialType: "sso", GrokProvider: grokProviderConsole, GrokSSOParentID: foreignSource.ID, ClientCookie: webOne.ClientCookie, Enabled: true, StatusCode: "401"}
 	if err := s.CreateAccount(context.Background(), foreignChild); err != nil {
 		t.Fatalf("CreateAccount(foreign child) error = %v", err)
 	}
@@ -633,7 +633,7 @@ func TestEnsureGrokSSOProviderViewsMigratesConsoleOnlyAccount(t *testing.T) {
 		Name:           "legacy-console",
 		AccountType:    "grok",
 		CredentialType: "sso",
-		GrokProvider:   grok.ProviderConsole,
+		GrokProvider:   grokProviderConsole,
 		ClientCookie:   "sso=legacy-sso",
 		Enabled:        true,
 		Weight:         3,
@@ -656,9 +656,9 @@ func TestEnsureGrokSSOProviderViewsMigratesConsoleOnlyAccount(t *testing.T) {
 	}
 	var web, console *store.Account
 	for _, acc := range accounts {
-		if grok.ProviderForAccount(acc) == grok.ProviderWeb {
+		if grok.ProviderForAccount(acc) == grokProviderWeb {
 			web = acc
-		} else if grok.ProviderForAccount(acc) == grok.ProviderConsole {
+		} else if grok.ProviderForAccount(acc) == grokProviderConsole {
 			console = acc
 		}
 	}
