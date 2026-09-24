@@ -2,7 +2,7 @@ package grok
 
 import "testing"
 
-// responsesSearchRequest is what the Grok tools console sends when the operator
+// responsesSearchRequest is what the Grok tools Build sends when the operator
 // switches Web search and X search on: both hosted tools travel in the Responses
 // `tools` array, beside the ordinary function declarations.
 func responsesSearchRequest() ResponsesCreateRequest {
@@ -37,7 +37,7 @@ func chatRequestDeclaresHostedTool(req *ChatCompletionsRequest, want string) boo
 
 // The Responses→Chat bridge used to keep only `function` declarations, so a
 // hosted tool the caller had explicitly switched on never reached the upstream:
-// the model answered that it had no web access while the console showed search
+// the model answered that it had no web access while the Build showed search
 // enabled. Both hosted tools must survive the bridge.
 func TestChatRequestFromResponses_KeepsHostedSearchTools(t *testing.T) {
 	chat, err := chatRequestFromResponses(responsesSearchRequest())
@@ -63,7 +63,7 @@ func TestBuildPayloadForResponsesBridge_AdvertisesHostedSearchTools(t *testing.T
 	if err != nil {
 		t.Fatalf("chatRequestFromResponses() error = %v", err)
 	}
-	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ConsoleModel: "grok-4.20-0309"}, &chat, false)
+	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.20-0309"}, &chat, false)
 	if err != nil {
 		t.Fatalf("responsesPayloadFromChat() error = %v", err)
 	}

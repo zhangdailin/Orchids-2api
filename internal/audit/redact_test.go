@@ -9,7 +9,7 @@ import (
 // contract: a reader learns WHICH fields changed without ever seeing a live
 // credential.
 func TestSummarizeChange_MasksCredentialsKeepsShape(t *testing.T) {
-	body := []byte(`{"name":"grok-sso","client_cookie":"sso=super-secret","enabled":true,"weight":3,"oauth_refresh_token":"rt-123"}`)
+	body := []byte(`{"name":"legacy-account","client_cookie":"session=super-secret","enabled":true,"weight":3,"oauth_refresh_token":"rt-123"}`)
 	summary, redacted := SummarizeChange(body)
 
 	for _, secret := range []string{"super-secret", "rt-123"} {
@@ -22,7 +22,7 @@ func TestSummarizeChange_MasksCredentialsKeepsShape(t *testing.T) {
 			t.Fatalf("summary lost the field name %q: %s", key, summary)
 		}
 	}
-	if !strings.Contains(summary, "grok-sso") || !strings.Contains(summary, "weight") {
+	if !strings.Contains(summary, "legacy-account") || !strings.Contains(summary, "weight") {
 		t.Fatalf("summary lost the non-secret change: %s", summary)
 	}
 	if len(redacted) != 2 {

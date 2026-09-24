@@ -121,7 +121,6 @@ test('every admin page links a cache-busted main.css', () => {
 // ---------------------------------------------------------------------------
 
 const opsCss = fs.readFileSync(path.join(__dirname, 'static', 'css', 'ops.css'), 'utf8');
-const grokCss = fs.readFileSync(path.join(__dirname, 'static', 'css', 'grok-tools.css'), 'utf8');
 const opsJs = fs.readFileSync(path.join(__dirname, 'static', 'js', 'ops.js'), 'utf8');
 
 test('the trend charts are width-constrained instead of sized by their aspect ratio', () => {

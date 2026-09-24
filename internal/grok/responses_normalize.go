@@ -112,11 +112,9 @@ func collectBuildToolAliases(payload map[string]interface{}) map[string]buildToo
 }
 
 // responsesPayloadFromChat converts Chat/Messages compatibility input into
-// the native Responses wire shape used by both Build and Console.
+// the native Responses wire shape used by Build.
 func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsRequest, build bool) (map[string]interface{}, error) {
-	if build {
-		spec.Upstream, spec.ConsoleModel = UpstreamCLI, ""
-	}
+	spec.Upstream = UpstreamCLI
 	if err := validateNativeChatContent(req.Messages); err != nil {
 		return nil, err
 	}
@@ -136,10 +134,7 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	if len(input) == 0 && instructions == "" {
 		return nil, fmt.Errorf("empty message")
 	}
-	model := spec.ConsoleModel
-	if build {
-		model = spec.UpstreamModel
-	}
+	model := spec.UpstreamModel
 	payload := map[string]interface{}{"model": model, "input": input}
 	if instructions != "" {
 		payload["instructions"] = instructions
@@ -161,11 +156,11 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	if reasoning := chatReasoningControls(req); len(reasoning) > 0 {
 		payload["reasoning"] = reasoning
 	}
-	// Stop sequences are enforced locally (the console chat/stream writers run a
+	// Stop sequences are enforced locally (the Build chat/stream writers run a
 	// stopFilter over the generated text). Sending them upstream as well makes
 	// the upstream truncate the turn, so the matched sequence never reaches the
 	// gateway and the client loses the stop_sequence it asked to be told about —
-	// and the field is not part of the Build/Console wire contract.
+	// and the field is not part of the Build wire contract.
 
 	if value := strings.TrimSpace(req.SafetyIdentifier); value != "" {
 		payload["safety_identifier"] = value
@@ -184,7 +179,7 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		payload["include"] = include
 	}
 	tools := append([]map[string]interface{}(nil), req.ResponsesTools...)
-	tools = append(tools, consoleToolsFromOpenAI(req.Tools)...)
+	tools = append(tools, buildToolsFromOpenAI(req.Tools)...)
 	// OpenAI's web_search_options has no function form: it means "run the
 	// hosted search tool". Lower it to the native tool the Responses planes
 	// understand (grok2api does the same) when the caller did not already
@@ -194,7 +189,7 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 	}
 	if len(tools) > 0 {
 		payload["tools"] = tools
-		if choice := consoleToolChoiceFromOpenAI(req.ToolChoice); choice != nil {
+		if choice := buildToolChoiceFromOpenAI(req.ToolChoice); choice != nil {
 			payload["tool_choice"] = choice
 		}
 	}
@@ -237,14 +232,6 @@ func (h *Handler) responsesPayloadFromChat(spec ModelSpec, req *ChatCompletionsR
 		}
 		normalizeBuildReasoningEffort(payload, model)
 		return payload, nil
-	}
-	// Console is stateless and rejects these client-side state hints.
-	payload["store"] = false
-	delete(payload, "prompt_cache_key")
-	normalizeConsoleReasoningEffort(payload, model)
-	if len(interfaceMaps(payload["tools"])) == 0 {
-		delete(payload, "tools")
-		delete(payload, "tool_choice")
 	}
 	return payload, nil
 }
@@ -319,7 +306,7 @@ func validateNativeChatContent(messages []ChatMessage) error {
 			switch parseLooseStringAny(part["type"]) {
 			case "text", "input_text", "output_text", "image_url", "input_image":
 			default:
-				return fmt.Errorf("Build/Console Chat does not support content.type=%q", part["type"])
+				return fmt.Errorf("Build/Build Chat does not support content.type=%q", part["type"])
 			}
 		}
 	}
@@ -875,93 +862,6 @@ func normalizeBuildReasoningEffort(payload map[string]interface{}, model string)
 	reasoning["effort"] = normalized
 }
 
-// normalizeConsoleReasoningEffort applies the Console wire aliases: minimal
-// collapses to low, and both xhigh and the client-only max alias become xhigh.
-// Any other value is forwarded unchanged rather than silently downgraded.
-// consoleModelSemantics is the per-model Console contract grok2api drives from
-// its catalog (console/catalog.go): whether a model reasons at all, whether it
-// accepts an effort level, the effort to use when none is sent, and the output
-// ceiling to inject when the caller did not set one.
-//
-// Without it a relay forwards `reasoning` to models that reject it, forwards
-// `effort` to models with a fixed reasoning budget, and lets the upstream pick
-// its own (shorter) output limit.
-type consoleModelSemantics struct {
-	SupportsReasoning       bool
-	SupportsReasoningEffort bool
-	DefaultReasoningEffort  string
-	MaxOutputTokens         int
-}
-
-// consoleModelSemanticsFor resolves the Console semantics for a model id. The
-// id may carry the "console/" route prefix this gateway's catalog uses.
-func consoleModelSemanticsFor(model string) (consoleModelSemantics, bool) {
-	id := strings.ToLower(strings.TrimSpace(model))
-	id = strings.TrimPrefix(id, "console/")
-	switch id {
-	case "grok-4.3", "grok-4.5", "grok-4.20-multi-agent-0309":
-		return consoleModelSemantics{SupportsReasoning: true, SupportsReasoningEffort: true, DefaultReasoningEffort: "medium", MaxOutputTokens: 1_000_000}, true
-	case "grok-4.20-0309-reasoning":
-		// Fixed reasoning budget: an effort is not accepted.
-		return consoleModelSemantics{SupportsReasoning: true, MaxOutputTokens: 1_000_000}, true
-	case "grok-4.20-0309-non-reasoning", "grok-build-0.1":
-		return consoleModelSemantics{MaxOutputTokens: 256_000}, true
-	}
-	return consoleModelSemantics{}, false
-}
-
-// normalizeConsoleReasoningEffort applies the Console wire aliases and the
-// per-model Contract Console actually enforces.
-func normalizeConsoleReasoningEffort(payload map[string]interface{}, model string) {
-	// The output ceiling is injected for any Console model that declares one,
-	// independent of reasoning, so it runs before the reasoning switch.
-	if spec, ok := consoleModelSemanticsFor(model); ok && spec.MaxOutputTokens > 0 {
-		if _, exists := payload["max_output_tokens"]; !exists {
-			payload["max_output_tokens"] = spec.MaxOutputTokens
-		}
-	}
-	spec, known := consoleModelSemanticsFor(model)
-	reasoning, _ := payload["reasoning"].(map[string]interface{})
-	if known && !spec.SupportsReasoning {
-		// The model rejects the reasoning object outright.
-		delete(payload, "reasoning")
-		return
-	}
-	if reasoning == nil {
-		if !known || spec.DefaultReasoningEffort == "" {
-			return
-		}
-		reasoning = map[string]interface{}{}
-	}
-	if known && !spec.SupportsReasoningEffort {
-		// Fixed reasoning budget: keep any other reasoning control, drop effort.
-		delete(reasoning, "effort")
-		if len(reasoning) == 0 {
-			delete(payload, "reasoning")
-		} else {
-			payload["reasoning"] = reasoning
-		}
-		return
-	}
-	switch strings.ToLower(strings.TrimSpace(interfaceString(reasoning["effort"]))) {
-	case "minimal", "low":
-		reasoning["effort"] = "low"
-	case "medium":
-		reasoning["effort"] = "medium"
-	case "high":
-		reasoning["effort"] = "high"
-	case "xhigh", "max":
-		reasoning["effort"] = "xhigh"
-	default:
-		if known && spec.DefaultReasoningEffort != "" {
-			reasoning["effort"] = spec.DefaultReasoningEffort
-		}
-	}
-	payload["reasoning"] = reasoning
-}
-
-// Validate structure only. Upstreams, not the relay's model catalog, decide
-// which reasoning effort values are supported. Never downgrade client values.
 func validatePayloadReasoning(payload map[string]interface{}) error {
 	if raw, exists := payload["reasoning"]; exists && raw != nil {
 		reasoning, ok := raw.(map[string]interface{})

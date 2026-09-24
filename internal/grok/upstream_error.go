@@ -11,7 +11,7 @@ const maxUpstreamBodyBytes = 4096
 
 // grokUpstreamError is a typed Grok upstream failure that preserves the HTTP
 // status, a sanitized copy of the response headers, and a bounded body so
-// callers can classify Cloudflare/account-block without re-parsing
+// callers can classify upstream/account-block without re-parsing
 // err.Error() text. Error() keeps the legacy text shape ("grok upstream
 // status=N body=...") so existing string matchers keep working.
 type grokUpstreamError struct {

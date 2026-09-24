@@ -49,7 +49,7 @@ func TestWriteGrokAccountUnavailable_ClassifiesThePool(t *testing.T) {
 		},
 		{
 			name:        "the pool cannot route the model",
-			err:         errors.New("no enabled accounts available for channel: grok (model grok-imagine-video-1.5 is not available in the current Warp account pool)"),
+			err:         errors.New("no enabled accounts available for channel: grok (model unavailable-model is not available in the current Grok account pool)"),
 			wantStatus:  http.StatusNotFound,
 			wantMessage: "is not available on this channel's accounts",
 		},
@@ -148,7 +148,7 @@ func TestWriteGrokNoAccountError_ClassifiesTheSameWayAsEveryOtherEntrance(t *tes
 // body. A pool failure is stored as its classified message; every other failure
 // keeps its own text, which describes that job rather than the pool.
 func TestWriteGrokUpstreamFailure_KeepsProseOutOfTheBody(t *testing.T) {
-	upstream := errors.New(`grok cli upstream status=403 body={"error":{"code":7,"message":"This page is out of date. Reload to continue."}}`)
+	upstream := errors.New(`grok cli upstream status=403 body={"error":{"code":"forbidden","message":"Access denied."}}`)
 	rec := httptest.NewRecorder()
 	writeGrokUpstreamFailure(rec, http.StatusForbidden, upstream)
 

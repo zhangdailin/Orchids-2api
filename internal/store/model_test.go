@@ -306,7 +306,7 @@ func TestStoreNew_RemovesDeprecatedGrokModelsOnly(t *testing.T) {
 	for _, record := range []*Model{
 		{Channel: "Grok", ModelID: "grok-4.5", Name: "Grok 4.5", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
 		{Channel: "Grok", ModelID: "grok-imagine-image-quality", Name: "Grok Imagine Image Quality", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
-		{Channel: "Grok", ModelID: "grok-4.3", Name: "legacy console model", Status: ModelStatusAvailable, Verified: true},
+		{Channel: "Grok", ModelID: "grok-4.3", Name: "legacy model", Status: ModelStatusAvailable, Verified: true},
 		{Channel: "Grok", ModelID: "grok-user-custom", Name: "User Custom", Status: ModelStatusAvailable, Verified: true},
 	} {
 		if err := s.CreateModel(ctx, record); err != nil {

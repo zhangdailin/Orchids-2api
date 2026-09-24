@@ -95,8 +95,6 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/api/cline/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
 | `/api/grok/device-auth` | POST | 发起 Grok Build OAuth 设备授权 |
 | `/api/grok/device-auth/{id}` | GET/DELETE | 查询授权状态 / 取消授权 |
-| `/api/grok/tools/v1/models` | GET | 工具页可用 Build 模型（管理会话认证） |
-| `/api/grok/tools/v1/responses` | POST | 工具页 Build Responses 对话（管理会话认证） |
 | `/api/keys` | GET/POST | API Key 列表 / 创建 |
 | `/api/keys/{id}` | PATCH/DELETE | 更新 API Key 状态或访问策略 / 删除 |
 | `/api/models` | GET/POST | 模型列表 / 创建模型 |
@@ -142,8 +140,6 @@ Grok Build（OAuth）账号的上游常常不下发套餐名与数值额度，�
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/api/grok/tools/v1/models` | GET | 返回工具页可选择的 Build 模型 |
-| `/api/grok/tools/v1/responses` | POST | 发起 Build Responses 请求 |
 
 这两个端点只接受管理会话认证。Responses 请求可以携带 `{"tools":[{"type":"web_search"}]}` 或 `{"tools":[{"type":"x_search"}]}`；网关保留 hosted tool 声明，是否可用由 Build 上游账号和模型决定。
 

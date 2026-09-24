@@ -7,12 +7,8 @@ import (
 	"strings"
 )
 
-// 403/429 classification helpers, ported from grok2api account_block.go plus
-// Cloudflare challenge detection. The unified entry point ClassifyUpstreamResponse
-// is response-aware (status + headers + body) so header-only signals such as
-// CF-Mitigated are not lost. Precedence:
-//
-//	Cloudflare challenge > explicit account block > 429 > generic forbidden
+// 403/429 classification helpers for Build account handling.
+// The unified entry point is response-aware (status + body).
 //
 // A generic 403 is deliberately NOT treated as an account block; only explicit
 // "blocked-user"/"user is blocked" language marks the account.
@@ -23,7 +19,6 @@ type UpstreamErrorKind int
 const (
 	UpstreamErrorUnknown UpstreamErrorKind = iota
 	UpstreamErrorAccountBlock
-	UpstreamErrorCloudflareChallenge
 	UpstreamErrorGenericForbidden
 	UpstreamErrorRateLimited
 )
@@ -32,8 +27,6 @@ func (k UpstreamErrorKind) String() string {
 	switch k {
 	case UpstreamErrorAccountBlock:
 		return "account_block"
-	case UpstreamErrorCloudflareChallenge:
-		return "cloudflare_challenge"
 	case UpstreamErrorGenericForbidden:
 		return "generic_forbidden"
 	case UpstreamErrorRateLimited:
@@ -48,16 +41,8 @@ func ClassifyUpstreamResponse(status int, header http.Header, body []byte) Upstr
 	if status == http.StatusTooManyRequests {
 		return UpstreamErrorRateLimited
 	}
-	if header != nil {
-		if hasCloudflareChallengeHeader(header) {
-			return UpstreamErrorCloudflareChallenge
-		}
-	}
 	switch status {
 	case http.StatusForbidden:
-		if IsCloudflareChallengeBody(body) {
-			return UpstreamErrorCloudflareChallenge
-		}
 		if IsDefinitiveAccountBlockBody(body) {
 			return UpstreamErrorAccountBlock
 		}
@@ -82,19 +67,6 @@ func ClassifyUpstreamError(err error) UpstreamErrorKind {
 	return ClassifyUpstreamResponse(status, nil, []byte(upstreamErrorBody(err)))
 }
 
-// hasCloudflareChallengeHeader detects header-only Cloudflare challenge signals.
-func hasCloudflareChallengeHeader(header http.Header) bool {
-	if value := strings.TrimSpace(header.Get("CF-Mitigated")); value != "" {
-		return true
-	}
-	for name := range header {
-		if strings.Contains(strings.ToLower(name), "cf-mitigated") {
-			return true
-		}
-	}
-	return false
-}
-
 // IsDefinitiveAccountBlockBody accepts only explicit error code or message
 // signals that a Grok account is blocked/suspended.
 func IsDefinitiveAccountBlockBody(body []byte) bool {
@@ -110,30 +82,6 @@ func IsDefinitiveAccountBlockBody(body []byte) bool {
 func IsDefinitiveAccountBlockText(value string) bool {
 	value = strings.ToLower(value)
 	return strings.Contains(value, "blocked-user") || strings.Contains(value, "user is blocked")
-}
-
-// IsCloudflareChallengeBody detects a Cloudflare interstitial/challenge page.
-// These are egress/clearance failures, not account failures.
-func IsCloudflareChallengeBody(body []byte) bool {
-	lower := strings.ToLower(string(body))
-	for _, marker := range []string{
-		"cf-mitigated",
-		"cf_chl_opt",
-		"__cf_chl",
-		"cf-chl",
-		"challenge-platform",
-		"turnstile",
-		"just a moment",
-		"enable javascript and cookies to continue",
-		"verify you are human",
-		"attention required",
-		"request rejected by anti-bot rules",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 // collectJSONStrings recursively gathers string values from a decoded JSON tree

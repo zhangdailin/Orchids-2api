@@ -55,7 +55,7 @@ func TestRemainingSearchRestrictionsValidationAndWire(t *testing.T) {
 func TestRemainingRefusalNonstream(t *testing.T) {
 	raw := `{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"Cannot help."}]}]}`
 	w := httptest.NewRecorder()
-	out := (&Handler{}).collectConsoleChat(w, &ChatCompletionsRequest{Model: "grok-4.6"}, strings.NewReader(raw))
+	out := (&Handler{}).collectBuildChat(w, &ChatCompletionsRequest{Model: "grok-4.6"}, strings.NewReader(raw))
 	if out.Err != nil {
 		t.Fatal(out.Err)
 	}

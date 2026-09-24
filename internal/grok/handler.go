@@ -357,7 +357,7 @@ func (h *Handler) ensureResolvedModelCapability(ctx context.Context, modelID str
 	return nil
 }
 
-// resolveConversationModel resolves the built-in Web/Console/Build catalog and
+// resolveConversationModel resolves the built-in Build catalog and
 // account-discovered Build models. A discovered model is routable only when at
 // least one enabled Build account advertises it, so arbitrary client strings
 // can never turn into upstream model probes.
@@ -483,11 +483,6 @@ func (h *Handler) markAccountStatus(ctx context.Context, acc *store.Account, err
 	// Invalid parameters and missing resources are request errors, not evidence
 	// that the credential is unusable. Do not poison account routing with them.
 	if status := parseUpstreamStatus(err); status >= 400 && status < 500 && status != 401 && status != 402 && status != 403 && status != 429 {
-		return
-	}
-	// Cloudflare challenges are egress problems, not account problems.
-	// Do not cool or disable the account; the egress layer must re-solve.
-	if isEgressChallengeError(err) {
 		return
 	}
 	// Team-level resource-exhausted 429: the rate limit is on the token/session,
@@ -654,10 +649,7 @@ func markAllGrokAccountStatuses(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Egress challenges and shared team rate limits are not account failures.
-	if isEgressChallengeError(err) {
-		return false
-	}
+	// Shared team rate limits are not account failures.
 	if isSharedGrokRateLimitError(err) {
 		return false
 	}
@@ -675,23 +667,8 @@ func skipExternalAttachmentFetchGrokAccountStatus(err error) bool {
 	return !strings.Contains(strings.ToLower(err.Error()), "fetch url status=")
 }
 
-// isEgressChallengeError reports whether an error is a Cloudflare interstitial. These are egress/clearance problems, not account
-// problems: switching accounts (or cooling the account) is wrong.
-func isEgressChallengeError(err error) bool {
-	if err == nil {
-		return false
-	}
-	kind := ClassifyUpstreamError(err)
-	return kind == UpstreamErrorCloudflareChallenge
-}
-
 func shouldSwitchGrokAccount(err error) bool {
 	if err == nil {
-		return false
-	}
-	// Cloudflare challenges should not drain the account pool: switching
-	// to another account hits the same wall. Leave to the egress layer instead.
-	if isEgressChallengeError(err) {
 		return false
 	}
 	// Response-aware classification: only an explicit account block switches

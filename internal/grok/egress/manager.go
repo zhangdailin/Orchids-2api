@@ -18,10 +18,9 @@ import (
 	"orchids-api/internal/util"
 )
 
-// Manager owns the proxy pool, per-node health, Cloudflare clearance cache, and
-// UA rotation. It is disabled by default (GrokEgressEnabled=false) so existing
+// Manager owns the Build proxy pool and per-node health. It is disabled by default (GrokEgressEnabled=false) so existing
 // behavior is unchanged until configured. When enabled it is fail-closed: a
-// request either gets a valid lease with clearance, or an error — it never
+// request either gets a valid lease or an error — it never
 // silently falls back to a direct client.
 
 const (
@@ -48,7 +47,6 @@ const (
 	OutcomeSuccess FeedbackOutcome = iota
 	OutcomeTransportError
 	OutcomeServerError
-	OutcomeChallenge // persistent Cloudflare challenge (node cannot serve)
 	OutcomeRateLimited
 	OutcomeAccountBlock
 	OutcomeForbidden
@@ -71,7 +69,6 @@ type Manager struct {
 
 var errNoClient = errors.New("egress client not initialized")
 var errNoHealthyNode = errors.New("egress no healthy node for scope")
-var errClearanceUnavailable = errors.New("egress clearance unavailable")
 
 // NewManager builds an egress manager from configuration. Returns nil when
 // egress is disabled.
@@ -99,10 +96,8 @@ func (m *Manager) Enabled() bool {
 	return m != nil && m.cfg != nil && m.cfg.GrokEgressEnabled
 }
 
-// Acquire selects a healthy node for a scope, binding a UA + clearance
-// fingerprint to it, and returns a lease. affinity (e.g. account identity)
-// keeps the same account on the same exit so clearance stays valid. When no
-// healthy node exists, or clearance cannot be resolved for a flare-solve node,
+// Acquire selects a healthy Build proxy node and returns a sticky lease.
+// affinity keeps the same account on the same exit. When no healthy node exists,
 // Acquire fails closed.
 func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, error) {
 	if !m.Enabled() {
@@ -122,13 +117,11 @@ func (m *Manager) Acquire(ctx context.Context, scope, affinity string) (*Lease, 
 	}
 	fingerprint := m.fingerprint(*node, affinity)
 
-	// Isolate connection pools by node, proxy URL, and clearance binding. The
+	// Isolate connection pools by node, proxy URL, and affinity binding. The
 	// proxy component is hashed so credentials never appear in cache keys or
 	// diagnostics, while a same-name node whose URL changes gets a fresh pool.
 	poolKey := "egress:" + node.Name + "|proxy=" + shortHash(node.URL) + "|" + fingerprint
-	// The ClientHello follows the UA this exit will send, so the TLS fingerprint
-	// and the advertised Chrome version cannot contradict each other.
-	client := util.GetSharedBrowserHTTPClientForUserAgent(poolKey, m.cfg.GrokRequestTimeout(strings.ToLower(strings.TrimSpace(scope))), 0, proxyFuncForNode(*node), "")
+	client := util.GetSharedHTTPClient(poolKey, m.cfg.GrokRequestTimeout(strings.ToLower(strings.TrimSpace(scope))), proxyFuncForNode(*node))
 
 	lease := &Lease{
 		NodeID:   node.Name,
@@ -232,7 +225,7 @@ func shortHash(value string) string {
 }
 
 // FeedbackOutcome updates a node's health score from a classified outcome.
-// Success recovers, transport/server/challenge degrade, and 429/account issues
+// Success recovers, transport/server failures degrade, and 429/account issues
 // leave the node untouched (they are not the node's fault).
 func (m *Manager) FeedbackOutcome(nodeID string, outcome FeedbackOutcome) {
 	if m == nil || nodeID == "" {
@@ -255,7 +248,7 @@ func (m *Manager) FeedbackOutcome(nodeID string, outcome FeedbackOutcome) {
 			delete(m.unhealthy, nodeID)
 			recordNodeRecovery(m.scopeForNodeLocked(nodeID))
 		}
-	case OutcomeTransportError, OutcomeServerError, OutcomeChallenge:
+	case OutcomeTransportError, OutcomeServerError:
 		// Failures push below zero so a fresh node (score 0) degrades on the
 		// first failure, and an exponential cooldown window lets it retry.
 		m.health[nodeID] = score*0.5 - 0.1
@@ -285,8 +278,6 @@ func outcomeReason(outcome FeedbackOutcome) string {
 	switch outcome {
 	case OutcomeServerError:
 		return "server"
-	case OutcomeChallenge:
-		return "challenge"
 	default:
 		return "transport"
 	}
@@ -294,7 +285,7 @@ func outcomeReason(outcome FeedbackOutcome) string {
 
 // FeedbackAffinityOutcome applies a node-health outcome to the node most
 // recently leased for a scope+affinity. Used by request paths that do not hold
-// the lease directly (e.g. CLI) to record a persistent challenge after retry.
+// the lease directly (e.g. CLI) to record a persistent transport failure after retry.
 func (m *Manager) FeedbackAffinityOutcome(scope, affinity string, outcome FeedbackOutcome) {
 	if m == nil {
 		return
@@ -390,9 +381,7 @@ func (m *Manager) probeNode(ctx context.Context, node Node) error {
 	target := "https://cli-chat-proxy.grok.com/"
 	probeCtx, cancel := context.WithTimeout(ctx, nodeProbeTimeout)
 	defer cancel()
-	client := util.GetSharedBrowserHTTPClientWithHeaderTimeout(
-		"egress-probe:"+node.Name+"|proxy="+shortHash(node.URL),
-		nodeProbeTimeout, 0, proxyFuncForNode(node))
+	client := util.GetSharedHTTPClient("egress-probe:"+node.Name+"|proxy="+shortHash(node.URL), nodeProbeTimeout, proxyFuncForNode(node))
 	req, err := http.NewRequestWithContext(probeCtx, http.MethodHead, target, nil)
 	if err != nil {
 		return err
@@ -405,8 +394,6 @@ func (m *Manager) probeNode(ctx context.Context, node Node) error {
 		return err
 	}
 	defer resp.Body.Close()
-	// A Cloudflare challenge means the exit is reachable but not usable; the
-	// caller will re-solve clearance on the next Acquire.
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode >= 500 {
 		return fmt.Errorf("probe status %d", resp.StatusCode)
 	}

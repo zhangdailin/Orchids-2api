@@ -188,7 +188,7 @@
 /* -----------------------------------------------------------------------------
    4. Secret fields
    -------------------------------------------------------------------------- */
-/* Password, admin token, Cloudflare cookies, proxy credentials and API keys all
+/* Password, admin token, proxy credentials and API keys all
    carry credentials, so they share one accent: a distinct border plus a 密钥
    badge instead of looking like any other text input. */
 .secret-field {

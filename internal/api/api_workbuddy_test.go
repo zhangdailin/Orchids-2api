@@ -719,22 +719,13 @@ func TestHandleAccounts_GrokRowCarriesSnapshotTimestamp(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
-	for _, row := range rows {
-		credential := row["credential_type"]
-		if credential == "oauth" {
-			billing, ok := row["grok_billing"].(map[string]interface{})
-			if !ok || billing["synced_at"] == nil {
-				t.Fatalf("Grok Build row is missing grok_billing.synced_at: %v", row["grok_billing"])
-			}
-			if row["grok_models_synced_at"] == nil {
-				t.Fatal("Grok Build row is missing grok_models_synced_at")
-			}
-			continue
-		}
-		webQuota, ok := row["grok_web_quota"].(map[string]interface{})
-		if !ok || webQuota["synced_at"] == nil {
-			t.Fatalf("Grok Web SSO row is missing grok_web_quota.synced_at: %v", row["grok_web_quota"])
-		}
+	row := rows[0]
+	billing, ok := row["grok_billing"].(map[string]interface{})
+	if !ok || billing["synced_at"] == nil {
+		t.Fatalf("Grok Build row is missing grok_billing.synced_at: %v", row["grok_billing"])
+	}
+	if row["grok_models_synced_at"] == nil {
+		t.Fatal("Grok Build row is missing grok_models_synced_at")
 	}
 }
 

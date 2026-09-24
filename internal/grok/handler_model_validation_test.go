@@ -197,7 +197,7 @@ func TestResolveModel_RemovesGrok43BetaWebsite(t *testing.T) {
 	}
 }
 
-func TestEnsureModelEnabled_RejectsConsoleOnlyGrok43EvenWhenStored(t *testing.T) {
+func TestEnsureModelEnabled_RejectsBuildOnlyGrok43EvenWhenStored(t *testing.T) {
 	h, s, mini := setupValidationHandler(t)
 	defer func() {
 		_ = s.Close()

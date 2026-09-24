@@ -932,7 +932,7 @@ func clearModelsForChannel(t *testing.T, ctx context.Context, s *store.Store, ch
 }
 
 // TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog pins
-// the scope guard: Grok Build is reconciled separately from Web and Console.
+// the scope guard: Grok Build is reconciled separately from retired providers.
 func TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog(t *testing.T) {
 	if shouldDeleteMissingModelsOnRefresh("Grok", "grok_build_models") {
 		t.Fatal("a Build text-catalog read must not prune the channel catalog")

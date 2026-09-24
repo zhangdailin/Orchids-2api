@@ -57,9 +57,9 @@ func TestPublicModelsPublishExternalIDs(t *testing.T) {
 		mini.Close()
 	}()
 	publishModel(t, s,
-		&store.Model{Channel: "Grok", ModelID: "console/grok-4.3"},
+		&store.Model{Channel: "Grok", ModelID: "grok-4.3"},
 		&store.Model{Channel: "Grok", ModelID: "grok-4.5"},
-		&store.Model{Channel: "Grok", ModelID: "console/grok-4.6"},
+		&store.Model{Channel: "Grok", ModelID: "grok-4.6"},
 	)
 
 	rec := httptest.NewRecorder()
@@ -142,6 +142,6 @@ func TestHandleModelsPublishesConservativeEnabledBuildProfile(t *testing.T) {
 
 // TestAppendGrokCompatibilityAliasesRespectsThePlane keeps the advertised alias
 // set equal to the set the resolver accepts. The entry carries the bare public
-// name, so the plane has to come from the row: a Console model that refuses an
+// name, so the plane has to come from the row: a Build model that refuses an
 // effort parameter must not publish <name>-<effort> aliases that every request
 // then rejects as model_not_found.

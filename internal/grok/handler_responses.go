@@ -232,17 +232,6 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error", modelNotFoundMessage(req.Model))
 		return
 	}
-	if !spec.SupportsConversation() {
-		// The Responses wire format is a conversation API, so a media-only model
-		// (image, video, TTS, STT, realtime) genuinely cannot serve it. Report
-		// that in the Responses envelope rather than as plain text: a Codex-style
-		// client parses the body to tell "wrong model" from "gateway is down", and
-		// /v1/models already advertises the capability so the choice can be made
-		// before the request.
-		writeResponsesAPIError(w, http.StatusBadRequest, "invalid_request_error",
-			fmt.Sprintf("model %s does not support responses; use the model's dedicated endpoint instead", req.Model))
-		return
-	}
 	if previousID := strings.TrimSpace(req.PreviousResponseID); previousID != "" {
 		owner := strings.TrimSpace(middleware.APIKeyFingerprint(r.Context()))
 		if owner == "" {

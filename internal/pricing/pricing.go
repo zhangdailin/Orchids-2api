@@ -132,7 +132,7 @@ func resolveOfficialTokenPrice(model string) (tokenPrice, bool) {
 // attaches, so an arbitrary path fragment is never mistaken for a billable model.
 func normalizePricingModel(model string) string {
 	normalized := strings.ToLower(strings.TrimSpace(model))
-	for _, prefix := range []string{"build/", "web/", "console/", "grok_build/", "grok_web/", "grok_console/"} {
+	for _, prefix := range []string{"build/", "grok_build/"} {
 		if strings.HasPrefix(normalized, prefix) {
 			return strings.TrimSpace(normalized[len(prefix):])
 		}

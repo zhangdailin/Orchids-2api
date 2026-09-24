@@ -480,7 +480,7 @@ const (
 	retry402Puter = accountpolicy.CooldownPuterQuota
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
 	retry403Default = accountpolicy.CooldownBlocked
-	// Grok 的 403 很多是 Cloudflare challenge/临时风控，不应长时间拉黑
+	// Grok 的 403 很多是 transient upstream denial/临时风控，不应长时间拉黑
 	retry403Grok = accountpolicy.CooldownBlockedGro
 )
 
@@ -609,7 +609,7 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		return false
 	case "403", "404":
 		// 403/404 可能是临时封禁或配置问题。
-		// 对 Grok 来说，403 很多是 Cloudflare challenge，不应长时间拉黑。
+		// 对 Grok 来说，403 很多是 transient upstream denial，不应长时间拉黑。
 		if acc.LastAttempt.IsZero() {
 			return false
 		}

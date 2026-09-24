@@ -154,7 +154,7 @@ func TestSidebarUsesRealLinks(t *testing.T) {
 		t.Fatalf("RenderIndex() error = %v", err)
 	}
 	page := recorder.Body.String()
-	for _, tab := range []string{"ops", "logs", "accounts", "keys", "models", "grok-tools", "alerts", "tutorial"} {
+	for _, tab := range []string{"ops", "logs", "accounts", "keys", "models", "alerts", "tutorial"} {
 		if !strings.Contains(page, `href="/console/?tab=`+tab+`"`) {
 			t.Errorf("sidebar has no native link for %q", tab)
 		}

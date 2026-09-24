@@ -129,8 +129,7 @@ func (h *Handler) warpModelVisible(ctx context.Context, modelID string) bool {
 }
 
 // externalPublicModelID is the name clients see for a route row. Grok routes
-// carry a plane qualifier internally (console/, build/) that grok2api never
-// publishes; every other channel's row is already the public name.
+// may carry a Build qualifier internally; clients receive the bare model name.
 func externalPublicModelID(channel, internalID string) string {
 	if strings.EqualFold(strings.TrimSpace(channel), "grok") {
 		if external := modelpolicy.ExternalPublicID(internalID); external != "" {
@@ -145,9 +144,7 @@ func publicModelIDKey(id string) string {
 }
 
 // grokBuildProfiles returns the conservative capability view shared by every
-// enabled Build account that advertised a model. Accounts on the Web and
-// Console planes are deliberately excluded: their similarly named routes do
-// not speak the Build catalog contract.
+// enabled Build account that advertised a model.
 func (h *Handler) grokBuildProfiles(ctx context.Context) map[string]modelcatalog.Profile {
 	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return nil
@@ -213,12 +210,8 @@ func appendGrokCompatibilityAliases(items []PublicModelResponse, seen map[string
 	if strings.Contains(strings.TrimSpace(entry.ID), "/") {
 		aliases = append(aliases, base)
 	}
-	// The effort levels are provider-scoped, and this entry carries the bare
-	// public name, so the plane goes back on before asking. Without it a Console
-	// model that refuses an effort parameter still published <name>-<effort>
-	// aliases, and the resolver — which asks with the qualified name — rejected
-	// every one of them.
-	levels := modelpolicy.SupportedReasoningEfforts(modelpolicy.ProviderScopedPublicID(entry.Provider, entry.ID))
+	// Publish only effort aliases supported by the Build model contract.
+	levels := modelpolicy.SupportedReasoningEfforts(entry.ID)
 	if len(levels) >= 2 {
 		for _, level := range levels {
 			aliases = append(aliases, base+"-"+level)
@@ -288,21 +281,15 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		// The provider qualifier is a routing detail: grok2api publishes the bare
-		// name (ExternalPublicID) and keeps the qualified one as an input alias.
-		// A Grok route named console/grok-4.3 therefore appears as grok-4.3, and
-		// the two spellings still resolve to the same route.
+		// A Build qualifier is an internal routing detail; publish the bare name.
 		publicID := externalPublicModelID(mChannel, m.ModelID)
 		if !middleware.APIKeyAllowsModel(ctx, m.ModelID) && !middleware.APIKeyAllowsModel(ctx, publicID) {
 			continue
 		}
-		// One public entry per external ID: routes that differ only by plane are
-		// the same public model (the admin plane lists them grouped).
+		// Publish one public row per external Build model ID.
 		publicIDKey := publicModelIDKey(publicID)
 		if _, duplicate := seenPublicModelIDs[publicIDKey]; duplicate {
-			// Same public id may represent Web, Console and Build routes. Preserve
-			// the single OpenAI model row, but union route-specific video actions
-			// instead of silently taking whichever provider sorted first.
+			// Preserve one OpenAI model row for duplicate Build aliases.
 			for i := range publicModels {
 				if publicModelIDKey(publicModels[i].ID) == publicIDKey {
 					break

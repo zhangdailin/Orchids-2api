@@ -693,7 +693,7 @@ func normalizeGrokTokenInput(acc *store.Account) {
 	acc.GrokProvider = grok.ProviderBuild
 	acc.OAuthAccessToken = strings.TrimSpace(acc.OAuthAccessToken)
 	acc.OAuthRefreshToken = strings.TrimSpace(acc.OAuthRefreshToken)
-	// Retired Web/Console credentials must never survive an account write.
+	// Non-Build Grok credentials must never survive an account write.
 	acc.Token = ""
 	acc.ClientCookie = ""
 	acc.RefreshToken = ""
@@ -2248,16 +2248,6 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			}
 			if strings.TrimSpace(acc.RequestID) == "" {
 				acc.RequestID = existing.RequestID
-			}
-		}
-		// For Grok SSO accounts, empty cookie on edit should keep the existing
-		// credential the same way Warp keeps refresh tokens.
-		if strings.EqualFold(acc.AccountType, "grok") && !grokAccountIsOAuth(&acc) {
-			if strings.TrimSpace(acc.ClientCookie) == "" {
-				acc.ClientCookie = existing.ClientCookie
-			}
-			if strings.TrimSpace(acc.RefreshToken) == "" {
-				acc.RefreshToken = existing.RefreshToken
 			}
 		}
 		if !isWarpAccount && acc.SessionCookie == "" {

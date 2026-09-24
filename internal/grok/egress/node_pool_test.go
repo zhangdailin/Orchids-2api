@@ -21,7 +21,7 @@ func TestNodesFromConfig(t *testing.T) {
 	cfg := &config.Config{
 		GrokEgressEnabled: true,
 		GrokEgressNodes: []config.EgressNodeConfig{
-			{Name: "a", URL: "http://proxy1:8080", Weight: 2, Scope: "app_chat"},
+			{Name: "a", URL: "http://proxy1:8080", Weight: 2, Scope: "cli"},
 			{Name: "b", URL: "", Scope: "all"}, // direct
 		},
 	}
@@ -41,15 +41,15 @@ func TestNodesFromConfig(t *testing.T) {
 }
 
 func TestNodeMatchesScope(t *testing.T) {
-	node := Node{Name: "n", Scope: "app_chat"}
-	if !nodeMatchesScope(node, "app_chat") {
-		t.Fatal("app_chat node should match app_chat scope")
+	node := Node{Name: "n", Scope: "cli"}
+	if !nodeMatchesScope(node, "cli") {
+		t.Fatal("cli node should match cli scope")
 	}
-	if nodeMatchesScope(node, "cli") {
-		t.Fatal("app_chat node should not match cli scope")
+	if nodeMatchesScope(node, "other") {
+		t.Fatal("cli node should not match another scope")
 	}
 	all := Node{Name: "n", Scope: "all"}
-	if !nodeMatchesScope(all, "cli") || !nodeMatchesScope(all, "console") {
+	if !nodeMatchesScope(all, "cli") || !nodeMatchesScope(all, "other") {
 		t.Fatal("all scope should match any scope")
 	}
 }
@@ -71,7 +71,7 @@ func TestManagerAcquireDirectNode(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected manager")
 	}
-	lease, err := m.Acquire(context.Background(), "app_chat", "acct-1")
+	lease, err := m.Acquire(context.Background(), "cli", "acct-1")
 	if err != nil {
 		t.Fatalf("acquire failed: %v", err)
 	}
@@ -82,14 +82,14 @@ func TestManagerUnhealthyNodeSkipped(t *testing.T) {
 	cfg := &config.Config{
 		GrokEgressEnabled: true,
 		GrokEgressNodes: []config.EgressNodeConfig{
-			{Name: "bad", Scope: "app_chat"},
-			{Name: "good", Scope: "app_chat"},
+			{Name: "bad", Scope: "cli"},
+			{Name: "good", Scope: "cli"},
 		},
 	}
 	m := NewManager(cfg)
 	m.FeedbackOutcome("bad", OutcomeServerError)
 	for i := 0; i < 10; i++ {
-		lease, err := m.Acquire(context.Background(), "app_chat", "acct-3")
+		lease, err := m.Acquire(context.Background(), "cli", "acct-3")
 		if err != nil {
 			t.Fatalf("acquire %d failed: %v", i, err)
 		}
@@ -165,7 +165,7 @@ func TestAcquireFailsClosedWhenNoNodes(t *testing.T) {
 	if m == nil {
 		t.Fatal("expected manager for enabled egress")
 	}
-	if _, err := m.Acquire(context.Background(), "app_chat", "acct"); err == nil {
+	if _, err := m.Acquire(context.Background(), "cli", "acct"); err == nil {
 		t.Fatal("expected error when no nodes configured")
 	}
 }
@@ -227,7 +227,7 @@ func TestFeedbackOutcomeBacksOffExponentially(t *testing.T) {
 func TestHealthSnapshotNeverLeaksProxyURL(t *testing.T) {
 	m := &Manager{
 		cfg:       &config.Config{GrokEgressEnabled: true},
-		nodes:     []Node{{Name: "eu-1", URL: "http://user:secret@proxy.internal:8080", Scope: "app_chat", Weight: 1}},
+		nodes:     []Node{{Name: "eu-1", URL: "http://user:secret@proxy.internal:8080", Scope: "cli", Weight: 1}},
 		health:    map[string]float64{},
 		unhealthy: map[string]time.Time{},
 		failures:  map[string]int{},

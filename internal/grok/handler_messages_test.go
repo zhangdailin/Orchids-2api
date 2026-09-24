@@ -112,9 +112,9 @@ func TestTranslateOpenAIChatStreamToAnthropic(t *testing.T) {
 	}
 }
 
-func TestConsolePayloadIncludesMaxOutputTokens(t *testing.T) {
+func TestBuildPayloadIncludesMaxOutputTokens(t *testing.T) {
 	maxTokens := 321
-	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ConsoleModel: "grok-4.6"}, &ChatCompletionsRequest{
+	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, &ChatCompletionsRequest{
 		Messages: []ChatMessage{{Role: "user", Content: "hello"}}, MaxTokens: &maxTokens,
 	}, false)
 	if err != nil {

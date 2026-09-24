@@ -32,13 +32,11 @@ func TestResolveModel_Grok420Rejected(t *testing.T) {
 
 func TestResolveModel_CurrentBuildMappings(t *testing.T) {
 	cases := []struct {
-		modelID       string
-		wantUpstream  string
-		wantModelMode string
-		wantModeID    string
+		modelID      string
+		wantUpstream string
 	}{
-		{modelID: "grok-4.5", wantUpstream: "grok-4.5", wantModelMode: ""},
-		{modelID: "grok-4.6", wantUpstream: "grok-4.6", wantModelMode: ""},
+		{modelID: "grok-4.5", wantUpstream: "grok-4.5"},
+		{modelID: "grok-4.6", wantUpstream: "grok-4.6"},
 	}
 	for _, tc := range cases {
 		spec, ok := ResolveModel(tc.modelID)
@@ -47,12 +45,6 @@ func TestResolveModel_CurrentBuildMappings(t *testing.T) {
 		}
 		if spec.UpstreamModel != tc.wantUpstream {
 			t.Fatalf("%s upstream=%q want=%q", tc.modelID, spec.UpstreamModel, tc.wantUpstream)
-		}
-		if spec.ModelMode != tc.wantModelMode {
-			t.Fatalf("%s mode=%q want=%q", tc.modelID, spec.ModelMode, tc.wantModelMode)
-		}
-		if spec.ModeID != tc.wantModeID {
-			t.Fatalf("%s modeID=%q want=%q", tc.modelID, spec.ModeID, tc.wantModeID)
 		}
 	}
 }

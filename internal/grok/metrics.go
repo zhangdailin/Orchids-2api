@@ -32,12 +32,6 @@ var (
 
 	// Response classification metrics. Labels carry only the challenge kind or
 	// status class — never credentials, tokens, cookies, UA, affinity or node.
-	grokUpstreamChallenges = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "grok",
-		Subsystem: "upstream",
-		Name:      "challenges_total",
-		Help:      "Upstream challenges classified by kind (cloudflare).",
-	}, []string{"kind"})
 
 	grokEgressAcquireErrors = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "grok",
@@ -82,13 +76,6 @@ func recordCLIUpstreamStatus(status int) {
 
 func recordCLIOAuthRefresh() {
 	grokCLIOAuthRefreshes.Inc()
-}
-
-func recordUpstreamChallenge(kind string) {
-	if kind == "" {
-		kind = "unknown"
-	}
-	grokUpstreamChallenges.WithLabelValues(kind).Inc()
 }
 
 func recordEgressAcquireError() {

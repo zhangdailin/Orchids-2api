@@ -10,7 +10,7 @@ import (
 )
 
 // Rate limit metadata parsing ported from grok2api
-// (backend/internal/infra/provider/rate_limit.go). xAI Console and Build CLI
+// (backend/internal/infra/provider/rate_limit.go). xAI Build CLI
 // both return a structured `resource-exhausted` 429 body carrying the team,
 // model, and RPS/RPM window. Parsing it lets the gateway cool down at the
 // team+model granularity instead of a fixed 60s blanket cooldown.
@@ -41,7 +41,7 @@ type RateLimitMetadata struct {
 }
 
 // ParseRateLimitMetadata extracts Team+Model RPS/RPM limit metadata from an
-// upstream 429 body. It accepts both Console and Build CLI resource-exhausted
+// upstream 429 body. It accepts both Build CLI resource-exhausted
 // text shapes.
 func ParseRateLimitMetadata(body []byte) *RateLimitMetadata {
 	for _, text := range rateLimitTexts(body) {

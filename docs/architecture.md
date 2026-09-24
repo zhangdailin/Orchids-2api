@@ -53,7 +53,6 @@ Orchids-2api/
 - `/*/v1/chat/completions`
 - `/*/v1/responses` 与 stored Response 子资源
 - `/api/grok/device-auth*`
-- `/api/grok/tools/v1/{models,responses}`
 - `/api/*`
 
 ### 3.2 `internal/handler`

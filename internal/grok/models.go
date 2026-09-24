@@ -22,17 +22,8 @@ type ModelSpec struct {
 	ID            string
 	Name          string
 	UpstreamModel string
-	ModelMode     string
-	ModeID        string
-	ConsoleModel  string
 	Tier          int
 	PreferBest    bool
-	IsImage       bool
-	IsVideo       bool
-	IsTTS         bool
-	IsSTT         bool
-	IsRealtime    bool
-	MediaAPIOnly  bool
 	// Upstream explicitly routes the model; UpstreamAuto derives from fields.
 	Upstream UpstreamKind
 	// AliasReasoningEffort is populated only while resolving an effort-suffixed
@@ -56,10 +47,6 @@ var SupportedModels = []ModelSpec{
 	{ID: "grok-4.6", Name: "Grok 4.6", UpstreamModel: "grok-4.6", Tier: grokTierSuper, Upstream: UpstreamCLI},
 }
 
-func (m ModelSpec) SupportsConversation() bool {
-	return !m.IsTTS && !m.IsSTT && !m.IsRealtime && !m.MediaAPIOnly
-}
-
 var modelByID = func() map[string]ModelSpec {
 	out := make(map[string]ModelSpec, len(SupportedModels))
 	for _, m := range SupportedModels {
@@ -68,8 +55,7 @@ var modelByID = func() map[string]ModelSpec {
 	return out
 }()
 
-// providerCompatibilityAliases preserve the provider-qualified IDs while also
-// accepting the unqualified and historical names published by grok2api.
+// providerCompatibilityAliases preserve Build-qualified and historical names.
 var providerCompatibilityAliases = map[string]string{
 	"grok-4.5-latest":  "grok-4.5",
 	"grok-4.6-latest":  "grok-4.6",
@@ -116,13 +102,11 @@ func ParseReasoningModelAlias(modelID string) (base, effort string, ok bool) {
 
 func ResolveModelAlias(modelID string) (ModelSpec, string, bool) {
 	id := normalizeModelID(modelID)
-	// Explicit provider-qualified IDs always win and remain supported.
+	// Exact model IDs always win.
 	if m, exists := modelByID[id]; exists {
 		return m, "", true
 	}
-	// Provider-qualified spellings in any casing. The exact table above has
-	// already been consulted, so a qualifier that names a real route of another
-	// plane is unaffected.
+	// Build-qualified spellings are accepted in any casing.
 	if stripped, changed := stripProviderPublicPrefix(id); changed {
 		if m, exists := modelByID[stripped]; exists {
 			return m, "", true

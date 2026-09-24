@@ -46,7 +46,7 @@ func chatMessageContentText(content interface{}) string {
 	}
 }
 
-func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
+func buildToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
 	if len(tools) == 0 {
 		return nil
 	}
@@ -90,7 +90,7 @@ func consoleToolsFromOpenAI(tools []ToolDef) []map[string]interface{} {
 	return out
 }
 
-func consoleToolChoiceFromOpenAI(choice interface{}) interface{} {
+func buildToolChoiceFromOpenAI(choice interface{}) interface{} {
 	switch v := choice.(type) {
 	case nil:
 		return nil
@@ -392,12 +392,12 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 	holdEnabled := h.shouldHoldQualityTurn(req, provider)
 
 	if req.Stream {
-		var hold *consoleQualityHold
+		var hold *buildQualityHold
 		if holdEnabled {
-			hold = newConsoleQualityHold(w, h.qualityHoldPolicy(), nil)
+			hold = newBuildQualityHold(w, h.qualityHoldPolicy(), nil)
 		}
-		result := h.streamConsoleChatHolding(w, req, resp.Body, hold)
-		h.applyConsoleQualityGuard(ctx, sess.acc, result)
+		result := h.streamBuildChatHolding(w, req, resp.Body, hold)
+		h.applyBuildQualityGuard(ctx, sess.acc, result)
 		h.auditChatOutcome(ctx, sess.acc, req, result)
 		if result.Withheld && hold != nil {
 			h.auditQualityDegraded(ctx, sess.acc, req, result, "stream")
@@ -407,16 +407,16 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 	}
 
 	if !holdEnabled {
-		result := h.collectConsoleChat(w, req, resp.Body)
-		h.applyConsoleQualityGuard(ctx, sess.acc, result)
+		result := h.collectBuildChat(w, req, resp.Body)
+		h.applyBuildQualityGuard(ctx, sess.acc, result)
 		h.auditChatOutcome(ctx, sess.acc, req, result)
 		return nil, false
 	}
 	// A collected response is buffered anyway, so holding it costs nothing: the
 	// body is only written once the guard has judged it.
 	deferred := newDeferredResponseWriter(w)
-	result := h.collectConsoleChat(deferred, req, resp.Body)
-	h.applyConsoleQualityGuard(ctx, sess.acc, result)
+	result := h.collectBuildChat(deferred, req, resp.Body)
+	h.applyBuildQualityGuard(ctx, sess.acc, result)
 	h.auditChatOutcome(ctx, sess.acc, req, result)
 	if result.Err != nil {
 		if commitErr := deferred.Commit(); commitErr != nil {
@@ -424,7 +424,7 @@ func (h *Handler) finishUpstreamChat(ctx context.Context, w http.ResponseWriter,
 		}
 		return nil, false
 	}
-	hold := &consoleQualityHold{
+	hold := &buildQualityHold{
 		writer:  deferred,
 		policy:  h.qualityHoldPolicy(),
 		started: time.Now(),
@@ -503,7 +503,7 @@ func (h *Handler) serveNativeChat(ctx context.Context, w http.ResponseWriter, re
 		// multiply into as many as 6×100 full upstream generations.
 		resp, err := h.retryWithAccountSwitchLimit(ctx, sess, 1500*time.Millisecond, request, openNext, nil, 1)
 		if err == nil && resp != nil {
-			tools := append(append([]map[string]interface{}(nil), req.ResponsesTools...), consoleToolsFromOpenAI(req.Tools)...)
+			tools := append(append([]map[string]interface{}(nil), req.ResponsesTools...), buildToolsFromOpenAI(req.Tools)...)
 			if aliases := collectBuildToolAliases(map[string]interface{}{"tools": tools}); len(aliases) > 0 {
 				resp.Body = rewriteBuildToolAliasResponse(resp.Body, resp.Header.Get("Content-Type"), aliases)
 			}
@@ -619,7 +619,7 @@ func (h *Handler) retryWithAccountSwitchLimit(ctx context.Context, sess *chatAcc
 	}
 }
 
-func (h *Handler) collectConsoleChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) (outcome chatOutcome) {
+func (h *Handler) collectBuildChat(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader) (outcome chatOutcome) {
 	var raw map[string]interface{}
 	if err := json.NewDecoder(body).Decode(&raw); err != nil {
 		outcome.Err = err

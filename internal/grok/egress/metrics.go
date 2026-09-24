@@ -6,7 +6,7 @@ import (
 )
 
 // Prometheus metrics for the egress layer. Labels are deliberately low
-// cardinality: scope (app_chat/console/cli) and outcome. They never carry proxy
+// cardinality: Build CLI scope and outcome. They never carry proxy
 // URLs, proxy credentials, cookies, OAuth tokens, User-Agents, affinities
 // or account identifiers.
 
@@ -32,20 +32,6 @@ var (
 		Help:      "Egress node recoveries after a successful response by scope.",
 	}, []string{"scope"})
 
-	grokEgressClearanceSolves = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "grok",
-		Subsystem: "egress",
-		Name:      "clearance_solve_total",
-		Help:      "Cloudflare clearance solve attempts by result (success|failure).",
-	}, []string{"result"})
-
-	grokEgressClearanceInvalidations = promauto.NewCounter(prometheus.CounterOpts{
-		Namespace: "grok",
-		Subsystem: "egress",
-		Name:      "clearance_invalidations_total",
-		Help:      "Cloudflare clearance invalidations after confirmed challenges.",
-	})
-
 	grokEgressAllNodesUnhealthy = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "grok",
 		Subsystem: "egress",
@@ -64,18 +50,6 @@ func recordNodeFailure(scope, reason string) {
 
 func recordNodeRecovery(scope string) {
 	grokEgressNodeRecoveries.WithLabelValues(scope).Inc()
-}
-
-func recordClearanceSolve(success bool) {
-	result := "failure"
-	if success {
-		result = "success"
-	}
-	grokEgressClearanceSolves.WithLabelValues(result).Inc()
-}
-
-func recordClearanceInvalidation() {
-	grokEgressClearanceInvalidations.Inc()
 }
 
 func recordAllNodesUnhealthy(scope string) {

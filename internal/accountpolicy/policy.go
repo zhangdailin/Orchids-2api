@@ -179,7 +179,7 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 	case "403", "404":
 		cooldown := CooldownBlocked
 		if isGrok(acc) {
-			// Grok answers 403 for Cloudflare challenges, which clear quickly.
+			// Grok answers 403 for transient upstream denials, which clear quickly.
 			cooldown = CooldownBlockedGro
 		}
 		return Verdict{

@@ -94,9 +94,6 @@ func AllPrefixes() []string {
 }
 
 func FromPath(path string) (ID, bool) {
-	if strings.HasPrefix(path, "/api/grok/models") || strings.HasPrefix(path, "/api/grok/tools/v1/") {
-		return Grok, true
-	}
 	for _, definition := range definitions {
 		if strings.HasPrefix(path, definition.APIPrefix+"/") || path == definition.APIPrefix {
 			return definition.ID, true
@@ -106,10 +103,6 @@ func FromPath(path string) (ID, bool) {
 }
 
 func TrimModelPath(path string) (ID, string, bool) {
-	const toolModelsPrefix = "/api/grok/tools/v1/models/"
-	if strings.HasPrefix(path, toolModelsPrefix) {
-		return Grok, strings.TrimPrefix(path, toolModelsPrefix), true
-	}
 	for _, definition := range definitions {
 		prefix := definition.APIPrefix + "/models/"
 		if strings.HasPrefix(path, prefix) {

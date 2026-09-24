@@ -20,7 +20,7 @@ func TestBuildChatSummaryBoundary(t *testing.T) {
 				if effort != "" {
 					req.ReasoningEffort = &effort
 				}
-				payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6", ConsoleModel: "grok-4.6"}, req, build)
+				payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, req, build)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -53,7 +53,7 @@ func TestChatReasoningSummaryIsClientOwned(t *testing.T) {
 				ReasoningEffort: &effort, ReasoningSummary: &summary,
 				Messages: []ChatMessage{{Role: "user", Content: "hello"}},
 			}
-			payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6", ConsoleModel: "grok-4.6"}, req, build)
+			payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, req, build)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +75,7 @@ func TestChatAlwaysRequestsEncryptedReasoning(t *testing.T) {
 			if effort != "" {
 				req.ReasoningEffort = &effort
 			}
-			payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6", ConsoleModel: "grok-4.6"}, req, build)
+			payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.6"}, req, build)
 			if err != nil {
 				t.Fatal(err)
 			}

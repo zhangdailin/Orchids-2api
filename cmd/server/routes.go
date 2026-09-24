@@ -213,41 +213,11 @@ func registerRoutes(
 		}, h)
 	}
 
-	// Grok tools inference is an authenticated management-plane projection of the
-	// native Grok handlers. It deliberately bypasses inferenceAuth: an operator's
-	// session is the authorization boundary, so client-key billing, model
-	// allowlists and key concurrency must not apply. Keep this prefix explicit so
-	// no generic /v1 surface is accidentally opened.
-	//
-	// Stateful resources (responses, video jobs, media inputs) are owned by the
-	// request fingerprint. Without a key the fingerprint is empty, and every
-	// keyless caller collapsed into the shared "anonymous" owner. Stamping a
-	// dedicated admin scope keeps the operator namespace separate from the
-	// keyless inference plane while remaining stable across admin browsers.
-	const adminToolsOwner = "admin-tools"
-	withAdminToolsOwner := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			next(w, r.WithContext(middleware.WithAPIKeyFingerprint(r.Context(), adminToolsOwner)))
-		}
-	}
-	toolPrefixes := []string{"/api/grok/tools/v1"}
-	toolRoute := func(path string, handler http.HandlerFunc) {
-		registerWithPrefixes(mux, toolPrefixes, path, sessionAuth(withAdminToolsOwner(handler)))
-	}
-	toolRoute("/models", limiter.Limit(h.HandleModels))
-	toolRoute("/models/", limiter.Limit(h.HandleModelByID))
-	toolRoute("/responses", limiter.Limit(grokHandler.HandleResponses))
-	toolRoute("/responses/compact", limiter.Limit(grokHandler.HandleResponsesCompact))
-	toolRoute("/responses/", limiter.Limit(grokHandler.HandleResponseResource))
-	toolRoute("/files/", limiter.Limit(grokHandler.HandleFiles))
-
 	// Admin routes under /api/* only (no dual prefix)
 	mux.HandleFunc("/api/providers", sessionAuth(channel.HandleRegistry))
 	mux.HandleFunc("/api/accounts", sessionAuth(apiHandler.HandleAccounts))
 	mux.HandleFunc("/api/accounts/", sessionAuth(apiHandler.HandleAccountByID))
 	mux.HandleFunc("/api/grok/availability", sessionAuth(apiHandler.HandleGrokAvailability))
-	// Management-plane media inputs: the same store as the inference-plane
-	// endpoint, with the envelope grok2api's admin API uses.
 	mux.HandleFunc("/api/puter/web-login", sessionAuth(apiHandler.HandlePuterWebLogin))
 	mux.HandleFunc("/api/workbuddy/login", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/workbuddy/login/", sessionAuth(apiHandler.HandleWorkBuddyLogin))
@@ -264,9 +234,6 @@ func registerRoutes(
 	// POST /api/keys/{id}/reset-usage lands on the same handler, which dispatches
 	// on the trailing path segment.
 	mux.HandleFunc("/api/models", sessionAuth(apiHandler.HandleModels))
-	// The tools page is an admin surface and must read the same public Grok
-	// catalog as inference clients without requiring a separate API key.
-	mux.HandleFunc("/api/grok/models", sessionAuth(h.HandleModels))
 	mux.HandleFunc("/api/models/groups", sessionAuth(apiHandler.HandleModelGroups))
 	mux.HandleFunc("/api/models/refresh", sessionAuth(modelRefreshHandler))
 	mux.HandleFunc("/api/models/", sessionAuth(apiHandler.HandleModelByID))
@@ -326,56 +293,16 @@ func registerRoutes(
 	staticRootHandler := web.StaticHandler()
 	mux.Handle("/static/", http.StripPrefix("/static/", staticRootHandler))
 
-	grokToolsURL := func() string {
-		return cfg.AdminPath + "/?tab=grok-tools"
-	}
-
-	redirectToGrokTools := func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		http.Redirect(w, r, grokToolsURL(), http.StatusFound)
-	}
-
-	// --- Root + public pages ---
+	// The public Grok conversation page was retired. Root traffic now enters the
+	// authenticated admin UI; the old public/chat/media aliases are intentionally
+	// left unregistered and therefore return 404.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		if currentConfig().PublicAPIEnabled() {
-			http.Redirect(w, r, grokToolsURL(), http.StatusFound)
-			return
-		}
-		http.Redirect(w, r, cfg.AdminPath+"/login.html", http.StatusFound)
+		http.Redirect(w, r, cfg.AdminPath+"/", http.StatusFound)
 	})
-	mux.HandleFunc("/login", redirectToGrokTools)
-	mux.HandleFunc("/imagine", redirectToGrokTools)
-	mux.HandleFunc("/voice", redirectToGrokTools)
-	mux.HandleFunc("/video", redirectToGrokTools)
-
-	// Public page aliases (dual prefix)
-	redirectPublicRoot := func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		if !currentConfig().PublicAPIEnabled() {
-			http.NotFound(w, r)
-			return
-		}
-		http.Redirect(w, r, grokToolsURL(), http.StatusFound)
-	}
-	publicPagePrefixes := []string{"/v1/public", "/api/v1/public"}
-	for _, prefix := range publicPagePrefixes {
-		mux.HandleFunc(prefix, redirectPublicRoot)
-		mux.HandleFunc(prefix+"/", redirectPublicRoot)
-	}
-	publicPages := []string{"/login", "/imagine", "/voice", "/video"}
-	for _, page := range publicPages {
-		registerWithPrefixes(mux, publicPagePrefixes, page, redirectToGrokTools)
-	}
 
 	// --- Admin Web UI ---
 	registerAdminUI(mux, cfg, currentConfig, s, staticRootHandler, tmplRenderer)

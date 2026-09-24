@@ -57,14 +57,12 @@ jobs:
           node --test web/accounts_ui.test.cjs
           node --test web/accounts_quota.test.cjs
           node --test web/puter_auth.test.cjs
-          node --test web/grok_tools.test.cjs
           node --test web/ops_ui.test.cjs
           node --test web/ops_render.test.cjs
           node --test web/logs_paging.test.cjs
           node --test web/layout_phone.test.cjs
           node --test web/provider_registry.test.cjs
           ./scripts/check-provider-registry.sh
-          ./scripts/check-grok-tools-min.sh
 
   race:
     name: Go test (race detector)

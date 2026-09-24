@@ -101,13 +101,9 @@ type Account struct {
 	OAuthRefreshToken string    `json:"oauth_refresh_token,omitempty"`
 	OAuthExpiresAt    time.Time `json:"oauth_expires_at,omitempty"`
 	TeamID            string    `json:"team_id,omitempty"`
-	// UpstreamMode overrides the per-account upstream selection. Empty lets the
-	// ModelSpec decide; otherwise one of "app_chat", "console", "cli".
+	// UpstreamMode is retained for non-Grok channel compatibility.
 	UpstreamMode string `json:"upstream_mode,omitempty"`
-	// GrokProvider is the explicit xAI product boundary. Build OAuth, Grok Web
-	// SSO and Console SSO have different credentials, model catalogs, quotas
-	// and failure semantics; they must not be treated as interchangeable.
-	// Legacy accounts are normalized on read/write from CredentialType.
+	// GrokProvider identifies the supported xAI product boundary: Build OAuth.
 	GrokProvider string `json:"grok_provider,omitempty"`
 	// GrokModels is the last successful account-specific upstream /v1/models
 	// capability snapshot. An empty snapshot means not synced yet, not that the

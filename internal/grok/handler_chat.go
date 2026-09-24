@@ -12,7 +12,7 @@ import (
 )
 
 // Chat completions. The only Grok upstream this gateway speaks here is the Build
-// (OAuth CLI) plane; the legacy website and developer-console planes were removed,
+// (OAuth CLI) plane; the legacy website and retired developer plane planes were removed,
 // so every conversation model is served by the native Responses bridge.
 
 func (h *Handler) defaultChatStream() bool {
@@ -83,10 +83,6 @@ func (h *Handler) HandleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeGrokError(w, http.StatusBadRequest, modelValidationMessage(req.Model, err))
-		return
-	}
-	if !spec.SupportsConversation() {
-		writeGrokError(w, http.StatusBadRequest, "model "+req.Model+" does not support chat completions")
 		return
 	}
 	if !modelRoutedToCLI(spec, h.configSnapshot()) {

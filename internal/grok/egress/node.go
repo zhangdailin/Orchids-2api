@@ -22,8 +22,7 @@ type Node struct {
 	Proxied bool
 }
 
-// supportedProxySchemes mirrors the transport actually used by the browser
-// client (util.GetSharedBrowserHTTPClient): standard HTTP CONNECT and SOCKS5.
+// supportedProxySchemes mirrors the Build proxy transport: HTTP CONNECT and SOCKS5.
 // HTTPS proxies, trojan/vless/ss/vmess and socks4 are rejected up-front so a
 // misconfigured node fails loudly instead of failing per request.
 var supportedProxySchemes = map[string]bool{
@@ -128,8 +127,7 @@ type Lease struct {
 	release  func()
 }
 
-// Do issues the request through the lease's client (proxy + UA + cookies are
-// injected at request time by the client's RoundTripper or the caller).
+// Do issues the request through the lease's proxy-aware client.
 func (l *Lease) Do(req *http.Request) (*http.Response, error) {
 	if l == nil || l.client == nil {
 		return nil, errNoClient

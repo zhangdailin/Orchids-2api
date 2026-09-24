@@ -16,8 +16,6 @@ import (
 // it actually implies.
 const (
 	grokResponseAccountUnavailableMessage = "No Grok account is currently available for this response. Retry later, or check the account pool in Admin UI."
-	grokVoiceAccountUnavailableMessage    = "No Grok Console account is currently available for realtime voice. Retry later, or check the account pool in Admin UI."
-	grokVideoAccountUnavailableMessage    = "No Grok Console account is currently available for video generation. Retry later, or check the account pool in Admin UI."
 	grokModelAccountUnavailableMessage    = "No upstream account is currently available for this model. Retry later or add capacity."
 )
 

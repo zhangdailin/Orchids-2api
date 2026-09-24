@@ -605,8 +605,8 @@ func (p *parkedResponse) isEmpty() bool {
 	return p == nil || len(p.body) == 0
 }
 
-// consoleQualityHold carries the withhold state of one streaming attempt.
-type consoleQualityHold struct {
+// buildQualityHold carries the withhold state of one streaming attempt.
+type buildQualityHold struct {
 	writer  *deferredResponseWriter
 	policy  qualityHoldPolicy
 	started time.Time
@@ -621,8 +621,8 @@ type consoleQualityHold struct {
 	expired bool
 }
 
-func newConsoleQualityHold(w http.ResponseWriter, policy qualityHoldPolicy, outcome *chatOutcome) *consoleQualityHold {
-	return &consoleQualityHold{
+func newBuildQualityHold(w http.ResponseWriter, policy qualityHoldPolicy, outcome *chatOutcome) *buildQualityHold {
+	return &buildQualityHold{
 		writer:  newDeferredResponseWriter(w),
 		policy:  normalizeQualityHoldPolicy(policy),
 		started: time.Now(),
@@ -633,7 +633,7 @@ func newConsoleQualityHold(w http.ResponseWriter, policy qualityHoldPolicy, outc
 // signals converts the stream's accounting into the classifier's inputs. The
 // character counts are converted to the token measure grok2api thresholds are
 // written in, with the same rune/4 estimate the usage accounting uses.
-func (c *consoleQualityHold) signals(terminal bool) qualityStreamSignals {
+func (c *buildQualityHold) signals(terminal bool) qualityStreamSignals {
 	if c == nil || c.outcome == nil {
 		return qualityStreamSignals{Terminal: terminal}
 	}
@@ -662,7 +662,7 @@ func (c *consoleQualityHold) signals(terminal bool) qualityStreamSignals {
 
 // step classifies the held turn. waiting reports whether the caller should keep
 // reading upstream.
-func (c *consoleQualityHold) step(terminal bool) (verdict qualityVerdict, waiting bool) {
+func (c *buildQualityHold) step(terminal bool) (verdict qualityVerdict, waiting bool) {
 	if c == nil || c.writer == nil {
 		return qualityDeliver, false
 	}
@@ -680,7 +680,7 @@ func (c *consoleQualityHold) step(terminal bool) (verdict qualityVerdict, waitin
 }
 
 // markReasoningStarted records that the upstream began a reasoning item.
-func (c *consoleQualityHold) markReasoningStarted() {
+func (c *buildQualityHold) markReasoningStarted() {
 	if c != nil {
 		c.reasoningStarted = true
 	}

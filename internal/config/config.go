@@ -54,10 +54,7 @@ type Config struct {
 	// without a managed key. Empty (the default) requires a key from everyone, as
 	// grok2api does; an operator that cannot update a client yet lists its address
 	// here, and every other caller still needs a key.
-	AnonymousAllowIPs     []string `json:"anonymous_allow_ips,omitempty"`
-	GrokTemporary         *bool    `json:"grok_temporary,omitempty"`
-	GrokDisableMemory     *bool    `json:"grok_disable_memory,omitempty"`
-	GrokCustomInstruction string   `json:"grok_custom_instruction,omitempty"`
+	AnonymousAllowIPs []string `json:"anonymous_allow_ips,omitempty"`
 
 	// ── WorkBuddy international backend (www.workbuddy.ai) ──
 	// Overridable for self-hosted regional deployments and for tests that need a
@@ -103,7 +100,6 @@ type Config struct {
 	// These fields are configurable via config.json / Redis and are deliberately
 	// NOT written into ApplyHardcoded, so they survive a persistConfig round trip.
 	GrokCLIBaseURL          string   `json:"grok_cli_base_url,omitempty"`
-	GrokCLIFallbackBaseURL  string   `json:"grok_cli_fallback_base_url,omitempty"`
 	GrokCLIUserAgent        string   `json:"grok_cli_user_agent,omitempty"`
 	GrokCLIClientVersion    string   `json:"grok_cli_client_version,omitempty"`
 	GrokCLIClientIdentifier string   `json:"grok_cli_client_identifier,omitempty"`
@@ -184,7 +180,7 @@ type EgressNodeConfig struct {
 	Name    string `json:"name"`
 	URL     string `json:"url"`    // proxy address http/socks5; empty = direct
 	Weight  int    `json:"weight"` // weight for weighted round-robin; <=0 = 1
-	Scope   string `json:"scope"`  // "app_chat"|"console"|"cli"|"all"
+	Scope   string `json:"scope"`  // "cli"|"all"
 	Proxied bool   `json:"proxied"`
 }
 
@@ -198,8 +194,6 @@ func (c *Config) Clone() *Config {
 
 	clone := *c
 	clone.InferenceAuth = cloneBool(c.InferenceAuth)
-	clone.GrokTemporary = cloneBool(c.GrokTemporary)
-	clone.GrokDisableMemory = cloneBool(c.GrokDisableMemory)
 	clone.Stream = cloneBool(c.Stream)
 	clone.ImageNSFW = cloneBool(c.ImageNSFW)
 	clone.PublicEnabled = cloneBool(c.PublicEnabled)
@@ -384,24 +378,6 @@ func (c *Config) ChatDefaultStream() bool {
 	return c == nil || c.Stream == nil || *c.Stream
 }
 
-func (c *Config) GrokChatTemporary() bool {
-	return c == nil || c.GrokTemporary == nil || *c.GrokTemporary
-}
-
-func (c *Config) GrokChatDisableMemory(defaultValue bool) bool {
-	if c == nil || c.GrokDisableMemory == nil {
-		return defaultValue
-	}
-	return *c.GrokDisableMemory
-}
-
-func (c *Config) GrokChatCustomInstruction() string {
-	if c == nil {
-		return ""
-	}
-	return strings.TrimSpace(c.GrokCustomInstruction)
-}
-
 // GrokCLIBaseURLOrDefault returns the Build CLI proxy base URL, defaulting to
 // the official gateway.
 func (c *Config) GrokCLIBaseURLOrDefault() string {
@@ -409,13 +385,6 @@ func (c *Config) GrokCLIBaseURLOrDefault() string {
 		return strings.TrimRight(strings.TrimSpace(c.GrokCLIBaseURL), "/")
 	}
 	return "https://cli-chat-proxy.grok.com/v1"
-}
-
-func (c *Config) GrokCLIFallbackBaseURLOrDefault() string {
-	if c != nil && strings.TrimSpace(c.GrokCLIFallbackBaseURL) != "" {
-		return strings.TrimRight(strings.TrimSpace(c.GrokCLIFallbackBaseURL), "/")
-	}
-	return "https://api.x.ai/v1"
 }
 
 // GrokCLIOAuthClientIDOrDefault returns the xAI OAuth client ID used for Build

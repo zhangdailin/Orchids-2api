@@ -388,14 +388,6 @@ func recordRequestOutcome(r *http.Request, wrapped *TracedResponseWriter, durati
 // cannot use them to move its own traffic out of the real figures.
 const HTTPChannel = "http"
 
-// adminToolsInferencePrefix is the session-authenticated namespace the Grok
-// tools console performs inference on. The channel owns the paths below it, so
-// the route classifier must recognise the endpoint behind this prefix: without
-// it every call the console makes was counted as plain HTTP, which left the log
-// centre with no request row and no diagnostic bundle for the one surface an
-// operator uses to debug exactly those requests.
-const adminToolsInferencePrefix = "/api/grok/tools/v1/"
-
 // streamFailureClass is the status class recorded for a response that committed
 // a 2xx status and then failed mid-stream. It counts as a failure and is kept
 // distinct from a real 5xx, because the client saw an HTTP 200.
@@ -409,13 +401,6 @@ func requestChannel(path string) string {
 		channelID = matched
 		definition, _ := channel.DefinitionFor(matched)
 		endpoint = strings.TrimPrefix(path, definition.APIPrefix+"/")
-	}
-	// The admin tools namespace sits under the channel but not under its API
-	// prefix, so the trim above leaves the whole path in place and no endpoint
-	// below matches. Trimming the namespace restores the endpoint the route
-	// classifier needs.
-	if rest, ok := strings.CutPrefix(path, adminToolsInferencePrefix); ok {
-		endpoint = rest
 	}
 	channelName := string(channelID)
 	if channelName == "" {

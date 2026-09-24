@@ -20,7 +20,7 @@ const (
 )
 
 // doUpstreamHTTP owns response execution, decompression and stream idleness.
-// Web/Console use byte activity; only Build understands Responses events well
+// Build uses byte activity; only Build understands Responses events well
 // enough to ignore keepalives and control frames semantically.
 func doUpstreamHTTP(req *http.Request, do func(*http.Request) (*http.Response, error), idle time.Duration, modes ...upstreamIdleMode) (*http.Response, error) {
 	resp, err := do(req)
@@ -114,8 +114,6 @@ func (b *leaseResponseBody) Close() error {
 // this request); rate limits and account issues do not.
 func egressOutcomeForKind(kind UpstreamErrorKind) egress.FeedbackOutcome {
 	switch kind {
-	case UpstreamErrorCloudflareChallenge:
-		return egress.OutcomeChallenge
 	case UpstreamErrorRateLimited:
 		return egress.OutcomeRateLimited
 	case UpstreamErrorAccountBlock:

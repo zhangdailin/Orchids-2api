@@ -18,25 +18,12 @@ var reasoningEffortCapabilities = map[string][]string{
 	"grok-composer-2.5-fast":       {"none"},
 }
 
-// consoleFixedReasoningModels produce reasoning but reject an effort parameter.
-// The same slug on another plane may expose a different contract, so the
-// restriction stays provider-scoped.
-var consoleFixedReasoningModels = map[string]struct{}{
-	"grok-4.20-0309-reasoning": {},
-}
-
-// GrokModelSlug strips any provider prefix ("console/grok-4.5" -> "grok-4.5").
+// GrokModelSlug strips the optional Build provider prefix.
 func GrokModelSlug(publicID string) string {
 	slug := strings.ToLower(strings.TrimSpace(publicID))
-	if index := strings.LastIndex(slug, "/"); index >= 0 {
-		slug = slug[index+1:]
-	}
+	slug = strings.TrimPrefix(slug, "build/")
+	slug = strings.TrimPrefix(slug, "grok_build/")
 	return slug
-}
-
-// IsConsoleGrokModel reports whether the public ID routes to the Console plane.
-func IsConsoleGrokModel(publicID string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(publicID)), "console/")
 }
 
 // IsGrokComposerModel reports whether the model belongs to the Composer family,
@@ -50,11 +37,6 @@ func IsGrokComposerModel(publicID string) bool {
 // configurable effort parameter.
 func SupportedReasoningEfforts(publicID string) []string {
 	slug := GrokModelSlug(publicID)
-	if IsConsoleGrokModel(publicID) {
-		if _, fixed := consoleFixedReasoningModels[slug]; fixed {
-			return nil
-		}
-	}
 	if levels, ok := reasoningEffortCapabilities[slug]; ok {
 		return append([]string(nil), levels...)
 	}

@@ -123,20 +123,20 @@ func TestBuildResponsesNormalizerOpaqueAgentMessageUsesBoundary(t *testing.T) {
 	}
 }
 
-func TestResponsesPayloadFromChatPreservesMultimodalAndNormalizesConsoleState(t *testing.T) {
+func TestResponsesPayloadFromChatPreservesMultimodalAndNormalizesBuildState(t *testing.T) {
 	req := &ChatCompletionsRequest{
-		Model: "console/grok-4.5", PromptCacheKey: "session", SafetyIdentifier: "user-1",
+		Model: "grok-4.5", PromptCacheKey: "session", SafetyIdentifier: "user-1",
 		Messages: []ChatMessage{{Role: "user", Content: []interface{}{
 			map[string]interface{}{"type": "text", "text": "inspect"},
 			map[string]interface{}{"type": "image_url", "image_url": map[string]interface{}{"url": "data:image/png;base64,AA=="}},
 		}}},
 	}
-	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{ConsoleModel: "grok-4.5"}, req, false)
+	payload, err := (&Handler{}).responsesPayloadFromChat(ModelSpec{UpstreamModel: "grok-4.5"}, req, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := payload["prompt_cache_key"]; exists || payload["store"] != false {
-		t.Fatalf("stateful fields leaked: %#v", payload)
+	if payload["prompt_cache_key"] != "session" {
+		t.Fatalf("Build prompt cache key missing: %#v", payload)
 	}
 	input := payload["input"].([]interface{})
 	message := input[0].(map[string]interface{})

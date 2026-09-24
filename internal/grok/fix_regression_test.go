@@ -540,24 +540,6 @@ func TestChatToolUseMustBeAnswered(t *testing.T) {
 	}
 }
 
-func TestResponseFailureClassifiesAntiBot(t *testing.T) {
-	code7 := map[string]interface{}{"type": "error", "error": map[string]interface{}{"code": float64(7), "message": "rejected"}}
-	err := responseFailure(code7)
-	if !errors.Is(err, errGrokWebAntiBot) {
-		t.Fatalf("code 7 must classify as anti-bot, got %v", err)
-	}
-	named := map[string]interface{}{"type": "response.failed", "response": map[string]interface{}{
-		"error": map[string]interface{}{"message": "Anti-Bot detected"},
-	}}
-	if err := responseFailure(named); !errors.Is(err, errGrokWebAntiBot) {
-		t.Fatalf("an anti-bot message must classify as anti-bot, got %v", err)
-	}
-	other := map[string]interface{}{"type": "error", "error": map[string]interface{}{"code": float64(3), "message": "bad request"}}
-	if err := responseFailure(other); errors.Is(err, errGrokWebAntiBot) {
-		t.Fatalf("an unrelated failure must not classify as anti-bot, got %v", err)
-	}
-}
-
 func TestQualityDegradedDetection(t *testing.T) {
 	cases := []struct {
 		name string

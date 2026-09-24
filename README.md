@@ -293,15 +293,9 @@ Grok 只使用 `cli-chat-proxy.grok.com/v1` Build 上游。账号必须通过管
 
 模型与推理接口默认要求管理端创建的 API Key。管理端可为每个 Key 设置允许模型、每分钟请求数和到期时间；旧 Key 默认不限制这些策略。仅在已有可信上游网关负责认证时，才设置 `inference_auth_enabled=false`。
 
-### Grok 工具页：Build 对话与联网工具
-
-- 工具页只暴露 `GET /api/grok/tools/v1/models` 和 `POST /api/grok/tools/v1/responses`，使用管理会话认证，不消耗 Client Key 的额度、模型白名单与并发。
-- 可在 Responses `tools` 中按需选择 `{"type":"web_search"}` 或 `{"type":"x_search"}`；网关保留这些 hosted tool 声明，由 Build 上游决定当前账号/模型是否支持并执行。
-- 请求按 `grok` 通道写入日志中心；启用诊断后可查看请求、上游尝试与响应。
-
 ### Grok 模型来源
 
-`/api/models`、`/api/grok/models`、`/grok/v1/models` 与工具页模型下拉均来自 Build OAuth 账号的上游能力目录。刷新读取账号自己的 `GET /v1/models`，返回 `source=grok_build_models`；上游新增或撤回会在下次成功刷新时同步。没有启用的 Build OAuth 账号时不会发布 Grok 模型。
+`/api/models` 与 `/grok/v1/models` 均来自 Build OAuth 账号的上游能力目录。刷新读取账号自己的 `GET /v1/models`，返回 `source=grok_build_models`；上游新增或撤回会在下次成功刷新时同步。没有启用的 Build OAuth 账号时不会发布 Grok 模型。
 
 ## 许可证
 

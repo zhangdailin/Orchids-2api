@@ -150,13 +150,13 @@ func (h *Handler) clearQualityGuard(ctx context.Context, acc *store.Account) {
 	}
 }
 
-// applyConsoleQualityGuard feeds one finished turn into the quality policy.
+// applyBuildQualityGuard feeds one finished turn into the quality policy.
 //
 // A healthy turn clears the counter; a degraded turn parks the credential (and
 // disables it on the second offence). The response itself is left alone: this
 // gateway has already streamed it, and rewriting a delivered answer would be
 // worse than cooling the credential that produced it.
-func (h *Handler) applyConsoleQualityGuard(ctx context.Context, acc *store.Account, outcome chatOutcome) {
+func (h *Handler) applyBuildQualityGuard(ctx context.Context, acc *store.Account, outcome chatOutcome) {
 	if h == nil || acc == nil {
 		return
 	}

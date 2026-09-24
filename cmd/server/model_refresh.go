@@ -1375,7 +1375,7 @@ func applyModelRefreshWithPrune(ctx context.Context, s *store.Store, channel str
 
 // shouldDeleteMissingModelsOnRefresh reports whether a whole-channel catalog is
 // authoritative. Grok Build is handled as a provider-scoped catalog by apply;
-// it must remain false here so it can never prune Web or Console planes.
+// it must remain false here so it can never prune retired provider planes.
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 	source = strings.TrimSpace(source)
 	if source == "grok_build_models" || source == "puter_public_models_test_mode" || source == "workbuddy_cli_models" {

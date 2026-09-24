@@ -10,6 +10,8 @@ func TestMapModelOnlyNormalizesSyntax(t *testing.T) {
 		{"future-upstream-model", "future-upstream-model"},
 		{"", ""},
 	} {
-		if got := mapModel(tc.input); got != tc.want { t.Errorf("mapModel(%q)=%q want %q", tc.input, got, tc.want) }
+		if got := mapModel(tc.input); got != tc.want {
+			t.Errorf("mapModel(%q)=%q want %q", tc.input, got, tc.want)
+		}
 	}
 }

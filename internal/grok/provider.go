@@ -11,7 +11,7 @@ import (
 )
 
 // ProviderBuild is the only Grok plane this gateway serves: the Build (OAuth
-// CLI) upstream. The legacy website and developer-console planes were retired.
+// CLI) upstream. All retired provider planes have been removed.
 const ProviderBuild = "build"
 
 const modelSnapshotTTL = 6 * time.Hour

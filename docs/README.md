@@ -7,7 +7,7 @@
 | `architecture.md` | 包结构、请求链路、模型发现与存储 |
 | `deployment.md` | 部署、验证、监控与排障 |
 
-Grok 支持面仅为 Build OAuth CLI：设备登录、Claude Messages、OpenAI Chat Completions、Responses 及 stored Response 子资源、模型发现、账单/限速状态，以及 `/api/grok/tools/v1/{models,responses}` 工具页。
+Grok 支持面仅为 Build OAuth CLI：设备登录、Claude Messages、OpenAI Chat Completions、Responses 及 stored Response 子资源、模型发现、账单/限速状态。
 
 ## 脱敏约定
 

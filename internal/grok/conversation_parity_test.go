@@ -36,7 +36,7 @@ func parityText(text string) string {
 func parityRun(t *testing.T, stream string, stop ...string) (string, chatOutcome) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	result := (&Handler{}).streamConsoleChatHolding(rec, &ChatCompletionsRequest{Model: "grok-4.6", Stream: true, Stop: stop}, strings.NewReader(stream), nil)
+	result := (&Handler{}).streamBuildChatHolding(rec, &ChatCompletionsRequest{Model: "grok-4.6", Stream: true, Stop: stop}, strings.NewReader(stream), nil)
 	return rec.Body.String(), result
 }
 
@@ -212,7 +212,7 @@ func TestParityToolsAreVisibleBeforeStreamCompletes(t *testing.T) {
 	w := &parityNoticeWriter{ResponseRecorder: httptest.NewRecorder(), notice: make(chan struct{})}
 	done := make(chan chatOutcome, 1)
 	go func() {
-		done <- (&Handler{}).streamConsoleChatHolding(w, &ChatCompletionsRequest{Model: "grok-4.6"}, reader, nil)
+		done <- (&Handler{}).streamBuildChatHolding(w, &ChatCompletionsRequest{Model: "grok-4.6"}, reader, nil)
 	}()
 	_, _ = io.WriteString(writer, parityItem("response.output_item.added", "fc_a", "call_a", "Read", ""))
 	select {
@@ -258,7 +258,7 @@ func TestParityReasoningAndSearchBlocks(t *testing.T) {
 
 func TestParityClientSearchToolsRemainClientTools(t *testing.T) {
 	h := &Handler{}
-	spec, _ := ResolveModel("console/grok-4.3")
+	spec, _ := ResolveModel("grok-4.6")
 	request := &ChatCompletionsRequest{Messages: []ChatMessage{{Role: "user", Content: "hello"}}, Tools: []ToolDef{{Type: "function", Function: map[string]interface{}{"name": "web_search", "parameters": map[string]interface{}{"type": "object"}}}}}
 	payload, err := h.responsesPayloadFromChat(spec, request, false)
 	if err != nil {
@@ -326,7 +326,7 @@ func TestParityNonStreamingDoesNotLeakReasoningAndPreservesAllMessages(t *testin
 		}
 		data, _ := json.Marshal(map[string]interface{}{"status": "completed", "output": output})
 		rec := httptest.NewRecorder()
-		result := (&Handler{}).collectConsoleChat(rec, &ChatCompletionsRequest{Model: "grok-4.6"}, bytes.NewReader(data))
+		result := (&Handler{}).collectBuildChat(rec, &ChatCompletionsRequest{Model: "grok-4.6"}, bytes.NewReader(data))
 		if onlyReasoning {
 			if result.Err == nil {
 				t.Fatal("reasoning-only completion accepted")

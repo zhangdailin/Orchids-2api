@@ -108,12 +108,6 @@ func readResponseSSE(reader io.Reader, consume func(string, string) error) error
 	})
 }
 
-// errGrokWebAntiBot marks a Web-plane anti-bot rejection that arrived inside an
-// otherwise successful stream (upstream code 7 / "anti-bot"). It is a distinct
-// condition from a transport failure: the request looked fine and the upstream
-// refused the session, so the clearance behind it is no longer trustworthy.
-var errGrokWebAntiBot = errors.New("grok web anti-bot rejection")
-
 func responseFailure(ev map[string]interface{}) error {
 	value := ev["error"]
 	if response, ok := ev["response"].(map[string]interface{}); ok {
@@ -130,44 +124,20 @@ func responseFailure(ev map[string]interface{}) error {
 	if message == "" {
 		message = streamString(ev["message"])
 	}
-	if isAntiBotFailure(detail, message) {
-		if message == "" {
-			message = "the upstream rejected the session as automated"
-		}
-		return fmt.Errorf("%w: %s", errGrokWebAntiBot, message)
-	}
 	if message != "" {
 		return fmt.Errorf("%s", message)
 	}
 	return fmt.Errorf("upstream response failed")
 }
 
-// isAntiBotFailure recognises the upstream's anti-bot payload: numeric code 7,
-// or a message that names it.
-func isAntiBotFailure(detail map[string]interface{}, message string) bool {
-	if detail != nil {
-		switch typed := detail["code"].(type) {
-		case float64:
-			if int(typed) == 7 {
-				return true
-			}
-		case string:
-			if strings.TrimSpace(typed) == "7" {
-				return true
-			}
-		}
-	}
-	return strings.Contains(strings.ToLower(message), "anti-bot")
-}
-
-// streamConsoleChatHolding is the console streaming entry with the quality hold
+// streamBuildChatHolding is the Build streaming entry with the quality hold
 // attached.
 //
 // While a hold is active nothing is written to the client: the deferred writer
 // buffers frames, and the classifier decides after every content event whether
 // to release them (deliver), keep waiting, or drop them and let the caller retry
 // on another account (withhold). A nil hold keeps the plain streaming path.
-func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader, hold *consoleQualityHold) (outcome chatOutcome) {
+func (h *Handler) streamBuildChatHolding(w http.ResponseWriter, req *ChatCompletionsRequest, body io.Reader, hold *buildQualityHold) (outcome chatOutcome) {
 	outcomeStarted := time.Now()
 	if hold != nil {
 		// The hold reads this stream's own accounting, so point it at the outcome
@@ -376,7 +346,7 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 		}
 		var ev map[string]interface{}
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			return fmt.Errorf("console stream parse error: %w", err)
+			return fmt.Errorf("Build stream parse error: %w", err)
 		}
 		kind := firstNonEmpty(interfaceString(ev["type"]), event)
 		if kind == "error" || kind == "response.failed" {
@@ -574,7 +544,7 @@ func (h *Handler) streamConsoleChatHolding(w http.ResponseWriter, req *ChatCompl
 		return
 	}
 	if err != nil && err != io.EOF {
-		fail(fmt.Errorf("console stream read error: %w", err))
+		fail(fmt.Errorf("Build stream read error: %w", err))
 		return
 	}
 	if !terminal {

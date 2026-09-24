@@ -30,8 +30,6 @@ func TestEstimateCostUsesOfficialRates(t *testing.T) {
 		{"family suffix", "grok-4.6-0309-reasoning", "grok-4.6", 20000, 5000, 60000},
 		// Source prefixes are stripped before resolution.
 		{"build prefix", "build/grok-4.6", "grok-4.6", 20000, 5000, 60000},
-		{"web prefix", "web/grok-4.5", "grok-4.5", 20000, 3000, 60000},
-		{"console prefix", "console/grok-4.3", "grok-4.3", 12500, 2000, 25000},
 		{"grok_build prefix", "grok_build/grok-code-fast", "grok-build-0.1", 10000, 2000, 20000},
 		{"case and space", "  Grok-4.6  ", "grok-4.6", 20000, 5000, 60000},
 	}

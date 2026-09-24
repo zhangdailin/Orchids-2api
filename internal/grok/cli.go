@@ -25,7 +25,7 @@ import (
 
 // Build CLI (cli-chat-proxy.grok.com) upstream. It speaks the standard OpenAI
 // Responses protocol authenticated with a Bearer OAuth access token, unlike the
-// retired website or developer-console protocols.
+// retired website or retired developer plane protocols.
 
 const (
 	defaultCLIBaseURL = "https://cli-chat-proxy.grok.com/v1"
@@ -127,9 +127,7 @@ func (c *CLIClient) clientIdentifier() string {
 
 // doResponses issues a standard Responses request to the CLI proxy. It ensures a
 // valid access token (refreshing if needed) then POSTs the payload, returning
-// the raw upstream response (SSE or JSON) for the caller to stream/collect. A
-// confirmed Cloudflare challenge invalidates the egress clearance and retries at
-// most once.
+// the raw upstream response (SSE or JSON) for the caller to stream or collect.
 func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path string, payload map[string]interface{}) (*http.Response, error) {
 	if acc == nil {
 		return nil, fmt.Errorf("empty cli account")
@@ -139,7 +137,6 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 	if err := waitScopedRateLimit(ctx, ProviderBuild, acc.OAuthAccessToken, modelID, c.cfg.GrokRequestsPerSecond(ProviderBuild)); err != nil {
 		return nil, err
 	}
-	challengeRetried := false
 	authRetried := false
 	for {
 		resp, err := c.doResponsesOnceAt(ctx, acc, path, payload)
@@ -187,16 +184,7 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 		}
 
 		kind := ClassifyUpstreamResponse(resp.StatusCode, resp.Header, raw)
-		if kind == UpstreamErrorCloudflareChallenge {
-			recordUpstreamChallenge("cloudflare")
-			if c.egress != nil && c.egress.Enabled() && !challengeRetried {
-				challengeRetried = true
-				continue
-			}
-			if c.egress != nil && c.egress.Enabled() {
-				c.egress.FeedbackAffinityOutcome("cli", cliEgressAffinity(acc), egress.OutcomeChallenge)
-			}
-		} else if kind == UpstreamErrorGenericForbidden {
+		if kind == UpstreamErrorGenericForbidden {
 			recordGenericForbidden()
 		}
 
@@ -332,34 +320,6 @@ func buildClientIdentifier(c *CLIClient) string {
 	return buildSessionUUID("agent:grok-shell")
 }
 
-// doFallbackRequest sends a request to the direct xAI API with the same
-// refreshed OAuth credential and fail-closed egress policy as the Build path.
-func (c *CLIClient) doFallbackRequest(ctx context.Context, acc *store.Account, method, path string, payload map[string]interface{}) (*http.Response, error) {
-	if c == nil {
-		return nil, fmt.Errorf("grok cli client not configured")
-	}
-	var body []byte
-	headers := http.Header{}
-	if payload != nil {
-		var err error
-		body, err = json.Marshal(payload)
-		if err != nil {
-			return nil, err
-		}
-		headers.Set("Content-Type", "application/json")
-	}
-	base := c.cfg.GrokCLIFallbackBaseURLOrDefault()
-	resp, err := c.request(ctx, acc, method, strings.TrimRight(base, "/")+"/"+strings.TrimLeft(strings.TrimSpace(path), "/"), body, headers)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return resp, nil
-	}
-	raw, responseHeaders := readBoundedResponse(resp)
-	return nil, newCLIUpstreamError(resp.StatusCode, responseHeaders, raw)
-}
-
 // doResponseResource forwards GET/DELETE for a stored Build Responses
 // resource. Non-2xx statuses are returned intact so the downstream API can
 // preserve the upstream resource semantics.
@@ -387,8 +347,7 @@ func (c *CLIClient) doResponseResource(ctx context.Context, acc *store.Account, 
 
 // VerifyAccount checks a Build CLI OAuth account by minting a token and probing
 // the CLI proxy models endpoint. Returns an upstream status string ("401",
-// "403", ...) alongside the error so callers can mark the account. A confirmed
-// Cloudflare challenge invalidates egress clearance and retries once.
+// "403", ...) alongside the error so callers can mark the account.
 func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (string, error) {
 	if c == nil || c.oauth == nil {
 		return "", fmt.Errorf("grok cli client not configured")
@@ -396,7 +355,6 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 	if acc == nil {
 		return "", fmt.Errorf("missing cli account")
 	}
-	challengeRetried := false
 	for {
 		resp, err := c.request(ctx, acc, http.MethodGet, c.baseURL()+"/models", nil, nil)
 		if err != nil {
@@ -411,12 +369,6 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 		}
 		raw, headerCopy := readBoundedResponse(resp)
 
-		kind := ClassifyUpstreamResponse(resp.StatusCode, resp.Header, raw)
-		if kind == UpstreamErrorCloudflareChallenge && c.egress != nil && c.egress.Enabled() && !challengeRetried {
-			challengeRetried = true
-			recordUpstreamChallenge("cloudflare")
-			continue
-		}
 		return classifyAccountStatusFromHTTP(resp.StatusCode), newCLIUpstreamError(resp.StatusCode, headerCopy, raw)
 	}
 }
@@ -614,7 +566,6 @@ func (c *CLIClient) doCLIRequest(ctx context.Context, acc *store.Account, req *h
 		return nil, fmt.Errorf("grok cli egress unavailable: %w", err)
 	}
 	// Build is a CLI identity. Its egress lease intentionally carries no
-	// browser identity or clearance state, so never attach either here.
 	resp, err := lease.Do(req)
 	if err != nil {
 		c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeTransportError)
