@@ -371,7 +371,7 @@ func listCachedEntries(mediaType string) ([]cacheEntry, int64, error) {
 			continue
 		}
 		name := sanitizeCachedFilename(item.Name())
-		if name == "" {
+		if name == "" || strings.HasPrefix(name, mediaInputFilePrefix) {
 			continue
 		}
 		info, err := item.Info()
@@ -407,7 +407,7 @@ func parseCacheDeleteTarget(req cacheDeleteItemRequest) (string, string, bool) {
 	if name == "" {
 		name = sanitizeCachedFilename(strings.TrimSpace(req.FileName))
 	}
-	if validCacheMediaType(mediaType) && name != "" {
+	if validCacheMediaType(mediaType) && name != "" && !strings.HasPrefix(name, mediaInputFilePrefix) {
 		return mediaType, name, true
 	}
 
@@ -419,7 +419,7 @@ func parseCacheDeleteTarget(req cacheDeleteItemRequest) (string, string, bool) {
 		rawPath = "/grok/v1/files/" + strings.TrimLeft(rawPath, "/")
 	}
 	mt, fn, ok := parseFilesPath(rawPath)
-	if !ok {
+	if !ok || strings.HasPrefix(fn, mediaInputFilePrefix) {
 		return "", "", false
 	}
 	return mt, fn, true
@@ -601,14 +601,11 @@ func (h *Handler) HandleAdminCacheClear(w http.ResponseWriter, r *http.Request) 
 		}
 		removedFiles += len(list)
 		removedBytes += size
-		dir := filepath.Join(cacheBaseDir, typ)
-		if err := os.RemoveAll(dir); err != nil {
-			writeGrokError(w, http.StatusInternalServerError, "failed to clear cache")
-			return
-		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			writeGrokError(w, http.StatusInternalServerError, "failed to recreate cache dir")
-			return
+		for _, entry := range list {
+			if err := os.Remove(filepath.Join(cacheBaseDir, typ, entry.Name)); err != nil && !os.IsNotExist(err) {
+				writeGrokError(w, http.StatusInternalServerError, "failed to clear cache")
+				return
+			}
 		}
 	}
 

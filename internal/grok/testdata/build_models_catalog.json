@@ -1,0 +1,100 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "grok-4.7",
+      "object": "model",
+      "owned_by": "xAI",
+      "model": "grok-4.7",
+      "model_family": "xai",
+      "name": "Grok 4.7",
+      "description": "SpaceXAI's latest frontier model",
+      "context_window": 500000,
+      "auto_compact_threshold_percent": 80,
+      "system_prompt_label": "Grok 4.7",
+      "max_completion_tokens": 1000000,
+      "api_backend": "responses",
+      "reasoning_effort": "high",
+      "supports_reasoning_effort": true,
+      "reasoning_efforts": [
+        {
+          "id": "xhigh",
+          "value": "xhigh",
+          "label": "Extra High",
+          "description": "Maximum reasoning for the hardest tasks.",
+          "default": false
+        },
+        {
+          "id": "high",
+          "value": "high",
+          "label": "High",
+          "description": "Thorough reasoning and quality. Recommended.",
+          "default": true
+        },
+        {
+          "id": "medium",
+          "value": "medium",
+          "label": "Medium",
+          "description": "Strong quality with a faster turnaround.",
+          "default": false
+        },
+        {
+          "id": "low",
+          "value": "low",
+          "label": "Low",
+          "description": "Fastest responses. Best for simple tasks.",
+          "default": false
+        }
+      ],
+      "supports_backend_search": true,
+      "compactions_remaining": 1,
+      "compaction_at_tokens": true
+    },
+    {
+      "id": "grok-4.6",
+      "object": "model",
+      "owned_by": "xAI",
+      "model": "grok-4.6",
+      "model_family": "xai",
+      "name": "Grok 4.6",
+      "context_window": 500000,
+      "auto_compact_threshold_percent": 80,
+      "system_prompt_label": "Grok 4.6",
+      "api_backend": "responses",
+      "reasoning_effort": "high",
+      "supports_reasoning_effort": true,
+      "reasoning_efforts": [
+        {
+          "id": "xhigh",
+          "value": "xhigh",
+          "label": "Extra High",
+          "description": "Highest effort and reasoning level",
+          "default": false
+        },
+        {
+          "id": "high",
+          "value": "high",
+          "label": "High",
+          "description": "Higher implementation quality with extensive reasoning",
+          "default": true
+        },
+        {
+          "id": "medium",
+          "value": "medium",
+          "label": "Medium",
+          "description": "Balanced effort with standard implementation and testing",
+          "default": false
+        },
+        {
+          "id": "low",
+          "value": "low",
+          "label": "Low",
+          "description": "Quick, fast implementations",
+          "default": false
+        }
+      ],
+      "compactions_remaining": 1,
+      "compaction_at_tokens": true
+    }
+  ]
+}

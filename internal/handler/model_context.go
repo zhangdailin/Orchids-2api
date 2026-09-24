@@ -89,6 +89,23 @@ func (h *Handler) observedModelContextWindows(ctx context.Context) *modelContext
 		if acc == nil {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") {
+			for _, profile := range acc.GrokModelCatalog {
+				key := contextKey("grok", profile.ModelID)
+				// A public route may select any eligible account, so publish the
+				// smallest observed positive budget rather than over-promising.
+				if profile.ContextWindow > 0 {
+					if old := w.input[key]; old == 0 || profile.ContextWindow < old {
+						w.input[key] = profile.ContextWindow
+					}
+				}
+				if profile.MaxCompletionTokens > 0 {
+					if old := w.output[key]; old == 0 || profile.MaxCompletionTokens < old {
+						w.output[key] = profile.MaxCompletionTokens
+					}
+				}
+			}
+		}
 		switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
 		case "qoder":
 			// The Qoder catalog declares max_input_tokens per model and the
@@ -109,10 +126,9 @@ func (h *Handler) observedModelContextWindows(ctx context.Context) *modelContext
 		}
 	}
 
-	// Grok is deliberately absent here: its window is not account-scoped and is
-	// already published by the static table the Codex catalog uses, so
-	// modelContextWindow reads it from that same table. Adding it to these maps
-	// would be a second copy that could drift.
+	// Dynamic Grok catalog observations above take precedence. The static table
+	// remains a compatibility fallback when an older account snapshot has no
+	// profile metadata.
 	return w
 }
 
@@ -149,6 +165,9 @@ func grokDeclaredContextWindow(modelID string) int {
 // modelContextWindow resolves the reported window for one route row. It answers
 // zero when nothing was observed, and the caller omits the field.
 func (h *Handler) modelContextWindow(ctx context.Context, windows *modelContextWindows, channel, modelID, publicID string) (int, int) {
+	if input, output := windows.lookup(channel, modelID, publicID); input > 0 || output > 0 {
+		return input, output
+	}
 	if strings.EqualFold(strings.TrimSpace(channel), "grok") {
 		declared := grokDeclaredContextWindow(modelID)
 		if declared == 0 {

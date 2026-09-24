@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -298,6 +299,29 @@ func TestCLIOAuthAccessTokenPersistsToStore(t *testing.T) {
 	}
 	if strings.Contains(got.OAuthAccessToken, idToken) || strings.Contains(got.OAuthRefreshToken, idToken) {
 		t.Fatal("id_token must not be persisted as a credential")
+	}
+}
+
+func TestCLIClientFetchModelCatalogParsesRealBuildFixture(t *testing.T) {
+	catalogBody, err := os.ReadFile("testdata/build_models_catalog.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(catalogBody)
+	}))
+	defer server.Close()
+	client := NewCLIClient(&config.Config{GrokCLIBaseURL: server.URL})
+	catalog, err := client.FetchModelCatalog(context.Background(), &store.Account{OAuthAccessToken: "active-access", OAuthExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog) != 2 || catalog[0].ModelID != "grok-4.7" || catalog[1].ModelID != "grok-4.6" {
+		t.Fatalf("catalog=%+v", catalog)
+	}
+	profile := catalog[0]
+	if strings.Join(profile.ReasoningEfforts, ",") != "xhigh,high,medium,low" || profile.DefaultReasoningEffort != "high" || !profile.SupportsReasoningEffort || profile.ContextWindow != 500000 || profile.MaxCompletionTokens != 1000000 || !profile.SupportsBackendSearch {
+		t.Fatalf("grok-4.7 profile=%+v", profile)
 	}
 }
 

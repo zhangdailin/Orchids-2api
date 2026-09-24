@@ -25,10 +25,10 @@ func TestCLIHeadersUseOfficialBuildIdentity(t *testing.T) {
 	if got := headers.Get("x-grok-client-identifier"); got != "grok-shell" {
 		t.Fatalf("x-grok-client-identifier=%q", got)
 	}
-	if got := headers.Get("x-grok-client-version"); got != "1.0.4" {
+	if got := headers.Get("x-grok-client-version"); got != "1.0.40" {
 		t.Fatalf("x-grok-client-version=%q", got)
 	}
-	if got := headers.Get("User-Agent"); got != "grok-shell/1.0.4 (linux; x86_64)" {
+	if got := headers.Get("User-Agent"); got != "grok-shell/1.0.40 (linux; x86_64)" {
 		t.Fatalf("User-Agent=%q", got)
 	}
 }

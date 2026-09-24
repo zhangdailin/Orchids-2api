@@ -30,6 +30,7 @@ import (
 	"orchids-api/internal/grok"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/opsagg"
 	"orchids-api/internal/puter"
 	"orchids-api/internal/qoder"
@@ -850,6 +851,7 @@ func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
 	}
 	acc.QuotaResetAt = existing.QuotaResetAt
 	acc.GrokModels = append([]string(nil), existing.GrokModels...)
+	acc.GrokModelCatalog = modelcatalog.CloneProfiles(existing.GrokModelCatalog)
 	acc.GrokModelsSyncedAt = existing.GrokModelsSyncedAt
 	acc.GrokBilling = existing.GrokBilling
 	acc.GrokRateLimits = existing.GrokRateLimits

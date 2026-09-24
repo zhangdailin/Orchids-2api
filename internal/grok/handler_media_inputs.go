@@ -9,9 +9,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +33,14 @@ const (
 
 var mediaInputQuotaMu sync.Mutex
 var mediaInputReservedBytes int64
+
+var (
+	errAdminMediaTooLarge  = errors.New("media input exceeds 20 MiB")
+	errAdminMediaBlocked   = errors.New("media input URL is not allowed")
+	adminMediaInputFetcher = fetchAdminMediaInput
+)
+
+const maxAdminMediaImportURLBytes = 8192
 
 func (h *Handler) HandleMediaInputs(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodPost) {
@@ -536,8 +546,12 @@ func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	fileHeader := files[0]
-	if fileHeader.Size <= 0 || fileHeader.Size > maxMediaInputBytes {
-		writeJSONStatus(w, http.StatusRequestEntityTooLarge, adminMediaError("media_too_large", "media input exceeds 20 MiB"))
+	if fileHeader.Size <= 0 {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMedia", "media input cannot be empty"))
+		return
+	}
+	if fileHeader.Size > maxMediaInputBytes {
+		writeJSONStatus(w, http.StatusRequestEntityTooLarge, adminMediaError("mediaTooLarge", "media input exceeds 20 MiB"))
 		return
 	}
 	file, err := fileHeader.Open()
@@ -547,18 +561,128 @@ func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request)
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxMediaInputBytes+1))
-	if err != nil || len(data) == 0 || len(data) > maxMediaInputBytes {
-		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_media", "invalid media input"))
+	if err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMedia", "failed to read media input"))
 		return
 	}
-	kind, mimeType, err := detectMediaInput(data, fileHeader.Header.Get("Content-Type"))
-	if err != nil {
-		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalid_media", err.Error()))
+	if len(data) == 0 {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMedia", "media input cannot be empty"))
 		return
+	}
+	if len(data) > maxMediaInputBytes {
+		writeJSONStatus(w, http.StatusRequestEntityTooLarge, adminMediaError("mediaTooLarge", "media input exceeds 20 MiB"))
+		return
+	}
+	input, err := h.saveAdminMediaInput(r.Context(), data, fileHeader.Header.Get("Content-Type"))
+	if err != nil {
+		status, code, message := adminMediaSaveError(err)
+		writeJSONStatus(w, status, adminMediaError(code, message))
+		return
+	}
+	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{"data": adminMediaInputJSON(input)})
+}
+
+// HandleAdminMediaInputImport downloads a remote input without using environment
+// proxies. DNS is resolved by the public-only dialer and each redirect is checked
+// again, preventing proxy bypass and DNS-rebinding access to internal services.
+func (h *Handler) HandleAdminMediaInputImport(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	if h == nil || h.lb == nil || h.lb.Store == nil {
+		writeJSONStatus(w, http.StatusServiceUnavailable, adminMediaError("serviceUnavailable", "media input store is not configured"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminMediaImportURLBytes+1024)
+	var request struct {
+		URL string `json:"url"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&request); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidRequest", "invalid JSON request"))
+		return
+	}
+	rawURL := strings.TrimSpace(request.URL)
+	if rawURL == "" || len(rawURL) > maxAdminMediaImportURLBytes {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMediaURL", "media URL is required and must not exceed 8192 bytes"))
+		return
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.User != nil || parsed.Hostname() == "" ||
+		(!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) ||
+		(parsed.Port() != "" && parsed.Port() != "80" && parsed.Port() != "443") {
+		writeJSONStatus(w, http.StatusBadRequest, adminMediaError("invalidMediaURL", "only credential-free HTTP/HTTPS URLs on ports 80 or 443 are supported"))
+		return
+	}
+	data, declared, err := adminMediaInputFetcher(r.Context(), rawURL)
+	if err != nil {
+		switch {
+		case errors.Is(err, errAdminMediaTooLarge):
+			writeJSONStatus(w, http.StatusRequestEntityTooLarge, adminMediaError("mediaTooLarge", errAdminMediaTooLarge.Error()))
+		case errors.Is(err, errAdminMediaBlocked), errors.Is(err, errRemoteFetchBlocked):
+			writeJSONStatus(w, http.StatusBadRequest, adminMediaError("mediaURLBlocked", "media URL is not allowed"))
+		default:
+			writeJSONStatus(w, http.StatusBadGateway, adminMediaError("mediaFetchFailed", "failed to download media input"))
+		}
+		return
+	}
+	input, err := h.saveAdminMediaInput(r.Context(), data, declared)
+	if err != nil {
+		status, code, message := adminMediaSaveError(err)
+		writeJSONStatus(w, status, adminMediaError(code, message))
+		return
+	}
+	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{"data": adminMediaInputJSON(input)})
+}
+
+func fetchAdminMediaInput(ctx context.Context, rawURL string) ([]byte, string, error) {
+	if _, err := checkRemoteFetchTarget(ctx, rawURL, false); err != nil {
+		return nil, "", fmt.Errorf("%w: %v", errAdminMediaBlocked, err)
+	}
+	client := newRemoteFetchClient(20*time.Second, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	request.Header.Set("Accept", "image/*, video/*")
+	request.Header.Set("User-Agent", "orchids-media-importer/1.0")
+	response, err := client.Do(request)
+	if err != nil {
+		if errors.Is(err, errRemoteFetchBlocked) {
+			return nil, "", fmt.Errorf("%w: %v", errAdminMediaBlocked, err)
+		}
+		return nil, "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("remote server returned HTTP %d", response.StatusCode)
+	}
+	if response.ContentLength > maxMediaInputBytes {
+		return nil, "", errAdminMediaTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxMediaInputBytes+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) > maxMediaInputBytes {
+		return nil, "", errAdminMediaTooLarge
+	}
+	return data, response.Header.Get("Content-Type"), nil
+}
+
+func (h *Handler) saveAdminMediaInput(ctx context.Context, data []byte, declaredMIME string) (*store.StoredMediaInput, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("invalid media: media input cannot be empty")
+	}
+	if len(data) > maxMediaInputBytes {
+		return nil, errAdminMediaTooLarge
+	}
+	kind, mimeType, err := detectMediaInput(data, declaredMIME)
+	if err != nil {
+		return nil, fmt.Errorf("invalid media: %w", err)
 	}
 	if !reserveMediaInputBytes(int64(len(data))) {
-		writeJSONStatus(w, http.StatusInsufficientStorage, adminMediaError("media_storage_full", "media input storage is full"))
-		return
+		return nil, fmt.Errorf("media storage full")
 	}
 	reserved := true
 	defer func() {
@@ -568,13 +692,11 @@ func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request)
 	}()
 	id, err := newMediaInputID()
 	if err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, adminMediaError("internal_error", "failed to allocate media input"))
-		return
+		return nil, fmt.Errorf("allocate media input: %w", err)
 	}
 	name, err := h.cacheMediaInputBytes(id, kind, data, mimeType)
 	if err != nil {
-		writeJSONStatus(w, http.StatusInternalServerError, adminMediaError("internal_error", "failed to cache media input"))
-		return
+		return nil, fmt.Errorf("cache media input: %w", err)
 	}
 	contentPath := filepath.Join(cacheBaseDir, kind, name)
 	now := time.Now().UTC()
@@ -582,13 +704,27 @@ func (h *Handler) HandleAdminMediaInputs(w http.ResponseWriter, r *http.Request)
 		ID: id, OwnerHash: mediaInputAdminOwner, Kind: kind, MIMEType: mimeType,
 		ContentPath: contentPath, SizeBytes: int64(len(data)), CreatedAt: now,
 	}
-	if err := h.lb.Store.SaveStoredMediaInput(r.Context(), input, mediaInputTTL); err != nil {
+	if err := h.lb.Store.SaveStoredMediaInput(ctx, input, mediaInputTTL); err != nil {
 		_ = os.Remove(contentPath)
-		writeJSONStatus(w, http.StatusServiceUnavailable, adminMediaError("service_unavailable", "failed to persist media input"))
-		return
+		return nil, fmt.Errorf("persist media input: %w", err)
 	}
 	reserved = false
-	writeJSONStatus(w, http.StatusCreated, map[string]interface{}{"data": adminMediaInputJSON(input)})
+	return input, nil
+}
+
+func adminMediaSaveError(err error) (int, string, string) {
+	switch {
+	case errors.Is(err, errAdminMediaTooLarge):
+		return http.StatusRequestEntityTooLarge, "mediaTooLarge", errAdminMediaTooLarge.Error()
+	case strings.HasPrefix(err.Error(), "invalid media:"):
+		return http.StatusBadRequest, "invalidMedia", strings.TrimSpace(strings.TrimPrefix(err.Error(), "invalid media:"))
+	case strings.Contains(err.Error(), "storage full"):
+		return http.StatusInsufficientStorage, "mediaStorageFull", "media input storage is full"
+	case strings.HasPrefix(err.Error(), "persist media input:"):
+		return http.StatusServiceUnavailable, "serviceUnavailable", "failed to persist media input"
+	default:
+		return http.StatusInternalServerError, "internalError", "failed to save media input"
+	}
 }
 
 // HandleAdminMediaInputResource serves GET/DELETE for a management-plane input.

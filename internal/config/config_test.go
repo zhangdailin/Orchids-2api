@@ -36,6 +36,12 @@ func TestConfigDefaults(t *testing.T) {
 	if cfg.MediaDir != "data"+string(filepath.Separator)+"tmp" {
 		t.Fatalf("MediaDir=%q", cfg.MediaDir)
 	}
+	if got := cfg.GrokCLIClientVersionOrDefault(); got != "1.0.40" {
+		t.Fatalf("GrokCLIClientVersionOrDefault()=%q", got)
+	}
+	if got := cfg.GrokCLIUserAgentOrDefault(); got != "grok-shell/1.0.40 (linux; x86_64)" {
+		t.Fatalf("GrokCLIUserAgentOrDefault()=%q", got)
+	}
 }
 
 // A conversation binding must outlive an ordinary working session. Thirty

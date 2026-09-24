@@ -53,6 +53,7 @@ test('stream stores interleaved reasoning and partial failure exactly once', asy
     body += failed ? 'data: {"type":"response.failed","response":{"error":{"message":"interrupted"}}}\n\n' : 'data: [DONE]\n\n';
     const session = {messages:[]};
     const ctx = vm.createContext({ session, AbortController,TextDecoder,fetch:async()=>new Response(body), chatState:{modelsLoaded:true,model:'test-model'},
+      toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:headers=>headers,
       setChatSendButtonState(){},updateChatStatus(){},buildResponsesPayload:()=>({}),handleUnauthorized:()=>false,
       requestAnimationFrame:()=>1,cancelAnimationFrame(){},trimChatSessionMessages:()=>0,saveChatSessions(){},renderChatSessions(){},
     });
@@ -137,6 +138,7 @@ test('Grok capability fallback fails open for invalid and failed availability re
 function streamContext(session, body, statuses) {
   const request = source.slice(source.indexOf('  async function requestChatCompletion('), source.indexOf('  async function retryAssistantMessage('));
   const ctx = vm.createContext({ session, AbortController, TextDecoder, fetch:async()=>new Response(body), chatState:{modelsLoaded:true,model:'test-model'},
+    toolInferencePrefix:()=>'/grok/v1', toolAuthHeaders:headers=>headers,
     setChatSendButtonState(){}, updateChatStatus:(text,type)=>statuses.push([text,type]), buildResponsesPayload:()=>({}), handleUnauthorized:()=>false,
     requestAnimationFrame:()=>1, cancelAnimationFrame(){}, trimChatSessionMessages:()=>0, saveChatSessions(){}, renderChatSessions(){} });
   vm.runInContext(request, ctx);
@@ -215,6 +217,8 @@ test('video operations use their matching API and preserve native request fields
     let sent;
     const values = {videoAction:action,videoRatio:'16:9',videoReferenceURL:'',videoReferenceVoice:'',videoSourceURL:'https://example.com/source.mp4'};
     const ctx = vm.createContext({chatState:{routes:[{id:'grok-imagine-video',provider:'console'}]},
+      toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:headers=>headers,
+      stagedVideoInput:async(_id,url)=>({url}), videoState:{referenceFileID:'',sourceFileID:''},
       document:{getElementById:id=>({value:values[id]})},handleUnauthorized:()=>false,
       fetch:async(path,options)=>{sent={path,body:JSON.parse(options.body)};return {ok:true,json:async()=>({request_id:'video_1'})};},
     });
@@ -325,4 +329,128 @@ test('JSZip is loaded only when the image batch download is used', () => {
   assert.doesNotMatch(template, /<script[^>]+jszip/i, 'JSZip must not block the initial page load');
   assert.match(imagine, /function loadJSZip\(\)/, 'the image downloader has no lazy JSZip loader');
   assert.match(imagine, /await loadJSZip\(\)/, 'batch download does not await the lazy JSZip loader');
+});
+
+
+test('chat persistence is scoped, debounced, and evicts oldest sessions to limits', () => {
+  const start = source.indexOf('  const chatSessionLimit = 50;');
+  const end = source.indexOf('  function activeChatSession()', start);
+  const writes = [];
+  const timers = [];
+  const sessions = Array.from({ length: 55 }, (_, i) => ({ id: `s${i}`, updatedAt: i, messages: [{ role: 'user', content: 'x'.repeat(100) }] }));
+  const context = vm.createContext({
+    chatState: { sessions, activeId: 's54', model: 'm', persistenceTimer: null },
+    chatStorageKey: 'history', toolHistoryScope: () => 'key-fingerprint',
+    localStorage: { setItem: (key, value) => writes.push([key, value]), getItem: () => null },
+    TextEncoder, setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
+    updateChatStatus() {}, createChatSession: () => ({ id: 'new', messages: [] }),
+    createPromptCacheKey: () => 'cache', normalizeAssistantMessage: value => value,
+  });
+  vm.runInContext(source.slice(start, end), context);
+  context.saveChatSessions(); context.saveChatSessions();
+  assert.equal(writes.length, 0, 'writes must be debounced');
+  timers.at(-1)();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0][0], 'history:key-fingerprint');
+  const stored = JSON.parse(writes[0][1]);
+  assert.equal(stored.sessions.length, 50);
+  assert.equal(stored.sessions[0].id, 's54');
+  assert.equal(stored.sessions.at(-1).id, 's5');
+  assert.ok(new TextEncoder().encode(writes[0][1]).byteLength <= 4 * 1024 * 1024);
+});
+
+test('chat persistence evicts oldest sessions until payload is about 4 MiB', () => {
+  const start = source.indexOf('  const chatSessionLimit = 50;');
+  const end = source.indexOf('  function activeChatSession()', start);
+  const huge = '界'.repeat(800000);
+  const context = vm.createContext({
+    chatState: { sessions: Array.from({length: 8}, (_, i) => ({id:`s${i}`, updatedAt:i, messages:[{role:'user',content:huge}]})), activeId:'s7', model:'m', persistenceTimer:null },
+    chatStorageKey:'history', toolHistoryScope:()=> 'admin', TextEncoder,
+    localStorage:{setItem(){},getItem(){return null;}}, setTimeout, clearTimeout,
+    updateChatStatus(){}, createChatSession:()=>({id:'new',messages:[]}), createPromptCacheKey:()=> 'cache', normalizeAssistantMessage:v=>v,
+  });
+  vm.runInContext(source.slice(start, end), context);
+  const bounded = context.boundedChatPayload();
+  assert.ok(new TextEncoder().encode(bounded.payload).byteLength <= 4 * 1024 * 1024);
+  assert.ok(bounded.sessions.length < 8);
+  assert.equal(bounded.sessions[0].id, 's7');
+});
+
+test('stale aborted SSE cannot overwrite a newer request', async () => {
+  const request = source.slice(source.indexOf('  async function requestChatCompletion('), source.indexOf('  async function retryAssistantMessage('));
+  let releaseOld;
+  let calls = 0;
+  const oldRead = new Promise(resolve => { releaseOld = resolve; });
+  const oldResponse = { ok:true, body:{ getReader:()=>({ read:()=>oldRead }) } };
+  const freshBody = 'data: '+JSON.stringify({type:'response.output_text.delta',delta:'new'})+'\n\ndata: [DONE]\n\n';
+  const session = {messages:[]};
+  const state = {modelsLoaded:true, model:'m', requestGeneration:0};
+  const ctx = vm.createContext({ session, AbortController, TextDecoder, chatState:state,
+    fetch:async()=> ++calls === 1 ? oldResponse : new Response(freshBody),
+    toolInferencePrefix:()=>'/grok/v1',toolAuthHeaders:h=>h,
+    setChatSendButtonState(){},updateChatStatus(){},buildResponsesPayload:()=>({}),handleUnauthorized:()=>false,
+    requestAnimationFrame:()=>1,cancelAnimationFrame(){},trimChatSessionMessages:()=>0,saveChatSessions(){},renderChatSessions(){},
+  });
+  vm.runInContext(request, ctx);
+  const old = ctx.requestChatCompletion(session, null);
+  const fresh = ctx.requestChatCompletion(session, null);
+  await fresh;
+  releaseOld({ value: new TextEncoder().encode('data: '+JSON.stringify({type:'response.output_text.delta',delta:'old'})+'\n\ndata: [DONE]\n\n'), done:false });
+  await old;
+  assert.deepEqual(session.messages.map(item => item.content), ['new']);
+  assert.equal(state.sending, false);
+});
+
+test('Grok model metadata rebuilds reasoning choices and disables unsupported backend search', () => {
+  const sync = source.slice(source.indexOf('  function syncChatModelUI()'), source.indexOf('  function renderChatModelDropdown()'));
+  const session = { reasoningEffort: 'none', webSearch: true };
+  const effort = element();
+  effort.value = '';
+  effort.replaceChildren = function(...children) { this.children = children; };
+  const webSearch = { checked: true, disabled: false };
+  const label = {};
+  const document = {
+    getElementById(id) { return { grokReasoningEffort: effort, grokWebSearch: webSearch, grokModelLabel: label }[id] || null; },
+    createElement() { return {}; },
+  };
+  const route = { id: 'grok-4.6', provider: 'build', reasoning_efforts: ['low', 'high'], default_reasoning_effort: 'high', supports_reasoning_effort: true, supports_backend_search: false };
+  const context = vm.createContext({ document, chatState: { model: route.id, routes: [route] }, activeChatSession: () => session });
+  vm.runInContext(`${sync}\nsyncChatModelUI();`, context);
+  assert.deepEqual(effort.children.map(option => option.value), ['', 'low', 'high']);
+  assert.equal(effort.value, 'high');
+  assert.equal(effort.disabled, false);
+  assert.equal(session.reasoningEffort, 'high');
+  assert.equal(webSearch.disabled, true);
+  assert.equal(webSearch.checked, false);
+  assert.equal(session.webSearch, false);
+});
+
+test('Grok model UI retains Console fixed reasoning behavior', () => {
+  const sync = source.slice(source.indexOf('  function syncChatModelUI()'), source.indexOf('  function renderChatModelDropdown()'));
+  const session = { reasoningEffort: 'high' };
+  const effort = element(); effort.value = ''; effort.replaceChildren = function(...children) { this.children = children; };
+  const document = { getElementById: id => id === 'grokReasoningEffort' ? effort : null, createElement: () => ({}) };
+  const route = { id: 'grok-4.20-0309-reasoning', provider: 'console', upstream_model: 'grok-4.20-0309-reasoning' };
+  const context = vm.createContext({ document, chatState: { model: route.id, routes: [route] }, activeChatSession: () => session });
+  vm.runInContext(`${sync}\nsyncChatModelUI();`, context);
+  assert.equal(effort.disabled, true);
+  assert.equal(effort.value, '');
+  assert.equal(session.reasoningEffort, '');
+});
+
+test('Grok payload omits Web search when route explicitly rejects backend search', () => {
+  const route = { id: 'grok-4.6', supports_backend_search: false };
+  const result = buildPayloadContext({ model: route.id, routes: [route] }, { webSearch: true, xSearch: true, messages: [{ role: 'user', content: 'hi' }] });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.tools)), [{ type: 'x_search' }]);
+});
+
+test('client key auth helpers scope history without persisting the secret', () => {
+  const helper = source.slice(source.indexOf('  const toolAuthState'), source.indexOf('  const cacheOnlineState'));
+  const context = vm.createContext({});
+  vm.runInContext(helper, context);
+  vm.runInContext('toolAuthState.mode="client"; toolAuthState.apiKey="sk-secret";', context);
+  assert.equal(context.toolHistoryScope().startsWith('key-'), true);
+  assert.equal(context.toolHistoryScope().includes('sk-secret'), false);
+  assert.equal(context.toolAuthHeaders({Accept:'x'}).Authorization, 'Bearer sk-secret');
+  assert.equal(context.toolInferencePrefix(), '/v1');
 });

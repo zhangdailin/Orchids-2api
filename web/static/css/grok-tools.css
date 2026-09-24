@@ -1322,6 +1322,110 @@
   resize: vertical;
 }
 
+.voice-file-tools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.voice-file-tools .voice-hint {
+  margin: var(--space-1) 0 0;
+}
+
+.voice-file-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.voice-file-wide {
+  grid-column: 1 / -1;
+}
+
+.voice-file-actions,
+.voice-transcript-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.voice-file-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.voice-file-result:empty {
+  display: none;
+}
+
+.voice-file-result audio {
+  width: 100%;
+}
+
+.voice-transcript {
+  min-height: 80px;
+  max-height: 320px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-hover);
+  color: var(--text-main);
+  font: inherit;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.voice-transcript-meta {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.voice-word-table-wrap {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.voice-word-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.voice-word-table th,
+.voice-word-table td {
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.voice-word-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-surface);
+}
+
+#audioStatus.is-error {
+  color: var(--danger);
+}
+
+@media (max-width: 760px) {
+  .voice-file-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .voice-file-wide {
+    grid-column: auto;
+  }
+}
+
 .visualizer {
   display: flex;
   align-items: flex-end;
@@ -2086,6 +2190,40 @@
 .cache-progress-text {
   font-variant-numeric: tabular-nums;
 }
+
+.media-gallery-heading,
+.media-gallery-controls,
+.media-gallery-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.media-gallery-controls .form-input { width: auto; min-width: 180px; }
+.admin-media-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+.admin-media-card {
+  display: grid;
+  gap: var(--space-2);
+  color: var(--text-main);
+  text-decoration: none;
+  min-width: 0;
+}
+.admin-media-card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+.admin-media-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-gallery-pager { justify-content: center; }
 
 /* ---- Voice surfaces (visualizer / audio-root are laid out above) ---------------------------------- */
 .visualizer {

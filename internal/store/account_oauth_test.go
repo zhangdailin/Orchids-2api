@@ -6,7 +6,41 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+
+	"orchids-api/internal/modelcatalog"
 )
+
+func TestUpdateAccountPreservesAndDeepCopiesNewestGrokCatalog(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "catalog:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	synced := time.Now().UTC().Truncate(time.Second)
+	acc := &Account{AccountType: "grok", Enabled: true, GrokModels: []string{"grok-4.7"}, GrokModelCatalog: []modelcatalog.Profile{{ModelID: "grok-4.7", ReasoningEfforts: []string{"high"}, ContextWindow: 500000}}, GrokModelsSyncedAt: synced}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := s.GetAccount(ctx, acc.ID)
+	stale := *fresh
+	fresh.GrokModelCatalog[0].ReasoningEfforts[0] = "xhigh"
+	fresh.GrokModelsSyncedAt = synced.Add(time.Minute)
+	if err := s.UpdateAccount(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	fresh.GrokModelCatalog[0].ReasoningEfforts[0] = "mutated-after-write"
+	stale.GrokModels = []string{"stale"}
+	stale.GrokModelCatalog = []modelcatalog.Profile{{ModelID: "stale"}}
+	if err := s.UpdateAccount(ctx, &stale); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetAccount(ctx, acc.ID)
+	if len(got.GrokModelCatalog) != 1 || got.GrokModelCatalog[0].ModelID != "grok-4.7" || got.GrokModelCatalog[0].ReasoningEfforts[0] != "xhigh" || got.GrokModels[0] != "grok-4.7" {
+		t.Fatalf("newest catalog was overwritten or aliased: %+v", got.GrokModelCatalog)
+	}
+}
 
 func TestUpdateAccount_PersistsGrokOAuthFields(t *testing.T) {
 	t.Parallel()

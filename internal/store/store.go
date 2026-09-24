@@ -12,6 +12,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/modelpolicy"
 )
 
@@ -118,8 +119,9 @@ type Account struct {
 	// GrokModels is the last successful account-specific upstream /v1/models
 	// capability snapshot. An empty snapshot means not synced yet, not that the
 	// account supports every model.
-	GrokModels         []string  `json:"grok_models,omitempty"`
-	GrokModelsSyncedAt time.Time `json:"grok_models_synced_at,omitempty"`
+	GrokModels         []string               `json:"grok_models,omitempty"`
+	GrokModelCatalog   []modelcatalog.Profile `json:"grok_model_catalog,omitempty"`
+	GrokModelsSyncedAt time.Time              `json:"grok_models_synced_at,omitempty"`
 	// GrokBilling contains only official xAI Build billing information. It is
 	// deliberately separate from GrokRateLimits, whose request/token headers
 	// are short-lived throttling windows rather than subscription allowance.

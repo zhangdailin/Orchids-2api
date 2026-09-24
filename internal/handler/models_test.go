@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
 )
 
@@ -89,5 +91,51 @@ func TestPublicModelsPublishExternalIDs(t *testing.T) {
 	}
 	if seen["grok-4.6"] != 1 {
 		t.Fatalf("routes differing only by plane must collapse to one public entry: %#v", seen)
+	}
+}
+
+func TestHandleModelsPublishesConservativeEnabledBuildProfile(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() { _ = s.Close(); mini.Close() }()
+	publishModel(t, s, &store.Model{Channel: "Grok", ModelID: "grok-4.6", Provider: "build", UpstreamModel: "grok-4.6"})
+
+	ctx := context.Background()
+	for _, acc := range []*store.Account{
+		{AccountType: "grok", Enabled: true, CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "one", GrokModelCatalog: []modelcatalog.Profile{{ModelID: "grok-4.6", ReasoningEfforts: []string{"low", "high", "xhigh"}, DefaultReasoningEffort: "high", SupportsReasoningEffort: true, SupportsBackendSearch: true, ContextWindow: 500000, MaxCompletionTokens: 100000}}},
+		{AccountType: "grok", Enabled: true, CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "two", GrokModelCatalog: []modelcatalog.Profile{{ModelID: "GROK-4.6", ReasoningEfforts: []string{"low", "high"}, DefaultReasoningEffort: "high", SupportsReasoningEffort: true, SupportsBackendSearch: false, ContextWindow: 256000, MaxCompletionTokens: 64000}}},
+		{AccountType: "grok", Enabled: false, CredentialType: "oauth", GrokProvider: "build", OAuthAccessToken: "disabled", GrokModelCatalog: []modelcatalog.Profile{{ModelID: "grok-4.6", ReasoningEfforts: []string{"none"}, ContextWindow: 1, MaxCompletionTokens: 1}}},
+	} {
+		if err := s.CreateAccount(ctx, acc); err != nil {
+			t.Fatalf("CreateAccount: %v", err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	h.HandleModels(rec, httptest.NewRequest(http.MethodGet, "http://example.com/grok/v1/models", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload PublicModelsListResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var got *PublicModelResponse
+	for i := range payload.Data {
+		if payload.Data[i].ID == "grok-4.6" {
+			got = &payload.Data[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("grok-4.6 missing: %+v", payload.Data)
+	}
+	if strings.Join(got.ReasoningEfforts, ",") != "low,high" || got.DefaultReasoningEffort != "high" {
+		t.Fatalf("reasoning metadata=%+v", *got)
+	}
+	if got.SupportsReasoningEffort == nil || !*got.SupportsReasoningEffort || got.SupportsBackendSearch == nil || *got.SupportsBackendSearch {
+		t.Fatalf("feature metadata=%+v", *got)
+	}
+	if got.ContextLength != 256000 || got.MaxInputTokens != 256000 || got.MaxOutputTokens != 64000 {
+		t.Fatalf("dynamic budgets=%+v", *got)
 	}
 }

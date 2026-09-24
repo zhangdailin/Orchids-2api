@@ -15,6 +15,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -390,12 +391,12 @@ func TestDiscoverGrokModelsUsesOfficialBuildCatalogAndPersistsPerAccountSnapshot
 	prevFetch := fetchGrokBuildModelsForRefresh
 	t.Cleanup(func() { fetchGrokBuildModelsForRefresh = prevFetch })
 	var calls int
-	fetchGrokBuildModelsForRefresh = func(ctx context.Context, cfg *config.Config, store *store.Store, got *store.Account) ([]string, error) {
+	fetchGrokBuildModelsForRefresh = func(ctx context.Context, cfg *config.Config, store *store.Store, got *store.Account) ([]modelcatalog.Profile, error) {
 		calls++
 		if got.ID != acc.ID {
 			t.Fatalf("account id=%d want %d", got.ID, acc.ID)
 		}
-		return []string{"grok-4.6", "grok-4.6", "future-private-model", "grok-4.5"}, nil
+		return []modelcatalog.Profile{{ModelID: "grok-4.6"}, {ModelID: "grok-4.6"}, {ModelID: "future-private-model"}, {ModelID: "grok-4.5"}}, nil
 	}
 
 	items, source, err := discoverGrokModelsConcurrent(ctx, &config.Config{}, s, 4)
@@ -448,7 +449,7 @@ func TestDiscoverGrokModelsWithoutUpstreamCatalogPublishesNothing(t *testing.T) 
 	}
 	prevFetch := fetchGrokBuildModelsForRefresh
 	t.Cleanup(func() { fetchGrokBuildModelsForRefresh = prevFetch })
-	fetchGrokBuildModelsForRefresh = func(context.Context, *config.Config, *store.Store, *store.Account) ([]string, error) {
+	fetchGrokBuildModelsForRefresh = func(context.Context, *config.Config, *store.Store, *store.Account) ([]modelcatalog.Profile, error) {
 		return nil, errors.New("control plane unavailable")
 	}
 
@@ -1058,9 +1059,9 @@ func TestGrokPartialCatalogNeverPrunes(t *testing.T) {
 	}
 	previous := fetchGrokBuildModelsForRefresh
 	defer func() { fetchGrokBuildModelsForRefresh = previous }()
-	fetchGrokBuildModelsForRefresh = func(_ context.Context, _ *config.Config, _ *store.Store, acc *store.Account) ([]string, error) {
+	fetchGrokBuildModelsForRefresh = func(_ context.Context, _ *config.Config, _ *store.Store, acc *store.Account) ([]modelcatalog.Profile, error) {
 		if acc.Name == "build-1" {
-			return []string{"new"}, nil
+			return []modelcatalog.Profile{{ModelID: "new"}}, nil
 		}
 		return nil, fmt.Errorf("temporary")
 	}

@@ -7,7 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
   <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260918-phonefix1">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260923-css-slim1">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/grok-tools.css?v=20260924-grok-complete1">
 </head>
 
 <body>
@@ -39,6 +39,15 @@
         <a id="grokCapabilityAction" class="capability-action hidden" href="{{.AdminPath}}/?tab=accounts">添加所需账号</a>
       </section>
       <div class="toolbar toolbar-compact grok-tools-toolbar" aria-label="Grok 工具导航">
+        <div class="grok-api-mode" aria-label="API 测试身份">
+          <select id="grokRequestMode" class="form-input" title="管理员模式使用当前登录会话；Client Key 模式按真实密钥权限、限流和计费测试">
+            <option value="admin">管理员模式</option>
+            <option value="client">Client Key 模式</option>
+          </select>
+          <input id="grokClientKey" class="form-input hidden" type="password" autocomplete="off" placeholder="粘贴 sk-…（仅保存在当前标签页）">
+          <button id="grokClientKeyApply" class="btn btn-outline hidden" type="button">应用密钥</button>
+          <span id="grokClientKeyStatus" class="hint"></span>
+        </div>
         <div class="filter-tabs grok-tabs" id="grokToolsTabs">
           <button class="tab-item" data-tab="chat" onclick="switchGrokToolTab('chat')">对话</button>
           <button class="tab-item active" data-tab="imagine" onclick="switchGrokToolTab('imagine')">图片</button>
@@ -199,6 +208,13 @@
               <label class="field-label" for="imaginePrompt">提示词</label>
               <textarea id="imaginePrompt" class="form-input imagine-masonry-textarea" rows="4" placeholder="描述你想生成的画面，Enter 生成，Shift+Enter 换行"></textarea>
               <div class="imagine-basic-row">
+                <div class="imagine-basic-field is-operation">
+                  <span class="imagine-field-label">操作</span>
+                  <div id="imagineOperationToggle" class="imagine-masonry-toggle" role="tablist" aria-label="图片操作">
+                    <button type="button" class="imagine-masonry-toggle-btn is-active" data-imagine-operation="generate">生成</button>
+                    <button type="button" class="imagine-masonry-toggle-btn" data-imagine-operation="edit">编辑</button>
+                  </div>
+                </div>
                 <div class="imagine-basic-field is-model">
                   <span class="imagine-field-label">图片模型</span>
                   <select id="imagineModel" class="form-input" aria-label="图片模型"><option value="">按质量档位选择</option></select>
@@ -227,6 +243,8 @@
                       <option value="2:3">2:3</option>
                       <option value="3:2">3:2</option>
                       <option value="1:1">1:1</option>
+                      <option value="4:3">4:3</option>
+                      <option value="3:4">3:4</option>
                       <option value="16:9">16:9</option>
                       <option value="9:16">9:16</option>
                     </select>
@@ -243,7 +261,23 @@
                       <button type="button" class="imagine-masonry-toggle-btn" data-imagine-run-mode="continuous">连续</button>
                     </div>
                   </div>
-                  <p class="hint">单轮只生成一批图；连续模式会在上一轮结束后自动开始下一轮，直到点击停止。</p>
+                  <div id="imagineEditInputs" class="imagine-edit-inputs hidden">
+                    <div>
+                      <span class="imagine-field-label">编辑素材（最多 7 张）</span>
+                      <p class="hint">本地文件会先暂存，再以 file_id 提交；也可逐行填写图片 URL。</p>
+                    </div>
+                    <div class="imagine-edit-input-actions">
+                      <button id="imagineSelectImagesBtn" class="btn btn-outline" type="button">上传图片</button>
+                      <input id="imagineImageFiles" class="ref-file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+                      <button id="imagineClearImagesBtn" class="btn btn-outline" type="button">清除素材</button>
+                    </div>
+                    <div id="imagineImageFilesStatus" class="staged-media-list">未选择文件</div>
+                    <label class="imagine-edit-urls">
+                      <span class="imagine-field-label">图片 URL（每行一个）</span>
+                      <textarea id="imagineImageURLs" class="form-input" rows="3" placeholder="https://example.com/reference.png"></textarea>
+                    </label>
+                  </div>
+                  <p id="imagineRunModeHint" class="hint">单轮只生成一批图；连续模式会在上一轮结束后自动开始下一轮，直到点击停止。</p>
                 </div>
               </details>
               <div class="imagine-masonry-toolbar">
@@ -355,11 +389,25 @@
                     <span class="field-label">&nbsp;</span>
                     <button class="btn btn-outline" id="videoClearImageBtn" type="button">清除</button>
                   </div>
+                  <div class="settings-block ref-block">
+                    <label class="field-label" for="videoReferenceURL">参考图片 URL（Console 生成）</label>
+                    <input id="videoReferenceURL" class="form-input" type="url" placeholder="https://...">
+                    <div class="ref-meta"><span id="videoReferenceFileName" class="ref-name">未选择文件</span></div>
+                    <div class="ref-controls">
+                      <button class="btn btn-outline" id="videoSelectReferenceBtn" type="button">上传参考图</button>
+                      <button class="btn btn-outline" id="videoClearReferenceBtn" type="button">清除</button>
+                      <input id="videoReferenceFileInput" class="ref-file-input" type="file" accept="image/*">
+                    </div>
+                  </div>
                   <div class="settings-block source-block">
                     <label class="field-label" for="videoSourceURL">原视频 URL（编辑 / 延长）</label>
-                    <input id="videoSourceURL" class="form-input" type="url">
-                    <label class="field-label" for="videoReferenceURL">参考图片 URL（Console 生成）</label>
-                    <input id="videoReferenceURL" class="form-input" type="url">
+                    <input id="videoSourceURL" class="form-input" type="url" placeholder="https://...">
+                    <div class="ref-meta"><span id="videoSourceFileName" class="ref-name">未选择文件</span></div>
+                    <div class="ref-controls">
+                      <button class="btn btn-outline" id="videoSelectSourceBtn" type="button">上传原视频</button>
+                      <button class="btn btn-outline" id="videoClearSourceBtn" type="button">清除</button>
+                      <input id="videoSourceFileInput" class="ref-file-input" type="file" accept="video/mp4,video/webm,video/quicktime">
+                    </div>
                     <label class="field-label" for="videoReferenceVoice">参考音色 ID（Console 生成）</label>
                     <input id="videoReferenceVoice" class="form-input">
                   </div>
@@ -491,6 +539,50 @@
               <p class="voice-hint voice-hint-spaced">语音会话将使用上方的音色、人格和语速设置。</p>
             </div>
 
+            <section id="voiceFileTools" class="grok-panel voice-card voice-file-tools" aria-labelledby="voiceFileToolsTitle">
+              <div class="voice-log-header">
+                <div>
+                  <div id="voiceFileToolsTitle" class="card-title">语音生成与转写</div>
+                  <p class="voice-hint">使用已配置的 Grok TTS / STT 模型处理文件；不会影响上方实时语音会话。</p>
+                </div>
+              </div>
+              <div class="voice-file-grid">
+                <div class="function-settings-block">
+                  <label class="field-label" for="audioOperation">操作</label>
+                  <select id="audioOperation" class="form-input"><option value="tts">文本转语音</option><option value="stt">音频转文字</option></select>
+                </div>
+                <div class="function-settings-block">
+                  <label class="field-label" for="audioModel">模型</label>
+                  <select id="audioModel" class="form-input"></select>
+                </div>
+                <div id="audioVoiceBlock" class="function-settings-block">
+                  <label class="field-label" for="audioVoice">音色</label>
+                  <select id="audioVoice" class="form-input"><option value="">加载音色…</option></select>
+                </div>
+                <div id="audioCustomVoiceBlock" class="function-settings-block hidden">
+                  <label class="field-label" for="audioCustomVoice">自定义 voice_id</label>
+                  <input id="audioCustomVoice" class="form-input" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="function-settings-block">
+                  <label class="field-label" for="audioLanguage">语言</label>
+                  <input id="audioLanguage" class="form-input" value="zh" placeholder="留空为自动检测">
+                </div>
+                <div id="audioTextLabel" class="function-settings-block voice-file-wide">
+                  <label class="field-label" for="audioText">文本</label>
+                  <textarea id="audioText" class="form-input" rows="4" placeholder="输入需要朗读的文本"></textarea>
+                </div>
+                <div id="audioFileLabel" class="function-settings-block voice-file-wide" hidden>
+                  <label class="field-label" for="audioFile">音频文件</label>
+                  <input id="audioFile" class="form-input" type="file" accept="audio/*">
+                </div>
+              </div>
+              <div class="voice-file-actions">
+                <button id="audioSubmit" class="btn btn-primary" type="button">执行</button>
+                <span id="audioStatus" class="status-text" role="status" aria-live="polite"></span>
+              </div>
+              <div id="audioResult" class="voice-file-result" aria-live="polite"></div>
+            </section>
+
             <div class="grok-panel voice-card">
               <div class="voice-log-header">
                 <div class="card-title">会话日志</div>
@@ -585,6 +677,26 @@
         </div>
 
         <div class="grok-panel">
+          <div class="media-gallery-heading">
+            <div><h3>生成图片</h3><p>浏览本地生成结果；输入素材不会显示。</p></div>
+            <div class="media-gallery-controls"><input id="mediaImageSearch" class="form-input" type="search" placeholder="搜索文件名" /><button class="btn btn-outline" id="mediaImageRefreshBtn" type="button">刷新</button></div>
+          </div>
+          <div id="mediaImageStats" class="meta-text">正在加载图片统计…</div>
+          <div id="mediaImageGallery" class="admin-media-gallery"><div class="table-empty-cell">暂无图片</div></div>
+          <div class="media-gallery-pager"><button class="btn btn-outline" id="mediaImagePrevBtn" type="button">上一页</button><span id="mediaImagePage">1 / 1</span><button class="btn btn-outline" id="mediaImageNextBtn" type="button">下一页</button></div>
+        </div>
+
+        <div class="grok-panel">
+          <div class="media-gallery-heading">
+            <div><h3>视频任务历史</h3><p>来自持久化视频任务存储。</p></div>
+            <div class="media-gallery-controls"><input id="mediaVideoSearch" class="form-input" type="search" placeholder="搜索任务、Prompt 或模型" /><select id="mediaVideoStatus" class="form-input"><option value="">全部状态</option><option value="queued">queued</option><option value="in_progress">in_progress</option><option value="completed">completed</option><option value="failed">failed</option></select><button class="btn btn-outline" id="mediaVideoRefreshBtn" type="button">刷新</button></div>
+          </div>
+          <div id="mediaVideoStats" class="meta-text">正在加载任务统计…</div>
+          <div class="cache-list"><table><thead><tr><th>任务</th><th>状态</th><th>模型 / Prompt</th><th>进度</th><th>创建时间</th></tr></thead><tbody id="mediaVideoHistory"><tr><td colspan="5" class="table-empty-cell">暂无视频任务</td></tr></tbody></table></div>
+          <div class="media-gallery-pager"><button class="btn btn-outline" id="mediaVideoPrevBtn" type="button">上一页</button><span id="mediaVideoPage">1 / 1</span><button class="btn btn-outline" id="mediaVideoNextBtn" type="button">下一页</button></div>
+        </div>
+
+        <div class="grok-panel">
           <h3>在线资产账号</h3>
           <p>支持按账号加载在线资产数量并执行在线清理。</p>
           <div class="cache-batch-actions">
@@ -629,9 +741,9 @@
 
   <script src="{{.AdminPath}}/js/common.js?v=20260917-clean1"></script>
   <script src="{{.AdminPath}}/js/provider-registry.js?v=20260924-backend-registry1"></script>
-  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260924-catalog1"></script>
-  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260924-upstream-truth1"></script>
-  <script src="{{.AdminPath}}/js/grok-media-tools.js?v=20260909-2"></script>
+  <script src="{{.AdminPath}}/js/grok-imagine.js?v=20260924-grok-complete1"></script>
+  <script src="{{.AdminPath}}/js/grok-tools.min.js?v=20260924-grok-complete1"></script>
+  <script src="{{.AdminPath}}/js/grok-media-tools.js?v=20260924-grok-complete1"></script>
 </body>
 
 </html>

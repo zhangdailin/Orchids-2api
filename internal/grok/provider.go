@@ -3,10 +3,12 @@ package grok
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
 
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
 )
 
@@ -222,9 +224,21 @@ func CLIModelsNeedSync(acc *store.Account, now time.Time) bool {
 }
 
 func ApplyCLIModels(acc *store.Account, models []string, now time.Time) bool {
+	profiles := make([]modelcatalog.Profile, 0, len(models))
+	for _, model := range models {
+		profiles = append(profiles, modelcatalog.Profile{ModelID: model})
+	}
+	return ApplyCLIModelCatalog(acc, profiles, now)
+}
+
+// ApplyCLIModelCatalog atomically projects one successful upstream catalog onto
+// the account's identifier compatibility field and durable profile field.
+func ApplyCLIModelCatalog(acc *store.Account, catalog []modelcatalog.Profile, now time.Time) bool {
 	if acc == nil {
 		return false
 	}
+	catalog = modelcatalog.Aggregate(catalog)
+	models := modelcatalog.ModelIDs(catalog)
 	seen := make(map[string]struct{}, len(models)+3)
 	normalized := make([]string, 0, len(models)+3)
 	appendModel := func(model string) {
@@ -288,8 +302,9 @@ func ApplyCLIModels(acc *store.Account, models []string, now time.Time) bool {
 	if len(normalized) == 0 {
 		return false
 	}
-	changed := !slices.EqualFunc(acc.GrokModels, normalized, strings.EqualFold)
+	changed := !slices.EqualFunc(acc.GrokModels, normalized, strings.EqualFold) || !reflect.DeepEqual(acc.GrokModelCatalog, catalog)
 	acc.GrokModels = normalized
+	acc.GrokModelCatalog = modelcatalog.CloneProfiles(catalog)
 	acc.GrokModelsSyncedAt = now.UTC()
 	return changed
 }

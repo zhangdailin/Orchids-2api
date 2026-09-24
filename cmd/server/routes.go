@@ -335,6 +335,12 @@ func registerRoutes(
 		{"/cache/list", grokHandler.HandleAdminCacheList},
 		{"/cache/clear", grokHandler.HandleAdminCacheClear},
 		{"/cache/item/delete", grokHandler.HandleAdminCacheItemDelete},
+		{"/media/images", grokHandler.HandleAdminMediaImages},
+		{"/media/images/stats", grokHandler.HandleAdminMediaImageStats},
+		{"/media/videos", grokHandler.HandleAdminMediaVideos},
+		{"/media/videos/stats", grokHandler.HandleAdminMediaVideoStats},
+		{"/media/inputs/upload", grokHandler.HandleAdminMediaInputs},
+		{"/media/inputs/import", grokHandler.HandleAdminMediaInputImport},
 		{"/cache/online/clear", grokHandler.HandleAdminCacheOnlineClear},
 		{"/cache/online/clear/async", grokHandler.HandleAdminCacheOnlineClearAsync},
 		{"/cache/online/load/async", grokHandler.HandleAdminCacheOnlineLoadAsync},
@@ -349,6 +355,13 @@ func registerRoutes(
 	}
 	for _, rt := range adminRoutes {
 		registerWithPrefixes(mux, adminPrefixes, rt.path, sessionAuth(rt.handler))
+	}
+	// Media gallery routes use the requested canonical admin prefix while the
+	// existing admin surface retains its established aliases.
+	for _, rt := range adminRoutes {
+		if strings.HasPrefix(rt.path, "/media/images") || strings.HasPrefix(rt.path, "/media/videos") {
+			mux.HandleFunc("/api/admin/v1"+rt.path, sessionAuth(rt.handler))
+		}
 	}
 
 	// --- Public API routes (dual prefix) ---

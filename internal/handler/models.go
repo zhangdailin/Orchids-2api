@@ -13,6 +13,7 @@ import (
 	"orchids-api/internal/channel"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/middleware"
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -40,6 +41,12 @@ type PublicModelResponse struct {
 	// MaxOutputTokens is the declared output budget where the catalog publishes
 	// one. Zero means unobserved and is omitted.
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// Grok Build publishes these fields per account. Pointer booleans preserve
+	// the important distinction between an explicit false and unknown metadata.
+	ReasoningEfforts        []string `json:"reasoning_efforts,omitempty"`
+	DefaultReasoningEffort  string   `json:"default_reasoning_effort,omitempty"`
+	SupportsReasoningEffort *bool    `json:"supports_reasoning_effort,omitempty"`
+	SupportsBackendSearch   *bool    `json:"supports_backend_search,omitempty"`
 }
 
 type PublicModelsListResponse struct {
@@ -137,6 +144,66 @@ func publicModelIDKey(id string) string {
 	return strings.ToLower(strings.TrimSpace(id))
 }
 
+// grokBuildProfiles returns the conservative capability view shared by every
+// enabled Build account that advertised a model. Accounts on the Web and
+// Console planes are deliberately excluded: their similarly named routes do
+// not speak the Build catalog contract.
+func (h *Handler) grokBuildProfiles(ctx context.Context) map[string]modelcatalog.Profile {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return nil
+	}
+	accounts, err := h.loadBalancer.Store.GetEnabledAccounts(ctx)
+	if err != nil {
+		return nil
+	}
+	catalogs := make([][]modelcatalog.Profile, 0, len(accounts))
+	for _, acc := range accounts {
+		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "grok") {
+			continue
+		}
+		provider := strings.ToLower(strings.TrimSpace(acc.GrokProvider))
+		if provider == "" && strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
+			provider = "build"
+		}
+		if provider != "build" || len(acc.GrokModelCatalog) == 0 {
+			continue
+		}
+		catalogs = append(catalogs, acc.GrokModelCatalog)
+	}
+	if len(catalogs) == 0 {
+		return nil
+	}
+	profiles := modelcatalog.Aggregate(catalogs...)
+	out := make(map[string]modelcatalog.Profile, len(profiles))
+	for _, profile := range profiles {
+		for _, id := range []string{profile.ModelID, modelpolicy.ExternalPublicID(profile.ModelID)} {
+			if key := publicModelIDKey(id); key != "" {
+				out[key] = profile
+			}
+		}
+	}
+	return out
+}
+
+func applyGrokBuildProfile(entry *PublicModelResponse, profile modelcatalog.Profile) {
+	if entry == nil {
+		return
+	}
+	entry.ReasoningEfforts = append([]string(nil), profile.ReasoningEfforts...)
+	entry.DefaultReasoningEffort = profile.DefaultReasoningEffort
+	supportsReasoning := profile.SupportsReasoningEffort
+	supportsSearch := profile.SupportsBackendSearch
+	entry.SupportsReasoningEffort = &supportsReasoning
+	entry.SupportsBackendSearch = &supportsSearch
+	if profile.ContextWindow > 0 {
+		entry.ContextLength = profile.ContextWindow
+		entry.MaxInputTokens = profile.ContextWindow
+	}
+	if profile.MaxCompletionTokens > 0 {
+		entry.MaxOutputTokens = profile.MaxCompletionTokens
+	}
+}
+
 func appendGrokCompatibilityAliases(items []PublicModelResponse, seen map[string]struct{}, entry PublicModelResponse) []PublicModelResponse {
 	if !strings.EqualFold(entry.OwnedBy, "grok") {
 		return items
@@ -204,6 +271,7 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	// One read of the observed catalogs answers every row below, so the model
 	// list reports the same window the request path forwards upstream.
 	contextWindows := h.observedModelContextWindows(ctx)
+	grokProfiles := h.grokBuildProfiles(ctx)
 	for _, m := range allModels {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
@@ -244,6 +312,17 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		entry.ContextLength = input
 		entry.MaxInputTokens = input
 		entry.MaxOutputTokens = output
+		if strings.EqualFold(mChannel, "grok") {
+			provider := strings.ToLower(strings.TrimSpace(m.Provider))
+			if provider == "build" || provider == "" {
+				for _, id := range []string{m.ModelID, m.UpstreamModel, publicID} {
+					if profile, ok := grokProfiles[publicModelIDKey(id)]; ok {
+						applyGrokBuildProfile(&entry, profile)
+						break
+					}
+				}
+			}
+		}
 		publicModels = append(publicModels, entry)
 		publicModels = appendGrokCompatibilityAliases(publicModels, seenPublicModelIDs, entry)
 	}

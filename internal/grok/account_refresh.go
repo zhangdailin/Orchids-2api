@@ -147,7 +147,7 @@ func RefreshBuildAccount(ctx context.Context, client *CLIClient, acc *store.Acco
 	}
 	if opts.Models {
 		modelsCtx, cancel := refreshStepContext(ctx, opts.ModelsTimeout)
-		models, err := client.FetchModels(modelsCtx, acc)
+		catalog, err := client.FetchModelCatalog(modelsCtx, acc)
 		cancel()
 		result.ModelsErr = err
 		if err == nil {
@@ -155,7 +155,7 @@ func RefreshBuildAccount(ctx context.Context, client *CLIClient, acc *store.Acco
 			if now.IsZero() {
 				now = time.Now()
 			}
-			ApplyCLIModels(acc, models, now)
+			ApplyCLIModelCatalog(acc, catalog, now)
 		}
 	}
 	return result

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/debug"
 	"orchids-api/internal/grok/egress"
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
 )
@@ -106,14 +108,14 @@ func (c *CLIClient) userAgent() string {
 	if c != nil && c.cfg != nil {
 		return c.cfg.GrokCLIUserAgentOrDefault()
 	}
-	return "grok-shell/1.0.4 (linux; x86_64)"
+	return "grok-shell/1.0.40 (linux; x86_64)"
 }
 
 func (c *CLIClient) clientVersion() string {
 	if c != nil && c.cfg != nil {
 		return c.cfg.GrokCLIClientVersionOrDefault()
 	}
-	return "1.0.4"
+	return "1.0.40"
 }
 
 func (c *CLIClient) clientIdentifier() string {
@@ -426,10 +428,91 @@ func (c *CLIClient) VerifyAccount(ctx context.Context, acc *store.Account) (stri
 	}
 }
 
-// FetchModels returns the official, account-scoped Build catalog. It is a
-// control-plane request and never sends a model prompt. The result must be
-// persisted as account capability rather than merged into a global static list.
-func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]string, error) {
+// buildModelCatalogEntry accepts both the current snake_case Build response and
+// older camelCase response variants.
+type buildModelCatalogEntry struct {
+	ID      string `json:"id"`
+	Model   string `json:"model"`
+	ModelID string `json:"modelId"`
+	Hidden  bool   `json:"hidden"`
+	Meta    struct {
+		Model   string `json:"model"`
+		ModelID string `json:"modelId"`
+		Hidden  bool   `json:"hidden"`
+	} `json:"_meta"`
+	ContextWindow            int64             `json:"context_window"`
+	ContextWindowCamel       int64             `json:"contextWindow"`
+	MaxCompletionTokens      int64             `json:"max_completion_tokens"`
+	MaxCompletionTokensCamel int64             `json:"maxCompletionTokens"`
+	ReasoningEffort          string            `json:"reasoning_effort"`
+	ReasoningEffortCamel     string            `json:"reasoningEffort"`
+	SupportsReasoningEffort  *bool             `json:"supports_reasoning_effort"`
+	SupportsReasoningCamel   *bool             `json:"supportsReasoningEffort"`
+	SupportsBackendSearch    bool              `json:"supports_backend_search"`
+	ReasoningEfforts         []json.RawMessage `json:"reasoning_efforts"`
+	ReasoningEffortsCamel    []json.RawMessage `json:"reasoningEfforts"`
+}
+
+func (e buildModelCatalogEntry) profile() modelcatalog.Profile {
+	if e.Hidden || e.Meta.Hidden {
+		return modelcatalog.Profile{}
+	}
+	profile := modelcatalog.Profile{ModelID: firstNonEmpty(e.ID, e.Model, e.ModelID, e.Meta.Model, e.Meta.ModelID), SupportsBackendSearch: e.SupportsBackendSearch}
+	if e.ContextWindow > 0 {
+		profile.ContextWindow = clampCatalogInt(e.ContextWindow)
+	} else {
+		profile.ContextWindow = clampCatalogInt(e.ContextWindowCamel)
+	}
+	if e.MaxCompletionTokens > 0 {
+		profile.MaxCompletionTokens = clampCatalogInt(e.MaxCompletionTokens)
+	} else {
+		profile.MaxCompletionTokens = clampCatalogInt(e.MaxCompletionTokensCamel)
+	}
+	if e.SupportsReasoningEffort != nil {
+		profile.SupportsReasoningEffort = *e.SupportsReasoningEffort
+	} else if e.SupportsReasoningCamel != nil {
+		profile.SupportsReasoningEffort = *e.SupportsReasoningCamel
+	}
+	rawMenu := e.ReasoningEfforts
+	if len(rawMenu) == 0 {
+		rawMenu = e.ReasoningEffortsCamel
+	}
+	for _, raw := range rawMenu {
+		var bare string
+		if json.Unmarshal(raw, &bare) == nil && strings.TrimSpace(bare) != "" {
+			profile.ReasoningEfforts = append(profile.ReasoningEfforts, bare)
+			continue
+		}
+		var option struct {
+			Value   string `json:"value"`
+			Default bool   `json:"default"`
+		}
+		if json.Unmarshal(raw, &option) != nil || strings.TrimSpace(option.Value) == "" {
+			continue
+		}
+		profile.ReasoningEfforts = append(profile.ReasoningEfforts, option.Value)
+		if option.Default && profile.DefaultReasoningEffort == "" {
+			profile.DefaultReasoningEffort = option.Value
+		}
+	}
+	if profile.DefaultReasoningEffort == "" {
+		profile.DefaultReasoningEffort = firstNonEmpty(e.ReasoningEffort, e.ReasoningEffortCamel)
+	}
+	return modelcatalog.Normalize(profile)
+}
+
+func clampCatalogInt(value int64) int {
+	if value <= 0 {
+		return 0
+	}
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int(value)
+}
+
+// FetchModelCatalog returns the complete account-scoped Build catalog profile.
+func (c *CLIClient) FetchModelCatalog(ctx context.Context, acc *store.Account) ([]modelcatalog.Profile, error) {
 	if c == nil || c.oauth == nil || acc == nil {
 		return nil, fmt.Errorf("grok cli models is not configured")
 	}
@@ -447,43 +530,43 @@ func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]stri
 		return nil, newCLIUpstreamError(resp.StatusCode, resp.Header, body)
 	}
 	var payload struct {
-		Data []struct {
-			ID      string `json:"id"`
-			Model   string `json:"model"`
-			ModelID string `json:"modelId"`
-			Hidden  bool   `json:"hidden"`
-			Meta    struct {
-				Model   string `json:"model"`
-				ModelID string `json:"modelId"`
-				Hidden  bool   `json:"hidden"`
-			} `json:"_meta"`
-		} `json:"data"`
+		Data []json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("decode grok cli models response: %w", err)
 	}
+	profiles := make([]modelcatalog.Profile, 0, len(payload.Data))
 	seen := make(map[string]struct{}, len(payload.Data))
-	models := make([]string, 0, len(payload.Data))
-	for _, item := range payload.Data {
-		if item.Hidden || item.Meta.Hidden {
+	for _, raw := range payload.Data {
+		var item buildModelCatalogEntry
+		if json.Unmarshal(raw, &item) != nil {
 			continue
 		}
-		model := firstNonEmpty(item.ID, item.Model, item.ModelID, item.Meta.Model, item.Meta.ModelID)
-		model = strings.TrimSpace(model)
-		if model == "" {
+		profile := item.profile()
+		key := strings.ToLower(profile.ModelID)
+		if key == "" {
 			continue
 		}
-		key := strings.ToLower(model)
 		if _, exists := seen[key]; exists {
 			continue
 		}
 		seen[key] = struct{}{}
-		models = append(models, model)
+		profiles = append(profiles, profile)
 	}
-	if len(models) == 0 {
+	if len(profiles) == 0 {
 		return nil, fmt.Errorf("grok cli models response contains no model ids")
 	}
-	return models, nil
+	return profiles, nil
+}
+
+// FetchModels preserves the historical identifier-only API for callers which
+// do not need profile metadata.
+func (c *CLIClient) FetchModels(ctx context.Context, acc *store.Account) ([]string, error) {
+	catalog, err := c.FetchModelCatalog(ctx, acc)
+	if err != nil {
+		return nil, err
+	}
+	return modelcatalog.ModelIDs(catalog), nil
 }
 
 // request is the single authenticated Build HTTP entry for chat, resources,

@@ -18,6 +18,7 @@ import (
 	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
+	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/puter"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
@@ -40,10 +41,10 @@ var verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, a
 // fetchGrokBuildModelsForRefresh reads the official Build CLI catalog.  It is
 // deliberately kept as an injectable control-plane operation: model refresh
 // must never send a completion simply to discover an account's capabilities.
-var fetchGrokBuildModelsForRefresh = func(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) ([]string, error) {
+var fetchGrokBuildModelsForRefresh = func(ctx context.Context, cfg *config.Config, s *store.Store, acc *store.Account) ([]modelcatalog.Profile, error) {
 	client := grok.NewCLIClient(cfg)
 	client.SetAccountStore(s)
-	return client.FetchModels(ctx, acc)
+	return client.FetchModelCatalog(ctx, acc)
 }
 
 type modelRefreshRequest struct {
@@ -981,7 +982,7 @@ func isPuterModelDefinitiveReject(err error) bool {
 type grokBuildModelDiscovery struct {
 	index   int
 	account *store.Account
-	models  []string
+	catalog []modelcatalog.Profile
 	err     error
 }
 
@@ -1012,8 +1013,8 @@ func discoverGrokModelsReport(ctx context.Context, cfg *config.Config, s *store.
 	ordered := make([]grokBuildModelDiscovery, len(accounts))
 	runIndexedModelRefreshWorkers(len(accounts), concurrency, func(index int) {
 		acc := accounts[index]
-		models, fetchErr := fetchGrokBuildModelsForRefresh(ctx, cfg, s, acc)
-		ordered[index] = grokBuildModelDiscovery{account: acc, models: models, err: fetchErr}
+		catalog, fetchErr := fetchGrokBuildModelsForRefresh(ctx, cfg, s, acc)
+		ordered[index] = grokBuildModelDiscovery{account: acc, catalog: catalog, err: fetchErr}
 	})
 
 	now := time.Now().UTC()
@@ -1028,9 +1029,9 @@ func discoverGrokModelsReport(ctx context.Context, cfg *config.Config, s *store.
 			report.Attempts = append(report.Attempts, attempt)
 			continue
 		}
-		if result.err == nil && len(result.models) > 0 {
+		if result.err == nil && len(result.catalog) > 0 {
 			grok.NormalizeProvider(result.account)
-			grok.ApplyCLIModels(result.account, result.models, now)
+			grok.ApplyCLIModelCatalog(result.account, result.catalog, now)
 			if updateErr := s.UpdateAccount(ctx, result.account); updateErr != nil {
 				attempt.Err = fmt.Errorf("persist grok build model catalog: %w", updateErr)
 			}

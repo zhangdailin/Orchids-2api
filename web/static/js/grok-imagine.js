@@ -22,6 +22,9 @@
     nsfwEnabled: true,
     saveState: null,
     showToast: null,
+    editFileIDs: [],
+    editFileNames: [],
+    editUploadVersion: 0,
   };
 
   function $(id) {
@@ -119,6 +122,81 @@
     if (!value) return "";
     if (/^(https?:|data:|\/)/i.test(value)) return value;
     return `data:${inferMime(value)};base64,${value}`;
+  }
+
+  function inferenceHeaders(headers = {}) {
+    return window.GrokToolRequest?.headers?.(headers) || headers;
+  }
+  function inferencePrefix() { return window.GrokToolRequest?.prefix?.() || "/grok/v1"; }
+  function imageOperation() { return readToggle("#imagineOperationToggle", "imagineOperation", "generate") === "edit" ? "edit" : "generate"; }
+
+  function editURLInputs() {
+    return String($("imagineImageURLs")?.value || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  }
+
+  function syncEditUI() {
+    const edit = imageOperation() === "edit";
+    $("imagineEditInputs")?.classList.toggle("hidden", !edit);
+    $("imagineRunModeToggle")?.closest(".imagine-basic-field")?.classList.toggle("hidden", edit);
+    if ($("imagineRunModeHint")) $("imagineRunModeHint").textContent = edit
+      ? "编辑模式为单轮请求，最多可组合 7 张已暂存图片或 URL。"
+      : "单轮只生成一批图；连续模式会在上一轮结束后自动开始下一轮，直到点击停止。";
+  }
+
+  function renderEditFiles(message) {
+    const status = $("imagineImageFilesStatus");
+    if (!status) return;
+    status.textContent = message || (state.editFileNames.length ? state.editFileNames.join(" · ") : "未选择文件");
+  }
+
+  async function stageEditFiles(files) {
+    const selected = Array.from(files || []).slice(0, 7);
+    if (!selected.length) return;
+    const version = ++state.editUploadVersion;
+    state.editFileIDs = [];
+    state.editFileNames = selected.map((file) => file.name);
+    renderEditFiles(`正在暂存 0/${selected.length}…`);
+    try {
+      for (let index = 0; index < selected.length; index += 1) {
+        const fileID = await window.GrokMediaStaging.upload(selected[index], "image");
+        if (version !== state.editUploadVersion) return;
+        state.editFileIDs.push(fileID);
+        renderEditFiles(`正在暂存 ${index + 1}/${selected.length}…`);
+      }
+      renderEditFiles();
+    } catch (err) {
+      if (version !== state.editUploadVersion) return;
+      state.editFileIDs = [];
+      renderEditFiles("暂存失败");
+      toast(err.message || "图片暂存失败", "error");
+    }
+  }
+
+  async function requestImageEdit(prompt, ratio, model, quality, signal) {
+    const inputs = state.editFileIDs.map((file_id) => ({ file_id }));
+    for (const url of editURLInputs()) inputs.push({ url });
+    if (!inputs.length) throw new Error("请上传或填写至少一张编辑素材");
+    if (inputs.length > 7) throw new Error("编辑素材不能超过 7 张");
+    const res = await fetch(`${inferencePrefix()}/images/edits`, {
+      method: "POST",
+      headers: inferenceHeaders({ "Content-Type": "application/json" }),
+      signal,
+      body: JSON.stringify({
+        model: String(model || "").trim() || "grok-imagine-image",
+        prompt,
+        images: inputs,
+        n: 1,
+        aspect_ratio: ratio,
+        size: sizeForRatio(ratio),
+        resolution: $("imagineResolution")?.value || "1k",
+        quality,
+        response_format: "url",
+      }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const image = extractImageValue(await res.json());
+    if (!image) throw new Error("no image generated");
+    return image;
   }
 
   function authHeaders() {
@@ -368,10 +446,11 @@
   }
 
   async function requestImage(prompt, ratio, model, quality, nsfw, signal) {
+    if (imageOperation() === "edit") return requestImageEdit(prompt, ratio, model, quality, signal);
     if (normalizeQuality(quality) === "basic" || document.getElementById("imagineModel")?.value) {
-      const res = await fetch("/grok/v1/images/generations", {
+      const res = await fetch(`${inferencePrefix()}/images/generations`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: inferenceHeaders({ "Content-Type": "application/json" }),
         signal,
         body: JSON.stringify({
           model: String(model || "").trim() || "grok-imagine-image-lite",
@@ -502,7 +581,12 @@
       return;
     }
     const ratio = String($("imagineRatio")?.value || "2:3");
-    const runMode = readToggle("#imagineRunModeToggle", "imagineRunMode", "single") === "continuous" ? "continuous" : "single";
+    const operation = imageOperation();
+    const runMode = operation === "edit" ? "single" : (readToggle("#imagineRunModeToggle", "imagineRunMode", "single") === "continuous" ? "continuous" : "single");
+    if (operation === "edit" && !state.editFileIDs.length && !editURLInputs().length) {
+      toast("请上传或填写至少一张编辑素材", "error");
+      return;
+    }
     const { quality, model } = syncQualityModel();
 
     saveState({
@@ -754,6 +838,14 @@
   }
 
   function bindEvents() {
+    document.querySelectorAll("[data-imagine-operation]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const value = btn.dataset.imagineOperation === "edit" ? "edit" : "generate";
+        setToggle("#imagineOperationToggle", "imagineOperation", value);
+        saveState({ imagineOperation: value });
+        syncEditUI();
+      });
+    });
     document.querySelectorAll("[data-imagine-run-mode]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const value = String(btn.dataset.imagineRunMode || "single");
@@ -785,6 +877,16 @@
         saveState({ imagineRatio: String(ratio.value || "") });
       });
     }
+    $("imagineSelectImagesBtn")?.addEventListener("click", () => $("imagineImageFiles")?.click());
+    $("imagineImageFiles")?.addEventListener("change", (event) => stageEditFiles(event.target.files));
+    $("imagineClearImagesBtn")?.addEventListener("click", () => {
+      state.editUploadVersion += 1;
+      state.editFileIDs = [];
+      state.editFileNames = [];
+      if ($("imagineImageFiles")) $("imagineImageFiles").value = "";
+      if ($("imagineImageURLs")) $("imagineImageURLs").value = "";
+      renderEditFiles();
+    });
     $("imagineStartBtn")?.addEventListener("click", () => start());
     $("imagineStopBtn")?.addEventListener("click", () => stop());
     $("imagineClearBtn")?.addEventListener("click", () => clearGrid());
@@ -809,8 +911,10 @@
     const models = qualityModels();
     const quality = normalizeQuality(ui.imagineQuality || (ui.imagineModel === models.quality ? "quality" : "lite"));
     setToggle("#imagineQualityToggle", "imagineQuality", quality);
+    setToggle("#imagineOperationToggle", "imagineOperation", ui.imagineOperation === "edit" ? "edit" : "generate");
     setToggle("#imagineRunModeToggle", "imagineRunMode", ui.imagineRunMode === "continuous" ? "continuous" : "single");
     bindEvents();
+    syncEditUI();
     syncRatioUI();
     resizePrompt();
     setButtons(false);
