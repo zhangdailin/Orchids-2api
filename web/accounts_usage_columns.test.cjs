@@ -86,7 +86,7 @@ const title = (html) => {
 function dayStamp(offsetDays = 0) {
   const d = new Date(Date.now() + offsetDays * 86400000);
   const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
 // --- 今日/累计 Tokens -------------------------------------------------------
@@ -100,6 +100,17 @@ test('the daily token figure is counted only when its stamp is today', () => {
   // An account that predates the counter has no date; claiming a daily figure
   // would invent one, so the answer is "not counted".
   assert.equal(context.accountTokensToday({ ...acc, tokens_date: '' }), 0);
+});
+
+
+test('daily token comparison follows the gateway UTC day, not browser timezone', () => {
+  const { context } = loadUI();
+  // 00:30 in Shanghai is still the preceding UTC day. The persisted counter is
+  // stamped by the UTC server and must remain visible rather than becoming 0.
+  const instant = new Date('2026-09-24T16:30:00Z');
+  assert.equal(context.gatewayDayStamp(instant), '2026-09-24');
+  assert.equal(context.accountTokensToday({ tokens_today: 4321, tokens_date: '2026-09-24' }),
+    context.gatewayDayStamp() === '2026-09-24' ? 4321 : 0);
 });
 
 test('the tokens cell abbreviates both figures and names them in the tooltip', () => {

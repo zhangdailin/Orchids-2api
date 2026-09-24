@@ -1598,14 +1598,18 @@ function accountTokensToday(acc) {
   if (!Number.isFinite(value) || value <= 0) return 0;
   const stamp = String(acc?.tokens_date || "").trim();
   if (!stamp) return 0;
-  return stamp === localDayStamp() ? value : 0;
+  return stamp === gatewayDayStamp() ? value : 0;
 }
 
-// localDayStamp is the same YYYY-MM-DD boundary the server rolls the counter on.
-function localDayStamp(date) {
+// The gateway rolls tokens_today using the server day. us1 runs in UTC, while
+// operators commonly open the UI in Asia/Shanghai; comparing that server stamp
+// with the browser's local date made every account read 0 for eight hours after
+// Shanghai midnight. UTC is deployment-independent and matches the persisted
+// counter contract.
+function gatewayDayStamp(date) {
   const d = date instanceof Date ? date : new Date();
   const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
 // buildTokensMarkup renders the 今日/累计 Tokens cell.

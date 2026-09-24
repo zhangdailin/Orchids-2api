@@ -1042,10 +1042,12 @@ func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage 
 	if usage <= 0 && count <= 0 {
 		return nil
 	}
-	nowStr := time.Now().Format(time.RFC3339Nano)
-	// The day boundary is the gateway's own local day, so "today" means the same
-	// window for every account regardless of which upstream reported the usage.
-	today := time.Now().Format("2006-01-02")
+	now := time.Now().UTC()
+	nowStr := now.Format(time.RFC3339Nano)
+	// Daily counters use a fixed UTC boundary. A browser may run in Shanghai or
+	// another zone, and a host's local timezone may change; neither may reinterpret
+	// the persisted tokens_date stamp.
+	today := now.Format("2006-01-02")
 	keys := []string{s.accountsKey(id)}
 	args := []interface{}{usage, count, nowStr, today}
 
