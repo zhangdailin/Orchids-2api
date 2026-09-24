@@ -31,3 +31,25 @@ func StripProviderPublicPrefix(id string) (string, bool) {
 	}
 	return normalized, false
 }
+
+// ProviderScopedPublicID puts the plane back on a bare public model name.
+//
+// Capability rules are provider-scoped: the Console plane's
+// grok-4.20-0309-reasoning refuses an effort parameter while the same name on
+// another plane accepts one, and "console/…" is what those rules key on. The
+// public list publishes the bare name because the qualifier is a routing detail,
+// so a caller that only holds the public name has to restore the plane before it
+// asks a provider-scoped question — otherwise an alias can be advertised from
+// the bare name and then rejected by the resolver, which asks with the plane.
+func ProviderScopedPublicID(provider, publicID string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	publicID = strings.ToLower(strings.TrimSpace(publicID))
+	if provider == "" || publicID == "" || strings.Contains(publicID, "/") {
+		return publicID
+	}
+	switch provider {
+	case "console", "web", "build":
+		return provider + "/" + publicID
+	}
+	return publicID
+}

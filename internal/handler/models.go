@@ -292,7 +292,12 @@ func appendGrokCompatibilityAliases(items []PublicModelResponse, seen map[string
 	if strings.Contains(strings.TrimSpace(entry.ID), "/") {
 		aliases = append(aliases, base)
 	}
-	levels := modelpolicy.SupportedReasoningEfforts(entry.ID)
+	// The effort levels are provider-scoped, and this entry carries the bare
+	// public name, so the plane goes back on before asking. Without it a Console
+	// model that refuses an effort parameter still published <name>-<effort>
+	// aliases, and the resolver — which asks with the qualified name — rejected
+	// every one of them.
+	levels := modelpolicy.SupportedReasoningEfforts(modelpolicy.ProviderScopedPublicID(entry.Provider, entry.ID))
 	if len(levels) >= 2 {
 		for _, level := range levels {
 			aliases = append(aliases, base+"-"+level)

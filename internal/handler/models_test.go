@@ -139,3 +139,38 @@ func TestHandleModelsPublishesConservativeEnabledBuildProfile(t *testing.T) {
 		t.Fatalf("dynamic budgets=%+v", *got)
 	}
 }
+
+// TestAppendGrokCompatibilityAliasesRespectsThePlane keeps the advertised alias
+// set equal to the set the resolver accepts. The entry carries the bare public
+// name, so the plane has to come from the row: a Console model that refuses an
+// effort parameter must not publish <name>-<effort> aliases that every request
+// then rejects as model_not_found.
+func TestAppendGrokCompatibilityAliasesRespectsThePlane(t *testing.T) {
+	aliases := func(entry PublicModelResponse) map[string]bool {
+		items := []PublicModelResponse{entry}
+		seen := map[string]struct{}{publicModelIDKey(entry.ID): {}}
+		items = appendGrokCompatibilityAliases(items, seen, entry)
+		out := map[string]bool{}
+		for _, item := range items[1:] {
+			out[publicModelIDKey(item.ID)] = true
+		}
+		return out
+	}
+
+	fixed := aliases(PublicModelResponse{ID: "grok-4.20-0309-reasoning", OwnedBy: "grok", Provider: "console"})
+	for _, unwanted := range []string{"grok-4.20-0309-reasoning-low", "grok-4.20-0309-reasoning-medium", "grok-4.20-0309-reasoning-high"} {
+		if fixed[unwanted] {
+			t.Fatalf("console fixed-effort model advertised %q: %v", unwanted, fixed)
+		}
+	}
+
+	console := aliases(PublicModelResponse{ID: "grok-4.3", OwnedBy: "grok", Provider: "console"})
+	if !console["grok-4.3-high"] || !console["grok-4.3-none"] {
+		t.Fatalf("console grok-4.3 aliases=%v", console)
+	}
+
+	build := aliases(PublicModelResponse{ID: "grok-4.6", OwnedBy: "grok", Provider: "build"})
+	if !build["grok-4.6-xhigh"] {
+		t.Fatalf("build grok-4.6 aliases=%v", build)
+	}
+}
