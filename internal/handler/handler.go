@@ -1266,7 +1266,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if !sh.hasReturn {
 		sh.finishResponse("end_turn")
 	}
-	if !isStream {
+	if !isStream && !sh.requestFailed {
 		stopReason := sh.finalStopReason
 		if stopReason == "" {
 			stopReason = "end_turn"

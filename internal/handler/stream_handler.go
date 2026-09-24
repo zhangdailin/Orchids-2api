@@ -226,6 +226,7 @@ type streamHandler struct {
 	msgID                    string
 	startTime                time.Time
 	hasReturn                bool
+	requestFailed            bool // terminal error body already owns non-stream response
 	completionLogged         bool
 	hasReasoningOutput       bool
 	finalStopReason          string
@@ -2330,6 +2331,7 @@ func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
 	// Claim the response under the lock so a concurrent finisher cannot also write
 	// a body; finishResponse then returns early and leaves the error in place.
 	h.hasReturn = true
+	h.requestFailed = true
 	h.returned.Store(true)
 	h.mu.Unlock()
 	apperrors.New(category, message, apperrors.StatusForCategory(category)).WriteResponse(h.w)

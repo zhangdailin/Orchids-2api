@@ -439,4 +439,11 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	if strings.Contains(out, "retries exhausted") {
 		t.Fatalf("did not expect retry exhausted wrapper for non-retriable client error, got: %s", out)
 	}
+	var response map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("error response must contain exactly one JSON document, got %q: %v", out, err)
+	}
+	if _, exists := response["choices"]; exists {
+		t.Fatalf("error response must not append a synthetic completion: %s", out)
+	}
 }
