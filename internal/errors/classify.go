@@ -206,6 +206,12 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		IsCreditExhaustion(lower) ||
 		strings.Contains(lower, "quota_limit"):
 		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
+	case strings.Contains(lower, "qoder gateway is busy"):
+		// Qoder business code 10605 means the model queue/service is unavailable,
+		// often with serviceAvailable=false and one shared retry-after hint. It is
+		// not a bad credential and switching through four accounts only multiplies
+		// the same rejected request, so return a rate limit immediately.
+		return UpstreamErrorClass{Category: "rate_limit"}
 	case HasExplicitHTTPStatus(lower, "429") ||
 		strings.Contains(lower, "qoder agent limit reached") ||
 		strings.Contains(lower, "qoder model rate limited") ||

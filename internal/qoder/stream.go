@@ -327,16 +327,19 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 		}
 		if envelope.StatusCodeValue != 0 && envelope.StatusCodeValue != http.StatusOK {
 			var failure struct {
-				Code    string `json:"code"`
 				Message string `json:"message"`
 			}
 			_ = json.Unmarshal([]byte(envelope.Body), &failure)
+			code := envelopeCode([]byte(envelope.Body))
 			detail := strings.TrimSpace(failure.Message)
+			if extracted := extractBodyMessage([]byte(envelope.Body)); extracted != "" {
+				detail = extracted
+			}
 			if detail == "" {
 				detail = fmt.Sprintf("upstream status %d", envelope.StatusCodeValue)
 			}
 			switch {
-			case stringOfCode(failure.Code) == busyCode:
+			case code == busyCode:
 				streamErr = fmt.Errorf("%w: %s", ErrBusy, detail)
 			case isDuplicateRequest(detail, envelope.Body):
 				// Replaying the same signed body/request id cannot repair an

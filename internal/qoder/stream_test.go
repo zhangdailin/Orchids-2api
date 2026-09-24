@@ -3,6 +3,7 @@ package qoder
 import (
 	"errors"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -158,10 +159,18 @@ func TestConsumeStreamReportsErrorEnvelope(t *testing.T) {
 func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 	t.Parallel()
 
-	body := "data: " + `{"statusCodeValue":401,"body":"{\"code\":\"10605\",\"message\":\"queue full\"}"}` + "\n\n"
-	_, _, err := collectStream(t, body)
-	if !errors.Is(err, ErrBusy) {
-		t.Fatalf("error = %v, want ErrBusy", err)
+	for _, bodyJSON := range []string{
+		`{"code":"10605","message":"queue full"}`,
+		`{"code":10605,"message":"{\"isQueued\":true,\"retryAfterSeconds\":29,\"serviceAvailable\":false,\"waitTime\":29}"}`,
+	} {
+		body := "data: " + `{"statusCodeValue":401,"body":` + strconv.Quote(bodyJSON) + `}` + "\n\n"
+		_, _, err := collectStream(t, body)
+		if !errors.Is(err, ErrBusy) {
+			t.Fatalf("error = %v, want ErrBusy for %s", err, bodyJSON)
+		}
+		if errors.Is(err, errUpstreamUnauthorized) {
+			t.Fatalf("busy refusal was misclassified as unauthorized: %v", err)
+		}
 	}
 }
 
