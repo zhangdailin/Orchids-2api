@@ -296,6 +296,8 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 
 	sawFinish := false
 	var streamErr error
+	var rateLimitText strings.Builder
+	checkingRateLimitText := true
 
 	readErr := readSSE(body, func(frame sseFrame) bool {
 		if strings.EqualFold(strings.TrimSpace(frame.event), "finish") {
@@ -409,12 +411,23 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			}
 		}
 		if delta.Content != "" {
-			// Some Qoder plans return account-pool throttling as a successful
-			// HTTP 200 SSE text chunk. Treat it as a model-scoped failure before
-			// forwarding the text, otherwise the gateway reports a false success.
-			if isModelRateLimitText(delta.Content) {
-				streamErr = fmt.Errorf("%w: %s", ErrModelRateLimited, strings.TrimSpace(delta.Content))
-				return false
+			// Buffer the beginning of text long enough to recognize Qoder's
+			// account-pool throttle even when the sentinel spans SSE deltas. Once
+			// the prefix can no longer become that message, release it normally.
+			if checkingRateLimitText {
+				rateLimitText.WriteString(delta.Content)
+				candidate := rateLimitText.String()
+				if isModelRateLimitText(candidate) {
+					streamErr = fmt.Errorf("%w: %s", ErrModelRateLimited, strings.TrimSpace(candidate))
+					return false
+				}
+				if !isPotentialModelRateLimitText(candidate) {
+					checkingRateLimitText = false
+					delta.Content = candidate
+					rateLimitText.Reset()
+				} else {
+					return true
+				}
 			}
 			if !bufferingToolText || sawNativeTools {
 				emitText(delta.Content)
@@ -461,6 +474,9 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 	if streamErr != nil {
 		return result, streamErr
 	}
+	if checkingRateLimitText && rateLimitText.Len() > 0 {
+		emitText(rateLimitText.String())
+	}
 	if toolsEnabled && !sawNativeTools && pendingText.Len() > 0 {
 		if parsed := parseTextToolCalls(pendingText.String()); len(parsed) > 0 {
 			pendingText.Reset()
@@ -485,6 +501,24 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 // It is intentionally distinct from a credential failure: other models on the
 // same account remain usable while this model cools down.
 var ErrModelRateLimited = fmt.Errorf("qoder model rate limited")
+
+func isPotentialModelRateLimitText(text string) bool {
+	candidate := strings.ToLower(strings.TrimSpace(text))
+	if candidate == "" {
+		return true
+	}
+	for _, sentinel := range []string{
+		"the available upstream accounts are rate-limited",
+		"the available upstream accounts are rate limited",
+		"available upstream accounts are rate-limited",
+		"available upstream accounts are rate limited",
+	} {
+		if strings.HasPrefix(sentinel, candidate) || strings.Contains(candidate, sentinel) {
+			return true
+		}
+	}
+	return false
+}
 
 func isModelRateLimitText(text string) bool {
 	lower := strings.ToLower(strings.TrimSpace(text))

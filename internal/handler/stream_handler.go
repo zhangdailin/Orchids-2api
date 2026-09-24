@@ -233,6 +233,10 @@ type streamHandler struct {
 	finalStopReason          string
 	outputTokens             int
 	inputTokens              int
+	cachedInputTokens        int
+	cacheWriteTokens         int
+	reasoningTokens          int
+	usageMetadata            map[string]interface{}
 	activeThinkingBlockIndex int
 	activeThinkingSSEIndex   int
 	activeTextBlockIndex     int
@@ -979,6 +983,79 @@ func (h *streamHandler) finalizeOutputTokens() {
 	h.outputTokens = h.outputEstimator.Count()
 }
 
+func (h *streamHandler) setUpstreamUsage(usage map[string]interface{}) {
+	if len(usage) == 0 {
+		return
+	}
+	read := func(keys ...string) (int, bool) {
+		for _, key := range keys {
+			if value, ok := getUsageIntValue(usage, key); ok {
+				return value, true
+			}
+		}
+		return 0, false
+	}
+	input, hasInput := read("inputTokens", "input_tokens")
+	output, hasOutput := read("outputTokens", "output_tokens")
+	cached, hasCached := read("cacheReadTokens", "cache_read_tokens")
+	cacheWrite, hasCacheWrite := read("cacheWriteTokens", "cache_creation_input_tokens")
+	reasoning, hasReasoning := read("reasoningTokens", "reasoning_tokens")
+	_, hasCredits := usage["credits"]
+	_, hasOriginalCredits := usage["original_credits"]
+	if !hasInput && !hasOutput && !hasCached && !hasCacheWrite && !hasReasoning && !hasCredits && !hasOriginalCredits {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.useUpstreamUsage = true
+	if hasInput {
+		h.inputTokens = input
+	}
+	if hasOutput {
+		h.outputTokens = output
+	}
+	if hasCached {
+		h.cachedInputTokens = cached
+	}
+	if hasCacheWrite {
+		h.cacheWriteTokens = cacheWrite
+	}
+	if hasReasoning {
+		h.reasoningTokens = reasoning
+	}
+	if hasCredits || hasOriginalCredits {
+		if h.usageMetadata == nil {
+			h.usageMetadata = make(map[string]interface{}, 2)
+		}
+		if hasCredits {
+			h.usageMetadata["credits"] = usage["credits"]
+		}
+		if hasOriginalCredits {
+			h.usageMetadata["original_credits"] = usage["original_credits"]
+		}
+	}
+}
+
+func getUsageIntValue(usage map[string]interface{}, key string) (int, bool) {
+	value, ok := usage[key]
+	if !ok {
+		return 0, false
+	}
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	case json.Number:
+		n, err := typed.Int64()
+		return int(n), err == nil
+	default:
+		return 0, false
+	}
+}
+
 func (h *streamHandler) setUsageTokens(input, output int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1034,6 +1111,10 @@ func (h *streamHandler) resetRoundState() {
 	h.currentToolInputID = ""
 	h.toolCallCount = 0
 	h.outputTokens = 0
+	h.cachedInputTokens = 0
+	h.cacheWriteTokens = 0
+	h.reasoningTokens = 0
+	h.usageMetadata = nil
 	h.completionLogged = false
 	h.outputEstimator.Reset()
 	h.useUpstreamUsage = false
@@ -2176,6 +2257,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	case "model.tokens-used":
 		usage := msg.Event
+		h.setUpstreamUsage(usage)
 		inputTokens, hasIn := getUsageInt(usage, "inputTokens")
 		outputTokens, hasOut := getUsageInt(usage, "outputTokens")
 		if !hasIn {
@@ -2209,6 +2291,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			}
 		}
 		if usage, ok := msg.Event["usage"].(map[string]interface{}); ok {
+			h.setUpstreamUsage(usage)
 			inputTokens, hasIn := getUsageInt(usage, "inputTokens")
 			outputTokens, hasOut := getUsageInt(usage, "outputTokens")
 			if !hasIn {

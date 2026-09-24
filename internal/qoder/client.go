@@ -252,6 +252,14 @@ type attemptStreamError struct {
 	wait      time.Duration
 }
 
+// RetryAfter exposes the upstream backoff hint to the shared request handler.
+func (e *attemptStreamError) RetryAfter() time.Duration {
+	if e == nil {
+		return 0
+	}
+	return e.wait
+}
+
 func (e *attemptStreamError) Error() string { return e.err.Error() }
 func (e *attemptStreamError) Unwrap() error { return e.err }
 

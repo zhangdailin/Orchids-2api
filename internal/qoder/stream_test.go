@@ -156,6 +156,20 @@ func TestConsumeStreamReportsErrorEnvelope(t *testing.T) {
 // TestConsumeStreamClassifiesBusyCode proves business code 10605 is reported as
 // a queue refusal under a 401, because refreshing the token cannot fix it and
 // the retry policy differs.
+func TestConsumeStreamClassifiesSplitTextRateLimit(t *testing.T) {
+	t.Parallel()
+	body := envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"The available upstream accounts are rate-"}}]}`) +
+		envelope(`{"id":"1","choices":[{"index":0,"delta":{"content":"limited. Retry later"},"finish_reason":"stop"}]}`) +
+		"event:finish\ndata: {}\n\n"
+	events, _, err := collectStream(t, body)
+	if !errors.Is(err, ErrModelRateLimited) {
+		t.Fatalf("error = %v, want ErrModelRateLimited", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("rate-limit sentinel leaked as assistant output: %+v", events)
+	}
+}
+
 func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 	t.Parallel()
 

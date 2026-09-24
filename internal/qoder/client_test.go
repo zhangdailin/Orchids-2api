@@ -444,6 +444,20 @@ func TestClassifyStatus(t *testing.T) {
 	}
 }
 
+func TestRetryAfterDelaySupportsHTTPDateAndCapsSafely(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	if got := retryAfterDelayAt(now.Add(7*time.Second).Format(http.TimeFormat), now); got != 7*time.Second {
+		t.Fatalf("HTTP-date Retry-After = %v, want 7s", got)
+	}
+	if got := retryAfterDelayAt(now.Add(-time.Second).Format(http.TimeFormat), now); got != 0 {
+		t.Fatalf("past Retry-After = %v, want 0", got)
+	}
+	if got := retryAfterDelayAt("9223372036854775807", now); got != 30*time.Second {
+		t.Fatalf("huge Retry-After = %v, want cap 30s", got)
+	}
+}
+
 // TestBusyWaitIsCapped proves a hostile or buggy backoff hint cannot park a
 // request indefinitely.
 func TestBusyWaitIsCapped(t *testing.T) {

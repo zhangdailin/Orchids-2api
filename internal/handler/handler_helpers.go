@@ -641,16 +641,24 @@ type accountStatsDelta struct {
 	count int64
 }
 
+func (h *Handler) initAccountStatsWriter() {
+	h.statsPending = make(map[int64]accountStatsDelta)
+	h.statsWake = make(chan struct{}, 1)
+	h.statsStop = make(chan struct{})
+	h.statsDone = make(chan struct{})
+	go h.runAccountStatsWriter()
+}
+
 func (h *Handler) updateAccountStats(account *store.Account, inputTokens, outputTokens int) {
 	if account == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return
 	}
-	h.statsOnce.Do(func() {
-		h.statsPending = make(map[int64]accountStatsDelta)
-		h.statsWake = make(chan struct{}, 1)
-		go h.runAccountStatsWriter()
-	})
+	h.statsOnce.Do(h.initAccountStatsWriter)
 	h.statsMu.Lock()
+	if h.statsClosed {
+		h.statsMu.Unlock()
+		return
+	}
 	delta := h.statsPending[account.ID]
 	delta.usage += float64(inputTokens + outputTokens)
 	delta.count++
@@ -663,25 +671,64 @@ func (h *Handler) updateAccountStats(account *store.Account, inputTokens, output
 }
 
 func (h *Handler) runAccountStatsWriter() {
-	for range h.statsWake {
+	defer close(h.statsDone)
+	const (
+		initialBackoff = 100 * time.Millisecond
+		maxBackoff     = 5 * time.Second
+	)
+	backoff := initialBackoff
+	for {
+		select {
+		case <-h.statsStop:
+			return
+		case <-h.statsWake:
+		}
 		for {
 			h.statsMu.Lock()
 			var accountID int64
 			var delta accountStatsDelta
+			found := false
 			for id, pending := range h.statsPending {
-				accountID, delta = id, pending
+				accountID, delta, found = id, pending, true
 				delete(h.statsPending, id)
 				break
 			}
 			h.statsMu.Unlock()
-			if accountID == 0 {
+			if !found {
+				backoff = initialBackoff
 				break
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			err := h.loadBalancer.Store.IncrementAccountStats(ctx, accountID, delta.usage, delta.count)
 			cancel()
-			if err != nil {
-				slog.Error("Failed to update account stats", "account_id", accountID, "error", err)
+			if err == nil {
+				backoff = initialBackoff
+				continue
+			}
+
+			// Merge the failed delta back rather than dropping it. Concurrent
+			// arrivals are already in the map and are preserved by addition.
+			h.statsMu.Lock()
+			pending := h.statsPending[accountID]
+			pending.usage += delta.usage
+			pending.count += delta.count
+			h.statsPending[accountID] = pending
+			h.statsMu.Unlock()
+			slog.Error("Failed to update account stats; retrying", "account_id", accountID, "retry_in", backoff, "error", err)
+			timer := time.NewTimer(backoff)
+			select {
+			case <-h.statsStop:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+			}
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
 			}
 		}
 	}
@@ -706,6 +753,24 @@ func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {
 			slog.Warn("同步账号令牌失败", "account", account.Name, "type", account.AccountType, "error", err)
 		}
 	}
+}
+
+type retryAfterError interface {
+	RetryAfter() time.Duration
+}
+
+func upstreamRetryAfter(err error) time.Duration {
+	var hinted retryAfterError
+	if errors.As(err, &hinted) {
+		delay := hinted.RetryAfter()
+		if delay > 30*time.Second {
+			return 30 * time.Second
+		}
+		if delay > 0 {
+			return delay
+		}
+	}
+	return 0
 }
 
 func computeRetryDelay(base time.Duration, attempt int, category string) time.Duration {

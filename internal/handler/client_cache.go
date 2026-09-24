@@ -345,6 +345,15 @@ func (h *Handler) Close() {
 		return
 	}
 
+	h.statsOnce.Do(h.initAccountStatsWriter)
+	h.statsCloseOnce.Do(func() {
+		h.statsMu.Lock()
+		h.statsClosed = true
+		h.statsMu.Unlock()
+		close(h.statsStop)
+		<-h.statsDone
+	})
+
 	closers := make([]clientCloser, 0, 1)
 	if c, ok := h.client.(clientCloser); ok {
 		closers = append(closers, c)

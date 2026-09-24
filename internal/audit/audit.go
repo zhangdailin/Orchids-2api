@@ -57,6 +57,7 @@ type Event struct {
 	InputTokens       int         `json:"input_tokens,omitempty"`
 	OutputTokens      int         `json:"output_tokens,omitempty"`
 	CachedInputTokens int         `json:"cached_input_tokens,omitempty"`
+	CacheWriteTokens  int         `json:"cache_write_tokens,omitempty"`
 	ReasoningTokens   int         `json:"reasoning_tokens,omitempty"`
 	TotalTokens       int         `json:"total_tokens,omitempty"`
 	UsageSource       UsageSource `json:"usage_source,omitempty"`

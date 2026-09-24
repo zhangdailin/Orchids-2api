@@ -772,15 +772,27 @@ func busyWait(retryAfter string, raw []byte) time.Duration {
 }
 
 func retryAfterDelay(value string) time.Duration {
+	return retryAfterDelayAt(value, time.Now())
+}
+
+func retryAfterDelayAt(value string, now time.Time) time.Duration {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return 0
 	}
-	seconds, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || seconds <= 0 {
-		return 0
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		if seconds >= int64(30*time.Second/time.Second) {
+			return 30 * time.Second
+		}
+		return time.Duration(seconds) * time.Second
 	}
-	return capWait(time.Duration(seconds) * time.Second)
+	if at, err := http.ParseTime(value); err == nil {
+		return capWait(at.Sub(now))
+	}
+	return 0
 }
 
 func capWait(wait time.Duration) time.Duration {

@@ -730,6 +730,28 @@ func TestStreamHandler_TokensUsed_OverridesEstimation(t *testing.T) {
 	}
 }
 
+func TestStreamHandler_DetailedUsageIsAssignedIdempotently(t *testing.T) {
+	sh := newStreamHandler(&config.Config{}, newFlushRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
+	defer sh.release()
+	usage := map[string]interface{}{
+		"inputTokens": 1000, "outputTokens": 20, "cacheReadTokens": 900,
+		"cacheWriteTokens": 50, "reasoningTokens": 7,
+		"credits": 0.25, "original_credits": 0.5,
+	}
+	sh.handleMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: usage})
+	sh.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"usage": usage}})
+	if sh.inputTokens != 1000 || sh.outputTokens != 20 || sh.cachedInputTokens != 900 || sh.cacheWriteTokens != 50 || sh.reasoningTokens != 7 {
+		t.Fatalf("detailed usage lost or doubled: in=%d out=%d cached=%d write=%d reasoning=%d", sh.inputTokens, sh.outputTokens, sh.cachedInputTokens, sh.cacheWriteTokens, sh.reasoningTokens)
+	}
+	if sh.usageMetadata["credits"] != 0.25 || sh.usageMetadata["original_credits"] != 0.5 {
+		t.Fatalf("usage metadata = %#v", sh.usageMetadata)
+	}
+	sh.resetRoundState()
+	if sh.cachedInputTokens != 0 || sh.cacheWriteTokens != 0 || sh.reasoningTokens != 0 || sh.usageMetadata != nil {
+		t.Fatalf("detailed usage survived round reset: %+v", sh)
+	}
+}
+
 func TestStreamHandler_FinalOutputTokens_MatchChunkedText(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false}
 	rec := newFlushRecorder()

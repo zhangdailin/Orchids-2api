@@ -1,10 +1,31 @@
 package handler
 
 import (
+	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	apperrors "orchids-api/internal/errors"
 )
+
+type hintedRetryError struct{ delay time.Duration }
+
+func (e hintedRetryError) Error() string             { return "retry later" }
+func (e hintedRetryError) RetryAfter() time.Duration { return e.delay }
+
+func TestUpstreamRetryAfterReadsWrappedHint(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", hintedRetryError{delay: 7 * time.Second})
+	if got := upstreamRetryAfter(err); got != 7*time.Second {
+		t.Fatalf("upstreamRetryAfter() = %v, want 7s", got)
+	}
+	if got := upstreamRetryAfter(hintedRetryError{delay: time.Minute}); got != 30*time.Second {
+		t.Fatalf("upstreamRetryAfter() cap = %v, want 30s", got)
+	}
+	if got := upstreamRetryAfter(errors.New("plain")); got != 0 {
+		t.Fatalf("upstreamRetryAfter(plain) = %v, want 0", got)
+	}
+}
 
 func TestClassifyUpstreamErrorCreditsExhausted(t *testing.T) {
 	t.Parallel()
