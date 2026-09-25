@@ -99,7 +99,7 @@ func responsesChatPath(path string) string {
 // that only implements Chat Completions.
 //
 // Codex defaults to the Responses wire API. Grok speaks it natively, but the
-// Warp/WorkBuddy/Qoder channels only expose /v1/chat/completions, so
+// WorkBuddy, Qoder and Cline only expose /v1/chat/completions, so
 // without this bridge every request from Codex to those channels is a 404. The
 // bridge reuses the channel's chat handler verbatim: account selection,
 // retries, tool handling and streaming all stay where they already live.

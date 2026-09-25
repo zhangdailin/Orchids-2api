@@ -5,8 +5,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260918-phonefix1">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/models.css?v=20260918-wide1">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v={{.AssetVersion}}">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/models.css?v={{.AssetVersion}}">
 
 </head>
 <body>
@@ -127,9 +127,9 @@
   {{template "model-modal.html" .}}
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v=20260925-abnormal1"></script>
-  <script src="{{.AdminPath}}/js/provider-registry.js?v=20260924-backend-registry1"></script>
-  <script src="{{.AdminPath}}/js/models.js?v=20260924-backend-registry1"></script>
+  <script src="{{.AdminPath}}/js/common.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/provider-registry.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/models.js?v={{.AssetVersion}}"></script>
 </body>
 </html>
 

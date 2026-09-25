@@ -3,14 +3,14 @@ package handler
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"github.com/goccy/go-json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"orchids-api/internal/audit"
 	"orchids-api/internal/config"
@@ -68,27 +68,6 @@ func (f *fakePayloadClient) snapshotCalls() []upstream.UpstreamRequest {
 	return out
 }
 
-func makeWarpRequestBody(t *testing.T, text, conversationID string) []byte {
-	t.Helper()
-	req := ClaudeRequest{
-		Model:          "claude-opus-4-6",
-		ConversationID: conversationID,
-		Messages: []prompt.Message{
-			{
-				Role:    "user",
-				Content: prompt.MessageContent{Text: text},
-			},
-		},
-		Stream: false,
-		Tools:  []interface{}{},
-	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	return body
-}
-
 func newTestHandler(client UpstreamClient) *Handler {
 	return &Handler{
 		config:       &config.Config{DebugEnabled: false},
@@ -98,300 +77,6 @@ func newTestHandler(client UpstreamClient) *Handler {
 	}
 }
 
-func TestWarpConversationID_NotPersistedWithoutConversationKey(t *testing.T) {
-	t.Parallel()
-
-	client := &fakePayloadClient{
-		conversationIDsByOp: []string{"warp_upstream_conv_1", "warp_upstream_conv_2"},
-	}
-	h := newTestHandler(client)
-
-	req1 := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(makeWarpRequestBody(t, "first", "")))
-	rec1 := httptest.NewRecorder()
-	h.HandleMessages(rec1, req1)
-	if rec1.Code != http.StatusOK {
-		t.Fatalf("first request status = %d, want %d", rec1.Code, http.StatusOK)
-	}
-
-	req2 := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(makeWarpRequestBody(t, "second", "")))
-	rec2 := httptest.NewRecorder()
-	h.HandleMessages(rec2, req2)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("second request status = %d, want %d", rec2.Code, http.StatusOK)
-	}
-
-	calls := client.snapshotCalls()
-	if len(calls) != 2 {
-		t.Fatalf("expected 2 upstream calls, got %d", len(calls))
-	}
-
-	if calls[0].ChatSessionID != "" {
-		t.Fatalf("first ChatSessionID = %q, want empty for a new official Warp conversation", calls[0].ChatSessionID)
-	}
-	if calls[1].ChatSessionID != "" {
-		t.Fatalf("second unrelated ChatSessionID = %q, want empty", calls[1].ChatSessionID)
-	}
-	if calls[1].ChatSessionID == "warp_upstream_conv_1" {
-		t.Fatalf("second request unexpectedly reused upstream conversation id: %q", calls[1].ChatSessionID)
-	}
-	// Verify empty conversation key does not store convID
-	if _, ok := h.sessionStore.GetConvID(context.Background(), ""); ok {
-		t.Fatalf("unexpected cached conversation id for empty conversation key")
-	}
-}
-
-func TestWarpToolResultFollowup_ResumesWithoutClientSessionID(t *testing.T) {
-	t.Parallel()
-	taskContext := []byte("opaque-warp-task-context")
-	finalTaskContext := []byte("opaque-warp-task-context-after-final-actions")
-
-	client := &fakePayloadClient{
-		eventsByOp: [][]upstream.SSEMessage{{
-			{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_upstream_tool_conv"}},
-			{Type: "model.tool-call", Event: map[string]interface{}{
-				"toolCallId":      "tool_write_1",
-				"toolName":        "Write",
-				"input":           `{"file_path":"calculator.py","content":"print(1)"}`,
-				"warpToolType":    "call_mcp_tool",
-				"warpTaskContext": base64.RawURLEncoding.EncodeToString(taskContext),
-			}},
-			{Type: "model.finish", Event: map[string]interface{}{
-				"finishReason":    "tool_use",
-				"warpTaskContext": base64.RawURLEncoding.EncodeToString(finalTaskContext),
-			}},
-		}},
-	}
-	h := newTestHandler(client)
-
-	first := []byte(`{
-		"model":"claude-opus-4-6",
-		"stream":false,
-		"messages":[{"role":"user","content":"create calculator.py"}],
-		"tools":[{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}}]
-	}`)
-	rec1 := httptest.NewRecorder()
-	h.HandleMessages(rec1, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(first)))
-	if rec1.Code != http.StatusOK {
-		t.Fatalf("first status=%d body=%s", rec1.Code, rec1.Body.String())
-	}
-
-	second := []byte(`{
-		"model":"claude-opus-4-6",
-		"stream":false,
-		"messages":[
-			{"role":"user","content":"create calculator.py"},
-			{"role":"assistant","content":[{"type":"tool_use","id":"tool_write_1","name":"Write","input":{"file_path":"calculator.py","content":"print(1)"}}]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_write_1","content":"File created successfully"}]}
-		],
-		"tools":[{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}},"required":["file_path","content"]}}]
-	}`)
-	rec2 := httptest.NewRecorder()
-	h.HandleMessages(rec2, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(second)))
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("second status=%d body=%s", rec2.Code, rec2.Body.String())
-	}
-
-	calls := client.snapshotCalls()
-	if len(calls) != 2 {
-		t.Fatalf("calls=%d want 2", len(calls))
-	}
-	if calls[0].ChatSessionID != "" {
-		t.Fatalf("new conversation id=%q want empty", calls[0].ChatSessionID)
-	}
-	if calls[1].ChatSessionID != "warp_upstream_tool_conv" {
-		t.Fatalf("continuation conversation=%q want warp_upstream_tool_conv", calls[1].ChatSessionID)
-	}
-	if !bytes.Equal(calls[1].WarpTaskContext, finalTaskContext) {
-		t.Fatalf("continuation task context=%q want %q", calls[1].WarpTaskContext, finalTaskContext)
-	}
-}
-
-func TestWarpConversationPersistsTaskContextAcrossOrdinaryRequests(t *testing.T) {
-	t.Parallel()
-	taskContext := []byte("complete-task-graph-after-first-turn")
-	encoded := base64.RawURLEncoding.EncodeToString(taskContext)
-	client := &fakePayloadClient{eventsByOp: [][]upstream.SSEMessage{
-		{
-			{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp-upstream-conversation"}},
-			{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn", "warpTaskContext": encoded}},
-		},
-		{
-			{Type: "model.finish", Event: map[string]interface{}{"finishReason": "end_turn", "warpTaskContext": encoded}},
-		},
-	}}
-	h := newTestHandler(client)
-
-	for _, text := range []string{"first", "ordinary second turn"} {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(makeWarpRequestBody(t, text, "client-conversation")))
-		h.HandleMessages(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("request %q status=%d body=%s", text, rec.Code, rec.Body.String())
-		}
-	}
-
-	calls := client.snapshotCalls()
-	if len(calls) != 2 {
-		t.Fatalf("calls=%d want 2", len(calls))
-	}
-	if calls[1].ChatSessionID != "warp-upstream-conversation" {
-		t.Fatalf("second conversation id=%q", calls[1].ChatSessionID)
-	}
-	if !bytes.Equal(calls[1].WarpTaskContext, taskContext) {
-		t.Fatalf("second task context=%q want %q", calls[1].WarpTaskContext, taskContext)
-	}
-}
-
-func TestWarpNoToolsWriteIsReturnedAsText(t *testing.T) {
-	t.Parallel()
-
-	client := &fakePayloadClient{eventsByOp: [][]upstream.SSEMessage{{
-		{Type: "model.tool-call", Event: map[string]interface{}{
-			"toolCallId": "tool_write_unavailable",
-			"toolName":   "Write",
-			"input":      `{"file_path":"index.html","content":"<!doctype html><h1>Cherry ready</h1>"}`,
-		}},
-		{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}},
-	}}}
-	h := newTestHandler(client)
-	body := []byte(`{
-		"model":"claude-opus-4-6",
-		"stream":false,
-		"messages":[{"role":"user","content":"Create an index.html landing page"}]
-	}`)
-	rec := httptest.NewRecorder()
-	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "/warp/v1/chat/completions", bytes.NewReader(body)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	calls := client.snapshotCalls()
-	if len(calls) != 1 || !calls[0].NoTools || len(calls[0].Tools) != 0 {
-		t.Fatalf("upstream request did not enforce no-tools: %#v", calls)
-	}
-	if !strings.Contains(calls[0].Prompt, "<tool_gate>") {
-		t.Fatalf("tool gate was not included in finalized prompt: %q", calls[0].Prompt)
-	}
-	out := rec.Body.String()
-	if strings.Contains(out, `"tool_calls"`) || strings.Contains(out, `"name":"Write"`) {
-		t.Fatalf("undeclared Write leaked to OpenAI client: %s", out)
-	}
-	if !strings.Contains(out, "Cherry ready") {
-		t.Fatalf("generated file content was lost: %s", out)
-	}
-}
-
-func TestWarpSuccessfulWriteResultGetsVisibleConfirmation(t *testing.T) {
-	t.Parallel()
-
-	client := &fakePayloadClient{eventsByOp: [][]upstream.SSEMessage{{
-		{Type: "model.finish", Event: map[string]interface{}{
-			"finishReason": "end_turn",
-			"usage":        map[string]interface{}{"inputTokens": 50, "outputTokens": 0},
-		}},
-	}}}
-	h := newTestHandler(client)
-	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_write_done", WarpToolBinding{ConversationID: "warp_conv_write_done", ToolType: "call_mcp_tool"})
-	body := []byte(`{
-		"model":"claude-opus-4-6",
-		"stream":false,"conversation_id":"test-conversation",
-		"messages":[
-			{"role":"user","content":"Create notes.txt"},
-			{"role":"assistant","content":[{"type":"tool_use","id":"tool_write_done","name":"Write","input":{"file_path":"notes.txt","content":"done"}}]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_write_done","content":"File created successfully"}]}
-		],
-		"tools":[{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}}}}]
-	}`)
-	rec := httptest.NewRecorder()
-	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "File operation completed successfully.") {
-		t.Fatalf("zero-output write result remained invisible: %s", rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), `"output_tokens":0`) {
-		t.Fatalf("visible confirmation reported zero output tokens: %s", rec.Body.String())
-	}
-	if calls := client.snapshotCalls(); len(calls) != 1 {
-		t.Fatalf("write result was replayed through extra upstream calls: %d", len(calls))
-	}
-}
-
-func TestWarpEmptyOutputRecoveryMarkerDoesNotBecomeUserQuestion(t *testing.T) {
-	t.Parallel()
-
-	client := &fakePayloadClient{}
-	h := newTestHandler(client)
-	body := []byte(`{
-		"model":"claude-opus-4-6",
-		"stream":false,
-		"messages":[
-			{"role":"user","content":"Create notes.txt"},
-			{"role":"assistant","content":[{"type":"tool_use","id":"tool_write_done","name":"Write","input":{"file_path":"notes.txt","content":"done"}}]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_write_done","content":"File created successfully"}]},
-			{"role":"assistant","content":[]},
-			{"role":"user","content":"[Your previous response had no visible output. Please continue and produce a user-visible response.]"}
-		],
-		"tools":[{"name":"Write","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"content":{"type":"string"}}}}]
-	}`)
-	rec := httptest.NewRecorder()
-	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	calls := client.snapshotCalls()
-	if len(calls) != 1 || !calls[0].NoTools {
-		t.Fatalf("recovery request did not prevent duplicate tools: %#v", calls)
-	}
-	if strings.Contains(calls[0].Prompt, clientEmptyOutputRecoveryMarker) {
-		t.Fatalf("client recovery marker was forwarded as the user's question: %q", calls[0].Prompt)
-	}
-	if !strings.Contains(calls[0].Prompt, "completed successfully") {
-		t.Fatalf("recovery prompt lost operation context: %q", calls[0].Prompt)
-	}
-	if !strings.Contains(rec.Body.String(), "File operation completed successfully.") {
-		t.Fatalf("recovery request remained empty: %s", rec.Body.String())
-	}
-}
-
-func TestResolveWarpContinuationRejectsMixedConversations(t *testing.T) {
-	t.Parallel()
-	h := newTestHandler(&fakePayloadClient{})
-	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_a", WarpToolBinding{ConversationID: "conv_a", AccountID: 1})
-	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_b", WarpToolBinding{ConversationID: "conv_b", AccountID: 1})
-	messages := []prompt.Message{{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{
-		{Type: "tool_result", ToolUseID: "tool_a", Content: "a"},
-		{Type: "tool_result", ToolUseID: "tool_b", Content: "b"},
-	}}}}
-	if _, err := h.resolveWarpContinuation(context.Background(), "test-conversation", messages); err == nil {
-		t.Fatal("expected mixed-conversation tool results to be rejected")
-	}
-}
-
-func TestResolveWarpContinuationRejectsExpiredToolBinding(t *testing.T) {
-	t.Parallel()
-	h := newTestHandler(&fakePayloadClient{})
-	messages := []prompt.Message{{Role: "user", Content: prompt.MessageContent{Blocks: []prompt.ContentBlock{{
-		Type: "tool_result", ToolUseID: "expired_tool", Content: "done",
-	}}}}}
-	if _, err := h.resolveWarpContinuation(context.Background(), "test-conversation", messages); err == nil || !strings.Contains(err.Error(), "expired or is unavailable") {
-		t.Fatalf("error=%v want explicit expired continuation error", err)
-	}
-}
-
-func TestWarpBindingInput_DoesNotPersistMCPPayloads(t *testing.T) {
-	if got := warpBindingInput("call_mcp_tool", `{"content":"large source file"}`); got != "" {
-		t.Fatalf("MCP input was persisted: %q", got)
-	}
-	if got := warpBindingInput("run_shell_command", `{"command":"pwd"}`); got != `{"command":"pwd"}` {
-		t.Fatalf("native shell input=%q", got)
-	}
-}
-
-// A workdir question that follows a tool result is a normal turn now. It used
-// to be intercepted and answered locally, and the tool-result guard that skipped
-// the intercept for followups is gone with the intercept itself.
 func TestToolResultFollowupWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
 	t.Parallel()
 
@@ -668,47 +353,7 @@ func TestMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
 	}
 }
 
-func TestWarpConversationID_PersistedWithConversationKey(t *testing.T) {
-	t.Parallel()
-
-	client := &fakePayloadClient{
-		conversationIDsByOp: []string{"warp_upstream_conv_persist"},
-	}
-	h := newTestHandler(client)
-	const conversationID = "local_conversation_key_1"
-
-	req1 := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(makeWarpRequestBody(t, "first", conversationID)))
-	rec1 := httptest.NewRecorder()
-	h.HandleMessages(rec1, req1)
-	if rec1.Code != http.StatusOK {
-		t.Fatalf("first request status = %d, want %d", rec1.Code, http.StatusOK)
-	}
-
-	req2 := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(makeWarpRequestBody(t, "second", conversationID)))
-	rec2 := httptest.NewRecorder()
-	h.HandleMessages(rec2, req2)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("second request status = %d, want %d", rec2.Code, http.StatusOK)
-	}
-
-	calls := client.snapshotCalls()
-	if len(calls) != 2 {
-		t.Fatalf("expected 2 upstream calls, got %d", len(calls))
-	}
-
-	if calls[0].ChatSessionID != "" {
-		t.Fatalf("first ChatSessionID = %q, want empty for a new official Warp conversation", calls[0].ChatSessionID)
-	}
-	if calls[1].ChatSessionID != "warp_upstream_conv_persist" {
-		t.Fatalf("second ChatSessionID = %q, want %q", calls[1].ChatSessionID, "warp_upstream_conv_persist")
-	}
-}
-
-// The gateway relays client content verbatim. There is deliberately no
-// history-message or tool-result cap: the old WarpMaxHistoryMessages /
-// WarpMaxToolResults knobs never trimmed anything, so this test now guards the
-// behaviour itself rather than proving two inert fields stayed inert.
-func TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
+func TestWorkBuddyPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
@@ -740,7 +385,7 @@ func TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
@@ -760,65 +405,14 @@ func TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem(t *testing.T) {
 		t.Fatalf("system len = %d, want %d", len(calls[0].System), len(reqPayload.System))
 	}
 	if !strings.Contains(calls[0].System[0].Text, "Claude Code") {
-		t.Fatalf("expected warp system prompt to be unchanged, got %q", calls[0].System[0].Text)
+		t.Fatalf("expected the system prompt to be unchanged, got %q", calls[0].System[0].Text)
 	}
 	if !strings.Contains(calls[0].System[1].Text, "cc_entrypoint=claude-code") {
-		t.Fatalf("expected cc_entrypoint to be preserved for warp, got %q", calls[0].System[1].Text)
+		t.Fatalf("expected cc_entrypoint to be preserved, got %q", calls[0].System[1].Text)
 	}
 }
 
-func TestWarpToolResultFollowupWithText_HonorsEmptyTools(t *testing.T) {
-	t.Parallel()
-
-	client := &fakePayloadClient{}
-	h := newTestHandler(client)
-	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
-
-	body := []byte(`{
-		"model":"claude-opus-4-6",
-		"stream":false,"conversation_id":"test-conversation",
-		"messages":[
-			{
-				"role":"user",
-				"content":[
-					{"type":"text","text":"You are an interactive agent that helps users with software engineering tasks.\n# Environment\nPrimary working directory: /Users/dailin/Documents/GitHub/truth_social_scraper\n# auto memory\ngitStatus: dirty\nRecent commits: abcdef"}
-				]
-			},
-			{
-				"role":"assistant",
-				"content":[
-					{"type":"tool_use","id":"tool_1","name":"Read","input":{"file_path":"utils.py"}}
-				]
-			},
-			{
-				"role":"user",
-				"content":[
-					{"type":"tool_result","tool_use_id":"tool_1","content":"1→import json\n2→import os\n3→from urllib.request import Request\n4→import socks\n5→from flask import Flask\n6→def load_media_mapping():\n7→    with open(MEDIA_MAPPING_FILE, \"r\") as f:\n8→        return json.load(f)\n9→ALERTS_FILE = os.path.join(PROJECT_ROOT, \"market_alerts.json\")"},
-					{"type":"text","text":"这个项目使用了哪些技术架构"}
-				]
-			}
-		],
-		"tools":[]
-	}`)
-
-	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-
-	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want %d", rec.Code, http.StatusOK)
-	}
-
-	calls := client.snapshotCalls()
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 upstream call, got %d", len(calls))
-	}
-	if !calls[0].NoTools {
-		t.Fatalf("expected explicit tools:[] to disable tools on the follow-up")
-	}
-}
-
-func TestWarpToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
+func TestToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{
@@ -837,7 +431,6 @@ func TestWarpToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
 		},
 	}
 	h := newTestHandler(client)
-	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_old_1", WarpToolBinding{ConversationID: "warp_conv_tool_old", ToolType: "call_mcp_tool"})
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
@@ -878,7 +471,7 @@ func TestWarpToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
 		]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
@@ -899,15 +492,11 @@ func TestWarpToolResultFollowup_RepeatedWriteIsForwarded(t *testing.T) {
 
 }
 
-func TestWarpToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testing.T) {
+func TestToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
 	h := newTestHandler(client)
-	h.sessionStore.SetConvID(context.Background(), "local_conversation_key_split", "warp_conv_existing")
-	for _, id := range []string{"tool_ls", "tool_api", "tool_utils"} {
-		h.sessionStore.SetWarpToolBinding(context.Background(), "local_conversation_key_split", id, WarpToolBinding{ConversationID: "warp_conv_existing", ToolType: "call_mcp_tool"})
-	}
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
@@ -930,7 +519,7 @@ func TestWarpToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testin
 		"tools":[]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
@@ -963,13 +552,13 @@ func TestWarpToolResultFollowup_SendsAllCurrentTurnResultsInOneRequest(t *testin
 	}
 }
 
-func TestWarpToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
+func TestToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{
 		eventsByOp: [][]upstream.SSEMessage{
 			{
-				{Type: "model.conversation_id", Event: map[string]interface{}{"id": "warp_conv_batch"}},
+				{Type: "model.conversation_id", Event: map[string]interface{}{"id": "workbuddy_conv_batch"}},
 				{Type: "model.text-delta", Event: map[string]interface{}{"delta": "Let me dig into the rest of the codebase first."}},
 				{
 					Type: "model.tool-call",
@@ -984,10 +573,6 @@ func TestWarpToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
 		},
 	}
 	h := newTestHandler(client)
-	h.sessionStore.SetConvID(context.Background(), "local_conversation_key_intermediate", "warp_conv_existing")
-	for _, id := range []string{"tool_ls", "tool_api", "tool_utils"} {
-		h.sessionStore.SetWarpToolBinding(context.Background(), "local_conversation_key_intermediate", id, WarpToolBinding{ConversationID: "warp_conv_existing", ToolType: "call_mcp_tool"})
-	}
 
 	body := []byte(`{
 		"model":"claude-opus-4-6",
@@ -1010,7 +595,7 @@ func TestWarpToolResultFollowup_StreamsSingleBatchedResponse(t *testing.T) {
 		"tools":[{"name":"Read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}}]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)

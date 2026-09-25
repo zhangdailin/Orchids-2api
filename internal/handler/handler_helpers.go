@@ -16,7 +16,6 @@ import (
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -129,7 +128,7 @@ func isModelMissingError(err error) bool {
 // decides". Every entry point that used to call channelFromPath on a body that
 // carries a model must call this instead: on the unified prefix the path carries
 // no channel at all, so a path-only answer silently degrades to the generic
-// code path (which is how a Warp token count came back with the wrong profile).
+// code path and the token count comes back with the wrong profile).
 func (h *Handler) ModelChannel(r *http.Request, modelID string) string {
 	if r != nil {
 		if channel := channelFromPath(r.URL.Path); channel != "" {
@@ -207,7 +206,7 @@ func looseNumber(value interface{}) (float64, bool) {
 
 // effortVariantOrder is the fallback order tried when a client asks for a model
 // family by its bare name and the catalog only exposes effort-suffixed
-// variants. Warp publishes models as "<family>-<effort>" (gpt-5-6-sol-low),
+// variants. A catalog may publish models as "<family>-<effort>" (gpt-5-6-sol-low),
 // while clients such as Codex send the family name plus reasoning_effort.
 var effortVariantOrder = []string{"medium", "high", "low", "xhigh", "max"}
 
@@ -262,8 +261,7 @@ func (h *Handler) resolveEffortModelVariant(ctx context.Context, modelID, effort
 }
 
 type accountSelectionOptions struct {
-	ModelID            string
-	PreferredAccountID int64
+	ModelID string
 }
 
 // acquireAccountSelection is the form the request path uses: it returns the
@@ -384,168 +382,36 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	if h == nil || h.loadBalancer == nil {
 		return nil, errors.New("load balancer not configured")
 	}
-	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
-		model := strings.TrimSpace(opts.ModelID)
-		channel := strings.ToLower(strings.TrimSpace(targetChannel))
-		needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "qoder" || channel == "workbuddy" || channel == "cline")
-		if needsFilter {
-			return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-				if channel == "cline" && !cline.CatalogSupportsModel(acc.ClineModelIDs, model) {
-					return false
-				}
-				if honorsModelCooldown(channel) && store.ModelCooldownRemaining(acc, model, time.Now()) != 0 {
-					return false
-				}
-				switch strings.TrimSpace(acc.StatusCode) {
-				case "402":
-					if channel == "qoder" {
-						return qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
-					}
-					if channel == "workbuddy" {
-						return workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model)
-					}
-				case store.AccountStatusQoderQuotaExhausted:
-					return channel == "qoder" && qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
-				case store.AccountStatusWorkBuddyQuotaExhausted:
-					return channel == "workbuddy" && workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model)
-				default:
-					return true
-				}
+	model := strings.TrimSpace(opts.ModelID)
+	channel := strings.ToLower(strings.TrimSpace(targetChannel))
+	needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "qoder" || channel == "workbuddy" || channel == "cline")
+	if needsFilter {
+		return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
+			if channel == "cline" && !cline.CatalogSupportsModel(acc.ClineModelIDs, model) {
 				return false
-			})
-		}
-		return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
-	}
-
-	requestedModel := normalizeRequestedModelID(opts.ModelID)
-	warpFilter := func(acc *store.Account) bool {
-		if opts.PreferredAccountID != 0 && acc.ID != opts.PreferredAccountID {
-			return false
-		}
-		return true
-	}
-	if requestedModel == "" || requestedModel == warp.DefaultModel() {
-		return h.selectWarpAccountWithFilter(ctx, failedAccountIDs, targetChannel, opts, warpFilter)
-	}
-
-	choices, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
-	if err != nil || choices == nil {
-		return h.selectWarpAccountWithFilter(ctx, failedAccountIDs, targetChannel, opts, warpFilter)
-	}
-	if !h.warpEffectiveChoicesSupportModel(ctx, choices, requestedModel) {
-		return nil, fmt.Errorf("no enabled accounts available for channel: %s (model %s is not available in the current Warp account pool)", targetChannel, requestedModel)
-	}
-
-	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
-		return warpFilter(acc) && warp.AccountSupportsModelForRouting(choices, acc, requestedModel)
-	})
-	if err == nil {
-		return account, nil
-	}
-	return nil, err
-}
-
-func (h *Handler) selectWarpAccountWithFilter(ctx context.Context, failedAccountIDs []int64, targetChannel string, opts accountSelectionOptions, filter func(*store.Account) bool) (*store.Account, error) {
-	account, err := h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, filter)
-	if err == nil {
-		return account, nil
-	}
-	// Account pricing is not used as a routing restriction: the upstream response
-	// is authoritative for any feature entitlement.
-	return nil, err
-}
-
-func (h *Handler) warpEffectiveChoicesSupportModel(ctx context.Context, choices *warp.AccountModelChoices, modelID string) bool {
-	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil || choices == nil || len(choices.Accounts) == 0 {
-		return true
-	}
-	resolvedModelID := normalizeRequestedModelID(modelID)
-	if resolvedModelID == "" {
-		return true
-	}
-	visible := h.visibleWarpModelSet(ctx)
-	if visible == nil {
-		for _, models := range choices.Accounts {
-			for _, cachedModel := range models {
-				if normalizeRequestedModelID(cachedModel) == resolvedModelID {
-					return true
-				}
 			}
-		}
-		return false
+			if honorsModelCooldown(channel) && store.ModelCooldownRemaining(acc, model, time.Now()) != 0 {
+				return false
+			}
+			switch strings.TrimSpace(acc.StatusCode) {
+			case "402":
+				if channel == "qoder" {
+					return qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
+				}
+				if channel == "workbuddy" {
+					return workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model)
+				}
+			case store.AccountStatusQoderQuotaExhausted:
+				return channel == "qoder" && qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
+			case store.AccountStatusWorkBuddyQuotaExhausted:
+				return channel == "workbuddy" && workbuddy.IsFreeModelInCatalog(acc.WorkBuddyModelIDs, model)
+			default:
+				return true
+			}
+			return false
+		})
 	}
-	_, ok := visible[resolvedModelID]
-	return ok
-}
-
-// warpRequestFeatures is everything the request builder needs from the account's
-// own model discovery: the agent defaults and the base model's input window.
-// They resolve together because both come from the same stored snapshot, and a
-// second read would only be another way for the two to disagree.
-type warpRequestFeatures struct {
-	Config        warp.AccountFeatureConfig
-	ContextWindow uint32
-}
-
-func (h *Handler) resolveWarpRequestFeatures(ctx context.Context, acc *store.Account, requestedModel string) warpRequestFeatures {
-	if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-		return warpRequestFeatures{}
-	}
-	var choices *warp.AccountModelChoices
-	if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-		loaded, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
-		if err == nil {
-			choices = loaded
-		}
-	}
-	return warpRequestFeatures{
-		Config:        warp.EffectiveAccountFeatureConfig(acc, choices, requestedModel),
-		ContextWindow: warp.ModelContextWindowLimitForAccount(choices, acc.ID, requestedModel),
-	}
-}
-
-// refreshWarpModelConfigAsync consumes Warp's stale-config signal without
-// delaying the completed user request. Each account has at most one refresh in
-// flight; a successful discovery atomically replaces that account's advisory
-// routing choices and feature defaults.
-func (h *Handler) refreshWarpModelConfigAsync(acc *store.Account) {
-	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil || acc == nil || acc.ID == 0 || !strings.EqualFold(acc.AccountType, "warp") {
-		return
-	}
-	if _, loaded := h.warpModelRefreshes.LoadOrStore(acc.ID, struct{}{}); loaded {
-		return
-	}
-	account := *acc
-	go func() {
-		defer h.warpModelRefreshes.Delete(account.ID)
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-
-		client := warp.NewFromAccount(&account, h.configSnapshot())
-		defer client.Close()
-		features, source, err := client.FetchDiscoveredFeatureModelChoices(ctx)
-		if err != nil {
-			slog.Warn("Warp model config refresh failed", "account_id", account.ID, "error", err)
-			return
-		}
-		choices := warp.AgentModeModelChoices(features)
-		if len(choices) == 0 {
-			slog.Warn("Warp model config refresh returned no enabled models", "account_id", account.ID)
-			return
-		}
-
-		discovery := warp.AccountModelDiscovery{
-			AccountID:     account.ID,
-			Source:        source,
-			Choices:       choices,
-			FeatureConfig: warp.AccountFeatureConfigFromChoices(features),
-		}
-		if err := warp.UpsertAccountModelDiscoveries(ctx, h.loadBalancer.Store, discovery); err != nil {
-			slog.Warn("Warp model config cache save failed", "account_id", account.ID, "error", err)
-			return
-		}
-		slog.Info("Warp model config refreshed", "account_id", account.ID, "source", source)
-	}()
+	return h.loadBalancer.GetNextAccountExcludingByChannelWithTracker(ctx, failedAccountIDs, targetChannel, h.connTracker)
 }
 
 func effectiveAccountConcurrencyLimit(acc *store.Account) int64 {
@@ -773,27 +639,6 @@ func (h *Handler) flushPendingAccountStats(timeout time.Duration) {
 			h.statsMu.Unlock()
 			slog.Warn("account stats remain unflushed during shutdown", "account_id", delta.accountID, "operation_id", delta.operationID, "error", err)
 			return
-		}
-	}
-}
-
-func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {
-	if account == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		return
-	}
-
-	var changed bool
-	if strings.EqualFold(account.AccountType, "warp") {
-		if warpClient, ok := client.(*warp.Client); ok {
-			changed = warpClient.SyncAccountStateTo(account)
-		}
-	}
-
-	if changed {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := h.loadBalancer.Store.UpdateAccount(ctx, account); err != nil {
-			slog.Warn("同步账号令牌失败", "account", account.Name, "type", account.AccountType, "error", err)
 		}
 	}
 }

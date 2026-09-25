@@ -23,9 +23,6 @@ function normalizeSidebarStatusCode(statusCode) {
 function getSidebarAccountToken(acc) {
   if (!acc) return "";
   const type = normalizeSidebarAccountType(acc);
-  if (type === "warp") {
-    return ""; // Official-login session credentials are never exposed to the UI.
-  }
   if (type === "workbuddy") {
     // The durable refresh token never leaves the server; the access token is
     // the visible proof that a credential is configured.
@@ -53,29 +50,12 @@ function isSidebarGrokOAuthAccount(acc) {
 
 function hasSidebarAccountCredential(acc) {
   if (typeof acc?.has_credential === "boolean") return acc.has_credential;
-  if (normalizeSidebarAccountType(acc) === "warp") return acc?.warp_authenticated === true;
   return isSidebarGrokOAuthAccount(acc) || Boolean(getSidebarAccountToken(acc));
 }
 
 function getSidebarQuotaStats(acc) {
   if (!acc) return null;
   const type = normalizeSidebarAccountType(acc);
-  if (type === "warp") {
-    const monthlyLimit = Math.max(0, Math.floor(acc.warp_monthly_limit || acc.usage_limit || 0));
-    const monthlyRemainingRaw = acc.warp_monthly_remaining !== undefined && acc.warp_monthly_remaining !== null
-      ? acc.warp_monthly_remaining
-      : (monthlyLimit > 0 ? monthlyLimit - Math.floor(acc.usage_current || 0) : 0);
-    const monthlyRemaining = Math.max(0, Math.floor(monthlyRemainingRaw || 0));
-    const bonusRemaining = Math.max(0, Math.floor(acc.warp_bonus_remaining || 0));
-    const remaining = monthlyRemaining + bonusRemaining;
-    if (monthlyLimit > 0 || bonusRemaining > 0) {
-      return {
-        supported: true,
-        limit: monthlyLimit + bonusRemaining,
-        remaining,
-      };
-    }
-  }
   if (type === "workbuddy") {
     // The credit meter reports the remaining share of the current cycle, so the
     // explicit quota_* fields are authoritative and usage_current must not be
@@ -132,7 +112,7 @@ function getSidebarQuotaStats(acc) {
   const limit = Math.floor(acc.usage_limit || 0);
   if (limit <= 0) return null;
   const current = Math.floor(acc.usage_current || 0);
-  const remaining = type === "warp" ? Math.max(0, limit - current) : Math.max(0, current);
+  const remaining = Math.max(0, current);
   return { supported: true, limit, remaining };
 }
 
@@ -152,10 +132,6 @@ function isQuotaOnlyStatus(acc) {
     // is authoritative. The limit may legitimately be 0 while credits remain, so
     // the verdict must not be gated on limit > 0.
     return Boolean(acc.quota_exhausted === true || (quota && quota.remaining <= 0 && acc.quota_supported === true));
-  }
-  if (type === "warp") {
-    // Warp's own exhausted window arrives as 429 with a drained allowance.
-    return statusCode === "429" && Boolean(quota && quota.limit > 0 && quota.remaining <= 0);
   }
   return false;
 }

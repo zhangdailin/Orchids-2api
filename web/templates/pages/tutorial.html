@@ -6,8 +6,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260918-phonefix1">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/tutorial.css?v=20260918-wide1">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v={{.AssetVersion}}">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/tutorial.css?v={{.AssetVersion}}">
 </head>
 
 <body>
@@ -68,14 +68,14 @@
           <div class="tut-example-head">
             <div>
               <h3>客户端配置示例</h3>
-              <p>以 OpenAI 兼容客户端接入 Warp 为例</p>
+              <p>以 OpenAI 兼容客户端接入 WorkBuddy 为例</p>
             </div>
             <button class="tut-copy" type="button" data-copy-target="tutConfigExample">复制配置</button>
           </div>
           <pre class="tut-code" id="tutConfigExample">{
-  "base_url": "<span data-api-base></span>/warp/v1",
+  "base_url": "<span data-api-base></span>/workbuddy/v1",
   "api_key": "sk-...",
-  "model": "claude-4-5-sonnet"
+  "model": "hy3"
 }</pre>
         </div>
       </div>
@@ -115,21 +115,6 @@
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td data-label="渠道与账号方式">
-                  <span class="tag badge-warp">Warp</span>
-                  <small>在账号管理中登录</small>
-                </td>
-                <td data-label="普通客户端">
-                  <span class="tut-address">
-                    <code id="tutUrlWarp" data-api-path="/warp/v1"></code>
-                    <button type="button" data-copy-target="tutUrlWarp">复制</button>
-                  </span>
-                </td>
-                <td data-label="Claude Code"><code data-api-path="/warp"></code></td>
-                <td data-label="模型示例"><code class="doc-model-code">claude-4-5-sonnet</code></td>
-                <td data-label="协议"><span class="tag protocol-tag protocol-tag-claude">Claude</span> <span class="tag protocol-tag protocol-tag-openai">OpenAI</span></td>
-              </tr>
               <tr>
                 <td data-label="渠道与账号方式">
                   <span class="tag badge-workbuddy">WorkBuddy</span>
@@ -221,8 +206,8 @@
     </section>
   </main>
 
-  <script src="{{.AdminPath}}/js/common.js?v=20260925-abnormal1"></script>
-  <script src="{{.AdminPath}}/js/tutorial.js?v=20260918-wide1"></script>
+  <script src="{{.AdminPath}}/js/common.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/tutorial.js?v={{.AssetVersion}}"></script>
 </body>
 
 </html>

@@ -377,8 +377,6 @@ func CooldownFor(acc *store.Account) time.Duration {
 			return CooldownBlockedGro
 		}
 		return CooldownBlocked
-	case store.AccountStatusWarpQuotaExhausted:
-		return CooldownTransient
 	default:
 		return CooldownTransient
 	}

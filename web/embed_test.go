@@ -1,10 +1,49 @@
 package web
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+// TestAssetVersionIsContentDerived pins the property that replaced the
+// hand-maintained ?v= strings: the version must come from the embedded bytes,
+// so a deployment that changes a script also changes the URL it is fetched
+// under. When the version was a literal, removing a provider from the UI left
+// every browser on the cached copy of the previous one.
+func TestAssetVersionIsContentDerived(t *testing.T) {
+	version := AssetVersion()
+	if len(version) != 12 {
+		t.Fatalf("AssetVersion() = %q, want a 12-character hash", version)
+	}
+	if again := AssetVersion(); again != version {
+		t.Fatalf("AssetVersion() is not stable: %q then %q", version, again)
+	}
+	if version == assetVersionPlaceholder {
+		t.Fatalf("AssetVersion() returned the placeholder %q", version)
+	}
+}
+
+// TestLoginPageResolvesAssetVersion covers the static login page, which is the
+// one asset URL that cannot read PageData.
+func TestLoginPageResolvesAssetVersion(t *testing.T) {
+	page, err := LoginPage()
+	if err != nil {
+		t.Fatalf("LoginPage() error = %v", err)
+	}
+	if bytes.Contains(page, []byte(assetVersionPlaceholder)) {
+		t.Fatalf("LoginPage() still carries %q", assetVersionPlaceholder)
+	}
+	want := []byte("main.css?v=" + AssetVersion())
+	if !bytes.Contains(page, want) {
+		t.Fatalf("LoginPage() does not link %s", want)
+	}
+	if !strings.Contains(string(page), "<title>") {
+		t.Fatal("LoginPage() does not look like the login page")
+	}
+}
 
 func TestStaticHandlerCachePolicy(t *testing.T) {
 	handler := StaticHandler()

@@ -41,7 +41,7 @@ type Account struct {
 	Weight        int     `json:"weight"`
 	MaxConcurrent int     `json:"max_concurrent,omitempty"`
 	Enabled       bool    `json:"enabled"`
-	Token         string  `json:"token"`        // Runtime/display token for non-Warp channels
+	Token         string  `json:"token"`        // Runtime/display token for token-backed channels
 	Subscription  string  `json:"subscription"` // "free", "pro", etc.
 	UsageCurrent  float64 `json:"usage_current"`
 	UsageTotal    float64 `json:"usage_total"` // Used as lifetime usage
@@ -54,12 +54,9 @@ type Account struct {
 	// rate limit right now?" — because a total only ever grows. The pair is
 	// rolled by the counter itself: a request whose date differs from
 	// TokensDate starts a new day instead of adding to yesterday's figure.
-	TokensToday          float64 `json:"tokens_today,omitempty"`
-	TokensDate           string  `json:"tokens_date,omitempty"`
-	WarpMonthlyLimit     float64 `json:"warp_monthly_limit,omitempty"`
-	WarpMonthlyRemaining float64 `json:"warp_monthly_remaining,omitempty"`
-	WarpBonusRemaining   float64 `json:"warp_bonus_remaining,omitempty"`
-	StatusCode           string  `json:"status_code"`
+	TokensToday float64 `json:"tokens_today,omitempty"`
+	TokensDate  string  `json:"tokens_date,omitempty"`
+	StatusCode  string  `json:"status_code"`
 	// AuthStatus is the durable credential-routing state. Empty is treated as
 	// active for legacy rows; reauthRequired permanently excludes the account
 	// until a successful verification or credential replacement clears it.
@@ -363,11 +360,6 @@ type GrokFreeQuotaSnapshot struct {
 	ConfirmedAt time.Time `json:"confirmed_at,omitempty"`
 }
 
-// AccountStatusWarpQuotaExhausted records a Warp credit exhaustion separately
-// from a transient HTTP 429. The account remains usable for Warp's free-only
-// capabilities while model/capability filters keep paid requests away from it.
-const AccountStatusWarpQuotaExhausted = "warp_quota_exhausted"
-
 // Qoder quota exhaustion is a capability downgrade when, and only when, the
 // requested route is explicitly marked free by the current upstream catalog.
 // The selector keeps these accounts in the pool but its model filter rejects
@@ -662,10 +654,10 @@ func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
 // retired *within a channel's namespace*, not everywhere.
 //
 // The list used to be applied by identifier alone. That deleted working models:
-// the Warp upstream catalog legitimately advertises grok-4.3,
-// grok-4.20-* and grok-build-0.1 (they route xAI models), so every restart
-// removed rows a refresh had just published, and a refresh put them back. The
-// channel is therefore part of the entry.
+// a channel catalog may legitimately advertise grok-4.3, grok-4.20-* and
+// grok-build-0.1 (they route xAI models), so every restart removed rows a
+// refresh had just published, and a refresh put them back. The channel is
+// therefore part of the entry.
 //
 // The Grok entries are the runtime interception list in modelpolicy
 // (deprecatedGrokModelIDs) plus the Grok-channel extra "grok-4.3"; keep the two
@@ -679,12 +671,6 @@ var deprecatedModelIDsByChannel = func() map[string][]string {
 	// route it.
 	grokIDs = append(grokIDs, "grok-4.3")
 	return map[string][]string{
-		"Warp": {
-			// Warp virtual modes are no longer public; Warp models must come from
-			// the upstream account catalog.
-			"warp-chat",
-			"warp-agent",
-		},
 		"Grok": grokIDs,
 	}
 }()

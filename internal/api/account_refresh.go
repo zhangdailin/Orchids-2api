@@ -4,90 +4,27 @@ package api
 //
 // The channels agree on the contract — return the status the scheduler should
 // record, the HTTP status the caller should see, and the failure — but disagree
-// entirely on how to get there, so each keeps its own function. This was five
-// if-blocks inside refreshAccountState; the dispatch is now a lookup.
+// entirely on how to get there, so each keeps its own function. This was a chain
+// of if-blocks inside refreshAccountState; the dispatch is now a lookup.
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 )
 
 // accountRefreshers dispatches a refresh by account type. A channel that is
 // absent is an unsupported account type.
 var accountRefreshers = map[string]func(*API, context.Context, *store.Account) (string, int, error){
-	"warp":      refreshWarpAccountState,
 	"grok":      refreshGrokAccountState,
 	"qoder":     refreshQoderAccountState,
 	"workbuddy": refreshWorkBuddyAccountState,
 	"cline":     refreshClineAccountState,
-}
-
-// refreshWarpAccountState re-proves a Warp session and re-reads the quota it
-// unlocks. Entitlement is judged separately: a 403 without a billable probe is
-// not proof that the account lost AI access.
-func refreshWarpAccountState(a *API, ctx context.Context, acc *store.Account) (string, int, error) {
-	cfg := a.config.Load()
-	warpClient := warp.NewFromAccount(acc, cfg)
-	result, err := warpClient.RefreshAccountState(ctx, acc, true)
-	if err != nil {
-		httpStatus := http.StatusBadRequest
-		if code := warp.HTTPStatusCode(err); code >= 400 {
-			httpStatus = code
-		}
-		accountStatus := ""
-		if httpStatus == http.StatusUnauthorized || httpStatus == http.StatusForbidden || httpStatus == http.StatusTooManyRequests {
-			accountStatus = strconv.Itoa(httpStatus)
-		}
-		return accountStatus, httpStatus, fmt.Errorf("failed to refresh warp account: %w", err)
-	}
-	if result.QuotaError != nil {
-		slog.Warn("Warp quota sync failed after refresh; keeping account available", "account_id", acc.ID, "error", result.QuotaError)
-	}
-	modelDiscoveryConfirmed := false
-	var modelDiscoveryErr error
-	if a.store != nil && acc.ID != 0 {
-		modelCtx, modelCancel := context.WithTimeout(ctx, 15*time.Second)
-		features, source, modelErr := warpClient.FetchDiscoveredFeatureModelChoices(modelCtx)
-		modelCancel()
-		choices := warp.AgentModeModelChoices(features)
-		featureConfig := warp.AccountFeatureConfigFromChoices(features)
-		if modelErr == nil && len(choices) > 0 {
-			modelDiscoveryConfirmed = true
-			discovery := warp.AccountModelDiscovery{
-				AccountID:     acc.ID,
-				Source:        source,
-				Choices:       choices,
-				FeatureConfig: featureConfig,
-			}
-			if err := warp.UpsertAccountModelDiscoveries(ctx, a.store, discovery); err != nil {
-				slog.Warn("Warp model choices sync failed after refresh", "account_id", acc.ID, "source", source, "error", err)
-			}
-		} else if modelErr != nil {
-			modelDiscoveryErr = modelErr
-			slog.Warn("Warp model choices fetch failed after refresh", "account_id", acc.ID, "error", modelErr)
-		} else {
-			modelDiscoveryErr = fmt.Errorf("warp model discovery returned no enabled models")
-		}
-	}
-	if strings.TrimSpace(acc.StatusCode) == "403" {
-		if !modelDiscoveryConfirmed {
-			if modelDiscoveryErr == nil {
-				modelDiscoveryErr = fmt.Errorf("warp model discovery unavailable")
-			}
-			return "403", http.StatusForbidden, fmt.Errorf("failed to verify warp AI entitlement without a billable probe: %w", modelDiscoveryErr)
-		}
-	}
-	return "", 0, nil
 }
 
 // refreshGrokAccountState re-verifies a Grok credential.

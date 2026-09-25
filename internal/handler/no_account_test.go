@@ -41,7 +41,7 @@ func TestWritePoolExhaustion_CapacityProblemIsRetryable(t *testing.T) {
 // accounts the upstream refuses outright, waiting is not the answer and the client
 // needs to be told that an operator has to act.
 func TestWritePoolExhaustion_ResidualCausePointsAtTheOperator(t *testing.T) {
-	selectErr := errors.New("no enabled accounts available for channel: warp")
+	selectErr := errors.New("no enabled accounts available for channel: grok")
 	rec := httptest.NewRecorder()
 
 	writePoolExhaustion(rec, classifyPoolExhaustion(selectErr, ""))

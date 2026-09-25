@@ -32,7 +32,6 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
 	"orchids-api/internal/tokencache"
-	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -124,12 +123,6 @@ func main() {
 			slog.Debug("Config loaded from Redis")
 		}
 	}
-	// The Warp request builder renders a whole transcript when no server-issued
-	// conversation id is available. That ceiling is a transport bound, so it is
-	// installed once here rather than being a compiled-in constant that decides
-	// how much context a large-window model gets.
-	warp.SetStatelessHistoryMaxChars(cfg.WarpStatelessHistoryMaxChars)
-	slog.Debug("Warp stateless transcript ceiling", "max_chars", cfg.WarpStatelessHistoryMaxChars)
 	slog.Info("Media storage initialized", "directory", cfg.MediaDir, "replicas", cfg.DeploymentReplicas, "shared", cfg.SharedMedia)
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Duration(cfg.LoadBalancerCacheTTL)*time.Second)

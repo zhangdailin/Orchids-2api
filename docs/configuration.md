@@ -133,14 +133,13 @@ Grok 账号只能通过 `/api/grok/device-auth*` 创建，凭据为 OAuth access
 | `retry_429_interval` | `60` | 无精确 reset 信息时的 429 重试间隔，秒，上限 3600 |
 | `grok_build_timeout_seconds` | 跟随 `request_timeout` | Build HTTP 总超时，含响应体读取，上限 86400 秒 |
 | `grok_build_stream_idle_seconds` | `120` | Build SSE 有效输出空闲超时，上限 3600 秒；keepalive 不重置计时 |
-| `warp_stream_idle_seconds` | `300` | Warp 响应体连续无字节空闲超时，上限 3600 秒；有持续输出的长任务不受影响 |
 | `grok_build_rps` | `0` | 0 关闭主动限速；正数按 Build 账号/模型限速，范围 0.01–1000，burst=1 |
 
 限流状态按 provider、账号与模型隔离；真实 429 冷却不随主动限速关闭。优先使用 `Retry-After`，再使用响应中的 reset 信息。配置 Redis 时，Build pacing 和冷却跨副本共享；Redis 暂时不可用时退化到进程内状态。
 
 总超时与空闲超时是不同边界。长回答需要同时满足入口 `concurrency_timeout` 和 Build HTTP 超时。stored Responses 保留创建账号绑定。
 
-未显式设置账号 `max_concurrent` 时，所有 provider（WorkBuddy、Warp、Qoder、Cline、Grok）默认每账号 10 路；显式正数会覆盖默认值，未知账号类型不受限。单一账号的渠道因此不再因为只有 1 路而把并发请求判成过载。Redis 部署使用带过期与续租的分布式连接租约，进程异常退出后遗留计数会自动回收。
+未显式设置账号 `max_concurrent` 时，所有 provider（WorkBuddy、Qoder、Cline、Grok）默认每账号 10 路；显式正数会覆盖默认值，未知账号类型不受限。单一账号的渠道因此不再因为只有 1 路而把并发请求判成过载。Redis 部署使用带过期与续租的分布式连接租约，进程异常退出后遗留计数会自动回收。
 
 Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头仍受 HTTP 总超时约束。其他模型继续使用各自客户端策略。
 
@@ -154,7 +153,6 @@ Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头�
 | `context_max_tokens` | 不生效 | 旧兼容字段；不在中转层截断或自动压缩上下文 |
 | `context_summary_max_tokens` | 不生效 | 旧兼容字段；不生成中转层摘要 |
 | `context_keep_turns` | 不生效 | 旧兼容字段；不按轮数删除请求历史 |
-| `warp_disable_tools` | `false` | Warp 工具默认开启 |
 | `stream` | `true` | Chat 默认流式 |
 | `public_enabled` | `true` | 公共页面默认开启 |
 | `token_refresh_interval` | `1` | token 自动刷新间隔（分钟） |
@@ -168,7 +166,6 @@ Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头�
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `session_ttl_minutes` | `720`（12 小时） | 客户端会话可空闲多久仍续用上游会话绑定。过短会在轮次之间断开绑定，下一轮只能重发整段 transcript。上限 43200（30 天） |
-| `warp_stateless_history_max_chars` | `8388608`（8 MiB） | 无服务端会话 ID 的 Warp 请求所渲染 transcript 的**传输**上限，不是上下文策略：上游按模型自身窗口处理收到的内容。旧值 48 KiB（约 12k token）会让 1M 窗口的模型表现得像 16k。上限 67108864 |
 
 模型窗口是**观测值**，不是配置项：`GET /v1/models` 与 `GET /v1/models/{id}` 会按渠道已经观测到的目录回报
 `context_length` / `max_input_tokens` / `max_output_tokens`；未观测到的模型**不输出**这些字段（而不是输出 0），
@@ -179,10 +176,9 @@ Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头�
 | Qoder | 账号快照 `qoder_model_ids[]` 的 `max_input_tokens` |
 | Cline | 暂无可信来源，不输出（推荐模型目录只声明 id） |
 | WorkBuddy | 账号快照 `workbuddy_model_ids[]` 的 `max_input_tokens` / `max_output_tokens` |
-| Warp | 账号模型发现缓存的 `context_windows`（即上游 `contextWindow.max`） |
 | Grok | Build OAuth `GET /v1/models` 能力目录 |
 
-服务端从不按 token 裁剪请求历史：`warp` / `workbuddy` / `qoder` / `cline` 全量透传客户端 `messages`。
+服务端从不按 token 裁剪请求历史：`workbuddy` / `qoder` / `cline` 全量透传客户端 `messages`。
 
 ### 3.4 工具定义保真
 
@@ -194,9 +190,6 @@ Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头�
 | 工具描述 | 逐字透传（仅去首尾空白） | 上限 64 KiB 仅作传输保护，达到上限才是病态请求 |
 | 工具数量 | 上限 256 | 仅作传输保护；旧值 32 会静默丢弃第 32 个之后的工具 |
 | 工具 token 估算 | 按实际发送的定义计算 | `count_tokens` 与前置 usage 不再按"压缩后的投影"少报（旧实现：24 个工具 / 128 字符描述 / 4 KiB schema） |
-
-历史里唯一被丢弃过的内容是**旧版**的 48 KiB 无状态 transcript 上限，现已提高为
-`warp_stateless_history_max_chars`（见 3.3）。
 
 ## 4. 最小可用配置
 
@@ -230,8 +223,6 @@ Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头�
 - `admin_pass` 若留空，会在启动时自动生成随机密码并写日志
 - 配置保存在 Redis 后，后续重启会优先使用 Redis 版本
 - 可用 `ORCHIDS_CREDENTIAL_ENCRYPTION_KEY` 提供 Base64、Hex 或 32 字节原始主密钥；环境变量优先于密钥文件
-- Warp 登录与账号 token 刷新需要设置 `ORCHIDS_WARP_FIREBASE_API_KEY`；该值只从进程环境读取，不写入配置文件、Redis 或管理 API
-- `/health` 会报告 Warp 配置状态；`/ready/warp` 在 Firebase API key 缺失时返回 503，便于部署系统在接流量前发现登录能力不可用
 - 首次启动自动创建主密钥文件，并把已有账号明文凭据迁移为 `enc:v1:` 密文
 - 主密钥不会写入 Redis 或管理 API；必须和 Redis 数据共同备份，切勿在已有账号后更换或删除
 - `debug-logs` 等目录是运行期产物，不是配置项
@@ -243,7 +234,6 @@ Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头�
 
 - `summary_cache_*`
 - `tool_call_mode`
-- `warp_tool_call_mode`
 - `disable_tool_filter`
 
 ## 8. 请求诊断与运维指标

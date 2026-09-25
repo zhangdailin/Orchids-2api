@@ -118,7 +118,7 @@ func TestEvaluate_PoolAndCredentialAlerts(t *testing.T) {
 // there is nothing to alert about and nothing to claim as healthy either.
 func TestEvaluate_NoSampleIsNotHealthy(t *testing.T) {
 	transition := Evaluate(Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
-		channel("warp", func(c *ChannelSnapshot) {
+		channel("workbuddy", func(c *ChannelSnapshot) {
 			c.Requests = 0
 			c.Success = 0
 			c.Failed = 0
@@ -141,7 +141,7 @@ func TestEvaluate_SeverityOrdering(t *testing.T) {
 			c.Failed = 3
 			c.SuccessRate = 0.7 // warning band, with enough failures to count
 		}),
-		channel("warp", func(c *ChannelSnapshot) {
+		channel("workbuddy", func(c *ChannelSnapshot) {
 			c.AccountsNeedingLogin = 1 // critical
 		}),
 	}}, nil, DefaultRules())
@@ -161,7 +161,7 @@ func TestEvaluate_IgnoresInfrastructureAggregates(t *testing.T) {
 	if IsAlertableChannel("http") || IsAlertableChannel("probe") {
 		t.Fatal("the http and probe aggregates must not be alertable")
 	}
-	for _, channel := range []string{"grok", "warp", "qoder", "workbuddy", "GROK"} {
+	for _, channel := range []string{"grok", "qoder", "cline", "workbuddy", "GROK"} {
 		if !IsAlertableChannel(channel) {
 			t.Fatalf("%s must remain alertable", channel)
 		}
@@ -193,14 +193,14 @@ func TestEvaluate_IgnoresInfrastructureAggregates(t *testing.T) {
 // aggregates must not silence a provider channel.
 func TestEvaluate_StillAlertsOnRealChannels(t *testing.T) {
 	transition := Evaluate(Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
-		channel("warp", func(c *ChannelSnapshot) {
+		channel("workbuddy", func(c *ChannelSnapshot) {
 			c.Requests = 40
 			c.Success = 4
 			c.Failed = 36
 			c.SuccessRate = 0.1
 		}),
 	}}, nil, DefaultRules())
-	if len(transition.Firing) != 1 || transition.Firing[0].Key != "success-rate:warp" {
+	if len(transition.Firing) != 1 || transition.Firing[0].Key != "success-rate:workbuddy" {
 		t.Fatalf("a real channel must still alert: %+v", transition.Firing)
 	}
 }
@@ -302,7 +302,7 @@ func TestEvaluate_SevereOutageIgnoresTheFailureFloor(t *testing.T) {
 	rules.MinFailures = 5 // an operator who wants five failures before a warning
 
 	severe := Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
-		channel("warp", func(c *ChannelSnapshot) {
+		channel("workbuddy", func(c *ChannelSnapshot) {
 			c.Requests = 5
 			c.Success = 2
 			c.Failed = 3 // below the configured failure floor, but only 40% success

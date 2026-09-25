@@ -6,8 +6,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{.Title}}</title>
-  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v=20260918-phonefix1">
-  <link rel="stylesheet" href="{{.AdminPath}}/css/accounts.css?v=20260921-no-capability1">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/main.css?v={{.AssetVersion}}">
+  <link rel="stylesheet" href="{{.AdminPath}}/css/accounts.css?v={{.AssetVersion}}">
 </head>
 
 <body>
@@ -70,7 +70,7 @@
 
         <div class="accounts-actions">
           <div class="accounts-action-cluster">
-            <button class="btn" onclick="exportAccounts()" title="不包含 Warp 登录会话；迁移后请重新进行官方网页登录">导出</button>
+            <button class="btn" onclick="exportAccounts()" title="导出账号配置；官方登录会话凭据不会导出，迁移后请重新进行官方网页登录">导出</button>
           </div>
           <div class="accounts-action-cluster is-danger">
             <button class="btn btn-danger-outline" id="batchDeleteBtn" disabled onclick="batchDeleteAccounts()">批量删除</button>
@@ -111,13 +111,13 @@
   {{template "account-modal.html" .}}
   <div class="toast-container" id="toastContainer"></div>
 
-  <script src="{{.AdminPath}}/js/common.js?v=20260925-abnormal1"></script>
-  <script src="{{.AdminPath}}/js/provider-registry.js?v=20260924-backend-registry1"></script>
-  <script src="{{.AdminPath}}/js/device-auth.js?v=20260914-qoder1"></script>
-  <script src="{{.AdminPath}}/js/workbuddy-auth.js?v=20260912-ui1"></script>
-  <script src="{{.AdminPath}}/js/qoder-auth.js?v=20260914-qoder1"></script>
-  <script src="{{.AdminPath}}/js/cline-auth.js?v=20260914-cline1"></script>
-  <script src="{{.AdminPath}}/js/accounts.js?v=20260925-tokenday1"></script>
+  <script src="{{.AdminPath}}/js/common.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/provider-registry.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/device-auth.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/workbuddy-auth.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/qoder-auth.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/cline-auth.js?v={{.AssetVersion}}"></script>
+  <script src="{{.AdminPath}}/js/accounts.js?v={{.AssetVersion}}"></script>
 </body>
 
 </html>

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -207,7 +206,6 @@ type streamHandler struct {
 	useUpstreamUsage    bool
 	responseFormat      adapter.ResponseFormat
 	disallowToolCalls   bool
-	strictToolAllowlist bool
 	surfaceToolRejects  bool
 	allowedToolNames    map[string]struct{}
 	clientTools         []interface{}
@@ -273,10 +271,7 @@ type streamHandler struct {
 	suppressedToolCalls int
 
 	// Callbacks
-	onConversationID     func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
-	onToolCall           func(id, name, input, upstreamType, taskContext string)
-	onWarpTaskContext    func(string)
-	onModelConfigRefresh func()
+	onConversationID func(string) // 濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸劍閺呮繈鏌曟径鍡樻珕闁稿顦甸弻銈囩矙鐠恒劋绮垫繛瀛樺殠閸婃繈寮婚敓鐘茬＜婵炴垶锕╅崵瀣磽娴ｆ彃浜鹃梺?conversationID 闂傚倸鍊风粈渚€骞栭锕€鐤柛鎰ゴ閺嬫牗绻涢幋鐐╂（婵炲樊浜滈崘鈧銈嗗姧缁蹭粙顢?
 	// Logger
 	logger *debug.Logger
 }
@@ -349,12 +344,6 @@ func (h *streamHandler) setAllowedToolNames(names []string) {
 		}
 		h.allowedToolNames[key] = struct{}{}
 	}
-	h.mu.Unlock()
-}
-
-func (h *streamHandler) setStrictToolAllowlist(strict bool) {
-	h.mu.Lock()
-	h.strictToolAllowlist = strict
 	h.mu.Unlock()
 }
 
@@ -454,10 +443,6 @@ func (h *streamHandler) currentReasoningText() string {
 }
 
 func (h *streamHandler) rewriteToolCallToClient(name, input string) (string, string) {
-	return h.rewriteToolCallToClientWithWarpType(name, input, "")
-}
-
-func (h *streamHandler) rewriteToolCallToClientWithWarpType(name, input, warpToolType string) (string, string) {
 	h.mu.Lock()
 	clientTools := h.clientTools
 	h.mu.Unlock()
@@ -471,9 +456,6 @@ func (h *streamHandler) rewriteToolCallToClientWithWarpType(name, input, warpToo
 	if mapped == "" {
 		return name, input
 	}
-	if strings.EqualFold(strings.TrimSpace(warpToolType), "run_shell_command") {
-		input = ensureClientRequiredBashDescription(mapped, input, clientTools)
-	}
 	// Cline may return fields that are valid for its internal TodoWrite schema
 	// but are not declared by the client schema. In particular, recent Cline
 	// builds add `id` to every `todos[]` item while Claude Code declares
@@ -481,40 +463,6 @@ func (h *streamHandler) rewriteToolCallToClientWithWarpType(name, input, warpToo
 	// recursively (including array item objects), before emitting tool_use.
 	input = sanitizeToolInputAgainstClientSchema(mapped, input, clientTools)
 	return mapped, input
-}
-
-// Warp's native RunShellCommand protobuf contains the command and execution
-// metadata, but no human-readable description. Some client-side Bash schemas
-// make description mandatory, so add it only when the receiving schema says it
-// is required. This keeps strict schemas that expose only command unchanged.
-func ensureClientRequiredBashDescription(name, input string, clientTools []interface{}) string {
-	if !strings.EqualFold(strings.TrimSpace(toolname.NormalizeToolNameFallback(name)), "bash") ||
-		!clientToolRequiresProperty(name, clientTools, "description") {
-		return input
-	}
-
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return input
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return input
-	}
-	command, _ := payload["command"].(string)
-	if strings.TrimSpace(command) == "" {
-		return input
-	}
-	if description, _ := payload["description"].(string); strings.TrimSpace(description) != "" {
-		return input
-	}
-
-	payload["description"] = "Run shell command"
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return input
-	}
-	return string(normalized)
 }
 
 func sanitizeToolInputAgainstClientSchema(name, input string, clientTools []interface{}) string {
@@ -617,62 +565,6 @@ func sameJSONValue(left, right interface{}) bool {
 	lb, lerr := json.Marshal(left)
 	rb, rerr := json.Marshal(right)
 	return lerr == nil && rerr == nil && string(lb) == string(rb)
-}
-
-func clientToolRequiresProperty(name string, clientTools []interface{}, property string) bool {
-	for _, required := range requiredClientToolProperties(name, clientTools) {
-		if strings.EqualFold(required, strings.TrimSpace(property)) {
-			return true
-		}
-	}
-	return false
-}
-
-func requiredClientToolProperties(name string, clientTools []interface{}) []string {
-	wantedName := strings.TrimSpace(name)
-	wantedCanonical := strings.TrimSpace(toolname.NormalizeToolNameFallback(wantedName))
-	for _, tool := range clientTools {
-		toolName, _, schema := toolname.ExtractToolSpecFields(tool)
-		toolCanonical := strings.TrimSpace(toolname.NormalizeToolNameFallback(toolName))
-		if !strings.EqualFold(toolName, wantedName) && !strings.EqualFold(toolCanonical, wantedCanonical) {
-			continue
-		}
-		var required []string
-		switch values := schema["required"].(type) {
-		case []interface{}:
-			for _, item := range values {
-				if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
-					required = append(required, strings.TrimSpace(value))
-				}
-			}
-		case []string:
-			for _, value := range values {
-				if strings.TrimSpace(value) != "" {
-					required = append(required, strings.TrimSpace(value))
-				}
-			}
-		}
-		return required
-	}
-	return nil
-}
-
-func missingClientToolRequiredProperties(name, input string, clientTools []interface{}) []string {
-	required := requiredClientToolProperties(name, clientTools)
-	if len(required) == 0 {
-		return nil
-	}
-	var payload map[string]interface{}
-	if json.Unmarshal([]byte(strings.TrimSpace(input)), &payload) != nil {
-		return required
-	}
-	missing := make([]string, 0, len(required))
-	for _, property := range required {
-		if _, exists := payload[property]; !exists {
-			missing = append(missing, property)
-		}
-	}
-	return missing
 }
 
 func (h *streamHandler) release() {
@@ -1669,7 +1561,7 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		h.emptyOutputFallback = suppressedWriteContentFallback(call)
 	}
 	allowedTool := true
-	if h.strictToolAllowlist || len(h.allowedToolNames) > 0 {
+	if len(h.allowedToolNames) > 0 {
 		lowerName := strings.ToLower(strings.TrimSpace(call.name))
 		_, allowedTool = h.allowedToolNames[lowerName]
 		if !allowedTool {
@@ -1677,7 +1569,7 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 			// they are not exposed as normal user-declared tools.
 			if (lowerName == "taskoutput" || lowerName == "taskstop") && h.hasAllowedToolNameLocked("task") {
 				allowedTool = true
-			} else if !h.strictToolAllowlist && lowerName == "task" && h.taskDelegationAllowedLocked(call.input) {
+			} else if lowerName == "task" && h.taskDelegationAllowedLocked(call.input) {
 				allowedTool = true
 			}
 		}
@@ -1733,24 +1625,6 @@ func (h *streamHandler) shouldAcceptToolCall(call toolCall) bool {
 		return false
 	}
 
-	h.mu.Lock()
-	clientTools := h.clientTools
-	h.mu.Unlock()
-	if missing := missingClientToolRequiredProperties(call.name, call.input, clientTools); call.upstreamType != "" && len(missing) > 0 {
-		h.mu.Lock()
-		h.suppressedToolCalls++
-		if h.surfaceToolRejects && h.emptyOutputFallback == "" {
-			h.emptyOutputFallback = fmt.Sprintf(
-				"The Warp tool call cannot be represented by the client tool schema; missing required properties: %s.",
-				strings.Join(missing, ", "),
-			)
-		}
-		h.mu.Unlock()
-		if h.config != nil && h.config.DebugEnabled {
-			slog.Debug("Warp tool call rejected by client schema", "tool", call.name, "missing", missing)
-		}
-		return false
-	}
 	return true
 }
 
@@ -1847,7 +1721,7 @@ func hasRequiredToolInputFields(nameKey string, fields toolInputFields) bool {
 		path := resolveToolPath(fields.FilePath, fields.Path)
 		return path != "" && len(fields.Old) > 0 && len(fields.New) > 0
 	case "write":
-		// Warp sometimes sends "path" instead of "file_path", or we might have mapped it.
+		// Upstreams sometimes send "path" instead of "file_path", or we mapped it.
 		// Also strict checking might fail if "content" is empty string (though rare for meaningful write).
 		path := resolveToolPath(fields.FilePath, fields.Path)
 		return path != "" && len(fields.Content) > 0
@@ -2018,7 +1892,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 	switch eventKey {
 	case "model.usage-metadata":
 		h.setUpstreamUsage(msg.Event)
-		slog.Info("Warp request usage", "usage", msg.Event)
+		slog.Info("upstream request usage", "usage", msg.Event)
 		return
 
 	case "model.actual_model":
@@ -2208,11 +2082,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 			return
 		}
 		h.toolCallHandled[toolID] = true
-		if h.onToolCall != nil {
-			upstreamType, _ := msg.Event["warpToolType"].(string)
-			taskContext, _ := msg.Event["warpTaskContext"].(string)
-			h.onToolCall(toolID, name, inputStr, upstreamType, taskContext)
-		}
 		if h.isStream {
 			if inputStr != "" {
 				h.addOutputTokens(inputStr)
@@ -2226,25 +2095,15 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		toolID, _ := msg.Event["toolCallId"].(string)
 		toolName, _ := msg.Event["toolName"].(string)
 		inputStr, _ := msg.Event["input"].(string)
-		upstreamType, _ := msg.Event["warpToolType"].(string)
-		if strings.TrimSpace(upstreamType) == "" {
-			toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr)
-			toolName, inputStr = h.rewriteToolCallToClient(toolName, inputStr)
-		} else {
-			// Warp tool payloads have already been decoded from their typed
-			// protobuf representation. Do not run heuristic path or command
-			// rewrites over them; only bridge the known protocol envelope.
-			toolName = strings.TrimSpace(toolName)
-			inputStr = strings.TrimSpace(inputStr)
-			toolName, inputStr = h.rewriteToolCallToClientWithWarpType(toolName, inputStr, upstreamType)
-		}
+		toolName, inputStr = normalizeUpstreamToolCall(toolName, inputStr)
+		toolName, inputStr = h.rewriteToolCallToClient(toolName, inputStr)
 		if toolID == "" {
 			return
 		}
 		if h.toolCallHandled[toolID] {
 			return
 		}
-		call := toolCall{id: toolID, name: toolName, input: inputStr, upstreamType: upstreamType}
+		call := toolCall{id: toolID, name: toolName, input: inputStr}
 		if !h.shouldAcceptToolCall(call) {
 			return
 		}
@@ -2258,10 +2117,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 		delete(h.toolInputHadDelta, toolID)
 		delete(h.toolInputNames, toolID)
 		h.toolCallHandled[toolID] = true
-		if h.onToolCall != nil {
-			taskContext, _ := msg.Event["warpTaskContext"].(string)
-			h.onToolCall(toolID, toolName, inputStr, upstreamType, taskContext)
-		}
 		if h.isStream {
 			h.emitToolUseFromInput(toolID, toolName, inputStr)
 			return
@@ -2294,15 +2149,6 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	case "model.finish":
 		stopReason := "end_turn"
-		if taskContext, _ := msg.Event["warpTaskContext"].(string); taskContext != "" && h.onWarpTaskContext != nil {
-			h.onWarpTaskContext(taskContext)
-		}
-		if shouldRefresh, ok := msg.Event["shouldRefreshModelConfig"].(bool); ok && shouldRefresh {
-			slog.Warn("Warp upstream requested model config refresh")
-			if h.onModelConfigRefresh != nil {
-				h.onModelConfigRefresh()
-			}
-		}
 		if usage, ok := msg.Event["usage"].(map[string]interface{}); ok {
 			h.setUpstreamUsage(usage)
 			inputTokens, hasIn := getUsageInt(usage, "inputTokens")

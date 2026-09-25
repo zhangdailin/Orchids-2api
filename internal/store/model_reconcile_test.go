@@ -91,7 +91,7 @@ func TestReconcileDiscoveredModelsValidatesBeforeWriting(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close(); mini.Close() })
 	ctx := context.Background()
-	_, err = s.ReconcileDiscoveredModels(ctx, "Warp", []*Model{{ModelID: "dup"}, {ModelID: "dup"}}, ModelReconcileOptions{Prune: true})
+	_, err = s.ReconcileDiscoveredModels(ctx, "workbuddy", []*Model{{ModelID: "dup"}, {ModelID: "dup"}}, ModelReconcileOptions{Prune: true})
 	if err == nil {
 		t.Fatal("expected duplicate error")
 	}

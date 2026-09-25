@@ -2,11 +2,11 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `warp`、`workbuddy`、`qoder`、`cline`、`grok` 五类通道。
+一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `workbuddy`、`qoder`、`cline`、`grok` 四类通道。
 
 ## 当前状态
 
-- `internal/handler` 统一处理 `warp` / `workbuddy` / `qoder` / `cline` 的 `/v1/messages` 与 `/v1/chat/completions`
+- `internal/handler` 统一处理 `workbuddy` / `qoder` / `cline` 的 `/v1/messages` 与 `/v1/chat/completions`
 - `internal/grok` 仅通过 Build OAuth CLI 上游处理 `grok` 的 Messages、Responses 与 Chat
 - 模型管理支持按通道刷新：`/api/models/refresh`
 - WorkBuddy 通道对接国际版 `www.workbuddy.ai`，账号级模型目录从 `GET /v3/config` 同步，refreshToken 自动轮换并回写
@@ -29,7 +29,6 @@
 
 | 通道 | 对外入口 |
 |---|---|
-| `warp` | `/warp/v1/messages`、`/warp/v1/chat/completions` |
 | `workbuddy` | `/workbuddy/v1/messages`、`/workbuddy/v1/chat/completions` |
 | `qoder` | `/qoder/v1/messages`、`/qoder/v1/chat/completions` |
 | `cline` | `/cline/v1/messages`、`/cline/v1/chat/completions` |
@@ -94,7 +93,6 @@ cp config.example.json config.json
 - 生产部署建议显式设置高强度 `admin_pass`，并保持 `debug_enabled` 为 `false`
 - 运行后若 Redis 中存在 `settings:config`，会覆盖文件配置
 - 首次启动会生成 `data/credential.key`；该文件必须和 Redis 数据一起持久化、备份，丢失后无法解密账号凭据
-- 使用 Warp 登录或刷新账号前，必须通过 `ORCHIDS_WARP_FIREBASE_API_KEY` 环境变量提供当前有效的 Warp Firebase API Key；仓库和编译产物不再内置该值
 - 登录管理端创建 API Key 后，使用 `Authorization: Bearer <API Key>` 调用模型和推理接口；Anthropic SDK 也可使用 `x-api-key`
 
 ### 3. 启动服务
@@ -168,13 +166,12 @@ go list -m -u all                                # 可升级清单，仅信息�
 ## 模型管理说明
 
 - 管理接口：`POST /api/models/refresh`
-- 请求体示例：`{"channel":"warp"}`
+- 请求体示例：`{"channel":"workbuddy"}`
 - 当前刷新策略是“按来源同步”，不同通道按各自上游能力验证
 - `verified` 表示本轮通过通道验证并纳入同步集合的数量
 
 当前各通道模型来源：
 
-- `warp`：账号 GraphQL 发现结果，失败时退回内置种子
 - `workbuddy`：账号级 `GET /v3/config` 的 `cli` agent 白名单（鉴权成功即视为验证通过，不额外消耗额度）
 - `grok`：Build OAuth 账号的 `GET /v1/models` 上游发现结果
 
@@ -209,13 +206,11 @@ WB_LIVE=1 WB_AUTH_FILE=/path/to/auths/workbuddy-<uid>.json go test ./internal/wo
 
 ### Claude Messages 风格
 
-- `POST /warp/v1/messages`
 - `POST /workbuddy/v1/messages`
 - `POST /grok/v1/messages`
 
 ### OpenAI Chat Completions 风格
 
-- `POST /warp/v1/chat/completions`
 - `POST /workbuddy/v1/chat/completions`
 - `POST /grok/v1/chat/completions`
 
@@ -228,7 +223,7 @@ WB_LIVE=1 WB_AUTH_FILE=/path/to/auths/workbuddy-<uid>.json go test ./internal/wo
 - `POST /responses/{response_id}/cancel`
 - `GET /responses/{response_id}/input_items`
 
-统一前缀 `/v1` 下以上端点对所有渠道的模型可用：Grok 模型走原生实现，Warp / WorkBuddy / Qoder / Cline 由 Responses→Chat 桥接提供；`cancel` 与 `input_items` 在五个前缀（含 `/grok/v1`）下均已注册，读取同一个 response store。未配置 Redis 时桥接回退到进程内存储并输出 WARN 日志，多副本部署必须配置 Redis。
+统一前缀 `/v1` 下以上端点对所有渠道的模型可用：Grok 模型走原生实现，WorkBuddy / Qoder / Cline 由 Responses→Chat 桥接提供；`cancel` 与 `input_items` 在四个前缀（含 `/grok/v1`）下均已注册，读取同一个 response store。未配置 Redis 时桥接回退到进程内存储并输出 WARN 日志，多副本部署必须配置 Redis。
 
 Build stored Responses 会按客户端 API Key 隔离，并固定回创建该 Response 的 OAuth 账号；归属记录默认保留 720 小时。详见 [docs/api-reference.md](docs/api-reference.md#13-openai-responses-风格)。
 

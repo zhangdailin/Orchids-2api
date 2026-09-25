@@ -262,30 +262,6 @@ function getQuotaStats(acc) {
   const base = getSidebarQuotaStats(acc);
   if (!base) return null;
   if (base.unknown) return base;
-  if (type === "warp") {
-    const monthlyLimit = Math.max(0, Math.floor(acc.warp_monthly_limit || acc.usage_limit || 0));
-    const monthlyRemainingRaw = acc.warp_monthly_remaining !== undefined && acc.warp_monthly_remaining !== null
-      ? acc.warp_monthly_remaining
-      : (monthlyLimit > 0 ? monthlyLimit - Math.floor(acc.usage_current || 0) : 0);
-    const monthlyRemaining = Math.max(0, Math.floor(monthlyRemainingRaw || 0));
-    const bonusRemaining = Math.max(0, Math.floor(acc.warp_bonus_remaining || 0));
-    const remaining = monthlyRemaining + bonusRemaining;
-    if (monthlyLimit > 0 || bonusRemaining > 0) {
-      const displayTotal = monthlyLimit + bonusRemaining;
-      const pctRemaining = displayTotal > 0 ? Math.min(100, Math.round((remaining / displayTotal) * 100)) : 0;
-      return {
-        supported: true,
-        limit: monthlyLimit,
-        remaining,
-        used: Math.max(0, Math.floor(acc.usage_current || 0)),
-        pctRemaining,
-        monthlyLimit,
-        monthlyRemaining,
-        bonusRemaining,
-        splitBonus: bonusRemaining > 0,
-      };
-    }
-  }
   const limit = Math.max(0, Math.floor(base.limit || 0));
   const remaining = Math.max(0, Math.floor(base.remaining || 0));
   const used = Math.max(0, limit - remaining);
@@ -300,15 +276,6 @@ function getAccountToken(acc) {
 function normalizeAccountSubscription(acc) {
   const raw = String(acc?.subscription || "").trim().toLowerCase();
   if (!raw) return "";
-  if (normalizeAccountType(acc) === "warp") {
-    if (raw.includes("enterprise") || raw.includes("unlimited")) return "enterprise";
-    if (raw.includes("max")) return "max";
-    if (raw.includes("business")) return "build/business";
-    if (raw.includes("build")) return "build/business";
-    if (raw.includes("free")) return "free";
-    if (raw.includes("unknown")) return "unknown";
-    return raw;
-  }
   if (raw.includes("heavy")) return "heavy";
   if (raw.includes("xpremiumplus") || raw.includes("x_premium_plus")) return "x_premium_plus";
   if (raw.includes("xpremium") || raw.includes("x_premium")) return "x_premium";
@@ -428,22 +395,6 @@ function subscriptionBadge(acc) {
     }
     return { text: "-", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "暂无订阅等级" };
   }
-  if (type === "warp") {
-    switch (level) {
-      case "enterprise":
-        return { text: "Enterprise", bg: "rgba(251, 191, 36, 0.16)", color: "#fbbf24", tip: "Warp Enterprise / Unlimited 额度档" };
-      case "max":
-        return { text: "Max", bg: "rgba(56, 189, 248, 0.16)", color: "#38bdf8", tip: "Warp Max 额度档" };
-      case "build/business":
-        return { text: "Build/Business", bg: "rgba(167, 139, 250, 0.16)", color: "#c4b5fd", tip: "Warp 1,500 credits/月，Build 与 Business 额度相同" };
-      case "free":
-        return { text: "Free", bg: "rgba(52, 211, 153, 0.14)", color: "#34d399", tip: "Warp Free 额度档" };
-      case "unknown":
-        return { text: "Unknown", bg: "rgba(100, 116, 139, 0.12)", color: "#94a3b8", tip: "暂未识别 Warp 额度档" };
-      default:
-        return { text: level, bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: `Warp 额度档: ${level}` };
-    }
-  }
   if (type !== "grok") {
     return { text: level, bg: "rgba(100, 116, 139, 0.12)", color: "#cbd5e1", tip: `订阅等级: ${level}` };
   }
@@ -500,29 +451,19 @@ function applyTokenLabels(type) {
   // in again.
   const clineLoginGroup = document.getElementById("clineLoginGroup");
   if (clineLoginGroup) clineLoginGroup.hidden = normalized !== "cline";
-  const warpDeviceLoginGroup = document.getElementById("warpDeviceLoginGroup");
-  if (warpDeviceLoginGroup) {
-    warpDeviceLoginGroup.hidden = normalized !== "warp" || Boolean(accountId);
-  }
   const saveButton = document.querySelector('#accountForm button[type="submit"]');
   if (saveButton) {
-    // Warp, WorkBuddy, Qoder and Cline are created by their official login
+    // WorkBuddy, Qoder, Cline and Grok are created by their official login
     // flows, so the form has nothing to submit for a new account of any of
     // those types.
     const loginOnlyChannel =
-      normalized === "warp" || normalized === "workbuddy" || normalized === "qoder" || normalized === "cline" || normalized === "grok";
+      normalized === "workbuddy" || normalized === "qoder" || normalized === "cline" || normalized === "grok";
     saveButton.hidden = loginOnlyChannel && !accountId;
   }
   applyCredentialModeUI(normalized);
   if (!label || !input || !hint) return;
   if (!input.required) input.value = "";
-  if (normalized === 'warp') {
-    label.textContent = "Warp 登录会话";
-    input.placeholder = "";
-    hint.textContent = accountId
-      ? "Warp 凭据由官方登录维护，这里不显示也不接受手填"
-      : "该渠道只支持官方登录，请使用下方「使用 Warp 官方网页登录」";
-  } else if (normalized === 'workbuddy') {
+  if (normalized === 'workbuddy') {
     // OAuth-only channel: no manual credential field is exposed.
     input.value = "";
     input.required = false;
@@ -553,9 +494,10 @@ function applyTokenLabels(type) {
   if (accountId) input.required = false;
 }
 
-// Grok and Warp expose the same server-owned device-auth protocol. Keep the
-// lifecycle shared while provider endpoints, copy and URL allowlists remain
-// explicit, so changing one provider cannot silently widen another.
+// Grok exposes a server-owned device-auth protocol. The lifecycle is shared
+// with the other official-login channels while provider endpoints, copy and
+// URL allowlists remain explicit, so changing one provider cannot silently
+// widen another.
 function createAccountDeviceLogin(options) {
   const state = { id: "", timer: null };
   const statusNode = () => document.getElementById(options.statusId);
@@ -664,30 +606,17 @@ const grokDeviceLogin = createAccountDeviceLogin({
   isAllowedURL: (url) => url.protocol === "https:" && (url.hostname === "auth.x.ai" || url.hostname === "accounts.x.ai"),
 });
 
-const warpDeviceLogin = createAccountDeviceLogin({
-  provider: "Warp",
-  endpoint: "/api/warp/device-auth",
-  statusId: "warpDeviceLoginStatus",
-  buttonId: "warpDeviceLoginButton",
-  isAllowedURL: (url) => url.origin === "https://app.warp.dev",
-});
-
 function renderGrokDeviceLoginStatus(message, type = "info", html = "") { grokDeviceLogin.render(message, type, html); }
 function resetGrokDeviceLoginStatus() { grokDeviceLogin.reset(); }
 function stopGrokDeviceLogin(cancel = false) { grokDeviceLogin.stop(cancel); }
 function startGrokDeviceLogin() { return grokDeviceLogin.start(); }
 function pollGrokDeviceLogin() { return grokDeviceLogin.poll(); }
-function renderWarpDeviceLoginStatus(message, type = "info", html = "") { warpDeviceLogin.render(message, type, html); }
-function resetWarpDeviceLoginStatus() { warpDeviceLogin.reset(); }
-function stopWarpDeviceLogin(cancel = false) { warpDeviceLogin.stop(cancel); }
-function startWarpDeviceLogin() { return warpDeviceLogin.start(); }
-function pollWarpDeviceLogin() { return warpDeviceLogin.poll(); }
 
 // Grok is Build OAuth-only. Other channels retain their existing generic
 // manual credential or official-login behavior.
 function applyCredentialModeUI(type) {
   const normalizedType = String(type || "").trim().toLowerCase();
-  const loginOnlyChannel = ["grok", "warp", "workbuddy", "qoder", "cline"].includes(normalizedType);
+  const loginOnlyChannel = ["grok", "workbuddy", "qoder", "cline"].includes(normalizedType);
   const credentialGroup = document.getElementById("ssoCredentialGroup");
   if (credentialGroup) credentialGroup.hidden = loginOnlyChannel;
   ["oauthCredentialGroup", "oauthRefreshGroup", "oauthExpiresGroup"].forEach((id) => {
@@ -831,11 +760,7 @@ function buildAccountPayload(type, baseData, credential) {
     delete payload.client_cookie;
     return payload;
   }
-  if (type === "warp") {
-    // Warp edits contain settings only; credentials belong to web login.
-    delete payload.refresh_token;
-    delete payload.client_cookie;
-  } else if (type === "qoder") {
+  if (type === "qoder") {
     // Qoder is OAuth-only: the credential belongs to the browser device flow
     // and there is no manual field, so the form only carries settings.
     delete payload.refresh_token;
@@ -865,8 +790,8 @@ function getActiveAccountType() {
 // The active platform tab is the source of truth: it is what the operator is
 // looking at when they press 添加账号. The hidden field is only a fallback for the
 // cold-load case (no tab rendered yet) — reading it first let a stale value from
-// a previous modal interaction (or the HTML default "warp") silently win, which
-// made the Grok tab open a Warp form.
+// a previous modal interaction silently win, which made the Grok tab open
+// another channel's form.
 function selectedPlatformAccountType(typeEl) {
   const activeTab = document.querySelector("#platformFilters .tab-item.active");
   if (activeTab?.dataset?.platform) {
@@ -881,7 +806,8 @@ function selectedPlatformAccountType(typeEl) {
 
 // platformAccountType maps a platform tab key to the account type it creates.
 // Tab keys are account types (the tab list is built from `accounts[].account_type`),
-// so an unrecognised value must not silently create a Warp account.
+// so an unrecognised value must not silently create an account of the wrong
+// channel.
 function platformAccountType(platform) {
   const key = String(platform || "").trim().toLowerCase();
   return window.OrchidsProviderRegistry?.get(key)?.key || getActiveAccountType();
@@ -1105,11 +1031,7 @@ function evaluateAccountStatus(acc) {
   }
 
   const type = normalizeAccountType(acc);
-  if (type === 'warp') {
-    if (!hasSidebarAccountCredential(acc)) {
-      return { normal: false, text: '待登录', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '请使用 Warp 官方网页登录' };
-    }
-  } else if (type === 'grok') {
+  if (type === 'grok') {
     // OAuth secrets are redacted by the account list API. credential_type is
     // the safe indicator that the server holds a Build OAuth credential.
     if (!hasSidebarAccountCredential(acc)) {
@@ -1703,8 +1625,8 @@ function buildMobileEmailMarkup(acc) {
 }
 
 // accountIdentityPrimary is the row's subject: the address for channels that
-// report one (WorkBuddy's nickname is the email), the session fingerprint for
-// Warp, otherwise the credential summary.
+// report one (WorkBuddy's nickname is the email), otherwise the credential
+// summary.
 function accountIdentityPrimary(acc) {
   const type = normalizeAccountType(acc);
   if (type === "workbuddy") {
@@ -1765,9 +1687,6 @@ function buildQuotaMarkup(acc) {
   if (quota) {
     const pct = quota.pctRemaining;
     const color = pct <= 10 ? "#fb7185" : pct <= 30 ? "#f59e0b" : "#34d399";
-    if (normalizeAccountType(acc) === "warp" && quota.splitBonus) {
-      return `<span style="color:${color}">${quota.remaining.toLocaleString()}</span> <span style="color:#64748b;font-size:0.75rem">(剩余)</span><div style="color:#64748b;font-size:0.75rem">${quota.monthlyRemaining.toLocaleString()} 月度 + ${quota.bonusRemaining.toLocaleString()} 赠送</div>`;
-    }
 	if (quota.weeklyPercent) {
 	  return `<span style="color:${color}">${quota.remaining.toLocaleString()}%</span> <span style="color:#64748b;font-size:0.75rem">/ 100% (周度剩余)</span>`;
 	}
@@ -1928,11 +1847,13 @@ function filterByPlatform(platform) {
   currentPage = 1; // Reset to first page
   // Keep the modal's account type in step with the selected tab. The hidden
   // field is the only source of truth for "which provider am I adding", and it
-  // must never silently fall back to Warp when a platform tab is selected.
+  // must never silently fall back to the default channel when a platform tab is
+  // selected.
   setAccountModalType(platformAccountType(platform));
   document.querySelectorAll("#platformFilters .tab-item").forEach(btn => {
-    // The key, not the label: the strip renders "Warp" while the tab carries "warp",
-    // so comparing textContent left the whole strip unselected after a click.
+    // The key, not the label: the strip renders the provider label while the tab
+    // carries its key, so comparing textContent left the whole strip unselected
+    // after a click.
     const key = btn.dataset.platform ? decodeURIComponent(btn.dataset.platform) : "";
     btn.classList.toggle("active", key === platform);
   });
@@ -2006,8 +1927,6 @@ function openModal(account = null) {
   const title = document.getElementById("modalTitle");
   const form = document.getElementById("accountForm");
   const typeEl = document.getElementById("accountType");
-  stopWarpDeviceLogin(true);
-  resetWarpDeviceLoginStatus();
   stopGrokDeviceLogin(true);
   resetGrokDeviceLoginStatus();
   clearAccountImportStatus();
@@ -2115,8 +2034,6 @@ function stopClineLogin() {
 
 // Close modal
 function closeModal() {
-  stopWarpDeviceLogin(true);
-  resetWarpDeviceLoginStatus();
   stopGrokDeviceLogin(true);
   resetGrokDeviceLoginStatus();
   stopWorkBuddyLogin();
@@ -2133,10 +2050,6 @@ async function saveAccount(e) {
   e.preventDefault();
   const id = document.getElementById("accountId").value;
   const type = document.getElementById("accountType").value;
-  if (type === "warp" && !id) {
-    showToast("请使用 Warp 官方网页登录添加账号", "error");
-    return;
-  }
   // WorkBuddy is OAuth-only: the official login flow creates and re-authorizes
   // the account, so the form must never submit a manually typed credential.
   if (type === "workbuddy" && !id) {
@@ -2182,7 +2095,7 @@ async function saveAccount(e) {
   // A WorkBuddy edit may legitimately keep the stored credential: the refresh
   // token is never returned to the browser, so an empty field means "unchanged".
   const keepStoredCredential = Boolean(id) && existing && normalizeAccountType(existing) === type && splitCredentials.length === 0;
-  if (type !== "warp" && !isOAuth && credentials.length === 0 && !keepStoredCredential) {
+  if (!isOAuth && credentials.length === 0 && !keepStoredCredential) {
     if (duplicateInputs.length > 0 || existingConflicts.length > 0) {
       const details = []
         .concat(duplicateInputs.slice(0, 4).map((item) => `输入重复: ${item}`))
@@ -2291,14 +2204,6 @@ function parseDataId(value) {
 function formatTokenDisplay(acc) {
   if (typeof acc?.has_credential === "boolean") return acc.has_credential ? '凭证已配置' : '待登录';
   const type = normalizeAccountType(acc);
-  if (type === 'warp') {
-    // Warp authenticates with a browser session that carries no email or
-    // username, so identity is shown as a short digest of the session. Two
-    // logins then look different instead of both reading 登录会话已配置.
-    const fingerprint = String(acc.session_fingerprint || '').trim();
-    if (!hasSidebarAccountCredential(acc)) return '待官网登录';
-    return fingerprint ? `会话 ${fingerprint.substring(0, 6)}` : '登录会话已配置';
-  }
   if (type === 'grok' && isSidebarGrokOAuthAccount(acc)) {
     const accessToken = String(acc.oauth_access_token || "");
     if (accessToken) {

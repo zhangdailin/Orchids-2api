@@ -19,7 +19,6 @@ import (
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
 	"orchids-api/internal/template"
-	"orchids-api/internal/warp"
 	"orchids-api/web"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -224,8 +223,6 @@ func registerRoutes(
 	mux.HandleFunc("/api/qoder/login/", sessionAuth(apiHandler.HandleQoderLogin))
 	mux.HandleFunc("/api/cline/login", sessionAuth(apiHandler.HandleClineLogin))
 	mux.HandleFunc("/api/cline/login/", sessionAuth(apiHandler.HandleClineLogin))
-	mux.HandleFunc("/api/warp/device-auth", sessionAuth(apiHandler.HandleWarpDeviceAuthorization))
-	mux.HandleFunc("/api/warp/device-auth/", sessionAuth(apiHandler.HandleWarpDeviceAuthorization))
 	mux.HandleFunc("/api/grok/device-auth", sessionAuth(apiHandler.HandleGrokDeviceAuthorization))
 	mux.HandleFunc("/api/grok/device-auth/", sessionAuth(apiHandler.HandleGrokDeviceAuthorization))
 	mux.HandleFunc("/api/keys", sessionAuth(apiHandler.HandleKeys))
@@ -307,27 +304,19 @@ func registerRoutes(
 	registerAdminUI(mux, cfg, currentConfig, s, staticRootHandler, tmplRenderer)
 
 	// --- Health, metrics, pprof ---
+	// /health reports every registered provider. The set comes from the channel
+	// registry rather than a literal, so removing a provider removes its key
+	// here too, and a provider that is not configured cannot be reported as one.
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		status := "ok"
-		warpStatus := "ready"
-		if warp.ConfigurationError() != nil {
-			status = "degraded"
-			warpStatus = "configuration_error"
+		providers := make(map[string]string, len(channel.All()))
+		for _, definition := range channel.All() {
+			providers[string(definition.ID)] = "ready"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":    status,
-			"providers": map[string]string{"warp": warpStatus},
+			"status":    "ok",
+			"providers": providers,
 		})
-	})
-	mux.HandleFunc("/ready/warp", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if err := warp.ConfigurationError(); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "configuration_error", "message": "Warp OAuth is not configured"})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
 	})
 	mux.Handle("/metrics", promhttp.Handler())
 	slog.Debug("Prometheus metrics enabled", "path", "/metrics")
@@ -386,14 +375,25 @@ func registerAdminUI(mux *http.ServeMux, cfg *config.Config, currentConfig func(
 		}
 		http.Redirect(w, r, cfg.AdminPath+"/", http.StatusFound)
 	})
+	// The login page is a plain static file, so it cannot read the PageData field
+	// the rendered pages use for ?v=; web.LoginPage resolves the same content-hash
+	// placeholder inside it instead.
+	serveLoginPage := func(w http.ResponseWriter, r *http.Request) {
+		page, err := web.LoginPage()
+		if err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write(page)
+	}
 	mux.HandleFunc(cfg.AdminPath+"/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		rr := r.Clone(r.Context())
-		rr.URL.Path = cfg.AdminPath + "/login.html"
-		staticHandler.ServeHTTP(w, rr)
+		serveLoginPage(w, r)
 	})
 
 	for _, page := range []string{"/config", "/cache", "/token"} {
@@ -412,7 +412,7 @@ func registerAdminUI(mux *http.ServeMux, cfg *config.Config, currentConfig func(
 
 	mux.HandleFunc(cfg.AdminPath+"/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == cfg.AdminPath+"/login.html" {
-			staticHandler.ServeHTTP(w, r)
+			serveLoginPage(w, r)
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, cfg.AdminPath+"/css/") ||

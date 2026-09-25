@@ -4,12 +4,12 @@ package api
 // API, one function per channel.
 //
 // Channels disagree about what their allowance even is — an upstream credit
-// window, a rolling token estimate, a monthly request budget split into base and
-// bonus, or nothing but a passive rate-limit header — so each channel keeps its
-// own projection. What they share is the shape: fill the same fields and record
-// where the numbers came from with applyQuotaProvenance. This used to be a single
-// switch over the account type inside buildQuotaResponseFieldsWithUsage; the
-// dispatch is now a lookup and each channel's rules are a named function.
+// window, a rolling token estimate, or nothing but a passive rate-limit header —
+// so each channel keeps its own projection. What they share is the shape: fill
+// the same fields and record where the numbers came from with
+// applyQuotaProvenance. This used to be a single switch over the account type
+// inside buildQuotaResponseFieldsWithUsage; the dispatch is now a lookup and each
+// channel's rules are a named function.
 
 import (
 	"strings"
@@ -34,7 +34,6 @@ var quotaProjectors = map[string]quotaProjector{
 	"qoder":     projectQoderQuota,
 	"workbuddy": projectWorkBuddyQuota,
 	"grok":      projectGrokQuota,
-	"warp":      projectWarpQuota,
 	"cline":     projectClineQuota,
 }
 
@@ -172,39 +171,6 @@ func projectWorkBuddyQuota(fields map[string]interface{}, acc *store.Account, li
 }
 func projectGrokQuota(fields map[string]interface{}, acc *store.Account, limit, current float64, observedTokens int64, usageObserved bool) {
 	buildGrokBuildQuotaFields(fields, acc, observedTokens, usageObserved)
-}
-
-func projectWarpQuota(fields map[string]interface{}, acc *store.Account, limit, current float64, observedTokens int64, usageObserved bool) {
-	baseLimit := limit
-	if acc.WarpMonthlyLimit > 0 {
-		baseLimit = acc.WarpMonthlyLimit
-	}
-	used := current
-	if used > baseLimit && baseLimit > 0 {
-		used = baseLimit
-	}
-	baseRemaining := acc.WarpMonthlyRemaining
-	if baseRemaining <= 0 && baseLimit > 0 {
-		baseRemaining = baseLimit - current
-	}
-	if baseRemaining < 0 {
-		baseRemaining = 0
-	}
-	bonusRemaining := acc.WarpBonusRemaining
-	if bonusRemaining < 0 {
-		bonusRemaining = 0
-	}
-	remaining := baseRemaining + bonusRemaining
-	fields["quota_limit"] = baseLimit
-	fields["quota_used"] = used
-	fields["quota_remaining"] = remaining
-	fields["quota_mode"] = "warp_split"
-	fields["quota_unit"] = "requests"
-	fields["quota_base_limit"] = baseLimit
-	fields["quota_base_remaining"] = baseRemaining
-	fields["quota_bonus_remaining"] = bonusRemaining
-	applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-		"Warp 官方接口返回的月度额度与赠送额度", baseLimit > 0, false)
 }
 
 func projectLegacyQuota(fields map[string]interface{}, acc *store.Account, limit, current float64, observedTokens int64, usageObserved bool) {

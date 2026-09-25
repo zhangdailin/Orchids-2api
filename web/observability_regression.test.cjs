@@ -47,17 +47,17 @@ function loadModels(){
  const ctx=vm.createContext({console,document:{addEventListener(){},getElementById:id=>id==='modelsList'?list:null,querySelectorAll:()=>[]},window:{matchMedia:()=>({matches:false})},encodeData:encodeURIComponent,decodeData:decodeURIComponent,escapeHtml:String,showToast(){},confirm:()=>true,fetch:async(url,options)=>{calls.push({url,options});return {ok:true}}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'static/js/models.js'),'utf8'),ctx);
  vm.runInContext(`updateModelSummary=()=>{};renderModelRefreshSummary=()=>{};renderPagination=()=>{};updateRefreshButton=()=>{};loadModels=async()=>{};
- models=[{id:'warp-a',channel:'Warp',model_id:'one',status:'available'},{id:'grok-b',channel:'Grok',model_id:'two',status:'available'}];currentModelChannel='Warp';`,ctx);
+ models=[{id:'cline-a',channel:'Cline',model_id:'one',status:'available'},{id:'grok-b',channel:'Grok',model_id:'two',status:'available'}];currentModelChannel='Cline';`,ctx);
  return {ctx,list,calls};
 }
 test('selected model remains checked after redraw and changing provider clears the selection',async()=>{
- const {ctx,list,calls}=loadModels();vm.runInContext(`modelsSelectedIds.add('warp-a');renderModels()`,ctx);
+ const {ctx,list,calls}=loadModels();vm.runInContext(`modelsSelectedIds.add('cline-a');renderModels()`,ctx);
  assert.match(list.innerHTML,/data-action="row-select"[^>]+checked/);
  vm.runInContext(`filterModelsByChannel('Grok')`,ctx);assert.equal(vm.runInContext('modelsSelectedIds.size',ctx),0);
  await vm.runInContext(`runModelBatch('disable')`,ctx);assert.equal(calls.length,0);
 });
 test('batch action rejects stale cross-channel IDs even if selection state is corrupted',async()=>{
- const {ctx,calls}=loadModels();vm.runInContext(`currentModelChannel='Grok';modelsSelectedIds.add('warp-a');modelsSelectedIds.add('grok-b')`,ctx);
+ const {ctx,calls}=loadModels();vm.runInContext(`currentModelChannel='Grok';modelsSelectedIds.add('cline-a');modelsSelectedIds.add('grok-b')`,ctx);
  await vm.runInContext(`runModelBatch('disable')`,ctx);assert.deepEqual(calls.map(c=>c.url),['/api/models/grok-b']);
 });
 

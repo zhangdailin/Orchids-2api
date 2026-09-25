@@ -35,20 +35,6 @@ func TestRedisSessionStoreConvID(t *testing.T) {
 	}
 }
 
-func TestRedisSessionStoreWarpTaskContext(t *testing.T) {
-	store, _ := setupRedisSessionStore(t)
-	ctx := context.Background()
-
-	if _, ok := store.GetWarpTaskContext(ctx, "session1"); ok {
-		t.Fatal("expected task context miss")
-	}
-	store.SetWarpTaskContext(ctx, "session1", "encoded-task-context")
-	got, ok := store.GetWarpTaskContext(ctx, "session1")
-	if !ok || got != "encoded-task-context" {
-		t.Fatalf("task context=%q ok=%v", got, ok)
-	}
-}
-
 func TestRedisSessionStoreDelete(t *testing.T) {
 	store, _ := setupRedisSessionStore(t)
 	ctx := context.Background()
@@ -100,102 +86,43 @@ func TestRedisSessionStoreTouch(t *testing.T) {
 }
 
 // --- Memory tests ---
-
-func TestMemorySessionStoreWarpTaskContext(t *testing.T) {
-	store := NewMemorySessionStore(30*time.Minute, 100)
-	ctx := context.Background()
-
-	if _, ok := store.GetWarpTaskContext(ctx, "s1"); ok {
-		t.Fatal("expected task context miss")
-	}
-	store.SetWarpTaskContext(ctx, "s1", "encoded-task-context")
-	got, ok := store.GetWarpTaskContext(ctx, "s1")
-	if !ok || got != "encoded-task-context" {
-		t.Fatalf("task context=%q ok=%v", got, ok)
-	}
-}
-
 func TestMemorySessionStoreCleanup(t *testing.T) {
 	store := NewMemorySessionStore(100*time.Millisecond, 100)
 	ctx := context.Background()
 
 	store.SetConvID(ctx, "s1", "conv_cleanup")
-	store.SetWarpToolBinding(ctx, "session", "tool_1", WarpToolBinding{ConversationID: "conv_1"})
 	time.Sleep(150 * time.Millisecond)
 	store.Cleanup(ctx)
 
 	if _, ok := store.GetConvID(ctx, "s1"); ok {
 		t.Fatal("session should have been cleaned up")
 	}
-	if _, ok := store.GetWarpToolBinding(ctx, "session", "tool_1"); ok {
-		t.Fatal("tool binding should have been cleaned up")
-	}
 }
 
-func TestMemorySessionStoreWarpToolBindingAndAccount(t *testing.T) {
+func TestMemorySessionStoreAccountID(t *testing.T) {
 	store := NewMemorySessionStore(30*time.Minute, 100)
 	ctx := context.Background()
+
+	if _, ok := store.GetAccountID(ctx, "session"); ok {
+		t.Fatal("expected account id miss")
+	}
 	store.SetAccountID(ctx, "session", 132)
-	store.SetWarpToolBinding(ctx, "session", "tool_write", WarpToolBinding{
-		ConversationID: "warp_conv",
-		AccountID:      132,
-		ToolType:       "call_mcp_tool",
-		ToolName:       "Write",
-		ToolInput:      `{"file_path":"main.go"}`,
-		TaskContext:    "dGFzaw",
-	})
 
 	if accountID, ok := store.GetAccountID(ctx, "session"); !ok || accountID != 132 {
 		t.Fatalf("accountID=%d ok=%v, want 132 true", accountID, ok)
 	}
-	binding, ok := store.GetWarpToolBinding(ctx, "session", "tool_write")
-	if !ok || binding.ConversationID != "warp_conv" || binding.AccountID != 132 || binding.ToolType != "call_mcp_tool" || binding.TaskContext != "dGFzaw" {
-		t.Fatalf("binding=%#v ok=%v", binding, ok)
-	}
 }
 
-func TestRedisSessionStoreWarpToolBindingAndAccount(t *testing.T) {
+func TestRedisSessionStoreAccountID(t *testing.T) {
 	store, _ := setupRedisSessionStore(t)
 	ctx := context.Background()
+
+	if _, ok := store.GetAccountID(ctx, "session"); ok {
+		t.Fatal("expected account id miss")
+	}
 	store.SetAccountID(ctx, "session", 132)
-	store.SetWarpToolBinding(ctx, "session", "tool:with unsafe key bytes", WarpToolBinding{
-		ConversationID: "warp_conv",
-		AccountID:      132,
-		ToolType:       "call_mcp_tool",
-	})
 
 	if accountID, ok := store.GetAccountID(ctx, "session"); !ok || accountID != 132 {
 		t.Fatalf("accountID=%d ok=%v, want 132 true", accountID, ok)
-	}
-	binding, ok := store.GetWarpToolBinding(ctx, "session", "tool:with unsafe key bytes")
-	if !ok || binding.ConversationID != "warp_conv" || binding.AccountID != 132 {
-		t.Fatalf("binding=%#v ok=%v", binding, ok)
-	}
-}
-
-func TestMemorySessionStoreWarpToolBindingIsConversationScoped(t *testing.T) {
-	store := NewMemorySessionStore(30*time.Minute, 100)
-	ctx := context.Background()
-	store.SetWarpToolBinding(ctx, "conversation-a", "tool_1", WarpToolBinding{ConversationID: "conv_a"})
-	store.SetWarpToolBinding(ctx, "conversation-b", "tool_1", WarpToolBinding{ConversationID: "conv_b"})
-
-	if binding, ok := store.GetWarpToolBinding(ctx, "conversation-a", "tool_1"); !ok || binding.ConversationID != "conv_a" {
-		t.Fatalf("conversation-a binding=%#v ok=%v", binding, ok)
-	}
-	if binding, ok := store.GetWarpToolBinding(ctx, "conversation-b", "tool_1"); !ok || binding.ConversationID != "conv_b" {
-		t.Fatalf("conversation-b binding=%#v ok=%v", binding, ok)
-	}
-}
-
-func TestMemorySessionStoreAllowsAnonymousToolCapability(t *testing.T) {
-	store := NewMemorySessionStore(time.Hour, 10)
-	ctx := context.Background()
-	store.SetWarpToolBinding(ctx, "", "unguessable-tool-id", WarpToolBinding{ConversationID: "warp-conv", AccountID: 7})
-	binding, ok := store.GetWarpToolBinding(ctx, "", "unguessable-tool-id")
-	if !ok || binding.ConversationID != "warp-conv" || binding.AccountID != 7 {
-		t.Fatalf("anonymous capability binding=%+v ok=%v", binding, ok)
-	}
-	if _, ok := store.GetWarpToolBinding(ctx, "another-session", "unguessable-tool-id"); ok {
-		t.Fatal("anonymous capability leaked into an explicit conversation namespace")
 	}
 }

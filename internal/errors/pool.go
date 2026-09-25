@@ -27,7 +27,7 @@ const (
 	// PoolBusyMessage answers a pool whose accounts are all serving other requests.
 	PoolBusyMessage = "Request failed: every account for this channel is busy with other requests. Please retry shortly."
 	// PoolModelUnavailableMessage answers a request for a model the channel's
-	// accounts cannot route (Warp's per-account model choices).
+	// accounts cannot route (per-account model choices).
 	PoolModelUnavailableMessage = "Request failed: the requested model is not available on this channel's accounts. Choose another model or add an account that supports it."
 	// PoolNoAccountsMessage answers the residual cases (no accounts, or accounts
 	// that cannot serve at all). The client can do nothing about them, so the

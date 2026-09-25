@@ -8,7 +8,6 @@
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/warp/v1/messages` | POST | Warp 通道 Claude Messages 代理 |
 | `/workbuddy/v1/messages` | POST | WorkBuddy 国际版 Claude Messages 代理 |
 | `/qoder/v1/messages` | POST | Qoder（qoder.com）Claude Messages 代理 |
 | `/cline/v1/messages` | POST | Cline（api.cline.bot）Claude Messages 代理 |
@@ -20,7 +19,6 @@
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
-| `/warp/v1/chat/completions` | POST | Warp OpenAI 兼容入口 |
 | `/workbuddy/v1/chat/completions` | POST | WorkBuddy 国际版 OpenAI 兼容入口 |
 | `/qoder/v1/chat/completions` | POST | Qoder OpenAI 兼容入口 |
 | `/cline/v1/chat/completions` | POST | Cline OpenAI 兼容入口 |
@@ -29,7 +27,7 @@
 
 ### 1.3 OpenAI Responses 风格
 
-所有渠道的模型都可经统一前缀 `/v1` 使用 Responses API：Grok 模型走原生实现，其余渠道（Warp / WorkBuddy / Qoder / Cline）由 Responses→Chat 桥接提供。渠道前缀（`/warp/v1`、`/workbuddy/v1`、`/qoder/v1`、`/cline/v1`、`/grok/v1`）同样可用。
+所有渠道的模型都可经统一前缀 `/v1` 使用 Responses API：Grok 模型走原生实现，其余渠道（WorkBuddy / Qoder / Cline）由 Responses→Chat 桥接提供。渠道前缀（`/workbuddy/v1`、`/qoder/v1`、`/cline/v1`、`/grok/v1`）同样可用。
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -41,7 +39,7 @@
 | `/responses/{response_id}/cancel` | POST | 取消 Response，幂等；返回带 `status=cancelled` 的对象 |
 | `/responses/{response_id}/input_items` | GET | 返回该 Response 创建时的输入项列表 |
 
-上表的 `cancel` / `input_items` 在 `/v1`、`/grok/v1`、`/warp/v1`、`/workbuddy/v1`、`/qoder/v1` 五个前缀下均已注册，且不经过按模型分发的 dispatcher：cancel 请求体不含 `model`，按请求体分发会让「发送 `{}`」与「不发送请求体」落到不同实现，因此这两个端点显式注册，统一读取同一个 response store。
+上表的 `cancel` / `input_items` 在 `/v1`、`/grok/v1`、`/workbuddy/v1`、`/qoder/v1` 四个前缀下均已注册，且不经过按模型分发的 dispatcher：cancel 请求体不含 `model`，按请求体分发会让「发送 `{}`」与「不发送请求体」落到不同实现，因此这两个端点显式注册，统一读取同一个 response store。
 
 stored Response 归属记录按客户端 API Key 隔离。连续请求和资源管理会固定使用创建该 Response 的 Build OAuth 账号；归属记录过期或账号不可用时不会切换到其他账号。统一前缀下的 `GET`/`DELETE` 由存储记录决定由谁处理：Build 记录交给原生 handler（只有它能用创建该记录的账号访问上游），其余记录交给写入它的桥接实现。
 
@@ -61,7 +59,6 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 |---|---|---|
 | `/v1/models` | GET | 全通道模型列表 |
 | `/v1/models/{id}` | GET | 查询单个模型 |
-| `/warp/v1/models` | GET | Warp 模型列表 |
 | `/workbuddy/v1/models` | GET | WorkBuddy 国际版模型列表 |
 | `/qoder/v1/models` | GET | Qoder 模型列表 |
 | `/cline/v1/models` | GET | Cline 模型列表 |
@@ -81,8 +78,6 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/api/accounts/{id}` | GET/PUT/DELETE | 查询 / 更新 / 删除账号 |
 | `/api/accounts/{id}/check` | GET | 账号检查 |
 | `/api/accounts/{id}/usage` | GET | 账号用量 |
-| `/api/warp/device-auth` | POST | 启动 Warp 官方网页登录 |
-| `/api/warp/device-auth/{id}` | GET/DELETE | 查询授权状态 / 取消授权 |
 | `/api/workbuddy/login` | POST | 发起 WorkBuddy 国际版官方浏览器登录（返回 `id` 与官方 `verification_uri_complete`） |
 | `/api/workbuddy/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
 | `/api/qoder/login` | POST | 发起 Qoder 官方设备授权登录（返回 `id` 与官方 `verification_uri_complete`） |
@@ -105,11 +100,8 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/api/token-cache/stats` | GET | Token 缓存统计 |
 | `/api/token-cache/clear` | POST | 清空 Token 缓存 |
 
-Warp 账号只能通过官方网页登录添加。`POST /api/accounts` 拒绝创建 Warp，
-`PUT /api/accounts/{id}` 仅允许编辑设置，不能提交 Token 或转换为其他账号类型。
-账号查询返回 `warp_authenticated` 表示服务器是否保存了登录凭据（不代表实时认证成功），不返回会话密钥。
-`/api/import` 跳过 Warp 并计入 `skipped`；`/api/export` 不包含 Warp 账号。
-迁移服务器后需重新进行 Warp 官方网页登录。已有账号及内部自动续期机制保留。
+每个通道的官方登录接口与账号约束见各自章节：Grok（§6）、WorkBuddy（§7）、Qoder（§9）、Cline（§10）。
+管理页面只通过这些登录入口新建或重新授权账号；迁移服务器后需重新登录，已有账号及内部自动续期机制保留。
 
 每个账号响应都带一组额度来源字段，用来区分「上游真的报了数值」「按画像推断为 Free」「尚未同步」：
 
@@ -209,7 +201,7 @@ RPM 在 Redis 中原子计数，并覆盖所有受 API Key 保护的模型与推
 ```bash
 curl -s http://127.0.0.1:3002/api/models/refresh \
   -H 'Content-Type: application/json' \
-  -d '{"channel":"warp"}'
+  -d '{"channel":"workbuddy"}'
 ```
 
 返回字段：
@@ -234,7 +226,7 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 - WorkBuddy 使用 `GET /v3/config` 的 `cli` 白名单（鉴权成功即视为验证通过，不额外消耗额度），返回 `source=workbuddy_cli_models`
 - Qoder 使用**有符号上游目录** `GET /algo/api/v2/model/list`（复用聊天链路的 COSY 签名），返回 `source=qoder_upstream_models`；对外模型 ID 是**小写化的显示名**（例如 `qwen3.7-max`），内部 key（`qmodel_latest`）以及 `max_input_tokens`/`is_reasoning` 等字段按 JSON 保存在账号快照里
 - Cline 使用推荐模型目录 `GET /ai/cline/recommended-models`（只发布 `free` 列表），返回 `source=cline_recommended_models`；对外模型 ID 就是上游 id（例如 `x-ai/grok-4.1-fast`）
-- Grok 使用 Build OAuth `GET /v1/models`，返回 `source=grok_build_models`；Warp 使用账号 GraphQL，返回 `source=warp_graphql_*`
+- Grok 使用 Build OAuth `GET /v1/models`，返回 `source=grok_build_models`
 - 仅当本轮确实读到上游目录时，来源中已消失的模型才会被删除
 
 ## 5. 常用请求示例
@@ -279,14 +271,14 @@ curl -s http://127.0.0.1:3002/workbuddy/v1/messages \
 
 这些 `quota_*` 字段会合并进**每一个账号响应**（列表、创建、编辑、检查），前端表格的「等级 / 配额」列直接读取；同时保留嵌套的 `workbuddy_quota` 快照（含 `package_name` / `synced_at` / `last_consumed_units`）。账号身份（`email` / `name` / `workbuddy_uid`）由 accessToken 里的 Keycloak claims 推导，因此手填会话 JSON 或走官方登录都能得到同样的账号标识。
 
-### 5.1 Warp Claude Messages 工具首轮
+### 5.1 WorkBuddy Claude Messages 工具首轮
 
 ```bash
-curl -s http://127.0.0.1:3002/warp/v1/messages \
+curl -s http://127.0.0.1:3002/workbuddy/v1/messages \
 	-H 'Authorization: Bearer sk-...' \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "claude-opus-5",
+    "model": "hy3",
     "messages": [{"role":"user","content":"Read README.md"}],
     "tools": [{
       "name": "Read",

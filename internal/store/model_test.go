@@ -109,10 +109,10 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 		t.Fatalf("CreateModel(workbuddy) error = %v", err)
 	}
 	if err := s.CreateModel(ctx, &Model{
-		Channel: "Warp", ModelID: "auto-open", Name: "Warp Auto Open",
+		Channel: "Qoder", ModelID: "auto-open", Name: "Qoder Auto Open",
 		Status: ModelStatusAvailable, Verified: true,
 	}); err != nil {
-		t.Fatalf("CreateModel(warp) error = %v", err)
+		t.Fatalf("CreateModel(qoder) error = %v", err)
 	}
 
 	workBuddyModel, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro")
@@ -123,15 +123,15 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 		t.Fatalf("workbuddy model channel = %q, want WorkBuddy", workBuddyModel.Channel)
 	}
 
-	warpModel, err := s.GetModelByChannelAndModelID(ctx, "warp", "auto-open")
+	qoderModel, err := s.GetModelByChannelAndModelID(ctx, "qoder", "auto-open")
 	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(warp) error = %v", err)
+		t.Fatalf("GetModelByChannelAndModelID(qoder) error = %v", err)
 	}
-	if warpModel.Channel != "Warp" {
-		t.Fatalf("warp model channel = %q, want Warp", warpModel.Channel)
+	if qoderModel.Channel != "Qoder" {
+		t.Fatalf("qoder model channel = %q, want Qoder", qoderModel.Channel)
 	}
-	if warpModel.ID == workBuddyModel.ID {
-		t.Fatalf("expected different records across channels, got same id %q", warpModel.ID)
+	if qoderModel.ID == workBuddyModel.ID {
+		t.Fatalf("expected different records across channels, got same id %q", qoderModel.ID)
 	}
 }
 
@@ -171,7 +171,7 @@ func TestStoreNew_PublishesNoBuiltInModels(t *testing.T) {
 	for _, probe := range []struct{ channel, modelID string }{
 		{"Grok", "grok-4.5"},
 		{"Grok", "grok-imagine-image"},
-		{"Warp", "auto-open"},
+		{"Qoder", "auto-open"},
 		{"WorkBuddy", "claude-opus-5"},
 		{"WorkBuddy", "default-model"},
 		{"Qoder", "Qwen3.7-Max"},
@@ -338,7 +338,7 @@ func TestStoreNew_RemovesDeprecatedGrokModelsOnly(t *testing.T) {
 // only removed from the channel that retired it.
 //
 // The cleanup used to match by identifier alone, which deleted working models:
-// the WorkBuddy and Warp upstream catalogs legitimately advertise grok-4.3 and
+// the WorkBuddy and Cline upstream catalogs legitimately advertise grok-4.3 and
 // grok-build-0.1, so every restart removed rows a refresh had just published.
 func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 	t.Parallel()
@@ -357,9 +357,8 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 	for _, record := range []*Model{
 		{Channel: "Grok", ModelID: "grok-4.3", Name: "retired Grok route", Status: ModelStatusAvailable, Verified: true},
 		{Channel: "WorkBuddy", ModelID: "grok-4.3", Name: "upstream WorkBuddy route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
-		{Channel: "Warp", ModelID: "grok-build-0.1", Name: "upstream Warp route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
+		{Channel: "Cline", ModelID: "grok-build-0.1", Name: "upstream Cline route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
 		{Channel: "Grok", ModelID: "grok-build-0.1", Name: "retired Grok route", Status: ModelStatusAvailable, Verified: true},
-		{Channel: "Warp", ModelID: "warp-chat", Name: "retired virtual mode", Status: ModelStatusAvailable, Verified: true},
 	} {
 		if err := s.CreateModel(ctx, record); err != nil {
 			t.Fatalf("CreateModel(%s/%s) error = %v", record.Channel, record.ModelID, err)
@@ -374,7 +373,7 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 
 	for _, probe := range []struct{ channel, modelID string }{
 		{"WorkBuddy", "grok-4.3"},
-		{"Warp", "grok-build-0.1"},
+		{"Cline", "grok-build-0.1"},
 	} {
 		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err != nil {
 			t.Fatalf("%s/%s was deleted from a channel that did not retire it: %v", probe.channel, probe.modelID, err)
@@ -383,7 +382,6 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 	for _, probe := range []struct{ channel, modelID string }{
 		{"Grok", "grok-4.3"},
 		{"Grok", "grok-build-0.1"},
-		{"Warp", "warp-chat"},
 	} {
 		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err == nil {
 			t.Fatalf("%s/%s was not retired", probe.channel, probe.modelID)

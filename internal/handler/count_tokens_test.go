@@ -14,8 +14,9 @@ import (
 // count_tokens decides the token profile from the channel, and on the unified
 // prefix the path names no channel at all. A path-only answer used to make every
 // /v1 request fall through to the generic estimate while the completion itself
-// ran on Warp, so a client that budgets its context against count_tokens planned
-// against a number that did not belong to the provider serving it.
+// ran on another channel, so a client that budgets its context against
+// count_tokens planned against a number that did not belong to the provider
+// serving it.
 func TestHandleCountTokensUsesTheModelChannelWhenThePathHasNone(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() {
@@ -23,9 +24,9 @@ func TestHandleCountTokensUsesTheModelChannelWhenThePathHasNone(t *testing.T) {
 		mini.Close()
 	}()
 
-	mustCreateModel(t, s, "360", "Warp", "gpt-5-6-sol-medium", store.ModelStatusAvailable)
+	mustCreateModel(t, s, "360", "WorkBuddy", "claude-opus-5", store.ModelStatusAvailable)
 
-	body := `{"model":"gpt-5-6-sol-medium","messages":[{"role":"user","content":"hello there, count my tokens"}]}`
+	body := `{"model":"claude-opus-5","messages":[{"role":"user","content":"hello there, count my tokens"}]}`
 
 	// The tracing middleware installs the hint box in production and the unified
 	// dispatcher publishes the resolved model into it; count_tokens reads it back
@@ -33,14 +34,14 @@ func TestHandleCountTokensUsesTheModelChannelWhenThePathHasNone(t *testing.T) {
 	unified := httptest.NewRecorder()
 	unifiedReq := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(body))
 	unifiedCtx, _ := middleware.RequestModelHint(unifiedReq.Context())
-	unifiedCtx = middleware.WithRequestModel(unifiedCtx, "gpt-5-6-sol-medium")
+	unifiedCtx = middleware.WithRequestModel(unifiedCtx, "claude-opus-5")
 	h.HandleCountTokens(unified, unifiedReq.WithContext(unifiedCtx))
 	if unified.Code != http.StatusOK {
 		t.Fatalf("unified status = %d body=%s", unified.Code, unified.Body.String())
 	}
 
 	channelScoped := httptest.NewRecorder()
-	h.HandleCountTokens(channelScoped, httptest.NewRequest(http.MethodPost, "/warp/v1/messages/count_tokens", strings.NewReader(body)))
+	h.HandleCountTokens(channelScoped, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages/count_tokens", strings.NewReader(body)))
 	if channelScoped.Code != http.StatusOK {
 		t.Fatalf("channel status = %d body=%s", channelScoped.Code, channelScoped.Body.String())
 	}
@@ -56,8 +57,8 @@ func TestHandleCountTokensUsesTheModelChannelWhenThePathHasNone(t *testing.T) {
 		t.Fatalf("decode channel: %v", err)
 	}
 
-	if unifiedBody.PromptProfile != "warp-official-proto" {
-		t.Fatalf("unified profile = %q, want the Warp profile its model resolves to", unifiedBody.PromptProfile)
+	if unifiedBody.PromptProfile != "workbuddy" {
+		t.Fatalf("unified profile = %q, want the WorkBuddy profile its model resolves to", unifiedBody.PromptProfile)
 	}
 	if unifiedBody.PromptProfile != channelBody.PromptProfile {
 		t.Fatalf("unified profile = %q, channel profile = %q; the unified prefix must resolve the channel from the model",

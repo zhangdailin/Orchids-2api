@@ -19,7 +19,6 @@ import (
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
-	"orchids-api/internal/warp"
 )
 
 type captureAuditLogger struct {
@@ -203,30 +202,6 @@ func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 	}
 	if !strings.Contains(out, "event: message_stop") {
 		t.Fatalf("expected forced message_stop when upstream missing finish, got: %s", out)
-	}
-}
-
-func TestHandleMessages_WarpAcceptedRequestIsNotReplayed(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 2}
-	h := NewWithLoadBalancer(cfg, nil)
-	upstreamClient := &errorUpstreamEdge{
-		err: warp.AttachRequestMetadata(errors.New("dial tcp: connection reset by peer"), "warp-conversation-1", "warp-request-1"),
-	}
-	h.client = upstreamClient
-
-	payload := map[string]any{
-		"model":    "claude-3-5-sonnet",
-		"messages": []map[string]any{{"role": "user", "content": "hi"}},
-		"system":   []any{},
-		"stream":   false,
-	}
-	b, _ := json.Marshal(payload)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(b))
-	h.HandleMessages(rec, req)
-
-	if upstreamClient.calls != 1 {
-		t.Fatalf("upstream calls=%d want 1: an accepted Warp request must not be replayed", upstreamClient.calls)
 	}
 }
 
@@ -435,7 +410,6 @@ func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *tes
 		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "Let me first understand the project structure and code."}},
 		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
 	}}
-	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
 
 	payload := map[string]any{
 		"model":           "claude-3-5-sonnet",
@@ -468,7 +442,7 @@ func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *tes
 	body, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -490,11 +464,10 @@ func TestHandleMessages_ToolResultFollowup_DoesNotInjectLocalFallbackText(t *tes
 	}
 }
 
-func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *testing.T) {
+func TestHandleMessages_CanceledFollowup_DoesNotEmitGenericEmptyFallback(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &errorUpstreamEdge{err: context.Canceled}
-	h.sessionStore.SetWarpToolBinding(context.Background(), "test-conversation", "tool_1", WarpToolBinding{ConversationID: "warp_conv_tool_1", ToolType: "read_files"})
 
 	payload := map[string]any{
 		"model":           "claude-3-5-sonnet",
@@ -523,7 +496,7 @@ func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *
 	body, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)

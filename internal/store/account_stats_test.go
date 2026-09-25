@@ -28,7 +28,7 @@ func TestIncrementAccountStats_PassthroughAccountKeepsRemoteQuotaCurrent(t *test
 
 	ctx := context.Background()
 	acc := &Account{
-		AccountType:  "warp",
+		AccountType:  "workbuddy",
 		Enabled:      true,
 		UsageCurrent: 11_000_000,
 		UsageLimit:   11_000_000,
@@ -76,7 +76,7 @@ func TestIncrementAccountStats_ZeroUsageStillCountsRequest(t *testing.T) {
 
 	ctx := context.Background()
 	acc := &Account{
-		AccountType:  "warp",
+		AccountType:  "workbuddy",
 		Enabled:      true,
 		UsageCurrent: 11_000_000,
 		UsageTotal:   123,
@@ -223,59 +223,5 @@ func TestIncrementAccountStatsOperationUsesCompletionUTCDateAcrossMidnight(t *te
 	}
 	if got.TokensDate != "2026-03-06" || got.TokensToday != 10 {
 		t.Fatalf("delayed prior-day completion rewound current UTC bucket: today=%v date=%q", got.TokensToday, got.TokensDate)
-	}
-}
-
-func TestUpdateAccount_PersistsWarpQuotaBreakdown(t *testing.T) {
-	t.Parallel()
-
-	mini := miniredis.RunT(t)
-	s, err := New(Options{
-		StoreMode:   "redis",
-		RedisAddr:   mini.Addr(),
-		RedisDB:     0,
-		RedisPrefix: "test:",
-	})
-	if err != nil {
-		t.Fatalf("store.New() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = s.Close()
-		mini.Close()
-	})
-
-	ctx := context.Background()
-	acc := &Account{
-		AccountType:          "warp",
-		Enabled:              true,
-		RefreshToken:         "rt",
-		UsageCurrent:         1429,
-		UsageLimit:           1550,
-		WarpMonthlyLimit:     1550,
-		WarpMonthlyRemaining: 121,
-		WarpBonusRemaining:   1000,
-	}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
-
-	acc.WarpMonthlyRemaining = 120
-	acc.WarpBonusRemaining = 999
-	if err := s.UpdateAccount(ctx, acc); err != nil {
-		t.Fatalf("UpdateAccount() error = %v", err)
-	}
-
-	got, err := s.GetAccount(ctx, acc.ID)
-	if err != nil {
-		t.Fatalf("GetAccount() error = %v", err)
-	}
-	if got.WarpMonthlyLimit != 1550 {
-		t.Fatalf("warp_monthly_limit=%v want 1550", got.WarpMonthlyLimit)
-	}
-	if got.WarpMonthlyRemaining != 120 {
-		t.Fatalf("warp_monthly_remaining=%v want 120", got.WarpMonthlyRemaining)
-	}
-	if got.WarpBonusRemaining != 999 {
-		t.Fatalf("warp_bonus_remaining=%v want 999", got.WarpBonusRemaining)
 	}
 }

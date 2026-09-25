@@ -204,8 +204,6 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "auth_blocked", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "404"):
 		return UpstreamErrorClass{Category: "auth_blocked"}
-	case isWarpModelUnavailableError(lower):
-		return UpstreamErrorClass{Category: "model_unavailable", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "input is too long") || HasExplicitHTTPStatus(lower, "400"):
 		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "402") ||
@@ -257,15 +255,6 @@ func isClineModelEntitlement(lower string) bool {
 	return strings.Contains(lower, "entitlement") ||
 		strings.Contains(lower, "not subscribed to required model plan") ||
 		strings.Contains(lower, "only available via cline product surfaces")
-}
-
-func isWarpModelUnavailableError(lower string) bool {
-	if !strings.Contains(lower, "warp") {
-		return false
-	}
-	return strings.Contains(lower, "requested base model") &&
-		(strings.Contains(lower, "not allowed") || strings.Contains(lower, "no model available")) ||
-		strings.Contains(lower, "llm_unavailable") || strings.Contains(lower, "model unavailable")
 }
 
 // IsCreditExhaustion reports whether a message says the account's allowance is

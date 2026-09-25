@@ -77,8 +77,8 @@ function loadUI() {
     setTimeout: (fn) => { fn(); return 0; },
   });
   context.fetch = async (url) => {
-    if (url === '/api/providers') return { ok: true, json: async () => ({ defaultProviderKey:'warp', providers:[
-      {key:'warp',label:'Warp'},{key:'workbuddy',label:'WorkBuddy'},
+    if (url === '/api/providers') return { ok: true, json: async () => ({ defaultProviderKey:'workbuddy', providers:[
+      {key:'workbuddy',label:'WorkBuddy'},
       {key:'qoder',label:'Qoder'},{key:'cline',label:'Cline'},{key:'grok',label:'Grok'},
     ]}) };
     return { ok: true, json: async () => [] };
@@ -111,7 +111,7 @@ test('clicking a platform tab makes 添加账号 open in that platform', () => {
   context.renderPlatformTabs();
 
   const tabs = node('platformFilters').children;
-  for (const platform of ['grok', 'cline', 'warp', 'workbuddy']) {
+  for (const platform of ['grok', 'cline', 'workbuddy']) {
     const tab = tabs.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === platform);
     assert.ok(tab, `no ${platform} tab among ${tabs.map((candidate) => candidate.textContent).join(',')}`);
     tab.click();
@@ -131,7 +131,7 @@ test('the active platform tab wins over a stale account-type field', () => {
   context.renderPlatformTabs();
   context.filterByPlatform('grok');
   // A previous modal interaction must not leak its type into the next open.
-  context.setAccountModalType('warp');
+  context.setAccountModalType('workbuddy');
   node('accountId').value = '';
   context.openModal();
   assert.equal(node('accountType').value, 'grok', 'the active platform tab wins over a stale field');
@@ -153,20 +153,14 @@ test('the visibly highlighted provider wins if in-memory state is stale', () => 
 test('every channel owns its credential copy: switching type never leaves another channel text behind', () => {
   const { context, node } = loadUI();
   node('accountId').value = '';
-  // Open Grok first: its copy is the one that used to survive into Warp.
+  // Open Grok first: its copy must not survive into the channels that follow.
   context.applyTokenLabels('grok');
   assert.equal(node('tokenLabel').textContent, 'Grok Build OAuth');
   assert.match(node('tokenHint').textContent, /Grok/);
 
-  context.applyTokenLabels('warp');
-  assert.equal(node('tokenLabel').textContent, 'Warp 登录会话');
-  assert.match(node('tokenHint').textContent, /Warp/);
-  assert.equal(node('tokenHint').textContent.includes('Grok'), false, 'Warp must not inherit Grok hint text');
-
-  // And the other way round: Warp must not leak into the channels that follow.
   context.applyTokenLabels('cline');
   assert.equal(node('tokenLabel').textContent, 'Cookie / __client / __session');
-  assert.equal(node('tokenHint').textContent.includes('Warp'), false, 'Cline must not inherit Warp hint text');
+  assert.equal(node('tokenHint').textContent.includes('Grok'), false, 'Cline must not inherit Grok hint text');
 
   context.applyTokenLabels('workbuddy');
   assert.equal(node('tokenLabel').textContent, 'WorkBuddy 凭证');
@@ -185,13 +179,12 @@ test('openModal after a tab click renders that tab form, not the previously open
   context.renderPlatformTabs();
 
   const expectations = {
-    grok: { label: 'Grok Build OAuth', hint: /Grok/, sso: true, warpLogin: true },
-    cline: { label: 'Cookie / __client / __session', hint: /Cookie/, sso: true, warpLogin: true },
-    warp: { label: 'Warp 登录会话', hint: /Warp/, sso: true, warpLogin: false },
-    workbuddy: { label: 'WorkBuddy 凭证', hint: /官方登录/, sso: true, warpLogin: true },
+    grok: { label: 'Grok Build OAuth', hint: /Grok/, sso: true },
+    cline: { label: 'Cookie / __client / __session', hint: /Cookie/, sso: true },
+    workbuddy: { label: 'WorkBuddy 凭证', hint: /官方登录/, sso: true },
   };
   const tabs = node('platformFilters').children;
-  for (const platform of ['grok', 'cline', 'warp', 'workbuddy']) {
+  for (const platform of ['grok', 'cline', 'workbuddy']) {
     const tab = tabs.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === platform);
     assert.ok(tab, `no ${platform} tab`);
     tab.click();
@@ -202,7 +195,6 @@ test('openModal after a tab click renders that tab form, not the previously open
     assert.equal(node('tokenLabel').textContent, expected.label, `${platform}: credential label`);
     assert.match(node('tokenHint').textContent, expected.hint, `${platform}: credential hint`);
     assert.equal(node('ssoCredentialGroup').hidden, expected.sso, `${platform}: credential field visibility`);
-    assert.equal(node('warpDeviceLoginGroup').hidden, expected.warpLogin, `${platform}: warp login visibility`);
   }
 });
 
@@ -218,56 +210,41 @@ test('Grok Build CLI OAuth cannot be created from the form', async () => {
   assert.match(notices[0], /官方网页登录/);
 });
 
-test('Warp exposes only official login and preserves settings editing', () => {
+test('Cline exposes only official login and preserves settings editing', () => {
   const { context, node } = loadUI();
   context.applyTokenLabels('grok');
   node('clientCookie').value = 'old-input';
-  context.applyTokenLabels('warp');
-  for (const id of ['ssoCredentialGroup', 'oauthCredentialGroup', 'oauthRefreshGroup', 'oauthExpiresGroup', 'grokDeviceLoginGroup', 'oauthCredentialGroup']) {
+  context.applyTokenLabels('cline');
+  for (const id of ['ssoCredentialGroup', 'oauthCredentialGroup', 'oauthRefreshGroup', 'oauthExpiresGroup', 'grokDeviceLoginGroup']) {
     assert.equal(node(id).hidden, true, id);
   }
-  assert.equal(node('warpDeviceLoginGroup').hidden, false);
-  assert.equal(node('clientCookie').required, false);
+  assert.equal(node('clineLoginGroup').hidden, false, 'the Cline login must be presented');
   assert.equal(node('clientCookie').value, '');
   assert.equal(node('#accountForm button[type="submit"]').hidden, true);
   node('accountId').value = '1';
-  context.applyTokenLabels('warp');
+  context.applyTokenLabels('cline');
   assert.equal(node('#accountForm button[type="submit"]').hidden, false);
-  assert.equal(node('warpDeviceLoginGroup').hidden, true);
-  const payload = context.buildAccountPayload('warp', { account_type: 'warp', enabled: true }, 'unused-secret');
+  const payload = context.buildAccountPayload('cline', { account_type: 'cline', enabled: true }, 'unused-secret');
   assert.equal(payload.refresh_token, undefined);
   assert.equal(payload.client_cookie, undefined);
   assert.equal(payload.enabled, true);
-  // Cline is created by its own WorkOS login, never from a manual credential:
-  // switching away from Warp must show the Cline login and drop the Warp one.
-  context.applyTokenLabels('cline');
+  // Switching away must show the next channel's login and drop the Cline one.
+  context.applyTokenLabels('workbuddy');
   node('accountId').value = '';
-  context.applyTokenLabels('cline');
-  assert.equal(node('clineLoginGroup').hidden, false);
-  assert.equal(node('warpDeviceLoginGroup').hidden, true);
-  assert.equal(node('ssoCredentialGroup').hidden, true, 'cline is OAuth-only too');
+  context.applyTokenLabels('workbuddy');
+  assert.equal(node('workbuddyLoginGroup').hidden, false);
+  assert.equal(node('clineLoginGroup').hidden, true);
+  assert.equal(node('ssoCredentialGroup').hidden, true, 'workbuddy is OAuth-only too');
   assert.equal(node('clientCookie').value, '', 'the hidden credential field must carry no value');
 });
 
-test('Warp credential presence and display do not read raw tokens', () => {
-  const { context } = loadUI();
-  const acc = { account_type: 'warp', warp_authenticated: true };
-  assert.equal(context.hasSidebarAccountCredential(acc), true);
-  assert.equal(context.getSidebarAccountToken(acc), '');
-  assert.equal(context.formatTokenDisplay(acc), '登录会话已配置');
-  const legacy = { account_type: 'warp', refresh_token: 'old-secret', token: 'old-jwt' };
-  assert.equal(context.hasSidebarAccountCredential(legacy), false);
-  assert.equal(context.getSidebarAccountToken(legacy), '');
-  assert.equal(context.formatTokenDisplay(legacy), '待官网登录');
-});
-
-test('Warp save cannot submit a manual creation request', async () => {
+test('Cline save cannot submit a manual creation request', async () => {
   const { context, node } = loadUI();
-  node('accountType').value = 'warp';
+  node('accountType').value = 'cline';
   node('clientCookie').value = 'manual-secret';
   const notices = [];
   context.showToast = (message) => notices.push(message);
-  context.fetch = () => { throw new Error('manual Warp creation must not send a request'); };
+  context.fetch = () => { throw new Error('manual Cline creation must not send a request'); };
   await context.saveAccount({ preventDefault() {} });
   assert.equal(notices.length, 1);
   assert.match(notices[0], /官方网页登录/);
@@ -287,12 +264,12 @@ test('loading accounts never starts upstream account checks', async () => {
   assert.equal('autoSyncStaleAccounts' in context, false, 'obsolete auto-sync machinery must stay removed');
 });
 
-test('Warp settings save succeeds without submitting credentials', async () => {
+test('Cline settings save succeeds without submitting credentials', async () => {
   const { context, node } = loadUI();
-  node('accountType').value = 'warp';
+  node('accountType').value = 'cline';
   node('accountId').value = '7';
   node('enabled').checked = true;
-  vm.runInContext('accounts = [{ id: 7, account_type: "warp", weight: 2, warp_authenticated: true }]', context);
+  vm.runInContext('accounts = [{ id: 7, account_type: "cline", weight: 2, has_credential: true }]', context);
   let sent;
   context.fetch = async (url, options) => { sent = { url, options }; return { ok: true }; };
   context.clearAccountImportStatus = () => {};
@@ -302,7 +279,7 @@ test('Warp settings save succeeds without submitting credentials', async () => {
   await context.saveAccount({ preventDefault() {} });
   assert.equal(sent.url, '/api/accounts/7');
   assert.equal(sent.options.method, 'PUT');
-  assert.deepEqual(JSON.parse(sent.options.body), { account_type: 'warp', weight: 2, enabled: true });
+  assert.deepEqual(JSON.parse(sent.options.body), { account_type: 'cline', weight: 2, enabled: true });
 });
 
 test('WorkBuddy is OAuth-only in the modal: no manual credential field', () => {
@@ -498,7 +475,7 @@ test('workbuddy-auth reports the server error code instead of blaming the networ
   assert.ok(awaitIndex === -1 || reserveIndex < awaitIndex, 'popup must be reserved before the first await');
 });
 
-test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login, never Warp', () => {
+test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login', () => {
   const { context, node } = loadUI();
   vm.runInContext(
     'globalThis.WorkBuddyLogin = { start() { globalThis.__wbStarted = (globalThis.__wbStarted || 0) + 1; }, stop() {} };',
@@ -521,7 +498,6 @@ test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login, ne
   assert.equal(node('accountType').value, 'workbuddy', 'modal type');
   assert.equal(node('accountTypeDisplay').value, 'WorkBuddy', 'modal type label');
   assert.equal(node('workbuddyLoginGroup').hidden, false, 'workbuddy login must be visible');
-  assert.equal(node('warpDeviceLoginGroup').hidden, true, 'warp login must stay hidden');
   assert.equal(node('grokDeviceLoginGroup').hidden, true, 'grok login must stay hidden');
   assert.equal(node('clineLoginGroup').hidden, true, 'cline login must stay hidden');
   assert.equal(node('ssoCredentialGroup').hidden, true, 'workbuddy is OAuth-only, no manual field');
@@ -537,11 +513,10 @@ test('every platform tab maps to its own provider login surface', () => {
   context.renderPlatformTabs();
 
   const expectations = {
-    warp: { warpDeviceLoginGroup: false, workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: true, ssoCredentialGroup: true },
-    cline: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: false, ssoCredentialGroup: true },
-    workbuddy: { warpDeviceLoginGroup: true, workbuddyLoginGroup: false, qoderLoginGroup: true, clineLoginGroup: true, ssoCredentialGroup: true },
-    qoder: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: false, clineLoginGroup: true, ssoCredentialGroup: true },
-    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: true, ssoCredentialGroup: true },
+    cline: { workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: false, ssoCredentialGroup: true },
+    workbuddy: { workbuddyLoginGroup: false, qoderLoginGroup: true, clineLoginGroup: true, ssoCredentialGroup: true },
+    qoder: { workbuddyLoginGroup: true, qoderLoginGroup: false, clineLoginGroup: true, ssoCredentialGroup: true },
+    grok: { workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: true, ssoCredentialGroup: true },
   };
   for (const [platform, expected] of Object.entries(expectations)) {
     node('accountId').value = '';
@@ -612,10 +587,9 @@ test('the shared device-auth driver reserves the popup before its first await', 
   assert.match(source, /setLink\(authURL\)/);
 });
 
-test('Grok and Warp share one lifecycle but keep provider URL allowlists isolated', async () => {
+test('Grok device login keeps its provider URL allowlist isolated', async () => {
   const cases = [
-    { provider: 'Grok', start: 'startGrokDeviceLogin()', endpoint: '/api/grok/device-auth', statusId: 'grokDeviceLoginStatus', buttonId: 'grokDeviceLoginButton', allowed: 'https://auth.x.ai/device?code=ok', rejected: 'https://app.warp.dev/device?code=wrong' },
-    { provider: 'Warp', start: 'startWarpDeviceLogin()', endpoint: '/api/warp/device-auth', statusId: 'warpDeviceLoginStatus', buttonId: 'warpDeviceLoginButton', allowed: 'https://app.warp.dev/device?code=ok', rejected: 'https://auth.x.ai/device?code=wrong' },
+    { provider: 'Grok', start: 'startGrokDeviceLogin()', endpoint: '/api/grok/device-auth', statusId: 'grokDeviceLoginStatus', buttonId: 'grokDeviceLoginButton', allowed: 'https://auth.x.ai/device?code=ok', rejected: 'https://auth.example.com/device?code=wrong' },
   ];
   for (const scenario of cases) {
     for (const [url, shouldOpen] of [[scenario.allowed, true], [scenario.rejected, false]]) {
@@ -643,10 +617,9 @@ test('Grok and Warp share one lifecycle but keep provider URL allowlists isolate
   }
 });
 
-test('shared Grok/Warp lifecycle preserves cancellation and ignores stale poll results', async () => {
+test('the shared device login lifecycle preserves cancellation and ignores stale poll results', async () => {
   for (const scenario of [
     { start: 'startGrokDeviceLogin()', stop: 'stopGrokDeviceLogin(true)', endpoint: '/api/grok/device-auth', url: 'https://auth.x.ai/device' },
-    { start: 'startWarpDeviceLogin()', stop: 'stopWarpDeviceLogin(true)', endpoint: '/api/warp/device-auth', url: 'https://app.warp.dev/device' },
   ]) {
     const { context } = loadUI();
     const requests = [];
@@ -688,27 +661,10 @@ test('a rejected credential shows the reason, not the raw error envelope', () =>
   assert.equal(vm.runInContext('extractAdminErrorDetail("")', context), '', 'an empty body stays empty');
 });
 
-test('a Warp account shows a session fingerprint instead of a bare label', () => {
-  const { context } = loadUI();
-  // Warp has no email or username: the fingerprint is what tells two logins apart.
-  const withFingerprint = vm.runInContext(
-    "formatTokenDisplay({ account_type: 'warp', refresh_token: 'x', warp_authenticated: true, session_fingerprint: '8f3a2c1b4d5e' })",
-    context,
-  );
-  assert.equal(withFingerprint, '会话 8f3a2c', 'the session fingerprint is not shown');
-  const withoutFingerprint = vm.runInContext(
-    "formatTokenDisplay({ account_type: 'warp', refresh_token: 'x', warp_authenticated: true })",
-    context,
-  );
-  assert.equal(withoutFingerprint, '登录会话已配置', 'the fallback label is missing');
-  const signedOut = vm.runInContext("formatTokenDisplay({ account_type: 'warp' })", context);
-  assert.equal(signedOut, '待官网登录', 'a Warp account with no session must read as pending');
-});
-
 test('the session fingerprint never exposes the credential', () => {
   const { context } = loadUI();
   const rendered = vm.runInContext(
-    "formatTokenDisplay({ account_type: 'warp', refresh_token: 'secret-session-token', warp_authenticated: true, session_fingerprint: '8f3a2c1b4d5e' })",
+    "formatTokenDisplay({ account_type: 'grok', credential_type: 'oauth', refresh_token: 'secret-session-token', has_credential: true })",
     context,
   );
   assert.ok(!rendered.includes('secret-session-token'), 'the raw session token leaked into the table');
@@ -918,7 +874,7 @@ const CHANNEL_SELECT_TEMPLATES = [
   'templates/components/modals/model-modal.html',
 ];
 
-const CHANNEL_KEYS = ['warp', 'workbuddy', 'qoder', 'cline', 'grok'];
+const CHANNEL_KEYS = ['workbuddy', 'qoder', 'cline', 'grok'];
 
 test('every channel in the tutorial list appears in the tutorial quick-reference table', () => {
   const template = fs.readFileSync(path.join(__dirname, 'templates/pages/tutorial.html'), 'utf8');
@@ -1006,7 +962,6 @@ test('账号管理 and 运维总览 count the same 异常 accounts from one pred
     // An INFERRED window that reads zero is still drained: this row used to be
     // 异常 on 账号管理 and 正常 everywhere else.
     { id: 4, account_type: 'grok', enabled: true, has_credential: true, status_code: '', quota_supported: true, quota_limit: 500000, quota_remaining: 0, quota_confidence: 'estimated' },
-    { id: 5, account_type: 'warp', enabled: true, has_credential: true, status_code: '', quota_supported: true, quota_limit: 1500, quota_remaining: 0, quota_confidence: 'confirmed' },
     // Genuine faults must still be counted.
     { id: 6, account_type: 'grok', enabled: false, has_credential: true, status_code: '' },
     { id: 7, account_type: 'qoder', enabled: true, has_credential: true, status_code: '401' },
@@ -1018,7 +973,7 @@ test('账号管理 and 运维总览 count the same 异常 accounts from one pred
   // common.js owns the number on every page except 账号管理 …
   const sidebar = context.computeSidebarAccountStats(rows);
   assert.equal(sidebar.abnormal, 3, 'disabled, 401 and missing-credential rows are the only faults');
-  assert.equal(sidebar.total, 9);
+  assert.equal(sidebar.total, 8);
 
   // … and 账号管理 must land on the same number now that updateStats() defers to
   // the shared predicate instead of computing its own verdict.

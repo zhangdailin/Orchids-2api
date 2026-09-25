@@ -85,7 +85,7 @@ func TestPublicModelsPublishExternalIDs(t *testing.T) {
 		}
 	}
 	for id := range seen {
-		if strings.Contains(id, "/") && !strings.HasPrefix(id, "warp-") {
+		if strings.Contains(id, "/") {
 			t.Fatalf("a provider-qualified ID was published: %q", id)
 		}
 	}

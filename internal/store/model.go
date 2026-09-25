@@ -100,7 +100,7 @@ type ModelReconcileResult struct {
 
 type Model struct {
 	ID            string      `json:"id"`
-	Channel       string      `json:"channel"`  // e.g., "warp", "grok"
+	Channel       string      `json:"channel"`  // e.g., "workbuddy", "grok"
 	ModelID       string      `json:"model_id"` // e.g., "claude-3-5-sonnet"
 	Name          string      `json:"name"`     // e.g., "Claude 3.5 Sonnet"
 	Status        ModelStatus `json:"status"`   // Enabled/Disabled

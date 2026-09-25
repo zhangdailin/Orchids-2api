@@ -11,7 +11,6 @@
   "credential_encryption_key_file": "data/credential.key",
   "response_store_ttl_hours": 720,
   "session_ttl_minutes": 720,
-  "warp_stateless_history_max_chars": 8388608,
   "store_mode": "redis",
   "redis_addr": "127.0.0.1:6379",
   "redis_password": "",

@@ -25,12 +25,12 @@ func TestInvalidJSONDiagnosticIsReachableFromJournal(t *testing.T) {
 	h.SetAuditLogger(middleware.ObserveAuditLogger(journal))
 	wrapped := middleware.TraceMiddleware(middleware.Diagnostics(d, func() bool { return true })(middleware.LoggingMiddleware(http.HandlerFunc(h.HandleMessages))))
 	rec := httptest.NewRecorder()
-	wrapped.ServeHTTP(rec, httptest.NewRequest("POST", "/warp/v1/messages", strings.NewReader("bad-json")))
+	wrapped.ServeHTTP(rec, httptest.NewRequest("POST", "/workbuddy/v1/messages", strings.NewReader("bad-json")))
 	journal.Close() // Flush the asynchronous audit writer before querying the API.
 	if rec.Code != 400 {
 		t.Fatal(rec.Code)
 	}
-	list := journalRequest(t, a, "?kind=request&channel=warp")
+	list := journalRequest(t, a, "?kind=request&channel=workbuddy")
 	rows := list["data"].([]interface{})
 	if len(rows) != 1 {
 		t.Fatal(list)

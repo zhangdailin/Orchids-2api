@@ -113,7 +113,6 @@ type Config struct {
 	// Build-specific field below takes precedence when set.
 	GrokStreamIdleSeconds      int `json:"grok_stream_idle_seconds,omitempty"`
 	GrokBuildStreamIdleSeconds int `json:"grok_build_stream_idle_seconds,omitempty"`
-	WarpStreamIdleSeconds      int `json:"warp_stream_idle_seconds,omitempty"`
 
 	// ── Grok Build egress proxy pool ──
 	GrokEgressEnabled bool               `json:"grok_egress_enabled,omitempty"`
@@ -124,12 +123,10 @@ type Config struct {
 	// This field is NOT written into ApplyHardcoded, so it survives a
 	// persistConfig round trip.
 	//
-	// WarpMaxToolResults and WarpMaxHistoryMessages used to live here. They never
-	// trimmed anything — the only reader was the account client-cache key — so a
-	// deployment that lowered them to save context got no saving and no warning.
-	// They are gone rather than documented, because an inert knob is a trap. The
-	// passthrough behaviour they pretended to govern is covered by
-	// TestWarpPassthrough_DoesNotTrimMessagesOrSanitizeSystem.
+	// Two inert trimming knobs used to live here. They never trimmed anything —
+	// the only reader was the account client-cache key — so a deployment that
+	// lowered them to save context got no saving and no warning. They are gone
+	// rather than documented, because an inert knob is a trap.
 	Stream              *bool `json:"-"`
 	ImageNSFW           *bool `json:"-"`
 	ImageFinalMinBytes  int   `json:"-"`
@@ -151,26 +148,21 @@ type Config struct {
 	// routinely idles for hours between turns; when the binding expires the next
 	// turn can no longer continue the upstream conversation and the whole
 	// transcript has to be re-sent instead.
-	SessionTTLMinutes int `json:"session_ttl_minutes,omitempty"`
-	// WarpStatelessHistoryMaxChars bounds the transcript rendered for a Warp
-	// request that has no server-issued conversation id. It is a transport
-	// ceiling, not a context policy: the upstream applies the model's own window
-	// to whatever it receives, so this must stay well above any model window.
-	WarpStatelessHistoryMaxChars int      `json:"warp_stateless_history_max_chars,omitempty"`
-	TokenRefreshInterval         int      `json:"-"`
-	AutoRefreshToken             bool     `json:"-"`
-	LoadBalancerCacheTTL         int      `json:"-"`
-	ConcurrencyLimit             int      `json:"-"`
-	ConcurrencyTimeout           int      `json:"concurrency_timeout,omitempty"`
-	AdaptiveTimeout              bool     `json:"-"`
-	ProxyURL                     string   `json:"proxy_url"`
-	ProxyHTTP                    string   `json:"proxy_http"`
-	ProxyHTTPS                   string   `json:"proxy_https"`
-	ProxyUser                    string   `json:"proxy_user"`
-	ProxyPass                    string   `json:"proxy_pass"`
-	ProxyBypass                  []string `json:"proxy_bypass"`
-	PublicKey                    string   `json:"-"`
-	PublicEnabled                *bool    `json:"-"`
+	SessionTTLMinutes    int      `json:"session_ttl_minutes,omitempty"`
+	TokenRefreshInterval int      `json:"-"`
+	AutoRefreshToken     bool     `json:"-"`
+	LoadBalancerCacheTTL int      `json:"-"`
+	ConcurrencyLimit     int      `json:"-"`
+	ConcurrencyTimeout   int      `json:"concurrency_timeout,omitempty"`
+	AdaptiveTimeout      bool     `json:"-"`
+	ProxyURL             string   `json:"proxy_url"`
+	ProxyHTTP            string   `json:"proxy_http"`
+	ProxyHTTPS           string   `json:"proxy_https"`
+	ProxyUser            string   `json:"proxy_user"`
+	ProxyPass            string   `json:"proxy_pass"`
+	ProxyBypass          []string `json:"proxy_bypass"`
+	PublicKey            string   `json:"-"`
+	PublicEnabled        *bool    `json:"-"`
 }
 
 // EgressNodeConfig describes one egress exit node for the Grok proxy pool.
@@ -356,10 +348,6 @@ func ApplyHardcoded(cfg *Config) {
 	// short enough that an ordinary lunch break detached the upstream
 	// conversation and forced the next turn to replay the entire transcript.
 	cfg.SessionTTLMinutes = boundedDefault(cfg.SessionTTLMinutes, 12*60, 30*24*60)
-	// Transport ceiling for a stateless Warp request. 1M tokens of text is only a
-	// few MiB, so 8 MiB is above any single model window while still bounding one
-	// protobuf frame.
-	cfg.WarpStatelessHistoryMaxChars = boundedDefault(cfg.WarpStatelessHistoryMaxChars, 8<<20, 64<<20)
 	cfg.TokenRefreshInterval = 1
 	cfg.AutoRefreshToken = true
 	cfg.LoadBalancerCacheTTL = 5

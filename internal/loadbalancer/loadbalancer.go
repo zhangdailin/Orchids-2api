@@ -13,7 +13,6 @@ import (
 	"orchids-api/internal/auth"
 	"orchids-api/internal/channel"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 
 	"golang.org/x/sync/singleflight"
 )
@@ -510,20 +509,6 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 
 	now := time.Now()
 	switch status {
-	case store.AccountStatusWarpQuotaExhausted:
-		// Warp credit exhaustion is a capability downgrade, not an account-wide
-		// cooldown. Account/model filters restrict this account to free-only
-		// models and reject tools/cloud-agent requests. Once refreshed quota is
-		// observed, remove the durable downgrade marker.
-		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-			return false
-		}
-		hasRefreshedQuota := acc.WarpMonthlyRemaining+acc.WarpBonusRemaining > 0 ||
-			(acc.WarpMonthlyLimit <= 0 && acc.UsageLimit > 0 && acc.UsageCurrent < acc.UsageLimit)
-		if hasRefreshedQuota {
-			lb.clearAccountStatus(ctx, acc, "Warp 额度已刷新，恢复完整能力")
-		}
-		return true
 	case store.AccountStatusQoderQuotaExhausted:
 		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "qoder") {
 			return false
@@ -639,10 +624,6 @@ func isPaidGrokBuildAccount(acc *store.Account) bool {
 }
 
 func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Account, reason string) {
-	// 清除 warp session 缓存，确保恢复后使用新 token
-	if strings.EqualFold(acc.AccountType, "warp") && acc.ID > 0 {
-		warp.InvalidateSession(acc.ID)
-	}
 	// Find and update the account in the cached slice so the change reflects immediately
 	lb.mu.Lock()
 	acc.StatusCode = ""

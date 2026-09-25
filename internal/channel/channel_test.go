@@ -27,3 +27,29 @@ func TestRegistryInvariantsAndPathParsing(t *testing.T) {
 		t.Fatalf("defaults=%d want 1", defaults)
 	}
 }
+
+// TestRegistryIsWorkBuddyDefaultAfterChannelRemoval pins the provider set once
+// the fifth channel was retired: WorkBuddy carries the default flag and the
+// remaining four channels keep their order, so any accidental re-addition or
+// reordering of the registry fails here.
+func TestRegistryIsWorkBuddyDefaultAfterChannelRemoval(t *testing.T) {
+	if got := Default(); got.ID != WorkBuddy {
+		t.Fatalf("Default() = %q, want %q", got.ID, WorkBuddy)
+	}
+	want := []ID{WorkBuddy, Qoder, Cline, Grok}
+	all := All()
+	if len(all) != len(want) {
+		t.Fatalf("All() has %d channels, want %d", len(all), len(want))
+	}
+	for i, id := range want {
+		if all[i].ID != id {
+			t.Fatalf("All()[%d] = %q, want %q", i, all[i].ID, id)
+		}
+	}
+	if len(GenericPrefixes()) != 3 {
+		t.Fatalf("GenericPrefixes() = %v, want the three chat-completions channels", GenericPrefixes())
+	}
+	if len(AllPrefixes()) != len(want) {
+		t.Fatalf("AllPrefixes() = %v, want one per channel", AllPrefixes())
+	}
+}

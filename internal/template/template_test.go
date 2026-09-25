@@ -89,7 +89,7 @@ func TestTutorialPageListsEveryChannel(t *testing.T) {
 	}
 	page := recorder.Body.String()
 
-	for _, key := range []string{"warp", "cline", "workbuddy", "qoder", "grok"} {
+	for _, key := range []string{"cline", "workbuddy", "qoder", "grok"} {
 		if !strings.Contains(page, `badge-`+key) {
 			t.Errorf("the rendered tutorial page has no row for channel %q", key)
 		}

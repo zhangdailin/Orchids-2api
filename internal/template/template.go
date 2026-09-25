@@ -69,9 +69,10 @@ func (r *Renderer) RenderIndex(w http.ResponseWriter, req *http.Request, cfg *co
 	// that knows credentials, status codes and quota state.
 
 	data := &PageData{
-		Title:     "API 管理面板",
-		AdminPath: cfg.AdminPath,
-		ActiveTab: activeTab,
+		Title:        "API 管理面板",
+		AdminPath:    cfg.AdminPath,
+		ActiveTab:    activeTab,
+		AssetVersion: web.AssetVersion(),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

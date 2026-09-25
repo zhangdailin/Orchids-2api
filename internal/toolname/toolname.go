@@ -112,7 +112,7 @@ func NormalizeToolName(name string) *NormalizedTool {
 	}
 }
 
-// NormalizeToolNameFallback provides backward compatibility for warp and handler packages.
+// NormalizeToolNameFallback provides backward compatibility for the handler package.
 func NormalizeToolNameFallback(name string) string {
 	if mapped, ok := normalizedToolNameFallbacks[strings.ToLower(strings.TrimSpace(name))]; ok {
 		return mapped

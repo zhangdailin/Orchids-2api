@@ -209,11 +209,11 @@ func codexDisplayName(slug string) string {
 }
 
 // codexEffortSuffixes are the effort variants collapsed into one
-// reasoning-capable catalog entry. Warp publishes gpt-5-6-sol-low, -medium,
-// -high and -xhigh as separate models; presenting them as a single family with
-// supported_reasoning_levels is what lets a client ask for the family plus an
-// effort instead of guessing the exact suffix — and the gateway resolves that
-// family name back onto the variant the catalog actually has.
+// reasoning-capable catalog entry. A catalog may publish gpt-5-6-sol-low,
+// -medium, -high and -xhigh as separate models; presenting them as a single
+// family with supported_reasoning_levels is what lets a client ask for the
+// family plus an effort instead of guessing the exact suffix — and the gateway
+// resolves that family name back onto the variant the catalog actually has.
 var codexEffortSuffixes = []string{"low", "medium", "high", "xhigh", "max"}
 
 // splitEffortVariantSuffix splits "<family>-<effort>" into its parts. It is the

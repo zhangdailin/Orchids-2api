@@ -22,7 +22,6 @@ import (
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
-	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -150,24 +149,14 @@ var upstreamCatalogSources = map[string]struct{}{
 	"cline_recommended_models": {},
 }
 
-// warpGraphQLSourcePrefix is the stable prefix of the Warp catalog source, which
-// names the GraphQL fields that answered and therefore carries a dynamic suffix.
-const warpGraphQLSourcePrefix = "warp_graphql_"
-
+// A catalog source that names the upstream read that produced it is an
+// observation and may publish model rows. The match is exact rather than by
+// prefix: "grok_build_models" is an observation while
+// "grok_build_models_unavailable_cached" is not, and a prefix test would accept
+// the latter.
 func isUpstreamCatalogSource(source string) bool {
-	source = strings.TrimSpace(source)
-	if _, ok := upstreamCatalogSources[source]; ok {
-		return true
-	}
-	return strings.HasPrefix(source, warpGraphQLSourcePrefix)
-}
-
-type warpAccountDiscovery struct {
-	id            int64
-	choices       []warp.ModelChoice
-	source        string
-	featureConfig warp.AccountFeatureConfig
-	ok            bool
+	_, ok := upstreamCatalogSources[strings.TrimSpace(source)]
+	return ok
 }
 
 type modelRefreshFunc func(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (*modelRefreshResult, error)
@@ -402,20 +391,11 @@ func discoverModelsForChannelReport(ctx context.Context, cfg *config.Config, s *
 	switch strings.ToLower(channel) {
 	case "workbuddy", "qoder", "cline":
 		return discoverAccountCatalogModels(ctx, cfg, s, channel, concurrency)
-	}
-
-	var candidates []discoveredModel
-	var source string
-	var err error
-	switch strings.ToLower(channel) {
-	case "warp":
-		candidates, source, err = discoverWarpModelsConcurrent(ctx, cfg, s, concurrency)
 	case "grok":
 		return discoverGrokModelsReport(ctx, cfg, s, concurrency)
 	default:
-		err = fmt.Errorf("unsupported channel: %s", channel)
+		return accountModelDiscoveryReport{}, fmt.Errorf("unsupported channel: %s", channel)
 	}
-	return accountModelDiscoveryReport{Candidates: candidates, Source: source}, err
 }
 
 // discoverWorkBuddyModels reads the account-scoped WorkBuddy model catalog.
@@ -881,159 +861,6 @@ func grokBuildModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*st
 	return out, nil
 }
 
-func discoverWarpModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
-	if s == nil {
-		return nil, "", fmt.Errorf("store not configured")
-	}
-
-	// Model configuration is a control-plane read, but only an active account
-	// may supply it: a disabled account is not part of the pool this gateway
-	// serves from, and publishing its catalog would advertise models no request
-	// can actually be routed to.
-	accounts, err := warpModelDiscoveryAccounts(ctx, s)
-	if err != nil {
-		return nil, "", err
-	}
-	if len(accounts) == 0 {
-		return nil, "", &noActiveAccountsError{Channel: "Warp"}
-	}
-
-	seen := map[string]struct{}{}
-	out := make([]discoveredModel, 0, 24)
-	sourceSet := map[string]struct{}{}
-	appendChoice := func(choice warp.ModelChoice) {
-		id := strings.TrimSpace(choice.ID)
-		if id == "" {
-			return
-		}
-		if _, exists := seen[id]; exists {
-			return
-		}
-		seen[id] = struct{}{}
-		name := util.FirstNonEmpty(choice.Name, id)
-		out = append(out, discoveredModel{
-			ID:        id,
-			Name:      name,
-			SortOrder: len(out),
-			Verified:  true,
-		})
-	}
-
-	ordered := make([]warpAccountDiscovery, len(accounts))
-	runIndexedModelRefreshWorkers(len(accounts), concurrency, func(idx int) {
-		acc := accounts[idx]
-		client := warp.NewFromAccount(acc, cfg)
-		features, source, discoverErr := client.FetchDiscoveredFeatureModelChoices(ctx)
-		client.Close()
-		if discoverErr != nil {
-			return
-		}
-		choices := warp.AgentModeModelChoices(features)
-		if len(choices) == 0 {
-			return
-		}
-		ordered[idx] = warpAccountDiscovery{
-			id:            acc.ID,
-			choices:       choices,
-			source:        source,
-			featureConfig: warp.AccountFeatureConfigFromChoices(features),
-			ok:            true,
-		}
-	})
-	for _, result := range ordered {
-		if !result.ok {
-			continue
-		}
-		for _, part := range strings.Split(result.source, "+") {
-			part = strings.TrimSpace(part)
-			if part != "" {
-				sourceSet[part] = struct{}{}
-			}
-		}
-		for _, choice := range result.choices {
-			appendChoice(choice)
-		}
-	}
-	if len(out) > 0 {
-		saveWarpAccountModelChoices(ctx, s, ordered)
-	}
-
-	if len(out) > 0 {
-		return out, joinWarpDiscoverySources(sourceSet), nil
-	}
-	// Warp can temporarily hide every agent-mode choice while a workspace is
-	// still provisioning. The last verified global catalog stays in the store as
-	// last known state, but this refresh observed nothing, so it publishes
-	// nothing and reports the failure instead of restating the old rows as a new
-	// discovery.
-	return nil, "", fmt.Errorf("warp model discovery returned no account choices")
-}
-
-// warpModelDiscoveryAccounts returns the Warp accounts a catalog read may use.
-// Only enabled, credential-bearing accounts qualify: a disabled account is not
-// in the serving pool, so its catalog is not this deployment's catalog.
-func warpModelDiscoveryAccounts(ctx context.Context, s *store.Store) ([]*store.Account, error) {
-	if s == nil {
-		return nil, fmt.Errorf("store not configured")
-	}
-	accounts, err := s.ListAccounts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	eligible := make([]*store.Account, 0, len(accounts))
-	for _, acc := range accounts {
-		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-			continue
-		}
-		if !acc.Enabled {
-			continue
-		}
-		if strings.TrimSpace(warp.RefreshToken(acc)) == "" {
-			continue
-		}
-		eligible = append(eligible, acc)
-	}
-	sort.SliceStable(eligible, func(i, j int) bool { return eligible[i].ID < eligible[j].ID })
-	return eligible, nil
-}
-
-func saveWarpAccountModelChoices(ctx context.Context, s *store.Store, discoveries []warpAccountDiscovery) {
-	items := make([]warp.AccountModelDiscovery, 0, len(discoveries))
-	for _, result := range discoveries {
-		if !result.ok || result.id == 0 || len(result.choices) == 0 {
-			continue
-		}
-		items = append(items, warp.AccountModelDiscovery{
-			AccountID:     result.id,
-			Source:        result.source,
-			Choices:       result.choices,
-			FeatureConfig: result.featureConfig,
-		})
-	}
-	if err := warp.UpsertAccountModelDiscoveries(ctx, s, items...); err != nil {
-		slog.Warn("warp account model choices could not be saved", "error", err)
-	}
-}
-
-func joinWarpDiscoverySources(sourceSet map[string]struct{}) string {
-	if len(sourceSet) == 0 {
-		return "warp_graphql"
-	}
-	ordered := make([]string, 0, 1)
-	for _, part := range []string{"feature_model_choice_all", "feature_model_choice_agent_mode"} {
-		if _, ok := sourceSet[part]; ok {
-			ordered = append(ordered, part)
-		}
-	}
-	if len(ordered) == 0 {
-		for part := range sourceSet {
-			ordered = append(ordered, part)
-		}
-		sort.Strings(ordered)
-	}
-	return "warp_graphql_" + strings.Join(ordered, "+")
-}
-
 func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Config {
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -1043,7 +870,7 @@ func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Confi
 	}
 
 	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "warp", "workbuddy", "qoder", "cline":
+	case "workbuddy", "qoder", "cline":
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
 			cfg.RequestTimeout = 15
 		}
@@ -1162,9 +989,6 @@ func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 }
 
 func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Model, ordered []discoveredModel) string {
-	if strings.EqualFold(strings.TrimSpace(channel), "warp") && discoveredModelsContain(ordered, warpDefaultModelID) {
-		return warpDefaultModelID
-	}
 	for _, model := range ordered {
 		if current := existing[model.ID]; current != nil && current.IsDefault {
 			return model.ID
@@ -1174,19 +998,4 @@ func chooseRefreshedDefaultModel(channel string, existing map[string]*store.Mode
 		return model.ID
 	}
 	return ""
-}
-
-const warpDefaultModelID = "auto-open"
-
-func shouldForceWarpDefault(channel, modelID string) bool {
-	return strings.EqualFold(strings.TrimSpace(channel), "warp") && modelID == warpDefaultModelID
-}
-
-func discoveredModelsContain(models []discoveredModel, id string) bool {
-	for _, model := range models {
-		if model.ID == id {
-			return true
-		}
-	}
-	return false
 }

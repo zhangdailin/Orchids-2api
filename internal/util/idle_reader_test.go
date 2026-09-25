@@ -36,7 +36,7 @@ func TestMonitorReadIdleCancelsBlockedReadWithClassifiableError(t *testing.T) {
 
 func TestMonitorReadIdleLeavesDisabledReaderUntouched(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("ok"))
-	if got := MonitorReadIdle(body, 0, func() {}, "warp"); got != body {
+	if got := MonitorReadIdle(body, 0, func() {}, "workbuddy"); got != body {
 		t.Fatal("disabled idle monitor wrapped the reader")
 	}
 }

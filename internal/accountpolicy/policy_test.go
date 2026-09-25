@@ -325,9 +325,9 @@ func TestCredentialMessageIsProviderAware(t *testing.T) {
 	if !strings.Contains(grokVerdict.Message, "重新登录") {
 		t.Fatalf("grok reason = %q", grokVerdict.Message)
 	}
-	other := Classify(&store.Account{AccountType: "warp"}, errors.New("401: expired"), "")
+	other := Classify(&store.Account{AccountType: "workbuddy"}, errors.New("401: expired"), "")
 	if other.Message == "" || other.NeedsLogin == false {
-		t.Fatalf("warp verdict = %+v", other)
+		t.Fatalf("workbuddy verdict = %+v", other)
 	}
 }
 

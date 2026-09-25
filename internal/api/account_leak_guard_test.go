@@ -31,11 +31,13 @@ var accountSecretFields = map[string]func(*store.Account) string{
 	"qoder_refresh_token": func(a *store.Account) string { return a.QoderRefreshToken },
 	"qoder_runtime_info":  func(a *store.Account) string { return a.QoderRuntimeInfo },
 	"qoder_runtime_key":   func(a *store.Account) string { return a.QoderRuntimeKey },
+	"cline_access_token":  func(a *store.Account) string { return a.ClineAccessToken },
+	"cline_refresh_token": func(a *store.Account) string { return a.ClineRefreshToken },
 }
 
 // accountChannels are the channels the account API serves. Every one of them goes
 // through the same projection, so the guard has to cover each.
-var accountChannels = []string{"warp", "grok", "workbuddy", "qoder"}
+var accountChannels = []string{"grok", "workbuddy", "qoder", "cline"}
 
 // marker prefixes every planted secret so one substring search can find all of
 // them in the rendered JSON, whatever the field name became on the wire.
@@ -82,6 +84,8 @@ var accountSecretSetter = map[string]func(*store.Account, string){
 	"qoder_refresh_token": func(a *store.Account, v string) { a.QoderRefreshToken = v },
 	"qoder_runtime_info":  func(a *store.Account, v string) { a.QoderRuntimeInfo = v },
 	"qoder_runtime_key":   func(a *store.Account, v string) { a.QoderRuntimeKey = v },
+	"cline_access_token":  func(a *store.Account, v string) { a.ClineAccessToken = v },
+	"cline_refresh_token": func(a *store.Account, v string) { a.ClineRefreshToken = v },
 }
 
 // TestAccountResponsesNeverCarryCredentials is the guard the account projection's
@@ -134,7 +138,7 @@ func TestAccountResponsesHideCredentialKeys(t *testing.T) {
 			t.Errorf("credential field %q was returned", field)
 		}
 	}
-	for _, derived := range []string{"session_fingerprint", "warp_authenticated"} {
+	for _, derived := range []string{"session_fingerprint"} {
 		if _, exists := row[derived]; exists {
 			t.Errorf("derived field %q was returned", derived)
 		}

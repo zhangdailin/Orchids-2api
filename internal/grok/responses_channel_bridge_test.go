@@ -22,7 +22,7 @@ func TestResponsesChatPathMapsTheChannelPrefix(t *testing.T) {
 	cases := map[string]string{
 		"/workbuddy/v1/responses":         "/workbuddy/v1/chat/completions",
 		"/workbuddy/v1/responses/compact": "/workbuddy/v1/chat/completions",
-		"/warp/v1/responses/":             "/warp/v1/chat/completions",
+		"/cline/v1/responses/":            "/cline/v1/chat/completions",
 		"/v1/responses":                   "/v1/chat/completions",
 		"  /qoder/v1/responses  ":         "/qoder/v1/chat/completions",
 		"/something/else":                 "/v1/chat/completions",
@@ -150,7 +150,7 @@ func TestResponsesBridgeForwardsChatErrors(t *testing.T) {
 	}
 	bridge := ResponsesBridgeHandler(chat, ResponsesBridgeOptions{})
 
-	req := httptest.NewRequest(http.MethodPost, "/warp/v1/responses",
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"does-not-exist","input":"hi","stream":true}`))
 	rec := httptest.NewRecorder()
 	bridge(rec, req)
@@ -206,7 +206,7 @@ func TestResponsesChannelSubpathServesCompactAndTrailingSlash(t *testing.T) {
 	handler := ResponsesChannelSubpath(recordingChat(t, &calls, &mu), ResponsesBridgeOptions{})
 
 	for name, target := range map[string]string{
-		"trailing_slash": "/warp/v1/responses/",
+		"trailing_slash": "/qoder/v1/responses/",
 		"compact":        "/workbuddy/v1/responses/compact",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -232,7 +232,7 @@ func TestResponsesChannelSubpathServesCompactAndTrailingSlash(t *testing.T) {
 	for _, call := range calls {
 		paths[call.path] = true
 	}
-	if !paths["/warp/v1/chat/completions"] || !paths["/workbuddy/v1/chat/completions"] {
+	if !paths["/qoder/v1/chat/completions"] || !paths["/workbuddy/v1/chat/completions"] {
 		t.Fatalf("inner chat paths = %v, want the same channel prefix as the request", paths)
 	}
 }
@@ -247,7 +247,7 @@ func TestResponsesChannelSubpathReportsUnstoredResponses(t *testing.T) {
 	}, ResponsesBridgeOptions{})
 
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
-		req := httptest.NewRequest(method, "/warp/v1/responses/resp_123", nil)
+		req := httptest.NewRequest(method, "/cline/v1/responses/resp_123", nil)
 		rec := httptest.NewRecorder()
 		handler(rec, req)
 		if rec.Code != http.StatusNotFound {
@@ -258,7 +258,7 @@ func TestResponsesChannelSubpathReportsUnstoredResponses(t *testing.T) {
 		}
 	}
 
-	put := httptest.NewRequest(http.MethodPut, "/warp/v1/responses/resp_123", nil)
+	put := httptest.NewRequest(http.MethodPut, "/cline/v1/responses/resp_123", nil)
 	rec := httptest.NewRecorder()
 	handler(rec, put)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -348,7 +348,7 @@ func TestResponsesBridgeStoresStreamedResponse(t *testing.T) {
 	resource := ResponsesResourceHandler(opts)
 
 	stream := httptest.NewRecorder()
-	bridge(stream, httptest.NewRequest(http.MethodPost, "/warp/v1/responses",
+	bridge(stream, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5-6-sol-low","input":"hi","stream":true,"store":true}`)))
 	if stream.Code != http.StatusOK || !strings.Contains(stream.Body.String(), "event: response.completed") {
 		t.Fatalf("stream status=%d body=%s", stream.Code, stream.Body.String())
@@ -359,7 +359,7 @@ func TestResponsesBridgeStoresStreamedResponse(t *testing.T) {
 	}
 
 	get := httptest.NewRecorder()
-	resource(get, httptest.NewRequest(http.MethodGet, "/warp/v1/responses/"+match[1], nil))
+	resource(get, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+match[1], nil))
 	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), "hello") {
 		t.Fatalf("stored streamed response status=%d body=%s", get.Code, get.Body.String())
 	}
@@ -412,7 +412,7 @@ func TestModelDispatcherSendsLookupFailuresToTheBridgedHandler(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	dispatch(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"warp-model","input":"hi"}`)))
+	dispatch(rec, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"workbuddy-model","input":"hi"}`)))
 	if rec.Body.String() != "bridged" {
 		t.Fatalf("lookup failure routed to %q, want the bridged handler", rec.Body.String())
 	}

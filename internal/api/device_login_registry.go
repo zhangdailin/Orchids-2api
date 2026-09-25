@@ -209,5 +209,5 @@ func (r *deviceLoginRegistry[T]) cleanup(now time.Time) {
 }
 
 // identityDeviceLogin is the shared accessor for a registry whose element *is* a
-// deviceLogin (the Warp and Grok aliases).
+// deviceLogin (the Grok alias).
 func identityDeviceLogin(login *deviceLogin) *deviceLogin { return login }

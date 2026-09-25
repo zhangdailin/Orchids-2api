@@ -49,7 +49,7 @@ func TestHandleModelsServesPagedEnvelopeOnRequest(t *testing.T) {
 	seedAdminModels(t, s,
 		&store.Model{ID: "grok-4.6", Channel: "grok", ModelID: "grok-4.6", Name: "Grok 4.6"},
 		&store.Model{ID: "grok-4.5", Channel: "grok", ModelID: "grok-4.5", Name: "Grok 4.5"},
-		&store.Model{ID: "warp-claude", Channel: "warp", ModelID: "claude", Name: "Claude"},
+		&store.Model{ID: "wb-claude", Channel: "workbuddy", ModelID: "claude", Name: "Claude"},
 	)
 
 	rec := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestHandleModelGroupsBucketsByEndpointCapabilities(t *testing.T) {
 			Capabilities: []string{"chat", "responses"}},
 		&store.Model{ID: "grok-imagine-image", Channel: "grok", ModelID: "grok-imagine-image", Name: "Imagine",
 			Capabilities: []string{"image"}},
-		&store.Model{ID: "no-caps", Channel: "warp", ModelID: "none", Name: "No caps"},
+		&store.Model{ID: "no-caps", Channel: "workbuddy", ModelID: "none", Name: "No caps"},
 	)
 
 	rec := httptest.NewRecorder()

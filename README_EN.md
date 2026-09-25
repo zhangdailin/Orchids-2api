@@ -2,11 +2,11 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across five upstream channels: `warp`, `workbuddy`, `qoder`, `cline`, and `grok`.
+A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across four upstream channels: `workbuddy`, `qoder`, `cline`, and `grok`.
 
 ## Current Status
 
-- `internal/handler` serves `warp` / `workbuddy` / `qoder` / `cline` for both `/v1/messages` and `/v1/chat/completions`
+- `internal/handler` serves `workbuddy` / `qoder` / `cline` for both `/v1/messages` and `/v1/chat/completions`
 - `internal/grok` handles Grok Messages, Responses, Chat, image, video, speech, and local media endpoints
 - per-channel model sync is available through `POST /api/models/refresh`
 - The Qoder channel is OAuth-only: accounts come exclusively from the official `qoder.com` device authorization flow, and it accepts no pasted personal access token
@@ -28,7 +28,8 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 
 | Channel | Public routes |
 |---|---|
-| `warp` | `/warp/v1/messages`, `/warp/v1/chat/completions` |
+| `workbuddy` | `/workbuddy/v1/messages`, `/workbuddy/v1/chat/completions` |
+| `qoder` | `/qoder/v1/messages`, `/qoder/v1/chat/completions` |
 | `cline` | `/cline/v1/messages`, `/cline/v1/chat/completions` |
 | `grok` | `/grok/v1/messages`, `/grok/v1/responses`, `/grok/v1/chat/completions`, image, video, speech, and file routes |
 
@@ -91,7 +92,6 @@ Notes:
 - in production, set a strong `admin_pass` explicitly and keep `debug_enabled` set to `false`
 - if Redis already contains `settings:config`, that stored config overrides the file on boot
 - the first start creates `data/credential.key`; persist and back it up with Redis, because losing it makes stored account credentials unreadable
-- before using Warp login or account refresh, provide the current authorized Warp Firebase API key through `ORCHIDS_WARP_FIREBASE_API_KEY`; the repository and compiled binaries no longer bundle one
 - create an API key in the admin UI and send it as `Authorization: Bearer <API Key>`; Anthropic SDKs may use `x-api-key`
 
 ### 3. Start the server
@@ -140,7 +140,7 @@ curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 ## Model Sync Behavior
 
 - endpoint: `POST /api/models/refresh`
-- example body: `{"channel":"warp"}`
+- example body: `{"channel":"workbuddy"}`
 - sync is source-driven: each channel verifies upstream candidates by its own upstream capability
 - newly discovered models are inserted
 - locally stored models missing from the source are deleted

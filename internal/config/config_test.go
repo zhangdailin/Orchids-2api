@@ -55,34 +55,18 @@ func TestConfigDefaultsKeepConversationBindingsAlive(t *testing.T) {
 	}
 }
 
-// The stateless transcript ceiling is a transport bound, not a context policy:
-// it has to stay above any single model window.
-func TestConfigDefaultsLeaveTheTranscriptCeilingAboveAnyModelWindow(t *testing.T) {
-	var cfg Config
-	ApplyDefaults(&cfg)
-	if cfg.WarpStatelessHistoryMaxChars < 1<<20 {
-		t.Fatalf("WarpStatelessHistoryMaxChars=%d, want at least 1 MiB", cfg.WarpStatelessHistoryMaxChars)
-	}
-}
-
 // An operator's explicit values survive, and an absurd one is still bounded.
 func TestConfigKeepsExplicitContextSettingsWithinBounds(t *testing.T) {
-	cfg := Config{SessionTTLMinutes: 90, WarpStatelessHistoryMaxChars: 2 << 20}
+	cfg := Config{SessionTTLMinutes: 90}
 	ApplyDefaults(&cfg)
 	if cfg.SessionTTLMinutes != 90 {
 		t.Fatalf("SessionTTLMinutes=%d, want the configured 90", cfg.SessionTTLMinutes)
 	}
-	if cfg.WarpStatelessHistoryMaxChars != 2<<20 {
-		t.Fatalf("WarpStatelessHistoryMaxChars=%d, want the configured 2 MiB", cfg.WarpStatelessHistoryMaxChars)
-	}
 
-	over := Config{SessionTTLMinutes: 1 << 30, WarpStatelessHistoryMaxChars: 1 << 30}
+	over := Config{SessionTTLMinutes: 1 << 30}
 	ApplyDefaults(&over)
 	if over.SessionTTLMinutes > 30*24*60 {
 		t.Fatalf("SessionTTLMinutes=%d is unbounded", over.SessionTTLMinutes)
-	}
-	if over.WarpStatelessHistoryMaxChars > 64<<20 {
-		t.Fatalf("WarpStatelessHistoryMaxChars=%d is unbounded", over.WarpStatelessHistoryMaxChars)
 	}
 }
 

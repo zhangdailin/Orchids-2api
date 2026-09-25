@@ -1,5 +1,5 @@
 /* =============================================================================
-   Warp Admin Console — design system
+   Orchids Admin Console — design system
    =============================================================================
 
    This file is the ONLY global stylesheet. It replaced three stacked theme
@@ -52,7 +52,7 @@
   --text-faint: #7d8aa1;
   --text-on-accent: #10130f;
 
-  /* Brand. Warp's amber, used only for the primary action, focus and active nav. */
+  /* Brand accent, used only for the primary action, focus and active nav. */
   --accent: #ffb257;
   --accent-strong: #ff9f2e;
   --accent-soft: rgba(255, 178, 87, 0.14);
@@ -77,7 +77,6 @@
   /* Legacy aliases kept so page stylesheets and inline styles keep resolving. */
   --accent-purple: #a78bfa;
   --accent-pink: #f0a6bd;
-  --accent-cyan: #5eead4;
   --accent-blue: var(--info);
   --accent-green: var(--ok);
   --accent-orange: var(--accent);
@@ -1328,7 +1327,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .is-filtered { color: var(--idle); border-color: var(--border-strong); background: var(--idle-soft); }
 
 .badge-grok,
-.badge-warp,
 .badge-workbuddy,
 .badge-qoder,
 .badge-cline,
@@ -1340,7 +1338,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 }
 
 .badge-grok { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
-.badge-warp { color: var(--info); border-color: rgba(108, 182, 255, 0.35); background: var(--info-soft); }
 .badge-workbuddy { color: var(--ok); border-color: rgba(74, 222, 155, 0.35); background: var(--ok-soft); }
 .badge-qoder { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.14); }
 .badge-cline { color: var(--accent-purple); border-color: rgba(167, 139, 250, 0.35); background: rgba(167, 139, 250, 0.14); }

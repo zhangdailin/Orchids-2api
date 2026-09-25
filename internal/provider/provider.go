@@ -16,7 +16,6 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -31,9 +30,6 @@ type Factory func(acc *store.Account, cfg *config.Config) interface{}
 // type and Go will not widen that on assignment; the closure is the single line
 // that would otherwise be a whole file.
 var factories = map[string]Factory{
-	"warp": func(acc *store.Account, cfg *config.Config) interface{} {
-		return warp.NewFromAccount(acc, cfg)
-	},
 	"workbuddy": func(acc *store.Account, cfg *config.Config) interface{} {
 		return workbuddy.NewFromAccount(acc, cfg)
 	},

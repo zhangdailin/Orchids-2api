@@ -206,7 +206,7 @@ var (
 		if acc.account_type ~= nil then
 			acc_type = string.lower(tostring(acc.account_type))
 		end
-		if acc_type ~= "warp" and acc_type ~= "grok" and acc_type ~= "qoder" and acc_type ~= "workbuddy" then
+		if acc_type ~= "grok" and acc_type ~= "qoder" and acc_type ~= "workbuddy" then
 			acc.usage_current = (acc.usage_current or 0) + usage
 		end
 		acc.usage_total = (acc.usage_total or 0) + usage
@@ -615,30 +615,10 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		updated.NSFWEnabled = acc.NSFWEnabled
 		updated.SessionID = acc.SessionID
 		updated.ClientCookie = acc.ClientCookie
-		if strings.EqualFold(updated.AccountType, "warp") {
-			if strings.TrimSpace(acc.RefreshToken) == "" {
-				updated.RefreshToken = existing.RefreshToken
-			} else {
-				updated.RefreshToken = acc.RefreshToken
-			}
-			if strings.TrimSpace(acc.DeviceID) == "" {
-				updated.DeviceID = existing.DeviceID
-			} else {
-				updated.DeviceID = acc.DeviceID
-			}
-			if strings.TrimSpace(acc.RequestID) == "" {
-				updated.RequestID = existing.RequestID
-			} else {
-				updated.RequestID = acc.RequestID
-			}
-		} else {
-			updated.RefreshToken = acc.RefreshToken
-			updated.DeviceID = acc.DeviceID
-			updated.RequestID = acc.RequestID
-		}
-		if strings.EqualFold(updated.AccountType, "warp") {
-			updated.SessionCookie = ""
-		} else if acc.SessionCookie == "" {
+		updated.RefreshToken = acc.RefreshToken
+		updated.DeviceID = acc.DeviceID
+		updated.RequestID = acc.RequestID
+		if acc.SessionCookie == "" {
 			updated.SessionCookie = existing.SessionCookie
 		} else {
 			updated.SessionCookie = acc.SessionCookie
@@ -660,9 +640,6 @@ func (s *redisStore) UpdateAccount(ctx context.Context, acc *Account) error {
 		// back afterward and silently lose usage. Only the increment script mutates
 		// these fields after account creation.
 		updated.UsageLimit = acc.UsageLimit
-		updated.WarpMonthlyLimit = acc.WarpMonthlyLimit
-		updated.WarpMonthlyRemaining = acc.WarpMonthlyRemaining
-		updated.WarpBonusRemaining = acc.WarpBonusRemaining
 		updated.StatusCode = acc.StatusCode
 		updated.AuthStatus = acc.AuthStatus
 		if acc.ClearVerifiedAt {

@@ -29,29 +29,8 @@ type UpstreamRequest struct {
 	ConversationID string
 	// TraceID preserves a client-provided trace independently from RequestID.
 	// WorkBuddy uses RequestID to aggregate one turn and TraceID for diagnostics.
-	TraceID              string
-	ChatSessionID        string
-	WarpCliAgentModel    string
-	WarpComputerUseModel string
-	// WarpContextWindowLimit is the base model's input-token window as the
-	// account's own discovery declared it. Warp reads zero as "use the model's
-	// default max", so a caller that already knows the real window states it
-	// instead of leaving the upstream to fall back to a smaller default.
-	WarpContextWindowLimit uint32
-	WarpToolContexts       map[string]WarpToolContext
-	// WarpTaskContext is the protobuf-encoded task state returned by Warp on
-	// the preceding turn. Warp conversations are stateful but task state is
-	// client-owned and must be round-tripped with tool results.
-	WarpTaskContext []byte
-}
-
-// WarpToolContext retains the upstream action identity that produced a
-// downstream tool call. Warp requires the result to use the original action
-// type and tool_call_id on the following request.
-type WarpToolContext struct {
-	Type  string
-	Name  string
-	Input string
+	TraceID       string
+	ChatSessionID string
 }
 
 // SSEMessage is the shared streaming event representation for upstream providers.

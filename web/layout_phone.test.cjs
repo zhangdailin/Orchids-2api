@@ -101,15 +101,31 @@ test('every admin page links a cache-busted main.css', () => {
 
   // main.css is served with `immutable` when the URL carries a version, so a
   // stylesheet fix that does not change the query string never reaches a browser
-  // that already fetched the broken bytes.
-  const versions = new Set();
-  for (const page of [...pages.map((p) => path.join(pageDir, p)), path.join(__dirname, 'static', 'login.html')]) {
+  // that already fetched the broken bytes. The version is therefore never written
+  // by hand: page templates read the content hash from PageData, and the static
+  // login page carries the placeholder web.LoginPage resolves at serve time.
+  // A literal here is the bug this test exists to catch, so assert on the
+  // mechanism rather than on a value.
+  for (const page of pages.map((p) => path.join(pageDir, p))) {
     const html = fs.readFileSync(page, 'utf8');
-    const match = html.match(/main\.css\?v=([^"']+)/);
-    assert.ok(match, `${path.basename(page)} links a versioned main.css`);
-    versions.add(match[1]);
+    assert.match(
+      html,
+      /main\.css\?v=\{\{\.AssetVersion\}\}/,
+      `${path.basename(page)} links main.css through the generated asset version`
+    );
+    assert.doesNotMatch(
+      html,
+      /(?:main|accounts|models|ops|tutorial|logs|config|alerts)\.css\?v=[0-9A-Za-z._-]+"/,
+      `${path.basename(page)} must not pin a hand-written asset version`
+    );
   }
-  assert.equal(versions.size, 1, `all pages share one main.css version, got ${[...versions].join(', ')}`);
+
+  const login = fs.readFileSync(path.join(__dirname, 'static', 'login.html'), 'utf8');
+  assert.match(
+    login,
+    /main\.css\?v=__ASSET_VERSION__/,
+    'the static login page carries the placeholder resolved by web.LoginPage'
+  );
 });
 
 // ---------------------------------------------------------------------------

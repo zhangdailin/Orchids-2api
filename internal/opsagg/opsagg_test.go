@@ -97,9 +97,9 @@ func TestRange_SpansMinutesInOrder(t *testing.T) {
 	base := time.Now().Truncate(time.Minute).Add(-3 * time.Minute)
 
 	for i := 0; i < 3; i++ {
-		agg.Observe(ctx, Outcome{Channel: "warp", OK: true, DurationMS: 100, At: base.Add(time.Duration(i) * time.Minute)})
+		agg.Observe(ctx, Outcome{Channel: "workbuddy", OK: true, DurationMS: 100, At: base.Add(time.Duration(i) * time.Minute)})
 	}
-	buckets, err := agg.Range(ctx, "warp", base, base.Add(2*time.Minute))
+	buckets, err := agg.Range(ctx, "workbuddy", base, base.Add(2*time.Minute))
 	if err != nil {
 		t.Fatalf("Range() error = %v", err)
 	}
@@ -111,7 +111,7 @@ func TestRange_SpansMinutesInOrder(t *testing.T) {
 			t.Fatalf("buckets are not in chronological order: %+v", buckets)
 		}
 	}
-	if summary := agg.Summarize(ctx, "warp", buckets); summary.RPM <= 0 {
+	if summary := agg.Summarize(ctx, "workbuddy", buckets); summary.RPM <= 0 {
 		t.Fatalf("rpm = %v, want > 0 over three minutes", summary.RPM)
 	}
 }
@@ -147,13 +147,13 @@ func TestChannels_ListsOnlyObservedChannels(t *testing.T) {
 	ctx := context.Background()
 	at := time.Now()
 	agg.Observe(ctx, Outcome{Channel: "grok", OK: true, At: at})
-	agg.Observe(ctx, Outcome{Channel: "warp", OK: true, At: at})
+	agg.Observe(ctx, Outcome{Channel: "workbuddy", OK: true, At: at})
 
 	channels, err := agg.Channels(ctx, at, at)
 	if err != nil {
 		t.Fatalf("Channels() error = %v", err)
 	}
-	if len(channels) != 2 || channels[0] != "grok" || channels[1] != "warp" {
+	if len(channels) != 2 || channels[0] != "grok" || channels[1] != "workbuddy" {
 		t.Fatalf("channels = %v", channels)
 	}
 }
@@ -257,7 +257,6 @@ func TestSummarizeWith_RateUsesTheWindowNotTheBuckets(t *testing.T) {
 	}
 }
 
-
 // TestSummarizeWith_MergedSamplesProducePercentiles is the reported P95 bug: the
 // merged scope had no samples of its own, so both percentiles were flat zero while
 // the trend showed traffic.
@@ -269,17 +268,17 @@ func TestSummarizeWith_MergedSamplesProducePercentiles(t *testing.T) {
 		agg.Observe(ctx, Outcome{Channel: "grok", OK: true, DurationMS: duration, FirstTokenMS: duration / 2, At: at})
 	}
 	for _, duration := range []int64{400, 500} {
-		agg.Observe(ctx, Outcome{Channel: "warp", OK: true, DurationMS: duration, FirstTokenMS: duration / 2, At: at})
+		agg.Observe(ctx, Outcome{Channel: "workbuddy", OK: true, DurationMS: duration, FirstTokenMS: duration / 2, At: at})
 	}
 
 	grokBuckets, _ := agg.Range(ctx, "grok", at, at)
-	warpBuckets, _ := agg.Range(ctx, "warp", at, at)
-	merged := append(append([]Bucket(nil), grokBuckets...), warpBuckets...)
+	workbuddyBuckets, _ := agg.Range(ctx, "workbuddy", at, at)
+	merged := append(append([]Bucket(nil), grokBuckets...), workbuddyBuckets...)
 	var durations, ttfts []int64
 	for _, pair := range []struct {
 		channel string
 		buckets []Bucket
-	}{{"grok", grokBuckets}, {"warp", warpBuckets}} {
+	}{{"grok", grokBuckets}, {"workbuddy", workbuddyBuckets}} {
 		d, tt := agg.SamplesFor(ctx, pair.channel, pair.buckets)
 		durations = append(durations, d...)
 		ttfts = append(ttfts, tt...)

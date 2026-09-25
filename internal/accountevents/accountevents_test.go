@@ -172,7 +172,7 @@ func TestBus_PublishNeverBlocks(t *testing.T) {
 // TestClassify_StatusAndCredentialChanges pins what a subscriber may assume:
 // a credential change is never reported as a plain update.
 func TestClassify_StatusAndCredentialChanges(t *testing.T) {
-	base := &store.Account{ID: 1, AccountType: "warp", RefreshToken: "session-a", Enabled: true, Weight: 1}
+	base := &store.Account{ID: 1, AccountType: "cline", RefreshToken: "session-a", Enabled: true, Weight: 1}
 
 	credentialSwap := *base
 	credentialSwap.RefreshToken = "session-b"

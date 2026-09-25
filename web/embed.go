@@ -1,11 +1,16 @@
 package web
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 )
 
 //go:embed static/*
@@ -13,6 +18,61 @@ var staticFS embed.FS
 
 //go:embed templates/*
 var TemplateFS embed.FS
+
+// assetVersionPlaceholder is what the static login page carries where a version
+// string belongs; LoginPage replaces it at serve time.
+const assetVersionPlaceholder = "__ASSET_VERSION__"
+
+var (
+	assetVersionOnce sync.Once
+	assetVersion     string
+)
+
+// AssetVersion returns a short content hash of the embedded stylesheets and
+// scripts.
+//
+// Every page template puts this on each <link> and <script> URL, and
+// StaticHandler marks a versioned asset immutable for a year. A version string
+// maintained by hand therefore has to be bumped by whoever edits the asset, and
+// skipping that step pins browsers to the previous deployment: removing a
+// provider from the UI changed the bytes but left the URL identical, so the
+// retired provider stayed visible in a browser that had already cached it.
+// Hashing the bytes makes the URL change whenever the bytes do.
+func AssetVersion() string {
+	assetVersionOnce.Do(func() {
+		sum := sha256.New()
+		_ = fs.WalkDir(staticFS, "static", func(name string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			switch strings.ToLower(path.Ext(name)) {
+			case ".css", ".js":
+			default:
+				return nil
+			}
+			data, readErr := staticFS.ReadFile(name)
+			if readErr != nil {
+				return readErr
+			}
+			fmt.Fprintf(sum, "%s\x00%d\x00", name, len(data))
+			_, _ = sum.Write(data)
+			return nil
+		})
+		assetVersion = hex.EncodeToString(sum.Sum(nil))[:12]
+	})
+	return assetVersion
+}
+
+// LoginPage returns the embedded admin login page with the asset-version
+// placeholder resolved. The page is a plain static file rather than a parsed
+// template, so it cannot use the PageData field the page templates read.
+func LoginPage() ([]byte, error) {
+	raw, err := staticFS.ReadFile("static/login.html")
+	if err != nil {
+		return nil, err
+	}
+	return bytes.ReplaceAll(raw, []byte(assetVersionPlaceholder), []byte(AssetVersion())), nil
+}
 
 func StaticHandler() http.Handler {
 	subFS, _ := fs.Sub(staticFS, "static")

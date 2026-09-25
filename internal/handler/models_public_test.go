@@ -9,7 +9,6 @@ import (
 
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 )
 
 func TestHandleModels_FiltersAPIKeyModelAllowlist(t *testing.T) {
@@ -55,7 +54,7 @@ func TestHandleModelByID_HidesOfflineModel(t *testing.T) {
 	}()
 
 	if err := s.CreateModel(context.Background(), &store.Model{
-		Channel: "Warp",
+		Channel: "WorkBuddy",
 		ModelID: "offline-only-model",
 		Name:    "Offline Only",
 		Status:  store.ModelStatusOffline,
@@ -63,7 +62,7 @@ func TestHandleModelByID_HidesOfflineModel(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models/offline-only-model", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/workbuddy/v1/models/offline-only-model", nil)
 	rec := httptest.NewRecorder()
 
 	h.HandleModelByID(rec, req)
@@ -235,78 +234,6 @@ func TestHandleModels_KeepsGrokModelsVisibleWhenAccountsHaveStatusCode(t *testin
 		if strings.Contains(body, `"id":"`+hidden+`"`) {
 			t.Fatalf("expected removed model %s to stay hidden, body=%s", hidden, body)
 		}
-	}
-}
-
-func TestHandleModels_WarpUsesAccountModelPool(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	ctx := context.Background()
-	if err := s.CreateAccount(ctx, &store.Account{
-		AccountType:  "warp",
-		RefreshToken: "warp-free-token",
-		Subscription: "free",
-		Enabled:      true,
-	}); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
-	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open"}}}); err != nil {
-		t.Fatalf("SaveAccountModelChoices() error = %v", err)
-	}
-	publishModel(t, s,
-		&store.Model{Channel: "Warp", ModelID: "auto-open"},
-		&store.Model{Channel: "Warp", ModelID: "gpt-5-2-medium"},
-		&store.Model{Channel: "Warp", ModelID: "gpt-5-2-high"},
-	)
-
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models", nil)
-	rec := httptest.NewRecorder()
-
-	h.HandleModels(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "auto-open") {
-		t.Fatalf("expected upstream free model in body=%s", body)
-	}
-	if strings.Contains(body, "gpt-5-2-medium") || strings.Contains(body, "gpt-5-2-high") {
-		t.Fatalf("expected non-free models hidden for free-only account pool, body=%s", body)
-	}
-}
-
-func TestHandleModelByID_WarpRejectsModelOutsideAccountPool(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	ctx := context.Background()
-	if err := s.CreateAccount(ctx, &store.Account{
-		AccountType:  "warp",
-		RefreshToken: "warp-free-token",
-		Subscription: "free",
-		Enabled:      true,
-	}); err != nil {
-		t.Fatalf("CreateAccount() error = %v", err)
-	}
-	if err := warp.SaveAccountModelChoices(ctx, s, &warp.AccountModelChoices{Accounts: map[string][]string{"1": {"auto-open"}}}); err != nil {
-		t.Fatalf("SaveAccountModelChoices() error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "http://example.com/warp/v1/models/gpt-5-2-medium", nil)
-	rec := httptest.NewRecorder()
-
-	h.HandleModelByID(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status=%d want=%d body=%s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 }
 

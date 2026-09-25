@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 )
 
 type PublicModelResponse struct {
@@ -82,50 +80,6 @@ func isVisiblePublicModel(m *store.Model, filterChannel string) (string, bool) {
 		return mChannel, false
 	}
 	return mChannel, true
-}
-
-func (h *Handler) visibleWarpModelSet(ctx context.Context) map[string]struct{} {
-	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
-		return nil
-	}
-	accounts, err := h.loadBalancer.Store.GetEnabledAccounts(ctx)
-	if err != nil || len(accounts) == 0 {
-		return nil
-	}
-	choices, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store)
-	if err != nil || choices == nil || len(choices.Accounts) == 0 {
-		return nil
-	}
-	out := map[string]struct{}{}
-	for _, acc := range accounts {
-		if acc == nil || !strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-			continue
-		}
-		// Public visibility follows the upstream discovery cache for every
-		// account tier; do not reduce free accounts to a synthetic default.
-		for _, modelID := range choices.Accounts[strconv.FormatInt(acc.ID, 10)] {
-			if modelID = strings.TrimSpace(modelID); modelID != "" {
-				out[modelID] = struct{}{}
-			}
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func (h *Handler) warpModelVisible(ctx context.Context, modelID string) bool {
-	visible := h.visibleWarpModelSet(ctx)
-	if visible == nil {
-		return true
-	}
-	resolvedModelID := normalizeRequestedModelID(modelID)
-	if resolvedModelID == "" {
-		return true
-	}
-	_, ok := visible[resolvedModelID]
-	return ok
 }
 
 // externalPublicModelID is the name clients see for a route row. Grok routes
@@ -260,10 +214,6 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		}
 		return strings.ToLower(allModels[i].ModelID) < strings.ToLower(allModels[j].ModelID)
 	})
-	var warpVisible map[string]struct{}
-	if filterChannel == "" || strings.EqualFold(filterChannel, "warp") {
-		warpVisible = h.visibleWarpModelSet(ctx)
-	}
 	var publicModels []PublicModelResponse
 	seenPublicModelIDs := make(map[string]struct{}, len(allModels))
 	// One read of the observed catalogs answers every row below, so the model
@@ -274,12 +224,6 @@ func (h *Handler) HandleModels(w http.ResponseWriter, r *http.Request) {
 		mChannel, ok := isVisiblePublicModel(m, filterChannel)
 		if !ok {
 			continue
-		}
-		if strings.EqualFold(mChannel, "warp") && warpVisible != nil {
-			modelID := normalizeRequestedModelID(m.ModelID)
-			if _, ok := warpVisible[modelID]; !ok {
-				continue
-			}
 		}
 		// A Build qualifier is an internal routing detail; publish the bare name.
 		publicID := externalPublicModelID(mChannel, m.ModelID)
@@ -404,10 +348,6 @@ func (h *Handler) HandleModelByID(w http.ResponseWriter, r *http.Request) {
 	}
 	mChannel, ok := isVisiblePublicModel(m, filterChannel)
 	if !ok {
-		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
-		return
-	}
-	if strings.EqualFold(mChannel, "warp") && !h.warpModelVisible(ctx, m.ModelID) {
 		apperrors.New("invalid_request_error", "Model not found", http.StatusNotFound).WriteResponse(w)
 		return
 	}

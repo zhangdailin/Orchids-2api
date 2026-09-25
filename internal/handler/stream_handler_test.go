@@ -213,7 +213,8 @@ func TestInjectNoAvailableAccountError_RateLimitAnswers429(t *testing.T) {
 }
 
 // TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral pins that the
-// spent-allowance message no longer names Warp whatever channel actually ran out.
+// spent-allowance message names no channel: whichever provider ran out says the
+// same thing, and the upstream's own text never reaches the client.
 func TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, false, adapter.FormatAnthropic)
@@ -227,8 +228,8 @@ func TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral(t *testi
 		t.Fatalf("status = %d, want 429 for an exhausted allowance", rec.Code)
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "Warp") {
-		t.Fatalf("a WorkBuddy exhaustion must not be reported as a Warp one: %s", body)
+	if strings.Contains(body, "workbuddy API error") {
+		t.Fatalf("the upstream error text leaked into the channel-neutral message: %s", body)
 	}
 	if !strings.Contains(body, `"type":"error"`) || !strings.Contains(body, "exhausted its allowance") {
 		t.Fatalf("expected an allowance-exhausted error envelope, got: %s", body)
@@ -451,143 +452,6 @@ func TestRewriteToolCallToClient_PrunesNestedUnknownTodoFields(t *testing.T) {
 	todos := payload["todos"].([]interface{})
 	if _, ok := todos[0].(map[string]interface{})["content"]; !ok {
 		t.Fatalf("content was lost: %s", input)
-	}
-}
-
-func TestRewriteToolCallToClient_AddsRequiredDescriptionToNativeWarpBashCall(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
-	defer h.release()
-	h.setClientTools([]interface{}{map[string]interface{}{
-		"name": "Bash",
-		"input_schema": map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"command":     map[string]interface{}{"type": "string"},
-				"description": map[string]interface{}{"type": "string"},
-			},
-			"required": []interface{}{"command", "description"},
-		},
-	}})
-
-	name, input := h.rewriteToolCallToClientWithWarpType("Bash", `{"command":"sudo apt-get update && sudo apt-get install -y nmap"}`, "run_shell_command")
-	if name != "Bash" {
-		t.Fatalf("expected Bash, got %q", name)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("expected json input, got %v", err)
-	}
-	if payload["command"] != "sudo apt-get update && sudo apt-get install -y nmap" {
-		t.Fatalf("command changed unexpectedly: %q", payload["command"])
-	}
-	if strings.TrimSpace(payload["description"]) == "" {
-		t.Fatalf("expected required Bash description, got %s", input)
-	}
-}
-
-func TestStreamHandler_NativeWarpBashCallSatisfiesClientSchema(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
-	defer h.release()
-	h.setClientTools([]interface{}{map[string]interface{}{
-		"name": "Bash",
-		"input_schema": map[string]interface{}{
-			"type": "object",
-			"properties": map[string]interface{}{
-				"command":     map[string]interface{}{"type": "string"},
-				"description": map[string]interface{}{"type": "string"},
-			},
-			"required": []interface{}{"command", "description"},
-		},
-	}})
-
-	h.handleMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{
-		"toolCallId":   "warp_install_nmap",
-		"toolName":     "Bash",
-		"input":        `{"command":"sudo apt-get install -y nmap"}`,
-		"warpToolType": "run_shell_command",
-	}})
-	h.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("content blocks=%d want 1", len(h.contentBlocks))
-	}
-	input, _ := h.contentBlocks[0]["input"].(map[string]interface{})
-	description, _ := input["description"].(string)
-	if strings.TrimSpace(description) == "" {
-		t.Fatalf("bridged Bash input is missing required description: %#v", input)
-	}
-}
-
-func TestStreamHandler_WarpToolCallDoesNotRewriteCommand(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
-	defer h.release()
-	h.setClientTools([]interface{}{map[string]interface{}{
-		"name": "Bash",
-		"input_schema": map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{"command": map[string]interface{}{"type": "string"}},
-			"required":   []interface{}{"command"},
-		},
-	}})
-
-	const command = `ls -la /tmp/cc-agent/original/project`
-	h.handleMessage(upstream.SSEMessage{Type: "model.tool-call", Event: map[string]interface{}{
-		"toolCallId":   "warp_exact_command",
-		"toolName":     "Bash",
-		"input":        `{"command":"` + command + `"}`,
-		"warpToolType": "run_shell_command",
-	}})
-	h.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "tool_use"}})
-
-	if len(h.contentBlocks) != 1 {
-		t.Fatalf("content blocks=%d want 1", len(h.contentBlocks))
-	}
-	input, _ := h.contentBlocks[0]["input"].(map[string]interface{})
-	if got, _ := input["command"].(string); got != command {
-		t.Fatalf("Warp command=%q want exact %q", got, command)
-	}
-}
-
-func TestStreamHandler_RejectsWarpCallMissingUnsupportedClientRequirement(t *testing.T) {
-	h := newStreamHandler(&config.Config{}, httptest.NewRecorder(), debug.New(false, false), false, false, adapter.FormatAnthropic)
-	defer h.release()
-	h.setSurfaceToolRejects(true)
-	h.setClientTools([]interface{}{map[string]interface{}{
-		"name": "Bash",
-		"input_schema": map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{"command": map[string]interface{}{"type": "string"}, "approval_token": map[string]interface{}{"type": "string"}},
-			"required":   []interface{}{"command", "approval_token"},
-		},
-	}})
-
-	accepted := h.shouldAcceptToolCall(toolCall{id: "warp_unsupported", name: "Bash", input: `{"command":"nmap --version"}`, upstreamType: "run_shell_command"})
-	if accepted {
-		t.Fatal("expected tool call with an unrepresentable required property to be rejected")
-	}
-	if !strings.Contains(h.emptyOutputFallback, "approval_token") {
-		t.Fatalf("fallback=%q want missing property name", h.emptyOutputFallback)
-	}
-}
-
-func TestRewriteToolCallToClient_DoesNotAddUndeclaredBashDescription(t *testing.T) {
-	tools := []interface{}{map[string]interface{}{
-		"name": "Bash",
-		"input_schema": map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{"command": map[string]interface{}{"type": "string"}},
-			"required":   []string{"command"},
-		},
-	}}
-	input := ensureClientRequiredBashDescription("Bash", `{"command":"nmap --version"}`, tools)
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		t.Fatalf("expected json input, got %v", err)
-	}
-	if _, exists := payload["description"]; exists {
-		t.Fatalf("strict client schema did not declare description: %s", input)
 	}
 }
 
@@ -959,7 +823,6 @@ func TestStreamHandler_NoToolsWriteReturnsContentAsText(t *testing.T) {
 	defer sh.release()
 
 	sh.setAllowedToolNames(nil)
-	sh.setStrictToolAllowlist(true)
 	sh.setSurfaceToolRejects(true)
 	sh.setDisallowToolCalls(true)
 	sh.handleMessage(upstream.SSEMessage{
@@ -981,36 +844,6 @@ func TestStreamHandler_NoToolsWriteReturnsContentAsText(t *testing.T) {
 	}
 	if !strings.Contains(out, `"stop_reason":"end_turn"`) {
 		t.Fatalf("expected a normal text completion, got: %s", out)
-	}
-}
-
-func TestStreamHandler_EmptyAllowedToolSetRejectsAllTools(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
-	defer sh.release()
-
-	sh.setAllowedToolNames(nil)
-	sh.setStrictToolAllowlist(true)
-	sh.setSurfaceToolRejects(true)
-	sh.handleMessage(upstream.SSEMessage{
-		Type: "model.tool-call",
-		Event: map[string]any{
-			"toolCallId": "tool_read_1",
-			"toolName":   "Read",
-			"input":      `{"file_path":"README.md"}`,
-		},
-	})
-	sh.finishResponse("tool_use")
-
-	out := rec.buf.String()
-	if strings.Contains(out, `"type":"tool_use"`) {
-		t.Fatalf("empty allowlist accepted a tool: %s", out)
-	}
-	if !strings.Contains(out, "not available in this request") {
-		t.Fatalf("rejected tool produced another empty completion: %s", out)
 	}
 }
 
@@ -1037,24 +870,6 @@ func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
 	}
 	if strings.Contains(out, `"output_tokens":0`) {
 		t.Fatalf("synthetic visible output retained zero output usage: %s", out)
-	}
-}
-
-func TestStreamHandler_ModelConfigRefreshCallback(t *testing.T) {
-	cfg := &config.Config{DebugEnabled: false}
-	rec := newFlushRecorder()
-	logger := debug.New(false, false)
-	defer logger.Close()
-	sh := newStreamHandler(cfg, rec, logger, false, false, adapter.FormatAnthropic)
-	defer sh.release()
-	called := 0
-	sh.onModelConfigRefresh = func() { called++ }
-	sh.handleMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]any{
-		"finishReason":             "end_turn",
-		"shouldRefreshModelConfig": true,
-	}})
-	if called != 1 {
-		t.Fatalf("refresh callback calls=%d want 1", called)
 	}
 }
 

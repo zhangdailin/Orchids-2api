@@ -22,7 +22,7 @@ func TestInvalidateAccounts_MakesChangesImmediate(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	acc := &store.Account{AccountType: "warp", RefreshToken: "session-a", Enabled: true, Weight: 1}
+	acc := &store.Account{AccountType: "workbuddy", RefreshToken: "session-a", Enabled: true, Weight: 1}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestInvalidateAccounts_MakesChangesImmediate(t *testing.T) {
 	// A long TTL makes the point: without notification the pool would keep serving
 	// the stale snapshot for the whole window.
 	lb := NewWithCacheTTL(s, time.Hour)
-	if _, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "warp", nil, nil); err != nil {
+	if _, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", nil, nil); err != nil {
 		t.Fatalf("first selection: %v", err)
 	}
 
@@ -40,7 +40,7 @@ func TestInvalidateAccounts_MakesChangesImmediate(t *testing.T) {
 	}
 	lb.AccountChanges([]int64{acc.ID})
 
-	if _, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "warp", nil, nil); err == nil {
+	if _, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", nil, nil); err == nil {
 		t.Fatal("a deleted account was still selectable after the invalidation")
 	}
 }
@@ -55,8 +55,8 @@ func TestInvalidateAccounts_KeepsUnrelatedAccounts(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	first := &store.Account{AccountType: "warp", RefreshToken: "session-a", Enabled: true, Weight: 1}
-	second := &store.Account{AccountType: "warp", RefreshToken: "session-b", Enabled: true, Weight: 1}
+	first := &store.Account{AccountType: "workbuddy", RefreshToken: "session-a", Enabled: true, Weight: 1}
+	second := &store.Account{AccountType: "workbuddy", RefreshToken: "session-b", Enabled: true, Weight: 1}
 	for _, acc := range []*store.Account{first, second} {
 		if err := s.CreateAccount(context.Background(), acc); err != nil {
 			t.Fatalf("CreateAccount: %v", err)
@@ -64,7 +64,7 @@ func TestInvalidateAccounts_KeepsUnrelatedAccounts(t *testing.T) {
 	}
 
 	lb := NewWithCacheTTL(s, time.Hour)
-	if _, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "warp", nil, nil); err != nil {
+	if _, err := lb.GetNextAccountExcludingByChannelWithTrackerFilter(context.Background(), nil, "workbuddy", nil, nil); err != nil {
 		t.Fatalf("first selection: %v", err)
 	}
 

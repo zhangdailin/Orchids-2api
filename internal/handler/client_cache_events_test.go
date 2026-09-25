@@ -90,8 +90,8 @@ func (c *cacheTestHandler) builtClients() []*fakeCachedClient {
 	return append([]*fakeCachedClient(nil), c.built...)
 }
 
-func warpAccount(id int64, session string) *store.Account {
-	return &store.Account{ID: id, AccountType: "warp", RefreshToken: session, Enabled: true, Weight: 1}
+func testAccount(id int64, session string) *store.Account {
+	return &store.Account{ID: id, AccountType: "workbuddy", RefreshToken: session, Enabled: true, Weight: 1}
 }
 
 // TestAccountChanges_RotationBuildsANewClient is the acceptance rule for
@@ -99,7 +99,7 @@ func warpAccount(id int64, session string) *store.Account {
 // replaced credential.
 func TestAccountChanges_RotationBuildsANewClient(t *testing.T) {
 	fixture := newCacheTestHandler(t)
-	account := warpAccount(11, "session-a")
+	account := testAccount(11, "session-a")
 
 	first, release := fixture.handler.acquireAccountClient(account)
 	if first == nil {
@@ -108,7 +108,7 @@ func TestAccountChanges_RotationBuildsANewClient(t *testing.T) {
 	release()
 
 	// Rotate the credential and notify, as the change bus would.
-	rotated := warpAccount(11, "session-b")
+	rotated := testAccount(11, "session-b")
 	fixture.setCurrent(rotated)
 	fixture.handler.AccountChanges([]int64{11})
 
@@ -130,7 +130,7 @@ func TestAccountChanges_RotationBuildsANewClient(t *testing.T) {
 // credential change must not tear down the connection a running request is using.
 func TestAccountChanges_DoesNotCloseAClientInUse(t *testing.T) {
 	fixture := newCacheTestHandler(t)
-	account := warpAccount(12, "session-a")
+	account := testAccount(12, "session-a")
 
 	inUse, releaseInUse := fixture.handler.acquireAccountClient(account)
 	if inUse == nil {
@@ -139,7 +139,7 @@ func TestAccountChanges_DoesNotCloseAClientInUse(t *testing.T) {
 	clientInUse := fixture.builtClients()[0]
 
 	// A rotation arrives while the request is still running.
-	rotated := warpAccount(12, "session-b")
+	rotated := testAccount(12, "session-b")
 	fixture.setCurrent(rotated)
 	fixture.handler.AccountChanges([]int64{12})
 	if clientInUse.isClosed() {
@@ -164,7 +164,7 @@ func TestAccountChanges_DoesNotCloseAClientInUse(t *testing.T) {
 // an account that no longer exists.
 func TestAccountChanges_DeleteEvictsTheClient(t *testing.T) {
 	fixture := newCacheTestHandler(t)
-	account := warpAccount(13, "session-a")
+	account := testAccount(13, "session-a")
 
 	client, release := fixture.handler.acquireAccountClient(account)
 	release()
@@ -189,7 +189,7 @@ func TestAccountChanges_DeleteEvictsTheClient(t *testing.T) {
 // later request is still holding.
 func TestAcquireRelease_IsIdempotent(t *testing.T) {
 	fixture := newCacheTestHandler(t)
-	account := warpAccount(14, "session-a")
+	account := testAccount(14, "session-a")
 
 	client, release := fixture.handler.acquireAccountClient(account)
 	if client == nil {
@@ -213,12 +213,12 @@ func TestAcquireRelease_IsIdempotent(t *testing.T) {
 // the keep-alive pool.
 func TestAcquireRelease_UnchangedAccountReusesTheClient(t *testing.T) {
 	fixture := newCacheTestHandler(t)
-	account := warpAccount(15, "session-a")
+	account := testAccount(15, "session-a")
 
 	first, releaseFirst := fixture.handler.acquireAccountClient(account)
 	releaseFirst()
 
-	same := warpAccount(15, "session-a")
+	same := testAccount(15, "session-a")
 	same.StatusCode = "429"
 	same.StatusMessage = "throttled"
 	same.VerifiedAt = time.Now()

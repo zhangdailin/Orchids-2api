@@ -267,7 +267,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			level = slog.LevelError
 		} else if wrapped.StatusCode >= 400 {
 			level = slog.LevelWarn
-		} else if !logutil.VerboseDiagnosticsEnabled() && !strings.HasPrefix(r.URL.Path, "/warp/") {
+		} else if !logutil.VerboseDiagnosticsEnabled() {
 			return
 		}
 		userAgent := strings.TrimSpace(r.UserAgent())

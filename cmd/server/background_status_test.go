@@ -30,8 +30,8 @@ func TestPreserveLatestAccountStatus_PreservesBlockedState(t *testing.T) {
 	}()
 
 	original := &store.Account{
-		Name:        "warp-1",
-		AccountType: "warp",
+		Name:        "workbuddy-1",
+		AccountType: "workbuddy",
 		Enabled:     true,
 		Weight:      1,
 		StatusCode:  "403",
@@ -56,19 +56,6 @@ func TestPreserveLatestAccountStatus_PreservesBlockedState(t *testing.T) {
 	}
 	if stale.LastAttempt.IsZero() {
 		t.Fatal("expected last_attempt to be preserved")
-	}
-}
-
-func TestProviderHealthRefreshDueUsesSlowCadence(t *testing.T) {
-	now := time.Now()
-	if providerHealthRefreshDue(&store.Account{VerifiedAt: now.Add(-time.Minute)}, now) {
-		t.Fatal("fresh healthy account was scheduled on credential tick")
-	}
-	if !providerHealthRefreshDue(&store.Account{VerifiedAt: now.Add(-providerHealthRefreshInterval - time.Minute)}, now) {
-		t.Fatal("stale healthy account was not scheduled")
-	}
-	if !providerHealthRefreshDue(&store.Account{}, now) {
-		t.Fatal("never-verified account was not scheduled immediately")
 	}
 }
 

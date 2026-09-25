@@ -56,14 +56,14 @@ func TestClassifyPoolExhaustion_SelectorReasonsPickTheAnswer(t *testing.T) {
 		},
 		{
 			name:         "every account is busy with other requests",
-			selectErr:    errors.New("no enabled accounts available for channel: warp (all matching accounts are at their concurrency limit)"),
+			selectErr:    errors.New("no enabled accounts available for channel: workbuddy (all matching accounts are at their concurrency limit)"),
 			wantCategory: "rate_limit",
 			wantStatus:   http.StatusTooManyRequests,
 			wantMessage:  "busy with other requests",
 		},
 		{
 			name:         "the pool cannot route the requested model",
-			selectErr:    errors.New("no enabled accounts available for channel: warp (model gpt-5-6-sol-low is not available in the current Warp account pool)"),
+			selectErr:    errors.New("no enabled accounts available for channel: workbuddy (model gpt-5-6-sol-low is not available in the current workbuddy account pool)"),
 			wantCategory: "model_unavailable",
 			wantStatus:   http.StatusNotFound,
 			wantMessage:  "is not available on this channel's accounts",
@@ -93,8 +93,8 @@ func TestClassifyPoolExhaustion_SelectorReasonsPickTheAnswer(t *testing.T) {
 			wantMessage:  "the requested Qoder model is temporarily rate-limited",
 		},
 		{
-			name:      "a failure that names no capacity cause stays for the caller",
-			selectErr: errors.New("grok cli account token is empty"),
+			name:       "a failure that names no capacity cause stays for the caller",
+			selectErr:  errors.New("grok cli account token is empty"),
 			wantStatus: 0,
 		},
 	}

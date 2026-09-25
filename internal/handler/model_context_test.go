@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"testing"
 
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 )
 
 // publicListEntry is the shape a client reads. The window fields are the point
@@ -105,69 +103,6 @@ func TestPublicModelsOmitUnobservedContextWindow(t *testing.T) {
 	}
 }
 
-// Warp publishes the window with every model choice. It is stored with the
-// discovery cache, and the model list has to report it.
-func TestPublicModelsPublishWarpContextWindow(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	acc := createEnabledTestAccount(t, s, "warp-1", "warp")
-	choices := &warp.AccountModelChoices{
-		Accounts: map[string][]string{accountKeyForTest(acc.ID): {"gpt-5-6-sol-medium"}},
-		ContextWindows: map[string]warp.ModelContextWindow{
-			"gpt-5-6-sol-medium": {Min: 1024, Max: 1000000, Default: 128000},
-		},
-	}
-	if err := warp.SaveAccountModelChoices(context.Background(), s, choices); err != nil {
-		t.Fatalf("SaveAccountModelChoices() error = %v", err)
-	}
-	publishModel(t, s, &store.Model{Channel: "warp", ModelID: "gpt-5-6-sol-medium"})
-
-	entries := fetchPublicModels(t, h, "/warp/v1/models")
-	if got := entries["gpt-5-6-sol-medium"].ContextLength; got != 1000000 {
-		t.Fatalf("warp context_length = %d, want 1000000", got)
-	}
-}
-
-func TestPublicModelsIgnoreDisabledWarpContextSnapshot(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-	ctx := context.Background()
-	active := createEnabledTestAccount(t, s, "warp-active", "warp")
-	disabled := createEnabledTestAccount(t, s, "warp-disabled", "warp")
-	disabled.Enabled = false
-	if err := s.UpdateAccount(ctx, disabled); err != nil {
-		t.Fatal(err)
-	}
-	if err := warp.UpsertAccountModelDiscoveries(ctx, s,
-		warp.AccountModelDiscovery{AccountID: active.ID, Choices: []warp.ModelChoice{{ID: "active-model", ContextWindow: warp.ModelContextWindow{Max: 200000}}}},
-		warp.AccountModelDiscovery{AccountID: disabled.ID, Choices: []warp.ModelChoice{{ID: "disabled-model", ContextWindow: warp.ModelContextWindow{Max: 900000}}}},
-	); err != nil {
-		t.Fatal(err)
-	}
-	publishModel(t, s,
-		&store.Model{Channel: "warp", ModelID: "active-model"},
-		&store.Model{Channel: "warp", ModelID: "disabled-model"},
-	)
-
-	entries := fetchPublicModels(t, h, "/warp/v1/models")
-	if got := entries["active-model"].ContextLength; got != 200000 {
-		t.Fatalf("active context_length=%d want 200000", got)
-	}
-	if _, visible := entries["disabled-model"]; visible {
-		t.Fatalf("disabled account model remained visible: %+v", entries["disabled-model"])
-	}
-}
-
-// WorkBuddy is the channel whose long sessions were measured past 400k tokens.
-// Its catalog carries maxInputTokens/maxOutputTokens and both must survive the
-// account snapshot.
 func TestPublicModelsPublishWorkBuddyContextWindow(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() {
@@ -238,10 +173,6 @@ func TestCodexCatalogPrefersObservedContextWindow(t *testing.T) {
 	if got := codexEntryFor(t, catalog, "qwen3.8-flash").ContextWindow; got != 128000 {
 		t.Fatalf("unobserved model context_window = %d, want the 128000 default", got)
 	}
-}
-
-func accountKeyForTest(id int64) string {
-	return strconv.FormatInt(id, 10)
 }
 
 func containsJSONField(body, field string) bool {

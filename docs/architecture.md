@@ -4,7 +4,7 @@
 
 `Orchids-2api` 当前由两条主处理链组成：
 
-- `internal/handler`：处理 `warp`、`workbuddy`、`qoder`、`cline`
+- `internal/handler`：处理 `workbuddy`、`qoder`、`cline`
 - `internal/grok`：处理 `grok`
 
 整体目标：
@@ -25,7 +25,7 @@ Orchids-2api/
 │   ├── debug/                   # 调试日志
 │   ├── errors/                  # 错误分类
 │   ├── grok/                    # Grok Build OAuth/Chat/Responses/Messages
-│   ├── handler/                 # Warp/WorkBuddy 主处理器
+│   ├── handler/                 # WorkBuddy/Qoder/Cline 主处理器
 │   ├── loadbalancer/            # 账号选择与状态管理
 │   ├── middleware/              # trace/log/session/concurrency
 │   ├── provider/                # 通道到 client 的注册表
@@ -35,7 +35,6 @@ Orchids-2api/
 │   ├── tokencache/              # token / prompt cache
 │   ├── upstream/                # 统一上游事件结构
 │   ├── util/                    # 通用工具
-│   ├── warp/                    # Warp 上游客户端
 │   ├── workbuddy/               # WorkBuddy 国际版上游客户端
 │   └── qoder/                   # Qoder（qoder.com）OAuth 设备授权上游客户端
 ├── web/                         # 嵌入式前端资源
@@ -56,7 +55,7 @@ Orchids-2api/
 
 ### 3.2 `internal/handler`
 
-负责 `warp` / `workbuddy` / `qoder` / `cline`：
+负责 `workbuddy` / `qoder` / `cline`：
 
 - 解析 Claude/OpenAI 请求
 - 识别通道与目标模型
@@ -94,7 +93,7 @@ Orchids-2api/
 
 ## 4. 主请求流
 
-### 4.1 `warp` / `workbuddy` / `qoder` / `cline`
+### 4.1 `workbuddy` / `qoder` / `cline`
 
 ```text
 HTTP Request
@@ -134,7 +133,6 @@ HTTP Request
 
 按通道的来源：
 
-- `warp`：账号 GraphQL 发现结果，失败时回退内置种子
 - `grok`：Build OAuth 账号读取上游 `GET /v1/models`，返回 `source=grok_build_models`
 - `workbuddy`：已启用账号的 CLI 模型目录，同时保存账号级模型快照
 - `qoder`：模型目录来自有符号上游读取（`GET /algo/api/v2/model/list`），账号快照按 JSON 保存整行；对外模型 ID 为小写显示名，内部 key 由该通道的 resolver 映射

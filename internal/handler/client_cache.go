@@ -14,7 +14,6 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -75,9 +74,8 @@ func (h *Handler) AccountChanges(ids []int64) {
 	h.clientCache.evictAccounts(ids)
 }
 
-// AccountChangeBatch keeps the normal client-cache invalidation and also
-// retires Warp's process-wide cookie/session identity when its credential is
-// replaced or the account is deleted.
+// AccountChangeBatch invalidates the client cache for every account the
+// account-events bus reports as changed.
 func (h *Handler) AccountChangeBatch(changes []accountevents.Change) {
 	ids := make([]int64, 0, len(changes))
 	for _, change := range changes {
@@ -85,9 +83,6 @@ func (h *Handler) AccountChangeBatch(changes []accountevents.Change) {
 			continue
 		}
 		ids = append(ids, change.AccountID)
-		if change.Kind == accountevents.KindCredential || change.Kind == accountevents.KindDeleted {
-			warp.InvalidateSession(change.AccountID)
-		}
 	}
 	h.AccountChanges(ids)
 }
@@ -307,9 +302,6 @@ func (h *Handler) buildAccountClient(acc *store.Account) UpstreamClient {
 	}
 	if h != nil && h.clientFactory != nil {
 		return h.clientFactory(acc, cfg)
-	}
-	if strings.EqualFold(acc.AccountType, "warp") {
-		return warp.NewFromAccount(acc, cfg)
 	}
 	if strings.EqualFold(acc.AccountType, "workbuddy") {
 		client := workbuddy.NewFromAccount(acc, cfg)

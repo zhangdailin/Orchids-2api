@@ -57,7 +57,7 @@ const realPayload = {
   since: '2026-09-12T11:48:19Z',
   until: '2026-09-12T14:48:19Z',
   retention_hours: 192,
-  channels: ['grok', 'warp', 'workbuddy'],
+  channels: ['grok', 'cline', 'workbuddy'],
   excluded_aggregates: ['http', 'probe'],
   totals: {
     requests: 248,
@@ -70,7 +70,7 @@ const realPayload = {
     samples: 240,
   },
   concurrency: { accounts_refreshing: 2 },
-  alerts: [{ key: 'success-rate:warp', severity: 'warning', channel: 'warp', title: 'warp 成功率 89%', detail: '窗口内 40 次请求' }],
+  alerts: [{ key: 'success-rate:cline', severity: 'warning', channel: 'cline', title: 'cline 成功率 89%', detail: '窗口内 40 次请求' }],
   coverage: {
     entries: 10011,
     oldest: '2026-06-23T10:53:53Z',
@@ -94,7 +94,7 @@ const realPayload = {
       series: [{ minute: '2026-09-12T13:53:00Z', requests: 2, success: 2, failed: 0 }],
     },
     {
-      channel: 'warp',
+      channel: 'cline',
       accounts_enabled: 1,
       accounts_available: 1,
       accounts_needing_login: 0,
@@ -174,12 +174,12 @@ test('the matrix renders provider rows plus their model rows', async () => {
   await new Promise((resolve) => setImmediate(resolve));
 
   const rows = node('opsMatrix').querySelector('tbody').children;
-  assert.equal(rows.length, 3, `expected grok + grok-4.6 + warp rows, got ${rows.length}`);
+  assert.equal(rows.length, 3, `expected grok + grok-4.6 + cline rows, got ${rows.length}`);
   const labels = rows.map((row) => (row.children[0] ? row.children[0].textContent : ''));
-  assert.deepEqual(labels, ['grok', 'grok-4.6', 'warp']);
+  assert.deepEqual(labels, ['grok', 'grok-4.6', 'cline']);
   // The traffic-free channel must read 暂无样本, never a healthy 100%.
-  const warpCells = rows[2].children.map((cell) => cell.textContent);
-  assert.ok(warpCells.includes('暂无样本'), `warp row shows ${warpCells.join('|')}`);
+  const clineCells = rows[2].children.map((cell) => cell.textContent);
+  assert.ok(clineCells.includes('暂无样本'), `cline row shows ${clineCells.join('|')}`);
 });
 
 // A payload captured from the running deployment can be dropped in as

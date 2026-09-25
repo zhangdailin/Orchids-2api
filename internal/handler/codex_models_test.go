@@ -162,9 +162,9 @@ func TestWriteCodexModelCatalogServesETag(t *testing.T) {
 	}
 }
 
-// Warp publishes one model per effort level (gpt-5-6-sol-low, -medium, ...).
-// The catalog must present that as one reasoning-capable family, otherwise a
-// client has to guess a suffix and any family request is rejected.
+// A channel may publish one model per effort level (gpt-5-6-sol-low, -medium,
+// ...). The catalog must present that as one reasoning-capable family, otherwise
+// a client has to guess a suffix and any family request is rejected.
 func TestCodexCatalogGroupsEffortVariantsIntoOneFamily(t *testing.T) {
 	catalog := newCodexModelCatalog([]PublicModelResponse{
 		textModel("gpt-5-6-sol-low"),

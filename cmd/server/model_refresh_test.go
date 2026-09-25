@@ -17,7 +17,6 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 )
 
 func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
@@ -29,7 +28,7 @@ func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
 	}
 
 	handler := makeCoordinatedModelRefreshHandler(func() *config.Config { return &config.Config{} }, nil, newModelRefreshCoordinator())
-	req := httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=warp&concurrency=99", strings.NewReader(`{"channel":"workbuddy","concurrency":8}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=cline&concurrency=99", strings.NewReader(`{"channel":"workbuddy","concurrency":8}`))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -146,14 +145,14 @@ func TestParseModelRefreshConcurrency(t *testing.T) {
 	}
 }
 
-func TestSyncModelsForChannelConcurrent_WarpRequiresAccountDiscovery(t *testing.T) {
+func TestSyncModelsForChannelConcurrent_WorkBuddyRequiresAccountDiscovery(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Warp")
+	clearModelsForChannel(t, ctx, s, "WorkBuddy")
 
-	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Warp", 8)
+	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "WorkBuddy", 8)
 	if err == nil {
 		t.Fatalf("syncModelsForChannelConcurrent() result=%+v want error", result)
 	}
@@ -171,50 +170,22 @@ func TestSyncModelsForChannelConcurrent_WarpRequiresAccountDiscovery(t *testing.
 	}
 }
 
-func TestWarpModelDiscoveryAccountsRequiresAnEnabledAccount(t *testing.T) {
+// TestRefreshDoesNotRepublishStoredCatalogOnFailure proves the stored rows are
+// last known state, not a fallback: when the upstream read yields nothing, the
+// refresh reports that and leaves the rows exactly as they were.
+func TestRefreshDoesNotRepublishStoredCatalogOnFailure(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Warp")
-	for _, acc := range []*store.Account{
-		{Name: "disabled", AccountType: "warp", Enabled: false, RefreshToken: "disabled-refresh"},
-		{Name: "enabled", AccountType: "warp", Enabled: true, RefreshToken: "enabled-refresh"},
-		{Name: "empty", AccountType: "warp", Enabled: false},
-		{Name: "other", AccountType: "grok", Enabled: true, RefreshToken: "not-warp"},
-	} {
-		if err := s.CreateAccount(ctx, acc); err != nil {
-			t.Fatalf("CreateAccount() error = %v", err)
-		}
-	}
-
-	accounts, err := warpModelDiscoveryAccounts(ctx, s)
-	if err != nil {
-		t.Fatalf("warpModelDiscoveryAccounts() error = %v", err)
-	}
-	// Only the enabled account is in the serving pool, so only it may supply a
-	// catalog. A disabled credential is not a read-only fallback: publishing its
-	// models would advertise routes no request can reach.
-	if len(accounts) != 1 || accounts[0].Name != "enabled" {
-		t.Fatalf("accounts=%#v want only the enabled Warp account", accounts)
-	}
-}
-
-// TestWarpRefreshDoesNotRepublishStoredCatalogOnFailure proves the stored rows
-// are last known state, not a fallback: when the upstream read yields nothing,
-// the refresh reports that and leaves the rows exactly as they were.
-func TestWarpRefreshDoesNotRepublishStoredCatalogOnFailure(t *testing.T) {
-	s, cleanup := setupModelRefreshStore(t)
-	defer cleanup()
-	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Warp")
+	clearModelsForChannel(t, ctx, s, "Cline")
 	if err := s.CreateModel(ctx, &store.Model{
-		Channel: "Warp", ModelID: "auto-open", Name: "Warp Auto",
+		Channel: "Cline", ModelID: "cline-a", Name: "Cline A",
 		Status: store.ModelStatusAvailable, Verified: true, Origin: "discovery",
 	}); err != nil {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Warp", 4)
+	result, err := syncModelsForChannelConcurrent(ctx, &config.Config{}, s, "Cline", 4)
 	if err == nil {
 		t.Fatalf("syncModelsForChannelConcurrent() result=%+v want error", result)
 	}
@@ -222,7 +193,7 @@ func TestWarpRefreshDoesNotRepublishStoredCatalogOnFailure(t *testing.T) {
 		t.Fatalf("error=%v want a no-active-account report", err)
 	}
 
-	stored, getErr := s.GetModelByChannelAndModelID(ctx, "Warp", "auto-open")
+	stored, getErr := s.GetModelByChannelAndModelID(ctx, "Cline", "cline-a")
 	if getErr != nil || stored == nil {
 		t.Fatalf("stored row was destroyed by a failed refresh: %v", getErr)
 	}
@@ -241,19 +212,6 @@ func TestChooseRefreshedDefaultModel_PrefersExistingDefault(t *testing.T) {
 	got := chooseRefreshedDefaultModel("WorkBuddy", existing, ordered)
 	if got != "a" {
 		t.Fatalf("default=%q want %q", got, "a")
-	}
-}
-
-func TestChooseRefreshedDefaultModel_WarpPrefersAutoOpen(t *testing.T) {
-	existing := map[string]*store.Model{
-		"claude-4-5-opus": {ModelID: "claude-4-5-opus", IsDefault: true},
-		"auto-open":       {ModelID: "auto-open", IsDefault: false},
-	}
-	ordered := []discoveredModel{{ID: "claude-4-5-opus"}, {ID: "auto-open"}}
-
-	got := chooseRefreshedDefaultModel("Warp", existing, ordered)
-	if got != "auto-open" {
-		t.Fatalf("default=%q want auto-open", got)
 	}
 }
 
@@ -373,7 +331,7 @@ func TestApplyModelRefresh_RefusesNonUpstreamSources(t *testing.T) {
 	for _, source := range []string{
 		"test",
 		"qoder_builtin_catalog",
-		"warp_cached_models",
+		"cline_cached_models",
 		"grok_build_models_unavailable_cached",
 		"",
 	} {
@@ -407,10 +365,10 @@ func TestApplyModelRefresh_RefusesNonUpstreamSources(t *testing.T) {
 // TestApplyModelRefresh_IsUpstreamCatalogSource pins the allowlist itself.
 func TestApplyModelRefresh_IsUpstreamCatalogSource(t *testing.T) {
 	allowed := []string{
-		"warp_graphql_feature_model_choice_agent_mode",
 		"grok_build_models",
 		"workbuddy_cli_models",
 		"qoder_upstream_models",
+		"cline_recommended_models",
 	}
 	for _, source := range allowed {
 		if !isUpstreamCatalogSource(source) {
@@ -422,7 +380,7 @@ func TestApplyModelRefresh_IsUpstreamCatalogSource(t *testing.T) {
 		"test",
 		"qoder_builtin_catalog",
 		"grok_cached_models",
-		"warp_cached_models",
+		"cline_cached_models",
 		"grok_build_models_unavailable_cached",
 	}
 	for _, source := range refused {
@@ -470,24 +428,24 @@ func TestApplyModelRefresh_CountsVerifiedSeparately(t *testing.T) {
 	}
 }
 
-func TestApplyModelRefresh_DeletesMissingWarpGraphQLModels(t *testing.T) {
+func TestApplyModelRefresh_DeletesMissingClineModels(t *testing.T) {
 	s, cleanup := setupModelRefreshStore(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Warp")
+	clearModelsForChannel(t, ctx, s, "Cline")
 	for _, record := range []*store.Model{
-		{Channel: "Warp", ModelID: "claude-4-5-opus", Name: "Old Opus", Status: store.ModelStatusAvailable, Verified: true, IsDefault: true, SortOrder: 0, Origin: "discovery"},
-		{Channel: "Warp", ModelID: "auto-open", Name: "Auto Open", Status: store.ModelStatusAvailable, Verified: true, SortOrder: 1, Origin: "discovery"},
+		{Channel: "Cline", ModelID: "cline/free/opus", Name: "Old Opus", Status: store.ModelStatusAvailable, Verified: true, IsDefault: true, SortOrder: 0, Origin: "discovery"},
+		{Channel: "Cline", ModelID: "cline/free/auto", Name: "Auto", Status: store.ModelStatusAvailable, Verified: true, SortOrder: 1, Origin: "discovery"},
 	} {
 		if err := s.CreateModel(ctx, record); err != nil {
 			t.Fatalf("CreateModel() error = %v", err)
 		}
 	}
 
-	result, err := applyModelRefresh(ctx, s, "Warp", "warp_graphql_feature_model_choice_agent_mode", []discoveredModel{
-		{ID: "auto-open", Name: "Auto Open", SortOrder: 0},
-		{ID: "gpt-5-2-low", Name: "GPT-5.2 Low", SortOrder: 1},
+	result, err := applyModelRefresh(ctx, s, "Cline", "cline_recommended_models", []discoveredModel{
+		{ID: "cline/free/auto", Name: "Auto", SortOrder: 0},
+		{ID: "cline/free/sonnet", Name: "Sonnet", SortOrder: 1},
 	})
 	if err != nil {
 		t.Fatalf("applyModelRefresh() error = %v", err)
@@ -495,68 +453,15 @@ func TestApplyModelRefresh_DeletesMissingWarpGraphQLModels(t *testing.T) {
 	if result.Deleted != 1 {
 		t.Fatalf("Deleted=%d want 1", result.Deleted)
 	}
-	if _, err := s.GetModelByChannelAndModelID(ctx, "Warp", "claude-4-5-opus"); err == nil {
+	if _, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/opus"); err == nil {
 		t.Fatal("expected old model to be deleted")
 	}
-	model, err := s.GetModelByChannelAndModelID(ctx, "Warp", "auto-open")
+	model, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/auto")
 	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(auto-open) error = %v", err)
+		t.Fatalf("GetModelByChannelAndModelID(cline/free/auto) error = %v", err)
 	}
 	if !model.IsDefault {
-		t.Fatal("auto-open IsDefault=false want true")
-	}
-}
-
-func TestSaveWarpAccountModelChoices(t *testing.T) {
-	s, cleanup := setupModelRefreshStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	saveWarpAccountModelChoices(ctx, s, []warpAccountDiscovery{
-		{
-			id: 1,
-			ok: true,
-			choices: []warp.ModelChoice{
-				{ID: "gpt-5.2-medium"},
-				{ID: "claude-opus-4-6"},
-			},
-			featureConfig: warp.AccountFeatureConfig{
-				CliAgentModel:         "cli-agent-team-auto",
-				ComputerUseAgentModel: "computer-use-agent-team-auto",
-			},
-		},
-		{
-			id: 2,
-			ok: false,
-			choices: []warp.ModelChoice{
-				{ID: "gemini-3-pro"},
-			},
-		},
-	})
-
-	choices, err := warp.LoadAccountModelChoices(ctx, s)
-	if err != nil {
-		t.Fatalf("LoadAccountModelChoices() error = %v", err)
-	}
-	if choices == nil {
-		t.Fatal("expected cached choices")
-	}
-	acc := &store.Account{ID: 1, AccountType: "warp", WarpMonthlyLimit: 1500, WarpMonthlyRemaining: 100}
-	if !warp.AccountSupportsModelForRouting(choices, acc, "claude-opus-4-6") {
-		t.Fatal("expected account 1 to route the Claude model its catalog advertises")
-	}
-	if warp.AccountSupportsModelForRouting(choices, acc, "gemini-3-pro") {
-		t.Fatal("expected account 1 not to route an uncached Gemini model")
-	}
-	if choices.Sources["1"] != "" {
-		t.Fatalf("source=%q want empty", choices.Sources["1"])
-	}
-	cfg := warp.EffectiveAccountFeatureConfig(acc, choices, "gpt-5.2-medium")
-	if cfg.CliAgentModel != "cli-agent-team-auto" {
-		t.Fatalf("cli agent=%q want cli-agent-team-auto", cfg.CliAgentModel)
-	}
-	if cfg.ComputerUseAgentModel != "computer-use-agent-team-auto" {
-		t.Fatalf("computer use agent=%q want computer-use-agent-team-auto", cfg.ComputerUseAgentModel)
+		t.Fatal("cline/free/auto IsDefault=false want true")
 	}
 }
 
@@ -565,10 +470,10 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Warp")
+	clearModelsForChannel(t, ctx, s, "Cline")
 	record := &store.Model{
-		Channel:   "Warp",
-		ModelID:   "claude-4-5-sonnet",
+		Channel:   "Cline",
+		ModelID:   "cline/free/sonnet",
 		Name:      "Old Name",
 		Status:    store.ModelStatusOffline,
 		Verified:  false,
@@ -579,8 +484,8 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
 
-	candidates := []discoveredModel{{ID: "claude-4-5-sonnet", Name: "Claude 4.5 Sonnet (Warp)", SortOrder: 0}}
-	result, err := applyModelRefresh(ctx, s, "Warp", "warp_graphql_feature_model_choice_agent_mode", candidates)
+	candidates := []discoveredModel{{ID: "cline/free/sonnet", Name: "Cline Sonnet", SortOrder: 0}}
+	result, err := applyModelRefresh(ctx, s, "Cline", "cline_recommended_models", candidates)
 	if err != nil {
 		t.Fatalf("applyModelRefresh() error = %v", err)
 	}
@@ -591,7 +496,7 @@ func TestApplyModelRefresh_PreservesExistingModelSettings(t *testing.T) {
 		t.Fatalf("Updated=%d want 1 (verification promotion)", result.Updated)
 	}
 
-	model, err := s.GetModelByChannelAndModelID(ctx, "Warp", "claude-4-5-sonnet")
+	model, err := s.GetModelByChannelAndModelID(ctx, "Cline", "cline/free/sonnet")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
 	}
@@ -840,7 +745,6 @@ func TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog(t *
 	// Only complete authoritative account catalogs prune automatically.
 	// WorkBuddy's degraded whitelist fallback cannot prove absence.
 	for _, tc := range []struct{ channel, source string }{
-		{"Warp", "warp_graphql_feature_model_choice_agent_mode"},
 		{"Qoder", "qoder_upstream_models"},
 		{"Cline", "cline_recommended_models"},
 	} {
@@ -857,7 +761,7 @@ func TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog(t *
 		}
 	}
 	// A non-upstream source never prunes.
-	for _, source := range []string{"", "test", "warp_cached_models", "grok_build_models_unavailable_cached"} {
+	for _, source := range []string{"", "test", "cline_cached_models", "grok_build_models_unavailable_cached"} {
 		if shouldDeleteMissingModelsOnRefresh("Grok", source) {
 			t.Fatalf("source %q must not prune", source)
 		}

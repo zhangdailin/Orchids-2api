@@ -106,7 +106,7 @@ func TestRegisterRoutes_WorkBuddyEndpoints(t *testing.T) {
 		"/workbuddy/v1/responses",
 		"/workbuddy/v1/responses/",
 		"/workbuddy/v1/responses/compact",
-		"/warp/v1/responses",
+		"/cline/v1/responses",
 		"/qoder/v1/responses",
 		// The unified prefix must serve every channel's models instead of
 		// belonging to the Grok handler alone.

@@ -440,7 +440,7 @@ func TestBillingReservationConcurrentSettleIsIdempotent(t *testing.T) {
 }
 
 func TestBillingRequestPathMatching(t *testing.T) {
-	priced := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/grok/v1/messages", "/warp/v1/chat/completions"}
+	priced := []string{"/v1/chat/completions", "/v1/messages", "/v1/responses", "/grok/v1/messages", "/workbuddy/v1/chat/completions"}
 	for _, path := range priced {
 		if !billingRequestPath(path) {
 			t.Fatalf("billingRequestPath(%q) = false, want true", path)

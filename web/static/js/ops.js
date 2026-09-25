@@ -1112,7 +1112,7 @@
     name.className = 'ops-matrix-name';
     name.textContent = label;
     // No data-label here on purpose: the card prints the cell's label above its value,
-    // and this cell's value is the channel or model name — "渠道 / 模型 / warp-main"
+    // and this cell's value is the channel or model name — "渠道 / 模型 / 名称"
     // labelled the heading twice. The other seven cells carry theirs.
     // The row name is the drill-down: a channel opens its own traffic, a model its
     // channel-and-model traffic, both over the window the page is showing.

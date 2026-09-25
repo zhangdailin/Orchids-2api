@@ -10,7 +10,7 @@ import (
 	"orchids-api/internal/upstream"
 )
 
-func TestHandleMessages_Warp_CustomMCPToolCall_RemainsAllowed(t *testing.T) {
+func TestHandleMessages_CustomMCPToolCall_RemainsAllowed(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{
@@ -32,9 +32,9 @@ func TestHandleMessages_Warp_CustomMCPToolCall_RemainsAllowed(t *testing.T) {
 	h := newTestHandler(client)
 
 	body := []byte(`{
-		"model":"claude-sonnet-4-6",
+		"model":"claude-opus-4-5",
 		"stream":false,
-		"conversation_id":"warp_custom_mcp",
+		"conversation_id":"workbuddy_custom_mcp",
 		"messages":[
 			{"role":"user","content":"find router handlers"}
 		],
@@ -54,7 +54,7 @@ func TestHandleMessages_Warp_CustomMCPToolCall_RemainsAllowed(t *testing.T) {
 		]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/warp/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)

@@ -25,9 +25,9 @@ const (
 
 type adminModelListEnvelope struct {
 	Items    []*store.Model `json:"items"`
-	Page     int           `json:"page"`
-	PageSize int           `json:"pageSize"`
-	Total    int           `json:"total"`
+	Page     int            `json:"page"`
+	PageSize int            `json:"pageSize"`
+	Total    int            `json:"total"`
 }
 
 // adminModelGroup is one set of routes that share the same endpoint
@@ -35,9 +35,9 @@ type adminModelListEnvelope struct {
 // ':'); EndpointCapabilities names the capabilities the group serves, which is
 // what makes same-name multi-capability routes visible in the admin UI.
 type adminModelGroup struct {
-	Key                  string        `json:"key"`
+	Key                  string         `json:"key"`
 	Routes               []*store.Model `json:"routes"`
-	EndpointCapabilities []string      `json:"endpointCapabilities"`
+	EndpointCapabilities []string       `json:"endpointCapabilities"`
 }
 
 type adminModelGroupEnvelope struct {

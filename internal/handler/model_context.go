@@ -7,7 +7,6 @@ import (
 	"orchids-api/internal/modelpolicy"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -59,8 +58,8 @@ func (w *modelContextWindows) lookup(channel string, modelIDs ...string) (int, i
 
 // observedModelContextWindows reads every window this deployment has already
 // observed from the upstream catalogs. The accounts are read once and shared, so
-// a channel whose window table is not per-account (Warp publishes it with each
-// model choice) is still filled from the same pass.
+// an account-scoped window table and an account-global one are filled from the
+// same pass.
 func (h *Handler) observedModelContextWindows(ctx context.Context) *modelContextWindows {
 	w := &modelContextWindows{input: map[string]int{}, output: map[string]int{}}
 	accounts, err := h.enabledAccountsForContextWindows(ctx)
@@ -68,23 +67,6 @@ func (h *Handler) observedModelContextWindows(ctx context.Context) *modelContext
 		return w
 	}
 
-	// Warp: aggregate only snapshots belonging to currently enabled Warp
-	// accounts. Disabled/deleted accounts must not keep stale context visible.
-	if h != nil && h.loadBalancer != nil && h.loadBalancer.Store != nil {
-		activeWarpIDs := make(map[int64]struct{})
-		for _, acc := range accounts {
-			if acc != nil && strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-				activeWarpIDs[acc.ID] = struct{}{}
-			}
-		}
-		if choices, err := warp.LoadAccountModelChoices(ctx, h.loadBalancer.Store); err == nil && choices != nil {
-			for modelID, window := range warp.ContextWindowsForAccountIDs(choices, activeWarpIDs) {
-				if window.Max > 0 {
-					w.input[contextKey("warp", modelID)] = int(window.Max)
-				}
-			}
-		}
-	}
 	for _, acc := range accounts {
 		if acc == nil {
 			continue

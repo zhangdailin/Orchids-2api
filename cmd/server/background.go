@@ -16,7 +16,6 @@ import (
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
-	"orchids-api/internal/warp"
 	"orchids-api/internal/workbuddy"
 )
 
@@ -374,58 +373,6 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 		// skips credentials the upstream already rejected, so these are collected
 		// separately and always verified, newest first.
 		for _, acc := range accounts {
-			if strings.EqualFold(acc.AccountType, "warp") {
-				if !providerHealthRefreshDue(acc, time.Now()) {
-					continue
-				}
-				// nextRefreshTime from Warp's quota GraphQL response is a billing
-				// period boundary, not a request backoff. Only skip an account when
-				// the upstream actually returned 429 with Retry-After.
-				if acc.StatusCode == "429" && !acc.QuotaResetAt.IsZero() && time.Now().Before(acc.QuotaResetAt) {
-					continue
-				}
-				if strings.TrimSpace(acc.RefreshToken) == "" {
-					continue
-				}
-				warpClient := warp.NewFromAccount(acc, cfg)
-				result, err := warpClient.RefreshAccountState(refreshCtx, acc, false)
-				if err != nil {
-					retryAfter := warp.RetryAfter(err)
-					httpStatus := warp.HTTPStatusCode(err)
-					if httpStatus == 401 || httpStatus == 403 {
-						verdict := accountpolicy.Classify(acc, err, "")
-						verdict.Apply(acc)
-						if updateErr := s.UpdateAccount(refreshCtx, acc); updateErr != nil {
-							slog.Warn("Auto refresh token: persist Warp auth verdict failed", "account", acc.Name, "error", updateErr)
-						}
-					} else if retryAfter > 0 {
-						acc.QuotaResetAt = time.Now().Add(retryAfter)
-						if updateErr := s.UpdateAccount(refreshCtx, acc); updateErr != nil {
-							slog.Warn("Auto refresh token: record warp retry-after failed", "account", acc.Name, "type", "warp", "error", updateErr)
-						}
-					}
-					slog.Warn("Auto refresh token failed", "account", acc.Name, "type", "warp", "http_status", httpStatus, "error", err)
-					continue
-				}
-				accountpolicy.Success(time.Now()).Apply(acc)
-
-				if result.QuotaError != nil {
-					slog.Warn("Warp usage sync failed", "account", acc.Name, "error", result.QuotaError)
-				} else if strings.TrimSpace(acc.Subscription) == "" || strings.EqualFold(acc.Subscription, "unknown") {
-					// A successful quota response with no recognizable paid tier is Free.
-					acc.Subscription = "free"
-				}
-				if result.QuotaError == nil {
-					slog.Debug("Warp usage synced", "account", acc.Name, "limit", acc.UsageLimit, "used", acc.UsageCurrent, "subscription", acc.Subscription)
-				}
-
-				preserveLatestAccountStatus(refreshCtx, s, acc)
-
-				if err := s.UpdateAccount(refreshCtx, acc); err != nil {
-					slog.Warn("Auto refresh token: update account failed", "account", acc.Name, "type", "warp", "error", err)
-				}
-				continue
-			}
 			if strings.EqualFold(acc.AccountType, "qoder") {
 				refreshQoderCatalog(refreshCtx, cfg, s, acc)
 				refreshQoderQuota(refreshCtx, cfg, s, acc)
@@ -459,7 +406,7 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 				refreshCLIAccount(refreshCtx, cfg, s, acc)
 				continue
 			}
-			// Non-warp/non-grok account types are not auto-refreshed here.
+			// Other account types are not auto-refreshed here.
 			continue
 		}
 	}
@@ -497,13 +444,3 @@ var refreshKick = accountevents.NewFilteredKick(
 	[]accountevents.Kind{accountevents.KindCreated, accountevents.KindCredential},
 	store.AccountChangeOriginScheduler,
 )
-
-func providerHealthRefreshDue(acc *store.Account, now time.Time) bool {
-	if acc == nil || acc.VerifiedAt.IsZero() {
-		return true
-	}
-	if strings.TrimSpace(acc.StatusCode) != "" {
-		return !accountpolicy.AccountHeld(acc, now)
-	}
-	return now.Sub(acc.VerifiedAt) >= providerHealthRefreshInterval
-}

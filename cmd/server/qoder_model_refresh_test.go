@@ -238,7 +238,7 @@ func TestShouldDeleteMissingModelsOnRefresh_OnlyPrunesUpstreamCatalogs(t *testin
 	if !shouldDeleteMissingModelsOnRefresh("qoder", "qoder_upstream_models") {
 		t.Fatal("an observed Qoder catalog must prune rows it no longer advertises")
 	}
-	for _, source := range []string{"qoder_builtin_catalog", "warp_cached_models", "test", ""} {
+	for _, source := range []string{"qoder_builtin_catalog", "cline_cached_models", "test", ""} {
 		if shouldDeleteMissingModelsOnRefresh("qoder", source) {
 			t.Fatalf("source %q pruned the catalog", source)
 		}

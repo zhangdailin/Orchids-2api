@@ -40,8 +40,6 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 	defer logger.Close()
 	logger.LogIncomingRequest(req)
 
-	breakdown := inputTokenBreakdown{}
-	profile := ""
 	// The channel is what picks the token profile, and on the unified prefix the
 	// path names no channel at all — only the model does. A path-only lookup here
 	// silently returned the generic estimate for every /v1 request, so a client
@@ -49,19 +47,9 @@ func (h *Handler) HandleCountTokens(w http.ResponseWriter, r *http.Request) {
 	// number. Channel names are compared case-insensitively everywhere else; the
 	// stored value is whatever the operator's catalog spells, so normalize it.
 	channel := strings.ToLower(h.ModelChannel(r, req.Model))
-	if channel == "warp" {
-		if warpBD, warpProfile, err := estimateWarpInputTokenBreakdown("", req.Model, req.Messages, req.System, req.Tools, len(req.Tools) == 0, ""); err == nil {
-			breakdown = warpBD
-			profile = warpProfile
-		}
-	}
-	if breakdown.Total == 0 {
-		builtPrompt := strings.TrimSpace(extractUserText(req.Messages))
-		breakdown = estimateInputTokenBreakdown(builtPrompt, req.Tools)
-		if profile == "" {
-			profile = channel
-		}
-	}
+	builtPrompt := strings.TrimSpace(extractUserText(req.Messages))
+	breakdown := estimateInputTokenBreakdown(builtPrompt, req.Tools)
+	profile := channel
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{

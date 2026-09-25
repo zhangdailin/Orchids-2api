@@ -43,7 +43,7 @@ func TestParseResponsesResourcePath(t *testing.T) {
 	}{
 		{"/v1/responses/resp_1", "resp_1", "", true},
 		{"/v1/responses/resp_1/", "resp_1", "", true},
-		{"/warp/v1/responses/resp_1/cancel", "resp_1", "cancel", true},
+		{"/cline/v1/responses/resp_1/cancel", "resp_1", "cancel", true},
 		{"/workbuddy/v1/responses/resp_1/input_items", "resp_1", "input_items", true},
 		{"/v1/responses/resp%5F1/cancel", "resp_1", "cancel", true},
 		{"/v1/responses/compact", "", "", false},
@@ -136,7 +136,7 @@ func TestResponsesInputItemsServesPersistedItems(t *testing.T) {
 
 	handler := ResponsesInputItemsHandler(opts)
 	rec := httptest.NewRecorder()
-	handler(rec, httptest.NewRequest(http.MethodGet, "/warp/v1/responses/"+id+"/input_items", nil))
+	handler(rec, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+id+"/input_items", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
@@ -348,7 +348,7 @@ func TestResponsesBridgePrefersTextFormatOverResponseFormat(t *testing.T) {
 		`"response_format":{"type":"text"},` +
 		`"text":{"format":{"type":"json_object"}}}`
 	rec := httptest.NewRecorder()
-	bridge(rec, httptest.NewRequest(http.MethodPost, "/warp/v1/responses", strings.NewReader(body)))
+	bridge(rec, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}

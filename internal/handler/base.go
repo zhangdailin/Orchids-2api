@@ -8,8 +8,7 @@ import (
 	"orchids-api/internal/store"
 )
 
-// BaseHandler contains shared infrastructure used by both the
-// Shared by the Warp handler and the Grok handler.
+// BaseHandler contains shared infrastructure used by the bridged handlers.
 type BaseHandler struct {
 	LB *loadbalancer.LoadBalancer
 }

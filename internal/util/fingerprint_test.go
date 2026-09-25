@@ -6,7 +6,7 @@ import "testing"
 // table relies on: the same secret always maps to the same short id, different
 // secrets map to different ids, and the digest never contains the secret.
 func TestFingerprint_StableAndNonReversible(t *testing.T) {
-	token := "warp-session-token-abcdef"
+	token := "workbuddy-session-token-abcdef"
 	first := Fingerprint(token)
 	second := Fingerprint("  " + token + "  ")
 	if first == "" || len(first) != 12 {
@@ -15,7 +15,7 @@ func TestFingerprint_StableAndNonReversible(t *testing.T) {
 	if first != second {
 		t.Fatalf("fingerprint is not stable across whitespace: %q vs %q", first, second)
 	}
-	if other := Fingerprint("warp-session-token-abcdeg"); other == first {
+	if other := Fingerprint("workbuddy-session-token-abcdeg"); other == first {
 		t.Fatal("different secrets must not share a fingerprint")
 	}
 	if Fingerprint("") != "" {

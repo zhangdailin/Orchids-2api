@@ -250,17 +250,6 @@ func successfulFileMutationToolResultFallback(messages []prompt.Message) string 
 	return "Requested file operations completed successfully."
 }
 
-func buildEmptyOutputRecoveryPrompt(messages []prompt.Message) string {
-	if _, ok := emptyOutputRecoveryPrefix(messages); !ok {
-		return ""
-	}
-	confirmation := successfulFileMutationToolResultFallback(messages)
-	if confirmation == "" {
-		return ""
-	}
-	return confirmation + " Confirm this result to the user in one concise sentence. Do not call tools and do not repeat the file operation."
-}
-
 func lastNonToolResultUserText(messages []prompt.Message) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]

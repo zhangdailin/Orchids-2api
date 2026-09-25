@@ -16,7 +16,7 @@ func benchmarkSelection(b *testing.B, n int, tracker ConnTracker) {
 			ID:          int64(i + 1),
 			Name:        "acc",
 			Weight:      1 + i%4,
-			AccountType: "warp",
+			AccountType: "workbuddy",
 		}
 	}
 	lb := &LoadBalancer{connTracker: tracker}

@@ -37,7 +37,6 @@ import (
 	"orchids-api/internal/store"
 	"orchids-api/internal/tokencache"
 	"orchids-api/internal/util"
-	"orchids-api/internal/warp"
 )
 
 type API struct {
@@ -64,7 +63,6 @@ type API struct {
 	// credential a completed login produced. Each channel keeps its own registry
 	// so codes and credentials can never cross authentication flows; the storage
 	// and bookkeeping behind them is shared (see deviceLoginRegistry).
-	warpLogins      *deviceLoginRegistry[deviceLogin]
 	grokLogins      *deviceLoginRegistry[deviceLogin]
 	workbuddyLogins *deviceLoginRegistry[workbuddyLogin]
 	qoderLogins     *deviceLoginRegistry[qoderLoginTransaction]
@@ -632,35 +630,6 @@ func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Conf
 	return fmt.Errorf("only Grok Build OAuth accounts are supported")
 }
 
-func normalizeWarpTokenInput(acc *store.Account) {
-	if acc == nil || !strings.EqualFold(acc.AccountType, "warp") {
-		return
-	}
-	acc.RefreshToken = warp.RefreshToken(acc)
-	// Only the official device-login flow supplies Warp session credentials.
-	// Clear legacy fields so they cannot become alternate authentication sources.
-	acc.Token = ""
-	acc.ClientCookie = ""
-	acc.SessionCookie = ""
-}
-
-func normalizeWarpTokenOutput(acc *store.Account) *store.Account {
-	if acc == nil {
-		return nil
-	}
-	copyAcc := *acc
-	if strings.EqualFold(strings.TrimSpace(copyAcc.AccountType), "warp") {
-		// Browser-login session credentials are private, including on export.
-		copyAcc.RefreshToken = ""
-		copyAcc.Token = ""
-		copyAcc.ClientCookie = ""
-		copyAcc.SessionCookie = ""
-		copyAcc.OAuthAccessToken = ""
-		copyAcc.OAuthRefreshToken = ""
-	}
-	return &copyAcc
-}
-
 func httpStatusFromAccountStatus(status string) int {
 	switch strings.TrimSpace(status) {
 	case "401":
@@ -759,7 +728,6 @@ func preserveGrokRuntimeStateOnAdminEdit(acc, existing *store.Account) {
 
 type accountOutput struct {
 	*store.Account
-	WarpAuthenticated bool `json:"warp_authenticated,omitempty"`
 	// SessionFingerprint is a short digest of the credential the account is
 	// authenticated with. It lets the table tell two sessions apart on channels
 	// that carry no email, without returning the secret itself.
@@ -782,9 +750,8 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 	}
-	merged["warp_authenticated"] = o.WarpAuthenticated
-	// The session fingerprint identifies a login on channels that carry no email
-	// (Warp); it is a digest, never the credential, so it is safe to expose to an
+	// The session fingerprint identifies a login on channels that carry no email;
+	// it is a digest, never the credential, so it is safe to expose to an
 	// authenticated administrator.
 	if o.SessionFingerprint != "" {
 		merged["session_fingerprint"] = o.SessionFingerprint
@@ -794,8 +761,8 @@ func (o accountOutput) MarshalJSON() ([]byte, error) {
 	}
 	// Credentials are write-only. The account API exposes only their presence,
 	// including for create, update and refresh responses.
-	merged["has_credential"] = o.SessionFingerprint != "" || o.WarpAuthenticated
-	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "cline_access_token", "cline_refresh_token", "session_fingerprint", "warp_authenticated"} {
+	merged["has_credential"] = o.SessionFingerprint != ""
+	for _, field := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "qoder_access_token", "qoder_refresh_token", "qoder_runtime_info", "qoder_runtime_key", "cline_access_token", "cline_refresh_token", "session_fingerprint"} {
 		delete(merged, field)
 	}
 	if o.Account != nil {
@@ -829,28 +796,25 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 	// redaction below clears it, so the operator can still tell two browser
 	// logins apart without the session token ever leaving the server.
 	sessionFingerprint := accountSessionFingerprint(acc)
-	out := normalizeWarpTokenOutput(acc)
-	if out == nil {
+	if acc == nil {
 		return nil
 	}
+	// The projection renders a copy: the channel redaction below clears slots on
+	// the way out, and the stored record must keep the credential it was given.
+	out := *acc
 	// The message is redacted with the same list the final render uses. The two
 	// used to differ: this one omitted Qoder's access token and runtime pair, and
 	// it ran before the channel projection cleared them, so an upstream error that
 	// echoed a Qoder token published it in status_message.
 	out.StatusMessage = redactAccountSecrets(acc.StatusMessage, acc)
-	if strings.EqualFold(out.AccountType, "warp") && out.WarpMonthlyLimit > 0 {
-		out.Subscription = warp.InferSubscriptionFromRequestLimit(&warp.RequestLimitInfo{
-			RequestLimit: int(out.WarpMonthlyLimit),
-		})
-	}
 	if strings.EqualFold(out.AccountType, "grok") {
-		grok.NormalizeProvider(out)
+		grok.NormalizeProvider(&out)
 		// The tier column must agree with the quota column. A Build Free account
 		// has no plan name from the identity endpoint (recorded as "unknown"), yet
 		// the same Free inference that produces its quota window already proves it
 		// is Free — and only Free. Reporting "未知" there told an operator nothing
 		// about an account the gateway had already characterised.
-		if verdict := grok.InferFreeProfile(out); verdict.Inferred {
+		if verdict := grok.InferFreeProfile(&out); verdict.Inferred {
 			switch strings.ToLower(strings.TrimSpace(out.Subscription)) {
 			case "", "unknown", "free":
 				out.Subscription = "free"
@@ -866,24 +830,23 @@ func normalizeAccountOutputWithUsage(acc *store.Account, usage map[int64]int64) 
 	if strings.EqualFold(out.AccountType, "workbuddy") {
 		// The durable refresh token never leaves the server; the access token
 		// stays visible so the account table can prove a credential exists.
-		out = RedactWorkBuddyOutput(out)
+		out = *RedactWorkBuddyOutput(&out)
 	}
 	if strings.EqualFold(out.AccountType, "qoder") {
 		// The durable refresh token and the derived runtime material never leave
 		// the server; the access token stays visible so the account table can
 		// prove a credential exists.
-		out = RedactQoderOutput(out)
+		out = *RedactQoderOutput(&out)
 	}
 	if strings.EqualFold(out.AccountType, "cline") {
 		// The durable refresh token never leaves the server; the access token
 		// stays visible so the account table can prove a credential exists.
-		out = RedactClineOutput(out)
+		out = *RedactClineOutput(&out)
 	}
 	return &accountOutput{
-		Account:            out,
-		WarpAuthenticated:  strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") && warp.RefreshToken(acc) != "",
+		Account:            &out,
 		SessionFingerprint: sessionFingerprint,
-		Quota:              buildQuotaResponseFieldsWithUsage(out, usage[out.ID], usage != nil),
+		Quota:              buildQuotaResponseFieldsWithUsage(&out, usage[out.ID], usage != nil),
 	}
 }
 
@@ -940,21 +903,16 @@ func (a *API) observedTokensByAccount(ctx context.Context, since time.Time) (map
 // credential an account is authenticated with.
 //
 // It exists because some channels authenticate with a session token that carries
-// no identity at all (Warp is the clearest case: there is no email or username to
-// show). The account table then had nothing to display but "登录会话已配置", which
-// made two different browser logins look identical. The fingerprint distinguishes
-// them without ever exposing the secret: 12 hex characters of a SHA-256 digest,
-// the same shape already used for upstream diagnostics.
+// no identity at all (there is no email or username to show). The account table
+// then had nothing to display but "登录会话已配置", which made two different
+// logins look identical. The fingerprint distinguishes them without ever
+// exposing the secret: 12 hex characters of a SHA-256 digest, the same shape
+// already used for upstream diagnostics.
 func accountSessionFingerprint(acc *store.Account) string {
 	if acc == nil {
 		return ""
 	}
 	switch strings.ToLower(strings.TrimSpace(acc.AccountType)) {
-	case "warp":
-		// Warp stores its browser session in the refresh-token column; the read
-		// path deliberately clears that column, which is exactly why the
-		// fingerprint has to be computed here.
-		return util.Fingerprint(warp.RefreshToken(acc))
 	case "grok":
 		if strings.EqualFold(strings.TrimSpace(acc.CredentialType), "oauth") {
 			return util.Fingerprint(util.FirstNonEmpty(acc.OAuthAccessToken, acc.OAuthRefreshToken))
@@ -983,8 +941,6 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 	var token string
 
 	switch accountType {
-	case "warp":
-		token = strings.TrimSpace(warp.RefreshToken(acc))
 	case "grok":
 		token = strings.TrimSpace(util.FirstNonEmpty(acc.OAuthRefreshToken, acc.OAuthAccessToken))
 	case "workbuddy":
@@ -1280,7 +1236,6 @@ func New(s *store.Store, adminUser, adminPass string, cfg *config.Config) *API {
 		checkFailCount:   map[int64]int{},
 		checkNextAllowed: map[int64]time.Time{},
 		checkSem:         make(chan struct{}, 2),
-		warpLogins:       newDeviceLoginRegistry(identityDeviceLogin, nil, "Warp authorization expired"),
 		grokLogins:       newDeviceLoginRegistry(identityDeviceLogin, nil, "Grok authorization expired"),
 		workbuddyLogins: newDeviceLoginRegistry(
 			func(login *workbuddyLogin) *deviceLogin { return &login.deviceLogin }, nil,
@@ -1531,10 +1486,7 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 		if !validateAccountType(w, acc.AccountType) {
 			return
 		}
-		if strings.EqualFold(acc.AccountType, "warp") {
-			http.Error(w, "Warp accounts must be added using official web login (/api/warp/device-auth)", http.StatusBadRequest)
-			return
-		} else if strings.EqualFold(acc.AccountType, "grok") {
+		if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
 			if !grokAccountIsOAuth(&acc) {
 				http.Error(w, "Grok accounts must be added through the Build OAuth device login (/api/grok/device-auth)", http.StatusBadRequest)
@@ -1619,148 +1571,6 @@ func (a *API) HandleAccounts(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// HandleWarpDeviceAuthorization starts and observes the official Warp Agent
-// CLI device-authorization flow. It is registered behind the admin session
-// middleware; no Warp credentials are accepted from or returned to the UI.
-func (a *API) HandleWarpDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	path := strings.TrimPrefix(r.URL.Path, "/api/warp/device-auth")
-	path = strings.Trim(path, "/")
-
-	switch {
-	case r.Method == http.MethodPost && path == "":
-		a.startWarpDeviceAuthorization(w, r)
-	case r.Method == http.MethodGet && path != "":
-		a.getWarpDeviceAuthorization(w, r, path)
-	case r.Method == http.MethodDelete && path != "":
-		a.cancelWarpDeviceAuthorization(w, r, path)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-func (a *API) startWarpDeviceAuthorization(w http.ResponseWriter, r *http.Request) {
-	if a == nil || a.store == nil {
-		http.Error(w, "account store is not configured", http.StatusServiceUnavailable)
-		return
-	}
-	a.warpLogins.cleanup(time.Now())
-
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-	defer cancel()
-	authenticator := warp.NewDeviceAuthenticator(a.config.Load())
-	details, err := authenticator.Start(ctx)
-	if err != nil {
-		slog.Warn("Warp device authorization could not be started", "error", err)
-		class := apperrors.ClassifyUpstreamError(err.Error())
-		if class.Category == "configuration" {
-			apperrors.New("configuration_error", apperrors.PublicMessage(err.Error()), http.StatusServiceUnavailable).WriteResponse(w)
-			return
-		}
-		http.Error(w, "failed to start Warp device authorization", http.StatusBadGateway)
-		return
-	}
-
-	id, err := newDeviceLoginID()
-	if err != nil {
-		http.Error(w, "failed to create login transaction", http.StatusInternalServerError)
-		return
-	}
-	expiresAt := time.Now().Add(time.Duration(details.ExpiresIn) * time.Second)
-	pollContext, pollCancel := context.WithCancel(context.Background())
-	login := &deviceLogin{
-		deviceCode: details.DeviceCode,
-		userCode:   details.UserCode,
-		verifyURI:  details.VerificationURI,
-		verifyFull: details.VerificationURIComplete,
-		expiresAt:  expiresAt,
-		interval:   time.Duration(details.Interval) * time.Second,
-		cancel:     pollCancel,
-		status:     "pending",
-	}
-
-	if !a.warpLogins.admit(id, login) {
-		pollCancel()
-		http.Error(w, "too many pending Warp device logins", http.StatusTooManyRequests)
-		return
-	}
-
-	go a.pollWarpDeviceAuthorization(pollContext, id, authenticator)
-	json.NewEncoder(w).Encode(newDeviceLoginResponse(id, login))
-}
-
-func (a *API) getWarpDeviceAuthorization(w http.ResponseWriter, _ *http.Request, id string) {
-	a.warpLogins.cleanup(time.Now())
-	response, ok := a.warpLogins.response(id)
-	if !ok {
-		http.Error(w, "Warp device login not found", http.StatusNotFound)
-		return
-	}
-	json.NewEncoder(w).Encode(response)
-}
-
-func (a *API) cancelWarpDeviceAuthorization(w http.ResponseWriter, _ *http.Request, id string) {
-	if _, ok := a.warpLogins.cancel(id, "Warp authorization cancelled"); !ok {
-		http.Error(w, "Warp device login not found", http.StatusNotFound)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (a *API) pollWarpDeviceAuthorization(ctx context.Context, id string, authenticator *warp.DeviceAuthenticator) {
-	for {
-		login, ok := a.warpLogins.pollable(id)
-		if !ok {
-			return
-		}
-		if time.Now().After(login.expiresAt) {
-			a.warpLogins.finish(id, "expired", "Warp authorization expired", 0)
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(login.interval):
-		}
-
-		requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		refreshToken, err := authenticator.Exchange(requestCtx, login.deviceCode)
-		cancel()
-		if err != nil {
-			if warp.IsDeviceAuthorizationPending(err) {
-				continue
-			}
-			slog.Warn("Warp device authorization failed", "login_id", id, "error", err)
-			a.warpLogins.finish(id, "failed", "Warp authorization failed", 0)
-			return
-		}
-
-		acc := &store.Account{
-			Name:         "warp-device-login",
-			AccountType:  "warp",
-			RefreshToken: refreshToken,
-			Weight:       1,
-			Enabled:      true,
-		}
-		normalizeWarpTokenInput(acc)
-		existing, err := a.saveNewAccountUnlessDuplicate(ctx, acc)
-		if err != nil {
-			slog.Warn("Warp device authorization could not save account", "login_id", id, "error", err)
-			a.warpLogins.finish(id, "failed", "Warp authorization succeeded but account could not be saved", 0)
-			return
-		}
-		if existing != nil {
-			a.warpLogins.finish(id, "complete", "Warp account already exists", existing.ID)
-			return
-		}
-
-		a.warpLogins.finish(id, "complete", "Warp account added", acc.ID)
-		a.syncAccountAfterCreate(*acc)
-		return
 	}
 }
 
@@ -2142,23 +1952,10 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			acc.AccountType = existing.AccountType
 		}
 		acc.AccountType = strings.ToLower(strings.TrimSpace(acc.AccountType))
-		if strings.EqualFold(strings.TrimSpace(existing.AccountType), "warp") && acc.AccountType != "warp" {
-			http.Error(w, "Warp login accounts cannot change account type", http.StatusBadRequest)
-			return
-		}
 		if !validateAccountType(w, acc.AccountType) {
 			return
 		}
-		if strings.EqualFold(acc.AccountType, "warp") {
-			if !strings.EqualFold(strings.TrimSpace(existing.AccountType), "warp") ||
-				acc.RefreshToken != "" || acc.Token != "" || acc.ClientCookie != "" ||
-				acc.SessionCookie != "" || acc.OAuthAccessToken != "" || acc.OAuthRefreshToken != "" {
-				http.Error(w, "Warp credentials can only be obtained through official web login", http.StatusBadRequest)
-				return
-			}
-			acc.RefreshToken = existing.RefreshToken
-			normalizeWarpTokenInput(&acc)
-		} else if strings.EqualFold(acc.AccountType, "grok") {
+		if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
 			// Admin UI redacts OAuth secrets on read; empty inbound fields mean
 			// "keep existing", not "clear credentials".
@@ -2224,25 +2021,16 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		isWarpAccount := strings.EqualFold(acc.AccountType, "warp")
-		if !isWarpAccount && acc.SessionID == "" {
+		if acc.SessionID == "" {
 			acc.SessionID = existing.SessionID
 		}
-		if isWarpAccount {
-			if strings.TrimSpace(acc.DeviceID) == "" {
-				acc.DeviceID = existing.DeviceID
-			}
-			if strings.TrimSpace(acc.RequestID) == "" {
-				acc.RequestID = existing.RequestID
-			}
-		}
-		if !isWarpAccount && acc.SessionCookie == "" {
+		if acc.SessionCookie == "" {
 			acc.SessionCookie = existing.SessionCookie
 		}
-		if !isWarpAccount && acc.ClientUat == "" {
+		if acc.ClientUat == "" {
 			acc.ClientUat = existing.ClientUat
 		}
-		if !isWarpAccount && acc.ProjectID == "" {
+		if acc.ProjectID == "" {
 			acc.ProjectID = existing.ProjectID
 		}
 		if acc.UserID == "" {
@@ -2263,22 +2051,12 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if strings.EqualFold(existing.AccountType, "warp") && (!acc.Enabled || !isWarpAccount) {
-			if err := warp.RemoveAccountModelChoices(r.Context(), a.store, existing.ID); err != nil {
-				slog.Warn("Failed to remove inactive Warp model choices", "account_id", existing.ID, "error", err)
-			}
-		}
 		json.NewEncoder(w).Encode(normalizeAccountOutput(&acc))
 
 	case http.MethodDelete:
 		if err := a.store.DeleteAccount(r.Context(), id); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
-		}
-		if strings.EqualFold(account.AccountType, "warp") {
-			if err := warp.RemoveAccountModelChoices(r.Context(), a.store, id); err != nil {
-				slog.Warn("Failed to remove deleted Warp model choices", "account_id", id, "error", err)
-			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 
@@ -2331,11 +2109,6 @@ func (a *API) HandleExport(w http.ResponseWriter, r *http.Request) {
 		Accounts: make([]store.Account, 0, len(accounts)),
 	}
 	for _, acc := range accounts {
-		// Warp sessions are not portable credentials. Log in again on the target
-		// server; exporting them would recreate the removed token-import path.
-		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "warp") {
-			continue
-		}
 		normalized := *normalizeAccountOutput(acc).Account
 		// Restore the durable credential the read path hides, then drop anything
 		// that belongs to another channel. An export that drops a channel's
@@ -2471,10 +2244,7 @@ func (a *API) HandleImport(w http.ResponseWriter, r *http.Request) {
 			result.Skipped++
 			continue
 		}
-		if strings.EqualFold(acc.AccountType, "warp") {
-			result.Skipped++
-			continue
-		} else if strings.EqualFold(acc.AccountType, "grok") {
+		if strings.EqualFold(acc.AccountType, "grok") {
 			normalizeGrokTokenInput(&acc)
 			if !grokAccountIsOAuth(&acc) || !grokAccountHasOAuthCredentials(&acc) {
 				slog.Warn("Skipped grok import without Build OAuth credentials", "name", acc.Name)
@@ -2984,8 +2754,8 @@ func normalizeConfigPatchValue(key string, value interface{}) interface{} {
 
 	switch key {
 	case "enable_token_refresh", "enable_usage_refresh", "enable_token_count", "cache_token_count",
-		"enable_token_cache", "auto_refresh_token", "kiro_use_builtin_proxy", "warp_use_builtin_proxy",
-		"antigravity_use_builtin_proxy", "warp_credit_refund",
+		"enable_token_cache", "auto_refresh_token", "kiro_use_builtin_proxy",
+		"antigravity_use_builtin_proxy",
 		"enable_context_compress", "debug_enabled":
 		if b, ok := parseBoolish(value); ok {
 			return b

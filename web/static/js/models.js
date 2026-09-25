@@ -166,7 +166,6 @@ function modelRefreshSourceLabel(source) {
   if (!value) return "未知来源";
   const labels = {
     // Upstream catalogs.
-    warp_graphql: "Warp 账号 GraphQL 目录",
     grok_build_models: "Grok Build OAuth 目录",
     workbuddy_cli_models: "WorkBuddy /v3/config 白名单",
     qoder_upstream_models: "Qoder 有符号上游目录",
@@ -175,7 +174,6 @@ function modelRefreshSourceLabel(source) {
     no_active_account: "无 active 账号（未拉取，未发布）",
   };
   if (labels[value]) return labels[value];
-  if (value.startsWith("warp_graphql")) return "Warp 账号 GraphQL 目录";
   if (value.startsWith("grok_build_models")) return "Grok Build OAuth 目录";
   if (value.startsWith("workbuddy_cli_models")) return "WorkBuddy /v3/config 白名单";
   if (value.startsWith("qoder_upstream_models")) return "Qoder 有符号上游目录";
@@ -192,8 +190,7 @@ function modelRefreshSourceLabel(source) {
 // catalog read. Only those may change the published model list.
 function isUpstreamModelRefreshSource(source) {
   const value = String(source || "").trim();
-  return value.startsWith("warp_graphql") ||
-    value.startsWith("grok_build_models") ||
+  return value.startsWith("grok_build_models") ||
     value.startsWith("workbuddy_cli_models") ||
     value.startsWith("qoder_upstream_models") ||
     value.startsWith("cline_recommended_models");

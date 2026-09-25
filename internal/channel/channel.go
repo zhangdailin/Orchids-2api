@@ -8,7 +8,6 @@ import "strings"
 type ID string
 
 const (
-	Warp      ID = "warp"
 	WorkBuddy ID = "workbuddy"
 	Qoder     ID = "qoder"
 	Cline     ID = "cline"
@@ -26,8 +25,7 @@ type Definition struct {
 }
 
 var definitions = [...]Definition{
-	{ID: Warp, Label: "Warp", APIPrefix: "/warp/v1", Generic: true, Default: true, Theme: "cyan", AccountCreate: "device"},
-	{ID: WorkBuddy, Label: "WorkBuddy", APIPrefix: "/workbuddy/v1", Generic: true, Theme: "orange", AccountCreate: "browser"},
+	{ID: WorkBuddy, Label: "WorkBuddy", APIPrefix: "/workbuddy/v1", Generic: true, Default: true, Theme: "orange", AccountCreate: "browser"},
 	{ID: Qoder, Label: "Qoder", APIPrefix: "/qoder/v1", Generic: true, Theme: "green", AccountCreate: "browser"},
 	{ID: Cline, Label: "Cline", APIPrefix: "/cline/v1", Generic: true, Theme: "blue", AccountCreate: "browser"},
 	{ID: Grok, Label: "Grok", APIPrefix: "/grok/v1", Theme: "red", AccountCreate: "hybrid"},

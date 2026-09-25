@@ -93,55 +93,38 @@ func TestHandleMessages_WorkdirQuestionReachesUpstream(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_Warp_StreamAndJSON(t *testing.T) {
+func TestHandleMessages_StoresUpstreamConversationIDForTheNextTurn(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "conversation_id", "id": "conv1"}},
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
-		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "warp-hi"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "workbuddy-hi"}},
 		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
 	}}
 
-	mkBody := func(stream bool) []byte {
-		payload := map[string]any{
-			"model":    "claude-3-5-sonnet",
-			"messages": []map[string]any{{"role": "user", "content": "hi"}},
-			"system":   []any{},
-			"stream":   stream,
-			// include stable conversation_id so handler will store upstream conv id
-			"conversation_id": "c1",
-		}
-		b, _ := json.Marshal(payload)
-		return b
+	payload := map[string]any{
+		"model":    "claude-opus-4-5",
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+		"system":   []any{},
+		"stream":   false,
+		// include stable conversation_id so handler will store upstream conv id
+		"conversation_id": "c1",
 	}
+	body, _ := json.Marshal(payload)
 
-	// non-stream JSON
-	{
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(mkBody(false)))
-		h.HandleMessages(rec, req)
-		if rec.Code != 200 {
-			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-		}
-		if !strings.Contains(rec.Body.String(), "warp-hi") {
-			t.Fatalf("expected upstream text in response")
-		}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
+	h.HandleMessages(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-
-	// stream SSE
-	{
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(mkBody(true)))
-		h.HandleMessages(rec, req)
-		out := rec.Body.String()
-		if !strings.Contains(out, "warp-hi") {
-			t.Fatalf("expected text delta in SSE")
-		}
+	if !strings.Contains(rec.Body.String(), "workbuddy-hi") {
+		t.Fatalf("expected upstream text in response")
 	}
 
 	// ensure upstream conversation id stored via SessionStore
-	convKey := conversationKeyForRequest(httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", nil), ClaudeRequest{ConversationID: "c1"})
+	convKey := conversationKeyForRequest(httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", nil), ClaudeRequest{ConversationID: "c1"})
 	got, _ := h.sessionStore.GetConvID(context.Background(), convKey)
 	if got != "conv1" {
 		t.Fatalf("expected stored upstream conversation id conv1, got %q", got)

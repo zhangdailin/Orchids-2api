@@ -6,8 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,7 +18,6 @@ import (
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
-	"orchids-api/internal/warp"
 )
 
 type spyConnTracker struct {
@@ -206,17 +203,14 @@ func TestAcquireReservedAccountSelection_WaitsForShortLease(t *testing.T) {
 	}
 }
 
-func TestAcquireReservedWarpCloudAgent_WaitsForPaidAccountLease(t *testing.T) {
+func TestAcquireReservedAccountSelection_WaitsForBusyAccountLease(t *testing.T) {
 	s, mini := setupConnTrackerHandlerTest(t)
 	defer func() {
 		_ = s.Close()
 		mini.Close()
 	}()
 
-	acc := createEnabledTestAccount(t, s, "busy-warp-build", "warp")
-	acc.Subscription = "build/business"
-	acc.WarpMonthlyLimit = 1500
-	acc.WarpMonthlyRemaining = 1152
+	acc := createEnabledTestAccount(t, s, "busy-workbuddy", "workbuddy")
 	if err := s.UpdateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("UpdateAccount() error = %v", err)
 	}
@@ -238,8 +232,8 @@ func TestAcquireReservedWarpCloudAgent_WaitsForPaidAccountLease(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, selected, release, trackedID, err := h.acquireReservedAccountSelection(ctx, "warp", true, nil, accountSelectionOptions{
-		ModelID: "auto-open",
+	_, selected, release, trackedID, err := h.acquireReservedAccountSelection(ctx, "workbuddy", true, nil, accountSelectionOptions{
+		ModelID: "claude-opus-5",
 	})
 	defer release()
 	if err != nil {
@@ -250,87 +244,6 @@ func TestAcquireReservedWarpCloudAgent_WaitsForPaidAccountLease(t *testing.T) {
 	}
 	if trackedID != acc.ID {
 		t.Fatalf("tracked account id = %d, want %d", trackedID, acc.ID)
-	}
-}
-
-func TestSelectAccount_WarpUsesAccountModelChoices(t *testing.T) {
-	s, mini := setupConnTrackerHandlerTest(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	acc1 := createEnabledTestAccount(t, s, "warp-1", "warp")
-	acc2 := createEnabledTestAccount(t, s, "warp-2", "warp")
-	if err := warp.SaveAccountModelChoices(context.Background(), s, &warp.AccountModelChoices{
-		Accounts: map[string][]string{
-			strconv.FormatInt(acc1.ID, 10): {"auto-open", "gpt-5-2-low"},
-			strconv.FormatInt(acc2.ID, 10): {"auto-open", "claude-4-6-opus-high"},
-		},
-	}); err != nil {
-		t.Fatalf("SaveAccountModelChoices() error = %v", err)
-	}
-
-	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
-	h := NewWithLoadBalancer(&config.Config{}, lb)
-	h.connTracker = newSpyConnTracker(map[int64]int64{
-		acc1.ID: 0,
-		acc2.ID: 0,
-	})
-	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
-		return &trackerTestUpstream{}
-	})
-
-	_, selected, release, err := h.acquireAccountSelection(context.Background(), "warp", true, nil, accountSelectionOptions{ModelID: "claude-4-6-opus-high"})
-	defer release()
-	if err != nil {
-		t.Fatalf("selectAccount() error = %v", err)
-	}
-	if selected == nil {
-		t.Fatal("selectAccount() returned nil account")
-	}
-	if selected.ID != acc2.ID {
-		t.Fatalf("selectAccount() picked account %d, want %d", selected.ID, acc2.ID)
-	}
-}
-
-func TestSelectAccount_WarpRejectsModelMissingFromCachedPool(t *testing.T) {
-	s, mini := setupConnTrackerHandlerTest(t)
-	defer func() {
-		_ = s.Close()
-		mini.Close()
-	}()
-
-	acc1 := createEnabledTestAccount(t, s, "warp-1", "warp")
-	acc2 := createEnabledTestAccount(t, s, "warp-2", "warp")
-	if err := warp.SaveAccountModelChoices(context.Background(), s, &warp.AccountModelChoices{
-		Accounts: map[string][]string{
-			strconv.FormatInt(acc1.ID, 10): {"auto-open", "gpt-5-2-low"},
-			strconv.FormatInt(acc2.ID, 10): {"auto-open", "gpt-5-2-low"},
-		},
-	}); err != nil {
-		t.Fatalf("SaveAccountModelChoices() error = %v", err)
-	}
-	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
-	h := NewWithLoadBalancer(&config.Config{}, lb)
-	h.connTracker = newSpyConnTracker(map[int64]int64{
-		acc1.ID: 0,
-		acc2.ID: 1,
-	})
-	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
-		return &trackerTestUpstream{}
-	})
-
-	_, selected, release, err := h.acquireAccountSelection(context.Background(), "warp", true, nil, accountSelectionOptions{ModelID: "claude-4-7-opus-xhigh-fast"})
-	defer release()
-	if err == nil {
-		t.Fatal("selectAccount() error = nil, want unavailable model error")
-	}
-	if selected != nil {
-		t.Fatalf("selectAccount() selected account %d, want nil", selected.ID)
-	}
-	if !strings.Contains(err.Error(), "not available in the current Warp account pool") {
-		t.Fatalf("selectAccount() error = %q", err.Error())
 	}
 }
 
@@ -415,9 +328,9 @@ func TestDefaultAccountConcurrencyLimitIsTen(t *testing.T) {
 	t.Parallel()
 
 	// Every provider shares one default. The per-channel values this replaced
-	// (WorkBuddy 3, Warp/Grok 1, Qoder unlimited) made a channel's
-	// capacity depend on which switch arm it happened to fall into.
-	for _, accountType := range []string{"warp", "grok", "workbuddy", "qoder"} {
+	// (WorkBuddy 3, Grok 1, Qoder unlimited) made a channel's capacity depend on
+	// which switch arm it happened to fall into.
+	for _, accountType := range []string{"grok", "workbuddy", "qoder", "cline"} {
 		if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: accountType}); got != 10 {
 			t.Fatalf("unconfigured %s limit = %d, want 10", accountType, got)
 		}

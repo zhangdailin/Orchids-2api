@@ -60,7 +60,7 @@ func TestChangeEmitter_PublishesOnlyAfterAPersistedWrite(t *testing.T) {
 	s, emitter := newEmitterStore(t)
 	ctx := context.Background()
 
-	acc := &Account{AccountType: "warp", RefreshToken: "session-a", Enabled: true, Weight: 1}
+	acc := &Account{AccountType: "cline", RefreshToken: "session-a", Enabled: true, Weight: 1}
 	if err := s.CreateAccount(ctx, acc); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestChangeEmitter_SilentWhenNoEmitterConfigured(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	acc := &Account{AccountType: "warp", RefreshToken: "x", Enabled: true}
+	acc := &Account{AccountType: "cline", RefreshToken: "x", Enabled: true}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount with no emitter: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestChangeEmitter_IgnoresWritesToAMissingRow(t *testing.T) {
 	emitter := &recordingEmitter{}
 	s.SetChangeEmitter(emitter)
 
-	acc := &Account{AccountType: "warp", RefreshToken: "session", Enabled: true}
+	acc := &Account{AccountType: "cline", RefreshToken: "session", Enabled: true}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}
