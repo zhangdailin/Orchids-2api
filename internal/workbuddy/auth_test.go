@@ -300,8 +300,8 @@ func TestConsumeStream_EmitsTextReasoningAndToolCalls(t *testing.T) {
 	body := strings.Join([]string{
 		`data: {"id":"cmb-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"","reasoning_content":"think"},"finish_reason":""}]}`,
 		`data: {"choices":[{"index":0,"delta":{"content":"hello "},"finish_reason":""}]}`,
-		`data: {"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":"stop"}],"usage":null}`,
-		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}}]}}]}`,
+		`data: {"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":""}],"usage":null}`,
+		`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"list_files","arguments":"{\"path\":\".\"}"}}]},"finish_reason":"tool_calls"}]}`,
 		`data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"completion_thinking_tokens":2,"prompt_cache_hit_tokens":3}}`,
 		`data: [DONE]`,
 	}, "\n")

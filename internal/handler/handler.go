@@ -1037,6 +1037,9 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		primaryHandler := sh.handleMessage
 		var attempt int
 		for {
+			if returned, _ := sh.terminalState(); returned {
+				return
+			}
 			sh.resetRoundState()
 			var err error
 			upstreamReq.Attempt = attempt + 1
@@ -1084,23 +1087,35 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				}
 				break
 			}
+			// A provider may emit its authoritative finish frame and then observe a
+			// transport cleanup error. Never reset terminal state and append a second
+			// response in that case.
+			if returned, failed := sh.terminalState(); returned {
+				if failed {
+					return
+				}
+				slog.Warn("Ignoring upstream error after terminal response", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+				break
+			}
 			errStr := err.Error()
 			errClass := apperrors.ClassifyUpstreamError(errStr)
 			warpCloudAgentForbidden := isWarpCloudAgentForbiddenError(errStr)
 			warpRequestStarted := isWarpRequest && warp.RequestIDFromError(err) != ""
-			if sh.hasAnyOutput() {
-				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
-				if !sh.hasVisibleOutput() {
-					sh.InjectErrorText("Reporting failure after hidden upstream output", "Upstream request failed after generating reasoning. Automatic retry was suppressed to avoid duplicate token billing.")
-				}
-				sh.finishResponse("end_turn")
+			if warpRequestStarted {
+				slog.Warn("Warp request was accepted upstream; suppressing unsafe replay", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+				sh.reportRequestFailure("Reporting Warp failure after upstream acceptance",
+					errClass.Category, apperrors.PublicMessage(errStr))
 				return
 			}
-			if warpRequestStarted && errClass.Retryable {
-				// A Warp conversation and its task graph belong to the account that
-				// created them. Recoverable stream failures must retry that same
-				// request on the same account, matching Warp's client recovery path.
-				errClass.SwitchAccount = false
+			if sh.hasAnyOutput() {
+				slog.Warn("Upstream failed after partial output, skip retry to avoid duplicated token billing", "trace_id", traceID, "attempt", upstreamReq.Attempt, "error", err)
+				// Partial content is not a successful completion. Streaming responses
+				// have already committed 200, so report the terminal failure in band;
+				// non-streaming responses have committed nothing and can still return
+				// the correct HTTP error without leaking the partial draft.
+				sh.reportRequestFailure("Reporting upstream failure after partial output",
+					errClass.Category, apperrors.PublicMessage(errStr))
+				return
 			}
 
 			// Check for non-retriable errors

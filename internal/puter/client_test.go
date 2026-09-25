@@ -218,6 +218,8 @@ func TestVerifyModelRequiresUsableEvent(t *testing.T) {
 	}{
 		{name: "valid", body: `{"type":"usage","usage":{"input_tokens":1,"output_tokens":1}}`},
 		{name: "empty", body: "", wantErr: "no usable stream events"},
+		{name: "empty-text", body: `{"type":"text","text":""}`, wantErr: "no usable stream events"},
+		{name: "empty-usage", body: `{"type":"usage"}`, wantErr: "no usable stream events"},
 		{name: "stream-error", body: `{"type":"error","message":"model unavailable"}`, wantErr: "model unavailable"},
 		{name: "malformed-only", body: `not-json`, wantErr: "protocol error: invalid JSON"},
 		{name: "unknown-event", body: `{"type":"mystery"}`, wantErr: `protocol error: unknown event type "mystery"`},

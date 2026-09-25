@@ -70,10 +70,14 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 		}
 		switch strings.ToLower(strings.TrimSpace(chunk.Type)) {
 		case "text":
-			result.SawMeaningfulEvent = true
-			emitDelta(onMessage, "model.text-delta", chunk.Text)
+			if chunk.Text != "" {
+				result.SawMeaningfulEvent = true
+				emitDelta(onMessage, "model.text-delta", chunk.Text)
+			}
 		case "reasoning":
-			result.SawMeaningfulEvent = true
+			if chunk.Reasoning != "" {
+				result.SawMeaningfulEvent = true
+			}
 			if chunk.Reasoning != "" && onMessage != nil {
 				if result.ThinkingSignature == "" {
 					result.ThinkingSignature = newPuterThinkingSignature()
@@ -102,8 +106,10 @@ func consumePuterStream(body io.Reader, onMessage func(upstream.SSEMessage)) (st
 				}})
 			}
 		case "usage":
-			result.SawMeaningfulEvent = true
 			result.Usage = normalizePuterUsage(chunk.Usage)
+			if len(result.Usage) > 0 {
+				result.SawMeaningfulEvent = true
+			}
 			if onMessage != nil && len(result.Usage) > 0 {
 				onMessage(upstream.SSEMessage{Type: "model.tokens-used", Event: result.Usage})
 			}

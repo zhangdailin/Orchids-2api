@@ -251,11 +251,11 @@ func (c *Client) handleStreamResponseWithCancel(ctx context.Context, req upstrea
 			op = fmt.Sprintf("%s redirect=%s", op, location)
 		}
 		return &HTTPStatusError{
-			Operation:  op,
-			StatusCode: resp.StatusCode,
-			ErrorCode:  resp.Header.Get("X-Warp-Error-Code"),
-			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
-			Body:       bodyText,
+			Operation:       op,
+			StatusCode:      resp.StatusCode,
+			ErrorCode:       resp.Header.Get("X-Warp-Error-Code"),
+			RetryAfterDelay: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
+			Body:            bodyText,
 		}
 	}
 

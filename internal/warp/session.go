@@ -329,10 +329,10 @@ func postWarpTokenForm(ctx context.Context, httpClient *http.Client, endpoint st
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &HTTPStatusError{
-			Operation:  "refresh token",
-			StatusCode: resp.StatusCode,
-			ErrorCode:  resp.Header.Get("X-Warp-Error-Code"),
-			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
+			Operation:       "refresh token",
+			StatusCode:      resp.StatusCode,
+			ErrorCode:       resp.Header.Get("X-Warp-Error-Code"),
+			RetryAfterDelay: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
 	return body, nil
@@ -424,10 +424,10 @@ func (s *session) ensureLogin(ctx context.Context, httpClient *http.Client) (err
 	}
 	if resp.StatusCode != http.StatusNoContent {
 		return &HTTPStatusError{
-			Operation:  "login",
-			StatusCode: resp.StatusCode,
-			ErrorCode:  resp.Header.Get("X-Warp-Error-Code"),
-			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
+			Operation:       "login",
+			StatusCode:      resp.StatusCode,
+			ErrorCode:       resp.Header.Get("X-Warp-Error-Code"),
+			RetryAfterDelay: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
 

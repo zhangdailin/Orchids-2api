@@ -51,6 +51,70 @@ func (m *errorUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upst
 	return m.err
 }
 
+type partialErrorUpstreamEdge struct {
+	err error
+}
+
+func (m *partialErrorUpstreamEdge) SendRequestWithPayload(_ context.Context, _ upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), _ *debug.Logger) error {
+	onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": "partial draft"}})
+	return m.err
+}
+
+func TestHandleMessages_NonStreamPartialFailureReturnsOnlyError(t *testing.T) {
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
+	h.client = &partialErrorUpstreamEdge{err: errors.New("upstream HTTP 500")}
+	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": false}
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "partial draft") || strings.Contains(rec.Body.String(), "choices") {
+		t.Fatalf("partial failure was fabricated as a completion: %s", rec.Body.String())
+	}
+}
+
+func TestHandleMessages_StreamPartialFailureEndsWithErrorNotSuccess(t *testing.T) {
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
+	h.client = &partialErrorUpstreamEdge{err: errors.New("upstream HTTP 500")}
+	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": true}
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+	out := rec.Body.String()
+	if !strings.Contains(out, "event: error") {
+		t.Fatalf("stream lacks terminal error: %s", out)
+	}
+	if strings.Contains(out, "event: message_stop") {
+		t.Fatalf("stream failure was followed by normal completion: %s", out)
+	}
+}
+
+type finishThenErrorUpstreamEdge struct{ calls int }
+
+func (m *finishThenErrorUpstreamEdge) SendRequestWithPayload(_ context.Context, _ upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), _ *debug.Logger) error {
+	m.calls++
+	onMessage(upstream.SSEMessage{Type: "model.finish", Event: map[string]interface{}{"finishReason": "stop"}})
+	return errors.New("connection reset after finish")
+}
+
+func TestHandleMessages_DoesNotRetryAfterTerminalFinish(t *testing.T) {
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10, MaxRetries: 2}, nil)
+	client := &finishThenErrorUpstreamEdge{}
+	h.client = client
+	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": true}
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+	if client.calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", client.calls)
+	}
+	if got := strings.Count(rec.Body.String(), "event: message_stop"); got != 1 {
+		t.Fatalf("message_stop count = %d, body=%s", got, rec.Body.String())
+	}
+}
+
 func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
@@ -79,7 +143,7 @@ func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_WarpRecoverableEmptyStreamRetries(t *testing.T) {
+func TestHandleMessages_WarpAcceptedRequestIsNotReplayed(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 2}
 	h := NewWithLoadBalancer(cfg, nil)
 	upstreamClient := &errorUpstreamEdge{
@@ -98,8 +162,8 @@ func TestHandleMessages_WarpRecoverableEmptyStreamRetries(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://x/warp/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec, req)
 
-	if upstreamClient.calls != 3 {
-		t.Fatalf("upstream calls=%d want 3 (initial attempt plus two recoveries)", upstreamClient.calls)
+	if upstreamClient.calls != 1 {
+		t.Fatalf("upstream calls=%d want 1: an accepted Warp request must not be replayed", upstreamClient.calls)
 	}
 }
 

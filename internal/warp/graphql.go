@@ -178,11 +178,11 @@ func doGraphQL(ctx context.Context, client *http.Client, endpointURL, jwt, opera
 	}
 	if resp.StatusCode != http.StatusOK {
 		return &HTTPStatusError{
-			Operation:  "graphql request",
-			StatusCode: resp.StatusCode,
-			ErrorCode:  resp.Header.Get("X-Warp-Error-Code"),
-			RetryAfter: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
-			Body:       strings.TrimSpace(string(bodyBytes)),
+			Operation:       "graphql request",
+			StatusCode:      resp.StatusCode,
+			ErrorCode:       resp.Header.Get("X-Warp-Error-Code"),
+			RetryAfterDelay: parseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
+			Body:            strings.TrimSpace(string(bodyBytes)),
 		}
 	}
 	if err := json.Unmarshal(bodyBytes, target); err != nil {

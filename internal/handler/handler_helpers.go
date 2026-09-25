@@ -734,6 +734,45 @@ func (h *Handler) runAccountStatsWriter() {
 	}
 }
 
+func (h *Handler) flushPendingAccountStats(timeout time.Duration) {
+	if h == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		h.statsMu.Lock()
+		var id int64
+		var delta accountStatsDelta
+		found := false
+		for accountID, pending := range h.statsPending {
+			id, delta, found = accountID, pending, true
+			delete(h.statsPending, accountID)
+			break
+		}
+		h.statsMu.Unlock()
+		if !found {
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), remaining)
+		err := h.loadBalancer.Store.IncrementAccountStats(ctx, id, delta.usage, delta.count)
+		cancel()
+		if err != nil {
+			h.statsMu.Lock()
+			pending := h.statsPending[id]
+			pending.usage += delta.usage
+			pending.count += delta.count
+			h.statsPending[id] = pending
+			h.statsMu.Unlock()
+			slog.Warn("account stats remain unflushed during shutdown", "account_id", id, "error", err)
+			return
+		}
+	}
+}
+
 func (h *Handler) syncWarpState(account *store.Account, client UpstreamClient) {
 	if account == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return

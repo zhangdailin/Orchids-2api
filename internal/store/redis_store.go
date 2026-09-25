@@ -255,12 +255,19 @@ var (
 		redis.call("PEXPIREAT", KEYS[1], max_expiry * 1000 + 60000)
 		return 1
 	`)
-	// settleApiKeyBillingScript books actual usage. The hold is dropped first and
-	// the charge is added regardless of whether it still existed: the request
-	// really ran, and an expired hold must not erase its cost.
+	// settleApiKeyBillingScript books usage exactly once per event id. Recording
+	// the event in the same Lua transaction makes a retry after an ambiguous
+	// network timeout safe: Redis either applied all three mutations or none.
 	settleApiKeyBillingScript = redis.NewScript(`
+		local prior = redis.call("HGET", KEYS[3], ARGV[1])
+		if prior then
+			if prior ~= tostring(ARGV[2]) then return -1 end
+			return 0
+		end
+		redis.call("HSET", KEYS[3], ARGV[1], tostring(ARGV[2]))
 		redis.call("HDEL", KEYS[1], ARGV[1])
-		return redis.call("INCRBY", KEYS[2], tonumber(ARGV[2]))
+		redis.call("INCRBY", KEYS[2], tonumber(ARGV[2]))
+		return 1
 	`)
 	releaseApiKeyBillingScript = redis.NewScript(`
 		return redis.call("HDEL", KEYS[1], ARGV[1])
@@ -268,6 +275,7 @@ var (
 	resetApiKeyBillingScript = redis.NewScript(`
 		redis.call("DEL", KEYS[1])
 		redis.call("SET", KEYS[2], 0)
+		redis.call("DEL", KEYS[3])
 		return 1
 	`)
 	listModelsScript = redis.NewScript(`
@@ -1363,7 +1371,7 @@ func (s *redisStore) DeleteApiKey(ctx context.Context, id int64) error {
 	if key.KeyHash != "" {
 		pipe.Del(ctx, s.apiKeysHashKey(key.KeyHash))
 	}
-	pipe.Del(ctx, s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id), s.apiKeyBillingLimitKey(id))
+	pipe.Del(ctx, s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id), s.apiKeyBillingSettledKey(id), s.apiKeyBillingLimitKey(id))
 	_, err = pipe.Exec(ctx)
 	return err
 }
@@ -1461,14 +1469,20 @@ func (s *redisStore) SettleApiKeyBilling(ctx context.Context, id int64, eventID 
 	if amount < 0 {
 		return fmt.Errorf("billing settlement amount must not be negative")
 	}
-	_, err := settleApiKeyBillingScript.Run(
+	result, err := settleApiKeyBillingScript.Run(
 		ctx,
 		s.client,
-		[]string{s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id)},
+		[]string{s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id), s.apiKeyBillingSettledKey(id)},
 		eventID,
 		amount,
 	).Int64()
-	return err
+	if err != nil {
+		return err
+	}
+	if result < 0 {
+		return fmt.Errorf("billing event %q was already settled with a different amount", eventID)
+	}
+	return nil
 }
 
 // ReleaseApiKeyBilling drops a hold without charging it and reports whether one
@@ -1504,7 +1518,7 @@ func (s *redisStore) ResetApiKeyBilling(ctx context.Context, id int64) error {
 	_, err := resetApiKeyBillingScript.Run(
 		ctx,
 		s.client,
-		[]string{s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id)},
+		[]string{s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id), s.apiKeyBillingSettledKey(id)},
 	).Int64()
 	return err
 }
@@ -1673,6 +1687,10 @@ func (s *redisStore) apiKeyBillingReservationsKey(id int64) string {
 // of truth for how much a key has spent.
 func (s *redisStore) apiKeyBillingUsedKey(id int64) string {
 	return fmt.Sprintf("%skeybilling:used:%d", s.prefix, id)
+}
+
+func (s *redisStore) apiKeyBillingSettledKey(id int64) string {
+	return fmt.Sprintf("%skeybilling:settled:%d", s.prefix, id)
 }
 
 // apiKeyBillingLimitKey mirrors the key's billing limit so the reserve script

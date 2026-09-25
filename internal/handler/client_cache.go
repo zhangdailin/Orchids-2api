@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"orchids-api/internal/accountevents"
 	"orchids-api/internal/cline"
@@ -352,6 +353,7 @@ func (h *Handler) Close() {
 		h.statsMu.Unlock()
 		close(h.statsStop)
 		<-h.statsDone
+		h.flushPendingAccountStats(5 * time.Second)
 	})
 
 	closers := make([]clientCloser, 0, 1)

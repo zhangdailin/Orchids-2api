@@ -188,6 +188,16 @@ func TestResolveModel_ParsesSupportedEffortSuffixes(t *testing.T) {
 	}
 }
 
+func TestResolveConversationModelRejectsDeprecatedAlias(t *testing.T) {
+	t.Parallel()
+	h := &Handler{}
+	for _, id := range []string{"grok-code-fast", "grok-code-fast-1", "grok/grok-code-fast"} {
+		if _, ok := h.resolveConversationModel(context.Background(), id); ok {
+			t.Fatalf("deprecated model %q resolved through alias", id)
+		}
+	}
+}
+
 func TestResolveModel_RemovesGrok43BetaWebsite(t *testing.T) {
 	if _, ok := ResolveModel("grok-4.3-beta"); ok {
 		t.Fatal("ResolveModel(grok-4.3-beta) = true, want removed")

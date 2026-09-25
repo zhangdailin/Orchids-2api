@@ -1607,7 +1607,11 @@ function accountTokensToday(acc) {
 // Shanghai midnight. UTC is deployment-independent and matches the persisted
 // counter contract.
 function gatewayDayStamp(date) {
-  const d = date instanceof Date ? date : new Date();
+  // Dates passed from tests/plugins can come from another JS realm, where
+  // `instanceof Date` is false. Accept every real Date by value instead of
+  // silently replacing it with the current time.
+  const candidate = date != null ? new Date(date.valueOf()) : new Date();
+  const d = Number.isNaN(candidate.getTime()) ? new Date() : candidate;
   const pad = (n) => String(n).padStart(2, "0");
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }

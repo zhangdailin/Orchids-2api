@@ -179,6 +179,14 @@ func TestConsumeStreamEmitsTextAndUsage(t *testing.T) {
 	}
 }
 
+func TestConsumeStreamRejectsMalformedDataFrame(t *testing.T) {
+	t.Parallel()
+	stream := "data: {not-json}\n\ndata: [DONE]\n\n"
+	if _, err := consumeStream(strings.NewReader(stream), false, nil); err == nil || !strings.Contains(err.Error(), "protocol error") {
+		t.Fatalf("error = %v, want protocol error", err)
+	}
+}
+
 func TestConsumeStreamRejectsEOFBeforeFinish(t *testing.T) {
 	stream := "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
 	result, err := consumeStream(strings.NewReader(stream), false, nil)

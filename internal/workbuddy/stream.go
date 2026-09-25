@@ -23,14 +23,22 @@ type streamResult struct {
 	ToolCallCount      int
 	Usage              map[string]interface{}
 	ThinkingSignature  string
+	FinishReasonValue  string
 }
 
 // FinishReason maps the accumulated stream onto an Anthropic-style stop reason.
 func (r streamResult) FinishReason() string {
-	if r.ToolCallCount > 0 {
+	if r.ToolCallCount > 0 || strings.EqualFold(r.FinishReasonValue, "tool_calls") {
 		return "tool_use"
 	}
-	return "end_turn"
+	switch strings.ToLower(strings.TrimSpace(r.FinishReasonValue)) {
+	case "length", "max_tokens":
+		return "max_tokens"
+	case "content_filter":
+		return "refusal"
+	default:
+		return "end_turn"
+	}
 }
 
 var toolCallSequence atomic.Uint64
@@ -136,6 +144,8 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	result := streamResult{}
 	tools := newToolCallAccumulator()
+	sawDone := false
+	sawFinish := false
 
 	emitTools := func() {
 		for _, state := range tools.completeAll() {
@@ -166,6 +176,7 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
+			sawDone = true
 			break
 		}
 		if payload == "" {
@@ -174,9 +185,7 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			// A non-JSON data line is a protocol warning, not a transport
-			// failure; keep consuming the stream.
-			continue
+			return result, fmt.Errorf("workbuddy stream protocol error: invalid JSON: %w", err)
 		}
 		if msg := strings.TrimSpace(chunk.Error.Message); msg != "" {
 			return result, fmt.Errorf("workbuddy stream error: %s", msg)
@@ -192,6 +201,9 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 		}
 		if len(chunk.Choices) == 0 {
 			continue
+		}
+		if sawFinish {
+			return result, fmt.Errorf("workbuddy stream protocol error: choice data after finish")
 		}
 		delta := chunk.Choices[0].Delta
 
@@ -222,14 +234,18 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 		// OpenAI-style tool arguments can span several deltas. Emitting on the
 		// first delta loses every later fragment and produces invalid JSON. A
 		// non-empty finish reason closes the choice; [DONE]/EOF is handled below.
-		if strings.TrimSpace(chunk.Choices[0].FinishReason) != "" {
+		if reason := strings.TrimSpace(chunk.Choices[0].FinishReason); reason != "" {
+			result.FinishReasonValue = reason
+			sawFinish = true
 			emitTools()
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return result, fmt.Errorf("failed to read workbuddy stream: %w", err)
 	}
-	emitTools()
+	if !sawDone || !sawFinish {
+		return result, fmt.Errorf("workbuddy stream ended before terminal finish")
+	}
 	return result, nil
 }
 

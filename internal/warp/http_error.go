@@ -11,11 +11,11 @@ import (
 
 // HTTPStatusError 表示 Warp 上游返回了非预期 HTTP 状态码。
 type HTTPStatusError struct {
-	Operation  string
-	StatusCode int
-	ErrorCode  string
-	RetryAfter time.Duration
-	Body       string
+	Operation       string
+	StatusCode      int
+	ErrorCode       string
+	RetryAfterDelay time.Duration
+	Body            string
 }
 
 func (e *HTTPStatusError) Error() string {
@@ -26,8 +26,8 @@ func (e *HTTPStatusError) Error() string {
 	if op == "" {
 		op = "request"
 	}
-	if e.RetryAfter > 0 {
-		return fmt.Sprintf("warp %s failed: HTTP %d%s (retry after %s)", op, e.StatusCode, formatWarpErrorCode(e.ErrorCode), e.RetryAfter.Round(time.Second))
+	if e.RetryAfterDelay > 0 {
+		return fmt.Sprintf("warp %s failed: HTTP %d%s (retry after %s)", op, e.StatusCode, formatWarpErrorCode(e.ErrorCode), e.RetryAfterDelay.Round(time.Second))
 	}
 	if body := strings.TrimSpace(e.Body); body != "" {
 		if len(body) > 512 {
@@ -45,6 +45,13 @@ func formatWarpErrorCode(code string) string {
 	return ""
 }
 
+func (e *HTTPStatusError) RetryAfter() time.Duration {
+	if e == nil {
+		return 0
+	}
+	return e.RetryAfterDelay
+}
+
 func HTTPStatusCode(err error) int {
 	var statusErr *HTTPStatusError
 	if errors.As(err, &statusErr) {
@@ -56,7 +63,7 @@ func HTTPStatusCode(err error) int {
 func RetryAfter(err error) time.Duration {
 	var statusErr *HTTPStatusError
 	if errors.As(err, &statusErr) {
-		return statusErr.RetryAfter
+		return statusErr.RetryAfterDelay
 	}
 	return 0
 }

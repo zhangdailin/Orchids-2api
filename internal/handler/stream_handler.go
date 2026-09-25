@@ -2005,6 +2005,7 @@ func (h *streamHandler) handleMessage(msg upstream.SSEMessage) {
 
 	switch eventKey {
 	case "model.usage-metadata":
+		h.setUpstreamUsage(msg.Event)
 		slog.Info("Warp request usage", "usage", msg.Event)
 		return
 
@@ -2395,6 +2396,15 @@ func (h *streamHandler) injectMessageText(logMsg, errorMsg string) {
 // stream has already sent its message_start — the status is 200 and cannot be
 // revisited — so its report has to stay in band, but it carries the same
 // operator-facing message rather than a re-classified one.
+func (h *streamHandler) terminalState() (returned, failed bool) {
+	if h == nil {
+		return false, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.hasReturn, h.requestFailed
+}
+
 func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
 	if h == nil || h.w == nil {
 		return

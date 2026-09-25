@@ -116,6 +116,28 @@ func TestApiKeyBillingExpiredReservationsStopCounting(t *testing.T) {
 	}
 }
 
+func TestApiKeyBillingSettlementIsIdempotentByEvent(t *testing.T) {
+	s, _ := newApiKeyBillingStore(t, "billing-idempotent:")
+	key := createBillingKey(t, s, 1000)
+	ctx := context.Background()
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 300); err != nil {
+		t.Fatalf("idempotent replay failed: %v", err)
+	}
+	got, err := s.GetApiKeyByID(ctx, key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BillingUsedUSDTicks != 300 {
+		t.Fatalf("used = %d, want one 300-tick charge", got.BillingUsedUSDTicks)
+	}
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "same-event", 301); err == nil {
+		t.Fatal("different amount for settled event must conflict")
+	}
+}
+
 // TestApiKeyBillingSettleMovesReservationIntoUsed pins settlement: the hold
 // disappears, the charge lands in the used counter, and actual usage is billed
 // even when its hold is gone.

@@ -72,7 +72,7 @@ type streamChunk struct {
 			// is not silently lost at the Cline boundary.
 			Reasoning string `json:"reasoning"`
 			Thinking  string `json:"thinking"`
-			ToolCalls        []struct {
+			ToolCalls []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Type     string `json:"type"`
@@ -367,12 +367,10 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil || !chunkLooksDecoded(payload) {
 			unwrapped, ok := unwrapEnvelope(payload)
 			if !ok {
-				// A non-JSON data line is a protocol warning, not a transport
-				// failure; keep consuming the stream.
-				continue
+				return result, fmt.Errorf("cline stream protocol error: invalid chunk")
 			}
-			if err := json.Unmarshal([]byte(unwrapped), &chunk); err != nil {
-				continue
+			if err := json.Unmarshal([]byte(unwrapped), &chunk); err != nil || !chunkLooksDecoded(unwrapped) {
+				return result, fmt.Errorf("cline stream protocol error: invalid wrapped chunk")
 			}
 		}
 		if msg := strings.TrimSpace(chunk.Error.Message); msg != "" {

@@ -362,12 +362,15 @@ func (h *Handler) ensureResolvedModelCapability(ctx context.Context, modelID str
 // least one enabled Build account advertises it, so arbitrary client strings
 // can never turn into upstream model probes.
 func (h *Handler) resolveConversationModel(ctx context.Context, modelID string) (ModelSpec, bool) {
+	id := normalizeModelID(modelID)
+	if id == "" || IsDeprecatedModelID(id) {
+		return ModelSpec{}, false
+	}
 	if spec, effort, ok := ResolveModelAlias(modelID); ok {
 		spec.AliasReasoningEffort = effort
 		return h.applyPersistedRoute(ctx, spec), true
 	}
-	id := normalizeModelID(modelID)
-	if id == "" || IsDeprecatedModelID(id) || h == nil || h.lb == nil || h.lb.Store == nil {
+	if h == nil || h.lb == nil || h.lb.Store == nil {
 		return ModelSpec{}, false
 	}
 	accounts, err := h.lb.Store.GetEnabledAccounts(ctx)
