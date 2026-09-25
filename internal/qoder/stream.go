@@ -339,7 +339,12 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 				detail = fmt.Sprintf("upstream status %d", envelope.StatusCodeValue)
 			}
 			switch {
-			case code == busyCode:
+			case code == busyCode || sharedQueueRefusal(detail, envelope.Body):
+				// The business code is the usual marker, but the same payload also
+				// reaches here under an envelope the code reader cannot unwrap. It
+				// must still classify as busy: read as a credential rejection it
+				// parks a working account, and it loses the wait the upstream asked
+				// for, so the retry comes back before the queue has cleared.
 				busyErr := fmt.Errorf("%w: %s", ErrBusy, detail)
 				streamErr = &attemptStreamError{err: busyErr, busy: true, retryable: true, wait: busyWait("", []byte(envelope.Body))}
 			case isDuplicateRequest(detail, envelope.Body):

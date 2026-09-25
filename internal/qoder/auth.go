@@ -472,6 +472,28 @@ func apiError(method, rawURL string, status int, raw []byte) error {
 	return fmt.Errorf("qoder API error: %s", strings.Join(parts, ", "))
 }
 
+// sharedQueueRefusal reports whether a failure describes an upstream-wide
+// queue/service refusal, whatever shape the envelope arrived in.
+//
+// The business code is the usual marker and envelopeCode reads it, but the same
+// payload has reached production under an envelope that reader could not unwrap.
+// Falling through to the status branch then labelled it "qoder upstream rejected
+// the credential" -- an authentication failure for a working account -- and,
+// worse, dropped the wait the upstream had asked for, so every retry came back
+// before the queue cleared. Matching the payload itself makes the classification
+// independent of how many times the gateway nested it.
+func sharedQueueRefusal(values ...string) bool {
+	for _, value := range values {
+		lower := strings.ToLower(value)
+		if strings.Contains(lower, busyCode) ||
+			strings.Contains(lower, `"isqueued":true`) ||
+			strings.Contains(lower, `"serviceavailable":false`) {
+			return true
+		}
+	}
+	return false
+}
+
 // envelopeCode returns the business code of an upstream error body. The gateway
 // reports 10605 (queue/concurrency refusal) as a string inside a 401/403
 // envelope, which is why the code is read before the HTTP status is trusted.

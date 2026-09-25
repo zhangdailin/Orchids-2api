@@ -70,3 +70,32 @@ func mustMarshalString(t *testing.T, value string) string {
 	}
 	return string(raw)
 }
+
+// TestSharedQueueRefusalIsShapeIndependent pins that the queue payload is
+// recognised even when the envelope hides the business code. Production reached
+// this state: the code reader could not unwrap the envelope, the refusal was
+// reported as a credential rejection, and the retry lost the upstream's wait.
+func TestSharedQueueRefusalIsShapeIndependent(t *testing.T) {
+	for name, values := range map[string][]string{
+		"bare code":             {"{\"code\":\"10605\"}"},
+		"queue flag only":       {`{"isQueued":true}`},
+		"service unavailable":   {`{"serviceAvailable":false}`},
+		"nested inside message": {`{"code":"10605","message":"{\"isQueued\":true,\"serviceAvailable\":false,\"retryAfterSeconds\":30}"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !sharedQueueRefusal(values...) {
+				t.Errorf("%v was not recognised as a shared queue refusal", values)
+			}
+		})
+	}
+	for name, values := range map[string][]string{
+		"credential rejection": {"qoder upstream rejected the credential: session expired"},
+		"agent limit":          {`{"agentLimitResetTime":1790538433100}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if sharedQueueRefusal(values...) {
+				t.Errorf("%v was wrongly treated as a queue refusal", values)
+			}
+		})
+	}
+}

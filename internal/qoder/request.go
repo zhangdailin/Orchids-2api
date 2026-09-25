@@ -751,7 +751,7 @@ func classifyStatus(status int, retryAfter string, raw []byte) error {
 	}
 	wrapped := apiError(http.MethodPost, "chat", status, raw)
 
-	if code == busyCode {
+	if code == busyCode || sharedQueueRefusal(detail, string(raw)) {
 		return &attemptStreamError{err: fmt.Errorf("%w: %v", ErrBusy, wrapped), busy: true, retryable: true, wait: busyWait(retryAfter, raw)}
 	}
 	// A 403 that names the pricing page is an entitlement refusal, not a
