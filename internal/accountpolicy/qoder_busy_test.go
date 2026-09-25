@@ -24,9 +24,15 @@ func (e qoderBusyError) RetryAfter() time.Duration { return e.wait }
 // for 30s and the gateway rotated to the next one, which met the same answer.
 const productionQoderBusyMessage = `qoder upstream rejected the credential: {"code":"10605","message":"{\"isQueued\":true,\"modelKey\":\"qfmodel\",\"queueCount\":0,\"queueType\":\"p3\",\"retryAfterSeconds\":30,\"serviceAvailable\":false,\"waitTime\":30}"}`
 
-// TestClassifyGlobalQueueRefusalDoesNotHoldTheAccount is the regression test for
-// the Qoder pool drain.
-func TestClassifyGlobalQueueRefusalDoesNotHoldTheAccount(t *testing.T) {
+// TestClassifyGlobalQueueRefusalWaitsWithoutHoldingTheAccount is the regression
+// test for the Qoder pool drain.
+//
+// The contract has two halves. The account must not be held or rotated -- a
+// refusal that every account receives cannot be escaped by moving, and parking
+// accounts is what emptied the pool. The request must still be retryable, on the
+// account it already holds, so a short upstream window becomes a short wait
+// instead of a failure.
+func TestClassifyGlobalQueueRefusalWaitsWithoutHoldingTheAccount(t *testing.T) {
 	acc := &store.Account{ID: 22, AccountType: "qoder", Enabled: true}
 	for _, tc := range []struct {
 		name    string
@@ -48,17 +54,18 @@ func TestClassifyGlobalQueueRefusalDoesNotHoldTheAccount(t *testing.T) {
 			if verdict.Scope == ScopeAccount || verdict.Scope == ScopeCredential {
 				t.Errorf("scope = %q, want a scope that does not hold the account", verdict.Scope)
 			}
-			// Neither retrying nor rotating can help: every account is told the
-			// same thing, so the request must fail fast instead of burning the pool.
-			if verdict.Retryable {
-				t.Error("Retryable = true; the next attempt meets the identical refusal")
+			// Nothing is persisted. A model cooldown here would take this account,
+			// and then every other one, out of selection for the window, which is
+			// the fail-fast this replaces.
+			if verdict.Cooldown != 0 {
+				t.Errorf("cooldown = %v, want 0 so no account or model state is written", verdict.Cooldown)
+			}
+			// Wait and retry, on the account already held.
+			if !verdict.Retryable {
+				t.Error("Retryable = false; a short queue window should be waited out, not failed")
 			}
 			if verdict.SwitchAccount {
 				t.Error("SwitchAccount = true; rotating multiplies one shared refusal across every account")
-			}
-			// The upstream hint is still honoured so the model is withheld for it.
-			if verdict.Cooldown != 30*time.Second {
-				t.Errorf("cooldown = %v, want the upstream's 30s hint", verdict.Cooldown)
 			}
 			if verdict.Model != "qwen3.8-flash" {
 				t.Errorf("model = %q, want the reported model", verdict.Model)
@@ -88,15 +95,31 @@ func TestClassifyAccountScopedRateLimitStillRotates(t *testing.T) {
 	}
 }
 
-// TestClassifyGlobalRefusalWithoutHintIsStillBounded pins that a refusal with no
-// usable hint does not inherit an unbounded or zero cooldown.
-func TestClassifyGlobalRefusalWithoutHintIsStillBounded(t *testing.T) {
+// TestClassifyGlobalRefusalIgnoresAnUnusableHint pins that a shared refusal does
+// not derive any account state from the hint. The wait itself is bounded where
+// it is actually spent (the handler caps an honoured retry-after), so nothing
+// here may invent a cooldown from a missing or absurd value.
+func TestClassifyGlobalRefusalIgnoresAnUnusableHint(t *testing.T) {
 	acc := &store.Account{ID: 22, AccountType: "qoder", Enabled: true}
-	verdict := Classify(acc, errors.New("qoder gateway is busy"), "qwen3.8-flash")
-	if verdict.Cooldown != CooldownRateLimit {
-		t.Errorf("cooldown = %v, want the default rate-limit cooldown %v", verdict.Cooldown, CooldownRateLimit)
-	}
-	if verdict.SwitchAccount {
-		t.Error("SwitchAccount = true; a shared refusal must not rotate")
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"no hint at all", errors.New("qoder gateway is busy")},
+		{"zero hint", qoderBusyError{message: "qoder gateway is busy", wait: 0}},
+		{"absurd hint", qoderBusyError{message: "qoder gateway is busy", wait: 12 * time.Hour}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			verdict := Classify(acc, tc.err, "qwen3.8-flash")
+			if verdict.Cooldown != 0 {
+				t.Errorf("cooldown = %v, want 0 regardless of the hint", verdict.Cooldown)
+			}
+			if verdict.Status != "" {
+				t.Errorf("status = %q, want none", verdict.Status)
+			}
+			if !verdict.Retryable || verdict.SwitchAccount {
+				t.Errorf("retryable=%v switch=%v, want a wait on the same account", verdict.Retryable, verdict.SwitchAccount)
+			}
+		})
 	}
 }

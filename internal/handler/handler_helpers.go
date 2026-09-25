@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/cline"
+	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/qoder"
@@ -688,4 +690,31 @@ func shouldRetryCurrentAccountWhenNoAlternative(category string) bool {
 	default:
 		return false
 	}
+}
+
+// isSharedUpstreamRefusalClass reports whether this failure describes a resource
+// shared by every account rather than this account's own limit. It is the
+// category/switch pair the classifier produces for that shape, and it is also
+// what tells the retry loop to keep the account it already holds: rotating
+// would meet the identical refusal, so the wait is spent on the same one.
+func isSharedUpstreamRefusalClass(class apperrors.UpstreamErrorClass) bool {
+	return class.Category == "rate_limit" && !class.SwitchAccount
+}
+
+// sharedRefusalJitter spreads retries that were all handed the same upstream
+// recovery time, so they do not wake together and re-queue as one spike. It is
+// bounded to a fifth of the wait (at most five seconds), which keeps the wait
+// anchored to the upstream's own hint.
+func sharedRefusalJitter(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return 0
+	}
+	jitter := delay / 5
+	if jitter > 5*time.Second {
+		jitter = 5 * time.Second
+	}
+	if jitter <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int63n(int64(jitter)))
 }

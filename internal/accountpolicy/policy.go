@@ -170,25 +170,23 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 	// zero within seconds, with pool-empty alerts and a ~20% success rate, while
 	// the upstream had only said that this model's queue was unavailable.
 	//
-	// The verdict stays model-scoped, so the account keeps its place in the pool
-	// and can still serve every other model; what changes is that a shared
-	// refusal no longer retries or rotates, because the next account meets the
-	// same answer. The upstream's own hint is still honoured as the cooldown.
+	// The verdict is retryable but deliberately not switchable, and it records
+	// nothing: the request waits out the upstream's own window and tries again on
+	// the account it already holds. That is the only useful response to a
+	// condition that is identical for every account -- rotating multiplies the
+	// refusal, and failing instantly throws away requests that a short wait would
+	// have served once the queue cleared.
+	//
+	// Cooldown is left zero on purpose: persisting a model cooldown here would
+	// take this account, and then every other one, out of selection for the
+	// window and turn the wait back into the fail-fast this is meant to replace.
 	if isGlobalUpstreamRefusal(lower) {
-		cooldown := CooldownRateLimit
-		var hint retryAfterError
-		if stderrors.As(err, &hint) {
-			if wait := hint.RetryAfter(); wait > 0 {
-				cooldown = BoundRateLimitCooldown(wait)
-			}
-		}
 		return Verdict{
 			Scope:         ScopeModel,
 			Message:       message,
 			Model:         model,
-			Retryable:     false,
+			Retryable:     true,
 			SwitchAccount: false,
-			Cooldown:      cooldown,
 			At:            now,
 		}
 	}
