@@ -212,7 +212,7 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "code=6004"):
 		return UpstreamErrorClass{Category: "rate_limit", Retryable: true, SwitchAccount: true}
-	case strings.Contains(lower, "qoder gateway is busy"):
+	case isSharedUpstreamQueueRefusal(lower):
 		// Qoder business code 10605 means the model queue/service is unavailable,
 		// often with serviceAvailable=false and one shared retry-after hint. It is
 		// not a bad credential and switching through four accounts only multiplies
@@ -246,6 +246,25 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	default:
 		return UpstreamErrorClass{Category: "unknown", Retryable: true, SwitchAccount: true}
 	}
+}
+
+// isSharedUpstreamQueueRefusal reports whether the upstream refused because a
+// resource shared by every account is unavailable.
+//
+// It keys on the shape of the refusal, not one phrasing, because the same
+// condition reaches this classifier under several texts: the classified form
+// ("qoder gateway is busy"), Qoder's raw business code when a parser has not
+// unwrapped it (10605, isQueued), the upstream stating its own pool is throttled,
+// and the serviceAvailable:false flag. Falling through to the default branch
+// would label it "unknown" with SwitchAccount=true, which is what turned one
+// shared refusal into a rotation storm across the whole account pool.
+func isSharedUpstreamQueueRefusal(lower string) bool {
+	return strings.Contains(lower, "qoder gateway is busy") ||
+		strings.Contains(lower, "available upstream accounts are rate-limited") ||
+		strings.Contains(lower, "available upstream accounts are rate limited") ||
+		strings.Contains(lower, "10605") ||
+		strings.Contains(lower, `"serviceavailable":false`) ||
+		strings.Contains(lower, `"isqueued":true`)
 }
 
 func isClineModelEntitlement(lower string) bool {

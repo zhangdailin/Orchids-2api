@@ -480,7 +480,22 @@ func envelopeCode(raw []byte) string {
 }
 
 func envelopeCodeDepth(raw []byte, depth int) string {
-	if depth > 4 || len(raw) == 0 || raw[0] != '{' {
+	if depth > 4 || len(raw) == 0 {
+		return ""
+	}
+	// A body that arrives as a JSON *string* -- "\"{\\\"code\\\":\\\"10605\\\"...}\"" --
+	// hides the envelope one level deeper. Reading it as opaque text is how a
+	// 10605 queue refusal came back as "qoder upstream rejected the credential",
+	// which then had the account parked as a rate limit for 30s a turn until the
+	// whole pool was empty. Unwrap the string and look again.
+	if raw[0] == '"' {
+		var nested string
+		if err := json.Unmarshal(raw, &nested); err != nil {
+			return ""
+		}
+		return envelopeCodeDepth([]byte(strings.TrimSpace(nested)), depth+1)
+	}
+	if raw[0] != '{' {
 		return ""
 	}
 	var env struct {
