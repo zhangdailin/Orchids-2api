@@ -26,7 +26,7 @@
   "grok_cli_client_version": "1.0.40",
   "grok_cli_client_identifier": "grok-shell",
   "grok_cli_oauth_client_id": "b1a00492-073a-47ea-816f-4c329264a828",
-  "grok_cli_oauth_device_url": "https://auth.x.ai/oauth2/device/auth",
+  "grok_cli_oauth_device_url": "https://auth.x.ai/oauth2/device/code",
   "grok_cli_oauth_token_url": "https://auth.x.ai/oauth2/token",
   "grok_cli_model_ids": [],
   "grok_build_timeout_seconds": 600,
