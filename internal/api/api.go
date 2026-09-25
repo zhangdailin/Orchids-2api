@@ -2390,8 +2390,18 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// A trailing action segment is stripped before the id is parsed, so
-	// /api/keys/5/reset-usage reaches the branch below instead of a 400.
-	idStr := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/keys/"), "/"), "/reset-usage")
+	// /api/keys/5/reset-usage and /api/keys/5/rotate reach the branches below
+	// instead of a 400.
+	trimmedPath := strings.TrimSuffix(r.URL.Path, "/")
+	action := ""
+	for _, candidate := range []string{"reset-usage", "rotate"} {
+		if strings.HasSuffix(trimmedPath, "/"+candidate) {
+			action = candidate
+			trimmedPath = strings.TrimSuffix(trimmedPath, "/"+candidate)
+			break
+		}
+	}
+	idStr := strings.TrimPrefix(trimmedPath, "/api/keys/")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid ID", http.StatusBadRequest)
@@ -2404,31 +2414,81 @@ func (a *API) HandleKeyByID(w http.ResponseWriter, r *http.Request) {
 		// key. grok2api resets a key's usage when its period ends; the manual
 		// action has to exist too, because a misconfigured limit is otherwise
 		// unrecoverable until the period rolls over.
-		if !strings.HasSuffix(strings.TrimSuffix(r.URL.Path, "/"), "/reset-usage") {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		resetID := id
-		key, err := a.store.GetApiKeyByID(r.Context(), resetID)
-		if err != nil {
-			if errors.Is(err, store.ErrNoRows) {
-				http.Error(w, "not found", http.StatusNotFound)
+		if action == "reset-usage" {
+			resetID := id
+			key, err := a.store.GetApiKeyByID(r.Context(), resetID)
+			if err != nil {
+				if errors.Is(err, store.ErrNoRows) {
+					http.Error(w, "not found", http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			if err := a.store.ResetApiKeyBilling(r.Context(), resetID); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			key.BillingUsedUSDTicks = 0
+			key.BillingPeriodStartedAt = time.Now().UTC()
+			if err := a.store.UpdateApiKey(r.Context(), key); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(key)
 			return
 		}
-		if err := a.store.ResetApiKeyBilling(r.Context(), resetID); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		// POST /api/keys/{id}/rotate: mint a new secret for an existing key.
+		// Only the hash is stored, so a secret that was not copied at creation
+		// can never be shown again -- the list knows only its prefix and
+		// suffix. Rotating is the supported way back to a usable secret without
+		// losing the key's id, name, policy and settled usage.
+		if action == "rotate" {
+			key, err := a.store.GetApiKeyByID(r.Context(), id)
+			if err != nil {
+				if errors.Is(err, store.ErrNoRows) {
+					http.Error(w, "not found", http.StatusNotFound)
+					return
+				}
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			fullKey, err := generateApiKey()
+			if err != nil {
+				slog.Error("Failed to rotate api key", "error", err)
+				http.Error(w, "failed to generate api key", http.StatusInternalServerError)
+				return
+			}
+			hash := sha256.Sum256([]byte(fullKey))
+			key.KeyHash = hex.EncodeToString(hash[:])
+			key.KeyPrefix = "sk-"
+			key.KeySuffix = fullKey[len(fullKey)-4:]
+			// UpdateApiKey drops the retired hash index, so the old secret stops
+			// authenticating as soon as this succeeds.
+			if err := a.store.UpdateApiKey(r.Context(), key); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			json.NewEncoder(w).Encode(CreateKeyResponse{
+				ID:                   key.ID,
+				Key:                  fullKey,
+				Name:                 key.Name,
+				KeyPrefix:            key.KeyPrefix,
+				KeySuffix:            key.KeySuffix,
+				Enabled:              key.Enabled,
+				AllowedModels:        key.AllowedModels,
+				RPMLimit:             key.RPMLimit,
+				MaxConcurrent:        key.MaxConcurrent,
+				ExpiresAt:            key.ExpiresAt,
+				CreatedAt:            key.CreatedAt,
+				BillingLimitUSDTicks: key.BillingLimitUSDTicks,
+			})
 			return
 		}
-		key.BillingUsedUSDTicks = 0
-		key.BillingPeriodStartedAt = time.Now().UTC()
-		if err := a.store.UpdateApiKey(r.Context(), key); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(key)
+
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
 
 	case http.MethodPatch:
 		var req UpdateKeyRequest

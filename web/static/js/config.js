@@ -454,9 +454,7 @@ function renderApiKeys() {
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
-  apiKeys.forEach((k, idx) => {
-    const keyDisplay = k.key_full || `${k.key_prefix}****${k.key_suffix}`;
-    const encodedKey = encodeURIComponent(keyDisplay);
+  apiKeys.forEach((k) => {
     const encodedLabel = encodeURIComponent(`${k.key_prefix}...${k.key_suffix}`);
     const tr = document.createElement("tr");
 
@@ -465,21 +463,17 @@ function renderApiKeys() {
     tokenWrap.style.display = "flex";
     tokenWrap.style.alignItems = "center";
     tokenWrap.style.gap = "8px";
-    const toggle = document.createElement("span");
-    toggle.className = "key-toggle";
-    toggle.dataset.idx = String(idx);
-    toggle.style.cursor = "pointer";
-    toggle.textContent = "👁️";
+    // The server stores only the hash, so the list can never show the secret
+    // again. It used to render an eye toggle and a click-to-copy over this
+    // masked string, which handed out "sk-****1234" as if it were the key; the
+    // masked form is now inert and points at the action that issues a new one.
     const display = document.createElement("span");
-    display.id = `key-display-${idx}`;
     display.className = "key-display";
-    display.dataset.key = encodedKey;
-    display.style.cursor = "pointer";
-    display.textContent = `${k.key_prefix || ""}****...${k.key_suffix || ""}`;
+    display.title = "完整 Key 仅在创建或重置时显示一次，之后无法再次查看；需要新 Key 请点「重置」";
+    display.textContent = `${k.key_prefix || ""}****${k.key_suffix || ""}`;
     const badge = document.createElement("span");
     badge.className = "secret-badge";
     badge.textContent = "密钥";
-    tokenWrap.appendChild(toggle);
     tokenWrap.appendChild(display);
     tokenWrap.appendChild(badge);
     tdToken.appendChild(tokenWrap);
@@ -522,6 +516,15 @@ function renderApiKeys() {
     editBtn.dataset.action = "edit-key";
     editBtn.dataset.id = encodeData(k.id);
     editBtn.textContent = "策略";
+    const rotateBtn = document.createElement("button");
+    rotateBtn.className = "btn btn-neutral";
+    rotateBtn.style.padding = "4px 8px";
+    rotateBtn.style.marginRight = "6px";
+    rotateBtn.dataset.action = "rotate-key";
+    rotateBtn.dataset.id = encodeData(k.id);
+    rotateBtn.dataset.name = encodedLabel;
+    rotateBtn.textContent = "重置";
+    rotateBtn.title = "生成新的完整 Key（旧 Key 立即失效），仅显示一次";
     const delBtn = document.createElement("button");
     delBtn.className = "btn btn-danger-outline";
     delBtn.style.padding = "4px 8px";
@@ -530,6 +533,7 @@ function renderApiKeys() {
     delBtn.dataset.label = encodedLabel;
     delBtn.textContent = "删除";
     tdAction.appendChild(editBtn);
+    tdAction.appendChild(rotateBtn);
     tdAction.appendChild(delBtn);
     tr.appendChild(tdAction);
 
@@ -573,25 +577,18 @@ function renderApiKeys() {
   container.appendChild(tip);
 
   container.onclick = (e) => {
-    const display = e.target.closest(".key-display");
-    if (display && container.contains(display)) {
-      const encoded = display.dataset.key || "";
-      const value = encoded ? decodeURIComponent(encoded) : (display.textContent || "");
-      copyToClipboard(value);
-      return;
-    }
-    const toggle = e.target.closest(".key-toggle");
-    if (toggle && container.contains(toggle)) {
-      const idx = parseInt(toggle.dataset.idx, 10);
-      if (!Number.isNaN(idx)) toggleKeyVisibility(idx);
-      return;
-    }
+    // The masked token is deliberately not copyable: the server keeps only the
+    // hash, so the string shown here is not a key and copying it produced a
+    // client that could never authenticate.
     const actionEl = e.target.closest("[data-action]");
     if (!actionEl || !container.contains(actionEl)) return;
     const action = actionEl.dataset.action;
     if (action === "edit-key") {
       const id = decodeData(actionEl.dataset.id || "");
       if (id) openEditKeyModal(id);
+    } else if (action === "rotate-key") {
+      const id = decodeData(actionEl.dataset.id || "");
+      if (id) rotateApiKey(id);
     } else if (action === "delete-key") {
       const id = decodeData(actionEl.dataset.id || "");
       const label = actionEl.dataset.label ? decodeURIComponent(actionEl.dataset.label) : "";
@@ -610,9 +607,7 @@ function renderApiKeys() {
 }
 
 function renderApiKeysMobile(container) {
-  const cards = apiKeys.map((k, idx) => {
-    const keyDisplay = k.key_full || `${k.key_prefix}****${k.key_suffix}`;
-    const encodedKey = encodeURIComponent(keyDisplay);
+  const cards = apiKeys.map((k) => {
     const encodedLabel = encodeURIComponent(`${k.key_prefix}...${k.key_suffix}`);
     const lastUsed = k.last_used_at ? formatTime(k.last_used_at) : "从未使用";
     const policy = formatKeyPolicy(k);
@@ -620,8 +615,7 @@ function renderApiKeysMobile(container) {
       <article class="config-key-card">
         <div class="config-key-head">
           <div class="config-key-token">
-            <button type="button" class="key-toggle" data-idx="${idx}">👁️</button>
-            <span id="key-display-${idx}" class="key-display" data-key="${encodedKey}">${escapeHtml(`${k.key_prefix || ""}****...${k.key_suffix || ""}`)}</span>
+            <span class="key-display" title="完整 Key 仅在创建或重置时显示一次，之后无法再次查看">${escapeHtml(`${k.key_prefix || ""}****${k.key_suffix || ""}`)}</span>
             <span class="secret-badge">密钥</span>
           </div>
           <label class="toggle">
@@ -641,6 +635,7 @@ function renderApiKeysMobile(container) {
         </div>
         <div class="config-key-actions">
           <button type="button" class="btn btn-neutral" data-action="edit-key" data-id="${encodeData(k.id)}">策略</button>
+          <button type="button" class="btn btn-neutral" data-action="rotate-key" data-id="${encodeData(k.id)}" title="生成新的完整 Key（旧 Key 立即失效），仅显示一次">重置</button>
           <button type="button" class="btn btn-danger-outline" data-action="delete-key" data-id="${encodeData(k.id)}" data-label="${encodedLabel}">删除</button>
         </div>
       </article>
@@ -658,24 +653,16 @@ function renderApiKeysMobile(container) {
   container.appendChild(tip);
 
   container.onclick = (e) => {
-    const display = e.target.closest(".key-display");
-    if (display && container.contains(display)) {
-      const encoded = display.dataset.key || "";
-      const value = encoded ? decodeURIComponent(encoded) : (display.textContent || "");
-      copyToClipboard(value);
-      return;
-    }
-    const toggle = e.target.closest(".key-toggle");
-    if (toggle && container.contains(toggle)) {
-      const idx = parseInt(toggle.dataset.idx, 10);
-      if (!Number.isNaN(idx)) toggleKeyVisibility(idx);
-      return;
-    }
+    // The masked token is deliberately not copyable here either: only its hash
+    // is stored, so the displayed string is not a key.
     const actionEl = e.target.closest("[data-action]");
     if (!actionEl || !container.contains(actionEl)) return;
     if (actionEl.dataset.action === "edit-key") {
       const id = decodeData(actionEl.dataset.id || "");
       if (id) openEditKeyModal(id);
+    } else if (actionEl.dataset.action === "rotate-key") {
+      const id = decodeData(actionEl.dataset.id || "");
+      if (id) rotateApiKey(id);
     } else if (actionEl.dataset.action === "delete-key") {
       const id = decodeData(actionEl.dataset.id || "");
       const label = actionEl.dataset.label ? decodeURIComponent(actionEl.dataset.label) : "";
@@ -748,14 +735,27 @@ function localExpiryValue(id) {
   return value ? new Date(value).toISOString() : null;
 }
 
-// Toggle key visibility
-function toggleKeyVisibility(idx) {
-  const span = document.getElementById(`key-display-${idx}`);
-  const k = apiKeys[idx];
-  if (span.textContent.includes('****')) {
-    span.textContent = k.key_full || (k.key_prefix + '****' + k.key_suffix);
-  } else {
-    span.textContent = `${k.key_prefix}****...${k.key_suffix}`;
+// Rotate a key: issue a fresh secret and show it in the one-time window. The
+// server stores only the hash, so a key that was not copied when it was created
+// cannot be revealed afterwards -- rotating is how an existing entry gets back
+// to a usable secret, and it retires the old one immediately.
+async function rotateApiKey(id) {
+  const key = apiKeys.find((item) => String(item.id) === String(id));
+  const label = key ? key.name : `#${id}`;
+  const confirmed = window.confirm(
+    `为「${label}」生成新的完整 Key？\n\n旧的 Key 会立即失效，使用它的客户端需要更新。新的 Key 只会显示这一次。`
+  );
+  if (!confirmed) return;
+  try {
+    const res = await fetch(`/api/keys/${id}/rotate`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || data.error || "重置失败");
+    createdKeys = [{ name: data.name || label, key: data.key }];
+    renderCreatedKeys();
+    openShowKeyModal();
+    loadApiKeys();
+  } catch (err) {
+    showToast(err.message || "重置失败", "error");
   }
 }
 
@@ -822,8 +822,7 @@ async function createApiKey(e) {
   }
   closeCreateKeyModal();
   renderCreatedKeys();
-  document.getElementById("showKeyModal").classList.add("active");
-  document.getElementById("showKeyModal").style.display = "flex";
+  openShowKeyModal();
   loadApiKeys();
 }
 
@@ -916,7 +915,13 @@ function copyAllKeys() {
   copyToClipboard(text);
 }
 
-// Close show key modal
+// Open/close show key modal. This window is the only place a complete secret
+// exists in the UI -- the list only ever holds a prefix and suffix.
+function openShowKeyModal() {
+  document.getElementById("showKeyModal").classList.add("active");
+  document.getElementById("showKeyModal").style.display = "flex";
+}
+
 function closeShowKeyModal() {
   document.getElementById("showKeyModal").classList.remove("active");
   document.getElementById("showKeyModal").style.display = "none";
