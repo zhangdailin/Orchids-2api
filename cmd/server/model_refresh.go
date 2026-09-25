@@ -19,7 +19,6 @@ import (
 	"orchids-api/internal/config"
 	"orchids-api/internal/grok"
 	"orchids-api/internal/modelcatalog"
-	"orchids-api/internal/puter"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 	"orchids-api/internal/util"
@@ -31,12 +30,6 @@ const (
 	defaultModelRefreshConcurrency = 4
 	maxModelRefreshConcurrency     = 16
 )
-
-var verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
-	client := puter.NewFromAccount(acc, refreshModelRequestConfig(cfg, "puter"))
-	defer client.Close()
-	return client.VerifyModel(ctx, modelID)
-}
 
 // fetchGrokBuildModelsForRefresh reads the official Build CLI catalog.  It is
 // deliberately kept as an injectable control-plane operation: model refresh
@@ -151,11 +144,10 @@ func isNoActiveAccounts(err error) bool {
 // observation while "grok_build_models_unavailable_cached" is not, and a prefix
 // test would accept the latter.
 var upstreamCatalogSources = map[string]struct{}{
-	"grok_build_models":             {},
-	"workbuddy_cli_models":          {},
-	"qoder_upstream_models":         {},
-	"puter_public_models_test_mode": {},
-	"cline_recommended_models":      {},
+	"grok_build_models":        {},
+	"workbuddy_cli_models":     {},
+	"qoder_upstream_models":    {},
+	"cline_recommended_models": {},
 }
 
 // warpGraphQLSourcePrefix is the stable prefix of the Warp catalog source, which
@@ -418,8 +410,6 @@ func discoverModelsForChannelReport(ctx context.Context, cfg *config.Config, s *
 	switch strings.ToLower(channel) {
 	case "warp":
 		candidates, source, err = discoverWarpModelsConcurrent(ctx, cfg, s, concurrency)
-	case "puter":
-		candidates, source, err = discoverPuterModelsConcurrent(ctx, cfg, s, concurrency)
 	case "grok":
 		return discoverGrokModelsReport(ctx, cfg, s, concurrency)
 	default:
@@ -431,7 +421,7 @@ func discoverModelsForChannelReport(ctx context.Context, cfg *config.Config, s *
 // discoverWorkBuddyModels reads the account-scoped WorkBuddy model catalog.
 // GET /v3/config is an authenticated control-plane endpoint, so a successful
 // read is itself proof that the credential works; no completion probe is sent
-// (the upstream bills per token, unlike Puter's free test_mode).
+// (the upstream bills per token).
 func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
 	report, err := discoverAccountCatalogModels(ctx, cfg, s, "WorkBuddy", defaultModelRefreshConcurrency)
 	return report.Candidates, report.Source, err
@@ -763,230 +753,6 @@ func persistWorkBuddyCatalogSnapshot(ctx context.Context, s *store.Store, acc *s
 	}
 }
 
-func discoverPuterModelsConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, concurrency int) ([]discoveredModel, string, error) {
-	// Puter's public catalog is readable without a credential, but a published
-	// model is only trustworthy when an active account accepted it. Without an
-	// active account the refresh therefore observes nothing and publishes
-	// nothing.
-	accounts, accErr := enabledAccountsByType(ctx, s, "puter")
-	if accErr != nil {
-		return nil, "", fmt.Errorf("puter model discovery failed: %w", accErr)
-	}
-	if len(accounts) == 0 {
-		return nil, "", &noActiveAccountsError{Channel: "Puter"}
-	}
-
-	proxyFunc := http.ProxyFromEnvironment
-	if cfg != nil {
-		proxyFunc = util.ProxyFuncFromConfig(cfg)
-	}
-	items, err := fetchPuterPublicModelChoices(ctx, proxyFunc)
-	if err != nil {
-		return nil, "", fmt.Errorf("puter public model discovery failed: %w", err)
-	}
-	if len(items) == 0 {
-		return nil, "", fmt.Errorf("puter public model discovery returned no choices")
-	}
-
-	candidates := puterChoicesToDiscovered(items)
-	if len(candidates) == 0 {
-		return nil, "", fmt.Errorf("puter has no discoverable models")
-	}
-
-	// A zero-cost catalog row is usable independently of the monthly paid
-	// allowance. Keep it visible even when every account is spent; metered and
-	// unknown rows still require the existing account test_mode proof.
-	free := make([]discoveredModel, 0)
-	probe := make([]discoveredModel, 0, len(candidates))
-	for _, candidate := range candidates {
-		if candidate.BillingTier == "free" {
-			free = append(free, candidate)
-			continue
-		}
-		probe = append(probe, candidate)
-	}
-	summary := verifyPuterDiscoveredModelsConcurrent(ctx, cfg, accounts, probe, concurrency)
-	verified := append(free, summary.Verified...)
-	for i := range verified {
-		verified[i].SortOrder = i
-	}
-	if len(verified) == 0 && summary.SawInsufficientFunds {
-		return nil, "", fmt.Errorf("puter accounts reported insufficient funds; no model could be observed as available")
-	}
-	if len(verified) == 0 {
-		return nil, "", fmt.Errorf("no puter models verified by test_mode")
-	}
-	return verified, "puter_public_models_test_mode", nil
-}
-
-func puterChoicesToDiscovered(items []puterPublicModelChoice) []discoveredModel {
-	out := make([]discoveredModel, 0, len(items))
-	for i, item := range items {
-		id := strings.TrimSpace(item.ID)
-		if id == "" {
-			continue
-		}
-		name := strings.TrimSpace(item.Name)
-		if name == "" {
-			name = id
-		}
-		candidate := discoveredModel{
-			ID: id, Name: name, SortOrder: i,
-			Provider: item.Provider, UpstreamModel: item.UpstreamModel,
-		}
-		if item.PricingKnown {
-			candidate.BillingTier = "metered"
-			candidate.BillingSource = "puter_catalog_costs"
-			if item.Free {
-				candidate.BillingTier = "free"
-				candidate.Verified = true
-			}
-		}
-		out = append(out, candidate)
-	}
-	return out
-}
-
-type puterModelVerificationSummary struct {
-	Verified             []discoveredModel
-	SawInsufficientFunds bool
-}
-
-func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel, concurrency int) puterModelVerificationSummary {
-	if len(accounts) == 0 || len(candidates) == 0 {
-		return puterModelVerificationSummary{}
-	}
-	if boundedModelRefreshWorkers(len(candidates), concurrency) <= 1 {
-		return verifyPuterDiscoveredModelsSerial(ctx, cfg, accounts, candidates)
-	}
-	results := make([]puterModelProbeResult, len(candidates))
-	runIndexedModelRefreshWorkers(len(candidates), concurrency, func(idx int) {
-		candidate := candidates[idx]
-		if strings.TrimSpace(candidate.ID) == "" {
-			return
-		}
-		probeID := strings.TrimSpace(candidate.UpstreamModel)
-		if probeID == "" {
-			probeID = candidate.ID
-		}
-		results[idx], _ = probePuterCandidate(ctx, cfg, accounts, probeID, idx%len(accounts))
-	})
-
-	verified := make([]discoveredModel, 0, len(candidates))
-	sawInsufficientFunds := false
-	for idx, candidate := range candidates {
-		if results[idx] == puterModelProbeQuotaLimited {
-			sawInsufficientFunds = true
-		}
-		if results[idx] != puterModelProbeAccepted {
-			continue
-		}
-		candidate.SortOrder = len(verified)
-		candidate.Verified = true
-		verified = append(verified, candidate)
-	}
-	return puterModelVerificationSummary{Verified: verified, SawInsufficientFunds: sawInsufficientFunds}
-}
-
-func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, accounts []*store.Account, candidates []discoveredModel) puterModelVerificationSummary {
-	verified := make([]discoveredModel, 0, len(candidates))
-	sawInsufficientFunds := false
-	accountIndex := 0
-	for _, candidate := range candidates {
-		if strings.TrimSpace(candidate.ID) == "" {
-			continue
-		}
-		probeID := strings.TrimSpace(candidate.UpstreamModel)
-		if probeID == "" {
-			probeID = candidate.ID
-		}
-		result, next := probePuterCandidate(ctx, cfg, accounts, probeID, accountIndex)
-		accountIndex = next
-		if result == puterModelProbeQuotaLimited {
-			sawInsufficientFunds = true
-		}
-		if result == puterModelProbeAccepted {
-			candidate.SortOrder = len(verified)
-			candidate.Verified = true
-			verified = append(verified, candidate)
-		}
-	}
-	return puterModelVerificationSummary{Verified: verified, SawInsufficientFunds: sawInsufficientFunds}
-}
-
-func probePuterCandidate(ctx context.Context, cfg *config.Config, accounts []*store.Account, modelID string, startAccount int) (puterModelProbeResult, int) {
-	if len(accounts) == 0 || strings.TrimSpace(modelID) == "" {
-		return 0, startAccount
-	}
-	result := puterModelProbeResult(0)
-	allDefinitiveRejects := true
-	for attempt := 0; attempt < len(accounts); attempt++ {
-		if ctx.Err() != nil {
-			return result, startAccount
-		}
-		index := (startAccount + attempt) % len(accounts)
-		err := verifyPuterModelForRefresh(ctx, cfg, accounts[index], modelID)
-		if err == nil {
-			return puterModelProbeAccepted, (index + 1) % len(accounts)
-		}
-		if isPuterInsufficientFundsError(err) {
-			result = result.withInsufficientFunds()
-		}
-		if !isPuterModelDefinitiveReject(err) {
-			allDefinitiveRejects = false
-		}
-	}
-	if result != puterModelProbeQuotaLimited && allDefinitiveRejects {
-		result = puterModelProbeRejected
-	}
-	return result, startAccount
-}
-
-type puterModelProbeResult uint8
-
-const (
-	_ puterModelProbeResult = iota
-	puterModelProbeAccepted
-	puterModelProbeRejected
-	puterModelProbeQuotaLimited
-)
-
-func (r puterModelProbeResult) withInsufficientFunds() puterModelProbeResult {
-	if r == puterModelProbeAccepted {
-		return r
-	}
-	return puterModelProbeQuotaLimited
-}
-
-func isPuterInsufficientFundsError(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(text, "insufficient_funds") ||
-		strings.Contains(text, "available funding is insufficient") ||
-		strings.Contains(text, "insufficient funding") ||
-		strings.Contains(text, "status=402") ||
-		strings.Contains(text, "status 402")
-}
-
-func isPuterModelDefinitiveReject(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := strings.ToLower(strings.TrimSpace(err.Error()))
-	if text == "" {
-		return false
-	}
-	if strings.Contains(text, "model not found") ||
-		strings.Contains(text, "invalid model") ||
-		strings.Contains(text, "unknown model") ||
-		strings.Contains(text, "unsupported model") {
-		return true
-	}
-	return false
-}
-
 type grokBuildModelDiscovery struct {
 	index   int
 	account *store.Account
@@ -1277,7 +1043,7 @@ func refreshModelRequestConfig(cfg *config.Config, channel string) *config.Confi
 	}
 
 	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "warp", "puter", "workbuddy", "qoder", "cline":
+	case "warp", "workbuddy", "qoder", "cline":
 		if cfg.RequestTimeout <= 0 || cfg.RequestTimeout > 15 {
 			cfg.RequestTimeout = 15
 		}
@@ -1386,8 +1152,8 @@ func applyModelRefreshWithPrune(ctx context.Context, s *store.Store, channel str
 // it must remain false here so it can never prune retired provider planes.
 func shouldDeleteMissingModelsOnRefresh(channel, source string) bool {
 	source = strings.TrimSpace(source)
-	if source == "grok_build_models" || source == "puter_public_models_test_mode" || source == "workbuddy_cli_models" {
-		// Grok is a provider subset; Puter probes may be inconclusive because of
+	if source == "grok_build_models" || source == "workbuddy_cli_models" {
+		// Grok is a provider subset; catalog reads may be inconclusive because of
 		// quota/transport; WorkBuddy can return a degraded whitelist fallback.
 		// Absence from any of these is not authoritative deletion evidence.
 		return false

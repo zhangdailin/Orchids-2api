@@ -79,7 +79,7 @@
   }
 
   // Journal labels. The server sends stable ids; the page shows what they mean.
-  const KIND_LABELS = { request: '请求', operation: '操作', system: '系统', debug: '诊断', http: 'HTTP', probe: '探测', grok: 'Grok', warp: 'Warp', puter: 'Puter', workbuddy: 'WorkBuddy' };
+  const KIND_LABELS = { request: '请求', operation: '操作', system: '系统', debug: '诊断', http: 'HTTP', probe: '探测', grok: 'Grok', warp: 'Warp', workbuddy: 'WorkBuddy' };
   const ACTION_LABELS = {
     debug_bundle: '请求诊断包',
     http_request: '推理请求',
@@ -133,7 +133,6 @@
     import: '导入',
     grok: 'Grok 账号',
     warp: 'Warp 账号',
-    puter: 'Puter 账号',
     workbuddy: 'WorkBuddy 账号',
     'v1.admin': '管理接口',
     imagine: '图片生成',

@@ -17,7 +17,7 @@ func TestReconcileDiscoveredModelsProtectsManualAndPrunesDiscovery(t *testing.T)
 	ctx := context.Background()
 	manual := &Model{Channel: "Qoder", ModelID: "manual", Name: "operator name", Status: ModelStatusMaintenance}
 	stale := &Model{Channel: "Qoder", ModelID: "stale", Name: "stale", Status: ModelStatusAvailable, Origin: "discovery"}
-	other := &Model{Channel: "Puter", ModelID: "stale", Name: "other channel", Status: ModelStatusAvailable, Origin: "discovery"}
+	other := &Model{Channel: "WorkBuddy", ModelID: "stale", Name: "other channel", Status: ModelStatusAvailable, Origin: "discovery"}
 	for _, m := range []*Model{manual, stale, other} {
 		if err := s.CreateModel(ctx, m); err != nil {
 			t.Fatal(err)
@@ -41,7 +41,7 @@ func TestReconcileDiscoveredModelsProtectsManualAndPrunesDiscovery(t *testing.T)
 	if _, err := s.GetModelByChannelAndModelID(ctx, "qoder", "stale"); err == nil {
 		t.Fatal("stale discovery row survived prune")
 	}
-	if _, err := s.GetModelByChannelAndModelID(ctx, "puter", "stale"); err != nil {
+	if _, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "stale"); err != nil {
 		t.Fatalf("other channel pruned: %v", err)
 	}
 	fresh, err := s.GetModelByChannelAndModelID(ctx, "qoder", "fresh")

@@ -9,7 +9,6 @@
 | 路径 | 方法 | 说明 |
 |---|---|---|
 | `/warp/v1/messages` | POST | Warp 通道 Claude Messages 代理 |
-| `/puter/v1/messages` | POST | Puter 通道 Claude Messages 代理 |
 | `/workbuddy/v1/messages` | POST | WorkBuddy 国际版 Claude Messages 代理 |
 | `/qoder/v1/messages` | POST | Qoder（qoder.com）Claude Messages 代理 |
 | `/cline/v1/messages` | POST | Cline（api.cline.bot）Claude Messages 代理 |
@@ -22,7 +21,6 @@
 | 路径 | 方法 | 说明 |
 |---|---|---|
 | `/warp/v1/chat/completions` | POST | Warp OpenAI 兼容入口 |
-| `/puter/v1/chat/completions` | POST | Puter OpenAI 兼容入口 |
 | `/workbuddy/v1/chat/completions` | POST | WorkBuddy 国际版 OpenAI 兼容入口 |
 | `/qoder/v1/chat/completions` | POST | Qoder OpenAI 兼容入口 |
 | `/cline/v1/chat/completions` | POST | Cline OpenAI 兼容入口 |
@@ -31,7 +29,7 @@
 
 ### 1.3 OpenAI Responses 风格
 
-所有渠道的模型都可经统一前缀 `/v1` 使用 Responses API：Grok 模型走原生实现，其余渠道（Warp / Puter / WorkBuddy / Qoder / Cline）由 Responses→Chat 桥接提供。渠道前缀（`/warp/v1`、`/puter/v1`、`/workbuddy/v1`、`/qoder/v1`、`/cline/v1`、`/grok/v1`）同样可用。
+所有渠道的模型都可经统一前缀 `/v1` 使用 Responses API：Grok 模型走原生实现，其余渠道（Warp / WorkBuddy / Qoder / Cline）由 Responses→Chat 桥接提供。渠道前缀（`/warp/v1`、`/workbuddy/v1`、`/qoder/v1`、`/cline/v1`、`/grok/v1`）同样可用。
 
 | 路径 | 方法 | 说明 |
 |---|---|---|
@@ -43,7 +41,7 @@
 | `/responses/{response_id}/cancel` | POST | 取消 Response，幂等；返回带 `status=cancelled` 的对象 |
 | `/responses/{response_id}/input_items` | GET | 返回该 Response 创建时的输入项列表 |
 
-上表的 `cancel` / `input_items` 在 `/v1`、`/grok/v1`、`/warp/v1`、`/puter/v1`、`/workbuddy/v1`、`/qoder/v1` 六个前缀下均已注册，且不经过按模型分发的 dispatcher：cancel 请求体不含 `model`，按请求体分发会让「发送 `{}`」与「不发送请求体」落到不同实现，因此这两个端点显式注册，统一读取同一个 response store。
+上表的 `cancel` / `input_items` 在 `/v1`、`/grok/v1`、`/warp/v1`、`/workbuddy/v1`、`/qoder/v1` 五个前缀下均已注册，且不经过按模型分发的 dispatcher：cancel 请求体不含 `model`，按请求体分发会让「发送 `{}`」与「不发送请求体」落到不同实现，因此这两个端点显式注册，统一读取同一个 response store。
 
 stored Response 归属记录按客户端 API Key 隔离。连续请求和资源管理会固定使用创建该 Response 的 Build OAuth 账号；归属记录过期或账号不可用时不会切换到其他账号。统一前缀下的 `GET`/`DELETE` 由存储记录决定由谁处理：Build 记录交给原生 handler（只有它能用创建该记录的账号访问上游），其余记录交给写入它的桥接实现。
 
@@ -64,7 +62,6 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/v1/models` | GET | 全通道模型列表 |
 | `/v1/models/{id}` | GET | 查询单个模型 |
 | `/warp/v1/models` | GET | Warp 模型列表 |
-| `/puter/v1/models` | GET | Puter 模型列表 |
 | `/workbuddy/v1/models` | GET | WorkBuddy 国际版模型列表 |
 | `/qoder/v1/models` | GET | Qoder 模型列表 |
 | `/cline/v1/models` | GET | Cline 模型列表 |
@@ -86,7 +83,6 @@ Build 原生 `context_management`、压缩输入和推理密文保留转发；`/
 | `/api/accounts/{id}/usage` | GET | 账号用量 |
 | `/api/warp/device-auth` | POST | 启动 Warp 官方网页登录 |
 | `/api/warp/device-auth/{id}` | GET/DELETE | 查询授权状态 / 取消授权 |
-| `/api/puter/web-login` | POST | 试验：验证 Puter 官方弹窗授权并保存账号；需管理认证和同源 JSON 请求 |
 | `/api/workbuddy/login` | POST | 发起 WorkBuddy 国际版官方浏览器登录（返回 `id` 与官方 `verification_uri_complete`） |
 | `/api/workbuddy/login/{id}` | GET/DELETE | 轮询登录状态 / 取消登录事务 |
 | `/api/qoder/login` | POST | 发起 Qoder 官方设备授权登录（返回 `id` 与官方 `verification_uri_complete`） |
@@ -188,7 +184,7 @@ RPM 在 Redis 中原子计数，并覆盖所有受 API Key 保护的模型与推
 
 当模型要调用工具时，非流式响应会直接返回 `content` 数组中的 `tool_use` block，而不是空内容。
 
-当前已做回归覆盖的 Puter 场景：
+当前已做回归覆盖的场景：
 
 - `Read`
 - `Write`
@@ -213,7 +209,7 @@ RPM 在 Redis 中原子计数，并覆盖所有受 API Key 保护的模型与推
 ```bash
 curl -s http://127.0.0.1:3002/api/models/refresh \
   -H 'Content-Type: application/json' \
-  -d '{"channel":"puter"}'
+  -d '{"channel":"warp"}'
 ```
 
 返回字段：
@@ -235,7 +231,6 @@ curl -s http://127.0.0.1:3002/api/models/refresh \
 
 - **刷新只发布上游目录**。没有 active 账号时不会拉取，也不会写入任何模型；此时接口返回 `{"skipped":true,"source":"no_active_account"}`，模型列表保持不变
 - 缓存目录与内置目录都不再作为回退：拉取失败即上报失败，已有行按「上次已知状态」保留，不会被当成本次发现重新发布
-- Puter 会额外使用账号 `test_mode` 逐模型验证，返回 `source=puter_public_models_test_mode`；`discovered` 是上游目录条数，`verified` 是探测通过条数
 - WorkBuddy 使用 `GET /v3/config` 的 `cli` 白名单（鉴权成功即视为验证通过，不额外消耗额度），返回 `source=workbuddy_cli_models`
 - Qoder 使用**有符号上游目录** `GET /algo/api/v2/model/list`（复用聊天链路的 COSY 签名），返回 `source=qoder_upstream_models`；对外模型 ID 是**小写化的显示名**（例如 `qwen3.7-max`），内部 key（`qmodel_latest`）以及 `max_input_tokens`/`is_reasoning` 等字段按 JSON 保存在账号快照里
 - Cline 使用推荐模型目录 `GET /ai/cline/recommended-models`（只发布 `free` 列表），返回 `source=cline_recommended_models`；对外模型 ID 就是上游 id（例如 `x-ai/grok-4.1-fast`）
@@ -284,10 +279,10 @@ curl -s http://127.0.0.1:3002/workbuddy/v1/messages \
 
 这些 `quota_*` 字段会合并进**每一个账号响应**（列表、创建、编辑、检查），前端表格的「等级 / 配额」列直接读取；同时保留嵌套的 `workbuddy_quota` 快照（含 `package_name` / `synced_at` / `last_consumed_units`）。账号身份（`email` / `name` / `workbuddy_uid`）由 accessToken 里的 Keycloak claims 推导，因此手填会话 JSON 或走官方登录都能得到同样的账号标识。
 
-### 5.1 Puter Claude Messages 工具首轮
+### 5.1 Warp Claude Messages 工具首轮
 
 ```bash
-curl -s http://127.0.0.1:3002/puter/v1/messages \
+curl -s http://127.0.0.1:3002/warp/v1/messages \
 	-H 'Authorization: Bearer sk-...' \
   -H 'Content-Type: application/json' \
   -d '{
@@ -372,16 +367,6 @@ curl -s -X DELETE http://127.0.0.1:3002/api/workbuddy/login/<login-id>
 - 需要同源（`Origin` 与 Host 一致）且 HTTPS（本地 `localhost`/`127.0.0.1` 例外）；跨站请求一律 403
 - 页面不会把 token 写入 `localStorage`/Cookie，refreshToken 也从不返回给浏览器
 
-## 7. Puter 官方网页登录
-
-账号管理 → Puter → 添加账号 →「使用 Puter 官方网页登录」；也可手填 Token。
-弹窗使用 Puter 网页授权协议，接收 `puter.token` 后检查官方 origin、弹窗 source 与本轮随机 `msg_id`，再通过同源 JSON 请求提交到 `/api/puter/web-login`。
-后端验证身份和额度后才保存账号，接口只返回账号 ID，不回显 Token。授权得到的是站点应用级凭据，其权限与额度不能视为完整账号权限。
-
-远程管理站点需要 HTTPS，反向代理应保留原始 Host，浏览器需允许弹窗；切断跨源 opener 的隔离页面无法完成授权。授权五分钟超时，可取消后重试。Token 不写入回调 URL、localStorage 或日志。
-
-本地回归覆盖消息来源检查、取消和超时、后端验证及失败不入库；真实官方弹窗授权和后续聊天仍需端到端验证。
-
 ## 8. 错误约定
 
 - `400`：请求参数错误、模型错误、方法错误
@@ -392,7 +377,6 @@ curl -s -X DELETE http://127.0.0.1:3002/api/workbuddy/login/<login-id>
 常见错误：
 
 - `model not found`
-- `puter API error: ...`
 - `Bad Gateway`
 - `stream parse error`
 

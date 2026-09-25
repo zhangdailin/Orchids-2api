@@ -3,7 +3,6 @@
   "use strict";
   const providers = Object.freeze([
     Object.freeze({"key":"warp","label":"Warp","apiPrefix":"/warp/v1","generic":true,"default":true,"theme":"cyan","accountCreate":"device"}),
-    Object.freeze({"key":"puter","label":"Puter","apiPrefix":"/puter/v1","generic":true,"theme":"purple","accountCreate":"browser"}),
     Object.freeze({"key":"workbuddy","label":"WorkBuddy","apiPrefix":"/workbuddy/v1","generic":true,"theme":"orange","accountCreate":"browser"}),
     Object.freeze({"key":"qoder","label":"Qoder","apiPrefix":"/qoder/v1","generic":true,"theme":"green","accountCreate":"browser"}),
     Object.freeze({"key":"cline","label":"Cline","apiPrefix":"/cline/v1","generic":true,"theme":"blue","accountCreate":"browser"}),

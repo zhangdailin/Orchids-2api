@@ -14,21 +14,21 @@ func TestClassifyUpstreamError(t *testing.T) {
 	}{
 		{
 			name:         "model not found is client error",
-			errStr:       "puter API error: message=Model not found, please try another model",
+			errStr:       "workbuddy API error: message=Model not found, please try another model",
 			wantCategory: "client",
 			wantRetry:    false,
 			wantSwitch:   false,
 		},
 		{
 			name:         "no implementation available is client error",
-			errStr:       "puter API error: code=no_implementation_available, status=502, message=No implementation available for interface `puter-chat-completion`.",
+			errStr:       "workbuddy API error: code=no_implementation_available, status=502, message=No implementation available for interface `workbuddy-chat-completion`.",
 			wantCategory: "client",
 			wantRetry:    false,
 			wantSwitch:   false,
 		},
 		{
 			name:         "insufficient funds is quota exhausted",
-			errStr:       "puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.",
+			errStr:       "workbuddy API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.",
 			wantCategory: "quota_exhausted",
 			wantRetry:    true,
 			wantSwitch:   true,

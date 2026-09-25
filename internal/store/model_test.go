@@ -103,10 +103,10 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 	// created explicitly. The point of the test is that the lookup index is keyed
 	// by channel *and* model id, not that either channel has a catalog.
 	if err := s.CreateModel(ctx, &Model{
-		Channel: "Puter", ModelID: "deepseek-v4-pro", Name: "deepseek-v4-pro",
+		Channel: "WorkBuddy", ModelID: "deepseek-v4-pro", Name: "deepseek-v4-pro",
 		Status: ModelStatusAvailable, Verified: true,
 	}); err != nil {
-		t.Fatalf("CreateModel(puter) error = %v", err)
+		t.Fatalf("CreateModel(workbuddy) error = %v", err)
 	}
 	if err := s.CreateModel(ctx, &Model{
 		Channel: "Warp", ModelID: "auto-open", Name: "Warp Auto Open",
@@ -115,12 +115,12 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 		t.Fatalf("CreateModel(warp) error = %v", err)
 	}
 
-	puterModel, err := s.GetModelByChannelAndModelID(ctx, "puter", "deepseek-v4-pro")
+	workBuddyModel, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro")
 	if err != nil {
-		t.Fatalf("GetModelByChannelAndModelID(puter) error = %v", err)
+		t.Fatalf("GetModelByChannelAndModelID(workbuddy) error = %v", err)
 	}
-	if puterModel.Channel != "Puter" {
-		t.Fatalf("puter model channel = %q, want Puter", puterModel.Channel)
+	if workBuddyModel.Channel != "WorkBuddy" {
+		t.Fatalf("workbuddy model channel = %q, want WorkBuddy", workBuddyModel.Channel)
 	}
 
 	warpModel, err := s.GetModelByChannelAndModelID(ctx, "warp", "auto-open")
@@ -130,7 +130,7 @@ func TestGetModelByChannelAndModelID_AllowsDuplicateModelIDsAcrossChannels(t *te
 	if warpModel.Channel != "Warp" {
 		t.Fatalf("warp model channel = %q, want Warp", warpModel.Channel)
 	}
-	if warpModel.ID == puterModel.ID {
+	if warpModel.ID == workBuddyModel.ID {
 		t.Fatalf("expected different records across channels, got same id %q", warpModel.ID)
 	}
 }
@@ -172,7 +172,7 @@ func TestStoreNew_PublishesNoBuiltInModels(t *testing.T) {
 		{"Grok", "grok-4.5"},
 		{"Grok", "grok-imagine-image"},
 		{"Warp", "auto-open"},
-		{"Puter", "claude-opus-5"},
+		{"WorkBuddy", "claude-opus-5"},
 		{"WorkBuddy", "default-model"},
 		{"Qoder", "Qwen3.7-Max"},
 	} {
@@ -201,12 +201,12 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &Model{
-		Channel: "Puter", ModelID: "deepseek-v4-pro", Name: "deepseek-v4-pro",
+		Channel: "WorkBuddy", ModelID: "deepseek-v4-pro", Name: "deepseek-v4-pro",
 		Status: ModelStatusAvailable, Verified: true,
 	}); err != nil {
 		t.Fatalf("CreateModel() error = %v", err)
 	}
-	model, err := s.GetModelByChannelAndModelID(ctx, "puter", "deepseek-v4-pro")
+	model, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID() error = %v", err)
 	}
@@ -224,7 +224,7 @@ func TestStoreNew_PreservesExistingModelList(t *testing.T) {
 		mini.Close()
 	})
 
-	if _, err := s.GetModelByChannelAndModelID(ctx, "puter", "deepseek-v4-pro"); err == nil {
+	if _, err := s.GetModelByChannelAndModelID(ctx, "workbuddy", "deepseek-v4-pro"); err == nil {
 		t.Fatal("expected deleted model to stay deleted after store restart")
 	}
 }
@@ -248,7 +248,7 @@ func TestStoreNew_KeepsUpstreamDiscoveredModels(t *testing.T) {
 	}
 	ctx := context.Background()
 	if err := s.CreateModel(ctx, &Model{
-		Channel: "Puter", ModelID: "claude-opus-5", Name: "claude-opus-5",
+		Channel: "WorkBuddy", ModelID: "claude-opus-5", Name: "claude-opus-5",
 		Status: ModelStatusAvailable, Verified: true, Origin: "discovery",
 	}); err != nil {
 		t.Fatalf("CreateModel(discovered) error = %v", err)
@@ -271,7 +271,7 @@ func TestStoreNew_KeepsUpstreamDiscoveredModels(t *testing.T) {
 	})
 
 	for _, probe := range []struct{ channel, modelID string }{
-		{"Puter", "claude-opus-5"},
+		{"WorkBuddy", "claude-opus-5"},
 		{"Grok", "grok-4.6"},
 	} {
 		model, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID)
@@ -338,7 +338,7 @@ func TestStoreNew_RemovesDeprecatedGrokModelsOnly(t *testing.T) {
 // only removed from the channel that retired it.
 //
 // The cleanup used to match by identifier alone, which deleted working models:
-// the Puter and Warp upstream catalogs legitimately advertise grok-4.3 and
+// the WorkBuddy and Warp upstream catalogs legitimately advertise grok-4.3 and
 // grok-build-0.1, so every restart removed rows a refresh had just published.
 func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 	t.Parallel()
@@ -356,7 +356,7 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 	ctx := context.Background()
 	for _, record := range []*Model{
 		{Channel: "Grok", ModelID: "grok-4.3", Name: "retired Grok route", Status: ModelStatusAvailable, Verified: true},
-		{Channel: "Puter", ModelID: "grok-4.3", Name: "upstream Puter route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
+		{Channel: "WorkBuddy", ModelID: "grok-4.3", Name: "upstream WorkBuddy route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
 		{Channel: "Warp", ModelID: "grok-build-0.1", Name: "upstream Warp route", Status: ModelStatusAvailable, Verified: true, Origin: "discovery"},
 		{Channel: "Grok", ModelID: "grok-build-0.1", Name: "retired Grok route", Status: ModelStatusAvailable, Verified: true},
 		{Channel: "Warp", ModelID: "warp-chat", Name: "retired virtual mode", Status: ModelStatusAvailable, Verified: true},
@@ -373,7 +373,7 @@ func TestCleanupDeprecatedModelIDsIsChannelScoped(t *testing.T) {
 	s.cleanupDeprecatedModelIDs(ctx)
 
 	for _, probe := range []struct{ channel, modelID string }{
-		{"Puter", "grok-4.3"},
+		{"WorkBuddy", "grok-4.3"},
 		{"Warp", "grok-build-0.1"},
 	} {
 		if _, err := s.GetModelByChannelAndModelID(ctx, probe.channel, probe.modelID); err != nil {

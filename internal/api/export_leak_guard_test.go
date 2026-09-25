@@ -67,15 +67,13 @@ func TestExportNeverCarriesAnotherChannelsCredential(t *testing.T) {
 	allowed := map[string]map[string]bool{
 		"grok": setOf("client_cookie", "refresh_token", "token", "session_cookie",
 			"session_id", "client_uat", "oauth_access_token", "oauth_refresh_token"),
-		"puter": setOf("client_cookie", "refresh_token", "token", "session_cookie",
-			"session_id", "client_uat"),
 		"workbuddy": setOf("client_cookie", "refresh_token", "token", "session_cookie",
 			"session_id", "client_uat", "workbuddy_access_token", "workbuddy_refresh_token"),
 		"qoder": setOf("client_cookie", "refresh_token", "token", "session_cookie",
 			"session_id", "client_uat", "qoder_access_token", "qoder_refresh_token",
 			"qoder_runtime_info", "qoder_runtime_key"),
 	}
-	for _, channel := range []string{"grok", "puter", "workbuddy", "qoder"} {
+	for _, channel := range []string{"grok", "workbuddy", "qoder"} {
 		t.Run(channel, func(t *testing.T) {
 			acc := &store.Account{
 				ID: 1, Name: "guard", AccountType: channel, Enabled: true, Weight: 1,
@@ -236,14 +234,14 @@ func TestAccountCheckKeepsASpentAllowanceVerdict(t *testing.T) {
 // TestAccountCheckKeepsTheReasonForAnUnchangedVerdict pins that a bare status from
 // a verifier does not erase the explanation an operator already has.
 //
-// Puter's verify path reports "402" with no message of its own. A manual check used
+// Some verify paths report "402" with no message of their own. A manual check used
 // to replace the upstream's "No usage left for request" with an empty string, so the
 // account stayed parked and the table stopped saying why.
 func TestAccountCheckKeepsTheReasonForAnUnchangedVerdict(t *testing.T) {
-	reason := "puter API error: status=402, body={\"code\":\"insufficient_funds\"}"
+	reason := "upstream API error: status=402, body={\"code\":\"insufficient_funds\"}"
 
 	// Same status: the specific reason survives.
-	same := &store.Account{AccountType: "puter", StatusCode: "402", StatusMessage: reason}
+	same := &store.Account{AccountType: "workbuddy", StatusCode: "402", StatusMessage: reason}
 	applySuccessfulAccountRefreshStatus(same, "402")
 	if same.StatusMessage != reason {
 		t.Fatalf("message = %q, want the existing reason kept", same.StatusMessage)
@@ -251,7 +249,7 @@ func TestAccountCheckKeepsTheReasonForAnUnchangedVerdict(t *testing.T) {
 
 	// Different status: an old reason described a different problem and must not be
 	// carried onto the new one.
-	different := &store.Account{AccountType: "puter", StatusCode: "401", StatusMessage: "session expired"}
+	different := &store.Account{AccountType: "workbuddy", StatusCode: "401", StatusMessage: "session expired"}
 	applySuccessfulAccountRefreshStatus(different, "402")
 	if strings.Contains(different.StatusMessage, "session expired") {
 		t.Fatalf("message = %q, want a stale reason dropped when the status changes", different.StatusMessage)

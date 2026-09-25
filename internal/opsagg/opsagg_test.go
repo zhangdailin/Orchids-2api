@@ -77,14 +77,14 @@ func TestObserve_RollsUpIntoOneMinuteBucket(t *testing.T) {
 // instead of drawing a green, zero-traffic channel.
 func TestSummarize_NoSamplesIsZero(t *testing.T) {
 	agg, _ := newAggregator(t)
-	buckets, err := agg.Range(context.Background(), "puter", time.Now().Add(-time.Hour), time.Now())
+	buckets, err := agg.Range(context.Background(), "workbuddy", time.Now().Add(-time.Hour), time.Now())
 	if err != nil {
 		t.Fatalf("Range() error = %v", err)
 	}
 	if len(buckets) != 0 {
 		t.Fatalf("buckets = %v, want none for an idle channel", buckets)
 	}
-	summary := agg.Summarize(context.Background(), "puter", buckets)
+	summary := agg.Summarize(context.Background(), "workbuddy", buckets)
 	if summary.Requests != 0 || summary.Samples != 0 || summary.SuccessRate != 0 || summary.RPM != 0 {
 		t.Fatalf("idle summary = %+v, want all zero", summary)
 	}

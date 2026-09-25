@@ -10,8 +10,8 @@ import (
 )
 
 func TestAccountCredentialsAreWriteOnly(t *testing.T) {
-	for _, provider := range []string{"warp", "grok", "puter", "workbuddy"} {
-		acc := &store.Account{ID: 9, AccountType: provider, Token: "private-token", ClientCookie: "private-cookie", RefreshToken: "private-refresh", SessionCookie: "private-session", SessionID: "private-session-id", ClientUat: "private-uat", OAuthAccessToken: "private-oauth", OAuthRefreshToken: "private-oauth-refresh", WorkBuddyAccessToken: "private-wb", WorkBuddyRefreshToken: "private-wb-refresh", StatusMessage: "upstream rejected private-refresh"}
+	for _, provider := range []string{"warp", "grok", "cline", "workbuddy"} {
+		acc := &store.Account{ID: 9, AccountType: provider, Token: "private-token", ClientCookie: "private-cookie", RefreshToken: "private-refresh", SessionCookie: "private-session", SessionID: "private-session-id", ClientUat: "private-uat", OAuthAccessToken: "private-oauth", OAuthRefreshToken: "private-oauth-refresh", WorkBuddyAccessToken: "private-wb", WorkBuddyRefreshToken: "private-wb-refresh", ClineAccessToken: "private-cline", ClineRefreshToken: "private-cline-refresh", StatusMessage: "upstream rejected private-refresh"}
 		raw, err := json.Marshal(normalizeAccountOutput(acc))
 		if err != nil {
 			t.Fatal(err)
@@ -24,7 +24,7 @@ func TestAccountCredentialsAreWriteOnly(t *testing.T) {
 		if row["has_credential"] != true {
 			t.Fatalf("missing credential presence for %s", provider)
 		}
-		for _, key := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "session_fingerprint", "warp_authenticated"} {
+		for _, key := range []string{"token", "client_cookie", "refresh_token", "session_cookie", "session_id", "client_uat", "oauth_access_token", "oauth_refresh_token", "workbuddy_access_token", "workbuddy_refresh_token", "cline_access_token", "cline_refresh_token", "session_fingerprint", "warp_authenticated"} {
 			if _, exists := row[key]; exists {
 				t.Fatalf("credential field %s was returned", key)
 			}

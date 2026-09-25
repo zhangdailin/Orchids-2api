@@ -29,7 +29,7 @@ func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
 	}
 
 	handler := makeCoordinatedModelRefreshHandler(func() *config.Config { return &config.Config{} }, nil, newModelRefreshCoordinator())
-	req := httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=warp&concurrency=99", strings.NewReader(`{"channel":"puter","concurrency":8}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=warp&concurrency=99", strings.NewReader(`{"channel":"workbuddy","concurrency":8}`))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -42,8 +42,8 @@ func TestMakeModelRefreshHandler_UsesBodyChannel(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Channel != "puter" {
-		t.Fatalf("channel=%q want %q", resp.Channel, "puter")
+	if resp.Channel != "workbuddy" {
+		t.Fatalf("channel=%q want %q", resp.Channel, "workbuddy")
 	}
 	if resp.Verified != 2 {
 		t.Fatalf("verified=%d want 2", resp.Verified)
@@ -67,12 +67,12 @@ func TestModelRefreshCoordinatorRejectsDuplicateChannel(t *testing.T) {
 	handler := makeCoordinatedModelRefreshHandler(func() *config.Config { return &config.Config{} }, nil, coordinator)
 	firstDone := make(chan struct{})
 	go func() {
-		handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=puter", nil))
+		handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=workbuddy", nil))
 		close(firstDone)
 	}()
 	<-started
 	second := httptest.NewRecorder()
-	handler(second, httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=puter", nil))
+	handler(second, httptest.NewRequest(http.MethodPost, "/api/models/refresh?channel=workbuddy", nil))
 	if second.Code != http.StatusConflict {
 		t.Fatalf("duplicate status=%d want 409", second.Code)
 	}
@@ -238,7 +238,7 @@ func TestChooseRefreshedDefaultModel_PrefersExistingDefault(t *testing.T) {
 	}
 	ordered := []discoveredModel{{ID: "b"}, {ID: "a"}}
 
-	got := chooseRefreshedDefaultModel("Puter", existing, ordered)
+	got := chooseRefreshedDefaultModel("WorkBuddy", existing, ordered)
 	if got != "a" {
 		t.Fatalf("default=%q want %q", got, "a")
 	}
@@ -254,119 +254,6 @@ func TestChooseRefreshedDefaultModel_WarpPrefersAutoOpen(t *testing.T) {
 	got := chooseRefreshedDefaultModel("Warp", existing, ordered)
 	if got != "auto-open" {
 		t.Fatalf("default=%q want auto-open", got)
-	}
-}
-
-func TestVerifyPuterDiscoveredModelsUsesCatalogUpstreamModel(t *testing.T) {
-	prevVerify := verifyPuterModelForRefresh
-	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
-	var got string
-	verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
-		got = modelID
-		return nil
-	}
-	result := verifyPuterDiscoveredModelsSerial(context.Background(), nil,
-		[]*store.Account{{ID: 1, AccountType: "puter"}},
-		[]discoveredModel{{ID: "public-alias", UpstreamModel: "openrouter:vendor/real-model"}})
-	if got != "openrouter:vendor/real-model" || len(result.Verified) != 1 || result.Verified[0].ID != "public-alias" {
-		t.Fatalf("probe=%q verified=%#v", got, result.Verified)
-	}
-}
-
-func TestVerifyPuterDiscoveredModelsConcurrent_RequiresAcceptedProbe(t *testing.T) {
-	prevVerify := verifyPuterModelForRefresh
-	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
-
-	var mu sync.Mutex
-	seen := map[string]int{}
-	verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
-		mu.Lock()
-		seen[modelID]++
-		mu.Unlock()
-		switch modelID {
-		case "stable":
-			return nil
-		case "flaky":
-			return errors.New("puter API error: status=429, body=too many requests")
-		case "missing":
-			return errors.New("puter API error: message=Model not found, please try one of the following models listed here")
-		default:
-			return errors.New("failed to send puter verify request: timeout")
-		}
-	}
-
-	got := verifyPuterDiscoveredModelsConcurrent(
-		context.Background(),
-		&config.Config{},
-		[]*store.Account{{ID: 1, AccountType: "puter"}, {ID: 2, AccountType: "puter"}},
-		[]discoveredModel{{ID: "stable"}, {ID: "flaky"}, {ID: "missing"}},
-		8,
-	)
-
-	gotIDs := make([]string, 0, len(got.Verified))
-	for _, item := range got.Verified {
-		gotIDs = append(gotIDs, item.ID)
-	}
-	if strings.Join(gotIDs, ",") != "stable" {
-		t.Fatalf("verified IDs=%v want [stable]", gotIDs)
-	}
-	if seen["missing"] != 2 {
-		t.Fatalf("missing probes=%d want 2", seen["missing"])
-	}
-}
-
-func TestVerifyPuterDiscoveredModelsConcurrent_TracksInsufficientFunds(t *testing.T) {
-	prevVerify := verifyPuterModelForRefresh
-	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
-
-	verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
-		return errors.New("puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")
-	}
-
-	got := verifyPuterDiscoveredModelsConcurrent(
-		context.Background(),
-		&config.Config{},
-		[]*store.Account{{ID: 1, AccountType: "puter"}, {ID: 2, AccountType: "puter"}},
-		[]discoveredModel{{ID: "claude-sonnet-4"}, {ID: "gpt-5"}},
-		8,
-	)
-
-	if len(got.Verified) != 0 {
-		t.Fatalf("verified=%+v want empty", got.Verified)
-	}
-	if !got.SawInsufficientFunds {
-		t.Fatal("expected insufficient funds to be tracked")
-	}
-}
-
-func TestVerifyPuterDiscoveredModelsSerial_RequiresAcceptedProbe(t *testing.T) {
-	prevVerify := verifyPuterModelForRefresh
-	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
-
-	verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
-		if modelID == "missing" {
-			return errors.New("puter API error: message=Model not found, please try one of the following models listed here")
-		}
-		return errors.New("failed to send puter verify request: EOF")
-	}
-
-	got := verifyPuterDiscoveredModelsConcurrent(
-		context.Background(),
-		&config.Config{},
-		[]*store.Account{{ID: 1, AccountType: "puter"}},
-		[]discoveredModel{{ID: "flaky"}, {ID: "missing"}},
-		1,
-	)
-
-	gotIDs := make([]string, 0, len(got.Verified))
-	for _, item := range got.Verified {
-		gotIDs = append(gotIDs, item.ID)
-	}
-	if strings.Join(gotIDs, ",") != "" {
-		t.Fatalf("verified IDs=%v want []", gotIDs)
-	}
-	if got.SawInsufficientFunds {
-		t.Fatal("did not expect insufficient funds for EOF/model missing errors")
 	}
 }
 
@@ -488,7 +375,6 @@ func TestApplyModelRefresh_RefusesNonUpstreamSources(t *testing.T) {
 		"qoder_builtin_catalog",
 		"warp_cached_models",
 		"grok_build_models_unavailable_cached",
-		"puter_public_models_unverified",
 		"",
 	} {
 		t.Run(source, func(t *testing.T) {
@@ -496,22 +382,22 @@ func TestApplyModelRefresh_RefusesNonUpstreamSources(t *testing.T) {
 			defer cleanup()
 
 			ctx := context.Background()
-			clearModelsForChannel(t, ctx, s, "Puter")
+			clearModelsForChannel(t, ctx, s, "WorkBuddy")
 			if err := s.CreateModel(ctx, &store.Model{
-				Channel: "Puter", ModelID: "existing", Name: "existing",
+				Channel: "WorkBuddy", ModelID: "existing", Name: "existing",
 				Status: store.ModelStatusAvailable, Verified: true, IsDefault: true,
 			}); err != nil {
 				t.Fatalf("CreateModel() error = %v", err)
 			}
 
-			result, err := applyModelRefresh(ctx, s, "Puter", source, []discoveredModel{{ID: "injected", Name: "injected", Verified: true}})
+			result, err := applyModelRefresh(ctx, s, "WorkBuddy", source, []discoveredModel{{ID: "injected", Name: "injected", Verified: true}})
 			if err == nil {
 				t.Fatalf("applyModelRefresh() result=%+v want a refusal for source %q", result, source)
 			}
-			if _, getErr := s.GetModelByChannelAndModelID(ctx, "Puter", "injected"); getErr == nil {
+			if _, getErr := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "injected"); getErr == nil {
 				t.Fatal("a non-upstream source published a model")
 			}
-			if _, getErr := s.GetModelByChannelAndModelID(ctx, "Puter", "existing"); getErr != nil {
+			if _, getErr := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "existing"); getErr != nil {
 				t.Fatalf("a refused refresh mutated the stored catalog: %v", getErr)
 			}
 		})
@@ -525,7 +411,6 @@ func TestApplyModelRefresh_IsUpstreamCatalogSource(t *testing.T) {
 		"grok_build_models",
 		"workbuddy_cli_models",
 		"qoder_upstream_models",
-		"puter_public_models_test_mode",
 	}
 	for _, source := range allowed {
 		if !isUpstreamCatalogSource(source) {
@@ -538,7 +423,6 @@ func TestApplyModelRefresh_IsUpstreamCatalogSource(t *testing.T) {
 		"qoder_builtin_catalog",
 		"grok_cached_models",
 		"warp_cached_models",
-		"puter_public_models_unverified",
 		"grok_build_models_unavailable_cached",
 	}
 	for _, source := range refused {
@@ -555,9 +439,9 @@ func TestApplyModelRefresh_CountsVerifiedSeparately(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	clearModelsForChannel(t, ctx, s, "Puter")
+	clearModelsForChannel(t, ctx, s, "WorkBuddy")
 
-	result, err := applyModelRefresh(ctx, s, "Puter", "puter_public_models_test_mode", []discoveredModel{
+	result, err := applyModelRefresh(ctx, s, "WorkBuddy", "workbuddy_cli_models", []discoveredModel{
 		{ID: "probed", Name: "probed", Verified: true},
 		{ID: "listed-only", Name: "listed-only"},
 	})
@@ -570,14 +454,14 @@ func TestApplyModelRefresh_CountsVerifiedSeparately(t *testing.T) {
 	if result.Verified != 1 {
 		t.Fatalf("Verified=%d want 1", result.Verified)
 	}
-	listed, err := s.GetModelByChannelAndModelID(ctx, "Puter", "listed-only")
+	listed, err := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "listed-only")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID(listed-only) error = %v", err)
 	}
 	if listed.Verified {
 		t.Fatal("a candidate that was never probed was recorded as verified")
 	}
-	probed, err := s.GetModelByChannelAndModelID(ctx, "Puter", "probed")
+	probed, err := s.GetModelByChannelAndModelID(ctx, "WorkBuddy", "probed")
 	if err != nil {
 		t.Fatalf("GetModelByChannelAndModelID(probed) error = %v", err)
 	}
@@ -953,8 +837,8 @@ func TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog(t *
 	if shouldDeleteMissingModelsOnRefresh("Grok", "grok_build_models") {
 		t.Fatal("a Build text-catalog read must not prune the channel catalog")
 	}
-	// Only complete authoritative account catalogs prune automatically. Puter
-	// probes and WorkBuddy's degraded whitelist fallback cannot prove absence.
+	// Only complete authoritative account catalogs prune automatically.
+	// WorkBuddy's degraded whitelist fallback cannot prove absence.
 	for _, tc := range []struct{ channel, source string }{
 		{"Warp", "warp_graphql_feature_model_choice_agent_mode"},
 		{"Qoder", "qoder_upstream_models"},
@@ -966,7 +850,6 @@ func TestShouldDeleteMissingModelsOnRefresh_NeverChannelPrunesOnBuildCatalog(t *
 	}
 	for _, tc := range []struct{ channel, source string }{
 		{"Grok", "grok_build_models"},
-		{"Puter", "puter_public_models_test_mode"},
 		{"WorkBuddy", "workbuddy_cli_models"},
 	} {
 		if shouldDeleteMissingModelsOnRefresh(tc.channel, tc.source) {

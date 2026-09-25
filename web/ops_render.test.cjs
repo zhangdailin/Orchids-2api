@@ -57,7 +57,7 @@ const realPayload = {
   since: '2026-09-12T11:48:19Z',
   until: '2026-09-12T14:48:19Z',
   retention_hours: 192,
-  channels: ['grok', 'puter', 'warp', 'workbuddy'],
+  channels: ['grok', 'warp', 'workbuddy'],
   excluded_aggregates: ['http', 'probe'],
   totals: {
     requests: 248,

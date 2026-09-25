@@ -368,12 +368,11 @@ type GrokFreeQuotaSnapshot struct {
 // capabilities while model/capability filters keep paid requests away from it.
 const AccountStatusWarpQuotaExhausted = "warp_quota_exhausted"
 
-// Puter and Qoder quota exhaustion are capability downgrades when, and only
-// when, the requested route is explicitly marked free by the current upstream
-// catalog. The selector keeps these accounts in the pool but its model filter
-// rejects every metered or unknown route.
+// Qoder quota exhaustion is a capability downgrade when, and only when, the
+// requested route is explicitly marked free by the current upstream catalog.
+// The selector keeps these accounts in the pool but its model filter rejects
+// every metered or unknown route.
 const (
-	AccountStatusPuterQuotaExhausted     = "puter_quota_exhausted"
 	AccountStatusQoderQuotaExhausted     = "qoder_quota_exhausted"
 	AccountStatusWorkBuddyQuotaExhausted = "workbuddy_quota_exhausted"
 )
@@ -462,18 +461,6 @@ type StoredReasoningReplay struct {
 	EncryptedContent string            `json:"encrypted_content,omitempty"`
 	Items            []json.RawMessage `json:"items,omitempty"`
 	ExpiresAt        time.Time         `json:"expires_at"`
-}
-
-// StoredPuterReasoningReplay keeps the reasoning associated with an emitted
-// Puter tool call. Some Anthropic-compatible clients display thinking blocks
-// but replace them with "..." in the next request, so the tool call ID is the
-// stable continuation key. Implementations must encrypt ReasoningContent at
-// rest before writing it to the backing store.
-type StoredPuterReasoningReplay struct {
-	Model            string    `json:"model"`
-	ToolCallID       string    `json:"tool_call_id"`
-	ReasoningContent string    `json:"reasoning_content"`
-	ExpiresAt        time.Time `json:"expires_at"`
 }
 
 type StoredSessionAffinity struct {
@@ -599,8 +586,6 @@ type reasoningReplayStore interface {
 	DeleteReasoningReplay(ctx context.Context, model, sessionKey string) error
 	SaveReasoningReplay(ctx context.Context, replay *StoredReasoningReplay, ttl time.Duration) error
 	GetReasoningReplay(ctx context.Context, model, sessionKey string) (*StoredReasoningReplay, error)
-	SavePuterReasoningReplay(ctx context.Context, replay *StoredPuterReasoningReplay, ttl time.Duration) error
-	GetPuterReasoningReplay(ctx context.Context, model, toolCallID string) (*StoredPuterReasoningReplay, error)
 	SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error
 	GetSessionAffinity(ctx context.Context, provider, model, sessionKey string) (*StoredSessionAffinity, error)
 }
@@ -677,7 +662,7 @@ func (s *Store) backfillGrokRouteMetadata(ctx context.Context) {
 // retired *within a channel's namespace*, not everywhere.
 //
 // The list used to be applied by identifier alone. That deleted working models:
-// the Puter and Warp upstream catalogs legitimately advertise grok-4.3,
+// the Warp upstream catalog legitimately advertises grok-4.3,
 // grok-4.20-* and grok-build-0.1 (they route xAI models), so every restart
 // removed rows a refresh had just published, and a refresh put them back. The
 // channel is therefore part of the entry.
@@ -1060,20 +1045,6 @@ func (s *Store) GetReasoningReplay(ctx context.Context, model, sessionKey string
 		return nil, fmt.Errorf("reasoning replay store not configured")
 	}
 	return s.reasoning.GetReasoningReplay(ctx, model, sessionKey)
-}
-
-func (s *Store) SavePuterReasoningReplay(ctx context.Context, replay *StoredPuterReasoningReplay, ttl time.Duration) error {
-	if s == nil || s.reasoning == nil {
-		return fmt.Errorf("reasoning replay store not configured")
-	}
-	return s.reasoning.SavePuterReasoningReplay(ctx, replay, ttl)
-}
-
-func (s *Store) GetPuterReasoningReplay(ctx context.Context, model, toolCallID string) (*StoredPuterReasoningReplay, error) {
-	if s == nil || s.reasoning == nil {
-		return nil, fmt.Errorf("reasoning replay store not configured")
-	}
-	return s.reasoning.GetPuterReasoningReplay(ctx, model, toolCallID)
 }
 
 func (s *Store) SaveSessionAffinity(ctx context.Context, affinity *StoredSessionAffinity, ttl time.Duration) error {

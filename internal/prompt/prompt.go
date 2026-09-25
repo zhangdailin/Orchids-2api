@@ -9,7 +9,7 @@ import (
 
 // NOTE:
 // This package intentionally contains ONLY shared schema/types used across the codebase
-// (Warp, Puter, caching, and handlers).
+// (Warp, caching, and handlers).
 //
 // Legacy prompt-building implementations (BuildPromptV2*, formatting, summarization, etc.)
 // have been removed in favor of AIClient-only routing.

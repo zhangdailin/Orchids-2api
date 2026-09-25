@@ -80,7 +80,7 @@ func TestEvaluate_FiresRecoversAndClosesTheLoop(t *testing.T) {
 // from paging anyone.
 func TestEvaluate_QuietChannelNeverFires(t *testing.T) {
 	transition := Evaluate(Snapshot{At: time.Now(), Channels: []ChannelSnapshot{
-		channel("puter", func(c *ChannelSnapshot) {
+		channel("workbuddy", func(c *ChannelSnapshot) {
 			c.Requests = 2
 			c.Success = 0
 			c.Failed = 2
@@ -161,7 +161,7 @@ func TestEvaluate_IgnoresInfrastructureAggregates(t *testing.T) {
 	if IsAlertableChannel("http") || IsAlertableChannel("probe") {
 		t.Fatal("the http and probe aggregates must not be alertable")
 	}
-	for _, channel := range []string{"grok", "warp", "puter", "workbuddy", "GROK"} {
+	for _, channel := range []string{"grok", "warp", "qoder", "workbuddy", "GROK"} {
 		if !IsAlertableChannel(channel) {
 			t.Fatalf("%s must remain alertable", channel)
 		}

@@ -50,7 +50,7 @@ func TestWarpManualCreationAndImportDisabled(t *testing.T) {
 		}
 	}
 	rec := httptest.NewRecorder()
-	a.HandleImport(rec, httptest.NewRequest(http.MethodPost, "/api/import", strings.NewReader(`{"accounts":[{"account_type":"warp","refresh_token":"manual-secret"},{"account_type":" Warp ","refresh_token":"manual-secret-2"},{"account_type":"puter","client_cookie":"puter-secret"}]}`)))
+	a.HandleImport(rec, httptest.NewRequest(http.MethodPost, "/api/import", strings.NewReader(`{"accounts":[{"account_type":"warp","refresh_token":"manual-secret"},{"account_type":" Warp ","refresh_token":"manual-secret-2"},{"account_type":"workbuddy","client_cookie":"workbuddy-secret"}]}`)))
 	var result ImportResult
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestWarpManualCreationAndImportDisabled(t *testing.T) {
 		t.Fatalf("unexpected import result: %s", rec.Body.String())
 	}
 	accounts, err := s.ListAccounts(context.Background())
-	if err != nil || len(accounts) != 1 || accounts[0].AccountType != "puter" {
+	if err != nil || len(accounts) != 1 || accounts[0].AccountType != "workbuddy" {
 		t.Fatalf("manual path persisted a Warp account: count=%d err=%v", len(accounts), err)
 	}
 }
@@ -68,7 +68,7 @@ func TestWarpCredentialReplacementAndTypeConversionDisabled(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()
 	acc := &store.Account{AccountType: "warp", RefreshToken: "private-session", Enabled: true}
-	other := &store.Account{AccountType: "puter", ClientCookie: "puter-secret", Enabled: true}
+	other := &store.Account{AccountType: "workbuddy", ClientCookie: "workbuddy-secret", Enabled: true}
 	for _, item := range []*store.Account{acc, other} {
 		if err := s.CreateAccount(context.Background(), item); err != nil {
 			t.Fatal(err)
@@ -85,7 +85,7 @@ func TestWarpCredentialReplacementAndTypeConversionDisabled(t *testing.T) {
 	for _, tc := range []struct {
 		id          int64
 		accountType string
-	}{{acc.ID, "puter"}, {other.ID, "warp"}} {
+	}{{acc.ID, "workbuddy"}, {other.ID, "warp"}} {
 		rec := httptest.NewRecorder()
 		a.HandleAccountByID(rec, httptest.NewRequest(http.MethodPut, "/api/accounts/"+strconv.FormatInt(tc.id, 10), strings.NewReader(`{"account_type":"`+tc.accountType+`"}`)))
 		if rec.Code != http.StatusBadRequest {

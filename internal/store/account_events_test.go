@@ -139,7 +139,7 @@ func TestChangeEmitter_DoesNotBlockTheWrite(t *testing.T) {
 
 	writeDone := make(chan error, 1)
 	go func() {
-		writeDone <- s.CreateAccount(context.Background(), &Account{AccountType: "puter", Token: "t", Enabled: true})
+		writeDone <- s.CreateAccount(context.Background(), &Account{AccountType: "workbuddy", Token: "t", Enabled: true})
 	}()
 
 	select {
@@ -166,7 +166,7 @@ func TestChangeEmitter_CoalescesBurstWithoutGoroutinePerWrite(t *testing.T) {
 	release := make(chan struct{})
 	s.SetChangeEmitter(blockingEmitter{release: release})
 
-	acc := &Account{AccountType: "puter", Token: "t", Enabled: true}
+	acc := &Account{AccountType: "workbuddy", Token: "t", Enabled: true}
 	if err := s.CreateAccount(context.Background(), acc); err != nil {
 		t.Fatalf("CreateAccount: %v", err)
 	}

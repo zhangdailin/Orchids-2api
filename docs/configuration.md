@@ -134,14 +134,13 @@ Grok 账号只能通过 `/api/grok/device-auth*` 创建，凭据为 OAuth access
 | `grok_build_timeout_seconds` | 跟随 `request_timeout` | Build HTTP 总超时，含响应体读取，上限 86400 秒 |
 | `grok_build_stream_idle_seconds` | `120` | Build SSE 有效输出空闲超时，上限 3600 秒；keepalive 不重置计时 |
 | `warp_stream_idle_seconds` | `300` | Warp 响应体连续无字节空闲超时，上限 3600 秒；有持续输出的长任务不受影响 |
-| `puter_stream_idle_seconds` | `120` | Puter NDJSON 响应体连续无字节空闲超时，上限 3600 秒；非法或未知事件会按协议错误记录 |
 | `grok_build_rps` | `0` | 0 关闭主动限速；正数按 Build 账号/模型限速，范围 0.01–1000，burst=1 |
 
 限流状态按 provider、账号与模型隔离；真实 429 冷却不随主动限速关闭。优先使用 `Retry-After`，再使用响应中的 reset 信息。配置 Redis 时，Build pacing 和冷却跨副本共享；Redis 暂时不可用时退化到进程内状态。
 
 总超时与空闲超时是不同边界。长回答需要同时满足入口 `concurrency_timeout` 和 Build HTTP 超时。stored Responses 保留创建账号绑定。
 
-未显式设置账号 `max_concurrent` 时，所有 provider（WorkBuddy、Warp、Puter、Qoder、Grok）默认每账号 10 路；显式正数会覆盖默认值，未知账号类型不受限。单一账号的渠道因此不再因为只有 1 路而把并发请求判成过载。Redis 部署使用带过期与续租的分布式连接租约，进程异常退出后遗留计数会自动回收。
+未显式设置账号 `max_concurrent` 时，所有 provider（WorkBuddy、Warp、Qoder、Cline、Grok）默认每账号 10 路；显式正数会覆盖默认值，未知账号类型不受限。单一账号的渠道因此不再因为只有 1 路而把并发请求判成过载。Redis 部署使用带过期与续租的分布式连接租约，进程异常退出后遗留计数会自动回收。
 
 Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头仍受 HTTP 总超时约束。其他模型继续使用各自客户端策略。
 
@@ -182,9 +181,8 @@ Grok Build 直连或通用代理均使用以上 Build 超时；等待响应头�
 | WorkBuddy | 账号快照 `workbuddy_model_ids[]` 的 `max_input_tokens` / `max_output_tokens` |
 | Warp | 账号模型发现缓存的 `context_windows`（即上游 `contextWindow.max`） |
 | Grok | Build OAuth `GET /v1/models` 能力目录 |
-| Puter | 暂无可信来源，不输出 |
 
-服务端从不按 token 裁剪请求历史：`puter` / `workbuddy` / `qoder` / `cline` 全量透传客户端 `messages`。
+服务端从不按 token 裁剪请求历史：`warp` / `workbuddy` / `qoder` / `cline` 全量透传客户端 `messages`。
 
 ### 3.4 工具定义保真
 

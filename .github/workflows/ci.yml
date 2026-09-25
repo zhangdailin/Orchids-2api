@@ -56,7 +56,6 @@ jobs:
         run: |
           node --test web/accounts_ui.test.cjs
           node --test web/accounts_quota.test.cjs
-          node --test web/puter_auth.test.cjs
           node --test web/ops_ui.test.cjs
           node --test web/ops_render.test.cjs
           node --test web/logs_paging.test.cjs

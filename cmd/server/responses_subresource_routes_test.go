@@ -64,7 +64,7 @@ func TestRegisterRoutes_ResponsesSubResources(t *testing.T) {
 	mux := http.NewServeMux()
 	registerRoutes(mux, cfg, s, h, nil, apiHandler, limiter, nil, renderer)
 
-	for _, prefix := range []string{"/v1", "/grok/v1", "/warp/v1", "/puter/v1", "/workbuddy/v1", "/qoder/v1"} {
+	for _, prefix := range []string{"/v1", "/grok/v1", "/warp/v1", "/workbuddy/v1", "/qoder/v1"} {
 		t.Run(prefix, func(t *testing.T) {
 			for _, probe := range []struct {
 				method string

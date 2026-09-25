@@ -120,7 +120,7 @@ func TestResponsesBridgeNonStreamReturnsAResponseObject(t *testing.T) {
 	}
 	bridge := ResponsesBridgeHandler(chat, ResponsesBridgeOptions{})
 
-	req := httptest.NewRequest(http.MethodPost, "/puter/v1/responses",
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"say hi"}`))
 	rec := httptest.NewRecorder()
 	bridge(rec, req)

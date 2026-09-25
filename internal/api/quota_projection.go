@@ -35,7 +35,6 @@ var quotaProjectors = map[string]quotaProjector{
 	"workbuddy": projectWorkBuddyQuota,
 	"grok":      projectGrokQuota,
 	"warp":      projectWarpQuota,
-	"puter":     projectPuterQuota,
 	"cline":     projectClineQuota,
 }
 
@@ -207,34 +206,7 @@ func projectWarpQuota(fields map[string]interface{}, acc *store.Account, limit, 
 	applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
 		"Warp 官方接口返回的月度额度与赠送额度", baseLimit > 0, false)
 }
-func projectPuterQuota(fields map[string]interface{}, acc *store.Account, limit, current float64, observedTokens int64, usageObserved bool) {
-	if limit <= 0 {
-		fields["quota_limit"] = 0.0
-		fields["quota_used"] = 0.0
-		fields["quota_remaining"] = 0.0
-		fields["quota_mode"] = "unknown"
-		fields["quota_unit"] = "credits"
-		fields["quota_supported"] = false
-		applyQuotaProvenance(fields, "unknown", "upstreamBilling", "",
-			"Puter 额度接口未返回数据", false, false)
-		return
-	}
-	remaining := current
-	if remaining > limit {
-		remaining = limit
-	}
-	used := limit - remaining
-	if used < 0 {
-		used = 0
-	}
-	fields["quota_limit"] = limit
-	fields["quota_used"] = used
-	fields["quota_remaining"] = remaining
-	fields["quota_mode"] = "remaining"
-	fields["quota_unit"] = "credits"
-	applyQuotaProvenance(fields, "paid", "upstreamBilling", "confirmed",
-		"Puter 官方接口返回的月度额度", limit > 0, false)
-}
+
 func projectLegacyQuota(fields map[string]interface{}, acc *store.Account, limit, current float64, observedTokens int64, usageObserved bool) {
 	fields["quota_limit"] = limit
 	remaining := current

@@ -146,13 +146,13 @@ func TestEnsureModelEnabled_PrefersGrokChannelWhenModelIDExistsInOtherProvider(t
 	}()
 
 	if err := s.CreateModel(context.Background(), &store.Model{
-		Channel:  "Puter",
+		Channel:  "WorkBuddy",
 		ModelID:  "grok-shared-id",
-		Name:     "Puter shared",
+		Name:     "WorkBuddy shared",
 		Status:   store.ModelStatusAvailable,
 		Verified: true,
 	}); err != nil {
-		t.Fatalf("CreateModel(puter) error = %v", err)
+		t.Fatalf("CreateModel(workbuddy) error = %v", err)
 	}
 	if err := s.CreateModel(context.Background(), &store.Model{
 		Channel:  "Grok",

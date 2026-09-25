@@ -411,7 +411,7 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 			result.SawMeaningfulEvent = true
 			if onMessage != nil {
 				// One signature per stream keeps every thinking delta inside a
-				// single signed block, matching the WorkBuddy/Qoder/Puter
+				// single signed block, matching the WorkBuddy/Qoder
 				// conversion; Anthropic clients validate the signature.
 				if result.ThinkingSignature == "" {
 					result.ThinkingSignature = newThinkingSignature()

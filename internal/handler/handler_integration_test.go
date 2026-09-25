@@ -54,8 +54,8 @@ func TestHandleMessages_WorkdirQuestionReachesUpstream(t *testing.T) {
 		path     string
 		question string
 	}{
-		{name: "anthropic", path: "/puter/v1/messages", question: "当前运行的目录"},
-		{name: "openai", path: "/puter/v1/chat/completions", question: "workspace path"},
+		{name: "anthropic", path: "/workbuddy/v1/messages", question: "当前运行的目录"},
+		{name: "openai", path: "/workbuddy/v1/chat/completions", question: "workspace path"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
@@ -148,12 +148,12 @@ func TestHandleMessages_Warp_StreamAndJSON(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
+func TestHandleMessages_WorkBuddy_StreamAndJSON(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
-		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "puter-hi"}},
+		{Type: "model", Event: map[string]any{"type": "text-delta", "delta": "workbuddy-hi"}},
 		{Type: "model", Event: map[string]any{"type": "finish", "finishReason": "stop"}},
 	}}
 
@@ -170,22 +170,22 @@ func TestHandleMessages_Puter_StreamAndJSON(t *testing.T) {
 
 	{
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(false)))
+		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(false)))
 		h.HandleMessages(rec, req)
 		if rec.Code != 200 {
 			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 		}
-		if !strings.Contains(rec.Body.String(), "puter-hi") {
+		if !strings.Contains(rec.Body.String(), "workbuddy-hi") {
 			t.Fatalf("expected upstream text in response")
 		}
 	}
 
 	{
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(true)))
+		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(true)))
 		h.HandleMessages(rec, req)
 		out := rec.Body.String()
-		if !strings.Contains(out, "puter-hi") {
+		if !strings.Contains(out, "workbuddy-hi") {
 			t.Fatalf("expected text delta in SSE")
 		}
 	}
@@ -206,7 +206,7 @@ func TestHandleMessages_ForwardsAndEnforcesToolControls(t *testing.T) {
 			"tools": []any{tool}, "tool_choice": choice, "parallel_tool_calls": parallel, "stream": false,
 		})
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 		h.HandleMessages(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
@@ -229,7 +229,7 @@ func TestHandleMessages_ForwardsAndEnforcesToolControls(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_Puter_PreservesContentByDefault(t *testing.T) {
+func TestHandleMessages_WorkBuddy_PreservesContentByDefault(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	up := &mockUpstream{events: []upstream.SSEMessage{
 		{Type: "model", Event: map[string]any{"type": "text-start"}},
@@ -259,7 +259,7 @@ func TestHandleMessages_Puter_PreservesContentByDefault(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -288,7 +288,7 @@ func TestHandleMessages_Puter_PreservesContentByDefault(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_Puter_OpenAIToolCall_StreamAndJSON(t *testing.T) {
+func TestHandleMessages_WorkBuddy_OpenAIToolCall_StreamAndJSON(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10}
 	h := NewWithLoadBalancer(cfg, nil)
 	h.client = &mockUpstream{events: []upstream.SSEMessage{
@@ -318,7 +318,7 @@ func TestHandleMessages_Puter_OpenAIToolCall_StreamAndJSON(t *testing.T) {
 
 	{
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(false)))
+		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(false)))
 		h.HandleMessages(rec, req)
 		if rec.Code != 200 {
 			t.Fatalf("non-stream expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -334,7 +334,7 @@ func TestHandleMessages_Puter_OpenAIToolCall_StreamAndJSON(t *testing.T) {
 
 	{
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(true)))
+		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(true)))
 		h.HandleMessages(rec, req)
 		if rec.Code != 200 {
 			t.Fatalf("stream expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -371,7 +371,7 @@ func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
 
 	{
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(false)))
+		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(false)))
 		h.HandleMessages(rec, req)
 		if rec.Code != 200 {
 			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -386,7 +386,7 @@ func TestHandleMessages_SuggestionMode_LocalResponse(t *testing.T) {
 
 	{
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(mkBody(true)))
+		req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(mkBody(true)))
 		h.HandleMessages(rec, req)
 		if rec.Code != 200 {
 			t.Fatalf("expected 200, got %d", rec.Code)
@@ -424,7 +424,7 @@ func TestHandleMessages_TitleGeneration_LocalResponse(t *testing.T) {
 	body, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())

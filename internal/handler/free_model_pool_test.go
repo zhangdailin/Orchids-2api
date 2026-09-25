@@ -7,30 +7,6 @@ import (
 	"orchids-api/internal/store"
 )
 
-func TestSelectAccountRecord_ExhaustedPuterOnlyServesCatalogFreeModel(t *testing.T) {
-	h, s, mini := setupModelValidationHandler(t)
-	defer func() { _ = s.Close(); mini.Close() }()
-	ctx := context.Background()
-	acc := &store.Account{AccountType: "puter", ClientCookie: "token", Enabled: true, Weight: 1, StatusCode: store.AccountStatusPuterQuotaExhausted}
-	if err := s.CreateAccount(ctx, acc); err != nil {
-		t.Fatal(err)
-	}
-	for _, m := range []*store.Model{
-		{Channel: "Puter", ModelID: "free-model", Name: "free-model", Status: store.ModelStatusAvailable, BillingTier: "free", BillingSource: "puter_catalog_costs"},
-		{Channel: "Puter", ModelID: "paid-model", Name: "paid-model", Status: store.ModelStatusAvailable, BillingTier: "metered", BillingSource: "puter_catalog_costs"},
-	} {
-		if err := s.CreateModel(ctx, m); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if got, err := h.selectAccountRecordWithOptions(ctx, "puter", nil, accountSelectionOptions{ModelID: "free-model"}); err != nil || got.ID != acc.ID {
-		t.Fatalf("free selection got=%v err=%v", got, err)
-	}
-	if _, err := h.selectAccountRecordWithOptions(ctx, "puter", nil, accountSelectionOptions{ModelID: "paid-model"}); err == nil {
-		t.Fatal("paid model unexpectedly selected exhausted Puter account")
-	}
-}
-
 func TestSelectAccountRecord_ExhaustedWorkBuddyRequiresConfirmedAdvertisedFreeModel(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() { _ = s.Close(); mini.Close() }()

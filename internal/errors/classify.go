@@ -170,7 +170,6 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		return UpstreamErrorClass{Category: "canceled"}
 	case strings.Contains(lower, " is not configured") ||
 		strings.Contains(lower, "configuration error") ||
-		strings.Contains(lower, "missing puter auth token") ||
 		strings.Contains(lower, "client is nil"):
 		return UpstreamErrorClass{Category: "configuration"}
 	case strings.Contains(lower, "protocol error") || strings.Contains(lower, "no usable stream events"):

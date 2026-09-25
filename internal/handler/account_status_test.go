@@ -62,8 +62,8 @@ func TestClassifyAccountStatus(t *testing.T) {
 			expected: "429",
 		},
 		{
-			name:     "Puter insufficient funds maps to cooldown",
-			errStr:   "puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.",
+			name:     "WorkBuddy insufficient funds maps to cooldown",
+			errStr:   "workbuddy API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.",
 			expected: "402",
 		},
 		{

@@ -41,7 +41,6 @@ const (
 	// CooldownRateLimit is retained as the first-failure/default alias.
 	CooldownRateLimit  = CooldownRateLimitBase
 	CooldownPayment    = 24 * time.Hour
-	CooldownPuterQuota = 15 * time.Minute
 	CooldownBlocked    = 24 * time.Hour
 	CooldownBlockedGro = 10 * time.Minute
 	CooldownTransient  = 5 * time.Minute
@@ -132,7 +131,7 @@ func ScopeForStatus(status string) Scope {
 	switch strings.TrimSpace(status) {
 	case "401":
 		return ScopeCredential
-	case "402", "403", "404", "429", store.AccountStatusPuterQuotaExhausted, store.AccountStatusQoderQuotaExhausted, store.AccountStatusWorkBuddyQuotaExhausted:
+	case "402", "403", "404", "429", store.AccountStatusQoderQuotaExhausted, store.AccountStatusWorkBuddyQuotaExhausted:
 		return ScopeAccount
 	case "":
 		return ScopeNone
@@ -219,13 +218,6 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 				At: now,
 			}
 		}
-		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "puter") && apperrors.IsCreditExhaustion(message) {
-			return Verdict{
-				Status: store.AccountStatusPuterQuotaExhausted, Message: message,
-				Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
-				At: now,
-			}
-		}
 		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "workbuddy") && apperrors.IsCreditExhaustion(message) {
 			return Verdict{
 				Status: store.AccountStatusWorkBuddyQuotaExhausted, Message: message,
@@ -244,9 +236,6 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 		// which held nothing: such a marker is now held, but only until the reset
 		// time it was written with has passed.
 		cooldown := CooldownPayment
-		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "puter") {
-			cooldown = CooldownPuterQuota
-		}
 		return Verdict{
 			Status: "402", Message: message,
 			Scope: ScopeAccount, Retryable: Retryable(err), SwitchAccount: true,
@@ -325,7 +314,7 @@ func AccountHeld(acc *store.Account, now time.Time) bool {
 		return true
 	}
 	status := strings.TrimSpace(acc.StatusCode)
-	if status == "" || status == store.AccountStatusPuterQuotaExhausted || status == store.AccountStatusQoderQuotaExhausted || status == store.AccountStatusWorkBuddyQuotaExhausted {
+	if status == "" || status == store.AccountStatusQoderQuotaExhausted || status == store.AccountStatusWorkBuddyQuotaExhausted {
 		return false
 	}
 	if acc.LastAttempt.IsZero() {
@@ -382,9 +371,6 @@ func CooldownFor(acc *store.Account) time.Duration {
 		// nothing here to release early. The account is held for the payment
 		// cooldown, and isAccountAvailable releases it sooner when QuotaResetAt
 		// says the allowance is back.
-		if strings.EqualFold(strings.TrimSpace(accountType(acc)), "puter") {
-			return CooldownPuterQuota
-		}
 		return CooldownPayment
 	case "403", "404":
 		if isGrok(acc) {

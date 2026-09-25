@@ -1329,7 +1329,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 .badge-grok,
 .badge-warp,
-.badge-puter,
 .badge-workbuddy,
 .badge-qoder,
 .badge-cline,
@@ -1342,7 +1341,6 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 
 .badge-grok { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
 .badge-warp { color: var(--info); border-color: rgba(108, 182, 255, 0.35); background: var(--info-soft); }
-.badge-puter { color: var(--accent-purple); border-color: rgba(167, 139, 250, 0.35); background: rgba(167, 139, 250, 0.14); }
 .badge-workbuddy { color: var(--ok); border-color: rgba(74, 222, 155, 0.35); background: var(--ok-soft); }
 .badge-qoder { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.14); }
 .badge-cline { color: var(--accent-purple); border-color: rgba(167, 139, 250, 0.35); background: rgba(167, 139, 250, 0.14); }

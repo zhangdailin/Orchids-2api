@@ -37,7 +37,7 @@ func TestGetOrCreateAccountClient_ReusesClientAcrossStatsOnlyAccountUpdates(t *t
 
 	base := &store.Account{
 		ID:            6,
-		AccountType:   "puter",
+		AccountType:   "workbuddy",
 		SessionCookie: "session-a",
 		UpdatedAt:     time.Unix(100, 0),
 	}
@@ -87,7 +87,7 @@ func TestGetOrCreateAccountClient_RebuildsWhenCredentialsChange(t *testing.T) {
 
 	base := &store.Account{
 		ID:            6,
-		AccountType:   "puter",
+		AccountType:   "workbuddy",
 		SessionCookie: "session-a",
 	}
 

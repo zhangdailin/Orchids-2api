@@ -114,7 +114,6 @@ type Config struct {
 	GrokStreamIdleSeconds      int `json:"grok_stream_idle_seconds,omitempty"`
 	GrokBuildStreamIdleSeconds int `json:"grok_build_stream_idle_seconds,omitempty"`
 	WarpStreamIdleSeconds      int `json:"warp_stream_idle_seconds,omitempty"`
-	PuterStreamIdleSeconds     int `json:"puter_stream_idle_seconds,omitempty"`
 
 	// ── Grok Build egress proxy pool ──
 	GrokEgressEnabled bool               `json:"grok_egress_enabled,omitempty"`

@@ -472,12 +472,8 @@ const (
 	//
 	// 401 冷却时间：token 可能已刷新，较短间隔后重试
 	retry401Default = accountpolicy.CooldownAuth
-	// 402 对 Puter 来说通常表示余额/credits 不足。Puter 暂无稳定额度/重置时间接口，
-	// 默认按日冷却，避免无额度账号反复撞上游。
+	// 402 通常表示余额/credits 不足，默认按日冷却，避免无额度账号反复撞上游。
 	retry402Default = accountpolicy.CooldownPayment
-	// Puter 的路由额度可能在短窗口内恢复，且当前错误不提供 reset 时间。
-	// 每 15 分钟允许一次探测，在避免请求风暴的同时防止整个通道停用一天。
-	retry402Puter = accountpolicy.CooldownPuterQuota
 	// 403/404 冷却时间：账号可能被封禁或配置错误，较长间隔后重试
 	retry403Default = accountpolicy.CooldownBlocked
 	// Grok 的 403 很多是 transient upstream denial/临时风控，不应长时间拉黑
@@ -528,14 +524,6 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 			lb.clearAccountStatus(ctx, acc, "Warp 额度已刷新，恢复完整能力")
 		}
 		return true
-	case store.AccountStatusPuterQuotaExhausted:
-		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "puter") {
-			return false
-		}
-		if acc.UsageLimit > 0 && acc.UsageCurrent > 0 {
-			lb.clearAccountStatus(ctx, acc, "Puter 额度已刷新，恢复完整能力")
-		}
-		return true
 	case store.AccountStatusQoderQuotaExhausted:
 		if !strings.EqualFold(strings.TrimSpace(acc.AccountType), "qoder") {
 			return false
@@ -567,12 +555,11 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 		}
 		return false
 	case "402":
-		// Older Puter/Qoder rows used the generic 402 marker before free-only
+		// Older Qoder rows used the generic 402 marker before free-only
 		// capability states existed. Admit them to the model-aware selector; that
 		// selector accepts only an explicitly free current catalog row. This also
 		// makes upgrades effective without rewriting Redis by hand.
-		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "puter") ||
-			strings.EqualFold(strings.TrimSpace(acc.AccountType), "qoder") {
+		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "qoder") {
 			return true
 		}
 		// Paid Build exhaustion recovers at the billing period boundary rather
@@ -599,9 +586,6 @@ func (lb *LoadBalancer) isAccountAvailable(ctx context.Context, acc *store.Accou
 			return false
 		}
 		cooldown := retry402Default
-		if strings.EqualFold(strings.TrimSpace(acc.AccountType), "puter") {
-			cooldown = retry402Puter
-		}
 		if now.Sub(acc.LastAttempt) >= cooldown {
 			lb.clearAccountStatus(ctx, acc, "402 冷却完成，自动恢复尝试")
 			return true

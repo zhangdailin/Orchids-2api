@@ -70,7 +70,7 @@ func TestClassifyPoolExhaustion_SelectorReasonsPickTheAnswer(t *testing.T) {
 		},
 		{
 			name:         "the upstream error carries the cause",
-			selectErr:    errors.New("no enabled accounts available for channel: puter"),
+			selectErr:    errors.New("no enabled accounts available for channel: workbuddy"),
 			lastErr:      `upstream API error: status=429, body={"code":"rate-limited"}`,
 			wantCategory: "rate_limit",
 			wantStatus:   http.StatusTooManyRequests,

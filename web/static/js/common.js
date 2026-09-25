@@ -26,9 +26,6 @@ function getSidebarAccountToken(acc) {
   if (type === "warp") {
     return ""; // Official-login session credentials are never exposed to the UI.
   }
-  if (type === "puter") {
-    return acc.client_cookie || acc.token || acc.session_cookie || "";
-  }
   if (type === "workbuddy") {
     // The durable refresh token never leaves the server; the access token is
     // the visible proof that a credential is configured.

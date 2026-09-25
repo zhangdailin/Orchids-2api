@@ -170,7 +170,7 @@ func TestCooldownFor_MatchesPoolValues(t *testing.T) {
 		{&store.Account{StatusCode: "401"}, 30 * time.Minute},
 		{&store.Account{StatusCode: "429"}, 30 * time.Second},
 		{&store.Account{StatusCode: "402"}, 24 * time.Hour},
-		{&store.Account{StatusCode: "402", AccountType: "puter"}, 15 * time.Minute},
+		{&store.Account{StatusCode: "402", AccountType: "qoder"}, 24 * time.Hour},
 		// A WorkBuddy account reaches status 402 only when its allowance is gone
 		// (a model-scoped refusal writes no status), so it is held like any other
 		// payment verdict — and released early by isAccountAvailable once

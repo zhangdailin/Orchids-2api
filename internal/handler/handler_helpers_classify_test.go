@@ -30,7 +30,7 @@ func TestUpstreamRetryAfterReadsWrappedHint(t *testing.T) {
 func TestClassifyUpstreamErrorCreditsExhausted(t *testing.T) {
 	t.Parallel()
 
-	errClass := apperrors.ClassifyUpstreamError("puter upstream error: no remaining quota: You have run out of credits.")
+	errClass := apperrors.ClassifyUpstreamError("workbuddy upstream error: no remaining quota: You have run out of credits.")
 	if errClass.Category != "quota_exhausted" {
 		t.Fatalf("expected quota_exhausted category, got %q", errClass.Category)
 	}

@@ -14,7 +14,6 @@ import (
 
 	"orchids-api/internal/cline"
 	"orchids-api/internal/config"
-	"orchids-api/internal/puter"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
@@ -34,9 +33,6 @@ type Factory func(acc *store.Account, cfg *config.Config) interface{}
 var factories = map[string]Factory{
 	"warp": func(acc *store.Account, cfg *config.Config) interface{} {
 		return warp.NewFromAccount(acc, cfg)
-	},
-	"puter": func(acc *store.Account, cfg *config.Config) interface{} {
-		return puter.NewFromAccount(acc, cfg)
 	},
 	"workbuddy": func(acc *store.Account, cfg *config.Config) interface{} {
 		return workbuddy.NewFromAccount(acc, cfg)

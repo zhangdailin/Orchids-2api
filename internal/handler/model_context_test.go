@@ -86,9 +86,9 @@ func TestPublicModelsOmitUnobservedContextWindow(t *testing.T) {
 		mini.Close()
 	}()
 
-	publishModel(t, s, &store.Model{Channel: "puter", ModelID: "gpt-5-nano"})
+	publishModel(t, s, &store.Model{Channel: "cline", ModelID: "gpt-5-nano"})
 
-	entries := fetchPublicModels(t, h, "/puter/v1/models")
+	entries := fetchPublicModels(t, h, "/cline/v1/models")
 	entry, ok := entries["gpt-5-nano"]
 	if !ok {
 		t.Fatalf("model missing from the list: %#v", entries)
@@ -99,7 +99,7 @@ func TestPublicModelsOmitUnobservedContextWindow(t *testing.T) {
 
 	// Re-encode to prove the field is absent rather than present-and-zero.
 	rec := httptest.NewRecorder()
-	h.HandleModels(rec, httptest.NewRequest(http.MethodGet, "http://example.com/puter/v1/models", nil))
+	h.HandleModels(rec, httptest.NewRequest(http.MethodGet, "http://example.com/cline/v1/models", nil))
 	if body := rec.Body.String(); containsJSONField(body, "context_length") {
 		t.Fatalf("context_length must not be serialized when unobserved: %s", body)
 	}

@@ -4,7 +4,7 @@
 
 `Orchids-2api` 当前由两条主处理链组成：
 
-- `internal/handler`：处理 `warp`、`puter`、`workbuddy`、`qoder`
+- `internal/handler`：处理 `warp`、`workbuddy`、`qoder`、`cline`
 - `internal/grok`：处理 `grok`
 
 整体目标：
@@ -25,12 +25,11 @@ Orchids-2api/
 │   ├── debug/                   # 调试日志
 │   ├── errors/                  # 错误分类
 │   ├── grok/                    # Grok Build OAuth/Chat/Responses/Messages
-│   ├── handler/                 # Warp/Puter/WorkBuddy 主处理器
+│   ├── handler/                 # Warp/WorkBuddy 主处理器
 │   ├── loadbalancer/            # 账号选择与状态管理
 │   ├── middleware/              # trace/log/session/concurrency
 │   ├── provider/                # 通道到 client 的注册表
 │   ├── prompt/                  # 共享消息结构
-│   ├── puter/                   # Puter 上游客户端
 │   ├── store/                   # Redis 存储
 │   ├── template/                # 管理页面模板
 │   ├── tokencache/              # token / prompt cache
@@ -57,7 +56,7 @@ Orchids-2api/
 
 ### 3.2 `internal/handler`
 
-负责 `warp` / `puter` / `workbuddy` / `qoder`：
+负责 `warp` / `workbuddy` / `qoder` / `cline`：
 
 - 解析 Claude/OpenAI 请求
 - 识别通道与目标模型
@@ -95,7 +94,7 @@ Orchids-2api/
 
 ## 4. 主请求流
 
-### 4.1 `warp` / `puter` / `workbuddy` / `qoder`
+### 4.1 `warp` / `workbuddy` / `qoder` / `cline`
 
 ```text
 HTTP Request
@@ -136,39 +135,30 @@ HTTP Request
 按通道的来源：
 
 - `warp`：账号 GraphQL 发现结果，失败时回退内置种子
-- `puter`：Puter 官方模型目录与本地当前代策略的交集，再经账号 `test_mode` 验证
 - `grok`：Build OAuth 账号读取上游 `GET /v1/models`，返回 `source=grok_build_models`
 - `workbuddy`：已启用账号的 CLI 模型目录，同时保存账号级模型快照
 - `qoder`：模型目录来自有符号上游读取（`GET /algo/api/v2/model/list`），账号快照按 JSON 保存整行；对外模型 ID 为小写显示名，内部 key 由该通道的 resolver 映射
+- `cline`：推荐模型目录 `GET /ai/cline/recommended-models`（只发布 `free` 列表）
 
 当前策略：
 
 - 新发现模型写入本地表
 - 来源缺失模型从本地表删除
-- Puter 做无额度消耗的 `test_mode` 逐模型验证；其他通道按各自来源能力验证
+- 各通道按各自来源能力验证
 
-## 6. Puter 当前实现要点
+## 6. 运行时状态
 
-Puter 走 `internal/puter`，特点是：
-
-- 请求直接发送原生 `tools`、assistant `tool_calls` 与 `role: tool` 消息
-- 上游流按 `text`、`reasoning`、`tool_use`、`usage`、`error` 类型严格解码
-- `tool_use` 被转换为统一 `model.tool-call` 事件，再由 handler 组装成 Claude Messages 或 OpenAI 响应
-- 非流式 `tool_use` 与 `tool_result` follow-up 已有回归测试覆盖
-
-## 7. 运行时状态
-
-### 7.1 Redis 中保存
+### 6.1 Redis 中保存
 
 - 账号、模型、API Key、配置
 - 可选 token cache / prompt cache
 - 在可用时，handler 会优先用 Redis 保存会话状态
 
-### 7.2 本地目录
+### 6.2 本地目录
 
 - `debug-logs/`：调试日志
 
-## 7.3 Qoder 当前实现要点
+## 6.3 Qoder 当前实现要点
 
 Qoder 通道走 `internal/qoder`，特点是：
 
@@ -181,7 +171,7 @@ Qoder 通道走 `internal/qoder`，特点是：
 - 上游对「额度耗尽」返回 `403` + `pricingUrl`（HTTP 200 信封内）。该失败被单独分类，**不改账号状态、不重试、不切换账号**，避免把有效凭据误判为「禁止访问」
 - 额度是**按账号的每日窗口**（`/api/v2/quota/usage` + `/api/v2/user/plan`）而不是付费订阅：额度耗尽记 `402` 并按上游 reset 时间挂起，reset 后自动恢复；控制台显示档位、剩余额度与升级链接
 
-## 8. 当前已知设计边界
+## 7. 当前已知设计边界
 
 - 很多运行时默认值由 `config.ApplyHardcoded` 强制写入，不是所有字段都能靠配置文件覆盖
 - `/metrics` 默认公开，生产环境建议放到内网或额外网关后面

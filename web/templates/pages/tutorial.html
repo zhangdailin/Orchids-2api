@@ -132,21 +132,6 @@
               </tr>
               <tr>
                 <td data-label="渠道与账号方式">
-                  <span class="tag badge-puter">Puter</span>
-                  <small>填写 <code class="doc-inline-code">auth_token</code></small>
-                </td>
-                <td data-label="普通客户端">
-                  <span class="tut-address">
-                    <code id="tutUrlPuter" data-api-path="/puter/v1"></code>
-                    <button type="button" data-copy-target="tutUrlPuter">复制</button>
-                  </span>
-                </td>
-                <td data-label="Claude Code"><code data-api-path="/puter"></code></td>
-                <td data-label="模型示例"><code class="doc-model-code">claude-opus-4-5</code></td>
-                <td data-label="协议"><span class="tag protocol-tag protocol-tag-claude">Claude</span> <span class="tag protocol-tag protocol-tag-openai">OpenAI</span></td>
-              </tr>
-              <tr>
-                <td data-label="渠道与账号方式">
                   <span class="tag badge-workbuddy">WorkBuddy</span>
                   <small>使用官方网页登录</small>
                 </td>
@@ -231,10 +216,6 @@
         <details>
           <summary>WorkBuddy、Qoder 或 Cline 无法手动填写凭据</summary>
           <p>这是预期行为。WorkBuddy 使用官方网页登录，Qoder 使用 <code class="doc-inline-code">qoder.com</code> 的 OAuth 设备授权，Cline 通过 WorkOS 设备授权（<code class="doc-inline-code">api.cline.bot</code>）登录；三者都应从账号管理页面发起登录。</p>
-        </details>
-        <details>
-          <summary>Puter 模型列表没有 openrouter: 等前缀模型</summary>
-          <p>Puter 当前展示无前缀主模型，覆盖 Claude、OpenAI、Gemini、Grok、DeepSeek、Mistral 等模型族；聚合源前缀模型暂不直接展示。</p>
         </details>
       </div>
     </section>

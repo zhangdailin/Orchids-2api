@@ -487,8 +487,6 @@ function applyTokenLabels(type) {
   const input = document.getElementById("clientCookie");
   const hint = document.getElementById("tokenHint");
   const accountId = String(document.getElementById("accountId")?.value || "");
-  const puterWebLoginGroup = document.getElementById("puterWebLoginGroup");
-  if (puterWebLoginGroup) puterWebLoginGroup.hidden = normalized !== "puter" || Boolean(accountId);
   // WorkBuddy login stays available while editing so an expired authorization can
   // be renewed by signing in again instead of deleting the account.
   const workbuddyLoginGroup = document.getElementById("workbuddyLoginGroup");
@@ -544,14 +542,7 @@ function applyTokenLabels(type) {
     label.textContent = "Grok Build OAuth";
     input.placeholder = "";
     hint.textContent = "Grok 仅支持 xAI 官方设备授权登录";
-  } else if (normalized === 'puter') {
-      label.textContent = "Auth Token";
-      input.placeholder = "每行一个 Puter auth_token";
-      hint.textContent = accountId
-        ? "凭证不回显；留空保留原凭证，填写则替换"
-        : "支持批量添加 Puter。每行一个 auth_token；可前往 https://docs.puter.com/playground/ai-chatgpt/ 获取";
-      input.required = true;
-    } else {
+  } else {
     label.textContent = "Cookie / __client / __session";
     input.placeholder = "支持原始 __client、完整 Cookie Header 或 Cookie JSON";
     hint.textContent = accountId
@@ -991,9 +982,7 @@ async function runAccountCreatePool(payloads, concurrency = 6, onProgress = null
 
 // The console's channel strip, shared with 模型管理: the same channels, in the same
 // order, with the same names, so an operator moving between the two pages does not have
-// the strip reorder under them. It used to be sorted alphabetically here (grok, puter,
-// warp, workbuddy, all lower case) while the models page listed Warp, Puter, WorkBuddy,
-// Grok — the same channels in a different order, under different names.
+// the strip reorder under them.
 //
 // Cline is listed here because this list is the only thing that renders a channel
 // tab: a channel missing from it has no tab, so its login group in the account
@@ -1126,10 +1115,6 @@ function evaluateAccountStatus(acc) {
     if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待登录', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Build OAuth 授权' };
     }
-  } else if (type === 'puter') {
-    if (!hasSidebarAccountCredential(acc)) {
-      return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 Puter auth_token' };
-    }
   } else if (type === 'workbuddy') {
     if (!hasSidebarAccountCredential(acc)) {
       return { normal: false, text: '待补全', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.16)', tip: '缺少 WorkBuddy 凭证（refreshToken / accessToken）' };
@@ -1155,9 +1140,8 @@ function evaluateAccountStatus(acc) {
   const quota = getQuotaStats(acc);
   // A drained allowance is the same business limit on every channel: the
   // credential is intact, the row stays selectable, and the scheduler resumes it
-  // when the window resets. Only puter and warp used to get this badge, so an
-  // exhausted Grok window showed a red 配额已满 fault and disagreed with the
-  // sidebar counter.
+  // when the window resets. An exhausted Grok window used to show a red 配额已满
+  // fault and disagree with the sidebar counter.
   if (isQuotaExhaustedQuota(acc, quota)) {
     const providerName = accountTypeLabel(normalizeAccountType(acc));
     const limitText = quota && quota.limit > 0 ? quota.limit.toLocaleString() : '未知';
@@ -1378,8 +1362,7 @@ function renderAccounts() {
     sub.className = "account-identity-sub";
     const typeBadge = document.createElement("span");
     typeBadge.className = "badge badge-" + normalizeAccountType(acc);
-    // The models table names its channels Warp / Puter / WorkBuddy / Grok; the same
-    // channel printed lower-cased here read as a different thing.
+    // The models table and account table use the same display names.
     typeBadge.textContent = ACCOUNT_TYPE_NAMES[normalizeAccountType(acc)] || normalizeAccountType(acc) || "unknown";
     sub.appendChild(typeBadge);
     if (tokenDisplay && tokenDisplay !== identity && tokenDisplay !== "-") {
@@ -1770,7 +1753,7 @@ function buildQuotaMarkup(acc) {
   if (quota && quota.unknown) {
     const hint = normalizeAccountType(acc) === "workbuddy"
       ? "WorkBuddy 计量接口未返回数据"
-      : "Puter 暂无稳定额度接口";
+      : "该渠道暂无可用额度接口";
     return `<span>未知</span> <span style="color:#64748b;font-size:0.75rem">(${hint})</span>`;
   }
   if (quota && quota.workbuddy) {
@@ -2016,7 +1999,6 @@ function toggleSelectAll(checked) {
 
 // Open modal
 function openModal(account = null) {
-  globalThis.PuterWebLogin?.stop();
   stopWorkBuddyLogin();
   stopQoderLogin();
   stopClineLogin();
@@ -2133,7 +2115,6 @@ function stopClineLogin() {
 
 // Close modal
 function closeModal() {
-  globalThis.PuterWebLogin?.stop();
   stopWarpDeviceLogin(true);
   resetWarpDeviceLoginStatus();
   stopGrokDeviceLogin(true);
@@ -2336,10 +2317,6 @@ function formatTokenDisplay(acc) {
       return token.substring(0, 30) + '...';
     }
     return token;
-  }
-  if (type === 'puter' && getAccountToken(acc)) {
-    const token = getAccountToken(acc);
-    return token.length > 24 ? token.substring(0, 8) + '...' + token.substring(token.length - 8) : token;
   }
   if (type === 'workbuddy') {
     // The signed-in address identifies both the account and the login; the token

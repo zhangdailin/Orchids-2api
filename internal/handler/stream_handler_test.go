@@ -189,7 +189,7 @@ func TestInjectNoAvailableAccountError_RateLimitAnswers429(t *testing.T) {
 
 	sh.InjectNoAvailableAccountError(
 		`upstream API error: status=429, body={"code":"rate-limited","message":"You have hit the rate limit."}`,
-		errors.New("no enabled accounts available for channel: puter (all matching accounts are rate-limited or cooling down)"),
+		errors.New("no enabled accounts available for channel: workbuddy (all matching accounts are rate-limited or cooling down)"),
 	)
 
 	// A non-streaming request has committed nothing yet, so the failure is a real
@@ -247,7 +247,7 @@ func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T)
 
 	sh.InjectNoAvailableAccountError(
 		`upstream API error: status=429, body={"code":"rate-limited"}`,
-		errors.New("no enabled accounts available for channel: puter (all matching accounts are rate-limited or cooling down)"),
+		errors.New("no enabled accounts available for channel: workbuddy (all matching accounts are rate-limited or cooling down)"),
 	)
 
 	if rec.Code != http.StatusOK {

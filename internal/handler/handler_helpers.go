@@ -308,7 +308,7 @@ func (h *Handler) acquireReservedAccountSelection(ctx context.Context, targetCha
 	// accounts at their hard limit and turn a transient race into a 503. Give
 	// releases a bounded, cancellable window to become visible before failing.
 	// The two-second window matches the busy retry used by Qoder and is still
-	// short enough that a genuinely saturated Puter pool fails promptly.
+	// short enough that a genuinely saturated pool fails promptly.
 	const (
 		reservationRetries    = 8
 		reservationRetryDelay = 250 * time.Millisecond
@@ -387,7 +387,7 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
 		model := strings.TrimSpace(opts.ModelID)
 		channel := strings.ToLower(strings.TrimSpace(targetChannel))
-		needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "puter" || channel == "qoder" || channel == "workbuddy" || channel == "cline")
+		needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "qoder" || channel == "workbuddy" || channel == "cline")
 		if needsFilter {
 			return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
 				if channel == "cline" && !cline.CatalogSupportsModel(acc.ClineModelIDs, model) {
@@ -397,10 +397,7 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 					return false
 				}
 				switch strings.TrimSpace(acc.StatusCode) {
-				case store.AccountStatusPuterQuotaExhausted, "402":
-					if channel == "puter" {
-						return h.isCurrentFreeModel(ctx, "puter", model)
-					}
+				case "402":
 					if channel == "qoder" {
 						return qoder.IsFreeModel(acc.QoderModelIDs, model) && h.isCurrentFreeModel(ctx, "qoder", model)
 					}

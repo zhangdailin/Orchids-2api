@@ -224,10 +224,10 @@ func TestClassify_CredentialSignalCoversEveryChannel(t *testing.T) {
 		t.Fatalf("oauth rotation classified as %q", got)
 	}
 
-	puter := &store.Account{ID: 4, AccountType: "puter", Token: "p1"}
-	reTokenized := *puter
-	reTokenized.Token = "p2"
-	if got := Classify(puter, &reTokenized); got != KindCredential {
-		t.Fatalf("puter token swap classified as %q", got)
+	qoder := &store.Account{ID: 4, AccountType: "qoder", QoderAccessToken: "q1"}
+	reTokenized := *qoder
+	reTokenized.QoderAccessToken = "q2"
+	if got := Classify(qoder, &reTokenized); got != KindCredential {
+		t.Fatalf("qoder token swap classified as %q", got)
 	}
 }

@@ -377,7 +377,7 @@ func TestResponsesBridgeMemoryFallbackStoresResponses(t *testing.T) {
 	resource := ResponsesResourceHandler(opts)
 
 	create := httptest.NewRecorder()
-	bridge(create, httptest.NewRequest(http.MethodPost, "/puter/v1/responses",
+	bridge(create, httptest.NewRequest(http.MethodPost, "/workbuddy/v1/responses",
 		strings.NewReader(`{"model":"gpt-5.6-luna","input":"hi","store":true}`)))
 	if create.Code != http.StatusOK {
 		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
@@ -392,14 +392,14 @@ func TestResponsesBridgeMemoryFallbackStoresResponses(t *testing.T) {
 	}
 
 	get := httptest.NewRecorder()
-	resource(get, httptest.NewRequest(http.MethodGet, "/puter/v1/responses/"+responseID, nil))
+	resource(get, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID, nil))
 	if get.Code != http.StatusOK || !strings.Contains(get.Body.String(), "fallback-answer") {
 		t.Fatalf("get status=%d body=%s", get.Code, get.Body.String())
 	}
 
 	// The in-process store must serve the items too, not just the body.
 	items := httptest.NewRecorder()
-	ResponsesInputItemsHandler(opts)(items, httptest.NewRequest(http.MethodGet, "/puter/v1/responses/"+responseID+"/input_items", nil))
+	ResponsesInputItemsHandler(opts)(items, httptest.NewRequest(http.MethodGet, "/workbuddy/v1/responses/"+responseID+"/input_items", nil))
 	if items.Code != http.StatusOK || !strings.Contains(items.Body.String(), "hi") {
 		t.Fatalf("input_items status=%d body=%s", items.Code, items.Body.String())
 	}

@@ -2,14 +2,13 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `warp`、`puter`、`workbuddy`、`qoder`、`cline`、`grok` 六类通道。
+一个基于 Go 的多通道代理服务，统一暴露 Claude Messages 风格与 OpenAI 兼容接口，当前支持 `warp`、`workbuddy`、`qoder`、`cline`、`grok` 五类通道。
 
 ## 当前状态
 
-- `internal/handler` 统一处理 `warp` / `puter` / `workbuddy` / `qoder` / `cline` 的 `/v1/messages` 与 `/v1/chat/completions`
+- `internal/handler` 统一处理 `warp` / `workbuddy` / `qoder` / `cline` 的 `/v1/messages` 与 `/v1/chat/completions`
 - `internal/grok` 仅通过 Build OAuth CLI 上游处理 `grok` 的 Messages、Responses 与 Chat
 - 模型管理支持按通道刷新：`/api/models/refresh`
-- Puter 非流式 Claude Messages 已覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result` 回归
 - WorkBuddy 通道对接国际版 `www.workbuddy.ai`，账号级模型目录从 `GET /v3/config` 同步，refreshToken 自动轮换并回写
 - Qoder 通道对接 `qoder.com` CLI 设备授权流（**只支持 OAuth 登录，不提供 PAT 入口**），模型目录由 `GET /algo/api/v2/model/list` 读取（复用聊天链路的 COSY 签名，无内置回退），设备 refreshToken 自动轮换并回写
 - Cline 通道对接 `api.cline.bot`：WorkOS 设备授权（**只支持 OAuth 登录，不提供手填凭证**）换取 Cline access/refresh token，请求凭据是 `Bearer workos:<accessToken>`，模型目录由 `GET /ai/cline/recommended-models` 读取（无内置回退），refreshToken 自动轮换并回写
@@ -31,7 +30,6 @@
 | 通道 | 对外入口 |
 |---|---|
 | `warp` | `/warp/v1/messages`、`/warp/v1/chat/completions` |
-| `puter` | `/puter/v1/messages`、`/puter/v1/chat/completions` |
 | `workbuddy` | `/workbuddy/v1/messages`、`/workbuddy/v1/chat/completions` |
 | `qoder` | `/qoder/v1/messages`、`/qoder/v1/chat/completions` |
 | `cline` | `/cline/v1/messages`、`/cline/v1/chat/completions` |
@@ -129,12 +127,6 @@ go build -o server.exe ./cmd/server
 go test ./...
 ```
 
-只跑 Puter 相关回归：
-
-```bash
-go test ./internal/handler -run "Puter_"
-```
-
 重新编译：
 
 ```bash
@@ -176,15 +168,13 @@ go list -m -u all                                # 可升级清单，仅信息�
 ## 模型管理说明
 
 - 管理接口：`POST /api/models/refresh`
-- 请求体示例：`{"channel":"puter"}`
+- 请求体示例：`{"channel":"warp"}`
 - 当前刷新策略是“按来源同步”，不同通道按各自上游能力验证
-- Puter 先读取官方模型目录，再用账号 `test_mode` 逐模型验证；目录缺失或验证失败的型号不会进入公开模型表
 - `verified` 表示本轮通过通道验证并纳入同步集合的数量
 
 当前各通道模型来源：
 
 - `warp`：账号 GraphQL 发现结果，失败时退回内置种子
-- `puter`：Puter 公开模型列表 + 账号 test_mode 保守验证
 - `workbuddy`：账号级 `GET /v3/config` 的 `cli` agent 白名单（鉴权成功即视为验证通过，不额外消耗额度）
 - `grok`：Build OAuth 账号的 `GET /v1/models` 上游发现结果
 
@@ -215,29 +205,17 @@ go test -count=1 -v -run TestLive_StartAuthLogin ./internal/workbuddy/live/
 WB_LIVE=1 WB_AUTH_FILE=/path/to/auths/workbuddy-<uid>.json go test ./internal/workbuddy/live/ -v
 ```
 
-## Puter 当前对齐点
-
-- 请求使用 Puter 原生 `tools`、assistant `tool_calls` 和 `role: tool` 历史格式，不再通过 system prompt 模拟 `<tool_call>`
-- 流式响应直接处理 `text`、`reasoning`、`tool_use`、`usage` 和 `error` 事件
-- `/puter/v1/messages` 非流式响应会保留 `tool_use` content block，不再返回 `content: null`
-- `tool_result` follow-up 可以继续返回新的 `tool_use`，也可以正常收敛成最终文本
-- 已有回归测试覆盖 `Read`、`Write`、`Edit`、`Delete`、长上下文、多轮 `tool_result`
-
-当前公开型号：`claude-opus-5`、`claude-sonnet-5`、`claude-fable-5`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gemini-3.5-flash`、`grok-4.5`、`grok-4.6`、`deepseek-v4-pro`、`deepseek-v4-flash`、`mistral-small-2603`。
-
 ## 主要公开端点
 
 ### Claude Messages 风格
 
 - `POST /warp/v1/messages`
-- `POST /puter/v1/messages`
 - `POST /workbuddy/v1/messages`
 - `POST /grok/v1/messages`
 
 ### OpenAI Chat Completions 风格
 
 - `POST /warp/v1/chat/completions`
-- `POST /puter/v1/chat/completions`
 - `POST /workbuddy/v1/chat/completions`
 - `POST /grok/v1/chat/completions`
 
@@ -250,7 +228,7 @@ WB_LIVE=1 WB_AUTH_FILE=/path/to/auths/workbuddy-<uid>.json go test ./internal/wo
 - `POST /responses/{response_id}/cancel`
 - `GET /responses/{response_id}/input_items`
 
-统一前缀 `/v1` 下以上端点对所有渠道的模型可用：Grok 模型走原生实现，Warp / Puter / WorkBuddy / Qoder / Cline 由 Responses→Chat 桥接提供；`cancel` 与 `input_items` 在六个前缀（含 `/grok/v1`）下均已注册，读取同一个 response store。未配置 Redis 时桥接回退到进程内存储并输出 WARN 日志，多副本部署必须配置 Redis。
+统一前缀 `/v1` 下以上端点对所有渠道的模型可用：Grok 模型走原生实现，Warp / WorkBuddy / Qoder / Cline 由 Responses→Chat 桥接提供；`cancel` 与 `input_items` 在五个前缀（含 `/grok/v1`）下均已注册，读取同一个 response store。未配置 Redis 时桥接回退到进程内存储并输出 WARN 日志，多副本部署必须配置 Redis。
 
 Build stored Responses 会按客户端 API Key 隔离，并固定回创建该 Response 的 OAuth 账号；归属记录默认保留 720 小时。详见 [docs/api-reference.md](docs/api-reference.md#13-openai-responses-风格)。
 

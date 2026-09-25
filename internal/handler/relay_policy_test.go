@@ -34,7 +34,7 @@ func TestRelayRepeatedRequestsAlwaysReachUpstream(t *testing.T) {
 		h.client = client
 		body, _ := json.Marshal(map[string]interface{}{"model": "claude-3-5-sonnet", "messages": []map[string]string{{"role": "user", "content": "Explain this example"}}, "stream": stream})
 		for _, key := range []string{"", "", "once", "once"} {
-			r := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", bytes.NewReader(body))
+			r := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 			r.Header.Set("Idempotency-Key", key)
 			r.Header.Set("X-Stainless-Retry-Count", "1")
 			w := httptest.NewRecorder()
@@ -61,7 +61,7 @@ func TestRelayForwardsCallerHistoryVerbatim(t *testing.T) {
 		{Role: "user", Content: prompt.MessageContent{Text: "Continue explaining the example"}},
 	}
 	body, _ := json.Marshal(ClaudeRequest{Model: "claude-3-5-sonnet", ConversationID: "relay-history", Messages: messages})
-	r := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", bytes.NewReader(body))
+	r := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	w := httptest.NewRecorder()
 	h.HandleMessages(w, r)
 	if w.Code != 200 || len(client.requests) != 1 {
@@ -83,7 +83,7 @@ func TestRelayIdempotencyKeyIsCallerScoped(t *testing.T) {
 	client := &relayRecordingClient{}
 	h.client = client
 	for _, caller := range []string{"caller-a", "caller-b"} {
-		r := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"Explain this example"}]}`))
+		r := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"Explain this example"}]}`))
 		r.Header.Set("X-API-Key", caller)
 		r.Header.Set("Idempotency-Key", "same-key")
 		w := httptest.NewRecorder()
@@ -169,7 +169,7 @@ func TestRelayIdenticalInflightRequestsBothReachUpstream(t *testing.T) {
 	finished := make(chan *httptest.ResponseRecorder, 2)
 	for i := 0; i < 2; i++ {
 		go func() {
-			r := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"Explain the same example"}]}`))
+			r := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", strings.NewReader(`{"model":"claude-3-5-sonnet","messages":[{"role":"user","content":"Explain the same example"}]}`))
 			r.Header.Set("Idempotency-Key", "same-inflight-key")
 			w := httptest.NewRecorder()
 			h.HandleMessages(w, r)

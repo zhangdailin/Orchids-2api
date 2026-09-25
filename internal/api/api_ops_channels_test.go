@@ -12,7 +12,7 @@ func TestIsProviderChannel_KeepsInfrastructureOutOfTheMatrix(t *testing.T) {
 			t.Fatalf("%q must not be presented as a provider channel", aggregate)
 		}
 	}
-	for _, channel := range []string{"grok", "warp", "puter", "workbuddy", "GROK"} {
+	for _, channel := range []string{"grok", "warp", "cline", "workbuddy", "GROK"} {
 		if !IsProviderChannel(channel) {
 			t.Fatalf("%q must remain a provider channel", channel)
 		}

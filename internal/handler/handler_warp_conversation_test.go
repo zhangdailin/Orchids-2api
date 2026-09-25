@@ -392,7 +392,7 @@ func TestWarpBindingInput_DoesNotPersistMCPPayloads(t *testing.T) {
 // A workdir question that follows a tool result is a normal turn now. It used
 // to be intercepted and answered locally, and the tool-result guard that skipped
 // the intercept for followups is gone with the intercept itself.
-func TestPuterCurrentWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
+func TestToolResultFollowupWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
@@ -400,7 +400,7 @@ func TestPuterCurrentWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
-		"conversation_id":"puter_fresh_reset",
+		"conversation_id":"workbuddy_fresh_reset",
 		"messages":[
 			{"role":"user","content":[{"type":"text","text":"帮我用python写一个计算器"}]},
 			{"role":"assistant","content":[
@@ -417,7 +417,7 @@ func TestPuterCurrentWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
 		]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	req.Header.Set("X-Workdir", `C:\Users\zhangdailin\Desktop\新建文件夹`)
 	rec := httptest.NewRecorder()
 
@@ -434,7 +434,7 @@ func TestPuterCurrentWorkdirAfterToolTurn_ReachesUpstream(t *testing.T) {
 	}
 }
 
-func TestPuterToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *testing.T) {
+func TestToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
@@ -443,7 +443,7 @@ func TestPuterToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t 
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
-		"conversation_id":"puter_followup_recover",
+		"conversation_id":"workbuddy_followup_recover",
 		"messages":[
 			{"role":"user","content":[{"type":"text","text":"这个项目是干什么的"}]},
 			{"role":"assistant","content":[
@@ -460,7 +460,7 @@ func TestPuterToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t 
 		]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
@@ -473,11 +473,11 @@ func TestPuterToolResultFollowup_RecoversSandboxPathFailureWithoutNoToolsGate(t 
 		t.Fatalf("expected 1 upstream call, got %d", len(calls))
 	}
 	if calls[0].NoTools {
-		t.Fatalf("expected puter follow-up after sandbox path miss to keep tools enabled")
+		t.Fatalf("expected workbuddy follow-up after sandbox path miss to keep tools enabled")
 	}
 }
 
-func TestPuterOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testing.T) {
+func TestOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
@@ -486,7 +486,7 @@ func TestPuterOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testin
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
-		"conversation_id":"puter_openai_tool_followup",
+		"conversation_id":"workbuddy_openai_tool_followup",
 		"messages":[
 			{"role":"user","content":"Create note.txt with hello world"},
 			{"role":"assistant","content":null,"tool_calls":[
@@ -499,7 +499,7 @@ func TestPuterOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testin
 		]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/puter/v1/chat/completions", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/chat/completions", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
@@ -512,7 +512,7 @@ func TestPuterOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testin
 		t.Fatalf("expected 1 upstream call, got %d", len(calls))
 	}
 	if calls[0].NoTools {
-		t.Fatalf("expected openai puter tool follow-up to keep tools enabled")
+		t.Fatalf("expected openai workbuddy tool follow-up to keep tools enabled")
 	}
 
 	if len(calls[0].Messages) != 3 {
@@ -560,7 +560,7 @@ func TestPuterOpenAIChatCompletionsToolFollowup_NormalizesToolMessages(t *testin
 	}
 }
 
-func TestPuterToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testing.T) {
+func TestToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{
@@ -574,7 +574,7 @@ func TestPuterToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
-		"conversation_id":"puter_followup_local_fallback",
+		"conversation_id":"workbuddy_followup_local_fallback",
 		"messages":[
 			{"role":"user","content":[{"type":"text","text":"这个项目是干什么的"}]},
 			{"role":"assistant","content":[
@@ -590,7 +590,7 @@ func TestPuterToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *
 		]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)
@@ -614,7 +614,7 @@ func TestPuterToolResultFollowup_PassesThroughUpstreamInsteadOfLocalFallback(t *
 	}
 }
 
-func TestPuterMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
+func TestMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
 	t.Parallel()
 
 	client := &fakePayloadClient{}
@@ -622,7 +622,7 @@ func TestPuterMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-opus-5",
 		"stream":false,
-		"conversation_id":"puter_multiturn_scientific_notation",
+		"conversation_id":"workbuddy_multiturn_scientific_notation",
 		"messages":[
 			{"role":"user","content":[{"type":"text","text":"帮我用python写一个计算器"}]},
 			{"role":"assistant","content":[
@@ -642,7 +642,7 @@ func TestPuterMultiTurnEditFollowup_PreservesHistory(t *testing.T) {
 		]
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/puter/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/workbuddy/v1/messages", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.HandleMessages(rec, req)

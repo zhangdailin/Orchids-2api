@@ -78,7 +78,7 @@ function loadUI() {
   });
   context.fetch = async (url) => {
     if (url === '/api/providers') return { ok: true, json: async () => ({ defaultProviderKey:'warp', providers:[
-      {key:'warp',label:'Warp'},{key:'puter',label:'Puter'},{key:'workbuddy',label:'WorkBuddy'},
+      {key:'warp',label:'Warp'},{key:'workbuddy',label:'WorkBuddy'},
       {key:'qoder',label:'Qoder'},{key:'cline',label:'Cline'},{key:'grok',label:'Grok'},
     ]}) };
     return { ok: true, json: async () => [] };
@@ -111,7 +111,7 @@ test('clicking a platform tab makes 添加账号 open in that platform', () => {
   context.renderPlatformTabs();
 
   const tabs = node('platformFilters').children;
-  for (const platform of ['grok', 'puter', 'warp', 'workbuddy']) {
+  for (const platform of ['grok', 'cline', 'warp', 'workbuddy']) {
     const tab = tabs.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === platform);
     assert.ok(tab, `no ${platform} tab among ${tabs.map((candidate) => candidate.textContent).join(',')}`);
     tab.click();
@@ -143,11 +143,11 @@ test('the visibly highlighted provider wins if in-memory state is stale', () => 
   node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
   node('enabled').checked = true;
   context.filterByPlatform('grok');
-  node('#platformFilters .tab-item.active').dataset.platform = encodeURIComponent('puter');
+  node('#platformFilters .tab-item.active').dataset.platform = encodeURIComponent('cline');
   node('accountId').value = '';
   context.openModal();
-  assert.equal(node('accountType').value, 'puter');
-  assert.equal(node('accountTypeDisplay').value, 'Puter');
+  assert.equal(node('accountType').value, 'cline');
+  assert.equal(node('accountTypeDisplay').value, 'Cline');
 });
 
 test('every channel owns its credential copy: switching type never leaves another channel text behind', () => {
@@ -164,13 +164,13 @@ test('every channel owns its credential copy: switching type never leaves anothe
   assert.equal(node('tokenHint').textContent.includes('Grok'), false, 'Warp must not inherit Grok hint text');
 
   // And the other way round: Warp must not leak into the channels that follow.
-  context.applyTokenLabels('puter');
-  assert.equal(node('tokenLabel').textContent, 'Auth Token');
-  assert.match(node('tokenHint').textContent, /Puter/);
+  context.applyTokenLabels('cline');
+  assert.equal(node('tokenLabel').textContent, 'Cookie / __client / __session');
+  assert.equal(node('tokenHint').textContent.includes('Warp'), false, 'Cline must not inherit Warp hint text');
 
   context.applyTokenLabels('workbuddy');
   assert.equal(node('tokenLabel').textContent, 'WorkBuddy 凭证');
-  assert.equal(node('tokenHint').textContent.includes('Puter'), false);
+  assert.equal(node('tokenHint').textContent.includes('__client'), false, 'WorkBuddy must not inherit the generic cookie hint');
 
   context.applyTokenLabels('grok');
   assert.equal(node('tokenLabel').textContent, 'Grok Build OAuth');
@@ -186,12 +186,12 @@ test('openModal after a tab click renders that tab form, not the previously open
 
   const expectations = {
     grok: { label: 'Grok Build OAuth', hint: /Grok/, sso: true, warpLogin: true },
-    puter: { label: 'Auth Token', hint: /Puter/, sso: false, warpLogin: true },
+    cline: { label: 'Cookie / __client / __session', hint: /Cookie/, sso: true, warpLogin: true },
     warp: { label: 'Warp 登录会话', hint: /Warp/, sso: true, warpLogin: false },
     workbuddy: { label: 'WorkBuddy 凭证', hint: /官方登录/, sso: true, warpLogin: true },
   };
   const tabs = node('platformFilters').children;
-  for (const platform of ['grok', 'puter', 'warp', 'workbuddy']) {
+  for (const platform of ['grok', 'cline', 'warp', 'workbuddy']) {
     const tab = tabs.find((candidate) => decodeURIComponent(candidate.dataset.platform || '') === platform);
     assert.ok(tab, `no ${platform} tab`);
     tab.click();
@@ -238,12 +238,15 @@ test('Warp exposes only official login and preserves settings editing', () => {
   assert.equal(payload.refresh_token, undefined);
   assert.equal(payload.client_cookie, undefined);
   assert.equal(payload.enabled, true);
-  context.applyTokenLabels('puter');
+  // Cline is created by its own WorkOS login, never from a manual credential:
+  // switching away from Warp must show the Cline login and drop the Warp one.
+  context.applyTokenLabels('cline');
   node('accountId').value = '';
-  context.applyTokenLabels('puter');
-  assert.equal(node('puterWebLoginGroup').hidden, false);
-  assert.equal(node('ssoCredentialGroup').hidden, false);
-  assert.equal(node('clientCookie').required, true);
+  context.applyTokenLabels('cline');
+  assert.equal(node('clineLoginGroup').hidden, false);
+  assert.equal(node('warpDeviceLoginGroup').hidden, true);
+  assert.equal(node('ssoCredentialGroup').hidden, true, 'cline is OAuth-only too');
+  assert.equal(node('clientCookie').value, '', 'the hidden credential field must carry no value');
 });
 
 test('Warp credential presence and display do not read raw tokens', () => {
@@ -312,10 +315,13 @@ test('WorkBuddy is OAuth-only in the modal: no manual credential field', () => {
   assert.equal(node('clientCookie').value, '');
   assert.equal(node('#accountForm button[type="submit"]').hidden, true,
     'a new WorkBuddy account is created by the login flow, not by the form');
-  // Other channels keep their manual credential field.
-  context.applyTokenLabels('puter');
-  assert.equal(node('ssoCredentialGroup').hidden, false);
-  assert.equal(node('#accountForm button[type="submit"]').hidden, false);
+  // Every channel is created by its own official login: the credential field
+  // stays hidden for a new account of any of them.
+  context.applyTokenLabels('cline');
+  assert.equal(node('clineLoginGroup').hidden, false, 'the cline login must be presented');
+  assert.equal(node('ssoCredentialGroup').hidden, true);
+  assert.equal(node('#accountForm button[type="submit"]').hidden, true,
+    'a new Cline account is created by the login flow, not by the form');
 
   // Editing keeps the login button (re-authorization) and the save button
   // (settings), but still no credential field.
@@ -325,11 +331,12 @@ test('WorkBuddy is OAuth-only in the modal: no manual credential field', () => {
   assert.equal(node('ssoCredentialGroup').hidden, true);
   assert.equal(node('#accountForm button[type="submit"]').hidden, false);
 
-  context.applyTokenLabels('puter');
+  // Switching to another channel leaves the WorkBuddy login behind.
+  context.applyTokenLabels('cline');
   node('accountId').value = '';
-  context.applyTokenLabels('puter');
+  context.applyTokenLabels('cline');
   assert.equal(node('workbuddyLoginGroup').hidden, true);
-  assert.equal(node('puterWebLoginGroup').hidden, false);
+  assert.equal(node('clineLoginGroup').hidden, false);
 });
 
 test('WorkBuddy creation cannot be submitted from the form', async () => {
@@ -438,7 +445,7 @@ test('WorkBuddy rows show the metered credits, plan label and signed-in email', 
 
   // 调用 falls back to meter consumption because this channel has no request counter.
   assert.equal(context.accountUsageCounter(account), 202);
-  assert.equal(context.accountUsageCounter({ account_type: 'puter', request_count: 7 }), 7);
+  assert.equal(context.accountUsageCounter({ account_type: 'cline', request_count: 7 }), 7);
 
   // The token column identifies the account by its signed-in address.
   const tokenCell = context.formatTokenDisplay(account);
@@ -516,7 +523,7 @@ test('clicking the WorkBuddy tab then 添加账号 shows the WorkBuddy login, ne
   assert.equal(node('workbuddyLoginGroup').hidden, false, 'workbuddy login must be visible');
   assert.equal(node('warpDeviceLoginGroup').hidden, true, 'warp login must stay hidden');
   assert.equal(node('grokDeviceLoginGroup').hidden, true, 'grok login must stay hidden');
-  assert.equal(node('puterWebLoginGroup').hidden, true, 'puter login must stay hidden');
+  assert.equal(node('clineLoginGroup').hidden, true, 'cline login must stay hidden');
   assert.equal(node('ssoCredentialGroup').hidden, true, 'workbuddy is OAuth-only, no manual field');
 });
 
@@ -524,16 +531,17 @@ test('every platform tab maps to its own provider login surface', () => {
   const { context, node } = loadUI();
   vm.runInContext('globalThis.WorkBuddyLogin = { start() {}, stop() {} };', context);
   vm.runInContext('globalThis.QoderLogin = { start() {}, stop() {} };', context);
+  vm.runInContext('globalThis.ClineLogin = { start() {}, stop() {} };', context);
   node('accountModal').classList = { add() {}, remove() {}, contains() { return true; } };
   node('enabled').checked = true;
   context.renderPlatformTabs();
 
   const expectations = {
-    warp: { warpDeviceLoginGroup: false, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
-    puter: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: false, ssoCredentialGroup: false },
-    workbuddy: { warpDeviceLoginGroup: true, workbuddyLoginGroup: false, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
-    qoder: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: false, puterWebLoginGroup: true, ssoCredentialGroup: true },
-    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, puterWebLoginGroup: true, ssoCredentialGroup: true },
+    warp: { warpDeviceLoginGroup: false, workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: true, ssoCredentialGroup: true },
+    cline: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: false, ssoCredentialGroup: true },
+    workbuddy: { warpDeviceLoginGroup: true, workbuddyLoginGroup: false, qoderLoginGroup: true, clineLoginGroup: true, ssoCredentialGroup: true },
+    qoder: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: false, clineLoginGroup: true, ssoCredentialGroup: true },
+    grok: { warpDeviceLoginGroup: true, workbuddyLoginGroup: true, qoderLoginGroup: true, clineLoginGroup: true, ssoCredentialGroup: true },
   };
   for (const [platform, expected] of Object.entries(expectations)) {
     node('accountId').value = '';
@@ -910,7 +918,7 @@ const CHANNEL_SELECT_TEMPLATES = [
   'templates/components/modals/model-modal.html',
 ];
 
-const CHANNEL_KEYS = ['warp', 'puter', 'workbuddy', 'qoder', 'cline', 'grok'];
+const CHANNEL_KEYS = ['warp', 'workbuddy', 'qoder', 'cline', 'grok'];
 
 test('every channel in the tutorial list appears in the tutorial quick-reference table', () => {
   const template = fs.readFileSync(path.join(__dirname, 'templates/pages/tutorial.html'), 'utf8');
@@ -992,7 +1000,7 @@ test('账号管理 and 运维总览 count the same 异常 accounts from one pred
 
   const rows = [
     // A drained allowance on every channel is a business limit, not a fault.
-    { id: 1, account_type: 'puter', enabled: true, has_credential: true, status_code: 'puter_quota_exhausted', quota_supported: true, quota_limit: 1000, quota_remaining: 0, quota_confidence: 'confirmed' },
+    { id: 1, account_type: 'cline', enabled: true, has_credential: true, status_code: 'cline_quota_exhausted', quota_supported: true, quota_limit: 1000, quota_remaining: 0, quota_confidence: 'confirmed' },
     { id: 2, account_type: 'workbuddy', enabled: true, has_credential: true, status_code: 'workbuddy_quota_exhausted', quota_supported: true, quota_limit: 350, quota_remaining: 0, quota_confidence: 'confirmed' },
     { id: 3, account_type: 'grok', enabled: true, has_credential: true, status_code: '', quota_supported: true, quota_limit: 500000, quota_remaining: 0, quota_confidence: 'confirmed' },
     // An INFERRED window that reads zero is still drained: this row used to be

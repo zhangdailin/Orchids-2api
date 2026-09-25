@@ -35,7 +35,7 @@ var accountSecretFields = map[string]func(*store.Account) string{
 
 // accountChannels are the channels the account API serves. Every one of them goes
 // through the same projection, so the guard has to cover each.
-var accountChannels = []string{"warp", "grok", "puter", "workbuddy", "qoder"}
+var accountChannels = []string{"warp", "grok", "workbuddy", "qoder"}
 
 // marker prefixes every planted secret so one substring search can find all of
 // them in the rendered JSON, whatever the field name became on the wire.

@@ -2,14 +2,13 @@
 
 [中文](README.md) | [English](README_EN.md)
 
-A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across six upstream channels: `warp`, `puter`, `workbuddy`, `qoder`, `cline`, and `grok`.
+A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-compatible APIs across five upstream channels: `warp`, `workbuddy`, `qoder`, `cline`, and `grok`.
 
 ## Current Status
 
-- `internal/handler` serves `warp` / `puter` / `workbuddy` / `qoder` / `cline` for both `/v1/messages` and `/v1/chat/completions`
+- `internal/handler` serves `warp` / `workbuddy` / `qoder` / `cline` for both `/v1/messages` and `/v1/chat/completions`
 - `internal/grok` handles Grok Messages, Responses, Chat, image, video, speech, and local media endpoints
 - per-channel model sync is available through `POST /api/models/refresh`
-- Puter non-stream Claude Messages regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long-context, and multi-round `tool_result`
 - The Qoder channel is OAuth-only: accounts come exclusively from the official `qoder.com` device authorization flow, and it accepts no pasted personal access token
 - The Cline channel is OAuth-only too: the WorkOS device grant is exchanged at `api.cline.bot` for the Cline credential (sent as `Bearer workos:<accessToken>`), and the model catalog is read from `GET /ai/cline/recommended-models` with no compiled-in fallback
 
@@ -30,7 +29,6 @@ A Go-based multi-channel proxy that exposes Claude Messages style and OpenAI-com
 | Channel | Public routes |
 |---|---|
 | `warp` | `/warp/v1/messages`, `/warp/v1/chat/completions` |
-| `puter` | `/puter/v1/messages`, `/puter/v1/chat/completions` |
 | `cline` | `/cline/v1/messages`, `/cline/v1/chat/completions` |
 | `grok` | `/grok/v1/messages`, `/grok/v1/responses`, `/grok/v1/chat/completions`, image, video, speech, and file routes |
 
@@ -126,12 +124,6 @@ Run all tests:
 go test ./...
 ```
 
-Run Puter-specific regressions:
-
-```bash
-go test ./internal/handler -run "Puter_"
-```
-
 Rebuild:
 
 ```bash
@@ -148,19 +140,11 @@ curl -s http://127.0.0.1:3002/v1/models -H 'Authorization: Bearer sk-...'
 ## Model Sync Behavior
 
 - endpoint: `POST /api/models/refresh`
-- example body: `{"channel":"puter"}`
-- sync is source-driven; Puter additionally verifies official-catalog candidates with account `test_mode`
+- example body: `{"channel":"warp"}`
+- sync is source-driven: each channel verifies upstream candidates by its own upstream capability
 - newly discovered models are inserted
 - locally stored models missing from the source are deleted
 - `verified` reports the number of models accepted into the synced set for that run
-
-## Puter Notes
-
-- requests use native `tools`, assistant `tool_calls`, and `role: tool` history instead of prompt-level `<tool_call>` emulation
-- streams are decoded by native `text`, `reasoning`, `tool_use`, `usage`, and `error` event type
-- `/puter/v1/messages` non-stream responses preserve `tool_use` content blocks
-- `tool_result` follow-ups can either continue the tool chain or converge to final text
-- regressions are covered for `Read`, `Write`, `Edit`, `Delete`, long context, and multi-round `tool_result`
 
 ## Admin
 

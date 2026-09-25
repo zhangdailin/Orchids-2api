@@ -91,7 +91,7 @@ func TestHandleMessages_NonStreamPartialFailureReturnsOnlyError(t *testing.T) {
 	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": false}
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
-	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
 	}
@@ -107,7 +107,7 @@ func TestHandleMessages_UsageEvidenceSuppressesReplay(t *testing.T) {
 	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": false}
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
-	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
 
 	if client.calls != 1 {
 		t.Fatalf("upstream calls = %d, want 1 after provider-reported usage", client.calls)
@@ -128,7 +128,7 @@ func TestHandleMessages_NonStreamEncodeFailureIsObservable(t *testing.T) {
 	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": false}
 	body, _ := json.Marshal(payload)
 	writer := &encodeFailResponseWriter{err: errors.New("client connection closed")}
-	h.HandleMessages(writer, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+	h.HandleMessages(writer, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
 
 	if len(auditLog.events) != 1 {
 		t.Fatalf("audit events = %d, want 1", len(auditLog.events))
@@ -144,7 +144,7 @@ func TestHandleMessages_StreamPartialFailureEndsWithErrorNotSuccess(t *testing.T
 	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": true}
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
-	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
 	out := rec.Body.String()
 	if !strings.Contains(out, "event: error") {
 		t.Fatalf("stream lacks terminal error: %s", out)
@@ -169,7 +169,7 @@ func TestHandleMessages_DoesNotRetryAfterTerminalFinish(t *testing.T) {
 	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": true}
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
-	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body)))
 	if client.calls != 1 {
 		t.Fatalf("upstream calls = %d, want 1", client.calls)
 	}
@@ -195,7 +195,7 @@ func TestHandleMessages_Stream_NoFinish_StillStops(t *testing.T) {
 	b, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec, req)
 	out := rec.Body.String()
 	if !strings.Contains(out, "hello") {
@@ -230,7 +230,7 @@ func TestHandleMessages_WarpAcceptedRequestIsNotReplayed(t *testing.T) {
 	}
 }
 
-func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedAccount(t *testing.T) {
+func TestHandleMessages_WorkBuddyStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedAccount(t *testing.T) {
 	mini := miniredis.RunT(t)
 	s, err := store.New(store.Options{
 		StoreMode:   "redis",
@@ -247,7 +247,7 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 	}()
 
 	first := &store.Account{
-		AccountType: "puter",
+		AccountType: "workbuddy",
 		Enabled:     true,
 		Weight:      1,
 	}
@@ -255,7 +255,7 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 		t.Fatalf("CreateAccount(first) error = %v", err)
 	}
 	second := &store.Account{
-		AccountType:   "puter",
+		AccountType:   "workbuddy",
 		Enabled:       true,
 		Weight:        1,
 		MaxConcurrent: 2,
@@ -264,7 +264,7 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 		t.Fatalf("CreateAccount(second) error = %v", err)
 	}
 
-	publishModel(t, s, &store.Model{Channel: "Puter", ModelID: "claude-opus-5"})
+	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "claude-opus-5"})
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 
@@ -276,7 +276,7 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 	})
 	h.SetClientFactory(func(acc *store.Account, cfg *config.Config) UpstreamClient {
 		if acc.ID == first.ID {
-			return &errorUpstreamEdge{err: errors.New("puter API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")}
+			return &errorUpstreamEdge{err: errors.New("workbuddy API error: code=insufficient_funds, status=402, message=Available funding is insufficient for this request.")}
 		}
 		return &mockUpstreamEdge{events: []upstream.SSEMessage{
 			{Type: "model", Event: map[string]any{"type": "text-start"}},
@@ -294,7 +294,7 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 	body, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/chat/completions", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/chat/completions", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -312,8 +312,8 @@ func TestHandleMessages_PuterStreamQuotaRetrySkipsRetryMarkerAndCoolsDownFailedA
 	if err != nil {
 		t.Fatalf("GetAccount(first) error = %v", err)
 	}
-	if storedFirst.StatusCode != store.AccountStatusPuterQuotaExhausted {
-		t.Fatalf("expected first account to enter Puter free-only mode, got %q", storedFirst.StatusCode)
+	if storedFirst.StatusCode != store.AccountStatusWorkBuddyQuotaExhausted {
+		t.Fatalf("expected first account to enter WorkBuddy free-only mode, got %q", storedFirst.StatusCode)
 	}
 }
 
@@ -342,7 +342,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	b, _ := json.Marshal(payload)
 
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec1, req1)
 	if rec1.Code != 200 {
 		t.Fatalf("expected first request 200, got %d", rec1.Code)
@@ -352,7 +352,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressInterruptedRetry(t *testing.T) {
 	}
 
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(b))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(b))
 	h.HandleMessages(rec2, req2)
 	if rec2.Code != 200 {
 		t.Fatalf("expected second request 200, got %d", rec2.Code)
@@ -404,7 +404,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
 	bodyB, _ := json.Marshal(payloadWithToolResult("file two"))
 
 	rec1 := httptest.NewRecorder()
-	req1 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(bodyA))
+	req1 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(bodyA))
 	h.HandleMessages(rec1, req1)
 	if rec1.Code != 200 {
 		t.Fatalf("expected first request 200, got %d", rec1.Code)
@@ -414,7 +414,7 @@ func TestHandleMessages_Dedup_DoesNotSuppressToolResultFollowup(t *testing.T) {
 	}
 
 	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(bodyB))
+	req2 := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(bodyB))
 	h.HandleMessages(rec2, req2)
 	if rec2.Code != 200 {
 		t.Fatalf("expected second request 200, got %d", rec2.Code)
@@ -541,7 +541,7 @@ func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *
 func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing.T) {
 	cfg := &config.Config{DebugEnabled: false, RequestTimeout: 10, MaxRetries: 3, RetryDelay: 0}
 	h := NewWithLoadBalancer(cfg, nil)
-	upstreamClient := &errorUpstreamEdge{err: errors.New("puter API error: message=Model not found, please try another model")}
+	upstreamClient := &errorUpstreamEdge{err: errors.New("workbuddy API error: message=Model not found, please try another model")}
 	h.client = upstreamClient
 	auditLog := &captureAuditLogger{}
 	h.SetAuditLogger(auditLog)
@@ -555,7 +555,7 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	body, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 	// A failure with nothing sent yet is a failure. Answering 200 with the error as
 	// assistant content is what made a client unable to tell a rejection from an
@@ -568,7 +568,7 @@ func TestHandleMessages_NonRetryableClientErrorReturnsExplicitMessage(t *testing
 	}
 
 	out := rec.Body.String()
-	if !strings.Contains(out, "rejected the request parameters or model") || strings.Contains(out, "puter API error") {
+	if !strings.Contains(out, "rejected the request parameters or model") || strings.Contains(out, "workbuddy API error") {
 		t.Fatalf("expected redacted upstream error, got: %s", out)
 	}
 	if strings.Contains(out, "No output was presented to the user") {

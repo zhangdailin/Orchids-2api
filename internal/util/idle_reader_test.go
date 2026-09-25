@@ -23,10 +23,10 @@ func (r *cancelAwareReadCloser) Close() error { return nil }
 func TestMonitorReadIdleCancelsBlockedReadWithClassifiableError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	body := MonitorReadIdle(&cancelAwareReadCloser{done: ctx.Done()}, 20*time.Millisecond, cancel, "puter")
+	body := MonitorReadIdle(&cancelAwareReadCloser{done: ctx.Done()}, 20*time.Millisecond, cancel, "grok")
 	_, err := body.Read(make([]byte, 1))
-	if err == nil || !strings.Contains(err.Error(), "puter stream idle timeout") {
-		t.Fatalf("Read() error=%v want Puter idle timeout", err)
+	if err == nil || !strings.Contains(err.Error(), "grok stream idle timeout") {
+		t.Fatalf("Read() error=%v want Grok idle timeout", err)
 	}
 	if !errors.Is(ctx.Err(), context.Canceled) {
 		t.Fatalf("context error=%v want canceled", ctx.Err())

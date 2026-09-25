@@ -11,9 +11,9 @@ const models = fs.readFileSync(path.join(root, 'static/js/models.js'), 'utf8');
 const payload = {
   defaultProviderKey: 'warp',
   providers: [
-    { key: 'warp', label: 'Warp' }, { key: 'puter', label: 'Puter' },
-    { key: 'workbuddy', label: 'WorkBuddy' }, { key: 'qoder', label: 'Qoder' },
-    { key: 'cline', label: 'Cline' }, { key: 'grok', label: 'Grok' },
+    { key: 'warp', label: 'Warp' }, { key: 'workbuddy', label: 'WorkBuddy' },
+    { key: 'qoder', label: 'Qoder' }, { key: 'cline', label: 'Cline' },
+    { key: 'grok', label: 'Grok' },
   ],
 };
 
@@ -37,8 +37,8 @@ test('accounts and models consume the backend-fed provider registry', () => {
   assert.match(accounts, /OrchidsProviderRegistry\?\.keys/);
   assert.match(accounts, /OrchidsProviderRegistry\?\.providers/);
   assert.match(models, /OrchidsProviderRegistry\?\.channels/);
-  assert.doesNotMatch(accounts, /\["warp", "puter", "workbuddy", "qoder", "cline", "grok"\]/);
-  assert.doesNotMatch(models, /\["Warp", "Puter", "WorkBuddy", "Qoder", "Cline", "Grok"\]/);
+  assert.doesNotMatch(accounts, /\["warp", "workbuddy", "qoder", "cline", "grok"\]/);
+  assert.doesNotMatch(models, /\["Warp", "WorkBuddy", "Qoder", "Cline", "Grok"\]/);
 });
 
 test('all provider pages load the registry before page code', () => {

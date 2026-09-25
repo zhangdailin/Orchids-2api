@@ -32,7 +32,6 @@ import (
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/modelcatalog"
 	"orchids-api/internal/opsagg"
-	"orchids-api/internal/puter"
 	"orchids-api/internal/qoder"
 	"orchids-api/internal/refreshqueue"
 	"orchids-api/internal/store"
@@ -597,12 +596,6 @@ type deviceLoginResponse struct {
 	Message                 string `json:"message,omitempty"`
 }
 
-var puterFetchMonthlyUsage = func(ctx context.Context, acc *store.Account, cfg *config.Config) (*puter.MonthlyUsage, error) {
-	client := puter.NewFromAccount(acc, cfg)
-	defer client.Close()
-	return client.FetchMonthlyUsage(ctx)
-}
-
 func verifyGrokAccount(ctx context.Context, acc *store.Account, cfg *config.Config, accountStore *store.Store) error {
 	if acc == nil {
 		return fmt.Errorf("missing grok account")
@@ -672,7 +665,7 @@ func httpStatusFromAccountStatus(status string) int {
 	switch strings.TrimSpace(status) {
 	case "401":
 		return http.StatusUnauthorized
-	case "402", store.AccountStatusPuterQuotaExhausted, store.AccountStatusQoderQuotaExhausted, store.AccountStatusWorkBuddyQuotaExhausted:
+	case "402", store.AccountStatusQoderQuotaExhausted, store.AccountStatusWorkBuddyQuotaExhausted:
 		return http.StatusPaymentRequired
 	case "403":
 		return http.StatusForbidden
@@ -976,8 +969,6 @@ func accountSessionFingerprint(acc *store.Account) string {
 	case "cline":
 		creds := cline.ResolveCredentials(acc)
 		return util.Fingerprint(util.FirstNonEmpty(creds.RefreshToken, creds.AccessToken))
-	case "puter":
-		return util.Fingerprint(puter.ResolveAuthToken(acc))
 	default:
 		return ""
 	}
@@ -996,8 +987,6 @@ func normalizedAccountCredentialKey(acc *store.Account) string {
 		token = strings.TrimSpace(warp.RefreshToken(acc))
 	case "grok":
 		token = strings.TrimSpace(util.FirstNonEmpty(acc.OAuthRefreshToken, acc.OAuthAccessToken))
-	case "puter":
-		token = puter.ResolveAuthToken(acc)
 	case "workbuddy":
 		return WorkBuddyCredentialKey(acc)
 	case "qoder":
@@ -2233,9 +2222,6 @@ func (a *API) HandleAccountByID(w http.ResponseWriter, r *http.Request) {
 			if acc.ReplaceClineCredentials {
 				acc.ClearVerifiedAt = true
 			}
-		} else if strings.EqualFold(acc.AccountType, "puter") && strings.EqualFold(existing.AccountType, "puter") && strings.TrimSpace(acc.ClientCookie) == "" && strings.TrimSpace(acc.Token) == "" {
-			acc.ClientCookie = existing.ClientCookie
-			acc.Token = existing.Token
 		}
 
 		isWarpAccount := strings.EqualFold(acc.AccountType, "warp")
@@ -3139,7 +3125,7 @@ func applySuccessfulAccountRefreshStatus(acc *store.Account, status string) {
 	// A verifier that reports only a status has no better explanation than the one
 	// already on the record. The reason is the operator's only signal — the account
 	// table shows a bare code without it — so an unchanged verdict keeps the
-	// specific wording (Puter's verifier returns "402" with nothing else, and a
+	// specific wording (the verifier returns "402" with nothing else, and a
 	// manual check used to wipe the upstream's own explanation).
 	//
 	// The carry-over is limited to the same status: a new code means the old reason

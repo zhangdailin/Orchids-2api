@@ -1,6 +1,6 @@
 # 部署指南
 
-本文档以当前代码实现为准，适用于 `warp`、`puter`、`workbuddy`、`qoder`、`cline` 和仅使用 Build OAuth CLI 的 `grok` 通道。
+本文档以当前代码实现为准，适用于 `warp`、`workbuddy`、`qoder`、`cline` 和仅使用 Build OAuth CLI 的 `grok` 通道。
 
 ## 1. 前置条件
 
@@ -96,13 +96,12 @@ Get-NetTCPConnection -LocalPort 3002 -ErrorAction SilentlyContinue
 - Grok 先在管理端通过 `/api/grok/device-auth*` 完成 Build OAuth 登录
 - 登录后调用 `POST /api/models/refresh`（请求体 `{"channel":"grok"}`），确认返回 `source=grok_build_models`
 - `GET /grok/v1/models` 只应出现 Build 上游实际发现的模型
-- 当前刷新是“按来源同步”：新增即写入、来源消失即删除；Puter 还会执行账号 `test_mode` 逐模型验证
+- 当前刷新是“按来源同步”：新增即写入、来源消失即删除；各通道按各自来源能力验证
 
 建议回归：
 
 ```bash
 go test ./...
-go test ./internal/handler -run "Puter_"
 ```
 
 ## 6. 可观测性与排障
@@ -136,7 +135,7 @@ Windows 日志通常取决于你的启动方式；若前台启动，直接查看
 
 | 项目 | 口径 |
 |---|---|
-| 请求数 / 成功率 | 只统计渠道前缀（`warp`/`puter`/`workbuddy`/`qoder`/`grok`）。`http`（管理页、健康检查、扫描器）被计入聚合但排除在矩阵与总数之外，页面用 `excluded_aggregates` 说明；`probe` 仅是旧版本探测循环留下的历史聚合，不再产生新数据 |
+| 请求数 / 成功率 | 只统计渠道前缀（`warp`/`workbuddy`/`qoder`/`cline`/`grok`）。`http`（管理页、健康检查、扫描器）被计入聚合但排除在矩阵与总数之外，页面用 `excluded_aggregates` 说明；`probe` 仅是旧版本探测循环留下的历史聚合，不再产生新数据 |
 | 速率（RPM） | 按所选**窗口长度**计算，而不是按存在数据的桶数；60 分钟里 1 次请求显示 1/60 而不是 1 |
 | 延迟 P95 | 合并视图会收集各渠道的原始样本后统一计算（百分位不可相加）；`samples` 为 0 表示没有样本，页面显示“暂无样本”而不是健康的 0 |
 | 首字延迟 | 从**首个有效载荷字节**算起，提交响应头与 SSE keepalive 注释都不计入；非流式响应等于整个耗时 |
@@ -153,8 +152,4 @@ go test ./...
 go build -o orchids-server ./cmd/server
 ```
 
-若当前版本重点涉及 Puter 或模型刷新逻辑，建议额外执行：
-
-```bash
-go test ./internal/handler -run "Puter_"
-```
+模型刷新逻辑变更时，刷新后用 `GET /v1/models` 复核来源与数量即可。

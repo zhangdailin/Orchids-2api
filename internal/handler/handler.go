@@ -545,16 +545,15 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	preSelectWarpRequest := strings.EqualFold(targetChannel, "warp")
-	preSelectPuterRequest := strings.EqualFold(targetChannel, "puter")
 	preSelectWorkBuddyRequest := strings.EqualFold(targetChannel, "workbuddy")
-	// Qoder forwards raw OpenAI-style messages like Puter and WorkBuddy do, so it
+	// Qoder forwards raw OpenAI-style messages like WorkBuddy does, so it
 	// belongs to the same passthrough family: no Warp history trimming, and the
 	// request verbatim as the caller sent it.
 	preSelectQoderRequest := strings.EqualFold(targetChannel, "qoder")
 	// Cline is the same kind of passthrough: its endpoint is OpenAI-shaped and
 	// the client's messages are forwarded verbatim.
 	preSelectClineRequest := strings.EqualFold(targetChannel, "cline")
-	preSelectPassthroughRequest := preSelectWarpRequest || preSelectPuterRequest || preSelectWorkBuddyRequest || preSelectQoderRequest || preSelectClineRequest
+	preSelectPassthroughRequest := preSelectWarpRequest || preSelectWorkBuddyRequest || preSelectQoderRequest || preSelectClineRequest
 	suggestionMode := isSuggestionMode(req.Messages)
 	emptyOutputRecoveryPrompt := ""
 	if preSelectWarpRequest {
@@ -582,7 +581,7 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if lastUserIsToolResultFollowup(req.Messages) {
 		if preSelectPassthroughRequest {
 			if verboseDiagnostics {
-				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", preSelectWarpRequest, "puter", preSelectPuterRequest)
+				slog.Debug("tool_gate: keeping tools for passthrough tool_result follow-up", "warp", preSelectWarpRequest)
 			}
 		} else {
 			gateNoTools = true
@@ -651,10 +650,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		isWarpRequest = true
 	}
-	isPuterRequest := preSelectPuterRequest
-	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "puter") {
-		isPuterRequest = true
-	}
 	isWorkBuddyRequest := preSelectWorkBuddyRequest
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "workbuddy") {
 		isWorkBuddyRequest = true
@@ -667,12 +662,10 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "cline") {
 		isClineRequest = true
 	}
-	isPassthroughRequest := isWarpRequest || isPuterRequest || isWorkBuddyRequest || isQoderRequest || isClineRequest
+	isPassthroughRequest := isWarpRequest || isWorkBuddyRequest || isQoderRequest || isClineRequest
 	if isPassthroughRequest {
 		channel := "warp"
 		switch {
-		case isPuterRequest:
-			channel = "puter"
 		case isWorkBuddyRequest:
 			channel = "workbuddy"
 		case isQoderRequest:
@@ -683,26 +676,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		// Passthrough channels do not trim history/tool results.
 		if verboseDiagnostics {
 			slog.Debug("Checkpoint: passthrough, skip context trimming", "channel", channel)
-		}
-	}
-	// Keep the public model id in the response, but route Puter with the exact
-	// identifier advertised by its catalog.
-	puterUpstreamModel := strings.TrimSpace(req.Model)
-	if isPuterRequest && validatedModel != nil && strings.TrimSpace(validatedModel.UpstreamModel) != "" {
-		puterUpstreamModel = strings.TrimSpace(validatedModel.UpstreamModel)
-	}
-	if isPuterRequest {
-		if sanitized, changed := sanitizeSystemItems(req.System); changed {
-			req.System = sanitized
-			if verboseDiagnostics {
-				slog.Debug("puter: sanitized forwarded system items")
-			}
-		}
-		if isDeepSeekPuterModel(puterUpstreamModel) {
-			restored, missing := h.restorePuterReasoning(r.Context(), puterUpstreamModel, req.Messages)
-			if verboseDiagnostics && (restored > 0 || missing > 0) {
-				slog.Debug("puter reasoning replay prepared", "restored", restored, "fallback_required", missing)
-			}
 		}
 	}
 	if verboseDiagnostics {
@@ -722,14 +695,12 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	mappedModel := mapModel(req.Model)
 	if currentAccount != nil && strings.EqualFold(currentAccount.AccountType, "warp") {
 		mappedModel = strings.TrimSpace(req.Model)
-	} else if isPuterRequest {
-		mappedModel = puterUpstreamModel
 	} else if isWorkBuddyRequest || isQoderRequest || isClineRequest {
 		mappedModel = strings.TrimSpace(req.Model)
 	}
 
 	var builtPrompt string
-	if isPuterRequest || isWorkBuddyRequest || isQoderRequest || isClineRequest {
+	if isWorkBuddyRequest || isQoderRequest || isClineRequest {
 		builtPrompt = strings.TrimSpace(extractUserText(req.Messages))
 		if builtPrompt == "" {
 			switch {
@@ -737,10 +708,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 				builtPrompt = "workbuddy request"
 			case isQoderRequest:
 				builtPrompt = "qoder request"
-			case isClineRequest:
-				builtPrompt = "cline request"
 			default:
-				builtPrompt = "puter request"
+				builtPrompt = "cline request"
 			}
 		}
 	} else {
@@ -809,8 +778,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	} else {
 		breakdown = estimateInputTokenBreakdown(builtPrompt, effectiveTools)
 		switch {
-		case isPuterRequest:
-			breakdownProfile = "puter"
 		case isWorkBuddyRequest:
 			breakdownProfile = "workbuddy"
 		case isQoderRequest:
@@ -911,13 +878,6 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sh.onToolCall = func(id, name, input, upstreamType, taskContext string) {
-		if isPuterRequest && isDeepSeekPuterModel(mappedModel) {
-			if reasoning := sh.currentReasoningText(); reasoning != "" {
-				if err := h.savePuterReasoningForTool(r.Context(), mappedModel, id, reasoning); err != nil {
-					slog.Warn("failed to save puter reasoning replay", "tool_call_id", id, "error", err)
-				}
-			}
-		}
 		if !isWarpRequest || activeWarpConversationID == "" {
 			return
 		}

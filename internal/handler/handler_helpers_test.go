@@ -68,7 +68,7 @@ func publishModel(t *testing.T, s *store.Store, records ...*store.Model) {
 	}
 }
 
-func TestValidateModelAvailability_PuterUsesChannelSpecificModel(t *testing.T) {
+func TestValidateModelAvailability_WorkBuddyUsesChannelSpecificModel(t *testing.T) {
 	h, s, mini := setupModelValidationHandler(t)
 	defer func() {
 		_ = s.Close()
@@ -76,17 +76,17 @@ func TestValidateModelAvailability_PuterUsesChannelSpecificModel(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	publishModel(t, s, &store.Model{Channel: "Puter", ModelID: "claude-opus-5"})
+	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "claude-opus-5"})
 
-	got, err := h.validateModelAvailability(ctx, "claude-opus-5", "puter")
+	got, err := h.validateModelAvailability(ctx, "claude-opus-5", "workbuddy")
 	if err != nil {
 		t.Fatalf("validateModelAvailability() error = %v", err)
 	}
 	if got == nil {
 		t.Fatal("validateModelAvailability() returned nil model")
 	}
-	if got.Channel != "Puter" {
-		t.Fatalf("validateModelAvailability() channel = %q, want %q", got.Channel, "Puter")
+	if got.Channel != "WorkBuddy" {
+		t.Fatalf("validateModelAvailability() channel = %q, want %q", got.Channel, "WorkBuddy")
 	}
 	if got.ModelID != "claude-opus-5" {
 		t.Fatalf("validateModelAvailability() model = %q, want %q", got.ModelID, "claude-opus-5")
@@ -248,11 +248,11 @@ func TestValidateModelAvailability_RejectsOfflineExactMatchEvenWhenAliasExists(t
 
 	ctx := context.Background()
 
-	mustCreateModel(t, s, "199", "Puter", "claude-opus-4-6", store.ModelStatusOffline)
+	mustCreateModel(t, s, "199", "WorkBuddy", "claude-opus-4-6", store.ModelStatusOffline)
 
-	mustCreateModel(t, s, "200", "Puter", "claude-opus-4.6", store.ModelStatusAvailable)
+	mustCreateModel(t, s, "200", "WorkBuddy", "claude-opus-4.6", store.ModelStatusAvailable)
 
-	got, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "puter")
+	got, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "workbuddy")
 	if err == nil {
 		t.Fatalf("validateModelAvailability() error = nil, got model=%v", got)
 	}
@@ -270,11 +270,11 @@ func TestValidateModelAvailability_ReturnsOfflineExactMatch(t *testing.T) {
 
 	ctx := context.Background()
 
-	mustCreateModel(t, s, "199", "Puter", "claude-opus-4-6", store.ModelStatusOffline)
+	mustCreateModel(t, s, "199", "WorkBuddy", "claude-opus-4-6", store.ModelStatusOffline)
 
-	mustCreateModel(t, s, "201", "Puter", "claude-opus-4.6", store.ModelStatusOffline)
+	mustCreateModel(t, s, "201", "WorkBuddy", "claude-opus-4.6", store.ModelStatusOffline)
 
-	_, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "puter")
+	_, err := h.validateModelAvailability(ctx, "claude-opus-4-6", "workbuddy")
 	if err == nil {
 		t.Fatal("validateModelAvailability() error = nil, want model not available")
 	}
@@ -387,7 +387,7 @@ func TestHandleMessages_WarpResolvesBareModelToEffortVariant(t *testing.T) {
 		t.Fatalf("upstream model = %q, want the effort variant gpt-5-6-sol-low", client.calls[0].Model)
 	}
 	// The client-stated effort must reach the provider request so channels
-	// whose wire contract carries it (qoder/workbuddy/puter/cline) can forward
+	// whose wire contract carries it (qoder/workbuddy/cline) can forward
 	// the thinking hint instead of silently dropping it.
 	if client.calls[0].ReasoningEffort != "low" {
 		t.Fatalf("upstream ReasoningEffort = %q, want low", client.calls[0].ReasoningEffort)

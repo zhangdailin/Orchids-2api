@@ -9,7 +9,7 @@ import (
 )
 
 // BaseHandler contains shared infrastructure used by both the
-// Shared by the Warp/Puter handler and the Grok handler.
+// Shared by the Warp handler and the Grok handler.
 type BaseHandler struct {
 	LB *loadbalancer.LoadBalancer
 }

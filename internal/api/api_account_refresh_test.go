@@ -43,33 +43,6 @@ func TestBuildQuotaResponseFields_WarpSplitQuota(t *testing.T) {
 	}
 }
 
-func TestBuildQuotaResponseFields_PuterMonthlyUsage(t *testing.T) {
-	t.Parallel()
-
-	acc := &store.Account{
-		AccountType:  "puter",
-		UsageCurrent: 13494935.4,
-		UsageLimit:   25000000,
-	}
-
-	fields := buildQuotaResponseFields(acc)
-	if got := fields["quota_supported"].(bool); !got {
-		t.Fatal("quota_supported=false want true")
-	}
-	if got := fields["quota_limit"].(float64); got != 25000000 {
-		t.Fatalf("quota_limit=%v want 25000000", got)
-	}
-	if got := fields["quota_remaining"].(float64); got != 13494935.4 {
-		t.Fatalf("quota_remaining=%v want 13494935.4", got)
-	}
-	if got := fields["quota_used"].(float64); got != 11505064.6 {
-		t.Fatalf("quota_used=%v want 11505064.6", got)
-	}
-	if got := fields["quota_unit"].(string); got != "credits" {
-		t.Fatalf("quota_unit=%q want credits", got)
-	}
-}
-
 func TestHandleAccounts_PostRejectsManualWarpLogin(t *testing.T) {
 	a, s, cleanup := newTestAPI(t)
 	defer cleanup()

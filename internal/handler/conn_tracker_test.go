@@ -127,8 +127,8 @@ func TestSelectAccount_UsesHandlerConnTracker(t *testing.T) {
 		mini.Close()
 	}()
 
-	acc1 := createEnabledTestAccount(t, s, "acc-1", "puter")
-	acc2 := createEnabledTestAccount(t, s, "acc-2", "puter")
+	acc1 := createEnabledTestAccount(t, s, "acc-1", "workbuddy")
+	acc2 := createEnabledTestAccount(t, s, "acc-2", "workbuddy")
 
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 	globalTracker := newSpyConnTracker(map[int64]int64{
@@ -147,7 +147,7 @@ func TestSelectAccount_UsesHandlerConnTracker(t *testing.T) {
 		return &trackerTestUpstream{}
 	})
 
-	_, selected, release, err := h.acquireAccountSelection(context.Background(), "puter", true, nil, accountSelectionOptions{})
+	_, selected, release, err := h.acquireAccountSelection(context.Background(), "workbuddy", true, nil, accountSelectionOptions{})
 	defer release()
 	if err != nil {
 		t.Fatalf("selectAccount() error = %v", err)
@@ -173,7 +173,7 @@ func TestAcquireReservedAccountSelection_WaitsForShortLease(t *testing.T) {
 		mini.Close()
 	}()
 
-	acc := createEnabledTestAccount(t, s, "busy-puter", "puter")
+	acc := createEnabledTestAccount(t, s, "busy-workbuddy", "workbuddy")
 	lb := loadbalancer.NewWithCacheTTL(s, time.Second)
 	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, lb)
 	tracker := newSpyConnTracker(map[int64]int64{acc.ID: 1})
@@ -193,7 +193,7 @@ func TestAcquireReservedAccountSelection_WaitsForShortLease(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, selected, release, trackedID, err := h.acquireReservedAccountSelection(ctx, "puter", true, nil, accountSelectionOptions{ModelID: "deepseek-v4-flash"})
+	_, selected, release, trackedID, err := h.acquireReservedAccountSelection(ctx, "workbuddy", true, nil, accountSelectionOptions{ModelID: "deepseek-v4-flash"})
 	defer release()
 	if err != nil {
 		t.Fatalf("acquireReservedAccountSelection() error = %v", err)
@@ -341,9 +341,9 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 		mini.Close()
 	}()
 
-	publishModel(t, s, &store.Model{Channel: "Puter", ModelID: "claude-opus-5"})
-	acc1 := createEnabledTestAccount(t, s, "acc-1", "puter")
-	acc2 := createEnabledTestAccount(t, s, "acc-2", "puter")
+	publishModel(t, s, &store.Model{Channel: "WorkBuddy", ModelID: "claude-opus-5"})
+	acc1 := createEnabledTestAccount(t, s, "acc-1", "workbuddy")
+	acc2 := createEnabledTestAccount(t, s, "acc-2", "workbuddy")
 	acc2.MaxConcurrent = 2
 	if err := s.UpdateAccount(context.Background(), acc2); err != nil {
 		t.Fatalf("UpdateAccount(acc-2) error = %v", err)
@@ -388,7 +388,7 @@ func TestHandleMessages_AccountSwitchUsesHandlerConnTracker(t *testing.T) {
 	body, _ := json.Marshal(payload)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -415,9 +415,9 @@ func TestDefaultAccountConcurrencyLimitIsTen(t *testing.T) {
 	t.Parallel()
 
 	// Every provider shares one default. The per-channel values this replaced
-	// (WorkBuddy 3, Warp/Puter/Grok 1, Qoder unlimited) made a channel's
+	// (WorkBuddy 3, Warp/Grok 1, Qoder unlimited) made a channel's
 	// capacity depend on which switch arm it happened to fall into.
-	for _, accountType := range []string{"warp", "puter", "workbuddy", "qoder", "grok"} {
+	for _, accountType := range []string{"warp", "grok", "workbuddy", "qoder"} {
 		if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: accountType}); got != 10 {
 			t.Fatalf("unconfigured %s limit = %d, want 10", accountType, got)
 		}
@@ -425,8 +425,8 @@ func TestDefaultAccountConcurrencyLimitIsTen(t *testing.T) {
 	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "workbuddy", MaxConcurrent: 7}); got != 7 {
 		t.Fatalf("configured WorkBuddy limit = %d, want 7", got)
 	}
-	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "puter", MaxConcurrent: 4}); got != 4 {
-		t.Fatalf("configured Puter limit = %d, want 4", got)
+	if got := effectiveAccountConcurrencyLimit(&store.Account{AccountType: "qoder", MaxConcurrent: 4}); got != 4 {
+		t.Fatalf("configured Qoder limit = %d, want 4", got)
 	}
 }
 

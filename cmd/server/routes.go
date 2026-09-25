@@ -194,7 +194,7 @@ func registerRoutes(
 	// that wrote it rather than by Grok's handler accepting a foreign record.
 	mux.HandleFunc("/v1/responses/", inferenceAuth(limiter.Limit(grok.ResponsesUnifiedResource(nativeResponsesSub, bridgeOptions))))
 	// count_tokens takes the same dispatch decision as the request it precedes:
-	// /warp/v1 and /puter/v1 have their own token profiles, and a client that
+	// dedicated channel prefixes have their own token profiles, and a client that
 	// counts against one channel while the completion runs on another plans its
 	// context against the wrong number. On the unified prefix the channel is the
 	// model's, not the path's.
@@ -218,7 +218,6 @@ func registerRoutes(
 	mux.HandleFunc("/api/accounts", sessionAuth(apiHandler.HandleAccounts))
 	mux.HandleFunc("/api/accounts/", sessionAuth(apiHandler.HandleAccountByID))
 	mux.HandleFunc("/api/grok/availability", sessionAuth(apiHandler.HandleGrokAvailability))
-	mux.HandleFunc("/api/puter/web-login", sessionAuth(apiHandler.HandlePuterWebLogin))
 	mux.HandleFunc("/api/workbuddy/login", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/workbuddy/login/", sessionAuth(apiHandler.HandleWorkBuddyLogin))
 	mux.HandleFunc("/api/qoder/login", sessionAuth(apiHandler.HandleQoderLogin))

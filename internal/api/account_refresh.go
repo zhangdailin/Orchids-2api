@@ -18,7 +18,6 @@ import (
 	"time"
 
 	apperrors "orchids-api/internal/errors"
-	"orchids-api/internal/puter"
 	"orchids-api/internal/store"
 	"orchids-api/internal/warp"
 )
@@ -28,7 +27,6 @@ import (
 var accountRefreshers = map[string]func(*API, context.Context, *store.Account) (string, int, error){
 	"warp":      refreshWarpAccountState,
 	"grok":      refreshGrokAccountState,
-	"puter":     refreshPuterAccountState,
 	"qoder":     refreshQoderAccountState,
 	"workbuddy": refreshWorkBuddyAccountState,
 	"cline":     refreshClineAccountState,
@@ -103,27 +101,6 @@ func refreshGrokAccountState(a *API, ctx context.Context, acc *store.Account) (s
 		return status, httpStatusFromAccountStatus(status), fmt.Errorf("failed to verify grok account: %w", verifyErr)
 	}
 	return "", 0, nil
-}
-
-// refreshPuterAccountState re-reads the Puter monthly allowance, which is the
-// only thing that proves the credential still works.
-func refreshPuterAccountState(a *API, ctx context.Context, acc *store.Account) (string, int, error) {
-	if puter.ResolveAuthToken(acc) == "" {
-		return "", http.StatusBadRequest, fmt.Errorf("failed to verify puter account: missing auth token")
-	}
-	usage, usageErr := puterFetchMonthlyUsage(ctx, acc, a.config.Load())
-	if usageErr == nil {
-		if puter.ApplyMonthlyUsage(acc, usage) {
-			return store.AccountStatusPuterQuotaExhausted, 0, nil
-		}
-		return "", 0, nil
-	}
-	usageStatus := apperrors.ClassifyAccountStatus(usageErr.Error())
-	httpStatus := http.StatusBadGateway
-	if usageStatus != "" {
-		httpStatus = httpStatusFromAccountStatus(usageStatus)
-	}
-	return usageStatus, httpStatus, fmt.Errorf("failed to fetch puter usage: %w", usageErr)
 }
 
 // refreshQoderAccountState re-verifies a Qoder credential through the store,

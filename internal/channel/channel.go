@@ -9,7 +9,6 @@ type ID string
 
 const (
 	Warp      ID = "warp"
-	Puter     ID = "puter"
 	WorkBuddy ID = "workbuddy"
 	Qoder     ID = "qoder"
 	Cline     ID = "cline"
@@ -28,7 +27,6 @@ type Definition struct {
 
 var definitions = [...]Definition{
 	{ID: Warp, Label: "Warp", APIPrefix: "/warp/v1", Generic: true, Default: true, Theme: "cyan", AccountCreate: "device"},
-	{ID: Puter, Label: "Puter", APIPrefix: "/puter/v1", Generic: true, Theme: "purple", AccountCreate: "browser"},
 	{ID: WorkBuddy, Label: "WorkBuddy", APIPrefix: "/workbuddy/v1", Generic: true, Theme: "orange", AccountCreate: "browser"},
 	{ID: Qoder, Label: "Qoder", APIPrefix: "/qoder/v1", Generic: true, Theme: "green", AccountCreate: "browser"},
 	{ID: Cline, Label: "Cline", APIPrefix: "/cline/v1", Generic: true, Theme: "blue", AccountCreate: "browser"},
