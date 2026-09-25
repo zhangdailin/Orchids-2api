@@ -11,6 +11,38 @@ What runs on the server, and which file in this directory owns each piece.
 | Reverse proxy | `/etc/caddy/Caddyfile` | `deploy/Caddyfile` |
 | Loopback guard | `/etc/orchids-guard.nft` + `orchids-3002-loopback.service` | `deploy/orchids-guard.nft`, `deploy/orchids-3002-loopback.service` |
 
+## Redis holds the live config, and it wins over config.json
+
+Once the admin UI saves settings, the effective configuration lives in Redis at
+`<redis_prefix>settings:config` — a single JSON string of the same shape as
+`config.json`. It is overlaid on the file at startup, so **editing
+`config.json` alone silently stops taking effect** on a host that has ever
+saved from the UI, including for fields the file appears to own such as
+`admin_pass` and the upstream URLs. The symptom is a change that is obviously
+correct on disk but never observable at runtime.
+
+Check which value is actually in force before debugging anything else:
+
+```sh
+redis-cli get orchids:settings:config | python3 -m json.tool | head -40
+```
+
+Apply an operator change the same way — back it up, edit one field, write it
+back, restart:
+
+```sh
+redis-cli get orchids:settings:config > /root/orchids-settings-config.backup.json
+redis-cli get orchids:settings:config | python3 -c 'import json,sys
+c = json.load(sys.stdin)
+c["grok_cli_oauth_device_url"] = "https://auth.x.ai/oauth2/device/code"
+sys.stdout.write(json.dumps(c, ensure_ascii=False, separators=(",", ":")))' \
+  | redis-cli -x set orchids:settings:config
+systemctl restart orchids-2api
+```
+
+Keep `config.json` in step anyway: it is the value a rebuilt host starts from
+before anybody opens the UI.
+
 ## Deploy a build
 
 ```sh
