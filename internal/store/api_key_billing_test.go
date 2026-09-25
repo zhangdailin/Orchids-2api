@@ -349,6 +349,52 @@ func TestApiKeyBillingPeriodRollsOver(t *testing.T) {
 	}
 }
 
+func TestApiKeyBillingPeriodRolloverPreservesLiveHoldsAndIsAtomic(t *testing.T) {
+	s, mini := newApiKeyBillingStore(t, "period-atomic:")
+	defer mini.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	raw := "raw-period-atomic"
+	digest := sha256.Sum256([]byte(raw))
+	key := &ApiKey{
+		Name: "period atomic", KeyHash: hex.EncodeToString(digest[:]), Enabled: true,
+		BillingLimitUSDTicks: 1_000, BillingPeriodDays: 1,
+		BillingPeriodStartedAt: now.Add(-48 * time.Hour),
+	}
+	if err := s.CreateApiKey(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "old", 900); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.ReserveApiKeyBilling(ctx, key.ID, "live", 100, now.Add(time.Hour)); err != nil || !ok {
+		t.Fatalf("live hold: ok=%v err=%v", ok, err)
+	}
+	// Two stale snapshots model concurrent authorizations. Exactly one can match
+	// and advance the durable period start; the second must not reset fresh usage.
+	staleA, _ := s.GetApiKeyByID(ctx, key.ID)
+	staleB := *staleA
+	s.rolloverApiKeyBilling(ctx, staleA, now)
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "fresh", 50); err != nil {
+		t.Fatal(err)
+	}
+	s.rolloverApiKeyBilling(ctx, &staleB, now.Add(time.Second))
+
+	if err := s.SettleApiKeyBilling(ctx, key.ID, "live", 100); err != nil {
+		t.Fatalf("live hold was deleted by rollover: %v", err)
+	}
+	got, err := s.GetApiKeyByID(ctx, key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BillingUsedUSDTicks != 150 {
+		t.Fatalf("stale rollover erased fresh settlement: used=%d want 150", got.BillingUsedUSDTicks)
+	}
+	if released, err := s.ReleaseApiKeyBilling(ctx, key.ID, "live"); err != nil || released {
+		t.Fatalf("settled live hold remains: released=%v err=%v", released, err)
+	}
+}
+
 // Resetting billing by hand zeroes the counter without touching the limit.
 func TestResetApiKeyBillingKeepsTheLimit(t *testing.T) {
 	s, mini := newApiKeyBillingStore(t, "reset:")

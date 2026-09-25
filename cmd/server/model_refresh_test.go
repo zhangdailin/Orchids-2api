@@ -257,6 +257,22 @@ func TestChooseRefreshedDefaultModel_WarpPrefersAutoOpen(t *testing.T) {
 	}
 }
 
+func TestVerifyPuterDiscoveredModelsUsesCatalogUpstreamModel(t *testing.T) {
+	prevVerify := verifyPuterModelForRefresh
+	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })
+	var got string
+	verifyPuterModelForRefresh = func(ctx context.Context, cfg *config.Config, acc *store.Account, modelID string) error {
+		got = modelID
+		return nil
+	}
+	result := verifyPuterDiscoveredModelsSerial(context.Background(), nil,
+		[]*store.Account{{ID: 1, AccountType: "puter"}},
+		[]discoveredModel{{ID: "public-alias", UpstreamModel: "openrouter:vendor/real-model"}})
+	if got != "openrouter:vendor/real-model" || len(result.Verified) != 1 || result.Verified[0].ID != "public-alias" {
+		t.Fatalf("probe=%q verified=%#v", got, result.Verified)
+	}
+}
+
 func TestVerifyPuterDiscoveredModelsConcurrent_RequiresAcceptedProbe(t *testing.T) {
 	prevVerify := verifyPuterModelForRefresh
 	t.Cleanup(func() { verifyPuterModelForRefresh = prevVerify })

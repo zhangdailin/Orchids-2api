@@ -11,6 +11,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/cline"
 	"orchids-api/internal/loadbalancer"
 	"orchids-api/internal/middleware"
 	"orchids-api/internal/qoder"
@@ -386,9 +387,12 @@ func (h *Handler) selectAccountRecordWithOptions(ctx context.Context, targetChan
 	if !strings.EqualFold(strings.TrimSpace(targetChannel), "warp") {
 		model := strings.TrimSpace(opts.ModelID)
 		channel := strings.ToLower(strings.TrimSpace(targetChannel))
-		needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "puter" || channel == "qoder" || channel == "workbuddy")
+		needsFilter := model != "" && (honorsModelCooldown(channel) || channel == "puter" || channel == "qoder" || channel == "workbuddy" || channel == "cline")
 		if needsFilter {
 			return h.loadBalancer.GetNextAccountExcludingByChannelWithTrackerFilter(ctx, failedAccountIDs, targetChannel, h.connTracker, func(acc *store.Account) bool {
+				if channel == "cline" && !cline.CatalogSupportsModel(acc.ClineModelIDs, model) {
+					return false
+				}
 				if honorsModelCooldown(channel) && store.ModelCooldownRemaining(acc, model, time.Now()) != 0 {
 					return false
 				}
@@ -637,32 +641,41 @@ func sameModelChannel(a, b string) bool {
 }
 
 type accountStatsDelta struct {
-	usage float64
-	count int64
+	accountID   int64
+	usage       float64
+	count       int64
+	operationID string
+	completedAt time.Time
 }
 
 func (h *Handler) initAccountStatsWriter() {
-	h.statsPending = make(map[int64]accountStatsDelta)
+	h.statsPending = make(map[string]accountStatsDelta)
 	h.statsWake = make(chan struct{}, 1)
 	h.statsStop = make(chan struct{})
 	h.statsDone = make(chan struct{})
 	go h.runAccountStatsWriter()
 }
 
-func (h *Handler) updateAccountStats(account *store.Account, inputTokens, outputTokens int) {
+func (h *Handler) updateAccountStats(ctx context.Context, account *store.Account, inputTokens, outputTokens int) {
 	if account == nil || h.loadBalancer == nil || h.loadBalancer.Store == nil {
 		return
 	}
 	h.statsOnce.Do(h.initAccountStatsWriter)
+	completedAt := time.Now().UTC()
+	requestID := middleware.GetRequestID(ctx)
+	operationID := fmt.Sprintf("%d:%s", account.ID, requestID)
+	if requestID == "" {
+		operationID = fmt.Sprintf("stats-%d-%d", account.ID, completedAt.UnixNano())
+	}
+	delta := accountStatsDelta{accountID: account.ID, usage: float64(inputTokens + outputTokens), count: 1, operationID: operationID, completedAt: completedAt}
 	h.statsMu.Lock()
 	if h.statsClosed {
 		h.statsMu.Unlock()
 		return
 	}
-	delta := h.statsPending[account.ID]
-	delta.usage += float64(inputTokens + outputTokens)
-	delta.count++
-	h.statsPending[account.ID] = delta
+	// Keep each completion as its own durable operation. Coalescing by account
+	// loses the request identity needed to make an ambiguous Redis retry safe.
+	h.statsPending[operationID] = delta
 	h.statsMu.Unlock()
 	select {
 	case h.statsWake <- struct{}{}:
@@ -685,12 +698,12 @@ func (h *Handler) runAccountStatsWriter() {
 		}
 		for {
 			h.statsMu.Lock()
-			var accountID int64
+			var pendingKey string
 			var delta accountStatsDelta
 			found := false
-			for id, pending := range h.statsPending {
-				accountID, delta, found = id, pending, true
-				delete(h.statsPending, id)
+			for key, pending := range h.statsPending {
+				pendingKey, delta, found = key, pending, true
+				delete(h.statsPending, key)
 				break
 			}
 			h.statsMu.Unlock()
@@ -699,22 +712,19 @@ func (h *Handler) runAccountStatsWriter() {
 				break
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err := h.loadBalancer.Store.IncrementAccountStats(ctx, accountID, delta.usage, delta.count)
+			err := h.loadBalancer.Store.IncrementAccountStatsOperation(ctx, delta.accountID, delta.usage, delta.count, delta.operationID, delta.completedAt)
 			cancel()
 			if err == nil {
 				backoff = initialBackoff
 				continue
 			}
 
-			// Merge the failed delta back rather than dropping it. Concurrent
-			// arrivals are already in the map and are preserved by addition.
+			// Requeue the identical operation. If Redis committed before the caller
+			// observed an error, the durable operation id makes this retry a no-op.
 			h.statsMu.Lock()
-			pending := h.statsPending[accountID]
-			pending.usage += delta.usage
-			pending.count += delta.count
-			h.statsPending[accountID] = pending
+			h.statsPending[pendingKey] = delta
 			h.statsMu.Unlock()
-			slog.Error("Failed to update account stats; retrying", "account_id", accountID, "retry_in", backoff, "error", err)
+			slog.Error("Failed to update account stats; retrying", "account_id", delta.accountID, "operation_id", delta.operationID, "retry_in", backoff, "error", err)
 			timer := time.NewTimer(backoff)
 			select {
 			case <-h.statsStop:
@@ -741,12 +751,12 @@ func (h *Handler) flushPendingAccountStats(timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		h.statsMu.Lock()
-		var id int64
+		var pendingKey string
 		var delta accountStatsDelta
 		found := false
-		for accountID, pending := range h.statsPending {
-			id, delta, found = accountID, pending, true
-			delete(h.statsPending, accountID)
+		for key, pending := range h.statsPending {
+			pendingKey, delta, found = key, pending, true
+			delete(h.statsPending, key)
 			break
 		}
 		h.statsMu.Unlock()
@@ -758,16 +768,13 @@ func (h *Handler) flushPendingAccountStats(timeout time.Duration) {
 			break
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), remaining)
-		err := h.loadBalancer.Store.IncrementAccountStats(ctx, id, delta.usage, delta.count)
+		err := h.loadBalancer.Store.IncrementAccountStatsOperation(ctx, delta.accountID, delta.usage, delta.count, delta.operationID, delta.completedAt)
 		cancel()
 		if err != nil {
 			h.statsMu.Lock()
-			pending := h.statsPending[id]
-			pending.usage += delta.usage
-			pending.count += delta.count
-			h.statsPending[id] = pending
+			h.statsPending[pendingKey] = delta
 			h.statsMu.Unlock()
-			slog.Warn("account stats remain unflushed during shutdown", "account_id", id, "error", err)
+			slog.Warn("account stats remain unflushed during shutdown", "account_id", delta.accountID, "operation_id", delta.operationID, "error", err)
 			return
 		}
 	}

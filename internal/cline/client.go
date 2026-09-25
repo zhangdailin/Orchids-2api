@@ -328,17 +328,14 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if logger != nil && !logger.Capturing() {
 		logger.LogUpstreamRequest(url, map[string]string{"provider": "cline", "model": model}, body)
 	}
-	return c.runChat(ctx, url, body, model, creds, onMessage)
+	return c.runChat(ctx, url, body, model, logicalTaskID(req.RequestID), creds, onMessage)
 }
 
-// runChat performs the upstream call with a three-attempt retry policy.
-//
-// A 401/403 on the first attempt — and only the first — forces one token
-// refresh: the stored access token may have expired between requests. Any later
-// rejection is reported, because refreshing again would burn the account's
-// durable credential for nothing.
-func (c *Client) runChat(ctx context.Context, url string, body []byte, model string, creds Credentials, onMessage func(upstream.SSEMessage)) error {
-	const maxAttempts = 3
+// runChat performs one upstream call, except that an initial 401 gets one token
+// refresh and one replay. All non-auth retry budgeting belongs to the shared
+// handler so an account switch and a provider-local replay cannot both consume
+// capacity for the same logical attempt.
+func (c *Client) runChat(ctx context.Context, url string, body []byte, model, taskID string, creds Credentials, onMessage func(upstream.SSEMessage)) error {
 	emitted := false
 	emit := func(msg upstream.SSEMessage) {
 		emitted = true
@@ -347,13 +344,12 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model str
 		}
 	}
 
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		attemptCredentials := c.currentCredentials()
-		if !attemptCredentials.HasCredential() {
-			attemptCredentials = creds
+	attemptCredentials := creds
+	for attempt := 0; attempt < 2; attempt++ {
+		if current := c.currentCredentials(); current.HasCredential() {
+			attemptCredentials = current
 		}
-		result, err := c.attemptChat(ctx, url, body, model, attemptCredentials, emit)
+		result, err := c.attemptChat(ctx, url, body, model, taskID, attemptCredentials, emit)
 		if err == nil {
 			if !result.SawMeaningfulEvent {
 				return fmt.Errorf("cline stream produced no usable events")
@@ -367,34 +363,22 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model str
 			}
 			return nil
 		}
-		lastErr = err
 		if emitted {
-			// Content already reached the client; replaying would duplicate it.
 			return err
 		}
-		switch {
-		case isUnauthorized(err) && attempt == 1:
+		if attempt == 0 && isUnauthorized(err) {
 			if refreshErr := c.forceRefresh(ctx, attemptCredentials); refreshErr != nil {
 				return refreshErr
 			}
 			continue
-		case isRetryable(err) && attempt < maxAttempts:
-			wait := retryDelay(attempt)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(wait):
-			}
-			continue
-		default:
-			return err
 		}
+		return err
 	}
-	return lastErr
+	return ErrCredentialMissing
 }
 
 // attemptChat performs one upstream attempt and consumes its stream.
-func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model string, creds Credentials, emit func(upstream.SSEMessage)) (streamResult, error) {
+func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model, taskID string, creds Credentials, emit func(upstream.SSEMessage)) (streamResult, error) {
 	reqCtx, cancel := util.WithDefaultTimeout(ctx, c.requestTimeout)
 	defer cancel()
 
@@ -402,7 +386,6 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 	if err != nil {
 		return streamResult{}, &attemptStreamError{err: fmt.Errorf("build cline request: %w", err)}
 	}
-	taskID := newTaskID(time.Now())
 	req.Header.Set("Authorization", "Bearer "+creds.Bearer())
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -541,12 +524,20 @@ func (c *Client) FetchModels(ctx context.Context) ([]Model, error) {
 // catalog makes this report ErrNoUpstreamCatalog instead.
 func (c *Client) resolveModel(req upstream.UpstreamRequest) (string, error) {
 	requested := strings.TrimSpace(req.Model)
-	if requested != "" {
-		return requested, nil
-	}
 	c.stateMu.RLock()
 	ids := append([]string(nil), c.accountIDsLocked()...)
 	c.stateMu.RUnlock()
+	if requested != "" {
+		for _, row := range ids {
+			if strings.EqualFold(catalogID(row), requested) {
+				return catalogID(row), nil
+			}
+		}
+		if len(ids) == 0 {
+			return "", ErrNoUpstreamCatalog
+		}
+		return "", fmt.Errorf("cline model %q is not in this account's catalog", requested)
+	}
 	for _, id := range ids {
 		if trimmed := strings.TrimSpace(catalogID(id)); trimmed != "" {
 			return trimmed, nil
@@ -562,11 +553,13 @@ func (c *Client) accountIDsLocked() []string {
 	return c.account.ClineModelIDs
 }
 
-func retryDelay(attempt int) time.Duration {
-	// 1s, 2s.
-	wait := time.Duration(1<<uint(attempt-1)) * time.Second
-	if wait > 30*time.Second {
-		wait = 30 * time.Second
+func logicalTaskID(requestID string) string {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return newTaskID(time.Now())
 	}
-	return wait
+	if strings.HasPrefix(requestID, "sess_") {
+		return requestID
+	}
+	return "sess_" + requestID
 }

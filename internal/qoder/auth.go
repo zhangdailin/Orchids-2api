@@ -29,6 +29,7 @@
 package qoder
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"strings"
@@ -475,15 +476,20 @@ func apiError(method, rawURL string, status int, raw []byte) error {
 // reports 10605 (queue/concurrency refusal) as a string inside a 401/403
 // envelope, which is why the code is read before the HTTP status is trusted.
 func envelopeCode(raw []byte) string {
-	trimmed := strings.TrimSpace(string(raw))
-	if !strings.HasPrefix(trimmed, "{") {
+	return envelopeCodeDepth(bytes.TrimSpace(raw), 0)
+}
+
+func envelopeCodeDepth(raw []byte, depth int) string {
+	if depth > 4 || len(raw) == 0 || raw[0] != '{' {
 		return ""
 	}
 	var env struct {
 		Code    json.RawMessage `json:"code"`
 		MsgCode json.RawMessage `json:"msgCode"`
+		Message json.RawMessage `json:"message"`
+		Body    json.RawMessage `json:"body"`
 	}
-	if err := json.Unmarshal([]byte(trimmed), &env); err != nil {
+	if err := json.Unmarshal(raw, &env); err != nil {
 		return ""
 	}
 	for _, field := range []json.RawMessage{env.Code, env.MsgCode} {
@@ -497,6 +503,21 @@ func envelopeCode(raw []byte) string {
 		var asNumber json.Number
 		if err := json.Unmarshal(field, &asNumber); err == nil && asNumber.String() != "" && asNumber.String() != "0" {
 			return asNumber.String()
+		}
+	}
+	for _, field := range []json.RawMessage{env.Message, env.Body} {
+		if len(field) == 0 || string(field) == "null" {
+			continue
+		}
+		var nested string
+		if json.Unmarshal(field, &nested) == nil {
+			if code := envelopeCodeDepth([]byte(strings.TrimSpace(nested)), depth+1); code != "" {
+				return code
+			}
+			continue
+		}
+		if code := envelopeCodeDepth(bytes.TrimSpace(field), depth+1); code != "" {
+			return code
 		}
 	}
 	return ""

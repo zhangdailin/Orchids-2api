@@ -128,6 +128,16 @@ func (h *Handler) handleNativeCLIResponsesAt(w http.ResponseWriter, r *http.Requ
 	}
 	defer resp.Body.Close()
 	h.syncGrokQuota(sess.acc, resp.Header)
+	// A non-streaming body is validated before the upstream status is committed;
+	// otherwise malformed JSON locks the client into a misleading 200.
+	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		raw, validationErr := readAndValidateNativeResponse(resp.Body)
+		if validationErr != nil {
+			writeResponsesAPIError(w, http.StatusBadGateway, "upstream_error", validationErr.Error())
+			return
+		}
+		resp.Body = io.NopCloser(strings.NewReader(string(raw)))
+	}
 	copyNativeCLIResponseHeaders(w.Header(), resp.Header)
 	if compatibilityWarnings != "" {
 		w.Header().Set("X-Grok2API-Compatibility-Warnings", compatibilityWarnings)
@@ -364,6 +374,21 @@ func responseIDFromResourcePath(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(decoded)
+}
+
+func readAndValidateNativeResponse(body io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, maxNativeResponsesBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("Upstream response unavailable")
+	}
+	if len(raw) > maxNativeResponsesBytes {
+		return nil, fmt.Errorf("Upstream response unavailable")
+	}
+	var response map[string]interface{}
+	if json.Unmarshal(raw, &response) != nil || response == nil {
+		return nil, fmt.Errorf("Invalid upstream response")
+	}
+	return raw, nil
 }
 
 func copyNativeCLIResponseAndCaptureModel(w http.ResponseWriter, body io.Reader, contentType, model string) (responseID string, captured []byte, result chatOutcome) {

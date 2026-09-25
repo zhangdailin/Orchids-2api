@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"orchids-api/internal/accountpolicy"
 	"orchids-api/internal/store"
 )
 
@@ -438,6 +439,38 @@ func TestIsAccountAvailable_402KeepsLongCooldownForOtherChannels(t *testing.T) {
 
 	if lb.isAccountAvailable(context.Background(), acc) {
 		t.Fatal("expected non-Puter 402 account to keep the long cooldown")
+	}
+}
+
+func TestPersistAppliedAccountStatus_DoesNotMutateVerdictAgain(t *testing.T) {
+	lb := &LoadBalancer{
+		Store:       &store.Store{},
+		connTracker: NewMemoryConnTracker(),
+		cachedAccounts: []*store.Account{
+			{ID: 1, Name: "account", AccountType: "puter", Enabled: true},
+		},
+	}
+	acc := &store.Account{ID: 1, AccountType: "puter"}
+	at := time.Now().Add(-time.Second)
+	verdict := accountpolicy.Verdict{
+		Status: "429", Message: "slow down", Scope: accountpolicy.ScopeAccount,
+		Cooldown: accountpolicy.CooldownRateLimit, At: at,
+	}
+	verdict.Apply(acc)
+	failures := acc.RateLimitFailures
+	lastAttempt := acc.LastAttempt
+
+	lb.PersistAppliedAccountStatus(context.Background(), acc, "test")
+
+	if acc.RateLimitFailures != failures || acc.RateLimitFailures != 1 {
+		t.Fatalf("rate limit failures = %d, want exactly one application", acc.RateLimitFailures)
+	}
+	if !acc.LastAttempt.Equal(lastAttempt) {
+		t.Fatalf("last attempt mutated during persistence: got=%v want=%v", acc.LastAttempt, lastAttempt)
+	}
+	cached := lb.cachedAccounts[0]
+	if cached.RateLimitFailures != 1 || cached.StatusMessage != "slow down" || !cached.LastAttempt.Equal(at) {
+		t.Fatalf("cached account did not copy applied verdict: %+v", cached)
 	}
 }
 

@@ -424,10 +424,58 @@ var errorHints = map[int]string{
 	CodeSessionDead:   "workbuddy session is dead (Offline user session not found); re-login the account",
 }
 
-// apiError renders an upstream failure in the form the shared error classifier
-// understands (`status=`, `code=`), so account health and retry decisions stay
-// accurate.
+// APIError is a typed WorkBuddy business failure. Scope-sensitive callers can
+// inspect Code without guessing from prose, while Error retains the stable
+// status=/code= markers used by the shared classifiers.
+type APIError struct {
+	HTTPStatus int
+	Code       int
+	Message    string
+	RetryDelay time.Duration
+}
+
+func (e *APIError) Error() string {
+	if e == nil {
+		return "workbuddy API error"
+	}
+	status := e.HTTPStatus
+	// 12153 is an authentication failure even when the streaming endpoint wraps
+	// it in HTTP 200. Expose the semantic status without losing the wire status.
+	parts := make([]string, 0, 4)
+	switch {
+	case e.Code == CodeSessionDead && status != http.StatusUnauthorized:
+		parts = append(parts, "status=401", fmt.Sprintf("upstream_status=%d", status))
+	case e.Code == CodeModelThrottle && status != http.StatusTooManyRequests:
+		parts = append(parts, "status=429", fmt.Sprintf("upstream_status=%d", status))
+	default:
+		parts = append(parts, fmt.Sprintf("status=%d", status))
+	}
+	if e.Code != 0 {
+		parts = append(parts, fmt.Sprintf("code=%d", e.Code))
+	}
+	if e.Message != "" {
+		parts = append(parts, "message="+truncate(e.Message, 300))
+	}
+	text := "workbuddy API error: " + strings.Join(parts, ", ")
+	if hint := errorHints[e.Code]; hint != "" {
+		text += " (" + hint + ")"
+	}
+	return text
+}
+
+func (e *APIError) RetryAfter() time.Duration {
+	if e == nil {
+		return 0
+	}
+	return e.RetryDelay
+}
+
+// apiError renders an upstream failure in typed form.
 func apiError(status int, raw []byte) error {
+	return apiErrorWithRetry(status, raw, 0)
+}
+
+func apiErrorWithRetry(status int, raw []byte, retryDelay time.Duration) error {
 	body := strings.TrimSpace(string(raw))
 	code := 0
 	msg := ""
@@ -442,22 +490,10 @@ func apiError(status int, raw []byte) error {
 	if code != 0 && msg == "" {
 		msg = body
 	}
-	parts := []string{fmt.Sprintf("status=%d", status)}
-	if code != 0 {
-		parts = append(parts, fmt.Sprintf("code=%d", code))
+	if msg == "" {
+		msg = body
 	}
-	if msg != "" {
-		parts = append(parts, "message="+truncate(msg, 300))
-	} else if body != "" {
-		parts = append(parts, "message="+truncate(body, 300))
-	}
-	err := fmt.Errorf("workbuddy API error: %s", strings.Join(parts, ", "))
-	if code != 0 {
-		if hint := errorHints[code]; hint != "" {
-			return fmt.Errorf("%w (%s)", err, hint)
-		}
-	}
-	return err
+	return &APIError{HTTPStatus: status, Code: code, Message: msg, RetryDelay: retryDelay}
 }
 
 // unwrapEnvelope validates the business envelope and returns data.

@@ -289,6 +289,36 @@ func TestClassify_WorkBuddyPaymentRefusalEnablesFreeOnlyMode(t *testing.T) {
 	}
 }
 
+func TestClassifyInferenceCapPreservesStatedCooldown(t *testing.T) {
+	wait := 17*time.Hour + 59*time.Minute
+	acc := &store.Account{ID: 2, AccountType: "cline", Enabled: true}
+	verdict := Classify(acc, retryAfterTestError{wait: wait}, "model-a")
+	if verdict.Scope != ScopeAccount || verdict.Status != "429" || verdict.Cooldown != wait {
+		t.Fatalf("verdict=%+v", verdict)
+	}
+	verdict.Apply(acc)
+	if !AccountHeld(acc, time.Now().Add(time.Hour)) {
+		t.Fatal("inference cap account was released by the generic 30m throttle ceiling")
+	}
+	remaining := time.Until(acc.QuotaResetAt)
+	if remaining < wait-time.Second || remaining > wait+time.Second {
+		t.Fatalf("quota reset remaining=%v want %v", remaining, wait)
+	}
+}
+
+type retryAfterTestError struct{ wait time.Duration }
+
+func (e retryAfterTestError) Error() string             { return "cline inference cap reached" }
+func (e retryAfterTestError) RetryAfter() time.Duration { return e.wait }
+
+func TestClassifyCline403EntitlementIsModelScoped(t *testing.T) {
+	acc := &store.Account{ID: 2, AccountType: "cline", Enabled: true}
+	verdict := Classify(acc, errors.New(`cline API error: POST /chat/completions returned HTTP 403: {"error":"ENTITLEMENT_ERROR","message":"user is not subscribed to required model plan"}`), "paid-model")
+	if verdict.Scope != ScopeModel || verdict.Status != "" || verdict.NeedsLogin || !verdict.SwitchAccount {
+		t.Fatalf("verdict=%+v", verdict)
+	}
+}
+
 // TestCredentialMessageIsProviderAware keeps the operator instruction concrete.
 func TestCredentialMessageIsProviderAware(t *testing.T) {
 	grokVerdict := Classify(grokBuildAccount(), errors.New("401: unauthenticated"), "")

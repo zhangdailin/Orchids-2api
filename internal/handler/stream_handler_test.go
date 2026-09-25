@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/goccy/go-json"
@@ -23,6 +24,21 @@ type flushRecorder struct {
 	code    int
 	flushes int
 }
+
+type failingResponseWriter struct {
+	header http.Header
+	err    error
+}
+
+func (w *failingResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+func (w *failingResponseWriter) Write([]byte) (int, error) { return 0, w.err }
+func (w *failingResponseWriter) WriteHeader(int)           {}
+func (w *failingResponseWriter) Flush()                    {}
 
 func newFlushRecorder() *flushRecorder {
 	return &flushRecorder{header: make(http.Header), code: 200}
@@ -780,18 +796,71 @@ func TestStreamHandler_KeepAlive_NoPanic(t *testing.T) {
 	sh := newStreamHandler(cfg, rec, logger, false, true, adapter.FormatAnthropic)
 	defer sh.release()
 
-	// should not write once hasReturn set
+	// should not write once terminal state is set
+	sh.mu.Lock()
 	sh.hasReturn = true
+	sh.returned.Store(true)
+	sh.mu.Unlock()
 	sh.writeKeepAlive()
 	if rec.buf.Len() != 0 {
 		t.Fatalf("expected no output when hasReturn")
 	}
 
 	// reset and ensure it writes
+	sh.mu.Lock()
 	sh.hasReturn = false
+	sh.returned.Store(false)
+	sh.mu.Unlock()
 	sh.writeKeepAlive()
 	if !strings.Contains(rec.buf.String(), ": keep-alive") {
 		t.Fatalf("expected keep-alive comment")
+	}
+}
+
+func TestStreamHandler_TerminalWriteFailureOverridesClaimedSuccess(t *testing.T) {
+	writer := &failingResponseWriter{err: errors.New("client connection closed")}
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(&config.Config{}, writer, logger, false, true, adapter.FormatAnthropic)
+	defer sh.release()
+
+	sh.finishResponse("end_turn")
+
+	returned, failed := sh.terminalState()
+	if !returned || !failed {
+		t.Fatalf("terminal state = returned:%v failed:%v, want terminal failure", returned, failed)
+	}
+	if sh.finalStopReason != "write_error" {
+		t.Fatalf("final stop reason = %q, want write_error", sh.finalStopReason)
+	}
+}
+
+func TestStreamHandler_TerminalStateAndKeepAliveAreRaceSafe(t *testing.T) {
+	rec := newFlushRecorder()
+	logger := debug.New(false, false)
+	defer logger.Close()
+	sh := newStreamHandler(&config.Config{}, rec, logger, false, true, adapter.FormatAnthropic)
+	defer sh.release()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			sh.writeKeepAlive()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_, _ = sh.terminalState()
+		}
+		sh.finishResponse("end_turn")
+	}()
+	wg.Wait()
+
+	if returned, _ := sh.terminalState(); !returned {
+		t.Fatal("handler did not reach terminal state")
 	}
 }
 

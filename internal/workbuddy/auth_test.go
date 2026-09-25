@@ -568,6 +568,29 @@ func TestBuildBody_IncludesUsageAndCamelCaseConversationID(t *testing.T) {
 	}
 }
 
+func TestConsumeStream_PreservesBusinessEnvelopeAndNestedReasoningUsage(t *testing.T) {
+	t.Parallel()
+	body := strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":3,"completion_tokens_details":{"reasoning_tokens":4}}}`,
+		`data: [DONE]`,
+	}, "\n")
+	result, err := consumeStream(strings.NewReader(body), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.Usage["reasoningTokens"]; got != 4 {
+		t.Fatalf("reasoningTokens=%v want 4", got)
+	}
+
+	for _, code := range []int{CodeModelThrottle, CodeSessionDead} {
+		_, err := consumeStream(strings.NewReader(fmt.Sprintf("data: {\"code\":%d,\"msg\":\"business failure\"}\n", code)), nil)
+		var typed *APIError
+		if !errors.As(err, &typed) || typed.Code != code || typed.HTTPStatus != http.StatusOK {
+			t.Fatalf("code %d error=%#v want typed HTTP-200 business error", code, err)
+		}
+	}
+}
+
 func TestApiError_CarriesStatusAndCode(t *testing.T) {
 	t.Parallel()
 

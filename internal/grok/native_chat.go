@@ -2,6 +2,7 @@ package grok
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -600,7 +601,14 @@ func (h *Handler) retryWithAccountSwitchLimit(ctx context.Context, sess *chatAcc
 		}
 
 		sess.Close()
-		if !util.SleepWithContext(ctx, switchPace) {
+		pace := switchPace
+		var cooldown *syntheticCooldownError
+		if errors.As(err, &cooldown) {
+			// This attempt never reached upstream. Rotate immediately; sleeping
+			// would serialize the same-team skip and hide the cooldown outcome.
+			pace = 0
+		}
+		if !util.SleepWithContext(ctx, pace) {
 			return nil, ctx.Err()
 		}
 		next, switchErr := openNext(used)

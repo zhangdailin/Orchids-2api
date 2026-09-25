@@ -217,6 +217,15 @@ func (e *InferenceCapError) Error() string {
 	return fmt.Sprintf("cline inference cap reached: try again in %s", formatCapWait(e.Wait))
 }
 
+// RetryAfter exposes the upstream-stated cap window to shared account policy
+// without coupling that package to the Cline implementation.
+func (e *InferenceCapError) RetryAfter() time.Duration {
+	if e == nil {
+		return 0
+	}
+	return e.Wait
+}
+
 // inferenceCapError builds the classified cap error from an upstream body.
 func inferenceCapError(raw string) *InferenceCapError {
 	return &InferenceCapError{Wait: ParseInferenceCapDuration(raw), Message: strings.TrimSpace(raw)}

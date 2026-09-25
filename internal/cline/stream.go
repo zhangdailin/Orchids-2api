@@ -21,9 +21,10 @@ import (
 // streamResult accumulates what the upstream produced so the caller can decide
 // whether the attempt was meaningful and which stop reason to report.
 type streamResult struct {
-	SawMeaningfulEvent bool
-	ToolCallCount      int
-	Usage              map[string]interface{}
+	SawMeaningfulEvent   bool
+	ToolCallCount        int
+	UpstreamFinishReason string
+	Usage                map[string]interface{}
 	// ThinkingSignature is one stable signature for every reasoning delta of
 	// the stream, generated on first sight so a multi-delta block stays signed.
 	ThinkingSignature string
@@ -34,7 +35,14 @@ func (r streamResult) FinishReason() string {
 	if r.ToolCallCount > 0 {
 		return "tool_use"
 	}
-	return "end_turn"
+	switch strings.ToLower(strings.TrimSpace(r.UpstreamFinishReason)) {
+	case "length", "max_tokens", "max_token_limit":
+		return "max_tokens"
+	case "stop", "stop_sequence", "end_turn", "":
+		return "end_turn"
+	default:
+		return r.UpstreamFinishReason
+	}
 }
 
 var toolCallSequence atomic.Uint64
@@ -442,7 +450,9 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 		// OpenAI-style tool arguments can span several deltas. Emitting on the
 		// first delta loses every later fragment and produces invalid JSON. A
 		// non-empty finish reason closes the choice; [DONE]/EOF is handled below.
-		if strings.TrimSpace(chunk.Choices[0].FinishReason) != "" {
+		finishReason := strings.TrimSpace(chunk.Choices[0].FinishReason)
+		if finishReason != "" {
+			result.UpstreamFinishReason = finishReason
 			sawFinish = true
 			emitTools()
 		}
@@ -522,7 +532,25 @@ func normalizeUsage(raw map[string]interface{}) map[string]interface{} {
 		out["cacheReadTokens"] = cached
 		out["cache_read_tokens"] = cached
 	}
+	if reasoning, ok := reasoningUsage(raw); ok {
+		out["reasoningTokens"] = reasoning
+		out["reasoning_tokens"] = reasoning
+	}
 	return out
+}
+
+func reasoningUsage(raw map[string]interface{}) (int, bool) {
+	if value, ok := firstUsageInt(raw, "reasoning_tokens", "reasoningTokens", "completion_thinking_tokens"); ok {
+		return value, true
+	}
+	for _, key := range []string{"completion_tokens_details", "completionTokensDetails", "output_tokens_details", "outputTokensDetails"} {
+		if details, ok := raw[key].(map[string]interface{}); ok {
+			if value, found := firstUsageInt(details, "reasoning_tokens", "reasoningTokens", "thinking_tokens", "thinkingTokens"); found {
+				return value, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func firstUsageInt(values map[string]interface{}, keys ...string) (int, bool) {

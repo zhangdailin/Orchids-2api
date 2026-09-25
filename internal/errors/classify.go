@@ -107,7 +107,7 @@ func ClassifyAccountStatus(errStr string) string {
 	// An entitlement refusal means the credential was accepted. It must not be
 	// recorded as an account status, or a valid account is disabled by a plan
 	// problem — and the alarm says the channel is broken when it is not.
-	if strings.Contains(lower, "no usable plan or allowance") || strings.Contains(lower, "qoder.com/pricing") {
+	if strings.Contains(lower, "no usable plan or allowance") || strings.Contains(lower, "qoder.com/pricing") || isClineModelEntitlement(lower) {
 		return ""
 	}
 	// A status reason persisted by an admin handler is the wrapped error string,
@@ -120,9 +120,11 @@ func ClassifyAccountStatus(errStr string) string {
 	}
 	switch {
 	case HasExplicitHTTPStatus(lower, "401") ||
+		strings.Contains(lower, "refresh token is expired") ||
+		strings.Contains(lower, "new browser login is required") ||
+		strings.Contains(lower, "sign in again") ||
 		strings.Contains(lower, "signed out") ||
 		strings.Contains(lower, "signed_out") ||
-		strings.Contains(lower, "unauthorized") ||
 		// The upstream session endpoint answers {"status":"unauthenticated"}
 		// without a status code; that body is a refused credential, not a
 		// transient failure.
@@ -190,10 +192,15 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		strings.Contains(lower, "duplicate request"):
 		return UpstreamErrorClass{Category: "client"}
 	case HasExplicitHTTPStatus(lower, "401") ||
+		strings.Contains(lower, "refresh token is expired") ||
+		strings.Contains(lower, "new browser login is required") ||
+		strings.Contains(lower, "sign in again") ||
 		strings.Contains(lower, "signed out") ||
 		strings.Contains(lower, "signed_out") ||
 		strings.Contains(lower, "invalid_api_key"):
 		return UpstreamErrorClass{Category: "auth", Retryable: true, SwitchAccount: true}
+	case isClineModelEntitlement(lower):
+		return UpstreamErrorClass{Category: "model_unavailable", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "403"):
 		return UpstreamErrorClass{Category: "auth_blocked", Retryable: true, SwitchAccount: true}
 	case HasExplicitHTTPStatus(lower, "404"):
@@ -206,6 +213,8 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		IsCreditExhaustion(lower) ||
 		strings.Contains(lower, "quota_limit"):
 		return UpstreamErrorClass{Category: "quota_exhausted", Retryable: true, SwitchAccount: true}
+	case strings.Contains(lower, "code=6004"):
+		return UpstreamErrorClass{Category: "rate_limit", Retryable: true, SwitchAccount: true}
 	case strings.Contains(lower, "qoder gateway is busy"):
 		// Qoder business code 10605 means the model queue/service is unavailable,
 		// often with serviceAvailable=false and one shared retry-after hint. It is
@@ -240,6 +249,15 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 	default:
 		return UpstreamErrorClass{Category: "unknown", Retryable: true, SwitchAccount: true}
 	}
+}
+
+func isClineModelEntitlement(lower string) bool {
+	if !HasExplicitHTTPStatus(lower, "403") {
+		return false
+	}
+	return strings.Contains(lower, "entitlement") ||
+		strings.Contains(lower, "not subscribed to required model plan") ||
+		strings.Contains(lower, "only available via cline product surfaces")
 }
 
 func isWarpModelUnavailableError(lower string) bool {

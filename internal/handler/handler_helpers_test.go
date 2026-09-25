@@ -201,6 +201,26 @@ func TestSelectAccountRecord_WorkBuddyParksModelNotAccount(t *testing.T) {
 	}
 }
 
+func TestSelectAccountRecord_ClineEnforcesPerAccountCatalog(t *testing.T) {
+	h, s, mini := setupModelValidationHandler(t)
+	defer func() { _ = s.Close(); mini.Close() }()
+	ctx := context.Background()
+	first := &store.Account{Name: "cline-a", AccountType: "cline", ClineAccessToken: "a", ClineModelIDs: []string{`{"id":"model-a"}`}, Enabled: true, Weight: 1}
+	second := &store.Account{Name: "cline-b", AccountType: "cline", ClineAccessToken: "b", ClineModelIDs: []string{`{"id":"model-b"}`}, Enabled: true, Weight: 1}
+	for _, acc := range []*store.Account{first, second} {
+		if err := s.CreateAccount(ctx, acc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, err := h.selectAccountRecordWithOptions(ctx, "cline", nil, accountSelectionOptions{ModelID: "model-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.ID != second.ID {
+		t.Fatalf("selected=%d want=%d", selected.ID, second.ID)
+	}
+}
+
 // mustCreateModel inserts a model directly (avoiding reliance on seed data).
 func mustCreateModel(t *testing.T, s *store.Store, id string, channel, modelID string, status store.ModelStatus) *store.Model {
 	t.Helper()

@@ -15,6 +15,38 @@ import (
 // The client-facing error object has to be parseable by an OpenAI SDK: the
 // handler used to answer text/plain, so resp.json()["error"] threw before the
 // caller could read the reason.
+func TestResponsesUpstreamFailureMapsAuthAndRetryAfter(t *testing.T) {
+	err := newCLIUpstreamError(http.StatusUnauthorized, http.Header{"Retry-After": {"7"}}, []byte(`{"error":"expired"}`))
+	rec := httptest.NewRecorder()
+	writeGrokUpstreamFailure(rec, http.StatusUnauthorized, err)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "7" {
+		t.Fatalf("Retry-After=%q want 7", got)
+	}
+}
+
+func TestSyntheticCooldownCarriesTypedHint(t *testing.T) {
+	err := newSyntheticCooldownError("build:team:t", "grok-4.6", 12*time.Second)
+	var hinted interface{ RetryAfter() time.Duration }
+	if !errors.As(err, &hinted) || hinted.RetryAfter() != 12*time.Second {
+		t.Fatalf("typed cooldown hint missing: %v", err)
+	}
+	if !isSharedGrokRateLimitError(err) || markAllGrokAccountStatuses(err) || !shouldSwitchGrokAccount(err) {
+		t.Fatalf("synthetic cooldown policy mismatch: %v", err)
+	}
+}
+
+func TestReadAndValidateNativeResponseBeforeCommit(t *testing.T) {
+	if _, err := readAndValidateNativeResponse(strings.NewReader(`not-json`)); err == nil {
+		t.Fatal("malformed upstream response accepted")
+	}
+	if raw, err := readAndValidateNativeResponse(strings.NewReader(`{"id":"resp_1","status":"completed"}`)); err != nil || len(raw) == 0 {
+		t.Fatalf("valid response rejected: %v", err)
+	}
+}
+
 func TestWriteGrokErrorReturnsOpenAIEnvelope(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeGrokError(rec, http.StatusBadRequest, "messages is required")

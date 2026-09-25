@@ -15,6 +15,7 @@ import (
 
 	"github.com/goccy/go-json"
 
+	"orchids-api/internal/config"
 	apperrors "orchids-api/internal/errors"
 	"orchids-api/internal/prompt"
 	"orchids-api/internal/store"
@@ -364,6 +365,18 @@ func TestSendRequestRefreshesOnceOnUnauthorized(t *testing.T) {
 	}
 }
 
+func TestForceRefreshRejectsExpiredDurableCredential(t *testing.T) {
+	client := NewFromAccount(signedTestAccount(), nil)
+	err := client.forceRefresh(context.Background(), Credentials{RefreshToken: "expired", RefreshExpiresAt: time.Now().Add(-time.Minute)})
+	if !errors.Is(err, ErrReLoginRequired) {
+		t.Fatalf("forceRefresh error=%v want ErrReLoginRequired", err)
+	}
+	class := apperrors.ClassifyUpstreamError(err.Error())
+	if class.Category != "auth" {
+		t.Fatalf("class=%+v want auth", class)
+	}
+}
+
 // TestSendRequestDoesNotReplayAfterOutput proves a retry is refused once content
 // has reached the caller: replaying would duplicate the answer.
 func TestSendRequestDoesNotReplayAfterOutput(t *testing.T) {
@@ -413,6 +426,49 @@ func TestSendRequestDoesNotReplayAfterOutput(t *testing.T) {
 
 // TestClassifyStatus pins the retry verdicts, including the busy code arriving
 // under a 401.
+func TestConfiguredClientVersionMatchesBodyAndHeader(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{QoderClientVersion: "9.8.7"}
+	client := NewFromAccount(signedTestAccount(), cfg)
+	body, err := buildChatBodyVersion(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "request", client.clientVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := decodeBodyForTest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"business":{"product":"cli","version":"9.8.7"`) {
+		t.Fatalf("body version is incoherent: %s", raw)
+	}
+	req, _ := http.NewRequest(http.MethodPost, "https://example.invalid/algo/chat", nil)
+	if err := client.applyAuthHeaders(req, credsOf(signedTestAccount()), RuntimeFields{EncryptUserInfo: "info", Key: "key"}, "request", "m", "system", string(body), "/chat"); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get("Cosy-Version"); got != "9.8.7" {
+		t.Fatalf("Cosy-Version=%q", got)
+	}
+}
+
+func TestRefreshedReplayUsesFreshIdentityAndRetryFlag(t *testing.T) {
+	original, err := buildChatBodyVersion(upstream.UpstreamRequest{}, modelEntry{Key: "m"}, "session", "old", "1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := refreshedReplayBody(original, "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := decodeBodyForTest(replayed)
+	var body chatBody
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.RequestID != "new" || body.RequestSetID != "new" || body.ChatRecordID != "new" || body.Business.ID != "new" || !body.IsRetry {
+		t.Fatalf("replay identity not refreshed: %+v", body)
+	}
+}
+
 func TestClassifyStatus(t *testing.T) {
 	t.Parallel()
 
@@ -465,6 +521,9 @@ func TestBusyWaitIsCapped(t *testing.T) {
 
 	if got := busyWait("", []byte(`{"retryAfterMs":600000}`)); got != 30*time.Second {
 		t.Fatalf("busyWait() = %v, want the 30s cap", got)
+	}
+	if got := busyWait("", []byte(`{"message":"{\"retryAfterSeconds\":29,\"serviceAvailable\":false}"}`)); got != 29*time.Second {
+		t.Fatalf("nested retryAfterSeconds = %v, want 29s", got)
 	}
 	if got := busyWait("", []byte(`{"queue":{"isQueued":true,"waitTime":1500}}`)); got != 1500*time.Millisecond {
 		t.Fatalf("busyWait() = %v, want 1.5s", got)

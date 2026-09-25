@@ -1,9 +1,12 @@
 package grok
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	apperrors "orchids-api/internal/errors"
 )
@@ -114,6 +117,23 @@ func grokUpstreamFailureMessage(err error) string {
 func writeGrokUpstreamFailure(w http.ResponseWriter, status int, err error) {
 	if err != nil {
 		slog.Warn("Reporting an upstream failure to the client", "error", err, "status", status)
+	}
+	// Responses must preserve the same upstream backoff contract as Chat.
+	if retryAfter := upstreamRetryAfterSeconds(err); retryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+	} else {
+		var cooldown interface{ RetryAfter() time.Duration }
+		if errors.As(err, &cooldown) && cooldown.RetryAfter() > 0 {
+			seconds := max(1, int(cooldown.RetryAfter().Round(time.Second)/time.Second))
+			w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		}
+	}
+	// A typed upstream credential failure is an operator-owned pool problem, not
+	// a rejection of the caller's API key. Legacy untyped errors keep the status
+	// their caller computed for compatibility.
+	var typed *grokUpstreamError
+	if errors.As(err, &typed) && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
+		status = http.StatusServiceUnavailable
 	}
 	writeResponsesAPIError(w, status, "upstream_error", grokUpstreamFailureMessage(err))
 }

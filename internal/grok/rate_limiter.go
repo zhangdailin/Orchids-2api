@@ -12,6 +12,22 @@ import (
 	"orchids-api/internal/store"
 )
 
+type syntheticCooldownError struct {
+	identity string
+	model    string
+	delay    time.Duration
+}
+
+func newSyntheticCooldownError(identity, model string, delay time.Duration) error {
+	return &syntheticCooldownError{identity: identity, model: model, delay: accountpolicy.BoundRateLimitCooldown(delay)}
+}
+
+func (e *syntheticCooldownError) Error() string {
+	return fmt.Sprintf("grok upstream status=429 body=too_many_requests team %s model %s cooling down; retry-after=%s", e.identity, e.model, e.delay.Round(time.Second))
+}
+
+func (e *syntheticCooldownError) RetryAfter() time.Duration { return e.delay }
+
 // tokenBucket is a simple thread-safe token bucket rate limiter.
 type tokenBucket struct {
 	rate       float64   // tokens per second
@@ -107,7 +123,7 @@ func waitScopedRateLimit(ctx context.Context, provider, token, model string, rat
 	for _, scope := range []RateLimitScope{RateLimitScopeRPS, RateLimitScopeRPM} {
 		for _, target := range uniqueStrings([]string{model, "*"}) {
 			if remaining := teamCooldown.RetryAfterFor(scope, identity, target); remaining > 0 {
-				return fmt.Errorf("grok upstream status=429 body=too_many_requests team %s model %s cooling down; retry-after=%s", identity, target, remaining.Round(time.Second))
+				return newSyntheticCooldownError(identity, target, remaining)
 			}
 		}
 	}

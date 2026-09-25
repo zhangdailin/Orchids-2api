@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -387,6 +388,16 @@ func TestNewFromAccountReusesSharedHTTPClient(t *testing.T) {
 	clientB := NewFromAccount(&store.Account{ClientCookie: "token-b"}, cfg)
 	if clientA.httpClient != clientB.httpClient {
 		t.Fatal("expected shared HTTP client")
+	}
+}
+
+func TestHTTPErrorPreservesRetryAfter(t *testing.T) {
+	err := &HTTPError{StatusCode: http.StatusTooManyRequests, Header: http.Header{"Retry-After": {"9"}}, Body: "slow down"}
+	if got := err.RetryAfter(); got != 9*time.Second {
+		t.Fatalf("RetryAfter()=%s want 9s", got)
+	}
+	if !strings.Contains(err.Error(), "status=429") {
+		t.Fatalf("Error()=%q", err.Error())
 	}
 }
 

@@ -151,6 +151,10 @@ func (c *CLIClient) doResponsesAt(ctx context.Context, acc *store.Account, path 
 			authRetried = true
 			if _, refreshErr := c.oauth.ForceRefresh(ctx, acc); refreshErr == nil {
 				continue
+			} else if IsCLIPermanentOAuthError(refreshErr) {
+				// The refresh credential is permanently unusable. Surface the typed
+				// OAuth failure so the retry loop retires this identity and switches.
+				return nil, refreshErr
 			}
 		}
 
@@ -575,6 +579,10 @@ func (c *CLIClient) doCLIRequest(ctx context.Context, acc *store.Account, req *h
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeSuccess)
+	case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized:
+		// Request validation and credential failures say nothing about the egress
+		// node's health.
+		c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeAccountBlock)
 	case resp.StatusCode == http.StatusTooManyRequests:
 		c.egress.FeedbackOutcome(lease.NodeID, egress.OutcomeRateLimited)
 	case resp.StatusCode >= 500:
@@ -612,7 +620,12 @@ type cliOAuthError struct {
 	message string
 }
 
-func (e *cliOAuthError) Error() string { return e.message }
+func (e *cliOAuthError) Error() string {
+	if e == nil || e.status == 0 {
+		return "grok cli oauth error"
+	}
+	return fmt.Sprintf("grok cli oauth status=%d: %s", e.status, e.message)
+}
 func (e *cliOAuthError) Status() string {
 	if e == nil || e.status == 0 {
 		return ""

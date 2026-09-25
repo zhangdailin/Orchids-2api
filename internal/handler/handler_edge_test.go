@@ -26,6 +26,20 @@ type captureAuditLogger struct {
 	events []audit.Event
 }
 
+type encodeFailResponseWriter struct {
+	header http.Header
+	err    error
+}
+
+func (w *encodeFailResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+func (w *encodeFailResponseWriter) Write([]byte) (int, error) { return 0, w.err }
+func (w *encodeFailResponseWriter) WriteHeader(int)           {}
+
 func (l *captureAuditLogger) Log(_ context.Context, event audit.Event) {
 	l.events = append(l.events, event)
 }
@@ -37,6 +51,17 @@ type mockUpstreamEdge struct {
 type errorUpstreamEdge struct {
 	err   error
 	calls int
+}
+
+type usageThenErrorUpstreamEdge struct {
+	err   error
+	calls int
+}
+
+func (m *usageThenErrorUpstreamEdge) SendRequestWithPayload(_ context.Context, _ upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), _ *debug.Logger) error {
+	m.calls++
+	onMessage(upstream.SSEMessage{Type: "model.usage-metadata", Event: map[string]interface{}{"inputTokens": 7, "outputTokens": 0}})
+	return m.err
 }
 
 func (m *mockUpstreamEdge) SendRequestWithPayload(ctx context.Context, req upstream.UpstreamRequest, onMessage func(upstream.SSEMessage), logger *debug.Logger) error {
@@ -72,6 +97,44 @@ func TestHandleMessages_NonStreamPartialFailureReturnsOnlyError(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "partial draft") || strings.Contains(rec.Body.String(), "choices") {
 		t.Fatalf("partial failure was fabricated as a completion: %s", rec.Body.String())
+	}
+}
+
+func TestHandleMessages_UsageEvidenceSuppressesReplay(t *testing.T) {
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10, MaxRetries: 2}, nil)
+	client := &usageThenErrorUpstreamEdge{err: errors.New("connection reset by peer")}
+	h.client = client
+	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": false}
+	body, _ := json.Marshal(payload)
+	rec := httptest.NewRecorder()
+	h.HandleMessages(rec, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+
+	if client.calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1 after provider-reported usage", client.calls)
+	}
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleMessages_NonStreamEncodeFailureIsObservable(t *testing.T) {
+	h := NewWithLoadBalancer(&config.Config{RequestTimeout: 10}, nil)
+	h.client = &mockUpstreamEdge{events: []upstream.SSEMessage{
+		{Type: "model.text-delta", Event: map[string]interface{}{"delta": "answer"}},
+		{Type: "model.finish", Event: map[string]interface{}{"finishReason": "stop"}},
+	}}
+	auditLog := &captureAuditLogger{}
+	h.SetAuditLogger(auditLog)
+	payload := map[string]interface{}{"model": "test", "messages": []map[string]interface{}{{"role": "user", "content": "hi"}}, "stream": false}
+	body, _ := json.Marshal(payload)
+	writer := &encodeFailResponseWriter{err: errors.New("client connection closed")}
+	h.HandleMessages(writer, httptest.NewRequest(http.MethodPost, "http://x/puter/v1/messages", bytes.NewReader(body)))
+
+	if len(auditLog.events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(auditLog.events))
+	}
+	if auditLog.events[0].Status != "error" {
+		t.Fatalf("audit status = %q, want error", auditLog.events[0].Status)
 	}
 }
 
@@ -470,8 +533,8 @@ func TestHandleMessages_WarpCanceledFollowup_DoesNotEmitGenericEmptyFallback(t *
 	if strings.Contains(out, "No output was presented to the user") {
 		t.Fatalf("did not expect generic empty fallback after canceled upstream, got: %s", out)
 	}
-	if !strings.Contains(out, "event: message_stop") {
-		t.Fatalf("expected stream to terminate cleanly, got: %s", out)
+	if !strings.Contains(out, "event: error") {
+		t.Fatalf("unexpected upstream-local cancellation must be reported as an error, got: %s", out)
 	}
 }
 

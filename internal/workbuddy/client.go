@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -179,12 +180,15 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return apiError(resp.StatusCode, raw)
+		return apiErrorWithRetry(resp.StatusCode, raw, parseRetryAfter(resp.Header.Get("Retry-After")))
 	}
 	resp.Body = monitorStreamIdle(resp.Body, c.streamIdle, cancel)
 
 	result, err := consumeStream(resp.Body, onMessage)
 	if err != nil {
+		if typed, ok := err.(*APIError); ok && typed.RetryDelay == 0 {
+			typed.RetryDelay = parseRetryAfter(resp.Header.Get("Retry-After"))
+		}
 		return err
 	}
 	if !result.SawMeaningfulEvent {
@@ -198,6 +202,26 @@ func (c *Client) runChat(ctx context.Context, req upstream.UpstreamRequest, time
 		onMessage(upstream.SSEMessage{Type: "model.finish", Event: event})
 	}
 	return nil
+}
+
+func parseRetryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds > 0 {
+		if seconds > 30 {
+			seconds = 30
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		delay := time.Until(at)
+		if delay > 30*time.Second {
+			return 30 * time.Second
+		}
+		if delay > 0 {
+			return delay
+		}
+	}
+	return 0
 }
 
 // ensureAccessToken returns a usable bearer token, refreshing when the stored

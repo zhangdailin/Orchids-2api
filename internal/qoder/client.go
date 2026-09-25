@@ -162,7 +162,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if err != nil {
 		return err
 	}
-	body, err := buildChatBody(req, model, sessionID, requestID)
+	body, err := buildChatBodyVersion(req, model, sessionID, requestID, c.clientVersion)
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,8 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		}
 		lastErr = err
 		if emitted {
-			// Content already reached the client; replaying would duplicate it.
+			// Usage is observable output too: replaying after a usage-only frame can
+			// double-count billing even when no assistant token was emitted.
 			return err
 		}
 		var agentErr *agentLimitError
@@ -229,6 +230,17 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 				return refreshErr
 			}
 			if fields, err = c.ensureRuntimeFields(ctx, c.currentCredentials()); err != nil {
+				return err
+			}
+			// A replay with the original request id is rejected as a duplicate even
+			// though the bearer changed. Give the repaired attempt a fresh identity
+			// and explicitly mark it as a retry.
+			requestID, err = newUUID(c.entropy)
+			if err != nil {
+				return err
+			}
+			body, err = refreshedReplayBody(body, requestID)
+			if err != nil {
 				return err
 			}
 			continue
@@ -325,7 +337,10 @@ func (c *Client) ensureAccessToken(ctx context.Context) (Credentials, error) {
 // after the upstream rejected a request that was otherwise well formed.
 func (c *Client) forceRefresh(ctx context.Context, rejected Credentials) error {
 	if strings.TrimSpace(rejected.RefreshToken) == "" {
-		return ErrCredentialMissing
+		return ErrReLoginRequired
+	}
+	if !rejected.RefreshExpiresAt.IsZero() && time.Now().After(rejected.RefreshExpiresAt) {
+		return ErrReLoginRequired
 	}
 	_, err := c.refresh(ctx, rejected)
 	return err

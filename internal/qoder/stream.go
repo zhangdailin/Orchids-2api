@@ -62,8 +62,8 @@ type streamChunk struct {
 	} `json:"choices"`
 	Usage *streamUsage `json:"usage"`
 	Error *struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Code    json.RawMessage `json:"code"`
+		Message string          `json:"message"`
 	} `json:"error"`
 }
 
@@ -340,7 +340,8 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			}
 			switch {
 			case code == busyCode:
-				streamErr = fmt.Errorf("%w: %s", ErrBusy, detail)
+				busyErr := fmt.Errorf("%w: %s", ErrBusy, detail)
+				streamErr = &attemptStreamError{err: busyErr, busy: true, retryable: true, wait: busyWait("", []byte(envelope.Body))}
 			case isDuplicateRequest(detail, envelope.Body):
 				// Replaying the same signed body/request id cannot repair an
 				// idempotency conflict; it only creates a retry storm.
@@ -376,8 +377,9 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			return false
 		}
 		if chunk.Error != nil && strings.TrimSpace(chunk.Error.Message) != "" {
-			if stringOfCode(chunk.Error.Code) == busyCode {
-				streamErr = fmt.Errorf("%w: %s", ErrBusy, chunk.Error.Message)
+			if stringOfCode(chunk.Error.Code) == busyCode || envelopeCode([]byte(chunk.Error.Message)) == busyCode {
+				busyErr := fmt.Errorf("%w: %s", ErrBusy, chunk.Error.Message)
+				streamErr = &attemptStreamError{err: busyErr, busy: true, retryable: true, wait: busyWait("", []byte(chunk.Error.Message))}
 			} else {
 				streamErr = fmt.Errorf("qoder stream error: %s", chunk.Error.Message)
 			}
@@ -663,8 +665,19 @@ func agentLimitResetAtDepth(value string, depth int) time.Time {
 	return time.Time{}
 }
 
-func stringOfCode(raw string) string {
-	return strings.TrimSpace(raw)
+func stringOfCode(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return strings.TrimSpace(text)
+	}
+	var number json.Number
+	if json.Unmarshal(raw, &number) == nil {
+		return strings.TrimSpace(number.String())
+	}
+	return ""
 }
 
 func newThinkingSignature() string {

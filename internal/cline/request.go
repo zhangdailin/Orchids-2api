@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/goccy/go-json"
 
@@ -53,7 +52,7 @@ type chatBody struct {
 
 // buildChatBody renders one chat request.
 func buildChatBody(req upstream.UpstreamRequest, model string) ([]byte, error) {
-	sessionID := newTaskID(time.Now())
+	sessionID := logicalTaskID(req.RequestID)
 	maxTokens := DefaultMaxTokens
 	// The upstream needs a reasoning_effort on every request, so the default
 	// stands in when the client did not state one; a stated effort wins.

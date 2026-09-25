@@ -865,7 +865,11 @@ func verifyPuterDiscoveredModelsConcurrent(ctx context.Context, cfg *config.Conf
 		if strings.TrimSpace(candidate.ID) == "" {
 			return
 		}
-		results[idx], _ = probePuterCandidate(ctx, cfg, accounts, candidate.ID, idx%len(accounts))
+		probeID := strings.TrimSpace(candidate.UpstreamModel)
+		if probeID == "" {
+			probeID = candidate.ID
+		}
+		results[idx], _ = probePuterCandidate(ctx, cfg, accounts, probeID, idx%len(accounts))
 	})
 
 	verified := make([]discoveredModel, 0, len(candidates))
@@ -892,7 +896,11 @@ func verifyPuterDiscoveredModelsSerial(ctx context.Context, cfg *config.Config, 
 		if strings.TrimSpace(candidate.ID) == "" {
 			continue
 		}
-		result, next := probePuterCandidate(ctx, cfg, accounts, candidate.ID, accountIndex)
+		probeID := strings.TrimSpace(candidate.UpstreamModel)
+		if probeID == "" {
+			probeID = candidate.ID
+		}
+		result, next := probePuterCandidate(ctx, cfg, accounts, probeID, accountIndex)
 		accountIndex = next
 		if result == puterModelProbeQuotaLimited {
 			sawInsufficientFunds = true

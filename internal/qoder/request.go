@@ -162,6 +162,10 @@ type chatToolCall struct {
 
 // buildChatBody renders the encoded request body.
 func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID string) ([]byte, error) {
+	return buildChatBodyVersion(req, model, sessionID, requestID, DefaultClientVersion)
+}
+
+func buildChatBodyVersion(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, clientVersion string) ([]byte, error) {
 	messages, systemText, err := buildMessages(req)
 	if err != nil {
 		return nil, err
@@ -191,7 +195,7 @@ func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, re
 	body := chatBody{
 		Business: businessInfo{
 			Product: sceneBusinessProduct,
-			Version: DefaultClientVersion,
+			Version: clientVersion,
 			Type:    sceneBusinessType,
 			ID:      requestID,
 			Name:    businessName(req),
@@ -233,6 +237,28 @@ func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, re
 		return nil, fmt.Errorf("marshal qoder request: %w", err)
 	}
 	return EncodeBody(raw), nil
+}
+
+func refreshedReplayBody(encoded []byte, requestID string) ([]byte, error) {
+	raw, err := decodeBody(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode qoder replay body: %w", err)
+	}
+	var body chatBody
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, fmt.Errorf("decode qoder replay JSON: %w", err)
+	}
+	body.RequestID = requestID
+	body.RequestSetID = requestID
+	body.ChatRecordID = requestID
+	body.Business.ID = requestID
+	body.Business.BeginAt = time.Now().UnixMilli()
+	body.IsRetry = true
+	updated, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal qoder replay body: %w", err)
+	}
+	return EncodeBody(updated), nil
 }
 
 // businessName is the first characters of the latest user text. The upstream
@@ -753,22 +779,64 @@ func busyWait(retryAfter string, raw []byte) time.Duration {
 	if delay := retryAfterDelay(retryAfter); delay > 0 {
 		return delay
 	}
-	var payload struct {
-		RetryAfterMs int64 `json:"retryAfterMs"`
-		Queue        struct {
-			IsQueued bool  `json:"isQueued"`
-			WaitTime int64 `json:"waitTime"`
-		} `json:"queue"`
+	if seconds := nestedInt64(raw, "retryAfterSeconds", 0); seconds > 0 {
+		return capWait(time.Duration(seconds) * time.Second)
 	}
-	if err := json.Unmarshal(bytes.TrimSpace(raw), &payload); err == nil {
-		switch {
-		case payload.RetryAfterMs > 0:
-			return capWait(time.Duration(payload.RetryAfterMs) * time.Millisecond)
-		case payload.Queue.WaitTime > 0:
-			return capWait(time.Duration(payload.Queue.WaitTime) * time.Millisecond)
-		}
+	if millis := nestedInt64(raw, "retryAfterMs", 0); millis > 0 {
+		return capWait(time.Duration(millis) * time.Millisecond)
+	}
+	if wait := nestedInt64(raw, "waitTime", 0); wait > 0 {
+		// waitTime has historically been milliseconds, while the explicitly named
+		// retryAfterSeconds is seconds.
+		return capWait(time.Duration(wait) * time.Millisecond)
 	}
 	return 2 * time.Second
+}
+
+func nestedInt64(raw []byte, key string, depth int) int64 {
+	if depth > 5 || len(bytes.TrimSpace(raw)) == 0 {
+		return 0
+	}
+	var value interface{}
+	if json.Unmarshal(bytes.TrimSpace(raw), &value) != nil {
+		return 0
+	}
+	var walk func(interface{}, int) int64
+	walk = func(node interface{}, level int) int64 {
+		if level > 5 {
+			return 0
+		}
+		switch typed := node.(type) {
+		case map[string]interface{}:
+			if rawValue, ok := typed[key]; ok {
+				switch number := rawValue.(type) {
+				case float64:
+					return int64(number)
+				case string:
+					parsed, _ := strconv.ParseInt(strings.TrimSpace(number), 10, 64)
+					return parsed
+				}
+			}
+			for _, child := range typed {
+				if found := walk(child, level+1); found > 0 {
+					return found
+				}
+			}
+		case []interface{}:
+			for _, child := range typed {
+				if found := walk(child, level+1); found > 0 {
+					return found
+				}
+			}
+		case string:
+			var nested interface{}
+			if json.Unmarshal([]byte(strings.TrimSpace(typed)), &nested) == nil {
+				return walk(nested, level+1)
+			}
+		}
+		return 0
+	}
+	return walk(value, depth)
 }
 
 func retryAfterDelay(value string) time.Duration {

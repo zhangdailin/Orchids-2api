@@ -552,6 +552,7 @@ type accountStore interface {
 	ListAccounts(ctx context.Context) ([]*Account, error)
 	GetEnabledAccounts(ctx context.Context) ([]*Account, error)
 	IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error
+	IncrementAccountStatsOperation(ctx context.Context, id int64, usage float64, count int64, operationID string, completedAt time.Time) error
 	ConsumeGrokQuota(ctx context.Context, id int64, provider string, amount float64) (bool, error)
 	ClaimGrokPaidQuotaProbe(ctx context.Context, id int64, now time.Time) (bool, error)
 }
@@ -569,10 +570,12 @@ type apiKeyStore interface {
 	GetApiKeyByID(ctx context.Context, id int64) (*ApiKey, error)
 	GetApiKeyByHash(ctx context.Context, hash string) (*ApiKey, error)
 	ConsumeApiKeyRPM(ctx context.Context, id int64, limit int, now time.Time) (bool, error)
+	TouchApiKeyLastUsed(ctx context.Context, id int64, now time.Time) error
 	ReserveApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64, expiresAt time.Time) (bool, error)
 	SettleApiKeyBilling(ctx context.Context, id int64, eventID string, amount int64) error
 	ReleaseApiKeyBilling(ctx context.Context, id int64, eventID string) (bool, error)
 	ResetApiKeyBilling(ctx context.Context, id int64) error
+	RolloverApiKeyBilling(ctx context.Context, key *ApiKey, now time.Time) (bool, error)
 }
 
 type modelStore interface {
@@ -833,8 +836,15 @@ func (s *Store) GetEnabledAccounts(ctx context.Context) ([]*Account, error) {
 }
 
 func (s *Store) IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error {
+	return s.IncrementAccountStatsOperation(ctx, id, usage, count, "", time.Now().UTC())
+}
+
+// IncrementAccountStatsOperation applies one completed request's counters. A
+// non-empty operationID makes retries durable and idempotent across processes;
+// completedAt determines the fixed UTC daily bucket rather than retry time.
+func (s *Store) IncrementAccountStatsOperation(ctx context.Context, id int64, usage float64, count int64, operationID string, completedAt time.Time) error {
 	if s.accounts != nil {
-		return s.accounts.IncrementAccountStats(ctx, id, usage, count)
+		return s.accounts.IncrementAccountStatsOperation(ctx, id, usage, count, operationID, completedAt)
 	}
 	return fmt.Errorf("store not configured")
 }
@@ -879,33 +889,21 @@ func (s *Store) CreateApiKey(ctx context.Context, key *ApiKey) error {
 	return fmt.Errorf("api keys store not configured")
 }
 
-// rolloverApiKeyBilling resets a key's settled usage when its billing period has
-// elapsed, so a limit is "per period" rather than "forever". The counter and the
-// period start are both Redis state; a concurrent pair of requests can at worst
-// reset twice, which is harmless because a fresh period starts empty either way.
+// rolloverApiKeyBilling atomically advances an elapsed billing period in the
+// durable store. The Redis transaction updates the period record and resets only
+// settled usage/idempotency state; live holds remain attached to running requests.
 func (s *Store) rolloverApiKeyBilling(ctx context.Context, key *ApiKey, now time.Time) {
 	if key == nil || key.BillingPeriodDays <= 0 {
 		return
 	}
-	started := key.BillingPeriodStartedAt
-	if started.IsZero() {
-		key.BillingPeriodStartedAt = now
-		if err := s.UpdateApiKey(ctx, key); err != nil {
-			slog.Warn("failed to record the billing period start", "key_id", key.ID, "error", err)
-		}
-		return
-	}
-	if now.Before(started.AddDate(0, 0, key.BillingPeriodDays)) {
-		return
-	}
-	if err := s.ResetApiKeyBilling(ctx, key.ID); err != nil {
+	rolled, err := s.apiKeys.RolloverApiKeyBilling(ctx, key, now.UTC())
+	if err != nil {
 		slog.Warn("failed to roll the billing period over", "key_id", key.ID, "error", err)
 		return
 	}
-	key.BillingUsedUSDTicks = 0
-	key.BillingPeriodStartedAt = now
-	if err := s.UpdateApiKey(ctx, key); err != nil {
-		slog.Warn("failed to advance the billing period", "key_id", key.ID, "error", err)
+	if rolled {
+		key.BillingUsedUSDTicks = 0
+		key.BillingPeriodStartedAt = now.UTC()
 	}
 }
 
@@ -945,10 +943,9 @@ func (s *Store) AuthorizeApiKey(ctx context.Context, raw string) (*ApiKey, error
 	}
 	key.LastUsedAt = &now
 	if key.RPMLimit <= 0 {
-		// The RPM Lua path persists last_used_at atomically. Unlimited keys do not
-		// enter that script, so explicitly persist their successful authentication
-		// or the management page misleadingly reports that they were never used.
-		if err := s.apiKeys.UpdateApiKey(ctx, key); err != nil {
+		// Persist only the usage touch. Rewriting the stale row here could race an
+		// atomic billing rollover and restore its old period start.
+		if err := s.apiKeys.TouchApiKeyLastUsed(ctx, key.ID, now); err != nil {
 			return nil, err
 		}
 	}

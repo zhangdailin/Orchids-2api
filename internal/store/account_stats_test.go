@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 )
@@ -163,6 +164,65 @@ func TestIncrementAccountStats_WorkBuddyKeepsRemoteRemainingCredits(t *testing.T
 	}
 	if got.UsageCurrent != 0 || got.UsageTotal != 500 || got.TokensToday != 500 {
 		t.Fatalf("workbuddy counters = current %v total %v today %v, want 0/500/500", got.UsageCurrent, got.UsageTotal, got.TokensToday)
+	}
+}
+
+func TestIncrementAccountStatsOperationIsDurablyIdempotent(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "stats-idempotent:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := context.Background()
+	acc := &Account{AccountType: "qoder", Enabled: true}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatal(err)
+	}
+	completed := time.Date(2026, 3, 5, 23, 59, 59, 0, time.UTC)
+	for i := 0; i < 2; i++ {
+		if err := s.IncrementAccountStatsOperation(ctx, acc.ID, 42, 1, "request-123", completed); err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+	}
+	got, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UsageTotal != 42 || got.RequestCount != 1 || got.TokensToday != 42 || got.TokensDate != "2026-03-05" {
+		t.Fatalf("duplicate operation applied twice: total=%v requests=%d today=%v date=%q", got.UsageTotal, got.RequestCount, got.TokensToday, got.TokensDate)
+	}
+}
+
+func TestIncrementAccountStatsOperationUsesCompletionUTCDateAcrossMidnight(t *testing.T) {
+	mini := miniredis.RunT(t)
+	s, err := New(Options{StoreMode: "redis", RedisAddr: mini.Addr(), RedisPrefix: "stats-midnight:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := context.Background()
+	acc := &Account{AccountType: "qoder", Enabled: true}
+	if err := s.CreateAccount(ctx, acc); err != nil {
+		t.Fatal(err)
+	}
+	beforeMidnight := time.Date(2026, 3, 5, 23, 59, 59, 0, time.UTC)
+	afterMidnight := beforeMidnight.Add(2 * time.Second)
+	if err := s.IncrementAccountStatsOperation(ctx, acc.ID, 10, 1, "newer", afterMidnight); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IncrementAccountStatsOperation(ctx, acc.ID, 20, 1, "delayed-older", beforeMidnight); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetAccount(ctx, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UsageTotal != 30 || got.RequestCount != 2 {
+		t.Fatalf("lifetime totals lost: total=%v requests=%d", got.UsageTotal, got.RequestCount)
+	}
+	if got.TokensDate != "2026-03-06" || got.TokensToday != 10 {
+		t.Fatalf("delayed prior-day completion rewound current UTC bucket: today=%v date=%q", got.TokensToday, got.TokensDate)
 	}
 }
 

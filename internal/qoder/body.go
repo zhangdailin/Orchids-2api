@@ -43,6 +43,18 @@ func EncodeBody(raw []byte) []byte {
 	return swapOuterThirds(encoded)
 }
 
+// decodeBody reverses EncodeBody for the narrow case where a refreshed
+// credential must replay an otherwise identical request with a fresh identity.
+func decodeBody(encoded []byte) ([]byte, error) {
+	unswapped := swapOuterThirds(encoded)
+	decoded := make([]byte, bodyEncoding.DecodedLen(len(unswapped)))
+	n, err := bodyEncoding.Decode(decoded, unswapped)
+	if err != nil {
+		return nil, err
+	}
+	return decoded[:n], nil
+}
+
 // swapOuterThirds moves the leading third to the end and the trailing third to
 // the front, leaving the middle in place. The middle section absorbs any
 // remainder so that all bytes are covered exactly once.

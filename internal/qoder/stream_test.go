@@ -185,6 +185,13 @@ func TestConsumeStreamClassifiesBusyCode(t *testing.T) {
 		if errors.Is(err, errUpstreamUnauthorized) {
 			t.Fatalf("busy refusal was misclassified as unauthorized: %v", err)
 		}
+		var attemptErr *attemptStreamError
+		if !errors.As(err, &attemptErr) || !attemptErr.busy || !attemptErr.retryable {
+			t.Fatalf("busy refusal lacks typed retry metadata: %#v", err)
+		}
+		if strings.Contains(bodyJSON, "retryAfterSeconds") && attemptErr.RetryAfter() != 29*time.Second {
+			t.Fatalf("RetryAfter=%v want 29s", attemptErr.RetryAfter())
+		}
 	}
 }
 

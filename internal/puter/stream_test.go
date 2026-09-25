@@ -57,6 +57,16 @@ func TestNormalizePuterUsagePreservesCacheAndBilledCost(t *testing.T) {
 	}
 }
 
+func TestNormalizePuterUsagePreservesNestedReasoningTokens(t *testing.T) {
+	got := normalizePuterUsage(map[string]interface{}{
+		"prompt_tokens": float64(10), "completion_tokens": float64(8),
+		"completion_tokens_details": map[string]interface{}{"reasoning_tokens": float64(6)},
+	})
+	if got["reasoningTokens"] != 6 || got["reasoning_tokens"] != 6 {
+		t.Fatalf("nested reasoning usage=%#v", got)
+	}
+}
+
 func TestRepairQuotedToolObjectWithTrailingBrace(t *testing.T) {
 	input := `"{\"command\":\"echo ok\",\"run_in_background\":true}"}`
 	got, ok := repairQuotedToolObjectWithTrailingBrace(input)

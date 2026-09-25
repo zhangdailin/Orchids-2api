@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const maxUpstreamBodyBytes = 4096
@@ -37,6 +38,13 @@ func (e *grokUpstreamError) Error() string {
 		b.WriteString(" body=" + e.body)
 	}
 	return b.String()
+}
+
+func (e *grokUpstreamError) RetryAfter() time.Duration {
+	if e == nil || e.header == nil {
+		return 0
+	}
+	return parseRetryAfterHeader(e.header.Get("Retry-After"), time.Now())
 }
 
 // newUpstreamError builds a typed error with a sanitized header copy and a

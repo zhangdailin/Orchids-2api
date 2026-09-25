@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"orchids-api/internal/prompt"
+	"orchids-api/internal/store"
 	"orchids-api/internal/upstream"
 )
 
@@ -36,6 +37,7 @@ func TestChatRequestCarriesTheClineProductIdentity(t *testing.T) {
 		apiBase: server.URL,
 		stream:  server.Client(),
 		creds:   Credentials{AccessToken: "access-1"},
+		account: &store.Account{ClineModelIDs: []string{"cline-free/deepseek-v4.1-flash"}},
 	}
 	if err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
 		Model:    "cline-free/deepseek-v4.1-flash",
@@ -145,6 +147,7 @@ func TestChat401RefreshRetryRebuildsThePOSTBody(t *testing.T) {
 			RefreshToken: "refresh-1",
 			ExpiresAt:    time.Now().Add(time.Hour),
 		},
+		account: &store.Account{ClineModelIDs: []string{"z-ai/glm-5.3-flash"}},
 	}
 	if err := client.SendRequestWithPayload(context.Background(), upstream.UpstreamRequest{
 		Model:    "z-ai/glm-5.3-flash",

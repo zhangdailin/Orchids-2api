@@ -680,6 +680,30 @@ func (lb *LoadBalancer) clearAccountStatus(ctx context.Context, acc *store.Accou
 	lb.persistAccountStatus(ctx, acc, reason)
 }
 
+// PersistAppliedAccountStatus publishes and persists an account that was already
+// mutated by accountpolicy.Verdict.Apply. Unlike MarkAccountStatus it does not
+// increment counters or recompute cooldowns a second time.
+func (lb *LoadBalancer) PersistAppliedAccountStatus(ctx context.Context, acc *store.Account, reason string) {
+	if acc == nil || lb.Store == nil {
+		return
+	}
+	lb.mu.Lock()
+	for _, cached := range lb.cachedAccounts {
+		if cached.ID == acc.ID {
+			cached.StatusCode = acc.StatusCode
+			cached.StatusMessage = acc.StatusMessage
+			cached.LastAttempt = acc.LastAttempt
+			cached.AuthStatus = acc.AuthStatus
+			cached.RateLimitFailures = acc.RateLimitFailures
+			cached.QuotaResetAt = acc.QuotaResetAt
+			cached.VerifiedAt = acc.VerifiedAt
+			break
+		}
+	}
+	lb.mu.Unlock()
+	lb.persistAccountStatus(ctx, acc, reason)
+}
+
 // MarkAccountStatus 标记账号状态（供后台刷新等外部调用使用）。
 func (lb *LoadBalancer) MarkAccountStatus(ctx context.Context, acc *store.Account, status string) {
 	if acc == nil || lb.Store == nil || status == "" {

@@ -181,12 +181,24 @@ var (
 		end
 		return count
 	`)
+	touchApiKeyLastUsedScript = redis.NewScript(`
+		local value = redis.call("GET", KEYS[1])
+		if not value then return redis.error_reply("api key not found") end
+		local api_key = cjson.decode(value)
+		api_key.last_used_at = ARGV[1]
+		redis.call("SET", KEYS[1], cjson.encode(api_key))
+		return 1
+	`)
 	incrementAccountStatsScript = redis.NewScript(`
 		local key = KEYS[1]
 		local usage = tonumber(ARGV[1])
 		local count = tonumber(ARGV[2])
 		local now_str = ARGV[3]
 		local today = ARGV[4]
+		local operation_id = ARGV[5]
+		if operation_id ~= "" then
+			if redis.call("SISMEMBER", KEYS[2], operation_id) == 1 then return "DUPLICATE" end
+		end
 		local val = redis.call("GET", key)
 		if not val then return redis.error_reply("account not found") end
 		local acc = cjson.decode(val)
@@ -202,15 +214,20 @@ var (
 		-- request observed on a different date than the one recorded starts a
 		-- new day. A total that never resets cannot answer how much of the
 		-- upstream rate limit this account has spent today.
-		if acc.tokens_date ~= today then
+		if acc.tokens_date == nil or acc.tokens_date < today then
 			acc.tokens_date = today
-			acc.tokens_today = 0
+			acc.tokens_today = usage
+		elseif acc.tokens_date == today then
+			acc.tokens_today = (acc.tokens_today or 0) + usage
 		end
-		acc.tokens_today = (acc.tokens_today or 0) + usage
 		acc.request_count = (acc.request_count or 0) + count
 		acc.last_used_at = now_str
 		acc.updated_at = now_str
 		redis.call("SET", key, cjson.encode(acc))
+		if operation_id ~= "" then
+			redis.call("SADD", KEYS[2], operation_id)
+			redis.call("EXPIRE", KEYS[2], 691200)
+		end
 		return "OK"
 	`)
 	// reserveApiKeyBillingScript implements the whole reservation decision in one
@@ -276,6 +293,27 @@ var (
 		redis.call("DEL", KEYS[1])
 		redis.call("SET", KEYS[2], 0)
 		redis.call("DEL", KEYS[3])
+		return 1
+	`)
+	// rolloverApiKeyBillingScript compares and mutates the durable API-key row in
+	// one Redis transaction. It deliberately preserves KEYS[2] (live holds), so a
+	// request admitted before rollover can still settle or release normally.
+	rolloverApiKeyBillingScript = redis.NewScript(`
+		local raw = redis.call("GET", KEYS[1])
+		if not raw then return redis.error_reply("api key not found") end
+		local row = cjson.decode(raw)
+		if (tonumber(row.billing_period_days or "0") or 0) ~= tonumber(ARGV[3]) then return 0 end
+		local current_start = tostring(row.billing_period_started_at or "")
+		if ARGV[1] == "" then
+			if current_start ~= "" and string.sub(current_start, 1, 5) ~= "0001-" then return 0 end
+		elseif current_start ~= ARGV[1] then
+			return 0
+		end
+		row.billing_period_started_at = ARGV[2]
+		row.updated_at = ARGV[2]
+		redis.call("SET", KEYS[1], cjson.encode(row))
+		redis.call("SET", KEYS[3], 0)
+		redis.call("DEL", KEYS[4])
 		return 1
 	`)
 	listModelsScript = redis.NewScript(`
@@ -998,7 +1036,7 @@ func (s *redisStore) DeleteAccount(ctx context.Context, id int64) error {
 	}
 
 	pipe := s.client.Pipeline()
-	pipe.Del(ctx, s.accountsKey(id))
+	pipe.Del(ctx, s.accountsKey(id), s.accountStatsOperationsKey(id))
 	pipe.SRem(ctx, s.accountsIDsKey(), id)
 	pipe.SRem(ctx, s.accountsEnabledKey(), id)
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -1040,6 +1078,10 @@ func (s *redisStore) GetEnabledAccounts(ctx context.Context) ([]*Account, error)
 }
 
 func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage float64, count int64) error {
+	return s.IncrementAccountStatsOperation(ctx, id, usage, count, "", time.Now().UTC())
+}
+
+func (s *redisStore) IncrementAccountStatsOperation(ctx context.Context, id int64, usage float64, count int64, operationID string, completedAt time.Time) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("redis store not configured")
 	}
@@ -1050,13 +1092,17 @@ func (s *redisStore) IncrementAccountStats(ctx context.Context, id int64, usage 
 		return nil
 	}
 	now := time.Now().UTC()
+	if completedAt.IsZero() {
+		completedAt = now
+	} else {
+		completedAt = completedAt.UTC()
+	}
 	nowStr := now.Format(time.RFC3339Nano)
-	// Daily counters use a fixed UTC boundary. A browser may run in Shanghai or
-	// another zone, and a host's local timezone may change; neither may reinterpret
-	// the persisted tokens_date stamp.
-	today := now.Format("2006-01-02")
-	keys := []string{s.accountsKey(id)}
-	args := []interface{}{usage, count, nowStr, today}
+	// Daily counters belong to request completion, not a delayed retry. This
+	// avoids moving a pre-midnight completion into the following UTC day.
+	today := completedAt.Format("2006-01-02")
+	keys := []string{s.accountsKey(id), s.accountStatsOperationsKey(id)}
+	args := []interface{}{usage, count, nowStr, today, strings.TrimSpace(operationID)}
 
 	err := incrementAccountStatsScript.Run(ctx, s.client, keys, args...).Err()
 	if err != nil && err != redis.Nil {
@@ -1424,6 +1470,16 @@ func (s *redisStore) ConsumeApiKeyRPM(ctx context.Context, id int64, limit int, 
 	return count <= int64(limit), nil
 }
 
+func (s *redisStore) TouchApiKeyLastUsed(ctx context.Context, id int64, now time.Time) error {
+	if s == nil || s.client == nil {
+		return fmt.Errorf("redis store not configured")
+	}
+	if id == 0 {
+		return ErrNoRows
+	}
+	return touchApiKeyLastUsedScript.Run(ctx, s.client, []string{s.apiKeysKey(id)}, now.UTC().Format(time.RFC3339Nano)).Err()
+}
+
 // ReserveApiKeyBilling holds amount ticks of a key's spending limit until
 // expiresAt. The check and the insert are one Lua script so two replicas cannot
 // both admit a request that the limit only covers once.
@@ -1521,6 +1577,39 @@ func (s *redisStore) ResetApiKeyBilling(ctx context.Context, id int64) error {
 		[]string{s.apiKeyBillingReservationsKey(id), s.apiKeyBillingUsedKey(id), s.apiKeyBillingSettledKey(id)},
 	).Int64()
 	return err
+}
+
+func (s *redisStore) RolloverApiKeyBilling(ctx context.Context, key *ApiKey, now time.Time) (bool, error) {
+	if s == nil || s.client == nil {
+		return false, fmt.Errorf("redis store not configured")
+	}
+	if key == nil || key.ID == 0 {
+		return false, ErrNoRows
+	}
+	if key.BillingPeriodDays <= 0 {
+		return false, nil
+	}
+	now = now.UTC()
+	started := key.BillingPeriodStartedAt.UTC()
+	if !started.IsZero() && now.Before(started.AddDate(0, 0, key.BillingPeriodDays)) {
+		return false, nil
+	}
+	expected := ""
+	if !started.IsZero() {
+		expected = started.Format(time.RFC3339Nano)
+	}
+	result, err := rolloverApiKeyBillingScript.Run(
+		ctx,
+		s.client,
+		[]string{s.apiKeysKey(key.ID), s.apiKeyBillingReservationsKey(key.ID), s.apiKeyBillingUsedKey(key.ID), s.apiKeyBillingSettledKey(key.ID)},
+		expected,
+		now.Format(time.RFC3339Nano),
+		key.BillingPeriodDays,
+	).Int64()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
 }
 
 func (s *redisStore) getApiKeyByID(ctx context.Context, id int64) (*ApiKey, error) {
@@ -1638,6 +1727,10 @@ func parseSortedInt64s(values []string) []int64 {
 
 func (s *redisStore) accountsKey(id int64) string {
 	return fmt.Sprintf("%saccounts:id:%d", s.prefix, id)
+}
+
+func (s *redisStore) accountStatsOperationsKey(id int64) string {
+	return fmt.Sprintf("%saccounts:stats_ops:%d", s.prefix, id)
 }
 
 func (s *redisStore) accountsIDsKey() string {

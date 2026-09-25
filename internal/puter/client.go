@@ -152,7 +152,7 @@ func (c *Client) FetchMonthlyUsage(ctx context.Context) (*MonthlyUsage, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		return nil, fmt.Errorf("puter usage API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Body: string(raw)}
 	}
 
 	var usage MonthlyUsage
@@ -239,7 +239,7 @@ func (c *Client) doChatRequest(ctx context.Context, body []byte) (*http.Response
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	return nil, fmt.Errorf("puter API error: status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	return nil, &HTTPError{StatusCode: resp.StatusCode, Header: resp.Header.Clone(), Body: string(raw)}
 }
 
 func (c *Client) buildRequest(req upstream.UpstreamRequest, testMode bool) (*request, error) {

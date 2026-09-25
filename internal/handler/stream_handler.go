@@ -1860,19 +1860,31 @@ func hasRequiredToolInputFields(nameKey string, fields toolInputFields) bool {
 	}
 }
 
+func (h *streamHandler) markWriteError(event string, err error) {
+	if err == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.markWriteErrorLocked(event, err)
+}
+
 func (h *streamHandler) markWriteErrorLocked(event string, err error) {
 	if err == nil {
 		return
 	}
-	if h.hasReturn {
-		return
-	}
+	// finishResponse claims hasReturn before writing its terminal frames. A write
+	// can therefore fail after the response is already terminal; do not mistake
+	// that claimed state for a successful write and hide the failure.
+	alreadyFailed := h.requestFailed
 	h.hasReturn = true
 	h.requestFailed = true
 	h.returned.Store(true)
 	h.finalStopReason = "write_error"
 	middleware.MarkStreamFailure(h.w)
-	slog.Warn("SSE write failed", "event", event, "error", err)
+	if !alreadyFailed {
+		slog.Warn("Response write failed", "event", event, "error", err)
+	}
 }
 
 func (h *streamHandler) forceFinishIfMissing() {
@@ -1896,9 +1908,9 @@ func (h *streamHandler) forceFinishIfMissing() {
 
 func (h *streamHandler) hasAnyOutput() bool {
 	h.mu.Lock()
-	hasReasoning := h.hasReasoningOutput
+	has := h.hasReasoningOutput || h.useUpstreamUsage
 	h.mu.Unlock()
-	return hasReasoning || h.hasVisibleOutput()
+	return has || h.hasVisibleOutput()
 }
 
 func (h *streamHandler) hasVisibleOutput() bool {

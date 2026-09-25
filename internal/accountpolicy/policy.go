@@ -6,6 +6,7 @@
 package accountpolicy
 
 import (
+	stderrors "errors"
 	"strings"
 	"time"
 
@@ -73,6 +74,10 @@ type Verdict struct {
 	At time.Time
 }
 
+type retryAfterError interface {
+	RetryAfter() time.Duration
+}
+
 // Success is the verdict for an upstream result that proved the credential
 // works. It always stamps VerifiedAt so "never checked" stays distinguishable
 // from "checked and healthy".
@@ -107,6 +112,12 @@ func (v Verdict) Apply(acc *store.Account) {
 		acc.LastAttempt = at
 		if acc.StatusCode == "429" {
 			acc.RateLimitFailures++
+			if v.Cooldown > 0 {
+				reset := at.Add(v.Cooldown)
+				if reset.After(acc.QuotaResetAt) {
+					acc.QuotaResetAt = reset
+				}
+			}
 		}
 	}
 	// Any verdict — healthy or not — proves the credential was exercised, which
@@ -150,6 +161,19 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 	message := strings.TrimSpace(err.Error())
 	lower := strings.ToLower(message)
 	now := time.Now()
+
+	var retryAfter retryAfterError
+	if stderrors.As(err, &retryAfter) {
+		cooldown := retryAfter.RetryAfter()
+		if cooldown <= 0 {
+			cooldown = CooldownRateLimit
+		}
+		return Verdict{
+			Status: "429", Message: message,
+			Scope: ScopeAccount, Retryable: true, SwitchAccount: true,
+			Cooldown: cooldown, At: now,
+		}
+	}
 
 	// A model-scoped complaint must not take the account out of service: the
 	// other models of the same account remain usable.
@@ -259,6 +283,9 @@ func isModelScopedFailure(lower string) bool {
 		strings.Contains(lower, "context_window_exceeded") ||
 		strings.Contains(lower, "max_token_limit") ||
 		strings.Contains(lower, "model unavailable") ||
+		strings.Contains(lower, "not subscribed to required model plan") ||
+		strings.Contains(lower, "only available via cline product surfaces") ||
+		(strings.Contains(lower, "http 403") && strings.Contains(lower, "entitlement")) ||
 		strings.Contains(lower, "requested base model")
 }
 
@@ -321,7 +348,13 @@ func AccountHeld(acc *store.Account, now time.Time) bool {
 	if acc.QuotaResetAt.After(until) {
 		switch {
 		case status == "429":
-			if ceiling := acc.LastAttempt.Add(CooldownRateLimitMax); ceiling.Before(acc.QuotaResetAt) {
+			// Cline's inference cap is an explicit account window (often many
+			// hours), not an ordinary throttle. Preserve the upstream deadline;
+			// the generic 30m ceiling only guards billing-cycle timestamps that
+			// accidentally leak into normal rate-limit state.
+			if strings.Contains(strings.ToLower(acc.StatusMessage), "cline inference cap reached") {
+				until = acc.QuotaResetAt
+			} else if ceiling := acc.LastAttempt.Add(CooldownRateLimitMax); ceiling.Before(acc.QuotaResetAt) {
 				until = ceiling
 			} else {
 				until = acc.QuotaResetAt

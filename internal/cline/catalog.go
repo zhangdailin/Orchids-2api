@@ -104,6 +104,22 @@ func CatalogSnapshot(models []Model) []string {
 	return rows
 }
 
+// CatalogSupportsModel reports whether an account-scoped snapshot advertised
+// the requested model. Matching is case-insensitive but returns no entitlement
+// for an empty or unreadable snapshot.
+func CatalogSupportsModel(rows []string, modelID string) bool {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return true
+	}
+	for _, row := range rows {
+		if strings.EqualFold(catalogID(row), modelID) {
+			return true
+		}
+	}
+	return false
+}
+
 // catalogID reads the identifier back out of a stored row. A bare id written by
 // an older build is still accepted.
 func catalogID(raw string) string {

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -53,6 +54,8 @@ type streamChunk struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
 	Model   string `json:"model"`
+	Code    int    `json:"code"`
+	Msg     string `json:"msg"`
 	Choices []struct {
 		Index        int    `json:"index"`
 		FinishReason string `json:"finish_reason"`
@@ -172,6 +175,15 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 			continue
 		}
 		if !strings.HasPrefix(line, "data:") {
+			// Some edge responses keep HTTP 200 but return the business envelope as
+			// plain JSON rather than SSE. Preserve that code instead of degrading it
+			// to a generic "no events" protocol error.
+			if strings.HasPrefix(line, "{") {
+				var env envelope
+				if json.Unmarshal([]byte(line), &env) == nil && env.Code != 0 {
+					return result, apiError(http.StatusOK, []byte(line))
+				}
+			}
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
@@ -186,6 +198,9 @@ func consumeStream(body io.Reader, onMessage func(upstream.SSEMessage)) (streamR
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			return result, fmt.Errorf("workbuddy stream protocol error: invalid JSON: %w", err)
+		}
+		if chunk.Code != 0 {
+			return result, apiError(http.StatusOK, []byte(payload))
 		}
 		if msg := strings.TrimSpace(chunk.Error.Message); msg != "" {
 			return result, fmt.Errorf("workbuddy stream error: %s", msg)
@@ -281,10 +296,23 @@ func normalizeUsage(raw map[string]interface{}) map[string]interface{} {
 		out["cacheReadTokens"] = cached
 		out["cache_read_tokens"] = cached
 	}
-	if reasoning, ok := firstUsageInt(raw, "completion_thinking_tokens"); ok {
+	if reasoning, ok := firstUsageInt(raw, "completion_thinking_tokens", "reasoning_tokens"); ok {
 		out["reasoningTokens"] = reasoning
+	} else if details := firstUsageMap(raw, "completion_tokens_details", "completionTokensDetails"); details != nil {
+		if reasoning, ok := firstUsageInt(details, "reasoning_tokens", "reasoningTokens"); ok {
+			out["reasoningTokens"] = reasoning
+		}
 	}
 	return out
+}
+
+func firstUsageMap(values map[string]interface{}, keys ...string) map[string]interface{} {
+	for _, key := range keys {
+		if nested, ok := values[key].(map[string]interface{}); ok {
+			return nested
+		}
+	}
+	return nil
 }
 
 func firstUsageInt(values map[string]interface{}, keys ...string) (int, bool) {
