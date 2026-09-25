@@ -65,6 +65,27 @@ certificate while Caddy presents the Let's Encrypt certificate for the origin.
 Caddy needs 80/443 reachable from the internet for ACME renewals; the access log
 goes to `/var/log/caddy/access.log` (owned by the `caddy` user).
 
+## Trust the local reverse proxy, or the login limiter keys on Cloudflare
+
+A fresh `config.json` has `"trusted_proxies": []`, which makes the server discard
+every forwarding header and treat the caller as `127.0.0.1` — Caddy's address on
+the backend socket, not the browser's. Behind Cloudflare that collapses *every*
+visitor onto Cloudflare's edge IP, so the login rate limiter
+(`NewRateLimiter(5, 15*time.Minute)`, in memory, keyed by `ClientIP`) hands all
+users one shared bucket of five attempts: a few failed logins anywhere lock out
+`/admin` for everyone with `429 Too many login attempts`, which the login page
+surfaces as a generic failure.
+
+List the reverse proxy's own address, never a range arbitrary clients can reach:
+
+```json
+"trusted_proxies": ["127.0.0.1/32", "::1/128"]
+```
+
+Verify with the `remote_ip` field of a `Request completed` log line: it must name
+the real client, not `127.0.0.1` and not a Cloudflare edge address. The limiter
+lives in process memory, so a restart also clears an in-flight lockout.
+
 ## Keep the backend off the public internet
 
 `orchids-server` listens on `:3002` for every interface and has no bind-address
