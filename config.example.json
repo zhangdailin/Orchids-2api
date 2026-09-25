@@ -37,7 +37,7 @@
   "cache_strategy": "mix",
   "enable_token_cache": false,
   "token_cache_ttl": 300,
-  "token_cache_strategy": 1,
+  "token_cache_strategy": "1",
   "proxy_http": "",
   "proxy_https": "",
   "proxy_user": "",
