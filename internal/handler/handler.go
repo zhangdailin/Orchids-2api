@@ -1102,11 +1102,13 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 			if hinted := upstreamRetryAfter(err); hinted > retryDelayForAttempt {
 				retryDelayForAttempt = hinted
 			}
-			// A shared upstream queue window is announced to every caller at once,
-			// so all the waiters wake on the same instant and re-queue together.
-			// Spreading the wake-up keeps the retry from becoming the next spike;
-			// the upstream's own recovery time is still the floor of the wait.
 			if retryDelayForAttempt > 0 && isSharedUpstreamRefusalClass(errClass) {
+				// The hint is the queue's worst case, not its actual clearing time,
+				// and paying it in full on the first retry made every request wait
+				// out the whole window. Probe early instead, then converge on the
+				// upstream's own figure, so a queue that clears in seconds is served
+				// in seconds. Jitter then keeps the probes from waking together.
+				retryDelayForAttempt = sharedRefusalWait(retryDelayForAttempt, attempt+1)
 				retryDelayForAttempt += sharedRefusalJitter(retryDelayForAttempt)
 			}
 			if retryDelayForAttempt > 0 && !util.SleepWithContext(r.Context(), retryDelayForAttempt) {
