@@ -382,11 +382,6 @@ func runIndexedModelRefreshWorkers(total, concurrency int, work func(index int))
 	wg.Wait()
 }
 
-func discoverModelsForChannelConcurrent(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) ([]discoveredModel, string, error) {
-	report, err := discoverModelsForChannelReport(ctx, cfg, s, channel, concurrency)
-	return report.Candidates, report.Source, err
-}
-
 func discoverModelsForChannelReport(ctx context.Context, cfg *config.Config, s *store.Store, channel string, concurrency int) (accountModelDiscoveryReport, error) {
 	switch strings.ToLower(channel) {
 	case "workbuddy", "qoder", "cline":
@@ -396,15 +391,6 @@ func discoverModelsForChannelReport(ctx context.Context, cfg *config.Config, s *
 	default:
 		return accountModelDiscoveryReport{}, fmt.Errorf("unsupported channel: %s", channel)
 	}
-}
-
-// discoverWorkBuddyModels reads the account-scoped WorkBuddy model catalog.
-// GET /v3/config is an authenticated control-plane endpoint, so a successful
-// read is itself proof that the credential works; no completion probe is sent
-// (the upstream bills per token).
-func discoverWorkBuddyModels(ctx context.Context, cfg *config.Config, s *store.Store) ([]discoveredModel, string, error) {
-	report, err := discoverAccountCatalogModels(ctx, cfg, s, "WorkBuddy", defaultModelRefreshConcurrency)
-	return report.Candidates, report.Source, err
 }
 
 // discoverQoderModels publishes the Qoder channel catalog read from the signed

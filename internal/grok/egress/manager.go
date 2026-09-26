@@ -283,22 +283,6 @@ func outcomeReason(outcome FeedbackOutcome) string {
 	}
 }
 
-// FeedbackAffinityOutcome applies a node-health outcome to the node most
-// recently leased for a scope+affinity. Used by request paths that do not hold
-// the lease directly (e.g. CLI) to record a persistent transport failure after retry.
-func (m *Manager) FeedbackAffinityOutcome(scope, affinity string, outcome FeedbackOutcome) {
-	if m == nil {
-		return
-	}
-	key := "scope:" + strings.ToLower(strings.TrimSpace(scope)) + ":" + affinity
-	m.mu.RLock()
-	nodeID := m.sticky[key]
-	m.mu.RUnlock()
-	if nodeID != "" {
-		m.FeedbackOutcome(nodeID, outcome)
-	}
-}
-
 // nodeCooldownFor returns the cooldown for a node that has failed n times in a
 // row: 30s, 1m, 2m, … capped at 10 minutes.
 func nodeCooldownFor(failures int) time.Duration {

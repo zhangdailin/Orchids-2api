@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	apperrors "orchids-api/internal/errors"
@@ -79,16 +78,6 @@ func writeGrokAccountUnavailable(w http.ResponseWriter, err error, fallbackCode,
 func writeGrokNoAccountError(w http.ResponseWriter, err error) {
 	answer := classifyGrokPoolFailure(err, "upstream_unavailable", grokModelAccountUnavailableMessage)
 	writeGrokErrorCode(w, answer.status, answer.code, answer.message)
-}
-
-// carriesPoolReason reports whether a selector error names why the pool is empty,
-// as opposed to the bare "no enabled accounts available for channel: X".
-func carriesPoolReason(err error) bool {
-	if err == nil {
-		return false
-	}
-	text := err.Error()
-	return strings.Contains(text, "matching accounts") || strings.Contains(text, "account pool")
 }
 
 // grokUpstreamFailureMessage is the text a client may read for a failure that came

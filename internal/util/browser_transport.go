@@ -53,13 +53,6 @@ func GetSharedBrowserHTTPClientWithHeaderTimeout(proxyKey string, timeout, heade
 	return getSharedBrowserHTTPClient(proxyKey, timeout, headerTimeout, proxyFunc, "")
 }
 
-// GetSharedBrowserHTTPClientForUserAgent is the same browser-like client, but
-// its TLS ClientHello is selected from the User-Agent the caller sends. Two
-// callers with different UAs therefore get different transports.
-func GetSharedBrowserHTTPClientForUserAgent(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), userAgent string) *http.Client {
-	return getSharedBrowserHTTPClient(proxyKey, timeout, headerTimeout, proxyFunc, userAgent)
-}
-
 func getSharedBrowserHTTPClient(proxyKey string, timeout, headerTimeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error), userAgent string) *http.Client {
 	if proxyKey == "" {
 		proxyKey = "direct"

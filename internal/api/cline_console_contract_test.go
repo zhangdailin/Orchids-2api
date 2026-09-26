@@ -88,17 +88,6 @@ func TestModelsJSListClineInTheChannelStrip(t *testing.T) {
 	}
 }
 
-// consoleLineContaining returns the first line holding a marker, so an assertion
-// can be made about one specific line rather than the whole file.
-func consoleLineContaining(source, marker string) string {
-	for _, line := range strings.Split(source, "\n") {
-		if strings.Contains(line, marker) {
-			return strings.TrimSpace(line)
-		}
-	}
-	return ""
-}
-
 // TestAccountsJSRendersTheClineRowCells pins the four columns that were empty.
 //
 // Each of them has a channel-specific branch, and a channel absent from every

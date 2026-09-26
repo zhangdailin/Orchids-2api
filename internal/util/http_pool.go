@@ -102,15 +102,6 @@ func responseHeaderTimeoutForClient(timeout time.Duration) time.Duration {
 	return min(max(timeout/2, 60*time.Second), 120*time.Second)
 }
 
-// generateProxyKey generates a string key based on the proxy config.
-func GenerateProxyKey(proxyHTTP, proxyHTTPS, proxyUser string) string {
-	if proxyHTTP == "" && proxyHTTPS == "" {
-		return "direct"
-	}
-	// Combine to strictly separate different proxy configurations
-	return proxyHTTP + "|" + proxyHTTPS + "|" + proxyUser
-}
-
 func GenerateProxyKeyFromConfig(cfg *config.Config) string {
 	if cfg == nil {
 		return "env"

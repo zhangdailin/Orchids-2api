@@ -116,22 +116,3 @@ func debugHeaderMap(headers http.Header) map[string]string {
 	}
 	return out
 }
-
-// suffixPrefixOverlap reports how many bytes of tag already appear at the end of
-// text, so a streaming filter can hold them back until the next chunk decides
-// whether they form the tag.
-func suffixPrefixOverlap(text, tag string) int {
-	if text == "" || tag == "" {
-		return 0
-	}
-	maxKeep := len(text)
-	if limit := len(tag) - 1; maxKeep > limit {
-		maxKeep = limit
-	}
-	for keep := maxKeep; keep > 0; keep-- {
-		if strings.HasSuffix(text, tag[:keep]) {
-			return keep
-		}
-	}
-	return 0
-}

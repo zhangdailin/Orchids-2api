@@ -1930,16 +1930,6 @@ func (s *redisStore) GetSessionAffinity(ctx context.Context, provider, model, se
 	return &affinity, nil
 }
 
-func validateVideoJobLeaseArgs(id, ownerHash, holder string, ttl time.Duration) error {
-	if strings.TrimSpace(id) == "" || strings.TrimSpace(ownerHash) == "" || strings.TrimSpace(holder) == "" {
-		return fmt.Errorf("video job id, owner, and lease holder are required")
-	}
-	if ttl <= 0 {
-		return fmt.Errorf("video job lease ttl must be positive")
-	}
-	return nil
-}
-
 func apiKeyRecordFromKey(key *ApiKey) apiKeyRecord {
 	return apiKeyRecord{
 		ID:      key.ID,

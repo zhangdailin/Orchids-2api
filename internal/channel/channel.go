@@ -54,14 +54,6 @@ func DefinitionFor(id ID) (Definition, bool) {
 	return Definition{}, false
 }
 
-func Label(value string) string {
-	if id, ok := Parse(value); ok {
-		definition, _ := DefinitionFor(id)
-		return definition.Label
-	}
-	return strings.TrimSpace(value)
-}
-
 func Default() Definition {
 	for _, definition := range definitions {
 		if definition.Default {

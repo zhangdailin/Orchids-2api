@@ -7,8 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"orchids-api/internal/grok/egress"
 )
 
 // upstreamIdleMode selects the activity model appropriate to an upstream.
@@ -107,20 +105,4 @@ func (b *leaseResponseBody) Close() error {
 		b.release = nil
 	}
 	return err
-}
-
-// egressOutcomeForKind maps a classified upstream error kind to the coarser
-// node-health outcome. Persistent challenges degrade the node (it cannot serve
-// this request); rate limits and account issues do not.
-func egressOutcomeForKind(kind UpstreamErrorKind) egress.FeedbackOutcome {
-	switch kind {
-	case UpstreamErrorRateLimited:
-		return egress.OutcomeRateLimited
-	case UpstreamErrorAccountBlock:
-		return egress.OutcomeAccountBlock
-	case UpstreamErrorGenericForbidden:
-		return egress.OutcomeForbidden
-	default:
-		return egress.OutcomeTransportError
-	}
 }

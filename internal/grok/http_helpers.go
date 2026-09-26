@@ -278,20 +278,6 @@ func requireAPIKeyModel(w http.ResponseWriter, r *http.Request, model string) bo
 	return false
 }
 
-// requireGrokStore writes the standard 503 response and returns false when the
-// handler has no account store. Admin handlers use it as:
-//
-//	if !requireGrokStore(w, h) {
-//		return
-//	}
-func requireGrokStore(w http.ResponseWriter, h *Handler) bool {
-	if h == nil || h.lb == nil || h.lb.Store == nil {
-		http.Error(w, "store not configured", http.StatusServiceUnavailable)
-		return false
-	}
-	return true
-}
-
 // streamResponseHeaders writes the standard SSE headers and returns the
 // response flusher (possibly nil).
 func streamResponseHeaders(w http.ResponseWriter) http.Flusher {
@@ -385,42 +371,6 @@ func writeSSEError(w http.ResponseWriter, message, errType, code string) {
 // writeSSE sends an SSE frame and flushes when the writer supports it.
 func writeSSE(w http.ResponseWriter, flusher http.Flusher, event string, data []byte) {
 	writeSSEBytes(w, event, data)
-	if flusher != nil {
-		flusher.Flush()
-	}
-}
-
-// writeSSELog sends an SSE frame, mirrors it to the debug logger, and flushes.
-func writeSSELog(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, raw []byte) error {
-	if err := writeSSEBytes(w, "", raw); err != nil {
-		return err
-	}
-	if logger != nil {
-		logger.LogOutputSSE("", string(raw))
-	}
-	if flusher != nil {
-		flusher.Flush()
-	}
-	return nil
-}
-
-// writeOpenAIStreamError emits the data-only error envelope expected by Chat
-// Completions clients. Responses and Anthropic keep their named error events.
-func writeOpenAIStreamError(w http.ResponseWriter, message, code string) error {
-	middleware.MarkStreamFailure(w)
-	payload := map[string]interface{}{"error": map[string]interface{}{
-		"message": apperrors.PublicMessage(message), "type": "api_error", "code": strings.TrimSpace(code),
-	}}
-	return writeSSEBytes(w, "", encodeJSONBytes(payload))
-}
-
-func writeChatStreamError(w http.ResponseWriter, flusher http.Flusher, logger *debug.Logger, msg, code string) {
-	_ = writeOpenAIStreamError(w, msg, code)
-	_ = writeSSEBytes(w, "", []byte("[DONE]"))
-	if logger != nil {
-		logger.LogOutputSSE("error", msg)
-		logger.LogOutputSSE("", "[DONE]")
-	}
 	if flusher != nil {
 		flusher.Flush()
 	}

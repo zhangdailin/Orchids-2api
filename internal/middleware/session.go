@@ -106,18 +106,6 @@ func APIKeyFingerprint(ctx context.Context) string {
 	return value
 }
 
-// WithAPIKeyFingerprint stamps an ownership identity without a client key. The
-// session-authenticated admin tools namespace uses it so its responses, video
-// jobs and media inputs live in an admin scope instead of collapsing into the
-// shared "anonymous" owner that keyless inference callers use.
-func WithAPIKeyFingerprint(ctx context.Context, fingerprint string) context.Context {
-	fingerprint = strings.TrimSpace(fingerprint)
-	if fingerprint == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, apiKeyFingerprintContextKey{}, fingerprint)
-}
-
 // APIKeyID returns the non-secret database identity of the validated client
 // key for request audit and usage-ledger attribution.
 func APIKeyID(ctx context.Context) int64 {

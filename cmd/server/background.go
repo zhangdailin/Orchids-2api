@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"orchids-api/internal/accountevents"
@@ -42,65 +41,10 @@ func preserveLatestAccountStatus(ctx context.Context, s *store.Store, acc *store
 	}
 }
 
-var (
-	grokRefreshMu           sync.Mutex
-	grokRefreshBackoffUntil time.Time
-	// grokRefreshIntervalMin is the freshness window a verdict is expected to
-	// hold for; the refresh loop sets it from the configured cadence.
-	grokRefreshIntervalMin int
-)
+const providerHealthRefreshInterval = 30 * time.Minute
 
-const (
-	// maxGrokRefreshPerCycle bounds how many credentials one refresh cycle
-	// touches. Five per thirty-minute cycle meant a thousand-account pool took
-	// most of a day to verify once; the cycle pauses between accounts, so a
-	// larger batch still paces the upstream.
-	maxGrokRefreshPerCycle = 25
-	grokRefresh429Backoff  = 10 * time.Minute
-	grokRefreshPause       = 500 * time.Millisecond
-	// Credential expiry checks may tick every minute, but provider identity and
-	// quota probes are materially heavier. New/replaced credentials remain due.
-	providerHealthRefreshInterval = 30 * time.Minute
-)
-
-type grokRefreshCandidate struct {
-	token    string
-	model    string
-	accounts []*store.Account
-}
-
-// grokRefreshHub hands out one lease per account so the same credential is never
-// refreshed twice at once. It is the process-wide hub, shared with the admin
-// "check" path, so a manual check and the scheduler cannot race: a second, older
-// snapshot winning the write-back is what could reinstate a status that had just
-// been cleared.
+// grokRefreshHub is shared by the admin check path and the refresh scheduler.
 var grokRefreshHub = refreshqueue.Default()
-
-// grokRefreshIntervalMinutes is the freshness window a verdict is expected to
-// hold for. It mirrors the configured refresh cadence, so "due" means "older than
-// one cycle" rather than an arbitrary constant.
-func grokRefreshIntervalMinutes() int {
-	grokRefreshMu.Lock()
-	defer grokRefreshMu.Unlock()
-	if grokRefreshIntervalMin < int(providerHealthRefreshInterval/time.Minute) {
-		return int(providerHealthRefreshInterval / time.Minute)
-	}
-	return grokRefreshIntervalMin
-}
-
-func grokRefreshInBackoff(now time.Time) bool {
-	grokRefreshMu.Lock()
-	defer grokRefreshMu.Unlock()
-	return !grokRefreshBackoffUntil.IsZero() && now.Before(grokRefreshBackoffUntil)
-}
-
-func setGrokRefreshBackoff(until time.Time) {
-	grokRefreshMu.Lock()
-	if until.After(grokRefreshBackoffUntil) {
-		grokRefreshBackoffUntil = until
-	}
-	grokRefreshMu.Unlock()
-}
 
 // refreshCLIAccount refreshes a Build CLI OAuth account access token before it
 // expires. The CLIClient oauth layer handles the refresh_token grant and
@@ -353,9 +297,6 @@ func startTokenRefreshLoop(ctx context.Context, configSnapshot func() *config.Co
 	if interval <= 0 {
 		interval = 30 * time.Minute
 	}
-	grokRefreshMu.Lock()
-	grokRefreshIntervalMin = max(int(interval.Minutes()), int(providerHealthRefreshInterval/time.Minute))
-	grokRefreshMu.Unlock()
 	slog.Debug("Auto refresh token enabled", "interval", interval.String())
 
 	refreshAccounts := func() {

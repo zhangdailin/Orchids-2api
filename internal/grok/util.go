@@ -246,57 +246,6 @@ func upstreamErrorValueMessage(raw interface{}) string {
 	return message
 }
 
-// walkJSONStrings visits every string leaf in a nested JSON value (maps,
-// slices, or plain strings).
-func walkJSONStrings(value interface{}, visit func(string)) {
-	switch x := value.(type) {
-	case map[string]interface{}:
-		for _, item := range x {
-			walkJSONStrings(item, visit)
-		}
-	case []interface{}:
-		for _, item := range x {
-			walkJSONStrings(item, visit)
-		}
-	case string:
-		visit(x)
-	}
-}
-
-func parseGrokJSONData(v interface{}) interface{} {
-	switch x := v.(type) {
-	case map[string]interface{}, []interface{}:
-		return x
-	case string:
-		raw := strings.TrimSpace(x)
-		if raw == "" {
-			return nil
-		}
-		var parsed interface{}
-		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
-			return parsed
-		}
-		return x
-	default:
-		return x
-	}
-}
-
-func parseGrokJSONText(raw string) interface{} {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return nil
-	}
-	if !strings.HasPrefix(s, "{") && !strings.HasPrefix(s, "[") {
-		return nil
-	}
-	var parsed interface{}
-	if err := json.Unmarshal([]byte(s), &parsed); err != nil {
-		return nil
-	}
-	return parsed
-}
-
 // firstNonEmpty delegates to the shared implementation in internal/util so the
 // package keeps its short local name without duplicating the logic.
 func firstNonEmpty(values ...string) string {
@@ -352,15 +301,6 @@ func parseDataURI(input string) (fileName, contentBase64, mime string, err error
 		ext = strings.TrimSpace(mime[slash+1:])
 	}
 	return "file." + ext, payload, mime, nil
-}
-
-func isRemoteURL(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u == nil {
-		return false
-	}
-	scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
-	return scheme == "http" || scheme == "https"
 }
 
 func fetchRemoteAsDataURI(rawURL string, timeout time.Duration, proxyFunc func(*http.Request) (*url.URL, error)) (string, error) {
@@ -435,57 +375,6 @@ func uniqueStrings(input []string) []string {
 	return util.UniqueStrings(input)
 }
 
-func parseBoolLoose(raw string, fallback bool) bool {
-	s := strings.ToLower(strings.TrimSpace(raw))
-	switch s {
-	case "1", "true", "yes", "y", "on":
-		return true
-	case "0", "false", "no", "n", "off":
-		return false
-	default:
-		return fallback
-	}
-}
-
-func parseIntLoose(raw string, fallback int) int {
-	v, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil {
-		return fallback
-	}
-	return v
-}
-
-func diagnosticValueSummary(v interface{}) string {
-	switch x := v.(type) {
-	case nil:
-		return ""
-	case string:
-		return truncateDiagnosticText(x, 220)
-	case []interface{}:
-		if len(x) == 0 {
-			return "[]"
-		}
-		return fmt.Sprintf("len=%d first=%s", len(x), truncateDiagnosticText(fmt.Sprint(x[0]), 180))
-	case map[string]interface{}:
-		if len(x) == 0 {
-			return "{}"
-		}
-		b, _ := json.Marshal(x)
-		return truncateDiagnosticText(string(b), 220)
-	default:
-		return truncateDiagnosticText(fmt.Sprint(x), 220)
-	}
-}
-
-func truncateDiagnosticText(s string, max int) string {
-	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
-	if max <= 0 || len([]rune(s)) <= max {
-		return s
-	}
-	r := []rune(s)
-	return string(r[:max]) + "..."
-}
-
 func interfaceToInt(v interface{}) int {
 	switch x := v.(type) {
 	case int:
@@ -513,76 +402,4 @@ func interfaceSlice(v interface{}) []interface{} {
 	default:
 		return nil
 	}
-}
-
-func valueAtPath(root interface{}, path ...string) interface{} {
-	cur := root
-	for _, key := range path {
-		m, ok := cur.(map[string]interface{})
-		if !ok {
-			return nil
-		}
-		cur, ok = m[key]
-		if !ok {
-			return nil
-		}
-	}
-	return cur
-}
-
-func mapAtAnyPath(root interface{}, paths ...[]string) map[string]interface{} {
-	for _, path := range paths {
-		if len(path) == 0 {
-			continue
-		}
-		if m, ok := valueAtPath(root, path...).(map[string]interface{}); ok && len(m) > 0 {
-			return m
-		}
-	}
-	return nil
-}
-
-func stringAtAnyPath(root interface{}, paths ...[]string) string {
-	for _, path := range paths {
-		if len(path) == 0 {
-			continue
-		}
-		v := strings.TrimSpace(fmt.Sprint(valueAtPath(root, path...)))
-		if v != "" && v != "<nil>" {
-			return v
-		}
-	}
-	return ""
-}
-
-func rawStringAtAnyPath(root interface{}, paths ...[]string) string {
-	for _, path := range paths {
-		if len(path) == 0 {
-			continue
-		}
-		raw := valueAtPath(root, path...)
-		if text, ok := raw.(string); ok {
-			if text != "" {
-				return text
-			}
-			continue
-		}
-		value := strings.TrimSpace(fmt.Sprint(raw))
-		if value != "" && value != "<nil>" {
-			return value
-		}
-	}
-	return ""
-}
-
-func intAtAnyPath(root interface{}, paths ...[]string) int {
-	for _, path := range paths {
-		if len(path) == 0 {
-			continue
-		}
-		if v := interfaceToInt(valueAtPath(root, path...)); v != 0 {
-			return v
-		}
-	}
-	return 0
 }

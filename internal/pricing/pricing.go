@@ -301,20 +301,6 @@ const (
 	officialLiteImageInputTicks int64 = 20_000_000
 )
 
-// officialImage20OutputTicks is the resolution/quality matrix for 2.0.
-func officialImage20OutputTicks(resolution, quality string) (int64, bool) {
-	switch resolution + "/" + quality {
-	case "1k/low":
-		return 400_000_000, true
-	case "2k/low", "1k/medium":
-		return 600_000_000, true
-	case "2k/medium":
-		return 800_000_000, true
-	default:
-		return 0, false
-	}
-}
-
 // ── Cost reconstruction (PricingBreakdown) ────────────────────────────────────
 //
 // grok2api exposes the rate components behind a stored cost so an operator can
@@ -357,19 +343,6 @@ type Breakdown struct {
 	Model          string      `json:"model"`
 	CostInUSDTicks int64       `json:"cost_in_usd_ticks"`
 	Components     []Component `json:"components"`
-}
-
-// addExact records a component whose exact cost is not quantity × unit price: the
-// per-second rate of an hourly price is not an integer, so the rate is rounded
-// for display while the cost stays the one the estimator charges.
-func (b *Breakdown) addExact(kind ComponentKind, unit Unit, quantity, unitPrice, cost int64) {
-	if quantity <= 0 || cost <= 0 {
-		return
-	}
-	b.Components = append(b.Components, Component{
-		Kind: kind, Unit: unit, Quantity: quantity, UnitPriceInUSDTicks: unitPrice, CostInUSDTicks: cost,
-	})
-	b.CostInUSDTicks += cost
 }
 
 func (b *Breakdown) add(kind ComponentKind, unit Unit, quantity, unitPrice int64) {

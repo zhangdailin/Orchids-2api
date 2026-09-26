@@ -10,28 +10,6 @@ import (
 	"orchids-api/internal/store"
 )
 
-func quotaWindowFromRateLimitInfo(info *RateLimitInfo) store.GrokQuotaWindow {
-	if info == nil {
-		return store.GrokQuotaWindow{}
-	}
-	window := store.GrokQuotaWindow{
-		Limit:        float64(info.Limit),
-		Remaining:    float64(info.Remaining),
-		HasLimit:     info.HasLimit,
-		HasRemaining: info.HasRemaining,
-		ResetAt:      info.ResetAt,
-	}
-	if info.HasLimit && info.Limit > 0 && info.HasRemaining {
-		used := info.Limit - info.Remaining
-		if used < 0 {
-			used = 0
-		}
-		window.UsagePercent = float64(used) * 100 / float64(info.Limit)
-		window.HasUsage = true
-	}
-	return window
-}
-
 const (
 	basicDefaultQuota float64 = 30
 	liteDefaultQuota  float64 = 70

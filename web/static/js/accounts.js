@@ -606,11 +606,9 @@ const grokDeviceLogin = createAccountDeviceLogin({
   isAllowedURL: (url) => url.protocol === "https:" && (url.hostname === "auth.x.ai" || url.hostname === "accounts.x.ai"),
 });
 
-function renderGrokDeviceLoginStatus(message, type = "info", html = "") { grokDeviceLogin.render(message, type, html); }
 function resetGrokDeviceLoginStatus() { grokDeviceLogin.reset(); }
 function stopGrokDeviceLogin(cancel = false) { grokDeviceLogin.stop(cancel); }
 function startGrokDeviceLogin() { return grokDeviceLogin.start(); }
-function pollGrokDeviceLogin() { return grokDeviceLogin.poll(); }
 
 // Grok is Build OAuth-only. Other channels retain their existing generic
 // manual credential or official-login behavior.
@@ -627,10 +625,6 @@ function applyCredentialModeUI(type) {
   if (grokDeviceLoginGroup) grokDeviceLoginGroup.hidden = normalizedType !== "grok";
   const clientCookie = document.getElementById("clientCookie");
   if (clientCookie) clientCookie.required = !loginOnlyChannel;
-}
-
-function currentCredentialMode() {
-  return String(document.getElementById("accountType")?.value || "").trim().toLowerCase() === "grok" ? "oauth" : "";
 }
 
 function splitBatchCredentialInput(raw) {
