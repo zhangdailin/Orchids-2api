@@ -207,10 +207,10 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 	if model.MaxInputTokens > 0 {
 		parameters["context_length"] = model.MaxInputTokens
 	}
-	// The gateway reads the thinking toggle from the parameters block. A
-	// reasoning-capable model defaults to thinking on, matching what the Qoder
-	// CLI sends; an explicit client "none"/off answer turns it off. A stated
-	// effort level is forwarded so the model can scale its reasoning budget.
+	// The upstream marks qfmodel and other reasoning-capable models as
+	// is_reasoning=true. Do not leave their thinking budget at the upstream
+	// default: use low unless the client explicitly requests another level.
+	// "none" still disables thinking and sends no reasoning_effort.
 	if model.IsReasoning {
 		parameters["enable_thinking"] = true
 	}
@@ -220,6 +220,8 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 		} else {
 			parameters["reasoning_effort"] = effort
 		}
+	} else if model.IsReasoning {
+		parameters["reasoning_effort"] = "low"
 	}
 	tools := normalizeToolDefinitions(req, model)
 	toolChoice, parallelTools := normalizeToolControls(req, len(tools) > 0)
