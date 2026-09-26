@@ -495,6 +495,46 @@ func TestConsumeStreamAcceptsGLMReasoningAliases(t *testing.T) {
 		t.Fatalf("text/result = %q/%+v", text.String(), result)
 	}
 }
+func TestConsumeStreamSeparatesSplitThinkingTagsFromAnswer(t *testing.T) {
+	stream := `data: {"choices":[{"delta":{"content":"Hello <thi"}}]}` + "\n\n" +
+		`data: {"choices":[{"delta":{"content":"nk>private reasoning</thi"}}]}` + "\n\n" +
+		`data: {"choices":[{"delta":{"content":"nk> world"},"finish_reason":"stop"}]}` + "\n\n" +
+		"data: [DONE]\n\n"
+	for _, toolsEnabled := range []bool{false, true} {
+		var text, reasoning strings.Builder
+		_, err := consumeStream(strings.NewReader(stream), toolsEnabled, func(msg upstream.SSEMessage) {
+			switch msg.Type {
+			case "model.text-delta":
+				text.WriteString(msg.Event["delta"].(string))
+			case "model.reasoning-delta":
+				reasoning.WriteString(msg.Event["delta"].(string))
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text.String() != "Hello  world" || reasoning.String() != "private reasoning" {
+			t.Fatalf("tools=%t text=%q reasoning=%q", toolsEnabled, text.String(), reasoning.String())
+		}
+	}
+}
+
+func TestConsumeStreamFlushesIncompleteThinkPrefixAsText(t *testing.T) {
+	stream := `data: {"choices":[{"delta":{"content":"answer <thi","reasoning_content":"separate reasoning"},"finish_reason":"stop"}]}` + "\n\n"
+	var text, reasoning strings.Builder
+	result, err := consumeStream(strings.NewReader(stream), false, func(msg upstream.SSEMessage) {
+		switch msg.Type {
+		case "model.text-delta":
+			text.WriteString(msg.Event["delta"].(string))
+		case "model.reasoning-delta":
+			reasoning.WriteString(msg.Event["delta"].(string))
+		}
+	})
+	if err != nil || !result.SawMeaningfulEvent || text.String() != "answer <thi" || reasoning.String() != "separate reasoning" {
+		t.Fatalf("text=%q reasoning=%q result=%+v err=%v", text.String(), reasoning.String(), result, err)
+	}
+}
+
 func TestBuildChatBodyHonorsClientReasoningEffort(t *testing.T) {
 	body, err := buildChatBody(upstream.UpstreamRequest{
 		Model:           "z-ai/glm-5.3-flash",

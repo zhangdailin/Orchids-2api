@@ -311,6 +311,47 @@ func parseClineRepeatedTagToolCall(text string) (string, []toolCall) {
 	return text[:first], calls
 }
 
+// clineThinkingSplitter separates GLM-style in-content <think> blocks from
+// answer text, including tags split across SSE frames. Unmatched tag prefixes
+// are held for at most len("</think>") bytes and flushed at end of stream.
+// A complete opening tag is required before treating anything as reasoning.
+type clineThinkingSplitter struct {
+	thinking bool
+	pending  string
+}
+
+func (s *clineThinkingSplitter) feed(content string, final bool, emitReasoning, emitText func(string)) {
+	s.pending += content
+	for len(s.pending) > 0 {
+		tag := "<think>"
+		emit := emitText
+		if s.thinking {
+			tag = "</think>"
+			emit = emitReasoning
+		}
+		if idx := strings.Index(s.pending, tag); idx >= 0 {
+			emit(s.pending[:idx])
+			s.pending = s.pending[idx+len(tag):]
+			s.thinking = !s.thinking
+			continue
+		}
+		// Retain only the longest suffix that could be the beginning of a
+		// delimiter; everything else is safe to emit right now.
+		keep := 0
+		if !final {
+			for n := min(len(s.pending), len(tag)-1); n > 0; n-- {
+				if strings.HasSuffix(s.pending, tag[:n]) {
+					keep = n
+					break
+				}
+			}
+		}
+		emit(s.pending[:len(s.pending)-keep])
+		s.pending = s.pending[len(s.pending)-keep:]
+		break
+	}
+}
+
 // consumeStream parses the SSE body and forwards deltas to the caller.
 func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SSEMessage)) (streamResult, error) {
 	scanner := bufio.NewScanner(body)
@@ -318,6 +359,7 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 	result := streamResult{}
 	tools := newToolCallAccumulator()
 	var pendingText strings.Builder
+	var thinkingSplitter clineThinkingSplitter
 	sawNativeTools := false
 	sawFinish := false
 
@@ -330,6 +372,38 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 			onMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{
 				"delta": text,
 			}})
+		}
+	}
+
+	emitReasoning := func(reasoning string) {
+		if reasoning == "" {
+			return
+		}
+		result.SawMeaningfulEvent = true
+		if onMessage != nil {
+			// One signature per stream also covers reasoning embedded in content.
+			if result.ThinkingSignature == "" {
+				result.ThinkingSignature = newThinkingSignature()
+			}
+			onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{
+				"delta":     reasoning,
+				"signature": result.ThinkingSignature,
+			}})
+		}
+	}
+
+	emitContent := func(content string) {
+		if content == "" {
+			return
+		}
+		if toolsEnabled && !sawNativeTools {
+			pendingText.WriteString(content)
+			if pendingText.Len() > maxClineTextToolBufferBytes {
+				emitText(pendingText.String())
+				pendingText.Reset()
+			}
+		} else {
+			emitText(content)
 		}
 	}
 
@@ -408,30 +482,10 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 			reasoning = delta.Thinking
 		}
 		if reasoning != "" {
-			result.SawMeaningfulEvent = true
-			if onMessage != nil {
-				// One signature per stream keeps every thinking delta inside a
-				// single signed block, matching the WorkBuddy/Qoder
-				// conversion; Anthropic clients validate the signature.
-				if result.ThinkingSignature == "" {
-					result.ThinkingSignature = newThinkingSignature()
-				}
-				onMessage(upstream.SSEMessage{Type: "model.reasoning-delta", Event: map[string]interface{}{
-					"delta":     reasoning,
-					"signature": result.ThinkingSignature,
-				}})
-			}
+			emitReasoning(reasoning)
 		}
 		if delta.Content != "" {
-			if toolsEnabled && !sawNativeTools {
-				pendingText.WriteString(delta.Content)
-				if pendingText.Len() > maxClineTextToolBufferBytes {
-					emitText(pendingText.String())
-					pendingText.Reset()
-				}
-			} else {
-				emitText(delta.Content)
-			}
+			thinkingSplitter.feed(delta.Content, false, emitReasoning, emitContent)
 		}
 		for _, call := range delta.ToolCalls {
 			result.SawMeaningfulEvent = true
@@ -465,6 +519,7 @@ func consumeStream(body io.Reader, toolsEnabled bool, onMessage func(upstream.SS
 		// attempt. Returning success would silently accept a partial answer.
 		return result, ErrStreamTruncated
 	}
+	thinkingSplitter.feed("", true, emitReasoning, emitContent)
 	if toolsEnabled && !sawNativeTools && pendingText.Len() > 0 {
 		visible, calls := parseClineTextToolCalls(pendingText.String())
 		emitText(visible)
