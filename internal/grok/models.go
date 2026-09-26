@@ -136,23 +136,6 @@ func ResolveModel(modelID string) (ModelSpec, bool) {
 	return m, ok
 }
 
-func (m ModelSpec) PoolCandidates() []string {
-	switch {
-	case m.PreferBest && m.Tier == grokTierHeavy:
-		return []string{"heavy", "basic"}
-	case m.PreferBest:
-		return []string{"heavy", "super", "lite", "basic"}
-	case m.Tier == grokTierHeavy:
-		return []string{"heavy", "basic"}
-	case m.Tier == grokTierSuper:
-		return []string{"super", "lite", "heavy", "basic"}
-	case m.Tier == grokTierLite:
-		return []string{"lite", "super", "heavy", "basic"}
-	default:
-		return []string{"basic", "lite", "super", "heavy"}
-	}
-}
-
 // modelRoutedToCLI reports whether a model should be served via the Build CLI
 // upstream (explicit marker or config list).
 func modelRoutedToCLI(spec ModelSpec, cfg *config.Config) bool {

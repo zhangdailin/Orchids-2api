@@ -320,5 +320,3 @@ func (l *Logger) UseUpstreamAttempt(a *UpstreamAttempt) {
 	defer l.mu.Unlock()
 	l.attempt = a
 }
-
-func (l *Logger) SSEEnabled() bool { return l != nil && l.enabled && l.sseEnabled }

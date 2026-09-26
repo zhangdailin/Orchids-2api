@@ -157,7 +157,6 @@ func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) 
 		{"qoder identity", func(a *store.Account) { a.QoderUserID = "user-b" }},
 		{"qoder organization", func(a *store.Account) { a.QoderOrganizationTags = []string{"tag-b"} }},
 		{"qoder policy", func(a *store.Account) { a.QoderDataPolicy = false }},
-		{"qoder runtime", func(a *store.Account) { a.QoderRuntimeKey = "key-b" }},
 		{"qoder models", func(a *store.Account) { a.QoderModelIDs = []string{"q-model-b"} }},
 	}
 	for _, tc := range accountCases {
@@ -166,6 +165,23 @@ func TestAccountClientFingerprintCoversProviderConstructionInputs(t *testing.T) 
 			tc.mutate(&changed)
 			if got := accountClientFingerprint(&changed, cfg); got == want {
 				t.Fatal("fingerprint did not change")
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*store.Account)
+	}{
+		{"derived runtime ciphertext", func(a *store.Account) { a.QoderRuntimeInfo = "runtime-b" }},
+		{"derived runtime key", func(a *store.Account) { a.QoderRuntimeKey = "key-b" }},
+		{"catalog observation time", func(a *store.Account) { a.QoderModelsSyncedAt = time.Now() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := *base
+			tc.mutate(&changed)
+			if got := accountClientFingerprint(&changed, cfg); got != want {
+				t.Fatal("derived Qoder state unexpectedly invalidated its own client")
 			}
 		})
 	}

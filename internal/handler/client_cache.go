@@ -434,10 +434,12 @@ func accountClientFingerprint(acc *store.Account, cfg *config.Config) string {
 	writeString(acc.QoderOrganizationID)
 	writeStrings(acc.QoderOrganizationTags)
 	writeBool(acc.QoderDataPolicy)
-	writeString(acc.QoderRuntimeInfo)
-	writeString(acc.QoderRuntimeKey)
+	// RuntimeInfo/RuntimeKey are random derived output written by the Qoder
+	// client itself. Including them invalidates that client on its first write,
+	// causing the next request to derive and persist another pair indefinitely.
+	// Token, UID and device inputs above still force a rebuild when they change.
 	writeStrings(acc.QoderModelIDs)
-	writeInt64(acc.QoderModelsSyncedAt.UnixNano())
+	// The catalog observation timestamp does not change model resolution.
 	writeString(acc.ClineAccessToken)
 	writeString(acc.ClineRefreshToken)
 	writeInt64(acc.ClineExpiresAt.UnixNano())
