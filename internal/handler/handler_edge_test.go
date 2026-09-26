@@ -498,16 +498,23 @@ func TestHandleMessages_CanceledFollowup_DoesNotEmitGenericEmptyFallback(t *test
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "http://x/workbuddy/v1/messages", bytes.NewReader(body))
 	h.HandleMessages(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
+	// Nothing had been written when the upstream cancelled, so the failure is
+	// answerable with a status rather than a 200 carrying an error frame. The
+	// point of the test is unchanged: the cancellation must be reported, and it
+	// must not be dressed up as the generic empty-output fallback.
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected a failure status for an uncommitted stream, got 200 with: %s", rec.Body.String())
 	}
 
 	out := rec.Body.String()
 	if strings.Contains(out, "No output was presented to the user") {
 		t.Fatalf("did not expect generic empty fallback after canceled upstream, got: %s", out)
 	}
-	if !strings.Contains(out, "event: error") {
+	if !strings.Contains(out, "error") {
 		t.Fatalf("unexpected upstream-local cancellation must be reported as an error, got: %s", out)
+	}
+	if strings.Contains(out, "event: error") {
+		t.Fatalf("the status was still free, so the report belongs in the response status, got: %s", out)
 	}
 }
 

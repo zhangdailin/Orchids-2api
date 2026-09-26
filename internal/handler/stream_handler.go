@@ -220,13 +220,20 @@ type streamHandler struct {
 	// returned mirrors hasReturn for the lock-free early-out at the top of
 	// handleMessage. The check runs once per upstream event, and taking h.mu just
 	// to read one bool was measurable on the per-token path.
-	returned                 atomic.Bool
-	blockIndex               int
-	msgID                    string
-	startTime                time.Time
-	hasReturn                bool
-	requestFailed            bool // terminal error body already owns non-stream response
-	completionLogged         bool
+	returned         atomic.Bool
+	blockIndex       int
+	msgID            string
+	startTime        time.Time
+	hasReturn        bool
+	requestFailed    bool // terminal error body already owns non-stream response
+	completionLogged bool
+	// messageStartWritten records that the opening frame, and therefore the HTTP
+	// status, has been committed to the client. Until it is set nothing has been
+	// sent, so a failed attempt can still be answered with a real HTTP status
+	// instead of an in-band error on a stream the client has already accepted.
+	messageStartWritten bool
+	// pendingModel is the model the deferred opening frame reports.
+	pendingModel             string
 	hasReasoningOutput       bool
 	finalStopReason          string
 	outputTokens             int
@@ -677,6 +684,11 @@ func (h *streamHandler) writeSSEBytesLockedWithHint(event string, data []byte, i
 	if h.hasReturn {
 		return
 	}
+	// Every event except the opening frame itself needs the stream open first, so
+	// the client never sees a content frame before message_start.
+	if event != "message_start" && !h.ensureMessageStartLocked() {
+		return
+	}
 	if h.responseFormat == adapter.FormatOpenAI {
 		written, err := h.writeOpenAISSEBytes(event, data)
 		if err != nil {
@@ -823,13 +835,54 @@ func (h *streamHandler) writeSSEMessageStart(model string, inputTokens, outputTo
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	raw, err := appendSSEMessageStart(h.ssePayloadScratch[:0], h.msgID, model, inputTokens, outputTokens)
+	h.writeMessageStartLocked(model, inputTokens, outputTokens)
+}
+
+// writeMessageStartLocked emits the opening frame. It takes the lock as held.
+func (h *streamHandler) writeMessageStartLocked(model string, inputTokens, outputTokens int) {
+	if !h.isStream || h.hasReturn {
+		return
+	}
+	raw, err := appendSSEMessageStart(nil, h.msgID, model, inputTokens, outputTokens)
 	if err != nil {
 		h.markWriteErrorLocked("message_start", err)
 		return
 	}
-	h.ssePayloadScratch = raw[:0]
+	h.messageStartWritten = true
 	h.writeSSEBytesLockedWithHint("message_start", raw, true)
+}
+
+// ensureMessageStartLocked opens the stream if it has not been opened yet.
+//
+// The opening frame used to be written before the upstream was even called, so
+// every streaming request committed 200 and a role chunk before it knew whether
+// the upstream would produce anything. A refusal that arrived afterwards could
+// then only be reported in band, which clients report as a truncated stream
+// rather than a retryable status. Deferring it to the first real event keeps the
+// response uncommitted while that is still true.
+//
+// It reports whether the stream is open and the caller may write its event. An
+// error that already claimed the response is not reopened.
+func (h *streamHandler) ensureMessageStartLocked() bool {
+	if h.messageStartWritten {
+		return true
+	}
+	if h.requestFailed || h.hasReturn || !h.isStream {
+		return false
+	}
+	h.writeMessageStartLocked(h.pendingModel, h.inputTokens, 0)
+	return h.messageStartWritten
+}
+
+// hasCommitted reports whether any byte of the response has been sent to the
+// client. Before that, a failure can still carry a real HTTP status.
+func (h *streamHandler) hasCommitted() bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.messageStartWritten || h.hasReturn
 }
 
 func (h *streamHandler) writeKeepAlive() {
@@ -839,6 +892,15 @@ func (h *streamHandler) writeKeepAlive() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.hasReturn {
+		return
+	}
+	// The stream is opened lazily, so a failure before any content can still carry
+	// a real HTTP status instead of an in-band error. That option is only worth
+	// holding while the client is willing to wait: a keep-alive tick means the
+	// upstream has been silent for the whole interval, and liveness now matters
+	// more, so open the stream and report as usual. This also bounds the silent
+	// gap to the keep-alive cadence the client saw before the frame was deferred.
+	if !h.messageStartWritten && !h.ensureMessageStartLocked() {
 		return
 	}
 	if _, err := h.w.Write(sseKeepAliveBytes); err != nil {
@@ -1337,6 +1399,23 @@ func (h *streamHandler) finishResponse(stopReason string) {
 				Type:  "model.text-delta",
 				Event: map[string]interface{}{"delta": fallback},
 			})
+		}
+	}
+
+	// The opening frame is deferred until there is something to send, so a
+	// response that is finishing without any content -- or any stream that never
+	// produced one -- must open here, while the response is still writable. Doing
+	// it after hasReturn is set would be dropped by the writers below.
+	h.mu.Lock()
+	opened := h.ensureMessageStartLocked()
+	h.mu.Unlock()
+	if h.isStream && !opened {
+		// Either the stream is already open, or an error owns the response.
+		h.mu.Lock()
+		alreadyOpen := h.messageStartWritten
+		h.mu.Unlock()
+		if !alreadyOpen {
+			return
 		}
 	}
 
@@ -2270,7 +2349,11 @@ func (h *streamHandler) reportRequestFailure(logMsg, category, message string) {
 	if logutil.VerboseDiagnosticsEnabled() {
 		slog.Debug(logMsg, "category", category, "message", message)
 	}
-	if h.isStream {
+	// An in-band error is only forced once something has actually been sent: the
+	// opening frame is written lazily now, so a stream that failed before any
+	// content still has a status left to set. Reporting in band there is what made
+	// a retryable condition look like a truncated answer.
+	if h.isStream && h.hasCommitted() {
 		h.writeStreamError(category, message)
 		if logutil.VerboseDiagnosticsEnabled() {
 			slog.Debug(logMsg+" (in band: the status is already committed)", "category", category)

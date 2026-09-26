@@ -237,14 +237,22 @@ func TestInjectNoAvailableAccountError_CreditExhaustionIsChannelNeutral(t *testi
 }
 
 // TestInjectNoAvailableAccountError_StreamingReportsInBandError is the other half
-// of the contract: a stream sent its message_start before the attempt, so its
-// status is already 200 and can never be revisited.
+// of the contract: once the stream has actually started, its status is already
+// 200 and can never be revisited.
 //
 // It must not pretend to be an answer either. The report is the protocol's error
-// event, and the stream ends there rather than with a normal stop.
+// event, and the stream ends there rather than with a normal stop. A stream that
+// has sent nothing yet is deliberately NOT in this case -- see
+// TestStreamError_OpenAIFormatRespectsWhetherTheStreamStarted, which pins that an
+// uncommitted response still answers with a real status.
 func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic)
+	// Commit the response the way a started stream does: the opening frame is
+	// written lazily now, so a stream only becomes unrevistable once it has begun.
+	// Opening without content keeps this test about the in-band report rather than
+	// about the answer text.
+	sh.writeSSEMessageStart("workbuddy-model", 12, 0)
 
 	sh.InjectNoAvailableAccountError(
 		`upstream API error: status=429, body={"code":"rate-limited"}`,
@@ -267,25 +275,51 @@ func TestInjectNoAvailableAccountError_StreamingReportsInBandError(t *testing.T)
 	}
 }
 
-// TestStreamError_OpenAIFormatEndsTheStream pins the OpenAI shape: a data frame
-// carrying an error object, followed by the sentinel that terminates the stream, so
-// a client reading to the end is not left waiting for a chunk that never comes.
-func TestStreamError_OpenAIFormatEndsTheStream(t *testing.T) {
-	rec := httptest.NewRecorder()
-	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatOpenAI)
+// TestStreamError_OpenAIFormatRespectsWhetherTheStreamStarted pins the two
+// answers the streaming path owes a caller, and keeps them consistent with the
+// initial-selection entrance that reports the same condition.
+//
+// Before any content the response is still uncommitted, so the failure is an
+// HTTP status: the client sees a retryable 429 rather than a truncated stream.
+// Once content has been sent the status is fixed, so the same failure has to
+// terminate the stream in band.
+func TestStreamError_OpenAIFormatRespectsWhetherTheStreamStarted(t *testing.T) {
+	t.Run("nothing sent yet answers with a status", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatOpenAI)
 
-	sh.InjectNoAvailableAccountError(`upstream API error: status=429`, errors.New("no enabled accounts available"))
+		sh.InjectNoAvailableAccountError(`upstream API error: status=429`, errors.New("no enabled accounts available"))
 
-	body := rec.Body.String()
-	if !strings.Contains(body, `"error":{`) || !strings.Contains(body, "rate-limited") {
-		t.Fatalf("expected an error object in the stream, got: %s", body)
-	}
-	if !strings.Contains(body, "[DONE]") {
-		t.Fatalf("expected the terminal sentinel after the error, got: %s", body)
-	}
-	if strings.Contains(body, `"delta"`) {
-		t.Fatalf("the failure was delivered as a choice delta: %s", body)
-	}
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusTooManyRequests)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `"error":{`) || !strings.Contains(body, "rate-limited") {
+			t.Fatalf("expected an error object in the body, got: %s", body)
+		}
+		if strings.Contains(body, "data:") || strings.Contains(body, "[DONE]") {
+			t.Fatalf("an uncommitted stream must not answer with SSE frames: %s", body)
+		}
+	})
+
+	t.Run("after content it terminates the stream in band", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatOpenAI)
+		sh.handleMessage(upstream.SSEMessage{
+			Type:  "model.text-delta",
+			Event: map[string]any{"delta": "partial"},
+		})
+
+		sh.InjectNoAvailableAccountError(`upstream API error: status=429`, errors.New("no enabled accounts available"))
+
+		body := rec.Body.String()
+		if !strings.Contains(body, `"error":{`) || !strings.Contains(body, "rate-limited") {
+			t.Fatalf("expected an error object in the stream, got: %s", body)
+		}
+		if !strings.Contains(body, "[DONE]") {
+			t.Fatalf("expected the terminal sentinel after the error, got: %s", body)
+		}
+	})
 }
 
 func TestAppendSSEPayloadBuildersMatchMarshal(t *testing.T) {
@@ -868,8 +902,21 @@ func TestStreamHandler_SuccessFallbackOverridesZeroUpstreamUsage(t *testing.T) {
 	if !strings.Contains(out, "File operation completed successfully.") {
 		t.Fatalf("expected visible success fallback, got: %s", out)
 	}
-	if strings.Contains(out, `"output_tokens":0`) {
+	// The opening frame reports the usage known when it is opened, which is zero
+	// output tokens -- the same figure the eager opening call carried before it was
+	// deferred, so a whole-body search for a zero would now always find it. The
+	// report that decides the fallback is the terminal one, and that is where the
+	// synthesised text has to be counted.
+	terminalAt := strings.Index(out, "event: message_delta")
+	if terminalAt < 0 {
+		t.Fatalf("expected a terminal usage report, got: %s", out)
+	}
+	terminal := out[terminalAt:]
+	if strings.Contains(terminal, `"output_tokens":0`) {
 		t.Fatalf("synthetic visible output retained zero output usage: %s", out)
+	}
+	if !strings.Contains(terminal, `"usage":{"output_tokens":`) {
+		t.Fatalf("expected the terminal report to carry usage, got: %s", out)
 	}
 }
 
