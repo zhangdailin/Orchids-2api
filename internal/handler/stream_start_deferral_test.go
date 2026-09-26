@@ -97,23 +97,35 @@ func TestStreamOpensOnlyWhenThereIsSomethingToSend(t *testing.T) {
 	}
 }
 
-// TestKeepAliveOpensTheStreamInsteadOfStayingSilent pins the liveness bound: a
-// keep-alive tick means the upstream has been silent for the whole interval, so
-// the stream opens and the client is kept alive rather than left with nothing.
-func TestKeepAliveOpensTheStreamInsteadOfStayingSilent(t *testing.T) {
+// TestKeepAliveDoesNotCommitSilentStream keeps the HTTP status available for
+// a queue refusal even after the watchdog's first 15-second tick.
+func TestKeepAliveDoesNotCommitSilentStream(t *testing.T) {
 	rec := newFlushRecorder()
 	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic)
 	defer sh.release()
 	sh.pendingModel = "qwen3.8-flash"
 
 	sh.writeKeepAlive()
-
-	out := rec.buf.String()
-	if !strings.Contains(out, "event: message_start") {
-		t.Fatalf("expected the keep-alive to open the stream, got: %q", out)
+	if rec.buf.Len() != 0 || sh.hasCommitted() {
+		t.Fatalf("keep-alive prematurely opened response: %q", rec.buf.String())
 	}
-	if !strings.Contains(out, sseKeepAlive) {
-		t.Fatalf("expected a keep-alive comment, got: %q", out)
+	sh.reportRequestFailure("queue refused", "rate_limit", "Qoder model queue unavailable")
+	if !strings.Contains(rec.buf.String(), "Qoder model queue unavailable") || strings.Contains(rec.buf.String(), "event: message_start") {
+		t.Fatalf("queue failure was not returned as HTTP error: %q", rec.buf.String())
+	}
+}
+
+// TestKeepAliveContinuesAfterStreamOpens covers the usual keep-alive behavior
+// after an actual content block has committed the response.
+func TestKeepAliveContinuesAfterStreamOpens(t *testing.T) {
+	rec := newFlushRecorder()
+	sh := newStreamHandler(&config.Config{}, rec, debug.New(false, false), true, true, adapter.FormatAnthropic)
+	defer sh.release()
+	sh.pendingModel = "qwen3.8-flash"
+	sh.handleMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]any{"delta": "hello"}})
+	sh.writeKeepAlive()
+	if !strings.Contains(rec.buf.String(), sseKeepAlive) {
+		t.Fatalf("committed response has no keep-alive: %q", rec.buf.String())
 	}
 }
 

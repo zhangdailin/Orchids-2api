@@ -704,14 +704,19 @@ func TestStreamHandler_KeepAlive_NoPanic(t *testing.T) {
 		t.Fatalf("expected no output when hasReturn")
 	}
 
-	// reset and ensure it writes
+	// reset: a silent stream must stay uncommitted until it has content.
 	sh.mu.Lock()
 	sh.hasReturn = false
 	sh.returned.Store(false)
 	sh.mu.Unlock()
 	sh.writeKeepAlive()
+	if rec.buf.Len() != 0 {
+		t.Fatalf("silent stream was committed by a keep-alive")
+	}
+	sh.handleMessage(upstream.SSEMessage{Type: "model.text-delta", Event: map[string]interface{}{"delta": "hello"}})
+	sh.writeKeepAlive()
 	if !strings.Contains(rec.buf.String(), ": keep-alive") {
-		t.Fatalf("expected keep-alive comment")
+		t.Fatalf("expected keep-alive comment after content")
 	}
 }
 

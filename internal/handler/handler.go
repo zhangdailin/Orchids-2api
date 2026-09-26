@@ -822,8 +822,8 @@ func (h *Handler) HandleMessages(w http.ResponseWriter, r *http.Request) {
 	// upstream is called committed 200 and a role chunk to every streaming client,
 	// so a shared queue refusal arriving afterwards could only be reported in band
 	// -- which clients surface as a truncated stream instead of a retryable 429.
-	// It is now emitted by the first real event (see ensureMessageStartLocked), so
-	// a failure that produces nothing can still carry a real HTTP status.
+	// Keep-alive ticks also wait until actual content has opened the stream, so
+	// a queue refusal after 15 seconds can still carry a real HTTP status.
 	sh.pendingModel = req.Model
 
 	if verboseDiagnostics {

@@ -894,13 +894,12 @@ func (h *streamHandler) writeKeepAlive() {
 	if h.hasReturn {
 		return
 	}
-	// The stream is opened lazily, so a failure before any content can still carry
-	// a real HTTP status instead of an in-band error. That option is only worth
-	// holding while the client is willing to wait: a keep-alive tick means the
-	// upstream has been silent for the whole interval, and liveness now matters
-	// more, so open the stream and report as usual. This also bounds the silent
-	// gap to the keep-alive cadence the client saw before the frame was deferred.
-	if !h.messageStartWritten && !h.ensureMessageStartLocked() {
+	// A keep-alive comment must not commit an empty 200 response. The client
+	// can wait for the shared queue without a body; if the retry budget expires,
+	// reportRequestFailure can still return an actual HTTP 429. Opening an
+	// Anthropic message_start here made queue refusals look like interrupted
+	// streams (HTTP 200 plus an in-band error) after 15 silent seconds.
+	if !h.messageStartWritten {
 		return
 	}
 	if _, err := h.w.Write(sseKeepAliveBytes); err != nil {
