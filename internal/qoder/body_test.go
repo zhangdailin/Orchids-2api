@@ -116,7 +116,7 @@ func TestSignPathStripsAlgoAndQuery(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1": "/api/v2/service/pro/sse/agent_chat_generation",
+		"https://api1.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1": "/api/v2/service/pro/sse/agent_chat_generation",
 		"https://gateway.qoder.com.cn/algo/api/v2/quota/usage?Encode=1":                                                                    "/api/v2/quota/usage",
 		"/algo/api/v2/quota/usage?Encode=1": "/api/v2/quota/usage",
 	}
@@ -132,8 +132,8 @@ func TestSignPathStripsAlgoAndQuery(t *testing.T) {
 func TestChatURLCarriesFixedAgentQuery(t *testing.T) {
 	t.Parallel()
 
-	got := chatURL("https://api2.qoder.sh")
-	want := "https://api2.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
+	got := chatURL("https://api1.qoder.sh")
+	want := "https://api1.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 	if got != want {
 		t.Fatalf("chatURL() = %q, want %q", got, want)
 	}

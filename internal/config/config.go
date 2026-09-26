@@ -68,7 +68,7 @@ type Config struct {
 	//
 	//   QoderOAuthBaseURL   browser authorization page   (default https://qoder.com)
 	//   QoderOpenAPIBaseURL device token + profile API   (default https://openapi.qoder.sh)
-	//   QoderInferenceURL   chat completion endpoint     (default https://api2.qoder.sh)
+	//   QoderInferenceURL   chat completion endpoint     (default https://api1.qoder.sh)
 	QoderOAuthBaseURL   string `json:"qoder_oauth_base_url,omitempty"`
 	QoderOpenAPIBaseURL string `json:"qoder_openapi_base_url,omitempty"`
 	QoderInferenceURL   string `json:"qoder_inference_base_url,omitempty"`

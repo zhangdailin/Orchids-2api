@@ -271,11 +271,10 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 		"Cache-Control":         "no-cache",
 		"Connection":            "keep-alive",
 		"Content-Type":          "application/json",
-		"Cosy-Business-Product": "cli",
+		"Cosy-Business-Product": "ide",
 		"Cosy-Business-Type":    "agent",
 		"Cosy-Clienttype":       "5",
 		"Cosy-Data-Policy":      "agree",
-		"Cosy-Key":              "runtime-key",
 		"Cosy-Machineid":        acc.QoderMachineID,
 		"Cosy-Machinetoken":     device.Token,
 		"Cosy-Machinetype":      device.Type,
@@ -284,11 +283,15 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 		"Login-Version":         "v2",
 		"X-Model-Key":           "qmodel_latest",
 		"X-Model-Source":        "system",
+		"User-Agent":            "Go-http-client/2.0",
 	}
 	for name, value := range want {
 		if got.headers.Get(name) != value {
 			t.Errorf("header %s = %q, want %q", name, got.headers.Get(name), value)
 		}
+	}
+	if got.headers.Get("Cosy-Key") == "" || got.headers.Get("Cosy-Key") == "runtime-key" {
+		t.Error("Cosy-Key was not rederived using the reference runtime identity")
 	}
 	if got.headers.Get("Cosy-Date") == "" {
 		t.Error("Cosy-Date is empty")
@@ -433,7 +436,7 @@ func TestSendRequestDoesNotReplayAfterOutput(t *testing.T) {
 
 // TestClassifyStatus pins the retry verdicts, including the busy code arriving
 // under a 401.
-func TestConfiguredClientVersionMatchesBodyAndHeader(t *testing.T) {
+func TestConfiguredClientVersionMatchesReferenceBodyAndHeader(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{QoderClientVersion: "9.8.7"}
 	client := NewFromAccount(signedTestAccount(), cfg)
@@ -445,7 +448,7 @@ func TestConfiguredClientVersionMatchesBodyAndHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"business":{"product":"cli","version":"9.8.7"`) {
+	if !strings.Contains(string(raw), `"business":{"product":"ide","version":"1.1.3"`) {
 		t.Fatalf("body version is incoherent: %s", raw)
 	}
 	req, _ := http.NewRequest(http.MethodPost, "https://example.invalid/algo/chat", nil)
@@ -454,6 +457,63 @@ func TestConfiguredClientVersionMatchesBodyAndHeader(t *testing.T) {
 	}
 	if got := req.Header.Get("Cosy-Version"); got != "9.8.7" {
 		t.Fatalf("Cosy-Version=%q", got)
+	}
+}
+
+func TestReferenceRuntimeIdentityRebuiltAfterTokenRotation(t *testing.T) {
+	acc := signedTestAccount()
+	acc.ID = 0
+	client := NewFromAccount(acc, nil)
+	initial := client.currentCredentials()
+	before, err := client.ensureRuntimeFields(context.Background(), initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := client.ensureRuntimeFields(context.Background(), initial)
+	if err != nil || again != before {
+		t.Fatalf("runtime pair changed without a credential rotation: err=%v", err)
+	}
+	rotated := initial
+	rotated.AccessToken = "new-access"
+	rotated.RefreshToken = "new-refresh"
+	client.storeCredentials(rotated, true, initial.RefreshToken)
+	after, err := client.ensureRuntimeFields(context.Background(), rotated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before || !after.Complete() {
+		t.Fatal("runtime identity was not renewed when the embedded tokens rotated")
+	}
+}
+
+func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
+	model := modelEntry{Key: "qfmodel", DisplayName: "Qwen3.8-Flash", IsReasoning: true, MaxInputTokens: 180000}
+	req := upstream.UpstreamRequest{Messages: []prompt.Message{{Role: "user", Content: prompt.MessageContent{Text: "你好 qoder"}}}}
+	encoded, err := buildChatBody(req, model, "session-id", "request-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := decodeBodyForTest(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	context := body["chat_context"].(map[string]interface{})
+	if context["text"].(map[string]interface{})["text"] != "你好 qoder" || context["extra"].(map[string]interface{})["originalContent"].(map[string]interface{})["text"] != "你好 qoder" {
+		t.Fatalf("chat context did not carry the latest user text: %#v", context)
+	}
+	if context["extra"].(map[string]interface{})["modelConfig"].(map[string]interface{})["key"] != "qfmodel" {
+		t.Fatalf("context model key does not match selected model: %#v", context)
+	}
+	if body["model_config"].(map[string]interface{})["key"] != "qfmodel" || body["business"].(map[string]interface{})["product"] != "ide" {
+		t.Fatalf("body model/business mismatch: %#v", body)
+	}
+	params := body["parameters"].(map[string]interface{})
+	if params["max_tokens"] != float64(32768) || params["reasoning_effort"] != "low" {
+		t.Fatalf("reference max tokens / requested low reasoning missing: %#v", params)
 	}
 }
 

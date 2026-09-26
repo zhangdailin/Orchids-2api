@@ -27,10 +27,9 @@ const (
 	inferPath  = "/algo/api/v2/service/pro/sse/agent_chat_generation"
 	inferQuery = "?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 
-	// sceneBusinessProduct, sceneBusinessType, sceneName and sceneClientID are
-	// the fixed scene the CLI requests. Sending another product would route the
-	// request to a surface this channel does not implement.
-	sceneBusinessProduct = "cli"
+	// Match the reference bridge's IDE request surface. This header and the
+	// business.product field must agree for every signed chat call.
+	sceneBusinessProduct = "ide"
 	sceneBusinessType    = "agent"
 	sceneName            = "assistant"
 
@@ -76,6 +75,9 @@ type chatBody struct {
 	Stream            bool                   `json:"stream"`
 	ChatTask          string                 `json:"chat_task"`
 	ChatContext       map[string]interface{} `json:"chat_context"`
+	ImageURLs         interface{}            `json:"image_urls"`
+	CodeLanguage      string                 `json:"code_language"`
+	ChatPrompt        string                 `json:"chat_prompt"`
 	IsReply           bool                   `json:"is_reply"`
 	IsRetry           bool                   `json:"is_retry"`
 	Source            int                    `json:"source"`
@@ -94,21 +96,20 @@ type chatBody struct {
 	ParallelToolCalls *bool                  `json:"parallel_tool_calls,omitempty"`
 }
 
-// modelConfigWire is the model block as the gateway reads it. It is deliberately
-// narrower than the catalog row: the catalog carries name/is_default/organization
-// fields that the chat endpoint does not accept, and forwarding them would put a
-// field the gateway does not know about into a body whose signature is already
-// computed.
+// modelConfigWire matches the reference bridge's template keys. Its selected
+// key, display name, capabilities and context bound come from the account's
+// observed catalog rather than the reference template's hard-coded "auto".
 type modelConfigWire struct {
-	Key            string   `json:"key"`
-	Format         string   `json:"format"`
-	Source         string   `json:"source"`
-	Enable         bool     `json:"enable"`
-	DisplayName    string   `json:"display_name,omitempty"`
-	IsVL           bool     `json:"is_vl"`
-	IsReasoning    bool     `json:"is_reasoning"`
-	PriceFactor    *float64 `json:"price_factor,omitempty"`
-	MaxInputTokens int      `json:"max_input_tokens,omitempty"`
+	Key            string `json:"key"`
+	DisplayName    string `json:"display_name"`
+	Model          string `json:"model"`
+	Format         string `json:"format"`
+	IsVL           bool   `json:"is_vl"`
+	IsReasoning    bool   `json:"is_reasoning"`
+	APIKey         string `json:"api_key"`
+	URL            string `json:"url"`
+	Source         string `json:"source"`
+	MaxInputTokens int    `json:"max_input_tokens"`
 }
 
 func wireModelConfig(model modelEntry) modelConfigWire {
@@ -122,13 +123,11 @@ func wireModelConfig(model modelEntry) modelConfigWire {
 	}
 	return modelConfigWire{
 		Key:            model.Key,
+		DisplayName:    firstNonEmpty(model.DisplayName, model.Name, model.Key),
 		Format:         format,
 		Source:         source,
-		Enable:         true,
-		DisplayName:    model.DisplayName,
 		IsVL:           model.IsVL,
 		IsReasoning:    model.IsReasoning,
-		PriceFactor:    model.PriceFactor,
 		MaxInputTokens: model.MaxInputTokens,
 	}
 }
@@ -198,7 +197,10 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 		return nil, err
 	}
 
-	parameters := map[string]interface{}{}
+	// The reference template sets a 32768 output-token budget. The shared
+	// UpstreamRequest currently carries no client output cap, so this is the
+	// reference default rather than a forwarded max_tokens value.
+	parameters := map[string]interface{}{"max_tokens": 32768}
 	if model.MaxInputTokens > 0 {
 		parameters["context_length"] = model.MaxInputTokens
 	}
@@ -224,7 +226,7 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 	body := chatBody{
 		Business: businessInfo{
 			Product: sceneBusinessProduct,
-			Version: clientVersion,
+			Version: "1.1.3",
 			Type:    sceneBusinessType,
 			ID:      requestID,
 			Name:    businessName(req),
@@ -237,7 +239,10 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 		SessionID:         sessionID,
 		Stream:            true,
 		ChatTask:          chatTask,
-		ChatContext:       map[string]interface{}{},
+		ChatContext:       referenceChatContext(req, model),
+		ImageURLs:         nil,
+		CodeLanguage:      "",
+		ChatPrompt:        "",
 		IsReply:           true,
 		IsRetry:           false,
 		Source:            sourceValue,
@@ -266,6 +271,27 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 		return nil, fmt.Errorf("marshal qoder request: %w", err)
 	}
 	return EncodeBody(raw), nil
+}
+
+// referenceChatContext mirrors the reference template's lightweight context
+// metadata without importing its long built-in system prompt. The actual
+// history remains in messages; only the latest user text is echoed here.
+func referenceChatContext(req upstream.UpstreamRequest, model modelEntry) map[string]interface{} {
+	prompt := latestUserText(req)
+	return map[string]interface{}{
+		"chatPrompt": "",
+		"extra": map[string]interface{}{
+			"context": []interface{}{},
+			"modelConfig": map[string]interface{}{
+				"is_reasoning": model.IsReasoning,
+				"key":          model.Key,
+			},
+			"originalContent": map[string]interface{}{"type": "text", "text": prompt},
+		},
+		"features":  []interface{}{},
+		"imageUrls": nil,
+		"text":      map[string]interface{}{"type": "text", "text": prompt},
+	}
 }
 
 func refreshedReplayBody(encoded []byte, requestID string) ([]byte, error) {
@@ -697,6 +723,7 @@ func (c *Client) applyAuthHeaders(req *http.Request, creds Credentials, fields R
 	req.Header.Set("Cosy-Scene", sceneName)
 	req.Header.Set("Cosy-User", strings.TrimSpace(creds.UID))
 	req.Header.Set("Cosy-Version", c.clientVersion)
+	req.Header.Set("User-Agent", "Go-http-client/2.0")
 	req.Header.Set("Login-Version", "v2")
 	if key := strings.TrimSpace(modelKey); key != "" {
 		req.Header.Set("X-Model-Key", key)

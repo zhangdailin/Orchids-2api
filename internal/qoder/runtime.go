@@ -65,6 +65,52 @@ type runtimeFieldInput struct {
 	DataPolicyAgreed bool     `json:"data_policy_agreed"`
 }
 
+// referenceRuntimeFieldInput matches the reference bridge's encrypted
+// AuthIdentity. Values (including unknown metadata) are strings, and empty
+// keys are serialized instead of omitted. Tokens must never be logged.
+type referenceRuntimeFieldInput struct {
+	Name               string `json:"name"`
+	Aid                string `json:"aid"`
+	UID                string `json:"uid"`
+	YxUID              string `json:"yx_uid"`
+	OrganizationID     string `json:"organization_id"`
+	OrganizationName   string `json:"organization_name"`
+	UserType           string `json:"user_type"`
+	SecurityOAuthToken string `json:"security_oauth_token"`
+	RefreshToken       string `json:"refresh_token"`
+}
+
+// referenceRuntimeFieldsFor uses the same random temp-key and encrypted
+// identity layout as qoder2api's cosy.NewSession. The existing CLI fixture
+// still pins runtimeFieldsFor independently for legacy imported sessions.
+func referenceRuntimeFieldsFor(entropy source, in referenceRuntimeFieldInput) (RuntimeFields, error) {
+	if entropy == nil {
+		entropy = cryptoSource{}
+	}
+	var raw [16]byte
+	if _, err := entropy.Read(raw[:]); err != nil {
+		return RuntimeFields{}, fmt.Errorf("read reference runtime entropy: %w", err)
+	}
+	key := []byte(hex.EncodeToString(raw[:])[:16])
+	plaintext, err := json.Marshal(in)
+	if err != nil {
+		return RuntimeFields{}, fmt.Errorf("marshal reference runtime identity: %w", err)
+	}
+	sealed, err := aesCBCEncryptPKCS7(plaintext, key)
+	if err != nil {
+		return RuntimeFields{}, err
+	}
+	publicKey, err := runtimePublicKey()
+	if err != nil {
+		return RuntimeFields{}, err
+	}
+	wrapped, err := rsaEncryptPKCS1v15WithSource(entropy, publicKey, key)
+	if err != nil {
+		return RuntimeFields{}, fmt.Errorf("wrap reference runtime key: %w", err)
+	}
+	return RuntimeFields{EncryptUserInfo: base64.StdEncoding.EncodeToString(sealed), Key: base64.StdEncoding.EncodeToString(wrapped)}, nil
+}
+
 // runtimeFieldsFor derives the pair for one account. entropy is the random
 // source; tests supply a deterministic reader.
 func runtimeFieldsFor(entropy source, in runtimeFieldInput) (RuntimeFields, error) {

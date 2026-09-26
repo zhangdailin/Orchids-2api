@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/goccy/go-json"
 )
 
 // recordingSource replays a fixed byte sequence and fails when it runs dry, so
@@ -145,6 +147,38 @@ func TestRuntimeFieldInputAlwaysCarriesTagsArray(t *testing.T) {
 	unpadded := unpadPKCS7(t, plaintext)
 	if !strings.Contains(string(unpadded), `"organization_tags":[]`) {
 		t.Fatalf("plaintext = %s, want an empty organization_tags array", unpadded)
+	}
+}
+
+func TestReferenceRuntimeIdentityIncludesTokensAndAccountClass(t *testing.T) {
+	entropy := newRecordingSource(bytes.Repeat([]byte{0x31}, 16), bytes.Repeat([]byte{0x32}, 512))
+	fields, err := referenceRuntimeFieldsFor(entropy, referenceRuntimeFieldInput{
+		Name: "Test User", Aid: "uid-1", UID: "uid-1", UserType: "personal_professional_trial",
+		SecurityOAuthToken: "access-secret", RefreshToken: "refresh-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fields.Complete() {
+		t.Fatal("reference runtime pair incomplete")
+	}
+	key := []byte("3131313131313131") // hex of the reference's first 8 random bytes
+	sealed, err := base64.StdEncoding.DecodeString(fields.EncryptUserInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext := make([]byte, len(sealed))
+	cipher.NewCBCDecrypter(block, key).CryptBlocks(plaintext, sealed)
+	var identity map[string]string
+	if err := json.Unmarshal(unpadPKCS7(t, plaintext), &identity); err != nil {
+		t.Fatal(err)
+	}
+	if len(identity) != 9 || identity["security_oauth_token"] != "access-secret" || identity["refresh_token"] != "refresh-secret" || identity["aid"] != "uid-1" || identity["user_type"] != "personal_professional_trial" {
+		t.Fatalf("reference identity field shape mismatch: keys=%d aid=%q user_type=%q", len(identity), identity["aid"], identity["user_type"])
 	}
 }
 

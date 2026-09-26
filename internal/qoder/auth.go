@@ -49,12 +49,12 @@ const (
 	// DefaultOpenAPIBaseURL serves the device token endpoints and the profile.
 	DefaultOpenAPIBaseURL = "https://openapi.qoder.sh"
 	// DefaultInferenceURL serves the chat completion SSE endpoint.
-	DefaultInferenceURL = "https://api2.qoder.sh"
+	DefaultInferenceURL = "https://api1.qoder.sh"
 	// DefaultClientID is the public OAuth client id of the Qoder CLI. It is not
 	// a secret.
 	DefaultClientID = "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"
 	// DefaultClientVersion is the CLI protocol version this channel speaks.
-	DefaultClientVersion = "1.1.34"
+	DefaultClientVersion = "1.0.10"
 	// sceneClientID is the Cosy-ClientType the CLI reports.
 	sceneClientID = "5"
 )
