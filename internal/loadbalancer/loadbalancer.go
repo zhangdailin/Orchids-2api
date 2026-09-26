@@ -119,13 +119,17 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 		excludeSet[id] = true
 	}
 
+	// Qoder uses a stable primary (lowest account ID), not a rotating scan
+	// window. A later account is considered only when the primary is unavailable
+	// or explicitly excluded after a switchable failure.
+	qoderSequential := strings.EqualFold(strings.TrimSpace(channel), "qoder")
 	// A large pool is examined in rotating windows rather than in full. Every
 	// request paying for a scan and availability check of thousands of accounts
 	// is what made the pool expensive to grow; the window wraps, so every
 	// account is still reachable, and a window that yields nothing falls back to
 	// the full list so correctness never depends on the window size.
 	scanned := accounts
-	if len(accounts) > accountScanWindow {
+	if !qoderSequential && len(accounts) > accountScanWindow {
 		start := lb.rotateScanCursor(len(accounts))
 		scanned = make([]*store.Account, 0, accountScanWindow)
 		for offset := 0; offset < accountScanWindow; offset++ {
@@ -225,7 +229,27 @@ func (lb *LoadBalancer) GetNextAccountExcludingByChannelWithTrackerFilter(ctx co
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s", channel)
 	}
 
-	account := lb.selectAccountWithTracker(accounts, tracker)
+	var account *store.Account
+	if qoderSequential {
+		// Do not overflow to a second account merely because the primary is
+		// busy. Keep the account stable across concurrent calls; the caller's
+		// bounded reservation wait handles a full primary instead.
+		for _, candidate := range accounts {
+			if account == nil || candidate.ID < account.ID {
+				account = candidate
+			}
+		}
+		if tracker == nil {
+			tracker = lb.connTracker
+		}
+		if tracker != nil && account != nil {
+			if limit := EffectiveAccountConcurrencyLimit(account); limit > 0 && tracker.GetCounts([]int64{account.ID})[account.ID] >= limit {
+				return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are at their concurrency limit)", channel)
+			}
+		}
+	} else {
+		account = lb.selectAccountWithTracker(accounts, tracker)
+	}
 	if account == nil {
 		return nil, fmt.Errorf("no enabled accounts available for channel: %s (all matching accounts are at their concurrency limit)", channel)
 	}

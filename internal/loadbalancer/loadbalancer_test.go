@@ -129,6 +129,42 @@ func TestSelectAccountWithTracker_UsesProvidedTracker(t *testing.T) {
 	}
 }
 
+// Qoder sticks to the lowest-ID available account. Saturation must not
+// silently spill requests to a different credential; explicit exclusion or
+// unavailability is the only reason to advance to the next account.
+func TestQoderSequentialAccountSelection(t *testing.T) {
+	now := time.Now()
+	primary := &store.Account{ID: 2, AccountType: "qoder", Enabled: true}
+	backup := &store.Account{ID: 7, AccountType: "qoder", Enabled: true}
+	lb := &LoadBalancer{
+		cachedAccounts: []*store.Account{backup, primary},
+		cacheExpires:   now.Add(time.Minute),
+		connTracker:    NewMemoryConnTracker(),
+	}
+	tracker := &fixedConnTracker{counts: map[int64]int64{2: 9}}
+	selectAccount := func(exclude []int64) (*store.Account, error) {
+		return lb.GetNextAccountExcludingByChannelWithTracker(context.Background(), exclude, "qoder", tracker)
+	}
+	for i := 0; i < 5; i++ {
+		selected, err := selectAccount(nil)
+		if err != nil || selected.ID != primary.ID {
+			t.Fatalf("selection %d: account=%v err=%v, want primary", i, selected, err)
+		}
+	}
+	tracker.counts[2] = EffectiveAccountConcurrencyLimit(primary)
+	if selected, err := selectAccount(nil); selected != nil || err == nil || !strings.Contains(err.Error(), "concurrency limit") {
+		t.Fatalf("saturated primary: account=%v err=%v, want capacity error without spillover", selected, err)
+	}
+	if selected, err := selectAccount([]int64{primary.ID}); err != nil || selected.ID != backup.ID {
+		t.Fatalf("excluded primary: account=%v err=%v, want backup", selected, err)
+	}
+	primary.StatusCode = "429"
+	primary.LastAttempt = now
+	if selected, err := selectAccount(nil); err != nil || selected.ID != backup.ID {
+		t.Fatalf("cooling primary: account=%v err=%v, want backup", selected, err)
+	}
+}
+
 func TestGetNextAccountExcludingByChannelWithTracker_AllRateLimitedReturnsHelpfulError(t *testing.T) {
 	now := time.Now()
 	lb := &LoadBalancer{
