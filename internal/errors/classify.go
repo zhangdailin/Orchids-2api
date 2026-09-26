@@ -172,6 +172,21 @@ func ClassifyUpstreamError(errStr string) UpstreamErrorClass {
 		strings.Contains(lower, "configuration error") ||
 		strings.Contains(lower, "client is nil"):
 		return UpstreamErrorClass{Category: "configuration"}
+	// A safety refusal is the client's content, not a capacity or credential
+	// problem: it maps to 400 and must never retry. Labelling it anything
+	// retryable lets one rejected prompt walk the whole account pool.
+	case strings.Contains(lower, "content policy rejected") ||
+		strings.Contains(lower, "datainspectionfailed") ||
+		strings.Contains(lower, "input text data may contain"):
+		return UpstreamErrorClass{Category: "client"}
+	// A 200 stream that delivered nothing is the upstream refusing quietly. It
+	// is a protocol-level emptiness, not a rate limit, and replaying it adds
+	// load to the condition that produced it.
+	case strings.Contains(lower, "empty upstream stream"):
+		return UpstreamErrorClass{Category: "protocol"}
+	// A request the upstream rejected on its own merits: a replay is identical.
+	case strings.Contains(lower, "rejected the request parameters"):
+		return UpstreamErrorClass{Category: "client"}
 	case strings.Contains(lower, "protocol error") || strings.Contains(lower, "no usable stream events"):
 		return UpstreamErrorClass{Category: "protocol"}
 	case strings.Contains(lower, "pacing registry capacity reached"):

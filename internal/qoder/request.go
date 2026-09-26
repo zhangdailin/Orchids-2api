@@ -657,8 +657,8 @@ func (c *Client) applyAuthHeaders(req *http.Request, creds Credentials, fields R
 	req.Header.Set("Cosy-Date", unixSeconds)
 	req.Header.Set("Cosy-Key", fields.Key)
 	req.Header.Set("Cosy-MachineId", c.machineID)
-	req.Header.Set("Cosy-MachineToken", c.machineID)
-	req.Header.Set("Cosy-MachineType", sceneClientID)
+	req.Header.Set("Cosy-MachineToken", c.machineTokenOr(c.machineID))
+	req.Header.Set("Cosy-MachineType", c.machineTypeOr(sceneClientID))
 	if orgID := strings.TrimSpace(creds.OrgID); orgID != "" {
 		req.Header.Set("Cosy-Organization-Id", orgID)
 	}
@@ -711,7 +711,9 @@ func (c *Client) attemptChat(ctx context.Context, url string, body []byte, model
 
 	resp, err := c.stream.Do(req)
 	if err != nil {
-		return streamResult{}, &attemptStreamError{err: fmt.Errorf("send qoder request: %w", err), retryable: true}
+		// Only a connection-level hiccup is worth another attempt; a bad URL or
+		// an untrusted certificate would fail identically every time.
+		return streamResult{}, &attemptStreamError{err: fmt.Errorf("send qoder request: %w", err), retryable: IsTransientTransport(err)}
 	}
 	defer resp.Body.Close()
 
@@ -766,9 +768,24 @@ func classifyStatus(status int, retryAfter string, raw []byte) error {
 	case http.StatusRequestTimeout, http.StatusTooManyRequests:
 		return &attemptStreamError{err: wrapped, retryable: true, wait: retryAfterDelay(retryAfter)}
 	}
+	// A safety refusal or a rejected parameter set is a verdict about the
+	// request, not about the account: it fails fast instead of walking the pool.
+	if IsContentPolicy(string(raw)) {
+		return &attemptStreamError{err: contentPolicyError(wrapped.Error())}
+	}
+	if IsClientFault(string(raw)) {
+		return &attemptStreamError{err: fmt.Errorf("%w: %v", ErrClientFault, wrapped)}
+	}
+	// A provider-side hiccup wearing any status is worth one bounded retry on
+	// the account that already holds the request.
+	if IsTransientUpstreamStatus(status, string(raw)) {
+		return &attemptStreamError{err: transientError(wrapped.Error()), retryable: true, wait: retryAfterDelay(retryAfter)}
+	}
 	if status >= 500 {
 		return &attemptStreamError{err: wrapped, retryable: true}
 	}
+	// The rest are request-side refusals: replaying them changes nothing and
+	// only takes a healthy account out of rotation.
 	_ = detail
 	return &attemptStreamError{err: wrapped}
 }

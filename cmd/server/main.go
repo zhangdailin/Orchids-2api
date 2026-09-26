@@ -113,6 +113,15 @@ func main() {
 
 	slog.Debug("Store initialized", "mode", "redis", "addr", cfg.RedisAddr, "prefix", cfg.RedisPrefix)
 
+	// The Qoder device fingerprint is derived from a per-deployment salt. It is
+	// generated once and never rotated: rotating it moves every account's
+	// fingerprint at once, which the upstream reads as every device changing.
+	if salt := qoder.EnsureInstallSalt(context.Background(), s); salt == "" {
+		slog.Debug("Qoder device fingerprint salt unavailable; using the reference-compatible derivation")
+	} else {
+		slog.Debug("Qoder device fingerprint salt loaded")
+	}
+
 	// 从 Redis 加载已保存的配置（如果存在）
 	if savedConfig, err := s.GetSetting(context.Background(), "config"); err == nil && savedConfig != "" {
 		if err := json.Unmarshal([]byte(savedConfig), cfg); err != nil {

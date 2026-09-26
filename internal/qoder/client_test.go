@@ -259,6 +259,13 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 
 	// NOTE: net/http canonicalizes header names, so Cosy-ClientType reads back
 	// as Cosy-Clienttype and Login-Version as Login-Version.
+	// The device id is the identity the credential was authorized under and is
+	// sent unchanged; the token and the type are derived from the account, so
+	// the same account always presents the same virtual device.
+	device := FingerprintFor(acc.QoderMachineID, acc.QoderUserID, acc.QoderAccessToken)
+	if device.Token == "" || device.Type == "" {
+		t.Fatalf("no device fingerprint was derived for %s", acc.QoderUserID)
+	}
 	want := map[string]string{
 		"Accept":                "text/event-stream",
 		"Cache-Control":         "no-cache",
@@ -270,8 +277,8 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 		"Cosy-Data-Policy":      "agree",
 		"Cosy-Key":              "runtime-key",
 		"Cosy-Machineid":        acc.QoderMachineID,
-		"Cosy-Machinetoken":     acc.QoderMachineID,
-		"Cosy-Machinetype":      "5",
+		"Cosy-Machinetoken":     device.Token,
+		"Cosy-Machinetype":      device.Type,
 		"Cosy-Scene":            "assistant",
 		"Cosy-User":             "uid-1",
 		"Login-Version":         "v2",

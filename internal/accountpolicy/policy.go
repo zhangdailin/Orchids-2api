@@ -191,6 +191,37 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 		}
 	}
 
+	// A refusal that is a verdict about the request itself — the safety review
+	// rejecting the input, or the upstream naming an invalid parameter — has to
+	// be decided before the generic branches below. Falling through would file
+	// it as "unknown" with SwitchAccount=true, which is what walked one rejected
+	// prompt across every account in the pool and left each of them stamped
+	// "429" for a problem that no account can fix.
+	//
+	// The verdict records nothing on the account and never switches: the same
+	// input fails identically everywhere, and the client gets a 400.
+	if isClientRefusal(lower) {
+		return Verdict{
+			Scope:         ScopeNone,
+			Message:       message,
+			Retryable:     false,
+			SwitchAccount: false,
+			At:            now,
+		}
+	}
+	// A 200 stream that delivered nothing is the upstream refusing quietly. It
+	// is not an account problem either: replaying it only adds load to the
+	// condition that produced the empty answer.
+	if strings.Contains(lower, "empty upstream stream") {
+		return Verdict{
+			Scope:         ScopeNone,
+			Message:       message,
+			Retryable:     false,
+			SwitchAccount: false,
+			At:            now,
+		}
+	}
+
 	var retryAfter retryAfterError
 	if stderrors.As(err, &retryAfter) {
 		cooldown := retryAfter.RetryAfter()
@@ -285,6 +316,20 @@ func Classify(acc *store.Account, err error, model string) Verdict {
 		Scope: ScopeNone, Retryable: Retryable(err), SwitchAccount: true,
 		At: now,
 	}
+}
+
+// isClientRefusal reports a failure the account cannot influence, because it is
+// a verdict about the request: the safety review rejected the input, or the
+// upstream named a bad parameter.
+//
+// It must stay in step with the classifier in internal/errors: the same text
+// has to mean the same thing whether the request path is asking "retry?" or the
+// account policy is asking "is this account still usable?".
+func isClientRefusal(lower string) bool {
+	return strings.Contains(lower, "content policy rejected") ||
+		strings.Contains(lower, "datainspectionfailed") ||
+		strings.Contains(lower, "input text data may contain") ||
+		strings.Contains(lower, "rejected the request parameters")
 }
 
 // isGlobalUpstreamRefusal reports whether the upstream refused because a shared

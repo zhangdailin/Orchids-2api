@@ -32,6 +32,12 @@ type Client struct {
 	// machineID is the device identity. It is bound to the credential: the
 	// upstream rejects a request whose machine id did not perform the login.
 	machineID string
+	// machineToken and machineType are the rest of the device fingerprint.
+	// They are not part of the credential binding, and are derived from the
+	// account so the device is stable across requests and restarts instead of
+	// drifting under a live credential.
+	machineToken string
+	machineType  string
 
 	// control answers the short control-plane calls (token, profile, catalog).
 	// stream answers the chat call, and has no client-level deadline so a long
@@ -117,7 +123,30 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 			Key:             strings.TrimSpace(acc.QoderRuntimeKey),
 		}
 	}
+	client.applyFingerprint()
 	return client
+}
+
+// applyFingerprint resolves the device headers this client sends.
+//
+// The machine id is the identity the login was authorized under and stays as
+// recorded, but the token and the type are derived from the account so the
+// device is the same one on every request and every restart: a device that
+// changes under a live credential is what the upstream throttles.
+func (c *Client) applyFingerprint() {
+	creds := c.creds
+	if c.account != nil {
+		creds = ResolveCredentials(c.account)
+	}
+	device := FingerprintFor(c.machineID, creds.UID, creds.AccessToken)
+	if device.Token == "" {
+		device.Token = c.machineID
+	}
+	if device.Type == "" {
+		device.Type = sceneClientID
+	}
+	c.machineToken = device.Token
+	c.machineType = device.Type
 }
 
 // SetAccountStore lets the client persist a rotated refresh token and a newly
@@ -178,11 +207,27 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 
 // runChat performs one upstream attempt. The shared request handler owns
 // transport/status retry and account switching, so retrying four times here as
-// well multiplied one API call by both budgets. The only local retry retained is
-// a single 401 credential refresh, because that repairs this account in place.
+// well multiplied one API call by both budgets.
+//
+// Two local repairs are kept, because both fix the request in place instead of
+// spending another account:
+//
+//   - a single 401 credential refresh, which repairs this account;
+//   - a bounded retry of a transient provider fault (418/5xx/provider_error or
+//     a connection hiccup), which is the upstream's own problem rather than
+//     this account's.
+//
+// Anything that has already emitted content is returned immediately: a replay
+// would duplicate the answer, and a usage-only frame would double-count billing.
+const transientAttempts = TransientMaxRetries + 1
+
 func (c *Client) runChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, toolsEnabled bool, onMessage func(upstream.SSEMessage)) error {
-	const maxAttempts = 2
+	attempts := transientAttempts
+	if attempts < 1 {
+		attempts = 1
+	}
 	emitted := false
+	refreshed := false
 	emit := func(msg upstream.SSEMessage) {
 		emitted = true
 		if onMessage != nil {
@@ -191,20 +236,18 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 	}
 
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		attemptCredentials := c.currentCredentials()
 		result, err := c.attemptChat(ctx, url, body, model, requestID, fields, attemptCredentials, toolsEnabled, emit)
 		if err == nil {
 			if !result.SawMeaningfulEvent {
-				return fmt.Errorf("qoder stream produced no usable events")
+				// A 200 stream that carried nothing is the upstream refusing
+				// quietly. It is reported as an error, not as an empty success,
+				// and it is not replayed: the empty answer came from load, and
+				// a replay adds to that load.
+				return fmt.Errorf("%w: %v", ErrEmptyStream, fmt.Errorf("qoder stream produced no usable events"))
 			}
-			if onMessage != nil {
-				event := map[string]interface{}{"finishReason": result.FinishReason()}
-				if len(result.Usage) > 0 {
-					event["usage"] = result.Usage
-				}
-				onMessage(upstream.SSEMessage{Type: "model.finish", Event: event})
-			}
+			result.emitFinish(onMessage)
 			return nil
 		}
 		lastErr = err
@@ -225,7 +268,9 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		}
 
 		switch {
-		case isUnauthorized(err) && attempt == 1:
+		case isUnauthorized(err) && !refreshed:
+			refreshed = true
+			attempts-- // The refresh attempt is not one of the transient budget.
 			if refreshErr := c.forceRefresh(ctx, attemptCredentials); refreshErr != nil {
 				return refreshErr
 			}
@@ -244,6 +289,14 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 				return err
 			}
 			continue
+		// A provider-side hiccup is worth a bounded local retry on the account
+		// that already holds the request; switching accounts for the upstream's
+		// own fault takes a healthy account out of rotation for nothing.
+		case isTransientError(err) && attempt < attempts:
+			if waitErr := sleepCtx(ctx, TransientBackoff(attempt)); waitErr != nil {
+				return lastErr
+			}
+			continue
 		case isRetryable(err):
 			// Return the typed retryable error to the shared handler. It applies the
 			// configured backoff and can switch accounts without multiplying budgets.
@@ -253,6 +306,21 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		}
 	}
 	return lastErr
+}
+
+// sleepCtx waits, but never past the caller's deadline.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // attemptStreamError carries the retry decision an attempt reached.
@@ -616,6 +684,20 @@ func (c *Client) RuntimeFields() RuntimeFields {
 		return RuntimeFields{}
 	}
 	return c.runtimeSnapshot()
+}
+
+func (c *Client) machineTokenOr(fallback string) string {
+	if c == nil || strings.TrimSpace(c.machineToken) == "" {
+		return fallback
+	}
+	return c.machineToken
+}
+
+func (c *Client) machineTypeOr(fallback string) string {
+	if c == nil || strings.TrimSpace(c.machineType) == "" {
+		return fallback
+	}
+	return c.machineType
 }
 
 // MachineID returns the device identity this client binds its requests to.

@@ -224,8 +224,10 @@ func (c *Client) getJSON(ctx context.Context, url string, creds Credentials, out
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(creds.AccessToken))
 	req.Header.Set("User-Agent", userAgent(c.clientVersion))
-	if machine := strings.TrimSpace(c.machineID); machine != "" {
+	if machine := strings.TrimSpace(c.machineTokenOr(c.machineID)); machine != "" {
 		// The CLI sends the device token alongside the bearer on this surface.
+		// It is the derived token, so this control-plane call presents the same
+		// device the signed chat request does.
 		req.Header.Set("Cosy-MachineToken", machine)
 	}
 

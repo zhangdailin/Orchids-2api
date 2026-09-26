@@ -110,6 +110,21 @@ func (r streamResult) FinishReason() string {
 	return "end_turn"
 }
 
+// emitFinish closes the stream with the stop reason and the usage in one frame.
+// Usage travels with the finish rather than as its own frame because a caller
+// that sees the usage without the finish cannot tell a complete answer from a
+// cut-off one.
+func (r streamResult) emitFinish(onMessage func(upstream.SSEMessage)) {
+	if onMessage == nil {
+		return
+	}
+	event := map[string]interface{}{"finishReason": r.FinishReason()}
+	if len(r.Usage) > 0 {
+		event["usage"] = r.Usage
+	}
+	onMessage(upstream.SSEMessage{Type: "model.finish", Event: event})
+}
+
 var toolCallSequence atomic.Uint64
 
 // NewToolCallID mints a local tool-call id for upstream deltas that omit one.
@@ -361,8 +376,20 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 				// allowance for this model. This must not be classified as an
 				// authentication failure, or a working account is retired.
 				streamErr = entitlementError(envelope.Body)
+			case IsContentPolicy(envelope.Body):
+				// The upstream safety review refused the input. It is not a
+				// capacity problem and not a credential problem: the client gets
+				// a 400 straight away, and no account is marked rate-limited.
+				streamErr = contentPolicyError(detail)
+			case IsClientFault(envelope.Body):
+				streamErr = fmt.Errorf("%w: %s", ErrClientFault, detail)
 			case envelope.StatusCodeValue == http.StatusUnauthorized || envelope.StatusCodeValue == http.StatusForbidden:
 				streamErr = fmt.Errorf("%w: %s", errUpstreamUnauthorized, detail)
+			case IsTransientUpstreamStatus(envelope.StatusCodeValue, envelope.Body):
+				// The gateway's own provider fault. It is worth one bounded
+				// retry on this account, and it must not be read as a
+				// credential rejection.
+				streamErr = &attemptStreamError{err: transientError(fmt.Sprintf("qoder upstream error: status=%d, %s", envelope.StatusCodeValue, detail)), retryable: true}
 			default:
 				streamErr = fmt.Errorf("qoder upstream error: status=%d, %s", envelope.StatusCodeValue, detail)
 			}
@@ -385,9 +412,20 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			if stringOfCode(chunk.Error.Code) == busyCode || envelopeCode([]byte(chunk.Error.Message)) == busyCode {
 				busyErr := fmt.Errorf("%w: %s", ErrBusy, chunk.Error.Message)
 				streamErr = &attemptStreamError{err: busyErr, busy: true, retryable: true, wait: busyWait("", []byte(chunk.Error.Message))}
+			} else if IsContentPolicy(chunk.Error.Message) {
+				// A safety refusal is a verdict about the input. Replaying it
+				// only sends the same rejected content again, and marking the
+				// account rate-limited is what empties a healthy pool.
+				streamErr = contentPolicyError(chunk.Error.Message)
+			} else if IsClientFault(chunk.Error.Message) {
+				// A request the upstream rejected on its own merits.
+				streamErr = fmt.Errorf("%w: %s", ErrClientFault, chunk.Error.Message)
 			} else {
 				streamErr = fmt.Errorf("qoder stream error: %s", chunk.Error.Message)
 			}
+			// The frame said it failed, so the stream is over: anything after
+			// it is not answer data, and reading on would only turn the error
+			// into a truncation.
 			return false
 		}
 		if chunk.Usage != nil {
