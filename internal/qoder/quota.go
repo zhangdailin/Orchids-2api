@@ -106,7 +106,10 @@ type planResponse struct {
 //
 // A missing quota is not an error the caller must fail on: the usage endpoint is
 // a separate read, and a deployment that cannot reach it should still serve chat.
-// The returned error is therefore informative rather than fatal.
+// The returned error is therefore informative rather than fatal. Usage must be
+// observed successfully before a snapshot is returned: plan/status metadata alone
+// cannot establish counters or exhaustion. On error callers must preserve the
+// previous snapshot and exhaustion state. Plan/status reads are optional enrichment.
 func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 	if c == nil {
 		return nil, fmt.Errorf("qoder client is nil")
@@ -120,28 +123,29 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 	quota := &Quota{SyncedAt: now}
 
 	usage, usageErr := c.getUsage(ctx, creds)
-	if usageErr == nil {
-		quota.UserType = strings.TrimSpace(usage.UserType)
-		quota.Exhausted = usage.IsQuotaExceeded || usage.LimitExceeded
-		quota.UpgradeURL = strings.TrimSpace(usage.UpgradeURL)
-		quota.Limit = usage.UserQuota.Total
-		quota.Used = usage.UserQuota.Used
-		quota.Remaining = usage.UserQuota.Remaining
-		quota.Unit = strings.TrimSpace(usage.UserQuota.Unit)
-		if quota.Unit == "" {
-			quota.Unit = "credits"
-		}
-		if usage.ExpiresAt > 0 {
-			// normalizeMillis already yields seconds; unixSeconds must not
-			// normalize a second time, or a far-future expiry wraps into 1978.
-			quota.PeriodEnd = time.Unix(normalizeMillis(usage.ExpiresAt), 0)
-		}
-		quota.PerModelCap = highestModelQuotaShare(usage)
-		// A window whose remaining share is zero is exhausted regardless of what
-		// the flag says; the flag is stale between refreshes.
-		if quota.Limit > 0 && quota.Remaining <= 0 {
-			quota.Exhausted = true
-		}
+	if usageErr != nil {
+		return nil, usageErr
+	}
+	quota.UserType = strings.TrimSpace(usage.UserType)
+	quota.Exhausted = usage.IsQuotaExceeded || usage.LimitExceeded
+	quota.UpgradeURL = strings.TrimSpace(usage.UpgradeURL)
+	quota.Limit = usage.UserQuota.Total
+	quota.Used = usage.UserQuota.Used
+	quota.Remaining = usage.UserQuota.Remaining
+	quota.Unit = strings.TrimSpace(usage.UserQuota.Unit)
+	if quota.Unit == "" {
+		quota.Unit = "credits"
+	}
+	if usage.ExpiresAt > 0 {
+		// normalizeMillis already yields seconds; unixSeconds must not
+		// normalize a second time, or a far-future expiry wraps into 1978.
+		quota.PeriodEnd = time.Unix(normalizeMillis(usage.ExpiresAt), 0)
+	}
+	quota.PerModelCap = highestModelQuotaShare(usage)
+	// A window whose remaining share is zero is exhausted regardless of what
+	// the flag says; the flag is stale between refreshes.
+	if quota.Limit > 0 && quota.Remaining <= 0 {
+		quota.Exhausted = true
 	}
 
 	// The plan read supplies the tier label and the reset boundary. It is a
@@ -165,11 +169,6 @@ func (c *Client) FetchQuota(ctx context.Context) (*Quota, error) {
 		}
 	}
 
-	if usageErr != nil && quota.PlanTier == "" {
-		// Neither read worked: report the first cause rather than an empty
-		// snapshot that looks like "no quota".
-		return nil, usageErr
-	}
 	return quota, nil
 }
 

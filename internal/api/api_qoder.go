@@ -191,13 +191,20 @@ func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 
 	client := qoder.NewFromAccount(acc, cfg)
 	defer client.Close()
+	// Later whole-account saves must not replay an earlier credential over an
+	// in-flight rotation persisted by the client.
+	defer client.CopyAccountState(acc)
 	if accountStore != nil {
 		client.SetAccountStore(accountStore)
 	}
 
+	accessToken, err := client.CurrentAccessToken(ctx)
+	if err != nil {
+		return "", 502, err
+	}
 	// The runtime pair encrypts the UID, so it cannot be produced before the
 	// identity is known. A credential imported without one is completed here.
-	if profile, err := client.FetchProfile(ctx, acc.QoderAccessToken); err == nil {
+	if profile, err := client.FetchProfile(ctx, accessToken); err == nil {
 		if uid := strings.TrimSpace(profile.UID); uid != "" {
 			acc.QoderUserID = uid
 		}
@@ -211,8 +218,9 @@ func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 			acc.QoderOrganizationID = orgID
 		}
 		if len(profile.OrgTags) > 0 {
-			acc.QoderOrganizationTags = profile.OrgTags
+			acc.QoderOrganizationTags = append([]string(nil), profile.OrgTags...)
 		}
+		client.ApplyProfile(profile)
 	} else {
 		slog.Debug("Qoder profile lookup failed during verification", "account_id", acc.ID, "error", err)
 	}
@@ -220,7 +228,7 @@ func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 		return "", 400, errors.New("qoder account has no user id; sign in again")
 	}
 
-	if err := client.PrepareRuntimeFields(ctx); err != nil {
+	if err := client.PrepareCurrentRuntimeFields(ctx); err != nil {
 		return "", 502, err
 	}
 	fields := client.RuntimeFields()
@@ -244,6 +252,12 @@ func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 	if quota, quotaErr := client.FetchQuota(ctx); quotaErr != nil {
 		slog.Warn("Qoder quota sync failed; leaving the allowance unknown",
 			"account_id", acc.ID, "error", quotaErr)
+		if acc.QoderQuota.Exhausted || acc.StatusCode == store.AccountStatusQoderQuotaExhausted {
+			if err := client.FinalizeAccountState(ctx, acc); err != nil {
+				return "", 502, err
+			}
+			return store.AccountStatusQoderQuotaExhausted, 0, nil
+		}
 	} else {
 		qoder.ApplyQuota(acc, quota)
 		if quota.Exhausted {
@@ -251,8 +265,14 @@ func verifyQoderAccountWithStore(ctx context.Context, acc *store.Account, cfg *c
 			// current catalog contains an explicitly zero-factor model. The
 			// request selector admits only that free model; if the catalog has no
 			// such row the account matches no request and stays effectively parked.
+			if err := client.FinalizeAccountState(ctx, acc); err != nil {
+				return "", 502, err
+			}
 			return store.AccountStatusQoderQuotaExhausted, 0, nil
 		}
+	}
+	if err := client.FinalizeAccountState(ctx, acc); err != nil {
+		return "", 502, err
 	}
 	return "", 0, nil
 }

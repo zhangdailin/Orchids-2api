@@ -6,6 +6,7 @@
 | `configuration.md` | 配置项、默认值、缓存、限速与安全含义 |
 | `architecture.md` | 包结构、请求链路、模型发现与存储 |
 | `deployment.md` | 部署、验证、监控与排障 |
+| [unused-files-audit.md](unused-files-audit.md) | 未使用文件清理依据、保留范围与验证方式 |
 
 Grok 支持面仅为 Build OAuth CLI：设备登录、Claude Messages、OpenAI Chat Completions、Responses 及 stored Response 子资源、模型发现、账单/限速状态。
 

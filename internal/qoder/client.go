@@ -243,10 +243,9 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 const transientAttempts = TransientMaxRetries + 1
 
 func (c *Client) runChat(ctx context.Context, url string, body []byte, model modelEntry, requestID string, fields RuntimeFields, toolsEnabled bool, onMessage func(upstream.SSEMessage)) error {
-	attempts := transientAttempts
-	if attempts < 1 {
-		attempts = 1
-	}
+	// Authentication repair has its own one-shot budget; only transient
+	// failures consume the transient retry counter.
+	transientRetries := 0
 	emitted := false
 	refreshed := false
 	emit := func(msg upstream.SSEMessage) {
@@ -256,8 +255,7 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		}
 	}
 
-	var lastErr error
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for {
 		attemptCredentials := c.currentCredentials()
 		result, err := c.attemptChat(ctx, url, body, model, requestID, fields, attemptCredentials, toolsEnabled, emit)
 		if err == nil {
@@ -271,7 +269,6 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 			result.emitFinish(onMessage)
 			return nil
 		}
-		lastErr = err
 		if emitted {
 			// Usage is observable output too: replaying after a usage-only frame can
 			// double-count billing even when no assistant token was emitted.
@@ -291,7 +288,6 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		switch {
 		case isUnauthorized(err) && !refreshed:
 			refreshed = true
-			attempts-- // The refresh attempt is not one of the transient budget.
 			if refreshErr := c.forceRefresh(ctx, attemptCredentials); refreshErr != nil {
 				return refreshErr
 			}
@@ -313,9 +309,10 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 		// A provider-side hiccup is worth a bounded local retry on the account
 		// that already holds the request; switching accounts for the upstream's
 		// own fault takes a healthy account out of rotation for nothing.
-		case isTransientError(err) && attempt < attempts:
-			if waitErr := sleepCtx(ctx, TransientBackoff(attempt)); waitErr != nil {
-				return lastErr
+		case isTransientError(err) && transientRetries < TransientMaxRetries:
+			transientRetries++
+			if waitErr := sleepCtx(ctx, TransientBackoff(transientRetries)); waitErr != nil {
+				return waitErr
 			}
 			continue
 		case isRetryable(err):
@@ -326,7 +323,6 @@ func (c *Client) runChat(ctx context.Context, url string, body []byte, model mod
 			return err
 		}
 	}
-	return lastErr
 }
 
 // sleepCtx waits, but never past the caller's deadline.
@@ -764,4 +760,118 @@ func NormalizeLoginResult(creds Credentials, machineID string) Credentials {
 // CatalogSnapshot renders a catalog as the account's stored snapshot.
 func CatalogSnapshot(catalog *Catalog) []string {
 	return catalogToIDs(catalog)
+}
+
+// ApplyProfile updates the client's private account snapshot as well as its
+// resolved identity. NewFromAccount copies its input, so changing the caller's
+// account alone would derive runtime fields from the pre-profile UID/org.
+func (c *Client) ApplyProfile(profile Profile) {
+	if c == nil {
+		return
+	}
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	oldUID, oldName, oldOrg := c.creds.UID, c.creds.Name, c.creds.OrgID
+	if uid := strings.TrimSpace(profile.UID); uid != "" {
+		c.creds.UID = uid
+		if c.account != nil {
+			c.account.QoderUserID = uid
+		}
+	}
+	if name := strings.TrimSpace(profile.Name); name != "" {
+		c.creds.Name = name
+		if c.account != nil {
+			c.account.QoderUserName = name
+		}
+	}
+	if email := strings.TrimSpace(profile.Email); email != "" {
+		c.creds.Email = email
+		if c.account != nil {
+			c.account.Email = email
+		}
+	}
+	if org := strings.TrimSpace(profile.OrgID); org != "" {
+		c.creds.OrgID = org
+		if c.account != nil {
+			c.account.QoderOrganizationID = org
+		}
+	}
+	if len(profile.OrgTags) > 0 {
+		c.creds.OrgTags = append([]string(nil), profile.OrgTags...)
+		if c.account != nil {
+			c.account.QoderOrganizationTags = append([]string(nil), profile.OrgTags...)
+		}
+	}
+	if oldUID != c.creds.UID || oldName != c.creds.Name || oldOrg != c.creds.OrgID {
+		c.runtime = RuntimeFields{}
+		c.runtimeAccessToken = ""
+		c.runtimeRefreshToken = ""
+	}
+}
+
+// CurrentAccessToken renews an expiring credential before optional profile
+// enrichment, returning the token the subsequent profile request must use.
+func (c *Client) CurrentAccessToken(ctx context.Context) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("qoder client is nil")
+	}
+	creds, err := c.ensureAccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	return creds.AccessToken, nil
+}
+
+// PrepareCurrentRuntimeFields refreshes first: runtime ciphertext includes both
+// tokens and must be derived for the final pair, not the consumed login pair.
+func (c *Client) PrepareCurrentRuntimeFields(ctx context.Context) error {
+	if c == nil {
+		return fmt.Errorf("qoder client is nil")
+	}
+	creds, err := c.ensureAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.ensureRuntimeFields(ctx, creds)
+	return err
+}
+
+// FinalizeAccountState derives a runtime pair for the latest observed token
+// without refreshing again (a short-lived upstream token can stay within the
+// refresh lead), then copies the final state before full-account persistence.
+func (c *Client) FinalizeAccountState(ctx context.Context, acc *store.Account) error {
+	if c == nil {
+		return fmt.Errorf("qoder client is nil")
+	}
+	if _, err := c.ensureRuntimeFields(ctx, c.currentCredentials()); err != nil {
+		return err
+	}
+	c.CopyAccountState(acc)
+	return nil
+}
+
+// CopyAccountState copies the final, mutex-protected private snapshot into the
+// caller's record. Login clients have ID zero and cannot persist rotations
+// directly, while verification's caller may later save the whole account.
+func (c *Client) CopyAccountState(acc *store.Account) {
+	if c == nil || acc == nil {
+		return
+	}
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.account == nil {
+		return
+	}
+	acc.QoderAccessToken = c.account.QoderAccessToken
+	acc.QoderRefreshToken = c.account.QoderRefreshToken
+	acc.QoderExpiresAt = c.account.QoderExpiresAt
+	acc.QoderUserID = c.account.QoderUserID
+	acc.QoderUserName = c.account.QoderUserName
+	acc.Email = c.account.Email
+	acc.QoderOrganizationID = c.account.QoderOrganizationID
+	acc.QoderOrganizationTags = append([]string(nil), c.account.QoderOrganizationTags...)
+	acc.QoderRuntimeInfo = c.account.QoderRuntimeInfo
+	acc.QoderRuntimeKey = c.account.QoderRuntimeKey
 }

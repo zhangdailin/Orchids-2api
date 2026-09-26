@@ -470,38 +470,40 @@ func convertAssistantMessage(msg prompt.Message, toolCallIDs map[string]bool) (c
 func convertBlockMessage(role string, msg prompt.Message, toolCallIDs map[string]bool) []chatMessage {
 	blocks := msg.Content.GetBlocks()
 	out := make([]chatMessage, 0, len(blocks))
-	pendingText := make([]string, 0, len(blocks))
-	pendingImages := make([]chatPart, 0, 2)
+	pendingParts := make([]chatPart, 0, len(blocks))
+	hasImage := false
 
 	flush := func() {
-		if len(pendingText) == 0 && len(pendingImages) == 0 {
+		if len(pendingParts) == 0 {
 			return
 		}
 		message := chatMessage{Role: normalRole(role)}
-		if len(pendingImages) == 0 {
-			message.Content = strings.Join(pendingText, "\n")
-		} else {
-			parts := make([]chatPart, 0, len(pendingImages)+len(pendingText))
-			for _, text := range pendingText {
-				parts = append(parts, chatPart{Type: "text", Text: text})
+		if !hasImage {
+			texts := make([]string, 0, len(pendingParts))
+			for _, part := range pendingParts {
+				texts = append(texts, part.Text)
 			}
-			parts = append(parts, pendingImages...)
-			message.Contents = parts
+			message.Content = strings.Join(texts, "\n")
+		} else {
+			// Preserve the original text/image interleaving. Transfer ownership
+			// of this slice so the next segment cannot overwrite earlier parts.
+			message.Contents = pendingParts
 		}
 		out = append(out, message)
-		pendingText = pendingText[:0]
-		pendingImages = pendingImages[:0]
+		pendingParts = nil
+		hasImage = false
 	}
 
 	for _, block := range blocks {
 		switch block.Type {
 		case "text":
 			if strings.TrimSpace(block.Text) != "" {
-				pendingText = append(pendingText, block.Text)
+				pendingParts = append(pendingParts, chatPart{Type: "text", Text: block.Text})
 			}
 		case "image":
 			if url := blockImageURL(block); url != "" {
-				pendingImages = append(pendingImages, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: url}})
+				pendingParts = append(pendingParts, chatPart{Type: "image_url", ImageURL: &chatImageURL{URL: url}})
+				hasImage = true
 			}
 		case "tool_result":
 			flush()

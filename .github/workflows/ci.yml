@@ -54,13 +54,7 @@ jobs:
       # (node --test spawns a child per file, which the sandbox blocks with EPERM).
       - name: Run web asset tests
         run: |
-          node --test web/accounts_ui.test.cjs
-          node --test web/accounts_quota.test.cjs
-          node --test web/ops_ui.test.cjs
-          node --test web/ops_render.test.cjs
-          node --test web/logs_paging.test.cjs
-          node --test web/layout_phone.test.cjs
-          node --test web/provider_registry.test.cjs
+          node --test web/*.test.cjs
           ./scripts/check-provider-registry.sh
 
   race:

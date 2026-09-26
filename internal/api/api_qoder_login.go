@@ -219,10 +219,17 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 
 	client := factory(acc, cfg)
 	defer client.Close()
+	// The ID-zero client cannot persist token rotations itself. Copy its final
+	// credential and runtime state before the account is returned for creation.
+	defer client.CopyAccountState(acc)
 
+	accessToken, err := client.CurrentAccessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
 	// The identity enrichment is optional: a userinfo outage must not invalidate
 	// a credential that already works.
-	if profile, err := client.FetchProfile(ctx, acc.QoderAccessToken); err != nil {
+	if profile, err := client.FetchProfile(ctx, accessToken); err != nil {
 		slog.Debug("Qoder profile lookup failed; keeping the login identity", "login_id", loginID, "error", err)
 	} else {
 		if uid := strings.TrimSpace(profile.UID); uid != "" {
@@ -237,7 +244,10 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 		if orgID := strings.TrimSpace(profile.OrgID); orgID != "" {
 			acc.QoderOrganizationID = orgID
 		}
-		acc.QoderOrganizationTags = profile.OrgTags
+		if len(profile.OrgTags) > 0 {
+			acc.QoderOrganizationTags = append([]string(nil), profile.OrgTags...)
+		}
+		client.ApplyProfile(profile)
 	}
 
 	if strings.TrimSpace(acc.QoderUserID) == "" {
@@ -254,7 +264,7 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 
 	// Derive the runtime auth pair now so the account is usable and the failure
 	// surface is the login rather than the first chat request.
-	if err := client.PrepareRuntimeFields(ctx); err != nil {
+	if err := client.PrepareCurrentRuntimeFields(ctx); err != nil {
 		return nil, err
 	}
 	acc.QoderRuntimeInfo = client.RuntimeFields().EncryptUserInfo
@@ -289,6 +299,9 @@ func (a *API) buildQoderAccountFromCredentialsWithFactory(ctx context.Context, l
 		}
 	}
 
+	if err := client.FinalizeAccountState(ctx, acc); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(acc.QoderRefreshToken) == "" {
 		// Without a refresh token the account cannot survive its first token
 		// expiry, and the login would look successful until it silently dies.

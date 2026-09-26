@@ -471,9 +471,22 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 					delta.Content = candidate
 					rateLimitText.Reset()
 				} else {
-					return true
+					// Only text is deferred. This choice may also carry native
+					// tool deltas and its finish reason, which must still be read.
+					delta.Content = ""
 				}
 			}
+		}
+		reason := strings.TrimSpace(choice.FinishReason)
+		if checkingRateLimitText && (len(delta.ToolCalls) > 0 || (reason != "" && reason != "null")) {
+			// A tool boundary or completed choice resolves an incomplete throttle
+			// prefix as prose. Release it before tools so it cannot appear after
+			// a tool call emitted by this choice's finish reason.
+			checkingRateLimitText = false
+			emitText(rateLimitText.String())
+			rateLimitText.Reset()
+		}
+		if delta.Content != "" {
 			if !bufferingToolText || sawNativeTools {
 				emitText(delta.Content)
 			} else {
@@ -504,7 +517,7 @@ func consumeStreamWithTools(body io.Reader, toolsEnabled bool, onMessage func(up
 			}
 			tools.add(call.Index, call.ID, call.Function.Name, call.Function.Arguments)
 		}
-		if reason := strings.TrimSpace(choice.FinishReason); reason != "" && reason != "null" {
+		if reason != "" && reason != "null" {
 			result.FinishReasonValue = reason
 			// Arguments can span several deltas, so calls are only emitted once
 			// the choice says it is done.

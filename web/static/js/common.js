@@ -398,16 +398,3 @@ function formatTime(iso) {
     hour12: false,
   });
 }
-
-function formatBytes(bytes) {
-  const num = Number(bytes || 0);
-  if (!Number.isFinite(num) || num <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = num;
-  let idx = 0;
-  while (value >= 1024 && idx < units.length - 1) {
-    value /= 1024;
-    idx++;
-  }
-  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[idx]}`;
-}
