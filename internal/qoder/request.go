@@ -112,7 +112,7 @@ type modelConfigWire struct {
 	MaxInputTokens int    `json:"max_input_tokens"`
 }
 
-func wireModelConfig(model modelEntry) modelConfigWire {
+func wireModelConfig(model modelEntry, explicitReasoning bool) modelConfigWire {
 	format := model.Format
 	if format == "" {
 		format = "openai"
@@ -127,7 +127,7 @@ func wireModelConfig(model modelEntry) modelConfigWire {
 		Format:         format,
 		Source:         source,
 		IsVL:           model.IsVL,
-		IsReasoning:    model.IsReasoning,
+		IsReasoning:    explicitReasoning,
 		MaxInputTokens: model.MaxInputTokens,
 	}
 }
@@ -204,21 +204,16 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 	if model.MaxInputTokens > 0 {
 		parameters["context_length"] = model.MaxInputTokens
 	}
-	// The upstream marks qfmodel and other reasoning-capable models as
-	// is_reasoning=true. Do not leave their thinking budget at the upstream
-	// default: use low unless the client explicitly requests another level.
-	// "none" still disables thinking and sends no reasoning_effort.
-	if model.IsReasoning {
+	// The reference gateway leaves reasoning off by default even for a catalog
+	// row marked is_reasoning=true; it enables model_config.is_reasoning only
+	// when the caller explicitly requests thinking. Keep client-specified effort
+	// intact so this changes only requests that supplied no reasoning preference.
+	effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort))
+	if effort != "" && effort != "none" {
 		parameters["enable_thinking"] = true
-	}
-	if effort := strings.ToLower(strings.TrimSpace(req.ReasoningEffort)); effort != "" {
-		if effort == "none" {
-			parameters["enable_thinking"] = false
-		} else {
-			parameters["reasoning_effort"] = effort
-		}
-	} else if model.IsReasoning {
-		parameters["reasoning_effort"] = "low"
+		parameters["reasoning_effort"] = effort
+	} else if effort == "none" {
+		parameters["enable_thinking"] = false
 	}
 	tools := normalizeToolDefinitions(req, model)
 	toolChoice, parallelTools := normalizeToolControls(req, len(tools) > 0)
@@ -251,7 +246,7 @@ func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, session
 		TaskID:            taskID,
 		SessionType:       sessionType,
 		AliyunUser:        aliyunUserTypeOr(aliyunUserType),
-		ModelConfig:       wireModelConfig(model),
+		ModelConfig:       wireModelConfig(model, effort != "" && effort != "none"),
 		CustomModel:       nil,
 		System:            systemText,
 		Messages:          messages,

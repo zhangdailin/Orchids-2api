@@ -505,15 +505,22 @@ func TestReferenceChatBodyCarriesPromptContextAndModel(t *testing.T) {
 	if context["text"].(map[string]interface{})["text"] != "你好 qoder" || context["extra"].(map[string]interface{})["originalContent"].(map[string]interface{})["text"] != "你好 qoder" {
 		t.Fatalf("chat context did not carry the latest user text: %#v", context)
 	}
-	if context["extra"].(map[string]interface{})["modelConfig"].(map[string]interface{})["key"] != "qfmodel" {
-		t.Fatalf("context model key does not match selected model: %#v", context)
+	contextModel := context["extra"].(map[string]interface{})["modelConfig"].(map[string]interface{})
+	if contextModel["key"] != "qfmodel" || contextModel["is_reasoning"] != true {
+		t.Fatalf("context model config changed outside the thinking experiment: %#v", contextModel)
 	}
-	if body["model_config"].(map[string]interface{})["key"] != "qfmodel" || body["business"].(map[string]interface{})["product"] != "ide" {
+	modelConfig := body["model_config"].(map[string]interface{})
+	if modelConfig["key"] != "qfmodel" || modelConfig["is_reasoning"] != false || body["business"].(map[string]interface{})["product"] != "ide" {
 		t.Fatalf("body model/business mismatch: %#v", body)
 	}
 	params := body["parameters"].(map[string]interface{})
-	if params["max_tokens"] != float64(32768) || params["reasoning_effort"] != "low" {
-		t.Fatalf("reference max tokens / requested low reasoning missing: %#v", params)
+	if params["max_tokens"] != float64(32768) {
+		t.Fatalf("reference max tokens missing: %#v", params)
+	}
+	for _, field := range []string{"reasoning_effort", "enable_thinking"} {
+		if _, present := params[field]; present {
+			t.Fatalf("unexpected default %s in %#v", field, params)
+		}
 	}
 }
 
