@@ -182,3 +182,23 @@ func TestEnsureInstallSaltPersistsOnce(t *testing.T) {
 		t.Fatalf("salt without a store = %q, want empty", got)
 	}
 }
+
+// TestAliyunUserTypeFallsBackToADocumentedClass pins the account class in the
+// chat body: the upstream sorts a request into a queue by it, so an unknown
+// class must still send a class it recognises rather than an empty field.
+func TestAliyunUserTypeFallsBackToADocumentedClass(t *testing.T) {
+	if got := aliyunUserTypeOr(""); got != defaultAliyunUserType || got == "" {
+		t.Fatalf("aliyunUserTypeOr(\"\") = %q, want a documented default", got)
+	}
+	if got := aliyunUserTypeOr("personal_professional_trial"); got != "personal_professional_trial" {
+		t.Fatalf("aliyunUserTypeOr(known) = %q, want the account's own class", got)
+	}
+	if got := aliyunUserTypeOr("  "); got != defaultAliyunUserType {
+		t.Fatalf("aliyunUserTypeOr(blank) = %q, want the default", got)
+	}
+
+	client := NewFromAccount(nil, nil)
+	if got := client.aliyunUserType(); got != "" {
+		t.Fatalf("an account-less client reports class %q, want empty so the default applies", got)
+	}
+}

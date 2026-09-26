@@ -309,7 +309,7 @@ func TestSendRequestSetsTheFullHeaderContract(t *testing.T) {
 		t.Fatalf("DecodeBody() error = %v", err)
 	}
 	text := string(decoded)
-	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qodercli"`, `"agent_id":"agent_common"`, `"task_id":"common"`, `"stream":true`, `"version":"3"`, `"key":"qmodel_latest"`, `"role":"user"`, `"context_length":1000000`} {
+	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qoder"`, `"agent_id":"agent_common"`, `"task_id":"common"`, `"stream":true`, `"version":"3"`, `"key":"qmodel_latest"`, `"role":"user"`, `"context_length":1000000`} {
 		if !strings.Contains(text, want) {
 			t.Errorf("decoded body = %s, want it to contain %s", text, want)
 		}

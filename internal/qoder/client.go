@@ -127,6 +127,27 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 	return client
 }
 
+// aliyunUserType returns the account class this account reported, for example
+// "personal_standard" or "personal_professional_trial".
+//
+// It travels in the chat body as aliyun_user_type, which is how the upstream
+// sorts a request into a queue. Leaving it empty is what let every refusal come
+// back as queueType "p3" with serviceAvailable false — the request was not
+// being placed with the account's real class.
+func (c *Client) aliyunUserType() string {
+	if c == nil {
+		return ""
+	}
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	if c.account != nil {
+		if class := strings.TrimSpace(c.account.QoderQuota.UserType); class != "" {
+			return class
+		}
+	}
+	return ""
+}
+
 // applyFingerprint resolves the device headers this client sends.
 //
 // The machine id is the identity the login was authorized under and stays as
@@ -191,7 +212,7 @@ func (c *Client) SendRequestWithPayload(ctx context.Context, req upstream.Upstre
 	if err != nil {
 		return err
 	}
-	body, err := buildChatBodyVersion(req, model, sessionID, requestID, c.clientVersion)
+	body, err := buildChatBodyScoped(req, model, sessionID, requestID, c.clientVersion, c.aliyunUserType())
 	if err != nil {
 		return err
 	}

@@ -342,7 +342,9 @@ func TestQoderChannelEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeBody() error = %v", err)
 	}
-	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qodercli"`, `"agent_id":"agent_common"`, `"stream":true`} {
+	// The account class travels in the body: the upstream sorts a request into
+	// a queue by it, and an empty value is not a class it recognises.
+	for _, want := range []string{`"chat_task":"FREE_INPUT"`, `"session_type":"qoder"`, `"agent_id":"agent_common"`, `"stream":true`, `"aliyun_user_type":"personal_standard"`} {
 		if !strings.Contains(string(decoded), want) {
 			t.Errorf("decoded body = %s, want it to contain %s", decoded, want)
 		}

@@ -38,8 +38,31 @@ const (
 	sourceValue = 1
 	taskID      = "common"
 	agentID     = "agent_common"
-	sessionType = "qodercli"
+	// sessionType is the surface the request claims to come from.
+	//
+	// "qodercli" labels the traffic as CLI traffic, which is the class the
+	// upstream sorts into its lowest-priority queue: production showed every
+	// refusal carrying queueType "p3" with serviceAvailable false. The
+	// reference gateway sends "qoder" for the same call, so the value is the
+	// one difference that plausibly decides which queue a request lands in.
+	sessionType = "qoder"
+
+	// defaultAliyunUserType is the account class sent when the account's own
+	// class is unknown. The reference gateway always sends one; an empty field
+	// is not something the upstream observes from the IDE/CLI it emulates.
+	defaultAliyunUserType = "personal_standard"
 )
+
+// aliyunUserTypeOr returns the account class to send. A class the account never
+// reported is replaced with the documented default rather than left empty: the
+// field is what the upstream reads to sort the request into a queue, so an
+// empty value is a request it cannot place.
+func aliyunUserTypeOr(aliyunUserType string) string {
+	if trimmed := strings.TrimSpace(aliyunUserType); trimmed != "" {
+		return trimmed
+	}
+	return defaultAliyunUserType
+}
 
 // chatURL renders the chat endpoint.
 func chatURL(base string) string {
@@ -166,6 +189,15 @@ func buildChatBody(req upstream.UpstreamRequest, model modelEntry, sessionID, re
 }
 
 func buildChatBodyVersion(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, clientVersion string) ([]byte, error) {
+	return buildChatBodyScoped(req, model, sessionID, requestID, clientVersion, "")
+}
+
+// buildChatBodyScoped renders the encoded request body for one account class.
+//
+// aliyunUserType is the account's own class when it is known. The upstream
+// sorts traffic by it, and an empty value is not a class it recognises, so a
+// request that omits it is not queued with the account's real peers.
+func buildChatBodyScoped(req upstream.UpstreamRequest, model modelEntry, sessionID, requestID, clientVersion, aliyunUserType string) ([]byte, error) {
 	messages, systemText, err := buildMessages(req)
 	if err != nil {
 		return nil, err
@@ -216,7 +248,7 @@ func buildChatBodyVersion(req upstream.UpstreamRequest, model modelEntry, sessio
 		AgentID:           agentID,
 		TaskID:            taskID,
 		SessionType:       sessionType,
-		AliyunUser:        "",
+		AliyunUser:        aliyunUserTypeOr(aliyunUserType),
 		ModelConfig:       wireModelConfig(model),
 		CustomModel:       nil,
 		System:            systemText,
