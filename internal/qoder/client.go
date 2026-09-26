@@ -130,10 +130,8 @@ func NewFromAccount(acc *store.Account, cfg *config.Config) *Client {
 // aliyunUserType returns the account class this account reported, for example
 // "personal_standard" or "personal_professional_trial".
 //
-// It travels in the chat body as aliyun_user_type, which is how the upstream
-// sorts a request into a queue. Leaving it empty is what let every refusal come
-// back as queueType "p3" with serviceAvailable false — the request was not
-// being placed with the account's real class.
+// It travels in the chat body as aliyun_user_type. Upstream 10605 responses
+// alone do not establish whether this field influences queue admission.
 func (c *Client) aliyunUserType() string {
 	if c == nil {
 		return ""

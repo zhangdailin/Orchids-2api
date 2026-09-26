@@ -3,6 +3,7 @@ package util
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"orchids-api/internal/config"
@@ -76,6 +77,38 @@ func TestProxyFuncFromConfig_EmptyMeansDirect(t *testing.T) {
 	}
 	if proxyURL != nil {
 		t.Fatalf("expected direct connection, got %v", proxyURL)
+	}
+}
+
+func TestProxyFuncFromConfig_SeparateCredentialsApplyToURL(t *testing.T) {
+	cfg := &config.Config{ProxyURL: "http://proxy.local:3128", ProxyUser: "alice", ProxyPass: "first"}
+	request := &http.Request{URL: &url.URL{Scheme: "https", Host: "upstream.example"}}
+	first, err := ProxyFuncFromConfig(cfg)(request)
+	if err != nil || first == nil || first.User == nil {
+		t.Fatalf("first proxy = %v, error = %v", first, err)
+	}
+	if pass, _ := first.User.Password(); pass != "first" {
+		t.Fatalf("first password = %q", pass)
+	}
+	firstKey := GenerateProxyKeyFromConfig(cfg)
+	cfg.ProxyPass = "rotated"
+	secondKey := GenerateProxyKeyFromConfig(cfg)
+	if firstKey == secondKey || strings.Contains(firstKey, "first") || strings.Contains(secondKey, "rotated") {
+		t.Fatalf("proxy cache did not isolate or redact credentials")
+	}
+	second, err := ProxyFuncFromConfig(cfg)(request)
+	if err != nil || second == nil || second.User == nil {
+		t.Fatalf("second proxy = %v, error = %v", second, err)
+	}
+	if pass, _ := second.User.Password(); pass != "rotated" {
+		t.Fatalf("rotated password = %q", pass)
+	}
+}
+
+func TestProxyCacheKeyDoesNotExposeURLCredentials(t *testing.T) {
+	key := GenerateProxyKeyFromConfig(&config.Config{ProxyURL: "http://alice:very-secret@proxy.local:3128"})
+	if strings.Contains(key, "very-secret") || strings.Contains(key, "alice") {
+		t.Fatalf("proxy credentials leaked into cache key")
 	}
 }
 

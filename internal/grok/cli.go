@@ -48,7 +48,7 @@ func NewCLIClient(cfg *config.Config) *CLIClient {
 	client := &CLIClient{cfg: cfg}
 	// Shared browser client keeps the utls Chrome TLS fingerprint; the CLI
 	// upstream tolerates browser-like TLS even though headers are CLI identity.
-	client.httpClient = util.GetSharedBrowserHTTPClientWithHeaderTimeout("cli", cfg.GrokRequestTimeout(ProviderBuild), 0, nil)
+	client.httpClient = util.GetSharedBrowserHTTPClientWithHeaderTimeout("cli|"+util.GenerateProxyKeyFromConfig(cfg), cfg.GrokRequestTimeout(ProviderBuild), 0, util.ProxyFuncFromConfig(cfg))
 	client.oauth = NewCLIOAuth(cfg, client.httpClient)
 	client.egress = egress.NewManager(cfg)
 	return client

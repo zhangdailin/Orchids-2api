@@ -38,13 +38,9 @@ const (
 	sourceValue = 1
 	taskID      = "common"
 	agentID     = "agent_common"
-	// sessionType is the surface the request claims to come from.
-	//
-	// "qodercli" labels the traffic as CLI traffic, which is the class the
-	// upstream sorts into its lowest-priority queue: production showed every
-	// refusal carrying queueType "p3" with serviceAvailable false. The
-	// reference gateway sends "qoder" for the same call, so the value is the
-	// one difference that plausibly decides which queue a request lands in.
+	// sessionType matches the reference gateway's chat request. The upstream's
+	// queue selection rules are not public; this value alone does not establish
+	// why a 10605 refusal reports queueType "p3".
 	sessionType = "qoder"
 
 	// defaultAliyunUserType is the account class sent when the account's own
@@ -53,10 +49,9 @@ const (
 	defaultAliyunUserType = "personal_standard"
 )
 
-// aliyunUserTypeOr returns the account class to send. A class the account never
-// reported is replaced with the documented default rather than left empty: the
-// field is what the upstream reads to sort the request into a queue, so an
-// empty value is a request it cannot place.
+// aliyunUserTypeOr returns the reported account class, or the reference
+// gateway's default if the class is unknown. Whether this value affects queue
+// admission is not established by the 10605 response alone.
 func aliyunUserTypeOr(aliyunUserType string) string {
 	if trimmed := strings.TrimSpace(aliyunUserType); trimmed != "" {
 		return trimmed

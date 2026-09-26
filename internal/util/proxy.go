@@ -149,6 +149,9 @@ func ProxyFuncFromConfig(cfg *config.Config) func(*http.Request) (*url.URL, erro
 		return http.ProxyFromEnvironment
 	}
 	if proxyURL, err := ParseProxyURL(cfg.ProxyURL); err == nil && proxyURL != nil {
+		if user := strings.TrimSpace(cfg.ProxyUser); user != "" && proxyURL.User == nil {
+			proxyURL.User = url.UserPassword(user, cfg.ProxyPass)
+		}
 		return ProxyFuncFromURL(proxyURL, cfg.ProxyBypass)
 	}
 	if strings.TrimSpace(cfg.ProxyHTTP) != "" || strings.TrimSpace(cfg.ProxyHTTPS) != "" {

@@ -13,6 +13,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"orchids-api/internal/config"
+	"orchids-api/internal/util"
 )
 
 const (
@@ -62,7 +63,7 @@ type DeviceAuthenticator struct {
 func NewDeviceAuthenticator(cfg *config.Config) *DeviceAuthenticator {
 	return &DeviceAuthenticator{
 		cfg:        cfg,
-		httpClient: newHTTPClient(cfg, 20*time.Second, nil),
+		httpClient: newHTTPClient(cfg, 20*time.Second, util.ProxyFuncFromConfig(cfg)),
 		deviceURL:  cfg.GrokCLIOAuthDeviceURLOrDefault(),
 		tokenURL:   cfg.GrokCLIOAuthTokenURLOrDefault(),
 	}

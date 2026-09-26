@@ -1,6 +1,7 @@
 package util
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"net/http"
@@ -114,14 +115,19 @@ func GenerateProxyKeyFromConfig(cfg *config.Config) string {
 	if cfg == nil {
 		return "env"
 	}
+	// Never put credentials in a cache key: include only their digest. The
+	// transport captures its proxy function on first use, so changing a proxy
+	// password must allocate a fresh client rather than reusing stale auth.
+	credentials := fmt.Sprintf("|credentials=%x", sha256.Sum256([]byte(cfg.ProxyUser+"\x00"+cfg.ProxyPass)))
 	if proxyURL := strings.TrimSpace(cfg.ProxyURL); proxyURL != "" {
-		key := proxyURL
+		// Keep passwords out of cache keys, including URL-embedded credentials.
+		key := fmt.Sprintf("proxy-url:%x", sha256.Sum256([]byte(proxyURL))) + credentials
 		if len(cfg.ProxyBypass) > 0 {
 			key += "|" + strings.Join(cfg.ProxyBypass, ",")
 		}
 		return key
 	}
-	key := GenerateProxyKey(cfg.ProxyHTTP, cfg.ProxyHTTPS, cfg.ProxyUser)
+	key := fmt.Sprintf("split-proxy:%x", sha256.Sum256([]byte(cfg.ProxyHTTP+"\x00"+cfg.ProxyHTTPS+"\x00"+cfg.ProxyUser))) + credentials
 	if len(cfg.ProxyBypass) > 0 {
 		key += "|" + strings.Join(cfg.ProxyBypass, ",")
 	}
